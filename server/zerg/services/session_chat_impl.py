@@ -25,9 +25,17 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 import zerg.services.live_session_dispatch as live_session_dispatch
+from zerg.metrics import managed_turn_dispatch_seconds
+from zerg.metrics import managed_turn_phase_seconds
+from zerg.metrics import managed_turn_requests_total
+from zerg.metrics import managed_turn_wait_seconds
+from zerg.metrics import managed_turn_wait_total
 from zerg.models.agents import AgentEvent
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
+from zerg.observability import get_tracer
+from zerg.observability import mark_span_error
+from zerg.observability import set_span_attributes
 from zerg.services.agents_store import AgentsStore
 from zerg.services.managed_local_control import MANAGED_LOCAL_CONTROL_STATUS_COMPLETED
 from zerg.services.managed_local_control import MANAGED_LOCAL_CONTROL_STATUS_FAILED
@@ -277,128 +285,228 @@ async def _release_managed_local_lock_after_terminal(
     lock_scope_id: str,
     request_id: str,
     session_id: UUID,
+    provider: str,
     db_bind,
     after_runtime_event_id: int,
 ) -> None:
-    try:
-        terminal_result = await await_managed_local_turn_terminal(
-            db_bind=db_bind,
-            session_id=session_id,
-            after_runtime_event_id=after_runtime_event_id,
-            timeout_secs=MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS,
+    tracer = get_tracer(__name__)
+    wait_started = time.monotonic()
+    with tracer.start_as_current_span("longhouse.turn.wait_terminal") as span:
+        set_span_attributes(
+            span,
+            {
+                "longhouse.provider": provider,
+                "longhouse.managed": True,
+                "longhouse.session.id": session_id,
+                "longhouse.turn.request_id": request_id,
+                "longhouse.turn.after_runtime_event_id": after_runtime_event_id,
+                "longhouse.turn.timeout_secs": MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS,
+            },
         )
-    except Exception:
-        logger.warning(
-            "[%s] Managed-local lock watcher crashed for %s",
-            request_id,
-            session_id,
-            exc_info=True,
-        )
-        return
-
-    if terminal_result is None:
-        logger.warning(
-            "[%s] Managed-local lock watcher timed out for %s; leaving TTL lock in place",
-            request_id,
-            session_id,
-        )
-        return
-
-    try:
-        updated_session_turn = await execute_session_turn_write(
-            db_bind=db_bind,
-            label="session-turn-terminal",
-            fn=lambda turn_db: mark_session_turn_terminal(
-                turn_db,
+        try:
+            terminal_result = await await_managed_local_turn_terminal(
+                db_bind=db_bind,
                 session_id=session_id,
-                request_id=request_id,
-                phase=terminal_result.phase,
-                terminal_at=terminal_result.occurred_at,
-            ),
-        )
-        if not updated_session_turn:
+                after_runtime_event_id=after_runtime_event_id,
+                timeout_secs=MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS,
+            )
+        except Exception as exc:
+            wait_seconds = max(0.0, time.monotonic() - wait_started)
+            managed_turn_wait_total.labels(provider=provider, milestone="terminal", outcome="error").inc()
+            managed_turn_wait_seconds.labels(provider=provider, milestone="terminal", outcome="error").observe(wait_seconds)
+            mark_span_error(span, exc)
             logger.warning(
-                "[%s] Managed-local terminal watcher saw %s for %s but canonical turn update did not apply",
+                "[%s] Managed-local lock watcher crashed for %s",
                 request_id,
-                terminal_result.phase,
+                session_id,
+                exc_info=True,
+            )
+            return
+
+        if terminal_result is None:
+            wait_seconds = max(0.0, time.monotonic() - wait_started)
+            managed_turn_wait_total.labels(provider=provider, milestone="terminal", outcome="timeout").inc()
+            managed_turn_wait_seconds.labels(provider=provider, milestone="terminal", outcome="timeout").observe(wait_seconds)
+            set_span_attributes(span, {"longhouse.turn.outcome": "timeout"})
+            logger.warning(
+                "[%s] Managed-local lock watcher timed out for %s; leaving TTL lock in place",
+                request_id,
                 session_id,
             )
-    except Exception:
-        logger.warning(
-            "[%s] Managed-local terminal watcher failed to persist terminal state for %s",
-            request_id,
-            session_id,
-            exc_info=True,
-        )
+            return
 
-    released = await session_lock_manager.release(lock_scope_id, request_id)
-    logger.info(
-        "[%s] Managed-local session reached terminal phase %s; lock release=%s",
-        request_id,
-        terminal_result.phase,
-        released,
-    )
+        set_span_attributes(
+            span,
+            {
+                "longhouse.turn.outcome": "terminal_observed",
+                "longhouse.turn.terminal_phase": terminal_result.phase,
+                "longhouse.turn.terminal_at": terminal_result.occurred_at,
+            },
+        )
+        wait_seconds = max(0.0, time.monotonic() - wait_started)
+        managed_turn_wait_total.labels(provider=provider, milestone="terminal", outcome="observed").inc()
+        managed_turn_wait_seconds.labels(provider=provider, milestone="terminal", outcome="observed").observe(wait_seconds)
+
+        try:
+            with tracer.start_as_current_span("longhouse.turn.persist_terminal") as persist_span:
+                updated_session_turn = await execute_session_turn_write(
+                    db_bind=db_bind,
+                    label="session-turn-terminal",
+                    fn=lambda turn_db: mark_session_turn_terminal(
+                        turn_db,
+                        session_id=session_id,
+                        request_id=request_id,
+                        phase=terminal_result.phase,
+                        terminal_at=terminal_result.occurred_at,
+                    ),
+                )
+                set_span_attributes(
+                    persist_span,
+                    {
+                        "longhouse.session.id": session_id,
+                        "longhouse.turn.request_id": request_id,
+                        "longhouse.turn.updated": bool(updated_session_turn),
+                    },
+                )
+                if not updated_session_turn:
+                    logger.warning(
+                        "[%s] Managed-local terminal watcher saw %s for %s but canonical turn update did not apply",
+                        request_id,
+                        terminal_result.phase,
+                        session_id,
+                    )
+        except Exception as exc:
+            mark_span_error(span, exc)
+            logger.warning(
+                "[%s] Managed-local terminal watcher failed to persist terminal state for %s",
+                request_id,
+                session_id,
+                exc_info=True,
+            )
+
+        with tracer.start_as_current_span("longhouse.turn.lock_release") as release_span:
+            released = await session_lock_manager.release(lock_scope_id, request_id)
+            set_span_attributes(
+                release_span,
+                {
+                    "longhouse.session.id": session_id,
+                    "longhouse.turn.request_id": request_id,
+                    "longhouse.turn.lock_released": released,
+                },
+            )
+        logger.info(
+            "[%s] Managed-local session reached terminal phase %s; lock release=%s",
+            request_id,
+            terminal_result.phase,
+            released,
+        )
 
 
 async def _observe_managed_local_turn_active_phase(
     *,
     request_id: str,
     session_id: UUID,
+    provider: str,
     db_bind,
     after_runtime_event_id: int,
 ) -> None:
-    try:
-        active_update = await await_managed_local_hook_phase_update(
-            db_bind=db_bind,
-            session_id=session_id,
-            after_runtime_event_id=after_runtime_event_id,
-            phases=set(_MANAGED_LOCAL_ACTIVE_PHASES),
-            timeout_secs=MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS,
-            poll_interval_secs=MANAGED_LOCAL_POLL_INTERVAL_SECS,
+    tracer = get_tracer(__name__)
+    wait_started = time.monotonic()
+    with tracer.start_as_current_span("longhouse.turn.wait_active") as span:
+        set_span_attributes(
+            span,
+            {
+                "longhouse.provider": provider,
+                "longhouse.managed": True,
+                "longhouse.session.id": session_id,
+                "longhouse.turn.request_id": request_id,
+                "longhouse.turn.after_runtime_event_id": after_runtime_event_id,
+                "longhouse.turn.active_phases": tuple(sorted(_MANAGED_LOCAL_ACTIVE_PHASES)),
+                "longhouse.turn.timeout_secs": MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS,
+            },
         )
-    except Exception:
-        logger.warning(
-            "[%s] Managed-local active watcher crashed for %s",
-            request_id,
-            session_id,
-            exc_info=True,
-        )
-        return
-
-    if active_update is None:
-        return
-
-    try:
-        updated = await execute_session_turn_write(
-            db_bind=db_bind,
-            label="session-turn-active",
-            fn=lambda turn_db: mark_session_turn_active(
-                turn_db,
+        try:
+            active_update = await await_managed_local_hook_phase_update(
+                db_bind=db_bind,
                 session_id=session_id,
-                request_id=request_id,
-                observed_at=active_update.occurred_at,
-            ),
-        )
-        if not updated:
-            logger.debug(
-                "[%s] Managed-local active watcher saw %s for %s but no canonical update was needed",
-                request_id,
-                active_update.phase,
-                session_id,
+                after_runtime_event_id=after_runtime_event_id,
+                phases=set(_MANAGED_LOCAL_ACTIVE_PHASES),
+                timeout_secs=MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS,
+                poll_interval_secs=MANAGED_LOCAL_POLL_INTERVAL_SECS,
             )
-    except Exception:
-        logger.warning(
-            "[%s] Managed-local active watcher failed to persist active phase for %s",
-            request_id,
-            session_id,
-            exc_info=True,
+        except Exception as exc:
+            wait_seconds = max(0.0, time.monotonic() - wait_started)
+            managed_turn_wait_total.labels(provider=provider, milestone="active", outcome="error").inc()
+            managed_turn_wait_seconds.labels(provider=provider, milestone="active", outcome="error").observe(wait_seconds)
+            mark_span_error(span, exc)
+            logger.warning(
+                "[%s] Managed-local active watcher crashed for %s",
+                request_id,
+                session_id,
+                exc_info=True,
+            )
+            return
+
+        if active_update is None:
+            wait_seconds = max(0.0, time.monotonic() - wait_started)
+            managed_turn_wait_total.labels(provider=provider, milestone="active", outcome="timeout").inc()
+            managed_turn_wait_seconds.labels(provider=provider, milestone="active", outcome="timeout").observe(wait_seconds)
+            set_span_attributes(span, {"longhouse.turn.outcome": "timeout"})
+            return
+
+        set_span_attributes(
+            span,
+            {
+                "longhouse.turn.outcome": "active_observed",
+                "longhouse.turn.active_phase": active_update.phase,
+                "longhouse.turn.active_phase_observed_at": active_update.occurred_at,
+            },
         )
+        wait_seconds = max(0.0, time.monotonic() - wait_started)
+        managed_turn_wait_total.labels(provider=provider, milestone="active", outcome="observed").inc()
+        managed_turn_wait_seconds.labels(provider=provider, milestone="active", outcome="observed").observe(wait_seconds)
+        try:
+            with tracer.start_as_current_span("longhouse.turn.persist_active") as persist_span:
+                updated = await execute_session_turn_write(
+                    db_bind=db_bind,
+                    label="session-turn-active",
+                    fn=lambda turn_db: mark_session_turn_active(
+                        turn_db,
+                        session_id=session_id,
+                        request_id=request_id,
+                        observed_at=active_update.occurred_at,
+                    ),
+                )
+                set_span_attributes(
+                    persist_span,
+                    {
+                        "longhouse.session.id": session_id,
+                        "longhouse.turn.request_id": request_id,
+                        "longhouse.turn.updated": bool(updated),
+                    },
+                )
+                if not updated:
+                    logger.debug(
+                        "[%s] Managed-local active watcher saw %s for %s but no canonical update was needed",
+                        request_id,
+                        active_update.phase,
+                        session_id,
+                    )
+        except Exception as exc:
+            mark_span_error(span, exc)
+            logger.warning(
+                "[%s] Managed-local active watcher failed to persist active phase for %s",
+                request_id,
+                session_id,
+                exc_info=True,
+            )
 
 
 def _schedule_managed_local_active_phase_observation(
     *,
     request_id: str,
     session_id: UUID,
+    provider: str,
     db_bind,
     after_runtime_event_id: int,
 ) -> None:
@@ -406,6 +514,7 @@ def _schedule_managed_local_active_phase_observation(
         _observe_managed_local_turn_active_phase(
             request_id=request_id,
             session_id=session_id,
+            provider=provider,
             db_bind=db_bind,
             after_runtime_event_id=after_runtime_event_id,
         )
@@ -427,6 +536,7 @@ def _schedule_managed_local_lock_release(
     lock_scope_id: str,
     request_id: str,
     session_id: UUID,
+    provider: str,
     db_bind,
     after_runtime_event_id: int,
 ) -> None:
@@ -435,6 +545,7 @@ def _schedule_managed_local_lock_release(
             lock_scope_id=lock_scope_id,
             request_id=request_id,
             session_id=session_id,
+            provider=provider,
             db_bind=db_bind,
             after_runtime_event_id=after_runtime_event_id,
         )
@@ -467,47 +578,165 @@ async def _dispatch_managed_local_text(
     db: Session,
 ) -> JSONResponse:
     """Send text to a managed-local session and return acceptance status."""
-    t0 = time.monotonic()
-    if not build_session_capabilities(source_session).live_control_available:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Managed local session is missing live runner metadata",
+    tracer = get_tracer(__name__)
+    provider_label = source_session.provider or "claude"
+    with tracer.start_as_current_span("longhouse.turn") as span:
+        t0 = time.monotonic()
+        set_span_attributes(
+            span,
+            {
+                "longhouse.provider": provider_label,
+                "longhouse.managed": True,
+                "longhouse.turn.control_path": "managed_local",
+                "longhouse.session.id": source_session.id,
+                "longhouse.turn.request_id": request_id,
+                "longhouse.turn.lock_scope_id": lock_scope_id,
+            },
         )
 
-    baseline_event_id = int(AgentsStore(db).get_latest_event_id(source_session.id) or 0)
-    baseline_hook_runtime_event_id = get_managed_local_latest_hook_runtime_event_id(
-        db=db,
-        session_id=source_session.id,
-    )
-    user_submitted_at = datetime.now(timezone.utc)
-    t_baseline = time.monotonic()
-    create_session_turn(
-        db,
-        session_id=source_session.id,
-        request_id=request_id,
-        baseline_event_id=baseline_event_id,
-        baseline_runtime_cursor=baseline_hook_runtime_event_id,
-        user_submitted_at=user_submitted_at,
-        expected_user_text=message,
-    )
-    db.commit()
-    t_turn_created = time.monotonic()
-    send_result = await live_session_dispatch.send_text_to_live_session(
-        db=db,
-        owner_id=owner_id,
-        session=source_session,
-        text=message,
-        commis_id=request_id,
-        timeout_secs=15,
-        verify_turn_started=True,
-        verification_timeout_secs=15.0,
-    )
-    t_sent = time.monotonic()
-    send_observed_at = datetime.now(timezone.utc)
+        if not build_session_capabilities(source_session).live_control_available:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Managed local session is missing live runner metadata",
+            )
 
-    if not send_result.ok or not bool(getattr(send_result, "verified_turn_started", False)):
-        error_code = _managed_local_send_failure_code(send_result)
-        if error_code == SESSION_TURN_ERROR_VERIFICATION_TIMEOUT:
+        with tracer.start_as_current_span("longhouse.turn.baseline") as baseline_span:
+            baseline_event_id = int(AgentsStore(db).get_latest_event_id(source_session.id) or 0)
+            baseline_hook_runtime_event_id = get_managed_local_latest_hook_runtime_event_id(
+                db=db,
+                session_id=source_session.id,
+            )
+            user_submitted_at = datetime.now(timezone.utc)
+            set_span_attributes(
+                baseline_span,
+                {
+                    "longhouse.session.id": source_session.id,
+                    "longhouse.turn.request_id": request_id,
+                    "longhouse.turn.baseline_event_id": baseline_event_id,
+                    "longhouse.turn.baseline_runtime_event_id": baseline_hook_runtime_event_id,
+                    "longhouse.turn.user_submitted_at": user_submitted_at,
+                },
+            )
+        t_baseline = time.monotonic()
+
+        with tracer.start_as_current_span("longhouse.turn.persist_create") as create_span:
+            create_session_turn(
+                db,
+                session_id=source_session.id,
+                request_id=request_id,
+                baseline_event_id=baseline_event_id,
+                baseline_runtime_cursor=baseline_hook_runtime_event_id,
+                user_submitted_at=user_submitted_at,
+                expected_user_text=message,
+            )
+            db.commit()
+            set_span_attributes(
+                create_span,
+                {
+                    "longhouse.session.id": source_session.id,
+                    "longhouse.turn.request_id": request_id,
+                },
+            )
+        t_turn_created = time.monotonic()
+
+        with tracer.start_as_current_span("longhouse.turn.provider_dispatch") as dispatch_span:
+            send_result = await live_session_dispatch.send_text_to_live_session(
+                db=db,
+                owner_id=owner_id,
+                session=source_session,
+                text=message,
+                commis_id=request_id,
+                timeout_secs=15,
+                verify_turn_started=True,
+                verification_timeout_secs=15.0,
+            )
+            send_observed_at = datetime.now(timezone.utc)
+            set_span_attributes(
+                dispatch_span,
+                {
+                    "longhouse.session.id": source_session.id,
+                    "longhouse.turn.request_id": request_id,
+                    "longhouse.turn.send_observed_at": send_observed_at,
+                    "longhouse.turn.dispatch_ok": bool(send_result.ok),
+                    "longhouse.turn.turn_verified": bool(getattr(send_result, "verified_turn_started", False)),
+                    "longhouse.turn.user_event_id": getattr(send_result, "verified_user_event_id", None),
+                    "longhouse.turn.exit_code": getattr(send_result, "exit_code", None),
+                },
+            )
+        t_sent = time.monotonic()
+
+        if not send_result.ok or not bool(getattr(send_result, "verified_turn_started", False)):
+            error_code = _managed_local_send_failure_code(send_result)
+            with tracer.start_as_current_span("longhouse.turn.persist_send_result") as persist_span:
+                if error_code == SESSION_TURN_ERROR_VERIFICATION_TIMEOUT:
+                    if not mark_session_turn_send_accepted(
+                        db,
+                        session_id=source_session.id,
+                        request_id=request_id,
+                        accepted_at=send_observed_at,
+                        user_event_id=getattr(send_result, "verified_user_event_id", None),
+                    ):
+                        raise RuntimeError(f"Failed to record canonical send_accepted milestone for {source_session.id}/{request_id}")
+                if not mark_session_turn_failed(
+                    db,
+                    session_id=source_session.id,
+                    request_id=request_id,
+                    error_code=error_code,
+                ):
+                    raise RuntimeError(f"Failed to record canonical failed milestone for {source_session.id}/{request_id}")
+                db.commit()
+                set_span_attributes(
+                    persist_span,
+                    {
+                        "longhouse.session.id": source_session.id,
+                        "longhouse.turn.request_id": request_id,
+                        "longhouse.turn.error_code": error_code,
+                    },
+                )
+            error_message = str(send_result.error or "Managed local session did not acknowledge the prompt after send")
+            mark_span_error(span, error_message)
+            set_span_attributes(
+                span,
+                {
+                    "longhouse.turn.outcome": "failed",
+                    "longhouse.turn.error_code": error_code,
+                },
+            )
+            dispatch_seconds = max(0.0, time.monotonic() - t0)
+            managed_turn_requests_total.labels(provider=provider_label, outcome="failed").inc()
+            managed_turn_dispatch_seconds.labels(provider=provider_label).observe(dispatch_seconds)
+            logger.warning(
+                "[%s] Managed-local send-live failed for %s: error_code=%s verified=%s exit_code=%s error=%s",
+                request_id,
+                source_session.id,
+                error_code,
+                bool(getattr(send_result, "verified_turn_started", False)),
+                getattr(send_result, "exit_code", None),
+                error_message,
+            )
+            with tracer.start_as_current_span("longhouse.turn.lock_release") as release_span:
+                released = await session_lock_manager.release(lock_scope_id, request_id)
+                set_span_attributes(
+                    release_span,
+                    {
+                        "longhouse.session.id": source_session.id,
+                        "longhouse.turn.request_id": request_id,
+                        "longhouse.turn.lock_released": released,
+                    },
+                )
+            logger.info(f"[{request_id}] Managed local chat dispatch failed, lock released")
+            return JSONResponse(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                content={
+                    "accepted": False,
+                    "error": error_message,
+                    "error_code": error_code,
+                    "session_id": str(source_session.id),
+                    "request_id": request_id,
+                },
+            )
+
+        with tracer.start_as_current_span("longhouse.turn.persist_send_result") as persist_span:
             if not mark_session_turn_send_accepted(
                 db,
                 session_id=source_session.id,
@@ -516,79 +745,70 @@ async def _dispatch_managed_local_text(
                 user_event_id=getattr(send_result, "verified_user_event_id", None),
             ):
                 raise RuntimeError(f"Failed to record canonical send_accepted milestone for {source_session.id}/{request_id}")
-        if not mark_session_turn_failed(
-            db,
-            session_id=source_session.id,
+            db.commit()
+            set_span_attributes(
+                persist_span,
+                {
+                    "longhouse.session.id": source_session.id,
+                    "longhouse.turn.request_id": request_id,
+                    "longhouse.turn.user_event_id": getattr(send_result, "verified_user_event_id", None),
+                },
+            )
+
+        _schedule_managed_local_active_phase_observation(
             request_id=request_id,
-            error_code=error_code,
-        ):
-            raise RuntimeError(f"Failed to record canonical failed milestone for {source_session.id}/{request_id}")
-        db.commit()
-        error_message = str(send_result.error or "Managed local session did not acknowledge the prompt after send")
-        logger.warning(
-            "[%s] Managed-local send-live failed for %s: error_code=%s verified=%s exit_code=%s error=%s",
-            request_id,
-            source_session.id,
-            error_code,
-            bool(getattr(send_result, "verified_turn_started", False)),
-            getattr(send_result, "exit_code", None),
-            error_message,
+            session_id=source_session.id,
+            provider=provider_label,
+            db_bind=db.get_bind(),
+            after_runtime_event_id=baseline_hook_runtime_event_id,
         )
-        await session_lock_manager.release(lock_scope_id, request_id)
-        logger.info(f"[{request_id}] Managed local chat dispatch failed, lock released")
-        return JSONResponse(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            content={
-                "accepted": False,
-                "error": error_message,
-                "error_code": error_code,
-                "session_id": str(source_session.id),
-                "request_id": request_id,
+        _schedule_managed_local_lock_release(
+            lock_scope_id=lock_scope_id,
+            request_id=request_id,
+            session_id=source_session.id,
+            provider=provider_label,
+            db_bind=db.get_bind(),
+            after_runtime_event_id=baseline_hook_runtime_event_id,
+        )
+
+        baseline_ms = round((t_baseline - t0) * 1000, 1)
+        turn_create_ms = round((t_turn_created - t_baseline) * 1000, 1)
+        provider_dispatch_ms = round((t_sent - t_turn_created) * 1000, 1)
+        dispatch_ms = round((t_sent - t0) * 1000, 1)
+        managed_turn_requests_total.labels(provider=provider_label, outcome="send_accepted").inc()
+        managed_turn_dispatch_seconds.labels(provider=provider_label).observe(dispatch_ms / 1000.0)
+        managed_turn_phase_seconds.labels(provider=provider_label, phase="baseline").observe(baseline_ms / 1000.0)
+        managed_turn_phase_seconds.labels(provider=provider_label, phase="turn_create").observe(turn_create_ms / 1000.0)
+        managed_turn_phase_seconds.labels(provider=provider_label, phase="provider_dispatch").observe(provider_dispatch_ms / 1000.0)
+        set_span_attributes(
+            span,
+            {
+                "longhouse.turn.outcome": "send_accepted",
+                "longhouse.turn.baseline_event_id": baseline_event_id,
+                "longhouse.turn.baseline_runtime_event_id": baseline_hook_runtime_event_id,
+                "longhouse.turn.phase_ms.baseline": baseline_ms,
+                "longhouse.turn.phase_ms.turn_create": turn_create_ms,
+                "longhouse.turn.phase_ms.provider_dispatch": provider_dispatch_ms,
+                "longhouse.turn.phase_ms.total": dispatch_ms,
             },
         )
+        logger.info(
+            "[%s] managed-local dispatch: baseline=%.0fms turn_create=%.0fms send=%.0fms total=%.0fms",
+            request_id,
+            baseline_ms,
+            turn_create_ms,
+            provider_dispatch_ms,
+            dispatch_ms,
+        )
 
-    if not mark_session_turn_send_accepted(
-        db,
-        session_id=source_session.id,
-        request_id=request_id,
-        accepted_at=send_observed_at,
-        user_event_id=getattr(send_result, "verified_user_event_id", None),
-    ):
-        raise RuntimeError(f"Failed to record canonical send_accepted milestone for {source_session.id}/{request_id}")
-    db.commit()
-
-    _schedule_managed_local_active_phase_observation(
-        request_id=request_id,
-        session_id=source_session.id,
-        db_bind=db.get_bind(),
-        after_runtime_event_id=baseline_hook_runtime_event_id,
-    )
-    _schedule_managed_local_lock_release(
-        lock_scope_id=lock_scope_id,
-        request_id=request_id,
-        session_id=source_session.id,
-        db_bind=db.get_bind(),
-        after_runtime_event_id=baseline_hook_runtime_event_id,
-    )
-
-    dispatch_ms = round((t_sent - t0) * 1000, 1)
-    logger.info(
-        "[%s] managed-local dispatch: baseline=%.0fms turn_create=%.0fms send=%.0fms total=%.0fms",
-        request_id,
-        (t_baseline - t0) * 1000,
-        (t_turn_created - t_baseline) * 1000,
-        (t_sent - t_turn_created) * 1000,
-        dispatch_ms,
-    )
-
-    return JSONResponse(
-        content={
-            "accepted": True,
-            "session_id": str(source_session.id),
-            "request_id": request_id,
-            "dispatch_ms": dispatch_ms,
-        },
-    )
+        return JSONResponse(
+            content={
+                "accepted": True,
+                "session_id": str(source_session.id),
+                "request_id": request_id,
+                "dispatch_ms": dispatch_ms,
+            },
+        )
 
 
 def _lock_scope_id_for_session(db: Session, session_id: str) -> str:

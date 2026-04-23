@@ -1,7 +1,9 @@
 """Agents API — session ingest endpoint."""
 
 import gzip
+import json
 import logging
+import time
 from uuid import UUID
 
 import zstandard
@@ -16,7 +18,14 @@ from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.metrics import agents_ingest_decode_seconds
+from zerg.metrics import agents_ingest_events_total
+from zerg.metrics import agents_ingest_payload_bytes
+from zerg.metrics import agents_ingest_requests_total
+from zerg.metrics import agents_ingest_write_seconds
 from zerg.models.device_token import DeviceToken
+from zerg.observability import get_tracer
+from zerg.observability import set_span_attributes
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import SessionIngest
 from zerg.services.session_views import IngestResponse
@@ -26,13 +35,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/agents", tags=["agents"])
 
 
-async def decompress_if_gzipped(request: Request) -> bytes:
+async def decompress_if_gzipped(request: Request) -> tuple[bytes, int, str]:
     """Decompress request body if gzip or zstd encoded.
 
     Returns:
-        Decompressed request body as bytes
+        Tuple of (decompressed request body, wire bytes, content encoding)
     """
     body = await request.body()
+    wire_bytes = len(body)
     content_encoding = request.headers.get("Content-Encoding", "").lower()
 
     if content_encoding == "gzip":
@@ -60,7 +70,7 @@ async def decompress_if_gzipped(request: Request) -> bytes:
                 detail=f"Invalid zstd content: {e}",
             )
 
-    return body
+    return body, wire_bytes, content_encoding or "identity"
 
 
 @router.post("/ingest", response_model=IngestResponse)
@@ -82,68 +92,168 @@ async def ingest_session(
     - Accepts gzip-compressed payloads (Content-Encoding: gzip)
     - Triggers async background summary/embedding/turn-loop work after successful ingest
     """
-    try:
-        body = await decompress_if_gzipped(request)
-
-        import json
-
-        try:
-            payload = json.loads(body)
-        except json.JSONDecodeError as e:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid JSON: {e}",
-            )
-
-        try:
-            data = SessionIngest(**payload)
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Invalid payload: {e}",
-            )
-
-        if isinstance(auth_token, ManagedLocalHookToken):
-            hook_session_id = UUID(auth_token.session_id)
-            if data.id is not None and data.id != hook_session_id:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Managed-local hook token does not match session",
-                )
-            data.id = hook_session_id
-            if auth_token.device_id:
-                data.device_id = auth_token.device_id
-        elif auth_token:
-            if data.device_id and data.device_id != auth_token.device_id:
-                logger.debug(
-                    "Device ID mismatch: payload %s != token %s, using token device_id",
-                    data.device_id,
-                    auth_token.device_id,
-                )
-            data.device_id = auth_token.device_id
-
-        from zerg.services.write_serializer import get_write_serializer
-
-        ws = get_write_serializer()
-
-        def _do_ingest(write_db):
-            store = AgentsStore(write_db)
-            return store.ingest_session(data)
-
-        result = await ws.execute_or_direct(_do_ingest, db, label="ingest")
-
-        return IngestResponse(
-            session_id=str(result.session_id),
-            events_inserted=result.events_inserted,
-            events_skipped=result.events_skipped,
-            session_created=result.session_created,
+    tracer = get_tracer(__name__)
+    auth_kind_label = (
+        "managed_local_hook" if isinstance(auth_token, ManagedLocalHookToken) else "device_token" if auth_token is not None else "none"
+    )
+    provider_label = "unknown"
+    content_encoding_label = request.headers.get("Content-Encoding", "").lower() or "identity"
+    request_status_label = "internal_error"
+    with tracer.start_as_current_span("longhouse.ingest") as span:
+        set_span_attributes(
+            span,
+            {
+                "http.route": "/api/agents/ingest",
+                "longhouse.ingest.auth_kind": auth_kind_label,
+            },
         )
 
-    except HTTPException:
-        raise
-    except Exception:
-        logger.exception("Failed to ingest session")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to ingest session",
-        )
+        try:
+            with tracer.start_as_current_span("longhouse.ingest.decode") as decode_span:
+                decode_started = time.monotonic()
+                body, wire_bytes, content_encoding = await decompress_if_gzipped(request)
+                decode_ms = round((time.monotonic() - decode_started) * 1000, 1)
+                content_encoding_label = content_encoding
+                set_span_attributes(
+                    decode_span,
+                    {
+                        "longhouse.ingest.content_encoding": content_encoding,
+                        "longhouse.ingest.body_bytes_wire": wire_bytes,
+                        "longhouse.ingest.body_bytes_decoded": len(body),
+                        "longhouse.ingest.decode_ms": decode_ms,
+                    },
+                )
+                agents_ingest_decode_seconds.labels(content_encoding=content_encoding_label).observe(decode_ms / 1000.0)
+                agents_ingest_payload_bytes.labels(
+                    content_encoding=content_encoding_label,
+                    kind="wire",
+                ).observe(wire_bytes)
+                agents_ingest_payload_bytes.labels(
+                    content_encoding=content_encoding_label,
+                    kind="decoded",
+                ).observe(len(body))
+
+            with tracer.start_as_current_span("longhouse.ingest.validate") as validate_span:
+                try:
+                    payload = json.loads(body)
+                except json.JSONDecodeError as e:
+                    request_status_label = "invalid_json"
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Invalid JSON: {e}",
+                    )
+
+                try:
+                    data = SessionIngest(**payload)
+                except Exception as e:
+                    request_status_label = "invalid_payload"
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=f"Invalid payload: {e}",
+                    )
+
+                if isinstance(auth_token, ManagedLocalHookToken):
+                    hook_session_id = UUID(auth_token.session_id)
+                    if data.id is not None and data.id != hook_session_id:
+                        request_status_label = "forbidden"
+                        raise HTTPException(
+                            status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Managed-local hook token does not match session",
+                        )
+                    data.id = hook_session_id
+                    if auth_token.device_id:
+                        data.device_id = auth_token.device_id
+                elif auth_token:
+                    if data.device_id and data.device_id != auth_token.device_id:
+                        logger.debug(
+                            "Device ID mismatch: payload %s != token %s, using token device_id",
+                            data.device_id,
+                            auth_token.device_id,
+                        )
+                    data.device_id = auth_token.device_id
+
+                provider_label = data.provider or "unknown"
+                set_span_attributes(
+                    validate_span,
+                    {
+                        "longhouse.session.id": data.id,
+                        "longhouse.provider": data.provider,
+                        "longhouse.device.id": data.device_id,
+                        "longhouse.ingest.event_count": len(data.events),
+                    },
+                )
+                agents_ingest_events_total.labels(provider=provider_label, kind="received").inc(len(data.events))
+                set_span_attributes(
+                    span,
+                    {
+                        "longhouse.session.id": data.id,
+                        "longhouse.provider": data.provider,
+                        "longhouse.device.id": data.device_id,
+                        "longhouse.ingest.event_count": len(data.events),
+                    },
+                )
+
+            from zerg.services.write_serializer import get_write_serializer
+
+            ws = get_write_serializer()
+
+            def _do_ingest(write_db):
+                store = AgentsStore(write_db)
+                return store.ingest_session(data)
+
+            with tracer.start_as_current_span("longhouse.ingest.write") as write_span:
+                write_started = time.monotonic()
+                result = await ws.execute_or_direct(_do_ingest, db, label="ingest")
+                write_ms = round((time.monotonic() - write_started) * 1000, 1)
+                agents_ingest_write_seconds.labels(provider=provider_label).observe(write_ms / 1000.0)
+                set_span_attributes(
+                    write_span,
+                    {
+                        "longhouse.session.id": result.session_id,
+                        "longhouse.ingest.events_inserted": result.events_inserted,
+                        "longhouse.ingest.events_skipped": result.events_skipped,
+                        "longhouse.ingest.session_created": result.session_created,
+                        "longhouse.ingest.write_ms": write_ms,
+                    },
+                )
+                agents_ingest_events_total.labels(provider=provider_label, kind="inserted").inc(result.events_inserted)
+                agents_ingest_events_total.labels(provider=provider_label, kind="skipped").inc(result.events_skipped)
+
+            set_span_attributes(
+                span,
+                {
+                    "longhouse.ingest.events_inserted": result.events_inserted,
+                    "longhouse.ingest.events_skipped": result.events_skipped,
+                    "longhouse.ingest.session_created": result.session_created,
+                },
+            )
+            request_status_label = "ok"
+            return IngestResponse(
+                session_id=str(result.session_id),
+                events_inserted=result.events_inserted,
+                events_skipped=result.events_skipped,
+                session_created=result.session_created,
+            )
+
+        except HTTPException as exc:
+            if request_status_label == "internal_error":
+                if exc.status_code == status.HTTP_400_BAD_REQUEST:
+                    request_status_label = "bad_request"
+                elif exc.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY:
+                    request_status_label = "unprocessable_entity"
+                else:
+                    request_status_label = f"http_{exc.status_code}"
+            raise
+        except Exception:
+            logger.exception("Failed to ingest session")
+            request_status_label = "internal_error"
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to ingest session",
+            )
+        finally:
+            agents_ingest_requests_total.labels(
+                auth_kind=auth_kind_label,
+                provider=provider_label,
+                status=request_status_label,
+            ).inc()

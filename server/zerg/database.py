@@ -677,6 +677,16 @@ def _migrate_agents_columns(engine: Engine) -> None:
     except Exception:
         logger.debug("sessions table migration skipped (table may not exist yet)", exc_info=True)
 
+    try:
+        with engine.connect() as conn:
+            columns = {row[1] for row in conn.execute(text("PRAGMA table_info(agent_heartbeats)"))}
+            if columns and "spool_dead" not in columns:
+                conn.execute(text("ALTER TABLE agent_heartbeats ADD COLUMN spool_dead INTEGER DEFAULT 0"))
+                conn.execute(text("UPDATE agent_heartbeats SET spool_dead = 0 WHERE spool_dead IS NULL"))
+            conn.commit()
+    except Exception:
+        logger.debug("agent_heartbeats table migration skipped (table may not exist yet)", exc_info=True)
+
     # session_turn_reviews table migrations (legacy — turn-review pipeline removed)
     try:
         with engine.connect() as conn:

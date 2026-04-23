@@ -561,6 +561,7 @@ def test_managed_local_active_observer_marks_canonical_turn(monkeypatch, tmp_pat
         session_chat_impl._observe_managed_local_turn_active_phase(
             request_id="req-active",
             session_id=source_session.id,
+            provider="claude",
             db_bind=db_bind,
             after_runtime_event_id=0,
         )
@@ -612,6 +613,7 @@ def test_managed_local_terminal_observer_marks_canonical_turn_and_releases_lock(
             lock_scope_id=str(source_session.id),
             request_id="req-terminal",
             session_id=source_session.id,
+            provider="claude",
             db_bind=db_bind,
             after_runtime_event_id=0,
         )
@@ -673,6 +675,7 @@ def test_managed_local_active_observer_is_noop_after_terminal_turn(monkeypatch, 
             lock_scope_id=str(source_session.id),
             request_id="req-active-after-terminal",
             session_id=source_session.id,
+            provider="claude",
             db_bind=db_bind,
             after_runtime_event_id=0,
         )
@@ -681,6 +684,7 @@ def test_managed_local_active_observer_is_noop_after_terminal_turn(monkeypatch, 
         session_chat_impl._observe_managed_local_turn_active_phase(
             request_id="req-active-after-terminal",
             session_id=source_session.id,
+            provider="claude",
             db_bind=db_bind,
             after_runtime_event_id=0,
         )

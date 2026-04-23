@@ -24,6 +24,7 @@ use crate::pipeline::compressor::CompressionAlgo;
 use crate::scheduler::{PathJob, PathScheduler, WorkPriority};
 use crate::shipper;
 use crate::shipping::client::ShipperClient;
+use crate::shipping_stats::RecentShipStatsTracker;
 use crate::state::db::open_db;
 use crate::state::file_state::FileState;
 use crate::state::spool::Spool;
@@ -90,6 +91,7 @@ struct PathTaskContext {
     algo: CompressionAlgo,
     tracker: ConsecutiveErrorTracker,
     parse_tracker: RecentIssueTracker,
+    ship_stats: RecentShipStatsTracker,
 }
 
 struct PathTaskResult {
@@ -151,12 +153,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     // 5. Create error tracker (shared across all ship operations)
     let tracker = ConsecutiveErrorTracker::new();
     let parse_tracker = RecentIssueTracker::new();
+    let ship_stats = RecentShipStatsTracker::new();
     let task_context = PathTaskContext {
         shipper_config: config.shipper_config.clone(),
         client: client.clone(),
         algo: config.algo,
         tracker: tracker.clone(),
         parse_tracker: parse_tracker.clone(),
+        ship_stats: ship_stats.clone(),
     };
 
     // 6. Start file watcher before catch-up work so live changes queue immediately.
@@ -402,6 +406,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &conn,
                     &tracker,
                     &parse_tracker,
+                    &ship_stats,
                     offline.is_offline,
                     &last_ship_at,
                     &status_path,
@@ -414,6 +419,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &conn,
                     &tracker,
                     &parse_tracker,
+                    &ship_stats,
                     offline.is_offline,
                     &last_ship_at,
                     &status_path,
@@ -435,6 +441,7 @@ fn write_local_status_snapshot(
     conn: &rusqlite::Connection,
     tracker: &ConsecutiveErrorTracker,
     parse_tracker: &RecentIssueTracker,
+    ship_stats: &RecentShipStatsTracker,
     is_offline: bool,
     last_ship_at: &Option<String>,
     status_path: &Path,
@@ -444,6 +451,7 @@ fn write_local_status_snapshot(
         spool: &spool,
         tracker,
         parse_tracker,
+        ship_stats,
         is_offline,
         last_ship_at: last_ship_at.clone(),
     };
@@ -453,23 +461,22 @@ fn write_local_status_snapshot(
     // Downstream readers (verify-runtime-truth, local-health) can then
     // tell an intentionally empty ledger apart from one the engine
     // couldn't read this tick.
-    let (phase_ledger, ledger_status) = match crate::state::session_phase::SessionPhaseStore::new(
-        conn,
-    )
-    .fresh_rows(chrono::Utc::now())
-    {
-        Ok(rows) => (rows, heartbeat::PhaseLedgerStatus::Ok),
-        Err(err) => {
-            tracing::warn!(
-                error = %err,
-                "failed to read fresh phase_ledger rows for engine-status.json"
-            );
-            (
-                Vec::new(),
-                heartbeat::PhaseLedgerStatus::ReadFailed(err.to_string()),
-            )
-        }
-    };
+    let (phase_ledger, ledger_status) =
+        match crate::state::session_phase::SessionPhaseStore::new(conn)
+            .fresh_rows(chrono::Utc::now())
+        {
+            Ok(rows) => (rows, heartbeat::PhaseLedgerStatus::Ok),
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    "failed to read fresh phase_ledger rows for engine-status.json"
+                );
+                (
+                    Vec::new(),
+                    heartbeat::PhaseLedgerStatus::ReadFailed(err.to_string()),
+                )
+            }
+        };
     heartbeat::write_status_file(&payload, &stats, phase_ledger, ledger_status, status_path);
     payload
 }
@@ -662,6 +669,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         PATH_SPOOL_REPLAY_LIMIT,
         task_context.shipper_config.max_batch_bytes,
         Some(&task_context.parse_tracker),
+        Some(&task_context.ship_stats),
     )
     .await
     {
@@ -705,6 +713,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                 &task_context.client,
                 &conn,
                 Some(&task_context.tracker),
+                Some(&task_context.ship_stats),
             )
             .await
             {

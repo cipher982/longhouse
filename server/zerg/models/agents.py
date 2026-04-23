@@ -342,6 +342,7 @@ class AgentHeartbeat(AgentsBase):
 
     # Stats
     spool_pending = Column(Integer, default=0)
+    spool_dead = Column(Integer, default=0)
     parse_errors_1h = Column(Integer, default=0)
     consecutive_failures = Column(Integer, default=0)
     disk_free_bytes = Column(BigInteger, default=0)

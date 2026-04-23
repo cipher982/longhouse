@@ -20,6 +20,7 @@ use crate::pipeline::batcher::{self, PlannedRangeAction, ShipRange};
 use crate::pipeline::compressor::{self, CompressionAlgo};
 use crate::pipeline::parser::{self, ParseResult};
 use crate::shipping::client::{ShipResult, ShipperClient};
+use crate::shipping_stats::{RecentShipStatsTracker, ShipAttemptOutcome};
 use crate::state::file_state::FileState;
 use crate::state::spool::Spool;
 
@@ -902,9 +903,28 @@ async fn attempt_ship(
     mut item: ShipItem,
     client: &ShipperClient,
     tracker: Option<&ConsecutiveErrorTracker>,
+    ship_stats: Option<&RecentShipStatsTracker>,
 ) -> AttemptedShip {
     let payload = std::mem::take(&mut item.compressed);
+    let attempt_started = std::time::Instant::now();
     let result = client.ship(payload).await;
+    let latency_ms = attempt_started.elapsed().as_millis() as u64;
+    if let Some(stats) = ship_stats {
+        let (outcome, http_status) = match &result {
+            ShipResult::Ok => (ShipAttemptOutcome::Ok, None),
+            ShipResult::RateLimited => (ShipAttemptOutcome::RateLimited, Some(429)),
+            ShipResult::ServerError(code, _) => (ShipAttemptOutcome::ServerError, Some(*code)),
+            ShipResult::PayloadRejected(code, _) => {
+                (ShipAttemptOutcome::PayloadRejected, Some(*code))
+            }
+            ShipResult::PayloadTooLarge(_) => (ShipAttemptOutcome::PayloadTooLarge, Some(413)),
+            ShipResult::RetryableClientError(code, _) => {
+                (ShipAttemptOutcome::RetryableClientError, Some(*code))
+            }
+            ShipResult::ConnectError(_) => (ShipAttemptOutcome::ConnectError, None),
+        };
+        stats.record(outcome, latency_ms, http_status);
+    }
 
     match result {
         ShipResult::Ok => {
@@ -988,6 +1008,7 @@ pub async fn ship_prepared_file(
     client: &ShipperClient,
     conn: &Connection,
     tracker: Option<&ConsecutiveErrorTracker>,
+    ship_stats: Option<&RecentShipStatsTracker>,
 ) -> Result<ShipPreparedOutcome> {
     let file_state = FileState::new(conn);
     let spool = Spool::new(conn);
@@ -1036,101 +1057,103 @@ pub async fn ship_prepared_file(
                     &item.provider,
                 )?;
             }
-            PreparedAction::Ship(item) => match attempt_ship(item, client, tracker).await {
-                AttemptedShip::Shipped(item) => {
-                    file_state.set_offset(
-                        &item.path_str,
-                        item.new_offset,
-                        &item.session_id,
-                        &item.session_id,
-                        &item.provider,
-                    )?;
-                    outcome.events_shipped += item.event_count;
-                    outcome.bytes_shipped += item.new_offset - item.offset;
-                }
-                AttemptedShip::Transient {
-                    item,
-                    error: _,
-                    is_connect_error,
-                } => {
-                    let enqueued = spool.enqueue(
-                        &item.provider,
-                        &item.path_str,
-                        item.offset,
-                        prepared.new_offset,
-                        Some(&item.session_id),
-                    )?;
-                    if enqueued {
-                        file_state.set_queued_offset(
+            PreparedAction::Ship(item) => {
+                match attempt_ship(item, client, tracker, ship_stats).await {
+                    AttemptedShip::Shipped(item) => {
+                        file_state.set_offset(
                             &item.path_str,
-                            prepared.new_offset,
+                            item.new_offset,
+                            &item.session_id,
+                            &item.session_id,
                             &item.provider,
-                            &item.session_id,
-                            &item.session_id,
                         )?;
-                    } else {
-                        tracing::warn!(
-                            "Spool at capacity — {} will be retried on next startup",
-                            item.path_str
-                        );
+                        outcome.events_shipped += item.event_count;
+                        outcome.bytes_shipped += item.new_offset - item.offset;
                     }
-                    outcome.fully_processed = false;
-                    outcome.had_connect_error = is_connect_error;
-                    return Ok(outcome);
-                }
-                AttemptedShip::PayloadTooLarge { item } => {
-                    let enqueued = spool.enqueue(
-                        &item.provider,
-                        &item.path_str,
-                        item.offset,
-                        prepared.new_offset,
-                        Some(&item.session_id),
-                    )?;
-                    if enqueued {
-                        file_state.set_queued_offset(
-                            &item.path_str,
-                            prepared.new_offset,
+                    AttemptedShip::Transient {
+                        item,
+                        error: _,
+                        is_connect_error,
+                    } => {
+                        let enqueued = spool.enqueue(
                             &item.provider,
-                            &item.session_id,
-                            &item.session_id,
+                            &item.path_str,
+                            item.offset,
+                            prepared.new_offset,
+                            Some(&item.session_id),
                         )?;
-                    } else {
-                        tracing::warn!(
+                        if enqueued {
+                            file_state.set_queued_offset(
+                                &item.path_str,
+                                prepared.new_offset,
+                                &item.provider,
+                                &item.session_id,
+                                &item.session_id,
+                            )?;
+                        } else {
+                            tracing::warn!(
+                                "Spool at capacity — {} will be retried on next startup",
+                                item.path_str
+                            );
+                        }
+                        outcome.fully_processed = false;
+                        outcome.had_connect_error = is_connect_error;
+                        return Ok(outcome);
+                    }
+                    AttemptedShip::PayloadTooLarge { item } => {
+                        let enqueued = spool.enqueue(
+                            &item.provider,
+                            &item.path_str,
+                            item.offset,
+                            prepared.new_offset,
+                            Some(&item.session_id),
+                        )?;
+                        if enqueued {
+                            file_state.set_queued_offset(
+                                &item.path_str,
+                                prepared.new_offset,
+                                &item.provider,
+                                &item.session_id,
+                                &item.session_id,
+                            )?;
+                        } else {
+                            tracing::warn!(
                             "Spool at capacity — 413 payload for {} will be retried on next startup",
                             item.path_str
                         );
+                        }
+                        outcome.fully_processed = false;
+                        return Ok(outcome);
                     }
-                    outcome.fully_processed = false;
-                    return Ok(outcome);
-                }
-                AttemptedShip::PayloadRejected {
-                    item,
-                    status_code,
-                    body,
-                } => {
-                    let error = format!(
-                        "payload rejected {}:{}",
+                    AttemptedShip::PayloadRejected {
+                        item,
                         status_code,
-                        truncate_http_body(&body)
-                    );
-                    spool.record_dead(
-                        &item.provider,
-                        &item.path_str,
-                        item.offset,
-                        item.new_offset,
-                        Some(&item.session_id),
-                        &error,
-                    )?;
-                    file_state.set_offset(
-                        &item.path_str,
-                        item.new_offset,
-                        &item.session_id,
-                        &item.session_id,
-                        &item.provider,
-                    )?;
-                    outcome.dead_lettered += 1;
+                        body,
+                    } => {
+                        let error = format!(
+                            "payload rejected {}:{}",
+                            status_code,
+                            truncate_http_body(&body)
+                        );
+                        spool.record_dead(
+                            &item.provider,
+                            &item.path_str,
+                            item.offset,
+                            item.new_offset,
+                            Some(&item.session_id),
+                            &error,
+                        )?;
+                        file_state.set_offset(
+                            &item.path_str,
+                            item.new_offset,
+                            &item.session_id,
+                            &item.session_id,
+                            &item.provider,
+                        )?;
+                        outcome.dead_lettered += 1;
+                    }
                 }
-            },
+            }
         }
     }
 
@@ -1228,6 +1251,7 @@ pub async fn replay_spool_batch_with_batch_bytes(
         limit,
         max_batch_bytes,
         None,
+        None,
     )
     .await
 }
@@ -1239,11 +1263,20 @@ pub(crate) async fn replay_spool_batch_with_batch_bytes_and_parse_tracker(
     limit: usize,
     max_batch_bytes: u64,
     parse_tracker: Option<&RecentIssueTracker>,
+    ship_stats: Option<&RecentShipStatsTracker>,
 ) -> Result<(usize, usize)> {
     let spool = Spool::new(conn);
     let pending = spool.dequeue_batch(limit)?;
-    let outcome =
-        replay_spool_entries(conn, client, algo, &pending, max_batch_bytes, parse_tracker).await?;
+    let outcome = replay_spool_entries(
+        conn,
+        client,
+        algo,
+        &pending,
+        max_batch_bytes,
+        parse_tracker,
+        ship_stats,
+    )
+    .await?;
 
     // Cleanup old dead entries
     let cleaned = spool.cleanup()?;
@@ -1262,10 +1295,20 @@ pub(crate) async fn replay_spool_for_path_with_batch_bytes_and_parse_tracker(
     limit: usize,
     max_batch_bytes: u64,
     parse_tracker: Option<&RecentIssueTracker>,
+    ship_stats: Option<&RecentShipStatsTracker>,
 ) -> Result<ReplaySpoolOutcome> {
     let spool = Spool::new(conn);
     let pending = spool.pending_entries_for_path(&file_path.to_string_lossy(), limit)?;
-    replay_spool_entries(conn, client, algo, &pending, max_batch_bytes, parse_tracker).await
+    replay_spool_entries(
+        conn,
+        client,
+        algo,
+        &pending,
+        max_batch_bytes,
+        parse_tracker,
+        ship_stats,
+    )
+    .await
 }
 
 pub(crate) async fn replay_spool_for_path_now_with_batch_bytes_and_parse_tracker(
@@ -1276,10 +1319,20 @@ pub(crate) async fn replay_spool_for_path_now_with_batch_bytes_and_parse_tracker
     limit: usize,
     max_batch_bytes: u64,
     parse_tracker: Option<&RecentIssueTracker>,
+    ship_stats: Option<&RecentShipStatsTracker>,
 ) -> Result<ReplaySpoolOutcome> {
     let spool = Spool::new(conn);
     let pending = spool.pending_entries_for_path_now(&file_path.to_string_lossy(), limit)?;
-    replay_spool_entries(conn, client, algo, &pending, max_batch_bytes, parse_tracker).await
+    replay_spool_entries(
+        conn,
+        client,
+        algo,
+        &pending,
+        max_batch_bytes,
+        parse_tracker,
+        ship_stats,
+    )
+    .await
 }
 
 async fn prepare_spool_entry_for_replay(
@@ -1313,6 +1366,7 @@ async fn replay_spool_entries(
     pending: &[crate::state::spool::SpoolEntry],
     max_batch_bytes: u64,
     parse_tracker: Option<&RecentIssueTracker>,
+    ship_stats: Option<&RecentShipStatsTracker>,
 ) -> Result<ReplaySpoolOutcome> {
     let spool = Spool::new(conn);
     let file_state = FileState::new(conn);
@@ -1390,66 +1444,68 @@ async fn replay_spool_entries(
                         spool.advance_start(entry.id, item.new_offset)?;
                     }
                 }
-                PreparedAction::Ship(item) => match attempt_ship(item, client, None).await {
-                    AttemptedShip::Shipped(item) => {
-                        outcome.events_shipped += item.event_count;
-                        file_state.set_acked_offset(&entry.file_path, item.new_offset)?;
-                        if item.new_offset >= entry.end_offset {
-                            spool.mark_shipped(entry.id)?;
-                            entry_done = true;
-                        } else {
-                            spool.advance_start(entry.id, item.new_offset)?;
+                PreparedAction::Ship(item) => {
+                    match attempt_ship(item, client, None, ship_stats).await {
+                        AttemptedShip::Shipped(item) => {
+                            outcome.events_shipped += item.event_count;
+                            file_state.set_acked_offset(&entry.file_path, item.new_offset)?;
+                            if item.new_offset >= entry.end_offset {
+                                spool.mark_shipped(entry.id)?;
+                                entry_done = true;
+                            } else {
+                                spool.advance_start(entry.id, item.new_offset)?;
+                            }
                         }
-                    }
-                    AttemptedShip::Transient {
-                        item: _,
-                        error,
-                        is_connect_error,
-                    } => {
-                        if is_connect_error {
-                            outcome.had_connect_error = true;
-                            break 'entry_loop;
+                        AttemptedShip::Transient {
+                            item: _,
+                            error,
+                            is_connect_error,
+                        } => {
+                            if is_connect_error {
+                                outcome.had_connect_error = true;
+                                break 'entry_loop;
+                            }
+                            spool.mark_failed(entry.id, &error)?;
+                            outcome.failed += 1;
+                            continue 'entry_loop;
                         }
-                        spool.mark_failed(entry.id, &error)?;
-                        outcome.failed += 1;
-                        continue 'entry_loop;
-                    }
-                    AttemptedShip::PayloadTooLarge { item: _ } => {
-                        spool.mark_failed_with_max(
-                            entry.id,
-                            "413 payload too large during replay",
-                            u32::MAX,
-                        )?;
-                        outcome.failed += 1;
-                        continue 'entry_loop;
-                    }
-                    AttemptedShip::PayloadRejected {
-                        item,
-                        status_code,
-                        body,
-                    } => {
-                        let error = format!(
-                            "payload rejected {}:{}",
+                        AttemptedShip::PayloadTooLarge { item: _ } => {
+                            spool.mark_failed_with_max(
+                                entry.id,
+                                "413 payload too large during replay",
+                                u32::MAX,
+                            )?;
+                            outcome.failed += 1;
+                            continue 'entry_loop;
+                        }
+                        AttemptedShip::PayloadRejected {
+                            item,
                             status_code,
-                            truncate_http_body(&body)
-                        );
-                        spool.record_dead(
-                            &item.provider,
-                            &item.path_str,
-                            item.offset,
-                            item.new_offset,
-                            Some(&item.session_id),
-                            &error,
-                        )?;
-                        file_state.set_acked_offset(&entry.file_path, item.new_offset)?;
-                        if item.new_offset >= entry.end_offset {
-                            spool.mark_shipped(entry.id)?;
-                            entry_done = true;
-                        } else {
-                            spool.advance_start(entry.id, item.new_offset)?;
+                            body,
+                        } => {
+                            let error = format!(
+                                "payload rejected {}:{}",
+                                status_code,
+                                truncate_http_body(&body)
+                            );
+                            spool.record_dead(
+                                &item.provider,
+                                &item.path_str,
+                                item.offset,
+                                item.new_offset,
+                                Some(&item.session_id),
+                                &error,
+                            )?;
+                            file_state.set_acked_offset(&entry.file_path, item.new_offset)?;
+                            if item.new_offset >= entry.end_offset {
+                                spool.mark_shipped(entry.id)?;
+                                entry_done = true;
+                            } else {
+                                spool.advance_start(entry.id, item.new_offset)?;
+                            }
                         }
                     }
-                },
+                }
             }
 
             if entry_done {
@@ -1527,7 +1583,7 @@ pub(crate) async fn full_scan_with_batch_bytes_and_parse_tracker(
             Ok(Some(prepared)) => {
                 let event_count = prepared.total_event_count();
                 let byte_count = prepared.new_offset.saturating_sub(prepared.offset);
-                let outcome = ship_prepared_file(prepared, client, conn, tracker).await?;
+                let outcome = ship_prepared_file(prepared, client, conn, tracker, None).await?;
                 log_slow_file_processing(
                     "fallback_scan",
                     path,
@@ -2444,7 +2500,7 @@ mod tests {
             })],
         };
 
-        let outcome = ship_prepared_file(prepared, &client, &conn, None)
+        let outcome = ship_prepared_file(prepared, &client, &conn, None, None)
             .await
             .unwrap();
         let fs = FileState::new(&conn);
@@ -2685,6 +2741,7 @@ mod tests {
             10,
             10_000,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -2707,6 +2764,64 @@ mod tests {
         );
         assert_eq!(file_state.get_offset(&path_a_str).unwrap(), path_a_len);
         assert_eq!(file_state.get_offset(&path_b_str).unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_replay_spool_for_path_records_ship_stats() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("eeeeeeee-1111-2222-3333-444455556666.jsonl");
+        std::fs::write(&path, claude_session_lines()).unwrap();
+
+        let file_state = FileState::new(&conn);
+        let spool = Spool::new(&conn);
+        let path_str = path.to_string_lossy().to_string();
+        let file_len = std::fs::metadata(&path).unwrap().len();
+
+        file_state
+            .set_queued_offset(
+                &path_str,
+                file_len,
+                "claude",
+                "eeeeeeee-1111-2222-3333-444455556666",
+                "eeeeeeee-1111-2222-3333-444455556666",
+            )
+            .unwrap();
+        spool
+            .enqueue(
+                "claude",
+                &path_str,
+                0,
+                file_len,
+                Some("eeeeeeee-1111-2222-3333-444455556666"),
+            )
+            .unwrap();
+
+        let ship_stats = RecentShipStatsTracker::new();
+        let (url, handle) = spawn_http_response_server("200 OK", "{}");
+        let client = make_test_client(&url);
+        let outcome = replay_spool_for_path_with_batch_bytes_and_parse_tracker(
+            &conn,
+            &client,
+            CompressionAlgo::Gzip,
+            &path,
+            10,
+            10_000,
+            None,
+            Some(&ship_stats),
+        )
+        .await
+        .unwrap();
+        handle.join().unwrap();
+
+        assert_eq!(outcome.resolved, 1);
+        let summary = ship_stats.summary();
+        assert_eq!(summary.ship_attempts_1h, 1);
+        assert_eq!(summary.ship_successes_1h, 1);
+        assert_eq!(summary.last_ship_result.as_deref(), Some("ok"));
+        assert_eq!(summary.last_ship_http_status, None);
     }
 
     #[tokio::test]
@@ -2755,6 +2870,7 @@ mod tests {
             10,
             10_000,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -2770,6 +2886,7 @@ mod tests {
             &path,
             10,
             10_000,
+            None,
             None,
         )
         .await
@@ -2823,6 +2940,7 @@ mod tests {
             &path,
             10,
             10_000,
+            None,
             None,
         )
         .await
@@ -2890,7 +3008,7 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
 
         let outcome = rt
-            .block_on(ship_prepared_file(prepared, &client, &conn, None))
+            .block_on(ship_prepared_file(prepared, &client, &conn, None, None))
             .unwrap();
         handle.join().unwrap();
 
@@ -2938,7 +3056,7 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
 
         let outcome = rt
-            .block_on(ship_prepared_file(prepared, &client, &conn, None))
+            .block_on(ship_prepared_file(prepared, &client, &conn, None, None))
             .unwrap();
         handle.join().unwrap();
 
@@ -2983,7 +3101,7 @@ mod tests {
             spawn_http_sequence_server(&[("401 Unauthorized", "{\"detail\":\"bad token\"}")]);
         let client = make_test_client(&url);
 
-        let outcome = ship_prepared_file(prepared, &client, &conn, None)
+        let outcome = ship_prepared_file(prepared, &client, &conn, None, None)
             .await
             .unwrap();
         handle.join().unwrap();
@@ -3021,7 +3139,7 @@ mod tests {
         )]);
         let client = make_test_client(&url);
 
-        let outcome = ship_prepared_file(prepared, &client, &conn, None)
+        let outcome = ship_prepared_file(prepared, &client, &conn, None, None)
             .await
             .unwrap();
         handle.join().unwrap();

@@ -13,6 +13,7 @@ use crate::config;
 use crate::error_tracker::ConsecutiveErrorTracker;
 use crate::error_tracker::RecentIssueTracker;
 use crate::shipping::client::ShipperClient;
+use crate::shipping_stats::RecentShipStatsTracker;
 use crate::state::session_phase::PhaseLedgerRow;
 use crate::state::spool::DeadLetterEntry;
 use crate::state::spool::Spool;
@@ -23,11 +24,33 @@ pub struct HeartbeatPayload {
     pub version: String,
     pub daemon_pid: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// RFC3339 timestamp of the last successful ship.
     pub last_ship_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// RFC3339 timestamp of the last ship attempt, successful or not.
+    pub last_ship_attempt_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_ship_result: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_ship_latency_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_ship_http_status: Option<u16>,
     pub spool_pending_count: usize,
     pub spool_dead_count: usize,
     pub parse_error_count_1h: u32,
     pub consecutive_ship_failures: u32,
+    pub ship_attempts_1h: u32,
+    pub ship_successes_1h: u32,
+    pub ship_rate_limited_1h: u32,
+    pub ship_server_errors_1h: u32,
+    pub ship_payload_rejections_1h: u32,
+    pub ship_payload_too_large_1h: u32,
+    pub ship_retryable_client_errors_1h: u32,
+    pub ship_connect_errors_1h: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ship_latency_p50_ms_1h: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ship_latency_p95_ms_1h: Option<u64>,
     pub disk_free_bytes: u64,
     pub is_offline: bool,
 }
@@ -37,6 +60,7 @@ pub struct HeartbeatStats<'a> {
     pub spool: &'a Spool<'a>,
     pub tracker: &'a ConsecutiveErrorTracker,
     pub parse_tracker: &'a RecentIssueTracker,
+    pub ship_stats: &'a RecentShipStatsTracker,
     pub is_offline: bool,
     pub last_ship_at: Option<String>,
 }
@@ -62,15 +86,30 @@ impl HeartbeatPayload {
         let parse_error_count_1h = stats.parse_tracker.count_last_hour();
         let consecutive_ship_failures = stats.tracker.consecutive_count();
         let disk_free_bytes = get_disk_free();
+        let ship_stats = stats.ship_stats.summary();
 
         HeartbeatPayload {
             version: BuildIdentity::current().qualified(),
             daemon_pid: std::process::id(),
             last_ship_at: stats.last_ship_at.clone(),
+            last_ship_attempt_at: ship_stats.last_ship_attempt_at,
+            last_ship_result: ship_stats.last_ship_result,
+            last_ship_latency_ms: ship_stats.last_ship_latency_ms,
+            last_ship_http_status: ship_stats.last_ship_http_status,
             spool_pending_count,
             spool_dead_count,
             parse_error_count_1h,
             consecutive_ship_failures,
+            ship_attempts_1h: ship_stats.ship_attempts_1h,
+            ship_successes_1h: ship_stats.ship_successes_1h,
+            ship_rate_limited_1h: ship_stats.ship_rate_limited_1h,
+            ship_server_errors_1h: ship_stats.ship_server_errors_1h,
+            ship_payload_rejections_1h: ship_stats.ship_payload_rejections_1h,
+            ship_payload_too_large_1h: ship_stats.ship_payload_too_large_1h,
+            ship_retryable_client_errors_1h: ship_stats.ship_retryable_client_errors_1h,
+            ship_connect_errors_1h: ship_stats.ship_connect_errors_1h,
+            ship_latency_p50_ms_1h: ship_stats.ship_latency_p50_ms_1h,
+            ship_latency_p95_ms_1h: ship_stats.ship_latency_p95_ms_1h,
             disk_free_bytes,
             is_offline: stats.is_offline,
         }
@@ -224,10 +263,24 @@ mod tests {
             version: "0.1.0".to_string(),
             daemon_pid: 12345,
             last_ship_at: Some("2026-02-18T10:00:00Z".to_string()),
+            last_ship_attempt_at: Some("2026-02-18T10:00:01Z".to_string()),
+            last_ship_result: Some("ok".to_string()),
+            last_ship_latency_ms: Some(123),
+            last_ship_http_status: None,
             spool_pending_count: 5,
             spool_dead_count: 1,
             parse_error_count_1h: 0,
             consecutive_ship_failures: 2,
+            ship_attempts_1h: 7,
+            ship_successes_1h: 5,
+            ship_rate_limited_1h: 1,
+            ship_server_errors_1h: 1,
+            ship_payload_rejections_1h: 0,
+            ship_payload_too_large_1h: 0,
+            ship_retryable_client_errors_1h: 0,
+            ship_connect_errors_1h: 1,
+            ship_latency_p50_ms_1h: Some(123),
+            ship_latency_p95_ms_1h: Some(250),
             disk_free_bytes: 1_000_000_000,
             is_offline: false,
         };
@@ -241,8 +294,12 @@ mod tests {
         assert_eq!(parsed["spool_pending_count"], 5);
         assert_eq!(parsed["spool_dead_count"], 1);
         assert_eq!(parsed["consecutive_ship_failures"], 2);
+        assert_eq!(parsed["ship_attempts_1h"], 7);
+        assert_eq!(parsed["ship_successes_1h"], 5);
         assert_eq!(parsed["is_offline"], false);
         assert!(parsed["last_ship_at"].is_string());
+        assert!(parsed["last_ship_attempt_at"].is_string());
+        assert_eq!(parsed["last_ship_result"], "ok");
     }
 
     #[test]
@@ -251,10 +308,24 @@ mod tests {
             version: "0.1.0".to_string(),
             daemon_pid: 1,
             last_ship_at: None,
+            last_ship_attempt_at: None,
+            last_ship_result: None,
+            last_ship_latency_ms: None,
+            last_ship_http_status: None,
             spool_pending_count: 0,
             spool_dead_count: 0,
             parse_error_count_1h: 0,
             consecutive_ship_failures: 0,
+            ship_attempts_1h: 0,
+            ship_successes_1h: 0,
+            ship_rate_limited_1h: 0,
+            ship_server_errors_1h: 0,
+            ship_payload_rejections_1h: 0,
+            ship_payload_too_large_1h: 0,
+            ship_retryable_client_errors_1h: 0,
+            ship_connect_errors_1h: 0,
+            ship_latency_p50_ms_1h: None,
+            ship_latency_p95_ms_1h: None,
             disk_free_bytes: 0,
             is_offline: true,
         };
@@ -274,14 +345,29 @@ mod tests {
         let spool = Spool::new(&conn);
         let tracker = ConsecutiveErrorTracker::new();
         let parse_tracker = RecentIssueTracker::new();
+        let ship_stats = RecentShipStatsTracker::new();
         let payload = HeartbeatPayload {
             version: "0.1.0".to_string(),
             daemon_pid: 42,
             last_ship_at: Some("2026-03-10T00:00:00Z".to_string()),
+            last_ship_attempt_at: None,
+            last_ship_result: None,
+            last_ship_latency_ms: None,
+            last_ship_http_status: None,
             spool_pending_count: 2,
             spool_dead_count: 3,
             parse_error_count_1h: 0,
             consecutive_ship_failures: 0,
+            ship_attempts_1h: 0,
+            ship_successes_1h: 0,
+            ship_rate_limited_1h: 0,
+            ship_server_errors_1h: 0,
+            ship_payload_rejections_1h: 0,
+            ship_payload_too_large_1h: 0,
+            ship_retryable_client_errors_1h: 0,
+            ship_connect_errors_1h: 0,
+            ship_latency_p50_ms_1h: None,
+            ship_latency_p95_ms_1h: None,
             disk_free_bytes: 10,
             is_offline: false,
         };
@@ -300,12 +386,19 @@ mod tests {
             spool: &spool,
             tracker: &tracker,
             parse_tracker: &parse_tracker,
+            ship_stats: &ship_stats,
             is_offline: false,
             last_ship_at: payload.last_ship_at.clone(),
         };
 
         let status_path = dir.path().join("agent").join("engine-status.json");
-        write_status_file(&payload, &stats, Vec::new(), PhaseLedgerStatus::Ok, &status_path);
+        write_status_file(
+            &payload,
+            &stats,
+            Vec::new(),
+            PhaseLedgerStatus::Ok,
+            &status_path,
+        );
 
         let json = std::fs::read_to_string(status_path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -343,6 +436,7 @@ mod tests {
         let spool = Spool::new(&conn);
         let tracker = ConsecutiveErrorTracker::new();
         let parse_tracker = RecentIssueTracker::new();
+        let ship_stats = RecentShipStatsTracker::new();
 
         // Seed one fresh ledger row.
         SessionPhaseStore::new(&conn)
@@ -360,10 +454,24 @@ mod tests {
             version: "0.1.0".to_string(),
             daemon_pid: 42,
             last_ship_at: None,
+            last_ship_attempt_at: None,
+            last_ship_result: None,
+            last_ship_latency_ms: None,
+            last_ship_http_status: None,
             spool_pending_count: 0,
             spool_dead_count: 0,
             parse_error_count_1h: 0,
             consecutive_ship_failures: 0,
+            ship_attempts_1h: 0,
+            ship_successes_1h: 0,
+            ship_rate_limited_1h: 0,
+            ship_server_errors_1h: 0,
+            ship_payload_rejections_1h: 0,
+            ship_payload_too_large_1h: 0,
+            ship_retryable_client_errors_1h: 0,
+            ship_connect_errors_1h: 0,
+            ship_latency_p50_ms_1h: None,
+            ship_latency_p95_ms_1h: None,
             disk_free_bytes: 0,
             is_offline: false,
         };
@@ -371,6 +479,7 @@ mod tests {
             spool: &spool,
             tracker: &tracker,
             parse_tracker: &parse_tracker,
+            ship_stats: &ship_stats,
             is_offline: false,
             last_ship_at: None,
         };
@@ -405,14 +514,29 @@ mod tests {
         let spool = Spool::new(&conn);
         let tracker = ConsecutiveErrorTracker::new();
         let parse_tracker = RecentIssueTracker::new();
+        let ship_stats = RecentShipStatsTracker::new();
         let payload = HeartbeatPayload {
             version: "0.1.0".to_string(),
             daemon_pid: 42,
             last_ship_at: None,
+            last_ship_attempt_at: None,
+            last_ship_result: None,
+            last_ship_latency_ms: None,
+            last_ship_http_status: None,
             spool_pending_count: 0,
             spool_dead_count: 0,
             parse_error_count_1h: 0,
             consecutive_ship_failures: 0,
+            ship_attempts_1h: 0,
+            ship_successes_1h: 0,
+            ship_rate_limited_1h: 0,
+            ship_server_errors_1h: 0,
+            ship_payload_rejections_1h: 0,
+            ship_payload_too_large_1h: 0,
+            ship_retryable_client_errors_1h: 0,
+            ship_connect_errors_1h: 0,
+            ship_latency_p50_ms_1h: None,
+            ship_latency_p95_ms_1h: None,
             disk_free_bytes: 0,
             is_offline: false,
         };
@@ -420,6 +544,7 @@ mod tests {
             spool: &spool,
             tracker: &tracker,
             parse_tracker: &parse_tracker,
+            ship_stats: &ship_stats,
             is_offline: false,
             last_ship_at: None,
         };
