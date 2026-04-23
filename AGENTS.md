@@ -57,7 +57,7 @@ Install channels:
 - **Mac human happy path**: `Longhouse.app`.
 - **iOS**: built from `ios/` via Xcode; no public distribution yet (personal install via Xcode build-and-run).
 - **Agent/headless/power-user**: `uv tool install longhouse`, PyPI, or `curl | bash`.
-- **Canonical repair seam**: `longhouse connect --install`.
+- **Canonical configured-machine repair seam**: `longhouse machine repair`. Use `longhouse connect --install` for first install or force-reinstall.
 
 Boundary rules:
 

@@ -1017,7 +1017,7 @@ def test_collect_local_health_broken_when_service_stopped_with_stuck_outbox(monk
     assert snapshot["severity"] == "red"
     assert "service_stopped" in snapshot["reasons"]
     assert "outbox_stuck" in snapshot["reasons"]
-    assert "Run: longhouse machine reconcile" in snapshot["suggested_actions"]
+    assert "Run: longhouse machine repair" in snapshot["suggested_actions"]
 
 
 def test_collect_local_health_flags_missing_shipper_state_without_suggesting_reconcile(monkeypatch, tmp_path: Path):
@@ -1036,7 +1036,7 @@ def test_collect_local_health_flags_missing_shipper_state_without_suggesting_rec
     assert "shipper_state_missing" in snapshot["reasons"]
     assert snapshot["headline"] == "Longhouse shipper state is missing"
     assert f"Inspect or restore shipper state: {get_agent_db_path(tmp_path)}" in snapshot["suggested_actions"]
-    assert "Run: longhouse machine reconcile" not in snapshot["suggested_actions"]
+    assert "Run: longhouse machine repair" not in snapshot["suggested_actions"]
 
 
 def test_collect_local_health_broken_when_launch_config_disagrees(monkeypatch, tmp_path: Path):
@@ -1068,7 +1068,7 @@ def test_collect_local_health_broken_when_launch_config_disagrees(monkeypatch, t
     assert "config_url_runner_url_mismatch" in snapshot["reasons"]
     assert "machine_name_runner_name_mismatch" in snapshot["reasons"]
     assert "launch config" in snapshot["headline"].lower()
-    assert "Run: longhouse machine reconcile" in snapshot["suggested_actions"]
+    assert "Run: longhouse machine repair" in snapshot["suggested_actions"]
 
 
 def test_collect_local_health_ignores_global_runner_drift_for_scratch_home(monkeypatch, tmp_path: Path):
@@ -1544,6 +1544,34 @@ def test_local_health_menubar_requires_installed_app(monkeypatch, tmp_path: Path
 
     assert result.exit_code == 1, result.output
     assert "connect --install" in result.output
+    assert calls == []
+
+
+def test_local_health_menubar_prefers_machine_repair_for_configured_machine(monkeypatch, tmp_path: Path):
+    runner = CliRunner()
+    calls: list[dict[str, object]] = []
+
+    def fake_run(command, check, cwd):
+        calls.append({"command": command, "check": check, "cwd": cwd})
+
+    _write_local_config(tmp_path / ".longhouse", url="https://demo.longhouse.test", machine_name="cinder")
+    monkeypatch.setattr(local_health_cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(local_health_cli, "get_zerg_url", lambda config_dir=None: "https://demo.longhouse.test")
+    monkeypatch.setattr(local_health_cli, "_prebuilt_runtime_artifact", lambda component: None)
+
+    result = runner.invoke(
+        app,
+        [
+            "local-health",
+            "--claude-dir",
+            str(tmp_path / ".claude"),
+            "menubar",
+        ],
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "machine repair" in result.output
+    assert "connect --install" not in result.output
     assert calls == []
 
 

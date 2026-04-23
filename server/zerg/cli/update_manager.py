@@ -580,20 +580,20 @@ def upgrade_command(
 def _reconcile_runtime_after_upgrade() -> None:
     """Refresh engine, Codex, hooks, and desktop app from the newly installed CLI.
 
-    Runs `longhouse connect --install` as a subprocess so the upgraded package is
-    loaded in a fresh interpreter. If the machine has never been connected, the
-    reconcile raises and we surface a short hint instead of forcing config.
+    Runs `longhouse machine repair` as a subprocess so the upgraded package is
+    loaded in a fresh interpreter. If the machine has never been configured, we
+    surface a short fallback hint instead of forcing config.
     """
 
     longhouse_bin = _resolve_longhouse_entrypoint()
     if longhouse_bin is None:
         typer.echo("Skipping runtime refresh: could not locate the longhouse entrypoint.")
-        typer.echo("Run: longhouse connect --install")
+        typer.echo("Run: longhouse machine repair")
         return
 
     typer.echo("Refreshing engine, Codex, hooks, and desktop app...")
     completed = subprocess.run(
-        [longhouse_bin, "connect", "--install"],
+        [longhouse_bin, "machine", "repair"],
         check=False,
     )
     if completed.returncode != 0:
@@ -601,7 +601,8 @@ def _reconcile_runtime_after_upgrade() -> None:
             "Runtime refresh failed; CLI is upgraded but engine/Codex may be stale.",
             fg=typer.colors.YELLOW,
         )
-        typer.echo("Re-run when ready: longhouse connect --install")
+        typer.echo("Re-run when ready: longhouse machine repair")
+        typer.echo("First install instead: longhouse connect --install")
         return
 
     typer.echo("Verify with: longhouse doctor")

@@ -20,6 +20,7 @@ from zerg.services.desktop_app import uninstall_desktop_app_service
 from zerg.services.local_runtime_installer import apply_machine_state_update
 from zerg.services.local_runtime_installer import reconcile_local_runtime
 from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
+from zerg.services.machine_repair import replay_machine_backlog
 from zerg.services.machine_state import clear_machine_runtime_url
 from zerg.services.shipper import clear_token
 from zerg.services.shipper import get_service_info
@@ -320,53 +321,13 @@ def _validate_token(url: str, token: str) -> bool:
 
 def _attempt_post_auth_spool_replay(*, url: str, token: str, claude_dir: str | None) -> None:
     """Best-effort replay of queued local backlog after auth repair succeeds."""
-    try:
-        engine = get_engine_executable()
-    except RuntimeError as exc:
-        logging.getLogger(__name__).debug("Skipping post-auth spool replay: %s", exc)
-        return
-
-    env = os.environ.copy()
-    if claude_dir:
-        env["CLAUDE_CONFIG_DIR"] = claude_dir
-
-    try:
-        result = subprocess.run(
-            [
-                engine,
-                "ship",
-                "--url",
-                url,
-                "--token",
-                token,
-                "--json",
-            ],
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-    except Exception as exc:
-        logging.getLogger(__name__).warning("Post-auth spool replay failed to start: %s", exc)
-        typer.secho(
-            "Authenticated, but queued shipping could not be replayed immediately. " "Run `longhouse ship` if backlog stays stuck.",
-            fg=typer.colors.YELLOW,
-        )
-        return
-
-    if result.returncode == 0:
-        return
-
-    detail = (result.stderr or result.stdout or "").strip().splitlines()
-    logging.getLogger(__name__).warning(
-        "Post-auth spool replay exited %s%s",
-        result.returncode,
-        f": {detail[0]}" if detail else "",
+    replay = replay_machine_backlog(
+        url=url,
+        token=token,
+        claude_dir=claude_dir,
     )
-    typer.secho(
-        "Authenticated, but queued shipping could not be replayed immediately. " "Run `longhouse ship` if backlog stays stuck.",
-        fg=typer.colors.YELLOW,
-    )
+    if replay.warning:
+        typer.secho(replay.warning, fg=typer.colors.YELLOW)
 
 
 def _finalize_auth_success(
