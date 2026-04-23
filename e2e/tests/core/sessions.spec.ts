@@ -760,7 +760,7 @@ test.describe("Filter Chips and Popover", () => {
 
     // URL should have both params
     await expect(page).toHaveURL(/provider=claude/);
-    await expect(page).toHaveURL(new RegExp(`environment=${machineName}`));
+    await expect(page).toHaveURL(new RegExp(`device_id=${machineName}`));
   });
 
   test("Escape closes the filter popover", async ({ page }) => {
@@ -1398,7 +1398,7 @@ test.describe("Machine Filter", () => {
     await expect(machineBtn).toHaveCount(1, { timeout: 10000 });
 
     await machineBtn.click();
-    await expect(page).toHaveURL(new RegExp(`environment=${machineName}`));
+    await expect(page).toHaveURL(new RegExp(`device_id=${machineName}`));
   });
 
   test("machine filter shows only sessions from that machine", async ({
@@ -1418,7 +1418,7 @@ test.describe("Machine Filter", () => {
     });
 
     // Navigate with machine filter pre-applied
-    await page.goto(`/timeline?environment=${machineToken}`);
+    await page.goto(`/timeline?device_id=${machineToken}`);
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
     // Should show the filtered machine's sessions

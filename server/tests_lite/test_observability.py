@@ -3,9 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
+import logging
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
+from zerg.build_info import BuildIdentityMissing
 from zerg import observability
 
 
@@ -46,6 +50,25 @@ def test_build_resource_attributes_uses_build_identity_and_settings(monkeypatch)
     assert attrs["longhouse.app_mode"] == "dev"
     assert attrs["longhouse.build.commit"] == "b672fcca"
     assert attrs["longhouse.build.qualified_version"] == "0.2.0-dev+b672fcca"
+    assert attrs["longhouse.build.identity_available"] is True
+
+
+def test_build_resource_attributes_continue_without_build_identity(monkeypatch, caplog: pytest.LogCaptureFixture) -> None:
+    fake_settings = SimpleNamespace(environment="dogfood", app_mode=SimpleNamespace(value="dev"))
+    monkeypatch.setattr(observability, "get_settings", lambda: fake_settings)
+    monkeypatch.setattr(observability.build_info, "load", lambda: (_ for _ in ()).throw(BuildIdentityMissing("missing identity")))
+    monkeypatch.setattr(observability.socket, "gethostname", lambda: "test-host")
+
+    with caplog.at_level(logging.WARNING):
+        attrs = observability._build_resource_attributes()
+
+    assert attrs["service.name"] == "longhouse-runtime"
+    assert attrs["service.instance.id"] == "test-host"
+    assert attrs["deployment.environment.name"] == "dogfood"
+    assert attrs["longhouse.app_mode"] == "dev"
+    assert attrs["longhouse.build.identity_available"] is False
+    assert "service.version" not in attrs
+    assert "continuing without build metadata" in caplog.text
 
 
 def test_otlp_endpoint_detection_is_opt_in(monkeypatch) -> None:
