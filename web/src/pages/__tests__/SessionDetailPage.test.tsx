@@ -325,7 +325,10 @@ describe("SessionDetailPage", () => {
 
     await user.click(toolRow);
 
-    expect(screen.getByText("Output")).toBeInTheDocument();
+    // Inline-expanded detail shows an 'output' label (lowercased in the
+    // redesigned timeline). The old right-rail inspector with its 'Status'
+    // meta-list is gone.
+    expect(screen.getByText("output")).toBeInTheDocument();
   });
 
   it("keeps unresolved live tool calls pending from the row into the inspector", () => {
@@ -378,15 +381,10 @@ describe("SessionDetailPage", () => {
 
       fireEvent.click(toolRow);
 
-      const statusItem = screen.getByText("Status").closest(".inspector-meta-item");
-      if (!(statusItem instanceof HTMLElement)) {
-        throw new Error("Expected status metadata in the inspector");
-      }
-      expect(statusItem).toHaveTextContent("Pending");
-      const inspectorBody1 = statusItem.closest(".event-inspector__body");
-      expect(inspectorBody1).not.toBeNull();
-      expect(inspectorBody1).toHaveTextContent("Result not recorded yet.");
-      expect(inspectorBody1).not.toHaveTextContent(
+      const row = screen.getByText("Bash").closest("[data-row-kind=\"tool\"]");
+      expect(row).not.toBeNull();
+      expect(row).toHaveTextContent("Result not recorded yet.");
+      expect(row).not.toHaveTextContent(
         "Tool call dropped \u2014 no result was ever recorded.",
       );
     } finally {
@@ -441,17 +439,12 @@ describe("SessionDetailPage", () => {
 
     fireEvent.click(toolRow);
 
-    const statusItem = screen.getByText("Status").closest(".inspector-meta-item");
-    if (!(statusItem instanceof HTMLElement)) {
-      throw new Error("Expected status metadata in the inspector");
-    }
-    expect(statusItem).toHaveTextContent("Dropped");
-    const inspectorBody2 = statusItem.closest(".event-inspector__body");
-    expect(inspectorBody2).not.toBeNull();
-    expect(inspectorBody2).toHaveTextContent(
+    const row = screen.getByText("Bash").closest("[data-row-kind=\"tool\"]");
+    expect(row).not.toBeNull();
+    expect(row).toHaveTextContent(
       "Tool call dropped \u2014 no result was ever recorded.",
     );
-    expect(inspectorBody2).not.toHaveTextContent("Result not recorded yet.");
+    expect(row).not.toHaveTextContent("Result not recorded yet.");
   });
 
   it("shows the active turn elapsed counter in the header and control strip", () => {

@@ -1092,22 +1092,6 @@
   .tl-chip--error   { color: var(--color-intent-error); border-color: rgba(196, 80, 64, 0.35); }
   .tl-chip--pending { color: var(--color-intent-warning); border-color: rgba(212, 168, 67, 0.3); }
 
-  .tl-raw-btn {
-    border: 0;
-    background: transparent;
-    color: var(--color-text-muted);
-    font-family: var(--font-family-mono);
-    font-size: 11px;
-    padding: 2px 6px;
-    border-radius: 4px;
-    cursor: pointer;
-    opacity: 0.45;
-    margin-left: auto;
-    transition: opacity var(--motion-duration-fast) var(--motion-easing-standard),
-                color var(--motion-duration-fast) var(--motion-easing-standard);
-  }
-  .tl-msg:hover .tl-raw-btn { opacity: 1; }
-  .tl-raw-btn:hover { color: var(--color-text-primary); background: rgba(255,255,255,0.08); opacity: 1; }
 
   /* --- Prose messages: no card, no border, just text. --- */
   .tl-msg {
@@ -1118,14 +1102,6 @@
     max-width: 80ch;
     margin-inline: auto;
     width: 100%;
-  }
-  .tl-msg { cursor: default; position: relative; }
-  .tl-msg.is-selected {
-    background: rgba(212, 184, 122, 0.06);
-    border-radius: var(--radius-md);
-    padding-inline: var(--space-3);
-    margin-inline-start: calc(-1 * var(--space-3));
-    margin-inline-end: calc(-1 * var(--space-3));
   }
   .tl-msg--user { align-self: flex-start; }
   .tl-msg__head {
@@ -1232,35 +1208,20 @@
     padding: 7px 10px 7px 14px;
     min-width: 0;
     width: 100%;
-  }
-  .tl-action__main {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    flex: 1;
-    min-width: 0;
     border: 0;
     background: transparent;
     color: inherit;
     font: inherit;
     text-align: left;
     cursor: pointer;
-    padding: 0;
   }
   .tl-action__chev {
-    border: 0;
-    background: transparent;
     color: var(--color-text-muted);
     font-size: 14px;
-    cursor: pointer;
-    padding: 2px 6px;
-    border-radius: 4px;
-    transition: transform var(--motion-duration-fast) var(--motion-easing-standard),
-                background var(--motion-duration-fast) var(--motion-easing-standard);
+    transition: transform var(--motion-duration-fast) var(--motion-easing-standard);
     display: inline-block;
     line-height: 1;
   }
-  .tl-action__chev:hover { background: rgba(255,255,255,0.06); color: var(--color-text-primary); }
   .tl-action__chev.is-open { transform: rotate(90deg); }
   .tl-action__accent {
     position: absolute;
