@@ -587,18 +587,34 @@ fn drain_due_local_retries(
     }
 }
 
+#[tracing::instrument(
+    level = "info",
+    name = "engine.ship.prepare",
+    skip(task_context),
+    fields(
+        longhouse.provider = %job.provider,
+        longhouse.work_context = %work_context(job.priority),
+    )
+)]
 async fn prepare_file_for_job(
     job: &PathJob,
     task_context: &PathTaskContext,
 ) -> Result<Option<shipper::PreparedFile>> {
     let path = job.path.clone();
     let provider = job.provider;
+    let work_context_label = work_context(job.priority);
     let algo = task_context.algo;
     let db_path = task_context.shipper_config.db_path.clone();
     let max_batch_bytes = task_context.shipper_config.max_batch_bytes;
     let parse_tracker = task_context.parse_tracker.clone();
+    let blocking_span = tracing::info_span!(
+        "engine.ship.prepare.blocking",
+        longhouse.provider = %provider,
+        longhouse.work_context = %work_context_label,
+    );
 
     tokio::task::spawn_blocking(move || {
+        let _enter = blocking_span.enter();
         let conn = open_db(db_path.as_deref())?;
         let canonical = std::fs::canonicalize(&path)
             .unwrap_or_else(|_| path.clone())
@@ -635,6 +651,15 @@ async fn prepare_file_for_job(
     .await?
 }
 
+#[tracing::instrument(
+    level = "info",
+    name = "engine.path_job",
+    skip(task_context),
+    fields(
+        longhouse.provider = %job.provider,
+        longhouse.work_context = %work_context(job.priority),
+    )
+)]
 async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskResult {
     let mut result = PathTaskResult {
         job,

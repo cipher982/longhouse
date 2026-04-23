@@ -899,6 +899,21 @@ pub(crate) fn prepare_file_batches_with_parse_tracker(
     )
 }
 
+#[tracing::instrument(
+    level = "info",
+    name = "engine.ship.attempt",
+    skip(item, client, tracker, ship_stats),
+    fields(
+        otel.kind = "client",
+        http.request.method = "POST",
+        http.route = "/api/agents/ingest",
+        http.response.status_code = tracing::field::Empty,
+        longhouse.provider = %item.provider,
+        longhouse.ship.event_count = item.event_count as u64,
+        longhouse.ship.range_bytes = item.new_offset.saturating_sub(item.offset),
+        longhouse.ship.outcome = tracing::field::Empty,
+    )
+)]
 async fn attempt_ship(
     mut item: ShipItem,
     client: &ShipperClient,
@@ -909,20 +924,16 @@ async fn attempt_ship(
     let attempt_started = std::time::Instant::now();
     let result = client.ship(payload).await;
     let latency_ms = attempt_started.elapsed().as_millis() as u64;
+    let span = tracing::Span::current();
+    let (outcome, http_status) = classify_ship_attempt_result(&result);
+    span.record(
+        "longhouse.ship.outcome",
+        tracing::field::display(outcome.as_str()),
+    );
+    if let Some(status) = http_status {
+        span.record("http.response.status_code", tracing::field::display(status));
+    }
     if let Some(stats) = ship_stats {
-        let (outcome, http_status) = match &result {
-            ShipResult::Ok => (ShipAttemptOutcome::Ok, None),
-            ShipResult::RateLimited => (ShipAttemptOutcome::RateLimited, Some(429)),
-            ShipResult::ServerError(code, _) => (ShipAttemptOutcome::ServerError, Some(*code)),
-            ShipResult::PayloadRejected(code, _) => {
-                (ShipAttemptOutcome::PayloadRejected, Some(*code))
-            }
-            ShipResult::PayloadTooLarge(_) => (ShipAttemptOutcome::PayloadTooLarge, Some(413)),
-            ShipResult::RetryableClientError(code, _) => {
-                (ShipAttemptOutcome::RetryableClientError, Some(*code))
-            }
-            ShipResult::ConnectError(_) => (ShipAttemptOutcome::ConnectError, None),
-        };
         stats.record(outcome, latency_ms, http_status);
     }
 
@@ -1000,6 +1011,20 @@ async fn attempt_ship(
                 body,
             }
         }
+    }
+}
+
+fn classify_ship_attempt_result(result: &ShipResult) -> (ShipAttemptOutcome, Option<u16>) {
+    match result {
+        ShipResult::Ok => (ShipAttemptOutcome::Ok, None),
+        ShipResult::RateLimited => (ShipAttemptOutcome::RateLimited, Some(429)),
+        ShipResult::ServerError(code, _) => (ShipAttemptOutcome::ServerError, Some(*code)),
+        ShipResult::PayloadRejected(code, _) => (ShipAttemptOutcome::PayloadRejected, Some(*code)),
+        ShipResult::PayloadTooLarge(_) => (ShipAttemptOutcome::PayloadTooLarge, Some(413)),
+        ShipResult::RetryableClientError(code, _) => {
+            (ShipAttemptOutcome::RetryableClientError, Some(*code))
+        }
+        ShipResult::ConnectError(_) => (ShipAttemptOutcome::ConnectError, None),
     }
 }
 
@@ -1343,7 +1368,11 @@ async fn prepare_spool_entry_for_replay(
     parse_tracker: Option<&RecentIssueTracker>,
 ) -> Result<Option<PreparedFile>> {
     let parse_tracker = parse_tracker.cloned();
+    let provider = entry.provider.clone();
+    let blocking_span =
+        tracing::info_span!("engine.spool.prepare.blocking", longhouse.provider = %provider);
     task::spawn_blocking(move || {
+        let _enter = blocking_span.enter();
         prepare_path_range_with_parse_tracker(
             &path,
             &entry.provider,
@@ -1359,6 +1388,12 @@ async fn prepare_spool_entry_for_replay(
     .await?
 }
 
+#[tracing::instrument(
+    level = "info",
+    name = "engine.spool.replay",
+    skip(conn, client, pending, parse_tracker, ship_stats),
+    fields(longhouse.spool.pending_entries = pending.len() as u64)
+)]
 async fn replay_spool_entries(
     conn: &Connection,
     client: &ShipperClient,
