@@ -189,6 +189,10 @@ function renderObservabilityPage() {
   );
 }
 
+function cloneOverview(hoursBack: number) {
+  return JSON.parse(JSON.stringify(buildOverview(hoursBack)));
+}
+
 describe("ObservabilityPage", () => {
   const originalSingleTenant = config.singleTenant;
 
@@ -219,48 +223,64 @@ describe("ObservabilityPage", () => {
   it("renders the built-in observability dashboard", async () => {
     renderObservabilityPage();
 
-    expect(await screen.findByText("Observability")).toBeInTheDocument();
-    expect(screen.getByLabelText("Observability window")).toBeInTheDocument();
+    expect(await screen.findByText("Health")).toBeInTheDocument();
+    expect(screen.getByLabelText("Health window")).toBeInTheDocument();
 
     await waitFor(() => {
       expect(screen.getByText("12")).toBeInTheDocument();
     });
 
-    const completedHeading = screen.getByText("Completed Turns");
+    const completedHeading = screen.getByText("Managed Turns");
     const completedCard = completedHeading.closest(".metric-card");
     expect(completedCard).not.toBeNull();
     expect(within(completedCard as Element).getByText("12")).toBeInTheDocument();
 
-    const unhealthyHeading = screen.getByText("Unhealthy Machines");
+    const unhealthyHeading = screen.getByText("Healthy Machines");
     const unhealthyCard = unhealthyHeading.closest(".metric-card");
     expect(unhealthyCard).not.toBeNull();
     expect(within(unhealthyCard as Element).getByText("1/2")).toBeInTheDocument();
 
-    expect(screen.getByText("Provider Drift")).toBeInTheDocument();
-    expect(screen.getByText("Machine Health")).toBeInTheDocument();
-    expect(screen.getByText("Recent Slow Turns")).toBeInTheDocument();
+    expect(screen.getByText("What the current window says")).toBeInTheDocument();
+    expect(screen.getByText("Which providers are contributing to the pain")).toBeInTheDocument();
+    expect(screen.getByText("Shipping truth from the latest heartbeats")).toBeInTheDocument();
+    expect(screen.getByText("The slowest managed turns in this window")).toBeInTheDocument();
+    expect(screen.getByText("1 machine blocked or offline")).toBeInTheDocument();
+    expect(screen.getByText("Claude is driving most of the slow turns")).toBeInTheDocument();
+    expect(screen.getByText("Dispatch looks healthy; slowness is later in the turn")).toBeInTheDocument();
     expect(screen.getAllByText("broken-machine").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("claude").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("codex").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Claude").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Codex").length).toBeGreaterThan(0);
     expect(screen.getByText("1 dead-letter range(s) need repair.")).toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "Open machine sessions" })[0]).toHaveAttribute(
+      "href",
+      "/timeline?device_id=broken-machine",
+    );
+    expect(screen.getByRole("link", { name: "Open Claude sessions" })).toHaveAttribute(
+      "href",
+      "/timeline?provider=claude",
+    );
+    expect(screen.getByRole("link", { name: /Claude · aaaaaaaa/i })).toHaveAttribute(
+      "href",
+      "/timeline/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    );
   });
 
   it("refetches when the time window changes", async () => {
     renderObservabilityPage();
     const user = userEvent.setup();
 
-    const completedHeading = await screen.findByText("Completed Turns");
+    const completedHeading = await screen.findByText("Managed Turns");
     const completedCard = completedHeading.closest(".metric-card");
     expect(completedCard).not.toBeNull();
     await waitFor(() => {
       expect(within(completedCard as Element).getByText("12")).toBeInTheDocument();
     });
 
-    const select = screen.getByLabelText("Observability window") as HTMLSelectElement;
+    const select = screen.getByLabelText("Health window") as HTMLSelectElement;
     await user.selectOptions(select, "6");
 
     await waitFor(() => {
-      const updatedHeading = screen.getByText("Completed Turns");
+      const updatedHeading = screen.getByText("Managed Turns");
       const updatedCard = updatedHeading.closest(".metric-card");
       expect(updatedCard).not.toBeNull();
       expect(select.value).toBe("6");
@@ -269,11 +289,111 @@ describe("ObservabilityPage", () => {
     });
   });
 
+  it("flags elevated dispatch overhead and links to the slow-turn section action", async () => {
+    mockFetch.mockImplementationOnce(() => {
+      const overview = cloneOverview(24);
+      overview.summary.submit_to_send_ms.p95 = 18000;
+      overview.summary.total_turn_time_ms.p95 = 40000;
+      overview.summary.slow_turns = 3;
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(overview),
+      });
+    });
+
+    renderObservabilityPage();
+
+    expect(await screen.findByText("Dispatch overhead is elevated")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open slow turns" })).toBeInTheDocument();
+  });
+
+  it("shows a no-turns diagnosis when latency data is not available yet", async () => {
+    mockFetch.mockImplementationOnce(() => {
+      const overview = cloneOverview(24);
+      overview.summary.completed_turns = 0;
+      overview.summary.slow_turns = 0;
+      overview.providers = [];
+      overview.machines = [];
+      overview.machine_counts = {
+        total: 0,
+        healthy: 0,
+        degraded: 0,
+        offline: 0,
+        broken: 0,
+      };
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(overview),
+      });
+    });
+
+    renderObservabilityPage();
+
+    expect(await screen.findByText("No completed managed turns in this window")).toBeInTheDocument();
+  });
+
+  it("keeps the machine diagnosis ahead of no-turns when shipping is already broken", async () => {
+    mockFetch.mockImplementationOnce(() => {
+      const overview = cloneOverview(24);
+      overview.summary.completed_turns = 0;
+      overview.summary.slow_turns = 0;
+      overview.providers = [];
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(overview),
+      });
+    });
+
+    renderObservabilityPage();
+
+    expect(await screen.findByText("1 machine blocked or offline")).toBeInTheDocument();
+    expect(screen.queryByText("No completed managed turns in this window")).not.toBeInTheDocument();
+  });
+
+  it("falls back to an all-clear diagnosis when the current window is healthy", async () => {
+    mockFetch.mockImplementationOnce(() => {
+      const overview = cloneOverview(24);
+      overview.summary.slow_turns = 0;
+      overview.summary.total_turn_time_ms.p95 = 22000;
+      overview.summary.total_turn_time_ms.max = 24000;
+      overview.providers = [
+        {
+          ...overview.providers[0],
+          slow_turns: 0,
+          total_turn_time_ms: { ...overview.providers[0].total_turn_time_ms, p95: 18000 },
+        },
+      ];
+      overview.slow_turns = [];
+      overview.slow_turn_total = 0;
+      overview.machines = [
+        {
+          ...overview.machines[1],
+          device_id: "healthy-machine",
+        },
+      ];
+      overview.machine_counts = {
+        total: 1,
+        healthy: 1,
+        degraded: 0,
+        offline: 0,
+        broken: 0,
+      };
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(overview),
+      });
+    });
+
+    renderObservabilityPage();
+
+    expect(await screen.findByText("No active health regressions in this slice")).toBeInTheDocument();
+  });
+
   it("shows a single-tenant note when the page is unavailable", () => {
     config.singleTenant = false;
     renderObservabilityPage();
 
-    expect(screen.getByText("Observability is single-tenant for now")).toBeInTheDocument();
+    expect(screen.getByText("Health is single-tenant for now")).toBeInTheDocument();
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
@@ -289,9 +409,9 @@ describe("ObservabilityPage", () => {
     renderObservabilityPage();
 
     await waitFor(() => {
-      expect(screen.getByText("Error loading observability")).toBeInTheDocument();
+      expect(screen.getByText("Error loading health")).toBeInTheDocument();
     });
-    expect(screen.getByText("Observability is only available on single-tenant runtimes right now.")).toBeInTheDocument();
+    expect(screen.getByText("Health is only available on single-tenant runtimes right now.")).toBeInTheDocument();
   });
 
   it("handles forbidden responses cleanly", async () => {
@@ -306,8 +426,8 @@ describe("ObservabilityPage", () => {
     renderObservabilityPage();
 
     await waitFor(() => {
-      expect(screen.getByText("Error loading observability")).toBeInTheDocument();
+      expect(screen.getByText("Error loading health")).toBeInTheDocument();
     });
-    expect(screen.getByText("You do not have access to this observability surface.")).toBeInTheDocument();
+    expect(screen.getByText("You do not have access to this health surface.")).toBeInTheDocument();
   });
 });

@@ -294,20 +294,30 @@ describe("SessionsPage", () => {
 
   it("hydrates timeline filters directly from the URL", async () => {
     renderSessionsPage(
-      "/timeline?project=zerg&provider=codex&environment=laptop&days_back=30&query=fix%20bug&mode=hybrid&sort=recent&hide_autonomous=false&limit=150"
+      "/timeline?project=zerg&provider=codex&device_id=laptop&days_back=30&query=fix%20bug&mode=hybrid&sort=recent&hide_autonomous=false&limit=150"
     );
 
     await waitFor(() => {
       expect(latestFilters).toEqual({
         project: "zerg",
         provider: "codex",
-        environment: "laptop",
+        device_id: "laptop",
         days_back: 30,
         query: "fix bug",
         limit: 100,
         mode: "hybrid",
         sort: "recency",
         hide_autonomous: false,
+      });
+    });
+  });
+
+  it("maps legacy environment URLs into the machine filter", async () => {
+    renderSessionsPage("/timeline?environment=laptop");
+
+    await waitFor(() => {
+      expect(latestFilters).toMatchObject({
+        device_id: "laptop",
       });
     });
   });

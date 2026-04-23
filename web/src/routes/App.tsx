@@ -246,12 +246,16 @@ export function buildAppRoutes({ demoMode, singleTenant: _singleTenant }: Routin
                 ),
               },
               {
-                path: "/observability",
+                path: "/health",
                 element: (
                   <ErrorBoundary>
                     <ObservabilityPage />
                   </ErrorBoundary>
                 ),
+              },
+              {
+                path: "/observability",
+                element: <Navigate to="/health" replace />,
               },
               {
                 path: "/runners",

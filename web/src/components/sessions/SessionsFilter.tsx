@@ -115,7 +115,7 @@ export interface FilterPopoverProps {
   onClose: () => void;
   project: string; setProject: (v: string) => void; projectOptions: string[];
   provider: string; setProvider: (v: string) => void; providerOptions: string[];
-  environment: string; setEnvironment: (v: string) => void; machineOptions: string[];
+  deviceId: string; setDeviceId: (v: string) => void; machineOptions: string[];
   daysBack: number; setDaysBack: (v: number) => void;
   hideAutonomous: boolean; setHideAutonomous: (v: boolean) => void;
   filtersLoading: boolean;
@@ -125,7 +125,7 @@ export function FilterPopover({
   anchorRef, onClose,
   project, setProject, projectOptions,
   provider, setProvider, providerOptions,
-  environment, setEnvironment, machineOptions,
+  deviceId, setDeviceId, machineOptions,
   daysBack, setDaysBack,
   hideAutonomous, setHideAutonomous,
   filtersLoading,
@@ -153,13 +153,13 @@ export function FilterPopover({
     <div
       ref={ref}
       id="filter-panel"
-      role="dialog"
+      role="region"
       aria-label="Session filters"
       className="sessions-filter-popover"
       style={{ top: pos.top, right: pos.right }}
     >
       <FilterSection label="Provider" value={provider} options={providerOptions} onChange={setProvider} loading={filtersLoading} />
-      <FilterSection label="Machine" value={environment} options={machineOptions} onChange={setEnvironment} loading={filtersLoading} />
+      <FilterSection label="Machine" value={deviceId} options={machineOptions} onChange={setDeviceId} loading={filtersLoading} />
       <FilterSection label="Project" value={project} options={projectOptions} onChange={setProject} loading={filtersLoading} />
       <DaysSection value={daysBack} onChange={setDaysBack} />
       <label className="sessions-filter-toggle-label">

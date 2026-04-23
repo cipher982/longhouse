@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const configState = {
   demoMode: false,
+  singleTenant: false,
 };
 
 vi.mock("../../lib/config", () => ({
@@ -12,6 +13,7 @@ vi.mock("../../lib/config", () => ({
 describe("getNavItems", () => {
   beforeEach(() => {
     configState.demoMode = false;
+    configState.singleTenant = false;
   });
 
   it("includes core items in the authenticated app navigation", async () => {
@@ -27,6 +29,17 @@ describe("getNavItems", () => {
     expect(getNavItems("ADMIN").map((item) => item.href)).toEqual([
       "/timeline",
       "/runners",
+      "/admin",
+    ]);
+  });
+
+  it("adds Health in single-tenant mode", async () => {
+    configState.singleTenant = true;
+    const { getNavItems } = await import("./navItems");
+    expect(getNavItems("ADMIN").map((item) => item.href)).toEqual([
+      "/timeline",
+      "/runners",
+      "/health",
       "/admin",
     ]);
   });
