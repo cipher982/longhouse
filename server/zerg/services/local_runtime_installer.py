@@ -7,7 +7,10 @@ regardless of which entrypoint initiated the setup.
 
 from __future__ import annotations
 
+import plistlib
+import shlex
 from dataclasses import dataclass
+from pathlib import Path
 
 from zerg.services.desktop_app import install_desktop_app_service
 from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
@@ -52,6 +55,56 @@ class LocalRuntimeReconcileResult:
 class MachineStateApplyResult:
     machine_state: MachineState
     reconciled: bool = False
+
+
+def _extract_service_longhouse_home(service_file: str | None) -> Path | None:
+    raw = str(service_file or "").strip()
+    if not raw:
+        return None
+
+    path = Path(raw).expanduser()
+    if not path.exists():
+        return None
+
+    try:
+        if path.suffix == ".plist":
+            payload = plistlib.loads(path.read_bytes())
+            env = payload.get("EnvironmentVariables") if isinstance(payload, dict) else None
+            if isinstance(env, dict):
+                home = str(env.get("LONGHOUSE_HOME") or "").strip()
+                return Path(home).expanduser() if home else None
+            return None
+
+        if path.suffix == ".service":
+            for raw_line in path.read_text().splitlines():
+                line = raw_line.strip()
+                if not line.startswith("Environment="):
+                    continue
+                value = line.split("=", 1)[1].strip()
+                for token in shlex.split(value):
+                    if "=" not in token:
+                        continue
+                    key, env_value = token.split("=", 1)
+                    if key == "LONGHOUSE_HOME":
+                        return Path(env_value).expanduser()
+    except Exception:
+        return None
+
+    return None
+
+
+def _service_targets_state_root(service_info: dict[str, object], state_root: Path | None) -> bool:
+    status = str(service_info.get("status") or "not-installed")
+    if status == "not-installed":
+        return False
+    if state_root is None:
+        return True
+
+    service_home = _extract_service_longhouse_home(str(service_info.get("service_file") or ""))
+    if service_home is None:
+        return True
+
+    return service_home == state_root.expanduser()
 
 
 def _ensure_managed_codex_runtime(*, source_override: str | None = None) -> InstalledRuntimeBinary:
@@ -161,6 +214,7 @@ def install_local_runtime(
 def apply_machine_state_update(
     *,
     claude_dir: str | None,
+    base_dir: Path | None = None,
     written_by: str,
     runtime_url: str | None = None,
     machine_name: str | None = None,
@@ -172,10 +226,12 @@ def apply_machine_state_update(
     """Persist durable machine state and reconcile generated launch artifacts when installed.
 
     This is the safe seam for local config changes like switching runtime URL or
-    machine label after a machine agent has already been installed.
+    machine label after a machine agent has already been installed. It does not
+    install runtime binaries; use ``reconcile_local_runtime`` for full repair or
+    first-install behavior.
     """
 
-    config_dir = resolve_longhouse_home_from_provider_home(claude_dir) if claude_dir else None
+    config_dir = base_dir if base_dir is not None else (resolve_longhouse_home_from_provider_home(claude_dir) if claude_dir else None)
     service_info = get_service_info(claude_dir)
 
     write_kwargs: dict[str, object] = {
@@ -192,7 +248,7 @@ def apply_machine_state_update(
         write_kwargs["topology_intent"] = topology_intent
 
     machine_state = write_machine_state(**write_kwargs)
-    service_installed = str(service_info.get("status") or "not-installed") != "not-installed"
+    service_installed = _service_targets_state_root(service_info, config_dir)
     if not service_installed or not machine_state.runtime_url or not machine_state.machine_name:
         return MachineStateApplyResult(machine_state=machine_state)
 

@@ -1188,6 +1188,35 @@ def test_local_health_command_json_output(monkeypatch, tmp_path: Path):
     assert payload["launch_readiness"]["state"] == "unconfigured"
 
 
+def test_local_health_command_prints_launch_warnings(monkeypatch, tmp_path: Path):
+    runner = CliRunner()
+    longhouse_home = tmp_path / ".longhouse"
+    _write_local_config(longhouse_home, url="https://demo.longhouse.test", machine_name="cinder")
+    service_file = _write_service_plist(
+        tmp_path,
+        machine_name="cinder",
+        config_generation="stale-generation",
+        state_hash=_machine_state_hash(
+            url="https://demo.longhouse.test",
+            machine_name="cinder",
+        ),
+    )
+    _write_shipper_db(longhouse_home, [("/tmp/claude-a.jsonl", "claude", "sess-1", None, "2026-04-14T00:00:00Z")])
+    _write_engine_status(longhouse_home, age_seconds=5)
+    monkeypatch.setattr(
+        local_health_service,
+        "get_service_info",
+        lambda *args, **kwargs: _service_info("running", service_file=str(service_file)),
+    )
+    _disable_real_runner_env(monkeypatch, tmp_path)
+
+    result = runner.invoke(app, ["local-health", "--claude-dir", str(tmp_path / ".claude")])
+
+    assert result.exit_code == 0, result.output
+    assert "Launch warnings" in result.output
+    assert "service_generation_mismatch" in result.output
+
+
 def test_collect_local_health_includes_activity_summary(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))

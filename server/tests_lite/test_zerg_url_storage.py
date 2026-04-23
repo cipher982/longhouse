@@ -7,6 +7,7 @@ import pytest
 from zerg.services.machine_state import load_machine_state
 from zerg.services.shipper.token import get_zerg_url
 from zerg.services.shipper.token import normalize_zerg_url
+from zerg.services.shipper.token import save_machine_name
 from zerg.services.shipper.token import save_zerg_url
 
 
@@ -54,3 +55,16 @@ def test_save_zerg_url_writes_canonical_state_and_journal(tmp_path: Path):
 def test_save_zerg_url_rejects_invalid_value(tmp_path: Path):
     with pytest.raises(ValueError, match="Invalid Longhouse URL"):
         save_zerg_url("https://<typer.models.OptionInfo object at 0x1234>", tmp_path)
+
+
+def test_save_machine_name_writes_canonical_state_and_journal(tmp_path: Path):
+    save_machine_name("Cinder Local", tmp_path)
+
+    state = load_machine_state(tmp_path)
+    assert state is not None
+    assert state.machine_name == "Cinder-Local"
+
+    journal_path = tmp_path / "machine" / "state-journal.jsonl"
+    journal = journal_path.read_text()
+    assert "Cinder-Local" in journal
+    assert "shipper-save-machine-name" in journal

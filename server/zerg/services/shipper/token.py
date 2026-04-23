@@ -9,7 +9,6 @@ from urllib.parse import urlparse
 from zerg.services.longhouse_paths import get_machine_token_path
 from zerg.services.machine_state import clear_machine_runtime_url
 from zerg.services.machine_state import load_machine_state
-from zerg.services.machine_state import write_machine_state
 
 
 def get_token_path(config_dir: Path | None = None) -> Path:
@@ -159,18 +158,17 @@ def normalize_zerg_url(url: object | None) -> str | None:
 
 
 def save_zerg_url(url: str, config_dir: Path | None = None) -> None:
-    """Save the Longhouse API URL to local storage.
-
-    Uses secure file creation to avoid permission race conditions.
-
-    Args:
-        url: The URL to save.
-        config_dir: Optional Longhouse home or provider-config override.
-    """
+    """Save the Longhouse API URL to canonical machine state."""
     normalized_url = normalize_zerg_url(url)
     if normalized_url is None:
         raise ValueError(f"Invalid Longhouse URL: {url!r}")
-    write_machine_state(
+
+    # Route durable machine config changes through the safe apply seam so
+    # installed launch artifacts stay in sync with canonical state.
+    from zerg.services.local_runtime_installer import apply_machine_state_update
+
+    apply_machine_state_update(
+        claude_dir=None,
         base_dir=config_dir,
         written_by="shipper-save-url",
         runtime_url=normalized_url,
@@ -203,9 +201,13 @@ def load_machine_name(config_dir: Path | None = None) -> str | None:
 
 
 def save_machine_name(name: str, config_dir: Path | None = None) -> None:
-    """Save the machine name label to Longhouse-owned machine state."""
+    """Save the machine name label through the canonical machine-state seam."""
     normalized_name = sanitize_machine_name(name)
-    write_machine_state(
+
+    from zerg.services.local_runtime_installer import apply_machine_state_update
+
+    apply_machine_state_update(
+        claude_dir=None,
         base_dir=config_dir,
         written_by="shipper-save-machine-name",
         machine_name=normalized_name,

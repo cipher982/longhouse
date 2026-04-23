@@ -420,6 +420,44 @@ def test_apply_machine_state_update_reconciles_existing_service(tmp_path, monkey
     ]
 
 
+def test_apply_machine_state_update_ignores_service_from_other_state_root(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    claude_dir = home / ".claude"
+    other_home = tmp_path / "other-home"
+    other_home.mkdir(parents=True, exist_ok=True)
+    service_file = tmp_path / "com.longhouse.shipper.plist"
+    service_file.write_bytes(
+        b"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>EnvironmentVariables</key><dict><key>LONGHOUSE_HOME</key><string>"""
+        + str(other_home).encode("utf-8")
+        + b"""</string></dict></dict></plist>"""
+    )
+
+    monkeypatch.setenv("HOME", str(home))
+    installer.write_machine_state(
+        base_dir=home / ".longhouse",
+        written_by="connect-install",
+        runtime_url="https://old.longhouse.test",
+        machine_name="test-box",
+        desktop_app_enabled=True,
+    )
+    monkeypatch.setattr(
+        installer,
+        "get_service_info",
+        lambda claude_dir: {"status": "running", "service_file": str(service_file)},
+    )
+
+    result = installer.apply_machine_state_update(
+        claude_dir=str(claude_dir),
+        written_by="connect",
+        runtime_url="https://new.longhouse.test",
+    )
+
+    assert result.reconciled is False
+    assert result.machine_state.runtime_url == "https://new.longhouse.test"
+
+
 def test_reconcile_local_runtime_uses_canonical_machine_state(tmp_path, monkeypatch):
     home = tmp_path / "home"
     claude_dir = home / ".claude"

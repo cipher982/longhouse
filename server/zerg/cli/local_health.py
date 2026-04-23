@@ -110,6 +110,13 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
         for reason in reasons:
             typer.echo(f"  - {reason}")
 
+    launch_warnings = list(launch_readiness.get("warnings") or [])
+    if launch_warnings:
+        typer.echo("")
+        typer.echo("Launch warnings")
+        for warning in launch_warnings:
+            typer.echo(f"  - {warning}")
+
     actions = list(snapshot.get("suggested_actions") or [])
     if actions:
         typer.echo("")
