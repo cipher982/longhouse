@@ -31,6 +31,7 @@ from zerg.services.session_runtime import should_include_runtime_view
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_loop_mode import SessionLoopMode
 from zerg.utils.time import UTCBaseModel
+from zerg.utils.time import normalize_utc
 
 logger = logging.getLogger(__name__)
 
@@ -353,6 +354,20 @@ class EventsListResponse(BaseModel):
     abandoned_events: int = Field(0, description="Events excluded from head projection due to rewind branches")
 
 
+class SessionTurnTimingResponse(UTCBaseModel):
+    """Derived durations computed from canonical turn timestamps."""
+
+    submit_to_send_ms: Optional[int] = Field(None, description="send_accepted_at - user_submitted_at")
+    submit_to_active_ms: Optional[int] = Field(None, description="active_phase_observed_at - user_submitted_at")
+    submit_to_terminal_ms: Optional[int] = Field(None, description="terminal_at - user_submitted_at")
+    active_to_terminal_ms: Optional[int] = Field(None, description="terminal_at - active_phase_observed_at")
+    terminal_to_durable_ms: Optional[int] = Field(None, description="durable_at - terminal_at")
+    total_turn_time_ms: Optional[int] = Field(
+        None,
+        description="Best available completion time: (durable_at or terminal_at) - user_submitted_at",
+    )
+
+
 class SessionTurnResponse(UTCBaseModel):
     """Canonical public timing fields for one session turn."""
 
@@ -373,6 +388,10 @@ class SessionTurnResponse(UTCBaseModel):
     durable_at: Optional[datetime] = Field(None, description="When transcript durability was established")
     created_at: Optional[datetime] = Field(None, description="Row creation timestamp")
     updated_at: Optional[datetime] = Field(None, description="Row update timestamp")
+    timing: SessionTurnTimingResponse = Field(
+        ...,
+        description="Derived read-time durations between canonical turn milestones",
+    )
 
 
 class SessionTurnsListResponse(BaseModel):
@@ -747,6 +766,7 @@ def build_event_response(
 
 
 def build_session_turn_response(turn: SessionTurn) -> SessionTurnResponse:
+    timing = build_session_turn_timing_response(turn)
     return SessionTurnResponse(
         id=int(turn.id),
         session_id=str(turn.session_id),
@@ -765,7 +785,34 @@ def build_session_turn_response(turn: SessionTurn) -> SessionTurnResponse:
         durable_at=turn.durable_at,
         created_at=turn.created_at,
         updated_at=turn.updated_at,
+        timing=timing,
     )
+
+
+def build_session_turn_timing_response(turn: SessionTurn) -> SessionTurnTimingResponse:
+    user_submitted_at = normalize_utc(turn.user_submitted_at)
+    send_accepted_at = normalize_utc(turn.send_accepted_at)
+    active_phase_observed_at = normalize_utc(turn.active_phase_observed_at)
+    terminal_at = normalize_utc(turn.terminal_at)
+    durable_at = normalize_utc(turn.durable_at)
+    completed_at = durable_at or terminal_at
+
+    return SessionTurnTimingResponse(
+        submit_to_send_ms=_duration_ms(user_submitted_at, send_accepted_at),
+        submit_to_active_ms=_duration_ms(user_submitted_at, active_phase_observed_at),
+        submit_to_terminal_ms=_duration_ms(user_submitted_at, terminal_at),
+        active_to_terminal_ms=_duration_ms(active_phase_observed_at, terminal_at),
+        terminal_to_durable_ms=_duration_ms(terminal_at, durable_at),
+        total_turn_time_ms=_duration_ms(user_submitted_at, completed_at),
+    )
+
+
+def _duration_ms(start: datetime | None, end: datetime | None) -> int | None:
+    if start is None or end is None:
+        return None
+    # Clamp small ordering/clock skew glitches to 0 so derived durations stay monotonic.
+    elapsed_ms = round((end - start).total_seconds() * 1000)
+    return max(0, int(elapsed_ms))
 
 
 def format_age(dt: datetime) -> str:

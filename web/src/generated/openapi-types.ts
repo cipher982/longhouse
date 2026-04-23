@@ -3249,6 +3249,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/machines/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Machine Health */
+        get: operations["list_machine_health_agents_machines_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/sessions/semantic": {
         parameters: {
             query?: never;
@@ -5423,11 +5440,24 @@ export interface components {
             daemon_pid?: number | null;
             /** Last Ship At */
             last_ship_at?: string | null;
+            /** Last Ship Attempt At */
+            last_ship_attempt_at?: string | null;
+            /** Last Ship Result */
+            last_ship_result?: string | null;
+            /** Last Ship Latency Ms */
+            last_ship_latency_ms?: number | null;
+            /** Last Ship Http Status */
+            last_ship_http_status?: number | null;
             /**
              * Spool Pending Count
              * @default 0
              */
             spool_pending_count: number;
+            /**
+             * Spool Dead Count
+             * @default 0
+             */
+            spool_dead_count: number;
             /**
              * Parse Error Count 1H
              * @default 0
@@ -5438,6 +5468,50 @@ export interface components {
              * @default 0
              */
             consecutive_ship_failures: number;
+            /**
+             * Ship Attempts 1H
+             * @default 0
+             */
+            ship_attempts_1h: number;
+            /**
+             * Ship Successes 1H
+             * @default 0
+             */
+            ship_successes_1h: number;
+            /**
+             * Ship Rate Limited 1H
+             * @default 0
+             */
+            ship_rate_limited_1h: number;
+            /**
+             * Ship Server Errors 1H
+             * @default 0
+             */
+            ship_server_errors_1h: number;
+            /**
+             * Ship Payload Rejections 1H
+             * @default 0
+             */
+            ship_payload_rejections_1h: number;
+            /**
+             * Ship Payload Too Large 1H
+             * @default 0
+             */
+            ship_payload_too_large_1h: number;
+            /**
+             * Ship Retryable Client Errors 1H
+             * @default 0
+             */
+            ship_retryable_client_errors_1h: number;
+            /**
+             * Ship Connect Errors 1H
+             * @default 0
+             */
+            ship_connect_errors_1h: number;
+            /** Ship Latency P50 Ms 1H */
+            ship_latency_p50_ms_1h?: number | null;
+            /** Ship Latency P95 Ms 1H */
+            ship_latency_p95_ms_1h?: number | null;
             /**
              * Disk Free Bytes
              * @default 0
@@ -5756,6 +5830,86 @@ export interface components {
             message: string;
             /** Tools */
             tools?: string[];
+        };
+        /** MachineHealthItemResponse */
+        MachineHealthItemResponse: {
+            /** Device Id */
+            device_id: string;
+            /** Version */
+            version?: string | null;
+            /**
+             * Last Heartbeat At
+             * Format: date-time
+             */
+            last_heartbeat_at: string;
+            /** Heartbeat Age Seconds */
+            heartbeat_age_seconds: number;
+            /** Stale After Seconds */
+            stale_after_seconds: number;
+            /** Is Stale */
+            is_stale: boolean;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "healthy" | "degraded" | "offline" | "broken";
+            /** Status Reason */
+            status_reason: string;
+            /** Status Summary */
+            status_summary: string;
+            /** Reasons */
+            reasons: string[];
+            /** Last Ship At */
+            last_ship_at?: string | null;
+            /** Last Ship Attempt At */
+            last_ship_attempt_at?: string | null;
+            /** Last Ship Result */
+            last_ship_result?: string | null;
+            /** Last Ship Latency Ms */
+            last_ship_latency_ms?: number | null;
+            /** Last Ship Http Status */
+            last_ship_http_status?: number | null;
+            /** Ship Attempts 1H */
+            ship_attempts_1h: number;
+            /** Ship Successes 1H */
+            ship_successes_1h: number;
+            /** Ship Success Rate 1H */
+            ship_success_rate_1h?: number | null;
+            /** Ship Rate Limited 1H */
+            ship_rate_limited_1h: number;
+            /** Ship Server Errors 1H */
+            ship_server_errors_1h: number;
+            /** Ship Payload Rejections 1H */
+            ship_payload_rejections_1h: number;
+            /** Ship Payload Too Large 1H */
+            ship_payload_too_large_1h: number;
+            /** Ship Retryable Client Errors 1H */
+            ship_retryable_client_errors_1h: number;
+            /** Ship Connect Errors 1H */
+            ship_connect_errors_1h: number;
+            /** Ship Latency P50 Ms 1H */
+            ship_latency_p50_ms_1h?: number | null;
+            /** Ship Latency P95 Ms 1H */
+            ship_latency_p95_ms_1h?: number | null;
+            /** Spool Pending */
+            spool_pending: number;
+            /** Spool Dead */
+            spool_dead: number;
+            /** Parse Errors 1H */
+            parse_errors_1h: number;
+            /** Consecutive Failures */
+            consecutive_failures: number;
+            /** Disk Free Bytes */
+            disk_free_bytes: number;
+            /** Is Offline */
+            is_offline: boolean;
+        };
+        /** MachineHealthListResponse */
+        MachineHealthListResponse: {
+            /** Machines */
+            machines: components["schemas"]["MachineHealthItemResponse"][];
+            /** Total */
+            total: number;
         };
         /**
          * ManagedLocalSessionLaunchResponse
@@ -7674,6 +7828,44 @@ export interface components {
              * @description Row update timestamp
              */
             updated_at?: string | null;
+            /** @description Derived read-time durations between canonical turn milestones */
+            timing: components["schemas"]["SessionTurnTimingResponse"];
+        };
+        /**
+         * SessionTurnTimingResponse
+         * @description Derived durations computed from canonical turn timestamps.
+         */
+        SessionTurnTimingResponse: {
+            /**
+             * Submit To Send Ms
+             * @description send_accepted_at - user_submitted_at
+             */
+            submit_to_send_ms?: number | null;
+            /**
+             * Submit To Active Ms
+             * @description active_phase_observed_at - user_submitted_at
+             */
+            submit_to_active_ms?: number | null;
+            /**
+             * Submit To Terminal Ms
+             * @description terminal_at - user_submitted_at
+             */
+            submit_to_terminal_ms?: number | null;
+            /**
+             * Active To Terminal Ms
+             * @description terminal_at - active_phase_observed_at
+             */
+            active_to_terminal_ms?: number | null;
+            /**
+             * Terminal To Durable Ms
+             * @description durable_at - terminal_at
+             */
+            terminal_to_durable_ms?: number | null;
+            /**
+             * Total Turn Time Ms
+             * @description Best available completion time: (durable_at or terminal_at) - user_submitted_at
+             */
+            total_turn_time_ms?: number | null;
         };
         /**
          * SessionTurnsListResponse
@@ -14122,6 +14314,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IngestResponse"];
+                };
+            };
+        };
+    };
+    list_machine_health_agents_machines_health_get: {
+        parameters: {
+            query?: {
+                /** @description Filter to one device */
+                device_id?: string | null;
+                /** @description Filter by derived machine transport state */
+                status?: ("healthy" | "degraded" | "offline" | "broken") | null;
+                /** @description Max machine rows to return */
+                limit?: number;
+                /** @description Treat heartbeats older than this as offline */
+                stale_after_seconds?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachineHealthListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

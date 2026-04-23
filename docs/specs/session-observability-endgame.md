@@ -178,3 +178,4 @@ Near-term slice success criteria:
 - `GET /api/agents/machines/health` returns one latest heartbeat-derived row per device.
 - Each row includes heartbeat freshness, dominant transport reason, rolling ship outcomes, and backlog/dead-letter signals.
 - Operator flows can filter that surface by device and derived state without querying raw heartbeat history directly.
+- `GET /api/agents/sessions/{session_id}/turns` and turn detail responses expose derived phase durations from canonical turn timestamps instead of forcing trace inspection for basic timing decomposition.
