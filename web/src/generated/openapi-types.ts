@@ -2283,6 +2283,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/observability/machines/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Machine Health */
+        get: operations["list_machine_health_observability_machines_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/observability/turns/slow": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Slow Turns */
+        get: operations["list_slow_turns_observability_turns_slow_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/observability/turns/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Summarize Turns */
+        get: operations["summarize_turns_observability_turns_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/observability/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Observability Overview */
+        get: operations["read_observability_overview_observability_overview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/config/container-policy": {
         parameters: {
             query?: never;
@@ -5951,6 +6019,35 @@ export interface components {
             /** Total */
             total: number;
         };
+        /** MachineHealthStatusCountsResponse */
+        MachineHealthStatusCountsResponse: {
+            /**
+             * Total
+             * @description Total machines in the current filtered slice before machine_limit is applied.
+             * @default 0
+             */
+            total: number;
+            /**
+             * Healthy
+             * @default 0
+             */
+            healthy: number;
+            /**
+             * Degraded
+             * @default 0
+             */
+            degraded: number;
+            /**
+             * Offline
+             * @default 0
+             */
+            offline: number;
+            /**
+             * Broken
+             * @default 0
+             */
+            broken: number;
+        };
         /**
          * ManagedLocalSessionLaunchResponse
          * @description Response after successfully starting a managed local session.
@@ -6121,6 +6218,40 @@ export interface components {
             env?: string[];
             /** Config */
             config?: string[];
+        };
+        /** ObservabilityOverviewResponse */
+        ObservabilityOverviewResponse: {
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Hours Back */
+            hours_back: number;
+            /** Slow Threshold Ms */
+            slow_threshold_ms: number;
+            /** Stale After Seconds */
+            stale_after_seconds: number;
+            summary: components["schemas"]["ManagedTurnSummaryResponse"];
+            /** Providers */
+            providers: components["schemas"]["ManagedTurnProviderSummaryResponse"][];
+            /**
+             * Machines
+             * @description Machine rows in the current filtered slice, truncated by machine_limit.
+             */
+            machines: components["schemas"]["MachineHealthItemResponse"][];
+            /** @description Status counts for the current filtered machine slice before machine_limit truncation. */
+            machine_counts: components["schemas"]["MachineHealthStatusCountsResponse"];
+            /**
+             * Slow Turns
+             * @description Slow-turn rows in the current filtered turn slice, truncated by slow_turn_limit.
+             */
+            slow_turns: components["schemas"]["SlowTurnItemResponse"][];
+            /**
+             * Slow Turn Total
+             * @description Total slow turns in the current filtered turn slice before slow_turn_limit truncation.
+             */
+            slow_turn_total: number;
         };
         /**
          * ObsidianCredentials
@@ -12699,6 +12830,190 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TopAutomationsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_machine_health_observability_machines_health_get: {
+        parameters: {
+            query?: {
+                /** @description Filter to one device */
+                device_id?: string | null;
+                /** @description Filter by derived machine transport state */
+                status?: ("healthy" | "degraded" | "offline" | "broken") | null;
+                /** @description Max machine rows to return */
+                limit?: number;
+                /** @description Treat heartbeats older than this as offline */
+                stale_after_seconds?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachineHealthListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_slow_turns_observability_turns_slow_get: {
+        parameters: {
+            query?: {
+                /** @description Filter by session provider */
+                provider?: string | null;
+                /** @description Filter by project */
+                project?: string | null;
+                /** @description Filter by device */
+                device_id?: string | null;
+                /** @description Filter by completed turn state (for example terminal|durable|failed). Only turns with terminal_at or durable_at are eligible. */
+                state?: string | null;
+                /** @description Filter by current machine transport state */
+                machine_status?: ("healthy" | "degraded" | "offline" | "broken") | null;
+                /** @description Only return completed turns at or above this total duration */
+                min_total_turn_time_ms?: number;
+                /** @description Only consider turns submitted within this recent window */
+                hours_back?: number;
+                /** @description Max slow-turn rows to return */
+                limit?: number;
+                /** @description Offset for pagination */
+                offset?: number;
+                /** @description Treat heartbeats older than this as offline when enriching machine status */
+                stale_after_seconds?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SlowTurnsListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    summarize_turns_observability_turns_summary_get: {
+        parameters: {
+            query?: {
+                /** @description Filter by session provider */
+                provider?: string | null;
+                /** @description Filter by project */
+                project?: string | null;
+                /** @description Filter by device */
+                device_id?: string | null;
+                /** @description Filter by completed turn state (for example terminal|durable|failed). Only turns with terminal_at or durable_at are eligible. */
+                state?: string | null;
+                /** @description Filter by current machine transport state */
+                machine_status?: ("healthy" | "degraded" | "offline" | "broken") | null;
+                /** @description Count turns at or above this total duration as slow */
+                slow_threshold_ms?: number;
+                /** @description Only consider completed turns submitted within this recent window */
+                hours_back?: number;
+                /** @description Treat heartbeats older than this as offline when enriching machine status */
+                stale_after_seconds?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedTurnsSummaryEnvelopeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_observability_overview_observability_overview_get: {
+        parameters: {
+            query?: {
+                /** @description Filter turn telemetry by session provider */
+                provider?: string | null;
+                /** @description Filter turn telemetry by project */
+                project?: string | null;
+                /** @description Filter machines and turns by device */
+                device_id?: string | null;
+                /** @description Filter completed turns by state (for example terminal|durable|failed). Only turns with terminal_at or durable_at are eligible. */
+                state?: string | null;
+                /** @description Filter both the machine list and turn enrichment by machine transport state */
+                machine_status?: ("healthy" | "degraded" | "offline" | "broken") | null;
+                /** @description Count turns at or above this total duration as slow */
+                slow_threshold_ms?: number;
+                /** @description Only consider recent completed turns in this lookback window */
+                hours_back?: number;
+                /** @description Max machine rows to include in the overview */
+                machine_limit?: number;
+                /** @description Max slow-turn rows to include in the overview */
+                slow_turn_limit?: number;
+                /** @description Treat heartbeats older than this as offline when enriching machine status */
+                stale_after_seconds?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObservabilityOverviewResponse"];
                 };
             };
             /** @description Validation Error */

@@ -19,6 +19,7 @@ import SettingsPage from "../pages/SettingsPage";
 import IntegrationsPage from "../pages/IntegrationsPage";
 import DevicesPage from "../pages/DevicesPage";
 import AdminPage from "../pages/AdminPage";
+import ObservabilityPage from "../pages/ObservabilityPage";
 import RunnersPage from "../pages/RunnersPage";
 import RunnerDetailPage from "../pages/RunnerDetailPage";
 import SessionsPage from "../pages/SessionsPage";
@@ -241,6 +242,14 @@ export function buildAppRoutes({ demoMode, singleTenant: _singleTenant }: Routin
                 element: (
                   <ErrorBoundary>
                     <AdminPage />
+                  </ErrorBoundary>
+                ),
+              },
+              {
+                path: "/observability",
+                element: (
+                  <ErrorBoundary>
+                    <ObservabilityPage />
                   </ErrorBoundary>
                 ),
               },

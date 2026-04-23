@@ -28,6 +28,7 @@
 /* Pages */
 @import url("./profile-admin.css");
 @import url("./admin-ops.css");
+@import url("./observability.css");
 @import url("./settings.css");
 @import url("./marketing-mode.css");
 @import url("./page-shell.css");

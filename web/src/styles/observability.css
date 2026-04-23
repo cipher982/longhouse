@@ -1,0 +1,275 @@
+@layer pages {
+  .observability-page {
+    width: 100%;
+  }
+
+  .observability-stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-6);
+  }
+
+  .observability-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+
+  .observability-controls__label,
+  .observability-controls__stamp {
+    color: var(--color-text-muted);
+    font-size: 0.8rem;
+  }
+
+  .observability-select {
+    min-width: 150px;
+    height: 36px;
+    margin-bottom: 0;
+  }
+
+  .observability-note {
+    display: grid;
+    gap: var(--space-1);
+    padding: var(--space-4);
+    border: 1px solid var(--color-border-primary);
+    border-radius: var(--radius-md);
+    background:
+      linear-gradient(135deg, color-mix(in srgb, var(--color-brand-primary) 8%, transparent), transparent 60%),
+      var(--color-surface-card);
+    color: var(--color-text-muted);
+    font-size: 0.82rem;
+    line-height: 1.55;
+  }
+
+  .observability-note strong {
+    color: var(--color-text-primary);
+  }
+
+  .observability-metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: var(--space-4);
+  }
+
+  .observability-page .metric-card {
+    --metric-accent: var(--color-text-secondary);
+    position: relative;
+    overflow: hidden;
+    border: 1px solid color-mix(in srgb, var(--metric-accent) 36%, var(--color-border-primary));
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--metric-accent) 12%, transparent), transparent 42%),
+      var(--color-surface-card);
+  }
+
+  .observability-page .metric-card::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 4px;
+    background: var(--metric-accent);
+    opacity: 0.9;
+  }
+
+  .observability-page .metric-card .ui-card__header {
+    padding-bottom: var(--space-2);
+  }
+
+  .observability-page .metric-title {
+    margin: 0;
+    font-size: 0.76rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: color-mix(in srgb, var(--metric-accent) 70%, var(--color-text-secondary));
+  }
+
+  .observability-page .metric-value {
+    color: var(--color-text-primary);
+    font-size: 1.75rem;
+    font-family: var(--font-family-mono, "SFMono-Regular", Menlo, Monaco, monospace);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .observability-page .metric-subtitle {
+    margin-top: var(--space-1);
+    color: var(--color-text-muted);
+    font-size: 0.78rem;
+    line-height: 1.35;
+  }
+
+  .observability-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+    gap: var(--space-4);
+  }
+
+  .observability-panel {
+    border: 1px solid var(--color-border-primary);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--color-brand-primary) 6%, transparent), transparent 32%),
+      var(--color-surface-card);
+  }
+
+  .observability-panel__header {
+    padding-bottom: var(--space-2);
+  }
+
+  .observability-panel__title {
+    margin: 0;
+    font-size: 1rem;
+  }
+
+  .observability-panel__description {
+    margin: var(--space-1) 0 0;
+    color: var(--color-text-muted);
+    font-size: 0.82rem;
+    line-height: 1.45;
+  }
+
+  .observability-provider-cell,
+  .observability-provider-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .observability-provider-name,
+  .observability-turn-session-id {
+    font-family: var(--font-family-mono, "SFMono-Regular", Menlo, Monaco, monospace);
+    font-size: 0.84rem;
+  }
+
+  .observability-cell-subtle {
+    color: var(--color-text-muted);
+    font-size: 0.78rem;
+  }
+
+  .observability-machine-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: var(--space-3);
+  }
+
+  .observability-machine-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    border: 1px solid var(--color-border-primary);
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--color-surface-card) 90%, transparent);
+  }
+
+  .observability-machine-card--healthy {
+    border-color: color-mix(in srgb, var(--color-intent-success) 35%, var(--color-border-primary));
+  }
+
+  .observability-machine-card--degraded {
+    border-color: color-mix(in srgb, var(--color-intent-warning) 38%, var(--color-border-primary));
+  }
+
+  .observability-machine-card--offline,
+  .observability-machine-card--broken {
+    border-color: color-mix(in srgb, var(--color-intent-error) 38%, var(--color-border-primary));
+  }
+
+  .observability-machine-card__header {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-3);
+    align-items: flex-start;
+  }
+
+  .observability-machine-name {
+    margin: 0;
+    font-size: 0.96rem;
+    font-family: var(--font-family-mono, "SFMono-Regular", Menlo, Monaco, monospace);
+  }
+
+  .observability-machine-version {
+    margin: 4px 0 0;
+    color: var(--color-text-muted);
+    font-size: 0.78rem;
+  }
+
+  .observability-machine-summary {
+    margin: 0;
+    color: var(--color-text-primary);
+    font-size: 0.84rem;
+    line-height: 1.45;
+  }
+
+  .observability-machine-meta {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-3);
+    color: var(--color-text-muted);
+    font-size: 0.76rem;
+    flex-wrap: wrap;
+  }
+
+  .observability-machine-stats {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-2);
+  }
+
+  .observability-machine-stat {
+    display: grid;
+    gap: 2px;
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--color-surface-elevated) 76%, transparent);
+  }
+
+  .observability-stat-label {
+    color: var(--color-text-muted);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .observability-stat-value {
+    color: var(--color-text-primary);
+    font-size: 0.88rem;
+    font-family: var(--font-family-mono, "SFMono-Regular", Menlo, Monaco, monospace);
+    font-variant-numeric: tabular-nums;
+  }
+
+  @media (max-width: 1280px) {
+    .observability-metrics-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 960px) {
+    .observability-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 760px) {
+    .observability-metrics-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 640px) {
+    .observability-controls {
+      width: 100%;
+      align-items: stretch;
+    }
+
+    .observability-select {
+      width: 100%;
+    }
+
+    .observability-metrics-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .observability-machine-stats {
+      grid-template-columns: 1fr;
+    }
+  }
+}
