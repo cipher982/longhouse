@@ -265,6 +265,7 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
         "_load_api_credentials",
         lambda **_kwargs: ("https://longhouse.test", "zdt_test_token"),
     )
+    monkeypatch.setattr(codex_cli, "_ensure_managed_launch_preflight", lambda **_kwargs: None)
     monkeypatch.setattr(codex_cli, "get_machine_name_label", lambda: "work-laptop")
     monkeypatch.setattr(
         codex_cli,
@@ -332,6 +333,43 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
     assert native_tui_calls == [("session-123", "/tmp/codex", "ws://127.0.0.1:4800", str(tmp_path), False)]
 
 
+def test_codex_command_stops_before_api_launch_when_preflight_fails(monkeypatch, tmp_path):
+    runner = CliRunner()
+    launch_calls: list[dict] = []
+
+    monkeypatch.setattr(
+        codex_cli,
+        "_load_api_credentials",
+        lambda **_kwargs: ("https://longhouse.test", "zdt_test_token"),
+    )
+    monkeypatch.setattr(codex_cli, "_resolve_codex_binary", lambda _explicit=None: "/tmp/codex")
+    monkeypatch.setattr(codex_cli, "get_machine_name_label", lambda: "work-laptop")
+    monkeypatch.setattr(
+        codex_cli,
+        "_ensure_managed_launch_preflight",
+        lambda **_kwargs: (_ for _ in ()).throw(SystemExit(claude_cli.EXIT_SETUP_FAILED)),
+    )
+    monkeypatch.setattr(
+        codex_cli,
+        "_launch_managed_local_from_api",
+        lambda **kwargs: launch_calls.append(kwargs),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "codex",
+            "--cwd",
+            str(tmp_path),
+            "--project",
+            "demo",
+        ],
+    )
+
+    assert result.exit_code == claude_cli.EXIT_SETUP_FAILED
+    assert launch_calls == []
+
+
 def test_codex_command_exits_on_bridge_failure(monkeypatch, tmp_path):
     runner = CliRunner()
 
@@ -340,6 +378,7 @@ def test_codex_command_exits_on_bridge_failure(monkeypatch, tmp_path):
         "_load_api_credentials",
         lambda **_kwargs: ("https://longhouse.test", "zdt_test_token"),
     )
+    monkeypatch.setattr(codex_cli, "_ensure_managed_launch_preflight", lambda **_kwargs: None)
     monkeypatch.setattr(codex_cli, "get_machine_name_label", lambda: "work-laptop")
     monkeypatch.setattr(
         codex_cli,

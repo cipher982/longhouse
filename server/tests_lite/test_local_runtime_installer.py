@@ -341,6 +341,64 @@ def test_apply_machine_state_update_persists_without_reconciling_when_service_mi
     assert loaded.written_by == "connect"
 
 
+def test_apply_machine_state_update_rejects_localhost_target_on_stable_home(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    claude_dir = home / ".claude"
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(installer, "get_service_info", lambda claude_dir: {"status": "not-installed"})
+    monkeypatch.setattr(
+        installer,
+        "collect_launch_readiness",
+        lambda *args, **kwargs: {
+            "reasons": ["config_url_runner_url_mismatch"],
+            "runner": {
+                "runner_name": "cinder",
+                "runner_urls": ["https://demo.longhouse.test"],
+            },
+        },
+    )
+
+    try:
+        installer.apply_machine_state_update(
+            claude_dir=str(claude_dir),
+            written_by="connect",
+            runtime_url="http://127.0.0.1:8080",
+            machine_name="cinder",
+        )
+    except RuntimeError as exc:
+        assert "Refusing to point the stable Longhouse home at a local control plane" in str(exc)
+        assert "LONGHOUSE_HOME=~/.longhouse-dev" in str(exc)
+    else:
+        raise AssertionError("expected apply_machine_state_update to reject localhost on the stable home")
+
+
+def test_apply_machine_state_update_allows_localhost_target_on_scratch_home(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    scratch_home = home / ".longhouse-dev"
+    collect_calls: list[dict[str, object]] = []
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(installer, "get_service_info", lambda claude_dir: {"status": "not-installed"})
+    monkeypatch.setattr(
+        installer,
+        "collect_launch_readiness",
+        lambda *args, **kwargs: collect_calls.append(kwargs) or {"reasons": ["config_url_runner_url_mismatch"]},
+    )
+
+    result = installer.apply_machine_state_update(
+        claude_dir=None,
+        base_dir=scratch_home,
+        written_by="connect",
+        runtime_url="http://127.0.0.1:8080",
+        machine_name="cinder-dev",
+    )
+
+    assert result.reconciled is False
+    assert result.machine_state.runtime_url == "http://127.0.0.1:8080"
+    assert collect_calls == []
+
+
 def test_apply_machine_state_update_reconciles_existing_service(tmp_path, monkeypatch):
     home = tmp_path / "home"
     claude_dir = home / ".claude"

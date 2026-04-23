@@ -177,6 +177,48 @@ def test_claude_command_fails_when_native_channels_unavailable(monkeypatch, tmp_
     assert launch_calls == []
 
 
+def test_claude_command_stops_before_api_launch_when_preflight_fails(monkeypatch, tmp_path):
+    runner = CliRunner()
+    launch_calls: list[dict] = []
+
+    monkeypatch.setattr(
+        claude_cli,
+        "_load_api_credentials",
+        lambda **_kwargs: ("https://longhouse.test", "zdt_test_token"),
+    )
+    monkeypatch.setattr(
+        claude_cli,
+        "_detect_native_claude_channels_available",
+        lambda: (True, "authMethod=claude.ai, apiProvider=firstParty"),
+    )
+    monkeypatch.setattr(claude_cli, "_collect_claude_launch_env", lambda: {})
+    monkeypatch.setattr(claude_cli, "get_machine_name_label", lambda: "work-laptop")
+    monkeypatch.setattr(
+        claude_cli,
+        "_ensure_managed_launch_preflight",
+        lambda **_kwargs: (_ for _ in ()).throw(ClickExit(claude_cli.EXIT_SETUP_FAILED)),
+    )
+    monkeypatch.setattr(
+        claude_cli,
+        "_launch_managed_local_from_api",
+        lambda **kwargs: launch_calls.append(kwargs),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "claude",
+            "--cwd",
+            str(tmp_path),
+            "--project",
+            "demo",
+        ],
+    )
+
+    assert result.exit_code == claude_cli.EXIT_SETUP_FAILED
+    assert launch_calls == []
+
+
 def test_claude_command_starts_native_channel_bridge_when_api_returns_native_transport(monkeypatch, tmp_path):
     runner = CliRunner()
     open_calls: list[str] = []
@@ -193,6 +235,7 @@ def test_claude_command_starts_native_channel_bridge_when_api_returns_native_tra
         "_detect_native_claude_channels_available",
         lambda: (True, "authMethod=claude.ai, apiProvider=firstParty"),
     )
+    monkeypatch.setattr(claude_cli, "_ensure_managed_launch_preflight", lambda **_kwargs: None)
     monkeypatch.setattr(claude_cli, "get_machine_name_label", lambda: "work-laptop")
     monkeypatch.setattr(
         claude_cli,
@@ -494,6 +537,7 @@ def test_claude_command_force_native_channels_bypasses_bedrock_gate(monkeypatch,
         },
     )
     monkeypatch.setattr(claude_cli, "get_machine_name_label", lambda: "work-laptop")
+    monkeypatch.setattr(claude_cli, "_ensure_managed_launch_preflight", lambda **_kwargs: None)
     monkeypatch.setattr(
         claude_cli,
         "_launch_managed_local_from_api",
@@ -548,6 +592,7 @@ def test_claude_command_force_native_channels_allows_bedrock_native_transport(mo
         },
     )
     monkeypatch.setattr(claude_cli, "get_machine_name_label", lambda: "work-laptop")
+    monkeypatch.setattr(claude_cli, "_ensure_managed_launch_preflight", lambda **_kwargs: None)
     monkeypatch.setattr(
         claude_cli,
         "_launch_managed_local_from_api",

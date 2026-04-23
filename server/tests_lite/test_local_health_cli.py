@@ -1040,16 +1040,19 @@ def test_collect_local_health_flags_missing_shipper_state_without_suggesting_rec
 
 
 def test_collect_local_health_broken_when_launch_config_disagrees(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    stable_home = home / ".longhouse"
     service_file = _write_service_plist(tmp_path, machine_name="cinder.local")
-    _write_shipper_db(tmp_path, [("/tmp/claude-a.jsonl", "claude", "sess-1", None, "2026-04-14T00:00:00Z")])
+    _write_shipper_db(stable_home, [("/tmp/claude-a.jsonl", "claude", "sess-1", None, "2026-04-14T00:00:00Z")])
     runner_env = _write_runner_env(tmp_path, url="https://demo.longhouse.test", runner_name="cinder")
     _write_local_config(
-        tmp_path,
+        stable_home,
         url="http://127.0.0.1:8080",
         machine_name="cinder.local",
         runner_enabled=True,
     )
-    _write_engine_status(tmp_path, age_seconds=5)
+    _write_engine_status(stable_home, age_seconds=5)
+    monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr(
         local_health_service,
         "get_service_info",
@@ -1057,7 +1060,7 @@ def test_collect_local_health_broken_when_launch_config_disagrees(monkeypatch, t
     )
     monkeypatch.setattr(local_health_service, "_candidate_runner_env_paths", lambda: [runner_env])
 
-    snapshot = local_health_service.collect_local_health(tmp_path)
+    snapshot = local_health_service.collect_local_health(stable_home)
 
     assert snapshot["health_state"] == "broken"
     assert snapshot["severity"] == "red"
@@ -1068,12 +1071,15 @@ def test_collect_local_health_broken_when_launch_config_disagrees(monkeypatch, t
     assert "Run: longhouse machine reconcile" in snapshot["suggested_actions"]
 
 
-def test_collect_local_health_ignores_runner_drift_when_runner_not_enabled(monkeypatch, tmp_path: Path):
+def test_collect_local_health_ignores_global_runner_drift_for_scratch_home(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    scratch_home = home / ".longhouse-dev"
     service_file = _write_service_plist(tmp_path, machine_name="cinder.local")
-    _write_shipper_db(tmp_path, [("/tmp/claude-a.jsonl", "claude", "sess-1", None, "2026-04-14T00:00:00Z")])
+    _write_shipper_db(scratch_home, [("/tmp/claude-a.jsonl", "claude", "sess-1", None, "2026-04-14T00:00:00Z")])
     runner_env = _write_runner_env(tmp_path, url="https://demo.longhouse.test", runner_name="cinder")
-    _write_local_config(tmp_path, url="http://127.0.0.1:8080", machine_name="cinder.local")
-    _write_engine_status(tmp_path, age_seconds=5)
+    _write_local_config(scratch_home, url="http://127.0.0.1:8080", machine_name="cinder.local")
+    _write_engine_status(scratch_home, age_seconds=5)
+    monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr(
         local_health_service,
         "get_service_info",
@@ -1081,13 +1087,41 @@ def test_collect_local_health_ignores_runner_drift_when_runner_not_enabled(monke
     )
     monkeypatch.setattr(local_health_service, "_candidate_runner_env_paths", lambda: [runner_env])
 
-    snapshot = local_health_service.collect_local_health(tmp_path)
+    snapshot = local_health_service.collect_local_health(scratch_home)
 
     assert snapshot["health_state"] == "healthy"
     assert snapshot["launch_readiness"]["state"] == "ready"
     assert "config_url_runner_url_mismatch" not in snapshot["reasons"]
     assert "machine_name_runner_name_mismatch" not in snapshot["reasons"]
     assert snapshot["launch_readiness"]["runner_expected"] is False
+    assert snapshot["launch_readiness"]["runner"]["exists"] is False
+
+
+def test_collect_launch_readiness_respects_explicit_control_plane_override(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    stable_home = home / ".longhouse"
+    service_file = _write_service_plist(tmp_path, machine_name="cinder")
+    runner_env = _write_runner_env(tmp_path, url="https://demo.longhouse.test", runner_name="cinder")
+    _write_local_config(stable_home, url="http://127.0.0.1:8080", machine_name="cinder")
+    _write_shipper_db(stable_home, [("/tmp/claude-a.jsonl", "claude", "sess-1", None, "2026-04-14T00:00:00Z")])
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(
+        local_health_service,
+        "get_service_info",
+        lambda *args, **kwargs: _service_info("running", service_file=str(service_file)),
+    )
+    monkeypatch.setattr(local_health_service, "_candidate_runner_env_paths", lambda: [runner_env])
+
+    readiness = local_health_service.collect_launch_readiness(
+        stable_home,
+        runtime_url_override="https://demo.longhouse.test",
+        machine_name_override="cinder",
+    )
+
+    assert readiness["state"] == "ready"
+    assert readiness["control_plane_url"] == "https://demo.longhouse.test"
+    assert "config_url_runner_url_mismatch" not in readiness["reasons"]
+    assert "machine_name_runner_name_mismatch" not in readiness["reasons"]
 
 
 def test_collect_local_health_flags_service_generation_drift(monkeypatch, tmp_path: Path):

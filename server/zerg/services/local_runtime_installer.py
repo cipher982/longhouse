@@ -11,8 +11,10 @@ import plistlib
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 from zerg.services.desktop_app import install_desktop_app_service
+from zerg.services.local_health import collect_launch_readiness
 from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
 from zerg.services.machine_state import MachineState
 from zerg.services.machine_state import machine_state_source_hash
@@ -55,6 +57,56 @@ class LocalRuntimeReconcileResult:
 class MachineStateApplyResult:
     machine_state: MachineState
     reconciled: bool = False
+
+
+def _canonical_stable_home() -> Path:
+    return (Path.home() / ".longhouse").expanduser().resolve(strict=False)
+
+
+def _is_stable_home(state_root: Path | None) -> bool:
+    if state_root is None:
+        return True
+    return state_root.expanduser().resolve(strict=False) == _canonical_stable_home()
+
+
+def _is_local_control_plane_url(url: str | None) -> bool:
+    raw = str(url or "").strip()
+    if not raw:
+        return False
+    parsed = urlparse(raw)
+    host = str(parsed.hostname or "").strip().lower()
+    return host in {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
+
+
+def _guard_stable_home_control_plane_target(
+    *,
+    state_root: Path | None,
+    runtime_url: str | None,
+    machine_name: str | None,
+) -> None:
+    if not _is_stable_home(state_root):
+        return
+    if not _is_local_control_plane_url(runtime_url):
+        return
+
+    readiness = collect_launch_readiness(
+        state_root,
+        runtime_url_override=runtime_url,
+        machine_name_override=machine_name,
+    )
+    reasons = {str(item) for item in list(readiness.get("reasons") or [])}
+    if not reasons.intersection({"config_url_runner_url_mismatch", "machine_name_runner_name_mismatch"}):
+        return
+
+    runner = dict(readiness.get("runner") or {})
+    runner_name = str(runner.get("runner_name") or "").strip() or "unknown"
+    runner_urls = ", ".join(str(item) for item in list(runner.get("runner_urls") or []) if str(item).strip()) or "unknown"
+    raise RuntimeError(
+        "Refusing to point the stable Longhouse home at a local control plane while the machine runner is "
+        f"enrolled as `{runner_name}` against `{runner_urls}`. "
+        "Use LONGHOUSE_HOME=~/.longhouse-dev for scratch local work, or reconfigure the stable machine with "
+        "`longhouse machine configure --url <control-plane-url> --machine-name <runner-name>`."
+    )
 
 
 def _extract_service_longhouse_home(service_file: str | None) -> Path | None:
@@ -191,6 +243,11 @@ def install_local_runtime(
     resolved_name = sanitize_machine_name(machine_name)
     if resolved_name is None:
         raise ValueError(f"Invalid machine name: {machine_name!r}")
+    _guard_stable_home_control_plane_target(
+        state_root=config_dir,
+        runtime_url=url,
+        machine_name=resolved_name,
+    )
     machine_state = write_machine_state(
         base_dir=config_dir,
         written_by=written_by,
@@ -246,6 +303,14 @@ def apply_machine_state_update(
         write_kwargs["desktop_app_enabled"] = menubar
     if topology_intent is not None:
         write_kwargs["topology_intent"] = topology_intent
+
+    effective_url = runtime_url if runtime_url is not None else None
+    effective_machine_name = machine_name if machine_name is not None else None
+    _guard_stable_home_control_plane_target(
+        state_root=config_dir,
+        runtime_url=effective_url,
+        machine_name=effective_machine_name,
+    )
 
     machine_state = write_machine_state(**write_kwargs)
     service_installed = _service_targets_state_root(service_info, config_dir)
@@ -326,6 +391,12 @@ def reconcile_local_runtime(
         raise RuntimeError(
             f"Machine state missing machine_name at {state_path}. " "Run `longhouse connect --install` once to configure this machine."
         )
+
+    _guard_stable_home_control_plane_target(
+        state_root=config_dir,
+        runtime_url=resolved_url,
+        machine_name=resolved_name,
+    )
 
     write_kwargs: dict[str, object] = {
         "base_dir": config_dir,
