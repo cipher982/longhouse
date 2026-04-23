@@ -29,6 +29,7 @@ Marks / skip conditions
 from __future__ import annotations
 
 import base64
+import json
 import os
 import sqlite3
 import socket
@@ -533,6 +534,84 @@ class TestCodexShipping:
         assert len(events_after) == len(events_before), (
             f"Re-ship created duplicates: {len(events_before)} → {len(events_after)}"
         )
+
+
+def test_full_ship_replays_pending_spool_even_without_new_files(server, tmp_path):
+    """One-shot ship should flush existing spool backlog, not only newly discovered files."""
+
+    temp_home = tmp_path / "home"
+    (temp_home / ".claude" / "projects").mkdir(parents=True)
+    session_id = "7f2c2a10-1111-2222-3333-444455556666"
+    session_file = tmp_path / f"{session_id}.jsonl"
+    session_file.write_text(
+        "\n".join(
+            [
+                r'{"type":"user","uuid":"spool-1","timestamp":"2026-02-15T10:00:00Z","message":{"content":"hello from spool replay"}}',
+                r'{"type":"assistant","uuid":"spool-2","timestamp":"2026-02-15T10:00:01Z","message":{"content":[{"type":"text","text":"spool replay ok"}]}}',
+            ]
+        )
+        + "\n"
+    )
+    engine_db = tmp_path / "engine.db"
+    env = {**os.environ, "HOME": str(temp_home)}
+
+    queue_result = subprocess.run(
+        [
+            str(ENGINE_BIN),
+            "ship",
+            "--file",
+            str(session_file),
+            "--url",
+            "http://127.0.0.1:9",
+            "--token",
+            "zdt_test",
+            "--provider",
+            "claude",
+            "--db",
+            str(engine_db),
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=env,
+    )
+    assert queue_result.returncode == 0, (
+        f"initial spooling run failed\nstdout: {queue_result.stdout}\nstderr: {queue_result.stderr}"
+    )
+    assert _get_session(server, session_id) is None, "spooled session should not reach the API before replay"
+
+    replay_result = subprocess.run(
+        [
+            str(ENGINE_BIN),
+            "ship",
+            "--url",
+            _server_url(server),
+            "--token",
+            _server_token(server),
+            "--db",
+            str(engine_db),
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=env,
+    )
+    assert replay_result.returncode == 0, (
+        f"spool replay run failed\nstdout: {replay_result.stdout}\nstderr: {replay_result.stderr}"
+    )
+
+    summary_start = replay_result.stdout.find("{")
+    assert summary_start >= 0, f"expected JSON summary in stdout, got: {replay_result.stdout!r}"
+    summary = json.loads(replay_result.stdout[summary_start:])
+    assert summary["files_shipped"] == 0
+    assert summary["spool_replayed"] == 1
+    assert summary["spool_pending"] == 0
+
+    session = _get_session(server, session_id)
+    assert session is not None, "pending spool backlog should replay even when there are no new files to scan"
+    assert session["provider"] == "claude"
 
 
 @pytest.mark.parametrize(

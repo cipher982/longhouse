@@ -424,3 +424,83 @@ def test_auth_clear_clears_canonical_runtime_url_without_touching_machine_name(t
     assert state.runtime_url is None
     assert state.machine_name == "test-box"
     assert state.written_by == "auth-clear"
+
+
+def test_auth_direct_token_replays_spool_after_success(monkeypatch, tmp_path):
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir()
+    longhouse_home = tmp_path / ".longhouse"
+    calls: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(connect, "load_token", lambda config_dir=None: None)
+    monkeypatch.setattr(connect, "get_zerg_url", lambda config_dir=None: None)
+    monkeypatch.setattr(connect, "_validate_token", lambda url, token: True)
+    monkeypatch.setattr(
+        connect,
+        "save_token",
+        lambda token, config_dir: calls.append(("save", (token, config_dir))),
+    )
+    monkeypatch.setattr(
+        connect,
+        "_persist_selected_url",
+        lambda url, claude_dir, written_by: calls.append(("persist", (url, claude_dir, written_by))),
+    )
+    monkeypatch.setattr(
+        connect,
+        "_attempt_post_auth_spool_replay",
+        lambda **kwargs: calls.append(("replay", kwargs)),
+    )
+
+    connect.auth(
+        url="https://example.com",
+        device_name="cinder",
+        token="zdt_direct",
+        force=False,
+        clear=False,
+        claude_dir=str(claude_dir),
+    )
+
+    assert calls == [
+        ("save", ("zdt_direct", longhouse_home)),
+        ("persist", ("https://example.com", str(claude_dir), "auth")),
+        ("replay", {"url": "https://example.com", "token": "zdt_direct", "claude_dir": str(claude_dir)}),
+    ]
+
+
+def test_auth_auto_token_replays_spool_after_success(monkeypatch):
+    calls: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(connect, "load_token", lambda config_dir=None: None)
+    monkeypatch.setattr(connect, "get_zerg_url", lambda config_dir=None: None)
+    monkeypatch.setattr(connect, "_auto_create_token", lambda url, device_name=None: "zdt_auto")
+    monkeypatch.setattr(connect, "_validate_token", lambda url, token: True)
+    monkeypatch.setattr(
+        connect,
+        "save_token",
+        lambda token, config_dir: calls.append(("save", (token, config_dir))),
+    )
+    monkeypatch.setattr(
+        connect,
+        "_persist_selected_url",
+        lambda url, claude_dir, written_by: calls.append(("persist", (url, claude_dir, written_by))),
+    )
+    monkeypatch.setattr(
+        connect,
+        "_attempt_post_auth_spool_replay",
+        lambda **kwargs: calls.append(("replay", kwargs)),
+    )
+
+    connect.auth(
+        url="https://example.com",
+        device_name="cinder",
+        token=None,
+        force=False,
+        clear=False,
+        claude_dir=None,
+    )
+
+    assert calls == [
+        ("save", ("zdt_auto", None)),
+        ("persist", ("https://example.com", None, "auth")),
+        ("replay", {"url": "https://example.com", "token": "zdt_auto", "claude_dir": None}),
+    ]
