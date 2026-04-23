@@ -17,7 +17,7 @@ on:
 
 jobs:
   build-frontend:
-    runs-on: ubuntu-latest
+    runs-on: cube
     name: "🏗️ Build frontend once"
 
     steps:
@@ -47,7 +47,7 @@ jobs:
           retention-days: 3
 
   lighthouse:
-    runs-on: ubuntu-latest
+    runs-on: cube
     name: "🔦 Lighthouse CI"
     needs: build-frontend
 
@@ -73,7 +73,7 @@ jobs:
         working-directory: web
 
   bundle-size:
-    runs-on: ubuntu-latest
+    runs-on: cube
     name: "📦 Bundle Size"
     needs: build-frontend
 
@@ -95,7 +95,7 @@ jobs:
         run: cd web && node ./scripts/check-bundle-size.mjs
 
   image-size:
-    runs-on: ubuntu-latest
+    runs-on: cube
     name: "🖼️ Image Size Check"
 
     steps:
