@@ -121,7 +121,7 @@ def configure_command(
     topology_intent: str | None = typer.Option(
         None,
         "--topology-intent",
-        help="Update the machine topology intent before reconciling.",
+        help="Legacy metadata only. Not used for launch safety.",
     ),
     menubar: bool | None = typer.Option(
         None,
@@ -139,6 +139,11 @@ def configure_command(
     if url is None and machine_name is None and topology_intent is None and menubar is None:
         typer.secho("[ERROR] Specify at least one config override to apply.", fg=typer.colors.RED)
         raise typer.Exit(code=1)
+    if topology_intent is not None:
+        typer.secho(
+            "[WARN] --topology-intent is legacy metadata and no longer affects launch safety.",
+            fg=typer.colors.YELLOW,
+        )
 
     _run_reconcile(
         claude_dir=claude_dir,

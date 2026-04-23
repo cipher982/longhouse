@@ -85,7 +85,6 @@ def test_onboard_imports_existing_sessions_first(monkeypatch, tmp_path):
             "menubar": False,
             "codex_source": None,
             "written_by": "onboard",
-            "topology_intent": "serve-local",
         }
     ]
     assert len(saved_configs) == 1
@@ -134,7 +133,6 @@ def test_onboard_forwards_managed_codex_source(monkeypatch, tmp_path):
             "menubar": False,
             "codex_source": "/tmp/codex-patched",
             "written_by": "onboard",
-            "topology_intent": "serve-local",
         }
     ]
 
@@ -188,7 +186,6 @@ def test_onboard_without_cli_skips_initial_import(monkeypatch, tmp_path):
             "menubar": False,
             "codex_source": None,
             "written_by": "onboard",
-            "topology_intent": "serve-local",
         }
     ]
 
@@ -326,7 +323,6 @@ def test_onboard_in_ci_can_install_services_when_explicitly_enabled(monkeypatch,
             "menubar": True,
             "codex_source": None,
             "written_by": "onboard",
-            "topology_intent": "serve-local",
         }
     ]
     assert ["open", str(app_path)] in subprocess_calls

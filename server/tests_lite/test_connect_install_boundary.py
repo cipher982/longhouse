@@ -55,7 +55,6 @@ def test_handle_install_delegates_to_shared_runtime_installer(monkeypatch, capsy
             "machine_name": "test-box",
             "menubar": True,
             "codex_source": "https://example.com/codex.tar.gz",
-            "topology_intent": "connect-remote",
         }
     ]
     assert "Machine: test-box" in output
@@ -105,7 +104,6 @@ def test_handle_install_prompts_for_machine_name_when_missing(monkeypatch):
             "machine_name": "fallback-box",
             "menubar": False,
             "codex_source": None,
-            "topology_intent": "connect-remote",
         }
     ]
 

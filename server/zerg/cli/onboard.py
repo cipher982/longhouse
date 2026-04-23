@@ -409,13 +409,11 @@ def onboard(
     # Topology choice: decide where the server runs (unless --remote-url specified)
     if remote_url or normalized_topology == "remote":
         # User specified --remote-url flag, use remote path directly
-        topology_intent = "connect-remote"
         if remote_url is None:
             remote_url = typer.prompt("URL of your Longhouse server", default="https://longhouse.example.com")
         api_url = remote_url
         skip_local_server = True
     elif normalized_topology == "local":
-        topology_intent = "serve-local"
         api_url = _derive_client_url(host, port)
         skip_local_server = False
     else:
@@ -430,13 +428,11 @@ def onboard(
 
         if choice == "2":
             # Remote server path
-            topology_intent = "connect-remote"
             remote_url = typer.prompt("URL of your Longhouse server", default="https://longhouse.example.com")
             api_url = remote_url
             skip_local_server = True
         else:
             # Local trial path (default)
-            topology_intent = "serve-local"
             api_url = _derive_client_url(host, port)
             skip_local_server = False
 
@@ -552,7 +548,6 @@ def onboard(
                     menubar=install_menubar,
                     codex_source=codex_source,
                     written_by="onboard",
-                    topology_intent=topology_intent,
                 )
                 installed_desktop_app = install_menubar and bool(getattr(install_result, "desktop_app_result", None))
                 typer.secho("  [OK] Machine agent installed for automatic imports", fg=typer.colors.GREEN)
