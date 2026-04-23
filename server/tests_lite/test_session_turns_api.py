@@ -159,6 +159,30 @@ def test_list_session_turns_defaults_to_stable_ascending_order(tmp_path):
         assert data["total"] == 3
         assert [item["id"] for item in data["turns"]] == [earliest.id, second.id, late.id]
         assert [item["request_id"] for item in data["turns"]] == ["req-early-a", "req-early-b", "req-late"]
+        assert data["turns"][0]["timing"] == {
+            "submit_to_send_ms": 1000,
+            "submit_to_active_ms": 2000,
+            "submit_to_terminal_ms": 7000,
+            "active_to_terminal_ms": 5000,
+            "terminal_to_durable_ms": 1000,
+            "total_turn_time_ms": 8000,
+        }
+        assert data["turns"][1]["timing"] == {
+            "submit_to_send_ms": 3000,
+            "submit_to_active_ms": None,
+            "submit_to_terminal_ms": 7000,
+            "active_to_terminal_ms": None,
+            "terminal_to_durable_ms": None,
+            "total_turn_time_ms": 7000,
+        }
+        assert data["turns"][2]["timing"] == {
+            "submit_to_send_ms": 0,
+            "submit_to_active_ms": 1000,
+            "submit_to_terminal_ms": None,
+            "active_to_terminal_ms": None,
+            "terminal_to_durable_ms": None,
+            "total_turn_time_ms": None,
+        }
 
 
 def test_list_session_turns_supports_desc_order_pagination_and_utc_strings(tmp_path):
@@ -247,6 +271,14 @@ def test_get_session_turn_detail_returns_envelope(tmp_path):
         assert data["turn"]["state"] == SESSION_TURN_STATE_DURABLE
         assert data["turn"]["durable_assistant_event_id"] == 222
         assert data["turn"]["durable_at"].endswith("Z")
+        assert data["turn"]["timing"] == {
+            "submit_to_send_ms": 1000,
+            "submit_to_active_ms": 2000,
+            "submit_to_terminal_ms": 4000,
+            "active_to_terminal_ms": 2000,
+            "terminal_to_durable_ms": 1000,
+            "total_turn_time_ms": 5000,
+        }
 
 
 def test_get_session_turns_rejects_invalid_order(tmp_path):
