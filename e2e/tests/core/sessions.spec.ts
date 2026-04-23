@@ -1103,61 +1103,15 @@ test.describe("Session Detail Page", () => {
       )
       .toBeLessThan(storedLayout.sidebarWidth - 20);
 
-    await page.locator('[data-row-kind="tool"]').first().click();
-
-    const inspectorPane = page.locator(".workspace-shell__pane--inspector");
-    const inspectorHandle = page.getByTestId(
-      "session-workspace-inspector-resize",
-    );
-    await expect(inspectorPane).toBeVisible();
-
-    const inspectorBefore = await inspectorPane.boundingBox();
-    const inspectorHandleBox = await inspectorHandle.boundingBox();
-    expect(inspectorBefore).toBeTruthy();
-    expect(inspectorHandleBox).toBeTruthy();
-
-    await page.mouse.move(
-      (inspectorHandleBox?.x ?? 0) + (inspectorHandleBox?.width ?? 0) / 2,
-      (inspectorHandleBox?.y ?? 0) + (inspectorHandleBox?.height ?? 0) / 2,
-    );
-    await page.mouse.down();
-    await page.mouse.move(
-      (inspectorHandleBox?.x ?? 0) + (inspectorHandleBox?.width ?? 0) / 2 - 80,
-      (inspectorHandleBox?.y ?? 0) + (inspectorHandleBox?.height ?? 0) / 2,
-      { steps: 12 },
-    );
-    await page.mouse.up();
-
-    await expect
-      .poll(async () => (await inspectorPane.boundingBox())?.width ?? 0, {
-        timeout: 4000,
-      })
-      .toBeGreaterThan((inspectorBefore?.width ?? 0) + 20);
-
-    const storedInspectorLayout = await page.evaluate(() =>
-      JSON.parse(
-        window.localStorage.getItem("zerg:session-workspace-layout:v1") || "{}",
-      ),
-    );
-    expect(storedInspectorLayout.inspectorWidth).toBeGreaterThan(360);
-
-    await page.reload();
-    await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
-    await page.locator('[data-row-kind="tool"]').first().click();
-
-    await expect
-      .poll(
-        async () =>
-          (
-            await page
-              .locator(".workspace-shell__pane--inspector")
-              .boundingBox()
-          )?.width ?? 0,
-        {
-          timeout: 4000,
-        },
-      )
-      .toBeGreaterThan((inspectorBefore?.width ?? 0) + 20);
+    // Inspector pane was removed: tool rows now expand inline instead of
+    // opening a side rail. Sanity-check that clicking a tool row toggles
+    // its inline detail (opens+closes) without the old inspector resize
+    // dance.
+    const firstTool = page.locator('[data-row-kind="tool"]').first();
+    await firstTool.click();
+    await expect(firstTool).toHaveClass(/is-expanded/);
+    await firstTool.click();
+    await expect(firstTool).not.toHaveClass(/is-expanded/);
   });
 
   test("scrolls from left and right gutters on timeline detail", async ({
