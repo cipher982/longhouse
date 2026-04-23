@@ -23,8 +23,7 @@ on:
       - 'scripts/ci/runtime-artifact-smoke.py'
       - 'scripts/qa/qa-oss.sh'
       - 'scripts/ops/run-onboarding-funnel.sh'
-      - 'scripts/release/build-managed-codex.sh'
-      - 'scripts/release/managed-codex.patch'
+      - 'scripts/release/download-managed-codex.sh'
       - 'Makefile'
       - 'README.md'
   release:
@@ -49,8 +48,7 @@ on:
       - 'scripts/ci/runtime-artifact-smoke.py'
       - 'scripts/qa/qa-oss.sh'
       - 'scripts/ops/run-onboarding-funnel.sh'
-      - 'scripts/release/build-managed-codex.sh'
-      - 'scripts/release/managed-codex.patch'
+      - 'scripts/release/download-managed-codex.sh'
       - 'Makefile'
       - 'README.md'
   schedule:
@@ -58,109 +56,7 @@ on:
   workflow_dispatch: {}
 
 jobs:
-  managed-codex-smoke-binary:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            release_asset: longhouse-codex-linux-x64
-          - os: macos-latest
-            release_asset: longhouse-codex-darwin-arm64
-    runs-on: ${{ matrix.os }}
-    # macOS hosted Rust builds for managed Codex are slow enough that the first
-    # cold cache-seeding run needs substantial headroom. Subsequent runs should
-    # hit the binary cache below and skip the rebuild entirely. On release
-    # events we skip the build path entirely and materialize from the release
-    # asset produced by Local Runtime Binary Release.
-    timeout-minutes: 180
-    name: "launch-gate--managed-codex-build--${{ matrix.os }}"
-    env:
-      GH_TOKEN: ${{ github.token }}
-
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.release.tag_name || github.ref }}
-          fetch-depth: 1
-
-      - name: Prepare managed Codex output directory
-        run: mkdir -p prebuilt
-
-      - name: Wait for release asset and download managed Codex
-        if: ${{ github.event_name == 'release' }}
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          ASSET: ${{ matrix.release_asset }}
-        run: |
-          deadline=$((SECONDS + 900))
-          while (( SECONDS < deadline )); do
-            if gh release download "$RELEASE_TAG" \
-              --repo "$GITHUB_REPOSITORY" \
-              --pattern "$ASSET" \
-              --output prebuilt/longhouse-codex \
-              --clobber 2>/dev/null; then
-              chmod +x prebuilt/longhouse-codex
-              echo "Materialized $ASSET from release $RELEASE_TAG."
-              exit 0
-            fi
-            echo "Waiting for release asset $ASSET on $RELEASE_TAG..."
-            sleep 15
-          done
-          echo "Timed out waiting for release asset $ASSET on $RELEASE_TAG." >&2
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' >&2 || true
-          exit 1
-
-      - name: Setup Rust
-        if: ${{ github.event_name != 'release' }}
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Restore managed Codex cargo dependency cache
-        if: ${{ github.event_name != 'release' }}
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: managed-codex-cargo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/release/build-managed-codex.sh', 'scripts/release/managed-codex.patch') }}
-          restore-keys: |
-            managed-codex-cargo-${{ runner.os }}-${{ runner.arch }}-
-            managed-codex-cargo-${{ runner.os }}-
-
-      - name: Restore managed Codex binary cache
-        id: managed_codex_binary_cache
-        if: ${{ github.event_name != 'release' }}
-        uses: actions/cache@v4
-        with:
-          path: prebuilt/longhouse-codex
-          key: managed-codex-binary-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/release/build-managed-codex.sh', 'scripts/release/managed-codex.patch') }}
-
-      - name: Install Linux build deps for managed Codex
-        if: ${{ github.event_name != 'release' && runner.os == 'Linux' }}
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libssl-dev libcap-dev
-
-      - name: Ensure cached managed Codex binary is executable
-        if: ${{ github.event_name != 'release' && steps.managed_codex_binary_cache.outputs.cache-hit == 'true' }}
-        run: chmod +x prebuilt/longhouse-codex
-
-      - name: Build managed Codex binary for smoke reuse
-        if: ${{ github.event_name != 'release' && steps.managed_codex_binary_cache.outputs.cache-hit != 'true' }}
-        run: |
-          chmod +x scripts/release/build-managed-codex.sh
-          scripts/release/build-managed-codex.sh --output prebuilt/longhouse-codex
-          chmod +x prebuilt/longhouse-codex
-
-      - name: Upload managed Codex smoke artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: launch-gate-managed-codex-${{ matrix.os }}
-          path: prebuilt/longhouse-codex
-          retention-days: 1
-
   installer-first-run:
-    needs: managed-codex-smoke-binary
     strategy:
       fail-fast: false
       matrix:
@@ -199,12 +95,6 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Linux build deps for managed Codex
-        if: ${{ runner.os == 'Linux' }}
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libssl-dev libcap-dev
 
       - name: Wait for released runtime artifacts
         if: ${{ github.event_name == 'release' }}
@@ -278,12 +168,17 @@ jobs:
           python3 -c 'import json, urllib.request; payload = json.load(urllib.request.urlopen("https://pypi.org/pypi/longhouse/json", timeout=10)); print("Latest PyPI versions:"); [print(version) for version in list(payload.get("releases", {}).keys())[-10:]]' >&2 || true
           exit 1
 
-      - name: Download prebuilt managed Codex
+      - name: Download stock codex for installer smoke
         if: ${{ github.event_name != 'release' }}
-        uses: actions/download-artifact@v5
-        with:
-          name: launch-gate-managed-codex-${{ matrix.os }}
-          path: ${{ runner.temp }}/managed-codex
+        run: |
+          case "${{ matrix.os }}" in
+            ubuntu-latest) target=x86_64-unknown-linux-gnu ;;
+            macos-latest)  target=aarch64-apple-darwin ;;
+            *) echo "Unsupported matrix os ${{ matrix.os }}"; exit 1 ;;
+          esac
+          scripts/release/download-managed-codex.sh \
+            --target "$target" \
+            --output "${RUNNER_TEMP}/managed-codex/longhouse-codex"
 
       - name: Run disposable installer smoke
         run: |
@@ -314,7 +209,6 @@ jobs:
           path: /tmp/installer-browser-verify-failure.png
 
   onboarding-funnel:
-    needs: managed-codex-smoke-binary
     runs-on: ubuntu-latest
     timeout-minutes: 30
     name: "launch-gate--onboarding-funnel"
@@ -352,16 +246,11 @@ jobs:
           bun install --silent
           bunx playwright install --with-deps chromium
 
-      - name: Install Linux build deps for managed Codex
+      - name: Download stock codex
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libssl-dev libcap-dev
-
-      - name: Download prebuilt managed Codex
-        uses: actions/download-artifact@v5
-        with:
-          name: launch-gate-managed-codex-ubuntu-latest
-          path: ${{ runner.temp }}/managed-codex
+          scripts/release/download-managed-codex.sh \
+            --target x86_64-unknown-linux-gnu \
+            --output "${RUNNER_TEMP}/managed-codex/longhouse-codex"
 
       - name: Run launch gate locally
         run: |
