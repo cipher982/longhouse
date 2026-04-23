@@ -16,6 +16,26 @@ from zerg.cli import machine as machine_cli
 from zerg.cli.main import app
 
 
+def _fake_reconcile_result():
+    return SimpleNamespace(
+        machine_state=SimpleNamespace(
+            config_generation="20260414-test",
+            runtime_url="https://demo.longhouse.test",
+        ),
+        install_result=SimpleNamespace(
+            machine_name="cinder",
+            engine_runtime=SimpleNamespace(path="/tmp/longhouse-engine", installed_now=False),
+            service_result={
+                "message": "ok",
+                "service": "launchd",
+                "plist_path": "/tmp/test.plist",
+            },
+            hooks=SimpleNamespace(actions=["hooks installed"], warning=None),
+            desktop_app_result=None,
+        ),
+    )
+
+
 def test_machine_reconcile_delegates_to_runtime_reconciler(monkeypatch):
     calls: list[dict[str, object]] = []
     runner = CliRunner()
@@ -23,24 +43,7 @@ def test_machine_reconcile_delegates_to_runtime_reconciler(monkeypatch):
     monkeypatch.setattr(
         machine_cli,
         "reconcile_local_runtime",
-        lambda **kwargs: calls.append(kwargs)
-        or SimpleNamespace(
-            machine_state=SimpleNamespace(
-                config_generation="20260414-test",
-                runtime_url="https://demo.longhouse.test",
-            ),
-            install_result=SimpleNamespace(
-                machine_name="cinder",
-                engine_runtime=SimpleNamespace(path="/tmp/longhouse-engine", installed_now=False),
-                service_result={
-                    "message": "ok",
-                    "service": "launchd",
-                    "plist_path": "/tmp/test.plist",
-                },
-                hooks=SimpleNamespace(actions=["hooks installed"], warning=None),
-                desktop_app_result=None,
-            ),
-        ),
+        lambda **kwargs: calls.append(kwargs) or _fake_reconcile_result(),
     )
 
     result = runner.invoke(app, ["machine", "reconcile", "--claude-dir", "/tmp/.claude"])
@@ -49,6 +52,10 @@ def test_machine_reconcile_delegates_to_runtime_reconciler(monkeypatch):
     assert calls == [
         {
             "claude_dir": "/tmp/.claude",
+            "machine_name": None,
+            "menubar": None,
+            "runtime_url": None,
+            "topology_intent": None,
             "written_by": "machine-reconcile",
         }
     ]
@@ -69,3 +76,53 @@ def test_machine_reconcile_reports_missing_machine_state(monkeypatch):
 
     assert result.exit_code == 1
     assert "Machine state missing runtime_url" in result.output
+
+
+def test_machine_configure_reconciles_with_overrides(monkeypatch):
+    calls: list[dict[str, object]] = []
+    runner = CliRunner()
+
+    monkeypatch.setattr(
+        machine_cli,
+        "reconcile_local_runtime",
+        lambda **kwargs: calls.append(kwargs) or _fake_reconcile_result(),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "machine",
+            "configure",
+            "--url",
+            "https://prod.longhouse.test",
+            "--machine-name",
+            "Cinder Local",
+            "--topology-intent",
+            "connect-remote",
+            "--menubar",
+            "--claude-dir",
+            "/tmp/.claude",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        {
+            "claude_dir": "/tmp/.claude",
+            "machine_name": "Cinder Local",
+            "menubar": True,
+            "runtime_url": "https://prod.longhouse.test",
+            "topology_intent": "connect-remote",
+            "written_by": "machine-configure",
+        }
+    ]
+    assert "Updated machine config and reconciled machine generation 20260414-test" in result.output
+
+
+def test_machine_configure_requires_override():
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["machine", "configure"])
+
+    assert result.exit_code == 1
+    assert "Specify at least one config override" in result.output

@@ -44,6 +44,40 @@ def _render_install_result(result: LocalRuntimeInstallResult) -> None:
         typer.echo("  Launch: " f"{result.desktop_app_result.get('launch_path') or result.desktop_app_result.get('binary_path', 'N/A')}")
 
 
+def _run_reconcile(
+    *,
+    claude_dir: str | None,
+    written_by: str,
+    runtime_url: str | None = None,
+    machine_name: str | None = None,
+    menubar: bool | None = None,
+    topology_intent: str | None = None,
+) -> None:
+    try:
+        result = reconcile_local_runtime(
+            claude_dir=claude_dir,
+            written_by=written_by,
+            runtime_url=runtime_url,
+            machine_name=machine_name,
+            menubar=menubar,
+            topology_intent=topology_intent,
+        )
+    except RuntimeError as exc:
+        typer.secho(f"[ERROR] {exc}", fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+    except ValueError as exc:
+        typer.secho(f"[ERROR] {exc}", fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+
+    verb = "Updated machine config and reconciled" if written_by == "machine-configure" else "Reconciled"
+    typer.secho(
+        f"[OK] {verb} machine generation {result.machine_state.config_generation or 'unknown'}",
+        fg=typer.colors.GREEN,
+    )
+    typer.echo(f"  URL: {result.machine_state.runtime_url}")
+    _render_install_result(result.install_result)
+
+
 @app.command("reconcile")
 def reconcile_command(
     claude_dir: str = typer.Option(
@@ -54,21 +88,51 @@ def reconcile_command(
 ) -> None:
     """Rewrite local runtime artifacts from canonical machine state."""
 
-    try:
-        result = reconcile_local_runtime(
-            claude_dir=claude_dir,
-            written_by="machine-reconcile",
-        )
-    except RuntimeError as exc:
-        typer.secho(f"[ERROR] {exc}", fg=typer.colors.RED)
-        raise typer.Exit(code=1) from exc
-    except ValueError as exc:
-        typer.secho(f"[ERROR] {exc}", fg=typer.colors.RED)
-        raise typer.Exit(code=1) from exc
-
-    typer.secho(
-        f"[OK] Reconciled machine generation {result.machine_state.config_generation or 'unknown'}",
-        fg=typer.colors.GREEN,
+    _run_reconcile(
+        claude_dir=claude_dir,
+        written_by="machine-reconcile",
     )
-    typer.echo(f"  URL: {result.machine_state.runtime_url}")
-    _render_install_result(result.install_result)
+
+
+@app.command("configure")
+def configure_command(
+    url: str | None = typer.Option(
+        None,
+        "--url",
+        help="Update the canonical Longhouse runtime URL before reconciling.",
+    ),
+    machine_name: str | None = typer.Option(
+        None,
+        "--machine-name",
+        help="Update the canonical machine label before reconciling.",
+    ),
+    topology_intent: str | None = typer.Option(
+        None,
+        "--topology-intent",
+        help="Update the machine topology intent before reconciling.",
+    ),
+    menubar: bool | None = typer.Option(
+        None,
+        "--menubar/--no-menubar",
+        help="Enable or disable the desktop menu bar surface before reconciling.",
+    ),
+    claude_dir: str | None = typer.Option(
+        None,
+        "--claude-dir",
+        help="Claude config directory (default: ~/.claude)",
+    ),
+) -> None:
+    """Safely update machine config and regenerate local launch artifacts."""
+
+    if url is None and machine_name is None and topology_intent is None and menubar is None:
+        typer.secho("[ERROR] Specify at least one config override to apply.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    _run_reconcile(
+        claude_dir=claude_dir,
+        written_by="machine-configure",
+        runtime_url=url,
+        machine_name=machine_name,
+        menubar=menubar,
+        topology_intent=topology_intent,
+    )
