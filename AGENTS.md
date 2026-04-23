@@ -233,7 +233,7 @@ Hosted push lanes:
 Separate release paths:
 
 - Self-installed CLI and `Longhouse.app` users only update on a published `vX.Y.Z` release.
-- `longhouse upgrade` / `uv tool upgrade longhouse` updates the CLI; some upgrades still need `longhouse connect --install`.
+- `longhouse upgrade` / `uv tool upgrade longhouse` updates the CLI; some upgrades still need `longhouse machine repair` afterward.
 - macOS app packaging smoke runs on push, but real app distribution is release-only.
 - **iOS app**: no push-triggered release. `git push` does not deploy iOS. Personal install today is Xcode build-and-run; there is no TestFlight or App Store distribution yet.
 
