@@ -9,6 +9,18 @@ on:
         description: "Existing git tag to publish from (for example v0.1.6)"
         required: true
         type: string
+      managed_codex_upstream_ref:
+        description: "Optional upstream openai/codex ref or tag for the managed Codex build"
+        required: false
+        type: string
+      managed_codex_upstream_version:
+        description: "Optional upstream Codex version stamp (for example 0.123.0)"
+        required: false
+        type: string
+      managed_codex_build_version:
+        description: "Optional managed Codex build stamp (for example 0.123.0+longhouse.5)"
+        required: false
+        type: string
       notary_wait_timeout:
         description: "How long to wait for Apple notarization before failing (for example 330m)"
         required: false
@@ -24,6 +36,9 @@ jobs:
   build-engine-linux-x64:
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag_name }}
+      MANAGED_CODEX_UPSTREAM_REF: ${{ inputs.managed_codex_upstream_ref || '' }}
+      MANAGED_CODEX_UPSTREAM_VERSION: ${{ inputs.managed_codex_upstream_version || '' }}
+      MANAGED_CODEX_BUILD_VERSION: ${{ inputs.managed_codex_build_version || '' }}
     runs-on: ubuntu-latest
 
     steps:
@@ -94,6 +109,9 @@ jobs:
   build-engine-linux-arm64:
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag_name }}
+      MANAGED_CODEX_UPSTREAM_REF: ${{ inputs.managed_codex_upstream_ref || '' }}
+      MANAGED_CODEX_UPSTREAM_VERSION: ${{ inputs.managed_codex_upstream_version || '' }}
+      MANAGED_CODEX_BUILD_VERSION: ${{ inputs.managed_codex_build_version || '' }}
     runs-on: ubuntu-24.04-arm
 
     steps:
@@ -167,6 +185,9 @@ jobs:
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag_name }}
       LONGHOUSE_NOTARY_WAIT_TIMEOUT: ${{ inputs.notary_wait_timeout || '330m' }}
+      MANAGED_CODEX_UPSTREAM_REF: ${{ inputs.managed_codex_upstream_ref || '' }}
+      MANAGED_CODEX_UPSTREAM_VERSION: ${{ inputs.managed_codex_upstream_version || '' }}
+      MANAGED_CODEX_BUILD_VERSION: ${{ inputs.managed_codex_build_version || '' }}
 
     steps:
       - name: Checkout
