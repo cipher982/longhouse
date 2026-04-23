@@ -84,7 +84,7 @@ def test_resolve_codex_binary_does_not_fall_back_to_ambient_path(monkeypatch):
     assert codex_cli._resolve_codex_binary() is None
 
 
-def test_active_turn_survived_tui_exit_ignores_completed_rollout(tmp_path):
+def test_active_turn_survived_tui_exit_ignores_completed_rollout(monkeypatch, tmp_path):
     rollout = tmp_path / "rollout.jsonl"
     rollout.write_text(
         '\n'.join(
@@ -100,6 +100,7 @@ def test_active_turn_survived_tui_exit_ignores_completed_rollout(tmp_path):
         json.dumps(
             {
                 "status": "ready",
+                "ws_url": "ws://127.0.0.1:4800",
                 "thread_id": "thr-live",
                 "thread_path": str(rollout),
                 "active_turn_id": "turn-live",
@@ -107,11 +108,12 @@ def test_active_turn_survived_tui_exit_ignores_completed_rollout(tmp_path):
             }
         )
     )
+    monkeypatch.setattr(codex_cli, "_bridge_readyz_healthy", lambda *_args, **_kwargs: True)
 
     assert codex_cli._active_turn_survived_tui_exit(str(state_file)) is False
 
 
-def test_active_turn_survived_tui_exit_preserves_live_turn(tmp_path):
+def test_active_turn_survived_tui_exit_preserves_live_turn(monkeypatch, tmp_path):
     rollout = tmp_path / "rollout.jsonl"
     rollout.write_text(
         json.dumps({"type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn-live"}}) + '\n'
@@ -121,6 +123,7 @@ def test_active_turn_survived_tui_exit_preserves_live_turn(tmp_path):
         json.dumps(
             {
                 "status": "ready",
+                "ws_url": "ws://127.0.0.1:4800",
                 "thread_id": "thr-live",
                 "thread_path": str(rollout),
                 "active_turn_id": "turn-live",
@@ -128,11 +131,35 @@ def test_active_turn_survived_tui_exit_preserves_live_turn(tmp_path):
             }
         )
     )
+    monkeypatch.setattr(codex_cli, "_bridge_readyz_healthy", lambda *_args, **_kwargs: True)
 
     assert codex_cli._active_turn_survived_tui_exit(str(state_file)) is True
 
 
-def test_active_turn_survived_tui_exit_checks_latest_rollout_when_active_turn_missing(tmp_path):
+def test_active_turn_survived_tui_exit_requires_healthy_readyz(monkeypatch, tmp_path):
+    rollout = tmp_path / "rollout.jsonl"
+    rollout.write_text(
+        json.dumps({"type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn-live"}}) + '\n'
+    )
+    state_file = tmp_path / "state.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "status": "ready",
+                "ws_url": "ws://127.0.0.1:4800",
+                "thread_id": "thr-live",
+                "thread_path": str(rollout),
+                "active_turn_id": "turn-live",
+                "last_turn_status": "inProgress",
+            }
+        )
+    )
+    monkeypatch.setattr(codex_cli, "_bridge_readyz_healthy", lambda *_args, **_kwargs: False)
+
+    assert codex_cli._active_turn_survived_tui_exit(str(state_file)) is False
+
+
+def test_active_turn_survived_tui_exit_checks_latest_rollout_when_active_turn_missing(monkeypatch, tmp_path):
     rollout = tmp_path / "rollout.jsonl"
     rollout.write_text(
         '\n'.join(
@@ -148,6 +175,7 @@ def test_active_turn_survived_tui_exit_checks_latest_rollout_when_active_turn_mi
         json.dumps(
             {
                 "status": "ready",
+                "ws_url": "ws://127.0.0.1:4800",
                 "thread_id": "thr-live",
                 "thread_path": str(rollout),
                 "active_turn_id": None,
@@ -155,8 +183,14 @@ def test_active_turn_survived_tui_exit_checks_latest_rollout_when_active_turn_mi
             }
         )
     )
+    monkeypatch.setattr(codex_cli, "_bridge_readyz_healthy", lambda *_args, **_kwargs: True)
 
     assert codex_cli._active_turn_survived_tui_exit(str(state_file)) is False
+
+
+def test_bridge_readyz_url_uses_http_readyz_endpoint():
+    assert codex_cli._bridge_readyz_url("ws://127.0.0.1:61460") == "http://127.0.0.1:61460/readyz"
+    assert codex_cli._bridge_readyz_url("wss://example.test/socket") == "https://example.test/socket/readyz"
 
 
 def test_build_codex_attach_command_carries_managed_override_and_session_env():

@@ -1,8 +1,16 @@
 diff --git a/codex-rs/app-server/src/transport/mod.rs b/codex-rs/app-server/src/transport/mod.rs
-index 75a497190..c7984d92c 100644
+index 75a4971..a028aa8 100644
 --- a/codex-rs/app-server/src/transport/mod.rs
 +++ b/codex-rs/app-server/src/transport/mod.rs
-@@ -24,10 +24,14 @@ use tokio_util::sync::CancellationToken;
+@@ -9,6 +9,7 @@ use crate::outgoing_message::OutgoingMessage;
+ use crate::outgoing_message::QueuedOutgoingMessage;
+ use codex_app_server_protocol::JSONRPCErrorError;
+ use codex_app_server_protocol::JSONRPCMessage;
++use codex_app_server_protocol::ServerNotification;
+ use codex_app_server_protocol::ServerRequest;
+ use std::collections::HashMap;
+ use std::collections::HashSet;
+@@ -24,10 +25,14 @@ use tokio_util::sync::CancellationToken;
  use tracing::error;
  use tracing::warn;
 
@@ -21,122 +29,254 @@ index 75a497190..c7984d92c 100644
 
  mod remote_control;
  mod stdio;
-diff --git a/codex-rs/tui/src/app.rs b/codex-rs/tui/src/app.rs
-index 1db3dbc7e..35649c285 100644
---- a/codex-rs/tui/src/app.rs
-+++ b/codex-rs/tui/src/app.rs
-@@ -4347,6 +4347,60 @@ impl App {
-         Ok(AppRunControl::Continue)
-     }
+@@ -285,6 +290,29 @@ fn disconnect_connection(
+     false
+ }
 
-+    async fn reconnect_remote_app_server(
-+        &mut self,
-+        tui: &mut tui::Tui,
-+        app_server: &mut AppServerSession,
-+        disconnect_message: String,
-+    ) -> Result<bool> {
-+        let Some(websocket_url) = self.remote_app_server_url.clone() else {
-+            return Ok(false);
-+        };
-+        let Some(thread_id) = self.current_displayed_thread_id().or(self.primary_thread_id) else {
-+            return Ok(false);
-+        };
++fn server_notification_requires_delivery(notification: &ServerNotification) -> bool {
++    matches!(
++        notification,
++        ServerNotification::TurnCompleted(_)
++            | ServerNotification::ItemCompleted(_)
++            | ServerNotification::AgentMessageDelta(_)
++            | ServerNotification::PlanDelta(_)
++            | ServerNotification::ReasoningSummaryTextDelta(_)
++            | ServerNotification::ReasoningTextDelta(_)
++    )
++}
 +
-+        let remote_cwd_override = app_server.remote_cwd_override().map(|cwd| cwd.to_path_buf());
-+        let mut replacement = match crate::start_app_server_for_picker(
-+            &self.config,
-+            &crate::AppServerTarget::Remote {
-+                websocket_url,
-+                auth_token: self.remote_app_server_auth_token.clone(),
-+            },
-+            self.environment_manager.clone(),
-+        )
-+        .await
-+        {
-+            Ok(app_server) => app_server.with_remote_cwd_override(remote_cwd_override),
-+            Err(err) => {
-+                self.chat_widget.add_error_message(format!(
-+                    "Remote app-server disconnected and reconnect failed: {err}"
-+                ));
-+                return Ok(false);
-+            }
-+        };
-+
-+        match replacement.resume_thread(self.config.clone(), thread_id).await {
-+            Ok(resumed) => {
-+                *app_server = replacement;
-+                self.replace_chat_widget_with_app_server_thread(tui, app_server, resumed)
-+                    .await?;
-+                self.chat_widget.add_info_message(
-+                    "Recovered remote Codex connection.".to_string(),
-+                    None,
-+                );
-+                Ok(true)
-+            }
-+            Err(err) => {
-+                self.chat_widget.add_error_message(format!(
-+                    "Remote app-server disconnected and resume failed: {err}"
-+                ));
-+                self.chat_widget.add_error_message(disconnect_message);
-+                Ok(false)
-+            }
++fn outgoing_message_requires_delivery(message: &OutgoingMessage) -> bool {
++    match message {
++        OutgoingMessage::AppServerNotification(notification) => {
++            server_notification_requires_delivery(notification)
++        }
++        OutgoingMessage::Request(_) | OutgoingMessage::Response(_) | OutgoingMessage::Error(_) => {
++            true
 +        }
 +    }
++}
 +
-     async fn handle_event(
-         &mut self,
-         tui: &mut tui::Tui,
-@@ -4562,6 +4616,15 @@ impl App {
-             AppEvent::FatalExitRequest(message) => {
-                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
-             }
-+            AppEvent::RemoteAppServerDisconnected(message) => {
-+                if !self
-+                    .reconnect_remote_app_server(tui, app_server, message.clone())
-+                    .await?
-+                {
-+                    return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
-+                }
-+                tui.frame_requester().schedule_frame();
-+            }
-             AppEvent::CodexOp(op) => {
-                 self.submit_active_thread_op(app_server, op.into()).await?;
-             }
-diff --git a/codex-rs/tui/src/app/app_server_adapter.rs b/codex-rs/tui/src/app/app_server_adapter.rs
-index f2490ca6a..c39627414 100644
---- a/codex-rs/tui/src/app/app_server_adapter.rs
-+++ b/codex-rs/tui/src/app/app_server_adapter.rs
-@@ -145,8 +145,13 @@ impl App {
-             }
-             AppServerEvent::Disconnected { message } => {
-                 tracing::warn!("app-server event stream disconnected: {message}");
--                self.chat_widget.add_error_message(message.clone());
--                self.app_event_tx.send(AppEvent::FatalExitRequest(message));
-+                if self.remote_app_server_url.is_some() {
-+                    self.app_event_tx
-+                        .send(AppEvent::RemoteAppServerDisconnected(message));
+ async fn send_message_to_connection(
+     connections: &mut HashMap<ConnectionId, OutboundConnectionState>,
+     connection_id: ConnectionId,
+@@ -308,11 +336,18 @@ async fn send_message_to_connection(
+     if connection_state.can_disconnect() {
+         match writer.try_send(queued_message) {
+             Ok(()) => false,
+-            Err(mpsc::error::TrySendError::Full(_)) => {
+-                warn!(
+-                    "disconnecting slow connection after outbound queue filled: {connection_id:?}"
+-                );
+-                disconnect_connection(connections, connection_id)
++            Err(mpsc::error::TrySendError::Full(queued_message)) => {
++                if outgoing_message_requires_delivery(&queued_message.message) {
++                    warn!(
++                        "disconnecting slow connection after outbound queue filled for required message: {connection_id:?}"
++                    );
++                    disconnect_connection(connections, connection_id)
 +                } else {
-+                    self.chat_widget.add_error_message(message.clone());
-+                    self.app_event_tx.send(AppEvent::FatalExitRequest(message));
++                    warn!(
++                        "dropping best-effort outbound message for slow connection after outbound queue filled: {connection_id:?}"
++                    );
++                    false
 +                }
              }
-         }
+             Err(mpsc::error::TrySendError::Closed(_)) => {
+                 disconnect_connection(connections, connection_id)
+@@ -875,7 +910,7 @@ mod tests {
      }
-diff --git a/codex-rs/tui/src/app_event.rs b/codex-rs/tui/src/app_event.rs
-index 934baac23..b1b60d342 100644
---- a/codex-rs/tui/src/app_event.rs
-+++ b/codex-rs/tui/src/app_event.rs
-@@ -143,6 +143,10 @@ pub(crate) enum AppEvent {
-     #[allow(dead_code)]
-     FatalExitRequest(String),
 
-+    /// Attempt to reconnect a dropped remote app-server session before
-+    /// escalating to a fatal exit.
-+    RemoteAppServerDisconnected(String),
+     #[tokio::test]
+-    async fn broadcast_does_not_block_on_slow_connection() {
++    async fn broadcast_best_effort_notification_does_not_disconnect_slow_connection() {
+         let fast_connection_id = ConnectionId(1);
+         let slow_connection_id = ConnectionId(2);
+
+@@ -937,8 +972,8 @@ mod tests {
+         )
+         .await
+         .expect("broadcast should return even when one connection is slow");
+-        assert!(!connections.contains_key(&slow_connection_id));
+-        assert!(slow_disconnect_token.is_cancelled());
++        assert!(connections.contains_key(&slow_connection_id));
++        assert!(!slow_disconnect_token.is_cancelled());
+         assert!(!fast_disconnect_token.is_cancelled());
+         let fast_message = fast_writer_rx
+             .try_recv()
+@@ -959,6 +994,173 @@ mod tests {
+                 ConfigWarningNotification { summary, .. }
+             )) if summary == "already-buffered"
+         ));
++        assert!(
++            slow_writer_rx.try_recv().is_err(),
++            "slow connection should drop the best-effort broadcast instead of queueing it"
++        );
++    }
 +
-     /// Forward an `Op` to the Agent. Using an `AppEvent` for this avoids
-     /// bubbling channels through layers of widgets.
-     CodexOp(Op),
++    #[tokio::test]
++    async fn broadcast_required_notification_disconnects_slow_connection() {
++        let fast_connection_id = ConnectionId(20);
++        let slow_connection_id = ConnectionId(21);
++
++        let (fast_writer_tx, mut fast_writer_rx) = mpsc::channel(1);
++        let (slow_writer_tx, mut slow_writer_rx) = mpsc::channel(1);
++        let fast_disconnect_token = CancellationToken::new();
++        let slow_disconnect_token = CancellationToken::new();
++
++        let mut connections = HashMap::new();
++        connections.insert(
++            fast_connection_id,
++            OutboundConnectionState::new(
++                fast_writer_tx,
++                Arc::new(AtomicBool::new(true)),
++                Arc::new(AtomicBool::new(true)),
++                Arc::new(RwLock::new(HashSet::new())),
++                Some(fast_disconnect_token.clone()),
++            ),
++        );
++        connections.insert(
++            slow_connection_id,
++            OutboundConnectionState::new(
++                slow_writer_tx.clone(),
++                Arc::new(AtomicBool::new(true)),
++                Arc::new(AtomicBool::new(true)),
++                Arc::new(RwLock::new(HashSet::new())),
++                Some(slow_disconnect_token.clone()),
++            ),
++        );
++
++        slow_writer_tx
++            .try_send(QueuedOutgoingMessage::new(
++                OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
++                    ConfigWarningNotification {
++                        summary: "already-buffered".to_string(),
++                        details: None,
++                        path: None,
++                        range: None,
++                    },
++                )),
++            ))
++            .expect("channel should have room");
++
++        timeout(
++            Duration::from_millis(100),
++            route_outgoing_envelope(
++                &mut connections,
++                OutgoingEnvelope::Broadcast {
++                    message: OutgoingMessage::AppServerNotification(
++                        ServerNotification::AgentMessageDelta(
++                            codex_app_server_protocol::AgentMessageDeltaNotification {
++                                thread_id: "thread".to_string(),
++                                turn_id: "turn".to_string(),
++                                item_id: "item".to_string(),
++                                delta: "hello".to_string(),
++                            },
++                        ),
++                    ),
++                },
++            ),
++        )
++        .await
++        .expect("broadcast should return even when one connection is slow");
++
++        assert!(!connections.contains_key(&slow_connection_id));
++        assert!(slow_disconnect_token.is_cancelled());
++        assert!(!fast_disconnect_token.is_cancelled());
++        let fast_message = fast_writer_rx
++            .try_recv()
++            .expect("fast connection should receive the required broadcast notification");
++        assert!(matches!(
++            fast_message.message,
++            OutgoingMessage::AppServerNotification(ServerNotification::AgentMessageDelta(
++                codex_app_server_protocol::AgentMessageDeltaNotification { delta, .. }
++            )) if delta == "hello"
++        ));
++        let slow_message = slow_writer_rx
++            .try_recv()
++            .expect("slow connection should retain its original buffered message");
++        assert!(matches!(
++            slow_message.message,
++            OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
++                ConfigWarningNotification { summary, .. }
++            )) if summary == "already-buffered"
++        ));
++    }
++
++    #[tokio::test]
++    async fn to_connection_best_effort_notification_does_not_disconnect_slow_websocket() {
++        let connection_id = ConnectionId(22);
++        let (writer_tx, mut writer_rx) = mpsc::channel(1);
++        let disconnect_token = CancellationToken::new();
++        writer_tx
++            .send(QueuedOutgoingMessage::new(
++                OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
++                    ConfigWarningNotification {
++                        summary: "queued".to_string(),
++                        details: None,
++                        path: None,
++                        range: None,
++                    },
++                )),
++            ))
++            .await
++            .expect("channel should accept the first queued message");
++
++        let mut connections = HashMap::new();
++        connections.insert(
++            connection_id,
++            OutboundConnectionState::new(
++                writer_tx,
++                Arc::new(AtomicBool::new(true)),
++                Arc::new(AtomicBool::new(true)),
++                Arc::new(RwLock::new(HashSet::new())),
++                Some(disconnect_token.clone()),
++            ),
++        );
++
++        let (write_complete_tx, write_complete_rx) = tokio::sync::oneshot::channel();
++        timeout(
++            Duration::from_millis(100),
++            route_outgoing_envelope(
++                &mut connections,
++                OutgoingEnvelope::ToConnection {
++                    connection_id,
++                    message: OutgoingMessage::AppServerNotification(
++                        ServerNotification::ConfigWarning(ConfigWarningNotification {
++                            summary: "second".to_string(),
++                            details: None,
++                            path: None,
++                            range: None,
++                        }),
++                    ),
++                    write_complete_tx: Some(write_complete_tx),
++                },
++            ),
++        )
++        .await
++        .expect("routing should return quickly for best-effort slow websocket notifications");
++
++        assert!(connections.contains_key(&connection_id));
++        assert!(!disconnect_token.is_cancelled());
++        let first = writer_rx
++            .try_recv()
++            .expect("original queued message should remain buffered");
++        assert!(matches!(
++            first.message,
++            OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
++                ConfigWarningNotification { summary, .. }
++            )) if summary == "queued"
++        ));
++        assert!(
++            writer_rx.try_recv().is_err(),
++            "best-effort message should be dropped instead of enqueued"
++        );
++        assert!(
++            write_complete_rx.await.is_err(),
++            "dropping the notification should close the write-complete waiter"
++        );
+     }
+
+     #[tokio::test]
 diff --git a/codex-rs/tui/src/lib.rs b/codex-rs/tui/src/lib.rs
 index a5efcd1ea..2c95c2db0 100644
 --- a/codex-rs/tui/src/lib.rs
