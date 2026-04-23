@@ -18,6 +18,7 @@ from zerg.services.machine_state import write_machine_state
 from zerg.services.runtime_artifacts import InstalledRuntimeBinary
 from zerg.services.runtime_artifacts import RuntimeComponent
 from zerg.services.runtime_artifacts import ensure_runtime_binary
+from zerg.services.shipper import get_service_info
 from zerg.services.shipper import install_hooks
 from zerg.services.shipper import install_service
 from zerg.services.shipper import load_token
@@ -45,6 +46,13 @@ class LocalRuntimeInstallResult:
 class LocalRuntimeReconcileResult:
     machine_state: MachineState
     install_result: LocalRuntimeInstallResult
+
+
+@dataclass(frozen=True)
+class MachineStateApplyResult:
+    machine_state: MachineState
+    install_result: LocalRuntimeInstallResult | None = None
+    reconciled: bool = False
 
 
 def _ensure_managed_codex_runtime(*, source_override: str | None = None) -> InstalledRuntimeBinary:
@@ -148,6 +156,62 @@ def install_local_runtime(
         codex_source=codex_source,
         machine_config_generation=machine_state.config_generation,
         machine_state_hash=machine_state_source_hash(machine_state),
+    )
+
+
+def apply_machine_state_update(
+    *,
+    claude_dir: str | None,
+    written_by: str,
+    runtime_url: str | None = None,
+    machine_name: str | None = None,
+    menubar: bool | None = None,
+    topology_intent: str | None = None,
+    token: str | None = None,
+    codex_source: str | None = None,
+) -> MachineStateApplyResult:
+    """Persist durable machine state and reconcile generated launch artifacts when installed.
+
+    This is the safe seam for local config changes like switching runtime URL or
+    machine label after a machine agent has already been installed.
+    """
+
+    config_dir = resolve_longhouse_home_from_provider_home(claude_dir) if claude_dir else None
+    service_info = get_service_info(claude_dir)
+
+    write_kwargs: dict[str, object] = {
+        "base_dir": config_dir,
+        "written_by": written_by,
+    }
+    if runtime_url is not None:
+        write_kwargs["runtime_url"] = runtime_url
+    if machine_name is not None:
+        write_kwargs["machine_name"] = machine_name
+    if menubar is not None:
+        write_kwargs["desktop_app_enabled"] = menubar
+    if topology_intent is not None:
+        write_kwargs["topology_intent"] = topology_intent
+
+    machine_state = write_machine_state(**write_kwargs)
+    service_installed = str(service_info.get("status") or "not-installed") != "not-installed"
+    if not service_installed or not machine_state.runtime_url or not machine_state.machine_name:
+        return MachineStateApplyResult(machine_state=machine_state)
+
+    effective_token = token if token is not None else load_token(config_dir)
+    install_result = _install_local_runtime_artifacts(
+        url=machine_state.runtime_url,
+        token=effective_token,
+        claude_dir=claude_dir,
+        machine_name=machine_state.machine_name,
+        menubar=bool(machine_state.desktop_app_enabled),
+        codex_source=codex_source,
+        machine_config_generation=machine_state.config_generation,
+        machine_state_hash=machine_state_source_hash(machine_state),
+    )
+    return MachineStateApplyResult(
+        machine_state=machine_state,
+        install_result=install_result,
+        reconciled=True,
     )
 
 

@@ -1,6 +1,5 @@
 """Tests for the local install vs workspace MCP boundary."""
 
-import json
 from types import SimpleNamespace
 
 import pytest
@@ -8,6 +7,7 @@ from click.exceptions import Exit as ClickExit
 
 from zerg.cli import connect
 from zerg.services.machine_state import load_machine_state
+from zerg.services.machine_state import write_machine_state
 from zerg.services.shipper.service import Platform
 
 
@@ -344,28 +344,33 @@ def test_connect_requires_configured_url(monkeypatch):
     assert exc.value.exit_code == 1
 
 
-def test_persist_selected_url_updates_machine_state(tmp_path):
+def test_persist_selected_url_uses_safe_apply_path(monkeypatch, tmp_path):
     claude_dir = tmp_path / ".claude"
     claude_dir.mkdir()
+    calls: list[dict[str, object]] = []
 
-    connect._persist_selected_url("https://example.com", claude_dir, written_by="connect")
+    monkeypatch.setattr(
+        connect,
+        "apply_machine_state_update",
+        lambda **kwargs: calls.append(kwargs),
+    )
 
-    state = load_machine_state(claude_dir)
-    assert state is not None
-    assert state.runtime_url == "https://example.com"
-    assert state.written_by == "connect"
+    connect._persist_selected_url("https://example.com", str(claude_dir), written_by="connect")
 
-    journal_path = tmp_path / ".longhouse" / "machine" / "state-journal.jsonl"
-    entries = [json.loads(line) for line in journal_path.read_text().splitlines()]
-    assert entries[-1]["new"]["runtime_url"] == "https://example.com"
-    assert entries[-1]["written_by"] == "connect"
+    assert calls == [
+        {
+            "claude_dir": str(claude_dir),
+            "written_by": "connect",
+            "runtime_url": "https://example.com",
+        }
+    ]
 
 
 def test_auth_clear_clears_canonical_runtime_url_without_touching_machine_name(tmp_path):
     claude_dir = tmp_path / ".claude"
     claude_dir.mkdir()
 
-    connect.write_machine_state(
+    write_machine_state(
         base_dir=claude_dir,
         written_by="test",
         runtime_url="https://example.com",
