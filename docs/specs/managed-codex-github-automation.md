@@ -9,7 +9,7 @@ On a schedule:
 1. Detect whether upstream shipped a newer Codex tag than the one currently pinned in `scripts/release/build-managed-codex.sh`.
 2. Decide whether the carried Longhouse patch for `openai/codex#18203` still matters.
 3. Produce an agent-ready advisory prompt for a one-off Claude/Codex review.
-4. Optionally dispatch the existing runtime release workflow with explicit managed-Codex upstream overrides.
+4. Dispatch the existing runtime release workflow with explicit managed-Codex upstream overrides when the deterministic policy says it is safe.
 
 ## What Already Exists In Zerg
 
@@ -25,7 +25,7 @@ On a schedule:
   - `managed_codex_upstream_version`
   - `managed_codex_build_version`
 - `.github/workflows/managed-codex-upstream-watch.yml`
-  Scheduled/manual watcher for upstream Codex tags that emits a report and can dispatch the runtime release workflow.
+  Scheduled/manual watcher for upstream Codex releases/tags that emits a report and can dispatch the runtime release workflow.
 
 ## Important Constraint
 
@@ -48,14 +48,34 @@ The intended split is:
    Runs on a schedule or manually. Produces:
    - `managed-codex-report.json`
    - `managed-codex-agent-prompt.txt`
-   - a GitHub Actions step summary with the candidate tag/ref and patch status
+   - a GitHub Actions step summary with the candidate tag/ref, patch status, desired managed build version, and current published managed-Codex version on the target Longhouse release
 2. Optional advisory step
    Run the emitted prompt through Claude/Codex on a protected self-hosted runner, or manually from Longhouse/hatch.
-3. Manual or policy-gated package dispatch
+3. Policy-gated package dispatch
    The watch workflow can dispatch `local-runtime-release.yml` with:
    - the target Longhouse release tag
    - the upstream Codex ref/version to build
    - the managed build version suffix
+
+## Dispatch Policy
+
+The deterministic mirror lane should be boring. The workflow now defaults to `latest_published_release`, not `latest_tag`, on unattended runs.
+
+Schedule auto-dispatch should only happen when all of these are true:
+
+- upstream published release is newer than the currently pinned upstream Codex version
+- `patch_status == applies_cleanly`
+- target Longhouse release tag is configured
+- the target Longhouse release does not already publish the same managed Codex build version
+
+Repository variables:
+
+- `LONGHOUSE_RUNTIME_RELEASE_TAG`
+  Existing Longhouse release tag whose runtime assets should be refreshed
+- `MANAGED_CODEX_AUTO_DISPATCH`
+  Set to `true` to let the scheduled watcher dispatch the runtime release workflow automatically
+- `MANAGED_CODEX_BUILD_SUFFIX`
+  Optional suffix override for the managed build version; defaults to `longhouse.1`
 
 ## Why The Advisory Step Is Separate
 
@@ -83,7 +103,7 @@ So the first cut should automate detection and packaging dispatch, and treat the
 Keep the first version narrow:
 
 1. Scheduled upstream watch in GitHub Actions.
-2. Agent prompt artifact for the one-off Claude/Codex review.
-3. Manual `workflow_dispatch` option to kick `local-runtime-release.yml` with the candidate upstream ref/version.
+2. Deterministic auto-dispatch only when the patch applies cleanly and the desired managed Codex build is not already published on the target Longhouse release.
+3. Agent prompt artifact for the one-off Claude/Codex review.
 
 That gets you the release-awareness loop now, without pretending the Longhouse runtime installer already has a separate managed-Codex update channel.

@@ -28,6 +28,11 @@ DEFAULT_UPSTREAM_REF_RE = re.compile(r'^DEFAULT_UPSTREAM_REF="([^"]+)"$', re.MUL
 DEFAULT_UPSTREAM_VERSION_RE = re.compile(r'^DEFAULT_UPSTREAM_VERSION="([^"]+)"$', re.MULTILINE)
 UPSTREAM_TAG_RE = re.compile(r"^rust-v(?P<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$")
 SEMVER_RE = re.compile(r"^(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)(?:-(?P<pre>[0-9A-Za-z.-]+))?$")
+CANDIDATE_SOURCE_CHOICES = (
+    "latest_tag",
+    "latest_published_release",
+    "latest_prerelease_release",
+)
 
 
 @dataclass(frozen=True)
@@ -224,6 +229,56 @@ def _recommendation(*, update_needed: bool, patch_status: str) -> str:
     )
 
 
+def _candidate_from_release(
+    release: dict[str, Any] | None,
+    *,
+    tag_by_name: dict[str, UpstreamTag],
+    source_name: str,
+) -> UpstreamTag:
+    if not release:
+        raise SystemExit(f"No upstream {source_name.replace('_', ' ')} was found")
+    tag_name = str(release.get("tag_name") or "").strip()
+    if not tag_name:
+        raise SystemExit(f"Upstream {source_name.replace('_', ' ')} is missing tag_name")
+    candidate = tag_by_name.get(tag_name)
+    if candidate is None:
+        raise SystemExit(f"Release tag {tag_name!r} from {source_name} did not resolve to an upstream rust-v* tag")
+    return candidate
+
+
+def _resolve_candidate_tag(
+    *,
+    explicit_candidate_tag: str | None,
+    candidate_source: str,
+    tags: list[UpstreamTag],
+    tag_by_name: dict[str, UpstreamTag],
+    latest_published_release: dict[str, Any] | None,
+    latest_prerelease_release: dict[str, Any] | None,
+) -> UpstreamTag:
+    if explicit_candidate_tag:
+        candidate_tag = tag_by_name.get(explicit_candidate_tag)
+        if not candidate_tag:
+            raise SystemExit(f"Candidate tag {explicit_candidate_tag!r} was not found in upstream tags")
+        return candidate_tag
+
+    if candidate_source == "latest_tag":
+        return tags[0]
+    if candidate_source == "latest_published_release":
+        return _candidate_from_release(
+            latest_published_release,
+            tag_by_name=tag_by_name,
+            source_name="latest_published_release",
+        )
+    if candidate_source == "latest_prerelease_release":
+        return _candidate_from_release(
+            latest_prerelease_release,
+            tag_by_name=tag_by_name,
+            source_name="latest_prerelease_release",
+        )
+
+    raise SystemExit(f"Unsupported candidate source: {candidate_source!r}")
+
+
 def _agent_prompt(
     *,
     pinned_ref: str,
@@ -291,6 +346,12 @@ def _parse_args() -> argparse.Namespace:
         help="Explicit upstream rust-v* tag to inspect instead of auto-selecting the newest semver tag",
     )
     parser.add_argument(
+        "--candidate-source",
+        choices=CANDIDATE_SOURCE_CHOICES,
+        default="latest_tag",
+        help="How to choose the default upstream candidate when --candidate-tag is not set",
+    )
+    parser.add_argument(
         "--github-token",
         default=os.environ.get("GITHUB_TOKEN", ""),
         help="Optional GitHub token for release API requests (defaults to GITHUB_TOKEN)",
@@ -317,12 +378,6 @@ def main() -> int:
 
     tags = _list_upstream_tags()
     tag_by_name = {tag.name: tag for tag in tags}
-    if args.candidate_tag:
-        candidate_tag = tag_by_name.get(args.candidate_tag)
-        if not candidate_tag:
-            raise SystemExit(f"Candidate tag {args.candidate_tag!r} was not found in upstream tags")
-    else:
-        candidate_tag = tags[0]
 
     releases = _fetch_json(f"{UPSTREAM_API_ROOT}/releases?per_page=20", args.github_token or None)
     if not isinstance(releases, list):
@@ -330,6 +385,14 @@ def main() -> int:
 
     latest_published_release = next((item for item in releases if not item.get("draft") and not item.get("prerelease")), None)
     latest_prerelease = next((item for item in releases if not item.get("draft") and item.get("prerelease")), None)
+    candidate_tag = _resolve_candidate_tag(
+        explicit_candidate_tag=args.candidate_tag,
+        candidate_source=args.candidate_source,
+        tags=tags,
+        tag_by_name=tag_by_name,
+        latest_published_release=latest_published_release,
+        latest_prerelease_release=latest_prerelease,
+    )
     candidate_release = next((item for item in releases if item.get("tag_name") == candidate_tag.name), None)
 
     patch_status = _check_patch_status(candidate_tag, args.patch_file)
@@ -345,6 +408,7 @@ def main() -> int:
 
     payload = {
         "upstream_repo": UPSTREAM_REPO_URL,
+        "candidate_source": args.candidate_source,
         "pinned_upstream_ref": pinned_ref,
         "pinned_upstream_version": pinned_version,
         "latest_upstream_tag": {
@@ -379,6 +443,7 @@ def main() -> int:
     print("Managed Codex upstream check")
     print(f"  pinned upstream version: {pinned_version}")
     print(f"  pinned upstream ref:     {pinned_ref}")
+    print(f"  candidate source:       {args.candidate_source}")
     print(f"  latest upstream tag:     {tags[0].name} ({tags[0].commit_sha[:12]})")
     print(f"  candidate tag:           {candidate_tag.name} ({candidate_tag.commit_sha[:12]})")
     print(f"  update needed by tag:    {str(update_needed).lower()}")
