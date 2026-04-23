@@ -373,7 +373,10 @@ class SessionTurnResponse(UTCBaseModel):
 
     id: int = Field(..., description="Turn integer id")
     session_id: str = Field(..., description="Owning session UUID")
-    request_id: Optional[str] = Field(None, description="Transport/control request id when available")
+    request_id: Optional[str] = Field(
+        None,
+        description="Transport request id when available, otherwise a synthetic canonical id for reconstructed native turns",
+    )
     state: str = Field(..., description="created|send_accepted|active|terminal|durable|failed")
     terminal_phase: Optional[str] = Field(None, description="Observed terminal phase when known")
     error_code: Optional[str] = Field(None, description="Canonical irrecoverable error code when failed")

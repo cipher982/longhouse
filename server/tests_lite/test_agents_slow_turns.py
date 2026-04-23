@@ -19,6 +19,7 @@ import zerg.services.agent_heartbeat_health as machine_health_service
 import zerg.services.session_turns as session_turns_service
 from zerg.database import get_db
 from zerg.database import make_engine
+from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
@@ -839,5 +840,65 @@ def test_slow_turns_route_supports_completed_failed_state_filter(tmp_path, monke
         assert payload["turns"][0]["state"] == SESSION_TURN_STATE_FAILED
         assert payload["turns"][0]["completed_at"] == "2026-04-23T20:10:39Z"
         assert payload["turns"][0]["timing"]["total_turn_time_ms"] == 39000
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_turn_summary_route_materializes_managed_native_turns(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    pinned_now = datetime(2026, 4, 23, 21, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(session_turns_service, "utc_now", lambda: pinned_now)
+    monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+
+    with SessionLocal() as db:
+        session = _seed_session(
+            db,
+            provider="claude",
+            project="zerg",
+            device_id="cinder",
+            managed_transport="claude_channel_bridge",
+        )
+        db.add_all(
+            [
+                AgentEvent(
+                    session_id=session.id,
+                    role="user",
+                    content_text="continue",
+                    timestamp=pinned_now - timedelta(minutes=10),
+                ),
+                AgentEvent(
+                    session_id=session.id,
+                    role="assistant",
+                    content_text="done",
+                    timestamp=pinned_now - timedelta(minutes=10) + timedelta(seconds=16),
+                ),
+            ]
+        )
+        db.commit()
+        _seed_heartbeat(
+            db,
+            device_id="cinder",
+            received_at=pinned_now - timedelta(minutes=1),
+        )
+        session_id = session.id
+
+    client, api_app_ref = _make_client(SessionLocal)
+    try:
+        response = client.get("/agents/turns/summary?hours_back=24&slow_threshold_ms=30000&stale_after_seconds=3600")
+        assert response.status_code == 200, response.text
+
+        payload = response.json()
+        assert payload["summary"]["completed_turns"] == 1
+        assert payload["summary"]["durable_turns"] == 1
+        assert payload["summary"]["total_turn_time_ms"] == {
+            "p50": 16000,
+            "p95": 16000,
+            "max": 16000,
+        }
+
+        with SessionLocal() as verify_db:
+            row = verify_db.query(SessionTurn).filter(SessionTurn.session_id == session_id).one()
+            assert row.request_id.startswith("native:")
+            assert row.state == SESSION_TURN_STATE_DURABLE
     finally:
         api_app_ref.dependency_overrides = {}

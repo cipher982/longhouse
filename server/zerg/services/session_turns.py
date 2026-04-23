@@ -14,6 +14,7 @@ from typing import TypeVar
 from uuid import UUID
 
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from zerg.database import make_sessionmaker
@@ -40,6 +41,10 @@ SESSION_TURN_STATE_FAILED = "failed"
 SESSION_TURN_ERROR_SEND_FAILED = "send_failed"
 SESSION_TURN_ERROR_VERIFICATION_TIMEOUT = "verification_timeout"
 SESSION_TURN_ERROR_TURN_TIMEOUT = "turn_timeout"
+SESSION_TURN_RECONSTRUCTED_REQUEST_PREFIX = "native"
+
+RECENT_MANAGED_TURN_MATERIALIZATION_LIMIT = 200
+SESSION_TURN_MATERIALIZATION_STALE_AFTER_DAYS = 7
 
 T = TypeVar("T")
 
@@ -155,6 +160,125 @@ def create_session_turn(
     db.add(turn)
     db.flush()
     return turn
+
+
+def materialize_managed_transcript_turns(
+    db: Session,
+    *,
+    session_id: UUID,
+) -> int:
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).one_or_none()
+    if session is None or not str(getattr(session, "managed_transport", "") or "").strip():
+        return 0
+
+    session_last_activity = normalize_utc(getattr(session, "last_activity_at", None)) or normalize_utc(getattr(session, "started_at", None))
+    if session_last_activity is not None and session_last_activity < utc_now() - timedelta(
+        days=SESSION_TURN_MATERIALIZATION_STALE_AFTER_DAYS
+    ):
+        has_existing_turn = db.query(SessionTurn.id).filter(SessionTurn.session_id == session_id).limit(1).one_or_none()
+        if has_existing_turn is not None:
+            return 0
+
+    events = (
+        db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc()).all()
+    )
+    if not events:
+        return 0
+
+    existing_turns = (
+        db.query(SessionTurn)
+        .filter(SessionTurn.session_id == session_id)
+        .order_by(SessionTurn.user_submitted_at.asc(), SessionTurn.created_at.asc(), SessionTurn.id.asc())
+        .all()
+    )
+    has_pending_request_turn = any(
+        str(getattr(turn, "request_id", "") or "").strip()
+        and getattr(turn, "send_accepted_at", None) is not None
+        and getattr(turn, "durable_at", None) is None
+        for turn in existing_turns
+    )
+    if has_pending_request_turn:
+        return 0
+    claimed_user_event_ids = {int(turn.user_event_id) for turn in existing_turns if getattr(turn, "user_event_id", None) is not None}
+    claimed_assistant_event_ids = {
+        int(turn.durable_assistant_event_id) for turn in existing_turns if getattr(turn, "durable_assistant_event_id", None) is not None
+    }
+
+    created = 0
+    for user_event, assistant_event in _iter_completed_transcript_turn_pairs(events):
+        user_event_id = int(getattr(user_event, "id", 0) or 0)
+        assistant_event_id = int(getattr(assistant_event, "id", 0) or 0)
+        if user_event_id <= 0 or assistant_event_id <= 0:
+            continue
+        if user_event_id in claimed_user_event_ids or assistant_event_id in claimed_assistant_event_ids:
+            continue
+
+        normalized_user_text = strip_claude_channel_wrapper(str(getattr(user_event, "content_text", "") or ""))
+        user_submitted_at = normalize_utc(getattr(user_event, "timestamp", None)) or utc_now()
+        durable_at = normalize_utc(getattr(assistant_event, "timestamp", None)) or user_submitted_at
+        request_id = _reconstructed_turn_request_id(
+            user_event_id=user_event_id,
+            assistant_event_id=assistant_event_id,
+        )
+        try:
+            with db.begin_nested():
+                turn = create_session_turn(
+                    db,
+                    session_id=session_id,
+                    request_id=request_id,
+                    user_submitted_at=user_submitted_at,
+                    expected_user_text=normalized_user_text or None,
+                )
+                if turn.user_event_id is None:
+                    turn.user_event_id = user_event_id
+                if turn.durable_assistant_event_id is None:
+                    turn.durable_assistant_event_id = assistant_event_id
+                if turn.durable_at is None:
+                    turn.durable_at = durable_at
+                if turn.state != SESSION_TURN_STATE_DURABLE:
+                    turn.state = SESSION_TURN_STATE_DURABLE
+                if turn.error_code:
+                    turn.error_code = None
+        except IntegrityError:
+            turn = get_session_turn(db, session_id=session_id, request_id=request_id)
+            if turn is None:
+                raise
+        claimed_user_event_ids.add(user_event_id)
+        claimed_assistant_event_ids.add(assistant_event_id)
+        if turn.user_event_id == user_event_id and turn.durable_assistant_event_id == assistant_event_id:
+            created += 1
+
+    return created
+
+
+def materialize_recent_managed_transcript_turns(
+    db: Session,
+    *,
+    provider: str | None = None,
+    project: str | None = None,
+    device_id: str | None = None,
+    hours_back: int = 24,
+    session_limit: int = RECENT_MANAGED_TURN_MATERIALIZATION_LIMIT,
+) -> int:
+    lookback_start = utc_now() - timedelta(hours=max(1, hours_back))
+    activity_anchor = func.coalesce(AgentSession.last_activity_at, AgentSession.started_at)
+    query = db.query(AgentSession.id).filter(
+        AgentSession.managed_transport.isnot(None),
+        AgentSession.managed_transport != "",
+        activity_anchor >= lookback_start,
+    )
+    if provider:
+        query = query.filter(AgentSession.provider == provider)
+    if project:
+        query = query.filter(AgentSession.project == project)
+    if device_id:
+        query = query.filter(AgentSession.device_id == device_id)
+    query = query.order_by(activity_anchor.desc(), AgentSession.started_at.desc(), AgentSession.id.desc()).limit(max(1, session_limit))
+
+    created = 0
+    for (session_id,) in query.all():
+        created += materialize_managed_transcript_turns(db, session_id=session_id)
+    return created
 
 
 def get_session_turn(
@@ -636,3 +760,40 @@ def _event_in_turn_window(
     if submitted_before is not None and event_timestamp >= submitted_before:
         return False
     return True
+
+
+def _iter_completed_transcript_turn_pairs(
+    events: list[AgentEvent],
+) -> list[tuple[AgentEvent, AgentEvent]]:
+    completed_pairs: list[tuple[AgentEvent, AgentEvent]] = []
+    current_user: AgentEvent | None = None
+    last_assistant: AgentEvent | None = None
+
+    for event in events:
+        role = str(getattr(event, "role", "") or "").strip().lower()
+        content_text = str(getattr(event, "content_text", "") or "")
+
+        if role == "user":
+            if current_user is not None and last_assistant is not None:
+                completed_pairs.append((current_user, last_assistant))
+            current_user = event
+            last_assistant = None
+            continue
+
+        if current_user is None:
+            continue
+
+        if role == "assistant" and content_text.strip():
+            last_assistant = event
+
+    if current_user is not None and last_assistant is not None:
+        completed_pairs.append((current_user, last_assistant))
+    return completed_pairs
+
+
+def _reconstructed_turn_request_id(
+    *,
+    user_event_id: int,
+    assistant_event_id: int,
+) -> str:
+    return f"{SESSION_TURN_RECONSTRUCTED_REQUEST_PREFIX}:{user_event_id}:{assistant_event_id}"
