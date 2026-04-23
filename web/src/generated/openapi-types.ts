@@ -3761,6 +3761,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/turns/slow": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Slow Turns
+         * @description List recent slow managed turns across sessions, enriched with current machine health.
+         */
+        get: operations["list_slow_turns_agents_turns_slow_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/backfill-summaries": {
         parameters: {
             query?: never;
@@ -8069,6 +8089,81 @@ export interface components {
              * @description Updated SKILL.md content
              */
             content?: string | null;
+        };
+        /** SlowTurnItemResponse */
+        SlowTurnItemResponse: {
+            /** Turn Id */
+            turn_id: number;
+            /** Session Id */
+            session_id: string;
+            /** Request Id */
+            request_id?: string | null;
+            /** Provider */
+            provider: string;
+            /** Project */
+            project?: string | null;
+            /** Device Id */
+            device_id?: string | null;
+            /** Device Name */
+            device_name?: string | null;
+            /** Managed Transport */
+            managed_transport?: string | null;
+            /** State */
+            state: string;
+            /** Terminal Phase */
+            terminal_phase?: string | null;
+            /** Error Code */
+            error_code?: string | null;
+            /**
+             * User Submitted At
+             * Format: date-time
+             */
+            user_submitted_at: string;
+            /**
+             * Completed At
+             * Format: date-time
+             */
+            completed_at: string;
+            /** Total Turn Time Ms */
+            total_turn_time_ms: number;
+            timing: components["schemas"]["SessionTurnTimingResponse"];
+            machine?: components["schemas"]["SlowTurnMachineResponse"] | null;
+        };
+        /** SlowTurnMachineResponse */
+        SlowTurnMachineResponse: {
+            /** Device Id */
+            device_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "healthy" | "degraded" | "offline" | "broken";
+            /** Status Reason */
+            status_reason: string;
+            /** Status Summary */
+            status_summary: string;
+            /**
+             * Last Heartbeat At
+             * Format: date-time
+             */
+            last_heartbeat_at: string;
+            /** Heartbeat Age Seconds */
+            heartbeat_age_seconds: number;
+            /** Is Stale */
+            is_stale: boolean;
+            /** Version */
+            version?: string | null;
+        };
+        /** SlowTurnsListResponse */
+        SlowTurnsListResponse: {
+            /** Turns */
+            turns: components["schemas"]["SlowTurnItemResponse"][];
+            /** Total */
+            total: number;
+            /** Hours Back */
+            hours_back: number;
+            /** Min Total Turn Time Ms */
+            min_total_turn_time_ms: number;
         };
         /**
          * StartupContextItemResponse
@@ -15295,6 +15390,56 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_slow_turns_agents_turns_slow_get: {
+        parameters: {
+            query?: {
+                /** @description Filter by session provider */
+                provider?: string | null;
+                /** @description Filter by project */
+                project?: string | null;
+                /** @description Filter by device */
+                device_id?: string | null;
+                /** @description Filter by turn state */
+                state?: string | null;
+                /** @description Filter by current machine transport state */
+                machine_status?: ("healthy" | "degraded" | "offline" | "broken") | null;
+                /** @description Only return completed turns at or above this total duration */
+                min_total_turn_time_ms?: number;
+                /** @description Only consider turns submitted within this recent window */
+                hours_back?: number;
+                /** @description Max slow-turn rows to return */
+                limit?: number;
+                /** @description Offset for pagination */
+                offset?: number;
+                /** @description Treat heartbeats older than this as offline when enriching machine status */
+                stale_after_seconds?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SlowTurnsListResponse"];
                 };
             };
             /** @description Validation Error */

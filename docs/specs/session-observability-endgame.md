@@ -103,6 +103,16 @@ Required surfaces:
 
 These must carry enough data to diagnose local transport issues without tailing logs.
 
+## Operator Surfaces
+
+These read paths are how a human or agent should answer slowdown questions quickly without raw SQL or log digging.
+
+- `GET /api/agents/machines/health` answers "is the shipping path on this machine healthy right now?"
+- `GET /api/agents/sessions/{session_id}/turns` and turn detail answer "which phase of this specific turn was slow?"
+- `GET /api/agents/turns/slow` answers "show me recent slow managed turns across sessions, grouped by the metadata I care about."
+
+If a slowdown question still requires opening logs first, the product surface is incomplete.
+
 ## Dashboards
 
 Launch-minimum dashboards:
@@ -179,3 +189,6 @@ Near-term slice success criteria:
 - Each row includes heartbeat freshness, dominant transport reason, rolling ship outcomes, and backlog/dead-letter signals.
 - Operator flows can filter that surface by device and derived state without querying raw heartbeat history directly.
 - `GET /api/agents/sessions/{session_id}/turns` and turn detail responses expose derived phase durations from canonical turn timestamps instead of forcing trace inspection for basic timing decomposition.
+- `GET /api/agents/turns/slow` returns recent completed managed-turn outliers across sessions, ordered by slowest total turn time first.
+- Each slow-turn row includes canonical timing durations, session/provider/project/device identifiers, and the current machine transport state when available.
+- Operator flows can filter recent slow turns by provider, project, device, machine state, and slow threshold without joining turns and heartbeats by hand.
