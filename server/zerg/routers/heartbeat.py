@@ -39,10 +39,25 @@ class HeartbeatIn(BaseModel):
 
     version: Optional[str] = None
     daemon_pid: Optional[int] = None
-    last_ship_at: Optional[str] = None  # RFC3339 or None
+    last_ship_at: Optional[str] = None  # RFC3339 last successful ship or None
+    last_ship_attempt_at: Optional[str] = None  # RFC3339 last ship attempt or None
+    last_ship_result: Optional[str] = None
+    last_ship_latency_ms: Optional[int] = None
+    last_ship_http_status: Optional[int] = None
     spool_pending_count: int = 0
+    spool_dead_count: int = 0
     parse_error_count_1h: int = 0
     consecutive_ship_failures: int = 0
+    ship_attempts_1h: int = 0
+    ship_successes_1h: int = 0
+    ship_rate_limited_1h: int = 0
+    ship_server_errors_1h: int = 0
+    ship_payload_rejections_1h: int = 0
+    ship_payload_too_large_1h: int = 0
+    ship_retryable_client_errors_1h: int = 0
+    ship_connect_errors_1h: int = 0
+    ship_latency_p50_ms_1h: Optional[int] = None
+    ship_latency_p95_ms_1h: Optional[int] = None
     disk_free_bytes: int = 0
     is_offline: bool = False
 
@@ -81,6 +96,7 @@ async def ingest_heartbeat(
     _version = payload.version
     _last_ship = last_ship_at
     _spool = payload.spool_pending_count
+    _spool_dead = payload.spool_dead_count
     _parse_err = payload.parse_error_count_1h
     _consec = payload.consecutive_ship_failures
     _disk = payload.disk_free_bytes
@@ -93,6 +109,7 @@ async def ingest_heartbeat(
             version=_version,
             last_ship_at=_last_ship,
             spool_pending=_spool,
+            spool_dead=_spool_dead,
             parse_errors_1h=_parse_err,
             consecutive_failures=_consec,
             disk_free_bytes=_disk,

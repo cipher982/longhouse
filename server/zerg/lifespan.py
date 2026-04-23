@@ -12,6 +12,8 @@ from fastapi import FastAPI
 
 from zerg.config import get_settings
 from zerg.database import initialize_database
+from zerg.observability import configure_observability
+from zerg.observability import shutdown_observability
 from zerg.services.ops_events import ops_events_bridge
 from zerg.services.scheduler_service import scheduler_service
 
@@ -55,6 +57,7 @@ def _enforce_single_tenant_startup(app: FastAPI) -> None:
 async def lifespan(app: FastAPI):
     """Handle application startup and shutdown lifecycle."""
     try:
+        configure_observability()
         initialize_database()
 
         from zerg.database import configure_write_serializer
@@ -520,6 +523,7 @@ async def lifespan(app: FastAPI):
         except Exception:  # noqa: BLE001
             logger.exception("Failed to stop audit_logger")
 
+        shutdown_observability()
         logger.info("Background services stopped")
     except Exception as e:
         logger.error(f"Error during shutdown: {e}")

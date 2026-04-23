@@ -6,7 +6,6 @@ use std::time::Instant;
 
 use rayon::prelude::*;
 
-use crate::bench;
 use crate::config::ShipperConfig;
 use crate::discovery;
 use crate::pipeline::compressor::CompressionAlgo;
@@ -146,16 +145,17 @@ pub async fn cmd_ship(
     }
 
     // Discover files
-    let all_files = bench::discover_session_files();
+    let providers = discovery::get_providers();
+    let all_files = discovery::discover_all_files(&providers);
     if !json_output {
         eprintln!("Found {} session files", all_files.len());
     }
 
     // Filter to files with new content
     let file_state = FileState::new(&conn);
-    let mut files_to_ship: Vec<(PathBuf, u64)> = Vec::new(); // (path, offset_to_start_from)
+    let mut files_to_ship: Vec<(PathBuf, &'static str, u64)> = Vec::new(); // (path, provider, offset_to_start_from)
 
-    for path in &all_files {
+    for (path, provider) in &all_files {
         let path_str = path.to_string_lossy();
         let current_offset = file_state.get_offset(&path_str)?;
         let file_size = match std::fs::metadata(path) {
@@ -172,10 +172,10 @@ pub async fn cmd_ship(
                 file_size
             );
             file_state.reset_offsets(&path_str)?;
-            files_to_ship.push((path.clone(), 0));
+            files_to_ship.push((path.clone(), *provider, 0));
         } else if file_size > current_offset {
             // New content available
-            files_to_ship.push((path.clone(), current_offset));
+            files_to_ship.push((path.clone(), *provider, current_offset));
         }
         // file_size == current_offset: no new content, skip
     }
@@ -268,7 +268,7 @@ pub async fn cmd_ship(
 
     let prepared_files: Vec<Option<shipper::PreparedFile>> = files_to_ship
         .par_iter()
-        .map(|(path, offset)| {
+        .map(|(path, provider, offset)| {
             let path_str = path.to_string_lossy().to_string();
             if std::fs::metadata(path).is_err() {
                 return None;
@@ -276,7 +276,7 @@ pub async fn cmd_ship(
 
             let prepared = match shipper::prepare_path_from_offset(
                 path,
-                "claude",
+                provider,
                 *offset,
                 algo,
                 config.max_batch_bytes,
@@ -360,7 +360,7 @@ pub async fn cmd_ship(
             };
 
             let client = client.as_ref().unwrap();
-            let outcome = shipper::ship_prepared_file(prepared, client, &conn, None).await?;
+            let outcome = shipper::ship_prepared_file(prepared, client, &conn, None, None).await?;
             if outcome.events_shipped > 0 || outcome.dead_lettered > 0 {
                 files_shipped += 1;
             }
@@ -518,6 +518,7 @@ pub async fn cmd_ship_file(
                 32,
                 config.max_batch_bytes,
                 None,
+                None,
             )
             .await?;
             replay_events_shipped = replay.events_shipped;
@@ -637,7 +638,7 @@ pub async fn cmd_ship_file(
             return Ok(());
         }
     };
-    let outcome = shipper::ship_prepared_file(prepared, &client, &conn, None).await?;
+    let outcome = shipper::ship_prepared_file(prepared, &client, &conn, None, None).await?;
     let events_shipped = reported_ship_events(
         replay_events_shipped,
         outcome.events_shipped,

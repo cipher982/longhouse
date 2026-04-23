@@ -13,6 +13,7 @@ mod pipeline;
 mod scheduler;
 mod shipper;
 mod shipping;
+mod shipping_stats;
 mod state;
 mod text;
 mod watcher;

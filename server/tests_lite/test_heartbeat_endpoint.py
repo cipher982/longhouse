@@ -12,6 +12,7 @@ targeting api_app. No shared conftest.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -96,8 +97,8 @@ def test_heartbeat_endpoint_creates_row(tmp_path):
         api_app_ref.dependency_overrides = {}
 
 
-def test_heartbeat_endpoint_upserts(tmp_path):
-    """Two POSTs to /agents/heartbeat result in two rows for the same device."""
+def test_heartbeat_endpoint_appends_history_rows(tmp_path):
+    """Two POSTs to /agents/heartbeat append two rows for the same device."""
     SessionLocal = _make_db(tmp_path)
     client, api_app_ref = _make_client(SessionLocal)
 
@@ -168,5 +169,58 @@ def test_heartbeat_prunes_old_rows(tmp_path):
             # Old row should be pruned; new row remains
             assert len(rows) == 1, f"Expected 1 row after prune, got {len(rows)}"
             assert rows[0].version == "0.5.0"
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_heartbeat_endpoint_persists_transport_summary_fields(tmp_path):
+    """Heartbeat raw_json preserves the engine ship telemetry payload."""
+    SessionLocal = _make_db(tmp_path)
+    client, api_app_ref = _make_client(SessionLocal)
+
+    try:
+        response = client.post(
+            "/api/agents/heartbeat",
+            json={
+                "version": "0.5.0",
+                "daemon_pid": 42,
+                "last_ship_attempt_at": "2026-04-23T20:00:03Z",
+                "last_ship_result": "rate_limited",
+                "last_ship_latency_ms": 187,
+                "last_ship_http_status": 429,
+                "spool_pending_count": 7,
+                "spool_dead_count": 2,
+                "parse_error_count_1h": 2,
+                "consecutive_ship_failures": 1,
+                "ship_attempts_1h": 12,
+                "ship_successes_1h": 8,
+                "ship_rate_limited_1h": 3,
+                "ship_server_errors_1h": 1,
+                "ship_payload_rejections_1h": 0,
+                "ship_payload_too_large_1h": 0,
+                "ship_retryable_client_errors_1h": 0,
+                "ship_connect_errors_1h": 0,
+                "ship_latency_p50_ms_1h": 140,
+                "ship_latency_p95_ms_1h": 260,
+                "disk_free_bytes": 50_000_000,
+                "is_offline": False,
+            },
+        )
+        assert response.status_code == 204
+
+        with SessionLocal() as db:
+            row = db.query(AgentHeartbeat).one()
+            raw = json.loads(row.raw_json)
+            assert row.spool_dead == 2
+            assert raw["last_ship_attempt_at"] == "2026-04-23T20:00:03Z"
+            assert raw["last_ship_result"] == "rate_limited"
+            assert raw["last_ship_latency_ms"] == 187
+            assert raw["last_ship_http_status"] == 429
+            assert raw["spool_dead_count"] == 2
+            assert raw["ship_attempts_1h"] == 12
+            assert raw["ship_successes_1h"] == 8
+            assert raw["ship_rate_limited_1h"] == 3
+            assert raw["ship_latency_p50_ms_1h"] == 140
+            assert raw["ship_latency_p95_ms_1h"] == 260
     finally:
         api_app_ref.dependency_overrides = {}

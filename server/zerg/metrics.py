@@ -118,6 +118,72 @@ try:
         buckets=(0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 120),
     )
 
+    managed_turn_requests_total = Counter(
+        "managed_turn_requests_total",
+        "Managed turn requests by provider and outcome",
+        labelnames=("provider", "outcome"),
+    )
+
+    managed_turn_dispatch_seconds = Histogram(
+        "managed_turn_dispatch_seconds",
+        "Managed turn send-accept latency by provider (seconds)",
+        labelnames=("provider",),
+        buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 30),
+    )
+
+    managed_turn_phase_seconds = Histogram(
+        "managed_turn_phase_seconds",
+        "Managed turn phase durations before send acceptance (seconds)",
+        labelnames=("provider", "phase"),
+        buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5),
+    )
+
+    managed_turn_wait_seconds = Histogram(
+        "managed_turn_wait_seconds",
+        "Managed turn watcher wait durations by milestone and outcome (seconds)",
+        labelnames=("provider", "milestone", "outcome"),
+        buckets=(0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600),
+    )
+
+    managed_turn_wait_total = Counter(
+        "managed_turn_wait_total",
+        "Managed turn watcher outcomes by milestone",
+        labelnames=("provider", "milestone", "outcome"),
+    )
+
+    agents_ingest_requests_total = Counter(
+        "agents_ingest_requests_total",
+        "Agent ingest requests by auth kind, provider, and status",
+        labelnames=("auth_kind", "provider", "status"),
+    )
+
+    agents_ingest_decode_seconds = Histogram(
+        "agents_ingest_decode_seconds",
+        "Decode and decompression time for agent ingest requests (seconds)",
+        labelnames=("content_encoding",),
+        buckets=(0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5),
+    )
+
+    agents_ingest_write_seconds = Histogram(
+        "agents_ingest_write_seconds",
+        "Write-serializer backed ingest write latency (seconds)",
+        labelnames=("provider",),
+        buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10),
+    )
+
+    agents_ingest_payload_bytes = Histogram(
+        "agents_ingest_payload_bytes",
+        "Payload byte sizes for agent ingest requests",
+        labelnames=("content_encoding", "kind"),
+        buckets=(256, 1_024, 4_096, 16_384, 65_536, 262_144, 1_048_576, 4_194_304, 16_777_216),
+    )
+
+    agents_ingest_events_total = Counter(
+        "agents_ingest_events_total",
+        "Event counts observed during agent ingest",
+        labelnames=("provider", "kind"),
+    )
+
 except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib absent
 
     class _NoopCounter:  # noqa: D401 – tiny helper
@@ -134,6 +200,10 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
     external_api_retry_total = _NoopCounter()  # type: ignore[assignment]
     dashboard_snapshot_requests_total = _NoopCounter()  # type: ignore[assignment]
     websocket_run_updates_total = _NoopCounter()  # type: ignore[assignment]
+    managed_turn_requests_total = _NoopCounter()  # type: ignore[assignment]
+    managed_turn_wait_total = _NoopCounter()  # type: ignore[assignment]
+    agents_ingest_requests_total = _NoopCounter()  # type: ignore[assignment]
+    agents_ingest_events_total = _NoopCounter()  # type: ignore[assignment]
 
     # Provide *noop* Gauge so code can call ``set`` without importing
     # the optional dependency in minimal CI images.
@@ -162,9 +232,18 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
         def observe(self, _value: float):  # noqa: D401 – mimic prometheus
             return None
 
+        def labels(self, *args, **kwargs):  # type: ignore
+            return self
+
     gmail_http_latency_seconds = _NoopHistogram()  # type: ignore[assignment]
     trigger_processing_seconds = _NoopHistogram()  # type: ignore[assignment]
     dashboard_snapshot_latency_seconds = _NoopHistogram()  # type: ignore[assignment]
     dashboard_snapshot_fiches_returned = _NoopHistogram()  # type: ignore[assignment]
     dashboard_snapshot_runs_returned = _NoopHistogram()  # type: ignore[assignment]
     websocket_run_update_latency_seconds = _NoopHistogram()  # type: ignore[assignment]
+    managed_turn_dispatch_seconds = _NoopHistogram()  # type: ignore[assignment]
+    managed_turn_phase_seconds = _NoopHistogram()  # type: ignore[assignment]
+    managed_turn_wait_seconds = _NoopHistogram()  # type: ignore[assignment]
+    agents_ingest_decode_seconds = _NoopHistogram()  # type: ignore[assignment]
+    agents_ingest_write_seconds = _NoopHistogram()  # type: ignore[assignment]
+    agents_ingest_payload_bytes = _NoopHistogram()  # type: ignore[assignment]
