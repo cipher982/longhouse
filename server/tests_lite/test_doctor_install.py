@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 
 from cryptography.fernet import Fernet
 from typer.testing import CliRunner
@@ -10,9 +11,11 @@ os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from zerg.cli import doctor as doctor_cli
+from zerg.cli import config_file as config_file_cli
 from zerg.cli.main import app
 from zerg.cli.update_manager import InstallMetadata
 from zerg.cli.update_manager import UpdateCheckResult
+from zerg.services import machine_state as machine_state_service
 
 
 def test_doctor_reports_install_metadata(monkeypatch):
@@ -83,3 +86,62 @@ def test_doctor_check_updates_surfaces_upgrade_command(monkeypatch):
     assert result.exit_code == 0, result.output
     assert "Update available (latest v0.1.6)" in result.output
     assert "uv tool upgrade longhouse" in result.output
+
+
+def test_check_config_does_not_flag_hosted_machine_state_as_local_url_drift(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[server]\nhost = \"127.0.0.1\"\nport = 65534\n", encoding="utf-8")
+
+    monkeypatch.setattr(config_file_cli, "get_config_path", lambda: config_path)
+    monkeypatch.setattr(
+        config_file_cli,
+        "load_config",
+        lambda config_path=None: SimpleNamespace(server=SimpleNamespace(host="127.0.0.1", port=65534)),
+    )
+    monkeypatch.setattr(
+        machine_state_service,
+        "load_machine_state",
+        lambda: machine_state_service.MachineState(
+            runtime_url="https://david010.longhouse.ai",
+            machine_name="cinder",
+        ),
+    )
+    monkeypatch.setattr(
+        "zerg.services.local_health.collect_launch_readiness",
+        lambda: {
+            "reasons": [],
+            "runner": {"runner_urls": ["https://david010.longhouse.ai"], "runner_name": "cinder"},
+            "control_plane_url": "https://david010.longhouse.ai",
+            "machine_name": "cinder",
+        },
+    )
+
+    results = doctor_cli._check_config()
+
+    assert not any(result.label.startswith("URL drift:") for result in results)
+
+
+def test_check_config_tolerates_missing_machine_state(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[server]\nhost = \"127.0.0.1\"\nport = 65534\n", encoding="utf-8")
+
+    monkeypatch.setattr(config_file_cli, "get_config_path", lambda: config_path)
+    monkeypatch.setattr(
+        config_file_cli,
+        "load_config",
+        lambda config_path=None: SimpleNamespace(server=SimpleNamespace(host="127.0.0.1", port=65534)),
+    )
+    monkeypatch.setattr(machine_state_service, "load_machine_state", lambda: None)
+    monkeypatch.setattr(
+        "zerg.services.local_health.collect_launch_readiness",
+        lambda: {
+            "reasons": [],
+            "runner": {"runner_urls": [], "runner_name": ""},
+            "control_plane_url": "",
+            "machine_name": "",
+        },
+    )
+
+    results = doctor_cli._check_config()
+
+    assert isinstance(results, list)
