@@ -561,6 +561,38 @@ def _check_config() -> list[CheckResult]:
         except Exception:
             pass  # Non-critical
 
+    try:
+        from zerg.services.local_health import collect_launch_readiness
+
+        launch_readiness = collect_launch_readiness()
+        launch_reasons = {str(item) for item in list(launch_readiness.get("reasons") or [])}
+        runner = dict(launch_readiness.get("runner") or {})
+        runner_urls = ", ".join(str(item) for item in list(runner.get("runner_urls") or []) if str(item).strip()) or "-"
+        runner_name = str(runner.get("runner_name") or "").strip() or "-"
+        control_plane_url = str(launch_readiness.get("control_plane_url") or machine_state.runtime_url or "").strip() or "-"
+        machine_name = str(launch_readiness.get("machine_name") or getattr(machine_state, "machine_name", None) or "").strip() or "-"
+
+        if launch_reasons.intersection(
+            {
+                "config_url_runner_url_mismatch",
+                "machine_name_runner_name_mismatch",
+                "service_runner_name_mismatch",
+            }
+        ):
+            results.append(
+                CheckResult(
+                    FAIL,
+                    "Managed launch target disagrees with this machine's runner",
+                    (
+                        f"launch={control_plane_url}; runner_urls={runner_urls}; "
+                        f"machine_name={machine_name}; runner_name={runner_name}. "
+                        "Run: longhouse machine configure --url <control-plane-url> --machine-name <runner-name>"
+                    ),
+                )
+            )
+    except Exception:
+        pass
+
     return results
 
 

@@ -88,6 +88,14 @@ def _coerce_path(path: str | Path | None) -> Path:
     return resolve_longhouse_home()
 
 
+def _canonical_stable_home() -> Path:
+    return (Path.home() / ".longhouse").expanduser().resolve(strict=False)
+
+
+def _state_root_tracks_machine_runner(base_dir: Path) -> bool:
+    return base_dir.expanduser().resolve(strict=False) == _canonical_stable_home()
+
+
 def _read_trimmed_file(path: Path) -> str | None:
     try:
         value = path.read_text().strip()
@@ -213,7 +221,6 @@ def _collect_local_config(base_dir: Path) -> dict[str, Any]:
         "config_generation": machine_state.config_generation if machine_state else None,
         "stored_url": machine_state.runtime_url if machine_state else None,
         "machine_name": machine_state.machine_name if machine_state else None,
-        "runner_enabled": machine_state.runner_enabled if machine_state else None,
         "state_hash": machine_state_source_hash(machine_state),
     }
 
@@ -243,7 +250,18 @@ def _parse_env_file(path: Path) -> dict[str, str]:
     return payload
 
 
-def _collect_runner_config() -> dict[str, Any]:
+def _collect_runner_config(*, include_global_runner: bool = True) -> dict[str, Any]:
+    if not include_global_runner:
+        return {
+            "path": str(_candidate_runner_env_paths()[0]),
+            "exists": False,
+            "error": None,
+            "runner_name": None,
+            "runner_id": None,
+            "runner_urls": [],
+            "install_mode": None,
+        }
+
     for path in _candidate_runner_env_paths():
         if not path.exists():
             continue
@@ -385,7 +403,7 @@ def _repair_command(*, can_reconcile_from_state: bool) -> str:
 
 def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dict[str, Any]:
     config = _collect_local_config(base_dir)
-    runner = _collect_runner_config()
+    runner = _collect_runner_config(include_global_runner=_state_root_tracks_machine_runner(base_dir))
     shipper_db_path = get_agent_db_path(base_dir)
     service_file = Path(str(service.get("service_file") or "").strip()) if str(service.get("service_file") or "").strip() else None
     service_machine_name = _extract_service_machine_name(service.get("service_file"))
@@ -400,7 +418,7 @@ def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dic
     state_hash = str(config.get("state_hash") or "").strip() or None
     state_exists = bool(config.get("state_exists"))
     state_error = str(config.get("state_error") or "").strip() or None
-    runner_expected = bool(config.get("runner_enabled"))
+    runner_expected = bool(runner.get("exists"))
     runner_name = str(runner.get("runner_name") or "").strip() or None
     runner_urls = [str(item).strip() for item in list(runner.get("runner_urls") or []) if str(item).strip()]
     service_config_generation = str(service_metadata.get("config_generation") or "").strip() or None
@@ -479,6 +497,7 @@ def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dic
         "reasons": reasons,
         "warnings": warnings,
         "suggested_actions": actions,
+        "control_plane_url": stored_url,
         "stored_url": stored_url,
         "machine_name": machine_name,
         "state_exists": state_exists,
@@ -494,6 +513,90 @@ def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dic
         "shipper_state_exists": shipper_state_exists,
         "runner": runner,
     }
+
+
+def collect_launch_readiness(
+    base_dir: str | Path | None = None,
+    *,
+    runtime_url_override: str | None = None,
+    machine_name_override: str | None = None,
+) -> dict[str, Any]:
+    """Collect the local managed-launch readiness contract.
+
+    `runtime_url_override` / `machine_name_override` let callers validate a
+    concrete launch target without first mutating canonical machine state.
+    """
+
+    resolved_base_dir = _coerce_path(base_dir)
+    service = _collect_service(resolved_base_dir)
+    readiness = _collect_launch_readiness(resolved_base_dir, service=service)
+
+    effective_url = str(runtime_url_override or "").strip() or str(readiness.get("stored_url") or "").strip() or None
+    effective_machine_name = str(machine_name_override or "").strip() or str(readiness.get("machine_name") or "").strip() or None
+    runner = dict(readiness.get("runner") or {})
+    runner_name = str(runner.get("runner_name") or "").strip() or None
+    runner_urls = [str(item).strip() for item in list(runner.get("runner_urls") or []) if str(item).strip()]
+    reasons = [str(item) for item in list(readiness.get("reasons") or [])]
+    actions = [str(item) for item in list(readiness.get("suggested_actions") or [])]
+    warnings = [str(item) for item in list(readiness.get("warnings") or [])]
+    had_override = runtime_url_override is not None or machine_name_override is not None
+
+    def _drop_reason(reason_code: str) -> None:
+        while reason_code in reasons:
+            reasons.remove(reason_code)
+
+    _drop_reason("config_url_runner_url_mismatch")
+    _drop_reason("machine_name_runner_name_mismatch")
+
+    if bool(readiness.get("runner_expected")) and effective_url and runner_urls and effective_url not in runner_urls:
+        reasons.append("config_url_runner_url_mismatch")
+        _with_action(
+            actions,
+            _repair_command(
+                can_reconcile_from_state=_can_reconcile_launch_from_state(
+                    state_exists=bool(readiness.get("state_exists")),
+                    state_error=str(readiness.get("state_error") or "").strip() or None,
+                    stored_url=effective_url,
+                    machine_name=effective_machine_name,
+                )
+            ),
+        )
+
+    if bool(readiness.get("runner_expected")) and effective_machine_name and runner_name and effective_machine_name != runner_name:
+        reasons.append("machine_name_runner_name_mismatch")
+        _with_action(
+            actions,
+            _repair_command(
+                can_reconcile_from_state=_can_reconcile_launch_from_state(
+                    state_exists=bool(readiness.get("state_exists")),
+                    state_error=str(readiness.get("state_error") or "").strip() or None,
+                    stored_url=effective_url,
+                    machine_name=effective_machine_name,
+                )
+            ),
+        )
+
+    state = str(readiness.get("state") or "unconfigured")
+    headline = str(readiness.get("headline") or "Managed launch configuration looks coherent")
+    if reasons:
+        state = "broken"
+        headline = "Managed launch config is inconsistent"
+    elif had_override:
+        state = "ready"
+        headline = "Managed launch configuration looks coherent"
+
+    readiness.update(
+        {
+            "state": state,
+            "headline": headline,
+            "reasons": reasons,
+            "warnings": warnings,
+            "suggested_actions": actions,
+            "control_plane_url": effective_url,
+            "machine_name": effective_machine_name,
+        }
+    )
+    return readiness
 
 
 def _collect_build_identity(*, engine_status: dict[str, Any]) -> dict[str, Any]:

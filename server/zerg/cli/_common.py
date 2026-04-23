@@ -12,6 +12,8 @@ from uuid import UUID
 
 import typer
 
+from zerg.services.local_health import collect_launch_readiness
+from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
 from zerg.services.shipper import get_zerg_url
 from zerg.services.shipper import load_token
 
@@ -45,6 +47,47 @@ def load_api_credentials(
         raise typer.Exit(code=exit_code)
 
     return resolved_url, resolved_token
+
+
+def ensure_managed_launch_preflight(
+    *,
+    url: str,
+    machine_name: str,
+    config_dir: Path | None,
+    exit_code: int = 1,
+) -> None:
+    """Fail fast when the local machine contract disagrees with managed launch."""
+
+    state_root = resolve_longhouse_home_from_provider_home(config_dir) if config_dir else None
+    readiness = collect_launch_readiness(
+        state_root,
+        runtime_url_override=url,
+        machine_name_override=machine_name,
+    )
+    reasons = {str(item) for item in list(readiness.get("reasons") or [])}
+    actionable = {
+        "config_url_runner_url_mismatch",
+        "machine_name_runner_name_mismatch",
+        "service_runner_name_mismatch",
+    }
+    if not reasons.intersection(actionable):
+        return
+
+    runner = dict(readiness.get("runner") or {})
+    runner_urls = ", ".join(str(item) for item in list(runner.get("runner_urls") or []) if str(item).strip()) or "-"
+    runner_name = str(runner.get("runner_name") or "").strip() or "-"
+    stored_url = str(readiness.get("stored_url") or "").strip() or "-"
+
+    typer.secho("Managed launch is misconfigured on this machine.", fg=typer.colors.RED)
+    typer.echo(f"  launch target: {readiness.get('control_plane_url') or url}")
+    if stored_url != str(readiness.get("control_plane_url") or url):
+        typer.echo(f"  stored target: {stored_url}")
+    typer.echo(f"  runner target: {runner_urls}")
+    typer.echo(f"  launch machine: {readiness.get('machine_name') or machine_name}")
+    typer.echo(f"  runner name: {runner_name}")
+    typer.echo("  Fix: longhouse machine configure --url <control-plane-url> --machine-name <runner-name>")
+    typer.echo("  Scratch local work: LONGHOUSE_HOME=~/.longhouse-dev ...")
+    raise typer.Exit(code=exit_code)
 
 
 def parse_uuid_or_exit(

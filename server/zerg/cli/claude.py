@@ -13,6 +13,7 @@ import typer
 
 from zerg.cli._common import ManagedLocalLaunchResponse
 from zerg.cli._common import build_session_url as _build_session_url
+from zerg.cli._common import ensure_managed_launch_preflight as _ensure_managed_launch_preflight
 from zerg.cli._common import git_output
 from zerg.cli._common import interactive_stdio as _interactive_stdio
 from zerg.cli._common import load_api_credentials
@@ -377,6 +378,12 @@ def claude(
             fg=typer.colors.RED,
         )
         raise typer.Exit(code=EXIT_SETUP_FAILED)
+    _ensure_managed_launch_preflight(
+        url=resolved_url,
+        machine_name=machine_name,
+        config_dir=resolved_config_dir,
+        exit_code=EXIT_SETUP_FAILED,
+    )
     typer.echo(f"Longhouse: {resolved_url}")
     result = _launch_managed_local_from_api(
         url=resolved_url,
