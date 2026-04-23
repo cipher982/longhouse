@@ -424,7 +424,11 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
         active_turn_id: None,
         last_turn_status: None,
         last_error: None,
-        thread_subscription_status: Some(ThreadSubscriptionStatus::WaitingForThread.as_str().to_string()),
+        thread_subscription_status: Some(
+            ThreadSubscriptionStatus::WaitingForThread
+                .as_str()
+                .to_string(),
+        ),
         thread_subscription_attempts: 0,
         thread_subscription_last_error: None,
         updated_at: Utc::now().to_rfc3339(),
@@ -564,7 +568,11 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         active_turn_id: None,
         last_turn_status: None,
         last_error: None,
-        thread_subscription_status: Some(ThreadSubscriptionStatus::WaitingForThread.as_str().to_string()),
+        thread_subscription_status: Some(
+            ThreadSubscriptionStatus::WaitingForThread
+                .as_str()
+                .to_string(),
+        ),
         thread_subscription_attempts: 0,
         thread_subscription_last_error: None,
         updated_at: Utc::now().to_rfc3339(),
@@ -605,7 +613,11 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
             active_turn_id: None,
             last_turn_status: None,
             last_error: None,
-            thread_subscription_status: Some(ThreadSubscriptionStatus::WaitingForThread.as_str().to_string()),
+            thread_subscription_status: Some(
+                ThreadSubscriptionStatus::WaitingForThread
+                    .as_str()
+                    .to_string(),
+            ),
             thread_subscription_attempts: 0,
             thread_subscription_last_error: None,
             updated_at: Utc::now().to_rfc3339(),
@@ -1259,10 +1271,17 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
         }
     });
 
-    let ws_url = tokio::time::timeout(Duration::from_secs(10), ws_listen_rx)
+    let upstream_ws_url = tokio::time::timeout(Duration::from_secs(10), ws_listen_rx)
         .await
         .context("timed out waiting for app-server websocket listener")?
         .context("app-server websocket listener never announced a URL")?;
+    // Always put the backpressure relay in front of codex. Prevents codex's
+    // internal mpsc(128) from filling under bursty streaming and killing the
+    // WS. The same relay also fronts the remote TUI since ws_url gets written
+    // to the state file. See engine/src/codex_ws_relay.rs.
+    let ws_url = crate::codex_ws_relay::spawn(&upstream_ws_url)
+        .await
+        .with_context(|| format!("spawning codex WS relay in front of {upstream_ws_url}"))?;
     let (ws_stream, _response) = connect_async(ws_url.as_str())
         .await
         .with_context(|| format!("connecting bridge client to {ws_url}"))?;
@@ -1855,8 +1874,11 @@ fn adopt_thread_identity(
         context.subscribed_thread_id = None;
         context.state.thread_subscription_attempts = 0;
         context.state.thread_subscription_last_error = None;
-        context.state.thread_subscription_status =
-            Some(derive_thread_subscription_status(context).as_str().to_string());
+        context.state.thread_subscription_status = Some(
+            derive_thread_subscription_status(context)
+                .as_str()
+                .to_string(),
+        );
     }
     sync_thread_binding(
         config,
@@ -2362,10 +2384,8 @@ async fn handle_bridge_followup(
             });
             let mut last_error = None;
             for attempt in 0..=THREAD_SUBSCRIBE_RETRY_ATTEMPTS {
-                context.state.thread_subscription_attempts = context
-                    .state
-                    .thread_subscription_attempts
-                    .saturating_add(1);
+                context.state.thread_subscription_attempts =
+                    context.state.thread_subscription_attempts.saturating_add(1);
                 update_thread_subscription_tracking(
                     context,
                     ThreadSubscriptionStatus::Subscribing,
@@ -2513,7 +2533,9 @@ mod tests {
                 last_turn_status: None,
                 last_error: None,
                 thread_subscription_status: Some(
-                    ThreadSubscriptionStatus::WaitingForThread.as_str().to_string(),
+                    ThreadSubscriptionStatus::WaitingForThread
+                        .as_str()
+                        .to_string(),
                 ),
                 thread_subscription_attempts: 0,
                 thread_subscription_last_error: None,
@@ -3118,7 +3140,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn process_notification_waits_for_rollout_materialization_before_subscribing_known_path() {
+    async fn process_notification_waits_for_rollout_materialization_before_subscribing_known_path()
+    {
         let temp = tempfile::tempdir().unwrap();
         let config = make_test_run_config(&temp);
         let mut context = make_test_context(&temp);
@@ -3350,7 +3373,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn process_notification_stops_requesting_thread_subscription_after_bridge_is_subscribed() {
+    async fn process_notification_stops_requesting_thread_subscription_after_bridge_is_subscribed()
+    {
         let temp = tempfile::tempdir().unwrap();
         let config = make_test_run_config(&temp);
         let mut context = make_test_context(&temp);
