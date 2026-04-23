@@ -9,6 +9,12 @@ import shutil
 import subprocess
 from collections import deque
 from pathlib import Path
+from urllib.error import HTTPError
+from urllib.error import URLError
+from urllib.parse import urlsplit
+from urllib.parse import urlunsplit
+from urllib.request import Request
+from urllib.request import urlopen
 
 import typer
 
@@ -189,11 +195,41 @@ def _latest_rollout_turn_is_terminal(thread_path: str | None) -> bool:
     return False
 
 
+def _bridge_readyz_url(ws_url: str | None) -> str | None:
+    normalized = str(ws_url or "").strip()
+    if not normalized:
+        return None
+    parsed = urlsplit(normalized)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    if parsed.scheme not in {"ws", "wss", "http", "https"}:
+        return None
+    scheme = "https" if parsed.scheme in {"wss", "https"} else "http"
+    path = parsed.path.rstrip("/")
+    readyz_path = f"{path}/readyz" if path else "/readyz"
+    return urlunsplit((scheme, parsed.netloc, readyz_path, "", ""))
+
+
+def _bridge_readyz_healthy(ws_url: str | None, *, timeout_secs: float = 1.0) -> bool:
+    readyz_url = _bridge_readyz_url(ws_url)
+    if not readyz_url:
+        return False
+    request = Request(readyz_url, method="GET")
+    try:
+        with urlopen(request, timeout=timeout_secs) as response:
+            status = getattr(response, "status", None) or response.getcode()
+            return 200 <= int(status) < 300
+    except (HTTPError, URLError, OSError, ValueError):
+        return False
+
+
 def _active_turn_survived_tui_exit(state_file: str | None) -> bool:
     state = _load_native_codex_bridge_state(state_file)
     if not state:
         return False
     if str(state.get("status") or "").strip() != "ready":
+        return False
+    if not _bridge_readyz_healthy(state.get("ws_url")):
         return False
     if not str(state.get("thread_id") or "").strip():
         return False
