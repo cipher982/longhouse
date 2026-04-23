@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -9,6 +10,9 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 import zerg.services.agent_heartbeat_health as machine_health_service
 from zerg.database import get_db
@@ -145,7 +149,7 @@ def test_machine_health_route_returns_latest_row_per_device_and_sorts_by_state(t
         assert broken["heartbeat_age_seconds"] == 60
         assert broken["ship_success_rate_1h"] == 0.6
         assert broken["spool_dead"] == 2
-        assert broken["reasons"] == ["spool_dead", "consecutive_failures", "connect_errors", "spool_pending"]
+        assert broken["reasons"] == ["spool_dead", "consecutive_failures", "spool_pending"]
         assert broken["last_ship_attempt_at"] == "2026-04-23T20:14:00Z"
 
         degraded = payload["machines"][1]
@@ -158,6 +162,94 @@ def test_machine_health_route_returns_latest_row_per_device_and_sorts_by_state(t
         filtered_payload = filtered.json()
         assert filtered_payload["total"] == 1
         assert filtered_payload["machines"][0]["device_id"] == "broken-machine"
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_machine_health_route_keeps_single_transient_connect_error_healthy(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    pinned_now = datetime(2026, 4, 23, 20, 15, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+
+    with SessionLocal() as db:
+        db.add(
+            AgentHeartbeat(
+                device_id="mostly-healthy-machine",
+                received_at=pinned_now - timedelta(minutes=1),
+                version="0.6.0",
+                spool_pending=0,
+                spool_dead=0,
+                parse_errors_1h=0,
+                consecutive_failures=0,
+                ship_attempts_1h=65,
+                ship_successes_1h=64,
+                ship_connect_errors_1h=1,
+                ship_latency_p50_ms_1h=320,
+                ship_latency_p95_ms_1h=3400,
+                disk_free_bytes=100,
+                is_offline=0,
+            )
+        )
+        db.commit()
+
+    client, api_app_ref = _make_client(SessionLocal)
+
+    try:
+        response = client.get("/api/agents/machines/health?device_id=mostly-healthy-machine&stale_after_seconds=3600")
+        assert response.status_code == 200
+
+        payload = response.json()
+        assert payload["total"] == 1
+        machine = payload["machines"][0]
+        assert machine["status"] == "healthy"
+        assert machine["status_reason"] == "healthy"
+        assert machine["status_summary"] == "Shipping healthy."
+        assert machine["ship_connect_errors_1h"] == 1
+        assert machine["reasons"] == []
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_machine_health_route_marks_transport_error_burst_degraded(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    pinned_now = datetime(2026, 4, 23, 20, 15, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+
+    with SessionLocal() as db:
+        db.add(
+            AgentHeartbeat(
+                device_id="bursty-machine",
+                received_at=pinned_now - timedelta(minutes=1),
+                version="0.6.0",
+                spool_pending=0,
+                spool_dead=0,
+                parse_errors_1h=0,
+                consecutive_failures=0,
+                ship_attempts_1h=20,
+                ship_successes_1h=18,
+                ship_connect_errors_1h=2,
+                ship_latency_p50_ms_1h=320,
+                ship_latency_p95_ms_1h=3400,
+                disk_free_bytes=100,
+                is_offline=0,
+            )
+        )
+        db.commit()
+
+    client, api_app_ref = _make_client(SessionLocal)
+
+    try:
+        response = client.get("/api/agents/machines/health?device_id=bursty-machine&stale_after_seconds=3600")
+        assert response.status_code == 200
+
+        payload = response.json()
+        assert payload["total"] == 1
+        machine = payload["machines"][0]
+        assert machine["status"] == "degraded"
+        assert machine["status_reason"] == "connect_errors"
+        assert machine["status_summary"] == "2 ship connect error(s) in the last hour."
+        assert machine["ship_connect_errors_1h"] == 2
+        assert machine["reasons"] == ["connect_errors"]
     finally:
         api_app_ref.dependency_overrides = {}
 

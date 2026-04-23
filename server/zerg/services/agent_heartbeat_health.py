@@ -15,6 +15,8 @@ from zerg.utils.time import utc_now
 
 DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS = 15 * 60
 DEFAULT_MACHINE_HEALTH_RECENT_WITHIN_SECONDS = 72 * 60 * 60
+TRANSPORT_ERROR_DEGRADED_MIN_COUNT = 2
+TRANSPORT_ERROR_DEGRADED_MIN_RATE = 0.10
 
 _STATE_SORT_ORDER = {
     "broken": 0,
@@ -22,6 +24,15 @@ _STATE_SORT_ORDER = {
     "degraded": 2,
     "healthy": 3,
 }
+
+
+def _is_transport_error_burst(*, error_count: int, ship_attempts: int) -> bool:
+    """Return True only for sustained transport noise, not one-off blips."""
+    if error_count <= 0:
+        return False
+    if ship_attempts <= 0:
+        return False
+    return error_count >= TRANSPORT_ERROR_DEGRADED_MIN_COUNT and (error_count / ship_attempts) >= TRANSPORT_ERROR_DEGRADED_MIN_RATE
 
 
 @dataclass(frozen=True)
@@ -160,6 +171,22 @@ def build_machine_transport_health_summary(
     disk_free_bytes = int(row.disk_free_bytes or 0)
     is_offline = bool(row.is_offline)
     is_stale = heartbeat_age_seconds > stale_after_seconds
+    connect_error_burst = _is_transport_error_burst(
+        error_count=ship_connect_errors_1h,
+        ship_attempts=ship_attempts_1h,
+    )
+    server_error_burst = _is_transport_error_burst(
+        error_count=ship_server_errors_1h,
+        ship_attempts=ship_attempts_1h,
+    )
+    rate_limited_burst = _is_transport_error_burst(
+        error_count=ship_rate_limited_1h,
+        ship_attempts=ship_attempts_1h,
+    )
+    retryable_client_error_burst = _is_transport_error_burst(
+        error_count=ship_retryable_client_errors_1h,
+        ship_attempts=ship_attempts_1h,
+    )
 
     reasons: list[str] = []
     if is_stale:
@@ -176,13 +203,13 @@ def build_machine_transport_health_summary(
         reasons.append("parse_errors")
     if consecutive_failures > 0:
         reasons.append("consecutive_failures")
-    if ship_connect_errors_1h > 0:
+    if connect_error_burst:
         reasons.append("connect_errors")
-    if ship_server_errors_1h > 0:
+    if server_error_burst:
         reasons.append("server_errors")
-    if ship_rate_limited_1h > 0:
+    if rate_limited_burst:
         reasons.append("rate_limited")
-    if ship_retryable_client_errors_1h > 0:
+    if retryable_client_error_burst:
         reasons.append("retryable_client_errors")
     if spool_pending > 0:
         reasons.append("spool_pending")
@@ -217,19 +244,19 @@ def build_machine_transport_health_summary(
         status = "degraded"
         status_reason = "consecutive_failures"
         status_summary = f"{consecutive_failures} consecutive ship failure(s)."
-    elif ship_connect_errors_1h > 0:
+    elif connect_error_burst:
         status = "degraded"
         status_reason = "connect_errors"
         status_summary = f"{ship_connect_errors_1h} ship connect error(s) in the last hour."
-    elif ship_server_errors_1h > 0:
+    elif server_error_burst:
         status = "degraded"
         status_reason = "server_errors"
         status_summary = f"{ship_server_errors_1h} ship server error(s) in the last hour."
-    elif ship_rate_limited_1h > 0:
+    elif rate_limited_burst:
         status = "degraded"
         status_reason = "rate_limited"
         status_summary = f"{ship_rate_limited_1h} rate-limit response(s) in the last hour."
-    elif ship_retryable_client_errors_1h > 0:
+    elif retryable_client_error_burst:
         status = "degraded"
         status_reason = "retryable_client_errors"
         status_summary = f"{ship_retryable_client_errors_1h} retryable client error(s) in the last hour."
