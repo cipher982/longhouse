@@ -1010,8 +1010,7 @@ struct LonghouseMenuBarCoreTests {
                 try actualData.write(to: expectedURL)
             }
 
-            let expectedData = try Data(contentsOf: expectedURL)
-            #expect(actualData == expectedData)
+            try assertPNGsRenderIdentically(actualURL: actualURL, expectedURL: expectedURL)
         }
     }
 
@@ -1153,5 +1152,58 @@ struct LonghouseMenuBarCoreTests {
             Issue.record("Unknown attention kind in managed phase contract: \(raw)")
             return .unknown(raw)
         }
+    }
+
+    private func assertPNGsRenderIdentically(actualURL: URL, expectedURL: URL) throws {
+        let actualRep = try decodedPNGRep(from: actualURL)
+        let expectedRep = try decodedPNGRep(from: expectedURL)
+
+        #expect(actualRep.pixelsWide == expectedRep.pixelsWide)
+        #expect(actualRep.pixelsHigh == expectedRep.pixelsHigh)
+        #expect(actualRep.bytesPerRow == expectedRep.bytesPerRow)
+        #expect(actualRep.bitsPerPixel == expectedRep.bitsPerPixel)
+
+        let actualData = try bitmapData(from: actualRep, sourceURL: actualURL)
+        let expectedData = try bitmapData(from: expectedRep, sourceURL: expectedURL)
+        guard actualData != expectedData else {
+            return
+        }
+
+        let bytesPerPixel = max(actualRep.bitsPerPixel / 8, 1)
+        let mismatchOffset = zip(actualData, expectedData)
+            .enumerated()
+            .first(where: { (_, pair) in pair.0 != pair.1 })?
+            .offset ?? 0
+        let pixelIndex = mismatchOffset / bytesPerPixel
+        let x = pixelIndex % actualRep.pixelsWide
+        let y = pixelIndex / actualRep.pixelsWide
+        let actualColor = actualRep.colorAt(x: x, y: y)?.description ?? "unknown"
+        let expectedColor = expectedRep.colorAt(x: x, y: y)?.description ?? "unknown"
+        Issue.record(
+            """
+            Rendered snapshot pixels differ for \(expectedURL.lastPathComponent) at (\(x), \(y)).
+            expected: \(expectedColor)
+            actual:   \(actualColor)
+            """
+        )
+    }
+
+    private func decodedPNGRep(from url: URL) throws -> NSBitmapImageRep {
+        let data = try Data(contentsOf: url)
+        return try #require(
+            NSBitmapImageRep(data: data),
+            "Failed to decode PNG at \(url.path)"
+        )
+    }
+
+    private func bitmapData(from rep: NSBitmapImageRep, sourceURL: URL) throws -> Data {
+        guard let bitmapData = rep.bitmapData else {
+            throw SnapshotComparisonError.missingBitmapData(sourceURL.path)
+        }
+        return Data(bytes: bitmapData, count: rep.bytesPerRow * rep.pixelsHigh)
+    }
+
+    private enum SnapshotComparisonError: Error {
+        case missingBitmapData(String)
     }
 }
