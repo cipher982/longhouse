@@ -8,6 +8,7 @@ mod daemon;
 mod discovery;
 mod error_tracker;
 mod heartbeat;
+mod observability;
 mod outbox;
 mod pipeline;
 mod scheduler;
@@ -21,6 +22,9 @@ mod watcher;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 use codex_app_server_canary::{
     parse_app_server_transport, parse_remote_tui_subscribe_phase,
@@ -528,12 +532,61 @@ fn prune_old_logs(log_dir: &std::path::Path, keep_days: u64) {
     }
 }
 
+fn command_name(command: &Commands) -> &'static str {
+    match command {
+        Commands::Parse { .. } => "parse",
+        Commands::Bench { .. } => "bench",
+        Commands::Ship { .. } => "ship",
+        Commands::Connect { .. } => "connect",
+        Commands::Bind { .. } => "bind",
+        Commands::CodexAppServerCanary { .. } => "codex-app-server-canary",
+        Commands::CodexBridge { command } => match command {
+            CodexBridgeCommands::Start { .. } => "codex-bridge-start",
+            CodexBridgeCommands::Run { .. } => "codex-bridge-run",
+            CodexBridgeCommands::Attach { .. } => "codex-bridge-attach",
+            CodexBridgeCommands::Send { .. } => "codex-bridge-send",
+            CodexBridgeCommands::Interrupt { .. } => "codex-bridge-interrupt",
+            CodexBridgeCommands::Stop { .. } => "codex-bridge-stop",
+        },
+    }
+}
+
+fn init_tracing_subscriber<W>(
+    writer: W,
+    ansi: bool,
+    command_name: &'static str,
+) -> anyhow::Result<Option<observability::OtelGuard>>
+where
+    W: for<'writer> MakeWriter<'writer> + Send + Sync + 'static,
+{
+    let env_filter = tracing_subscriber::EnvFilter::from_default_env()
+        .add_directive("longhouse_engine=info".parse()?);
+    let fmt_layer = tracing_subscriber::fmt::layer()
+        .with_writer(writer)
+        .with_ansi(ansi);
+    let registry = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(fmt_layer);
+
+    if let Some(otel) = observability::build_otel_setup(command_name)? {
+        registry
+            .with(tracing_opentelemetry::layer().with_tracer(otel.tracer))
+            .try_init()?;
+        Ok(Some(otel.guard))
+    } else {
+        registry.try_init()?;
+        Ok(None)
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let command_name = command_name(&cli.command);
 
     // For Connect (daemon) mode: use rolling file appender.
     // For all other commands: log to stderr as usual.
     let _guard;
+    let otel_shutdown_guard;
     match &cli.command {
         Commands::Connect { log_dir, .. } => {
             let log_path = resolve_log_dir(log_dir.as_deref());
@@ -543,26 +596,14 @@ fn main() -> anyhow::Result<()> {
             let file_appender = tracing_appender::rolling::daily(&log_path, "engine.log");
             let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
             _guard = Some(guard);
-
-            tracing_subscriber::fmt()
-                .with_writer(non_blocking)
-                .with_ansi(false)
-                .with_env_filter(
-                    tracing_subscriber::EnvFilter::from_default_env()
-                        .add_directive("longhouse_engine=info".parse()?),
-                )
-                .init();
+            otel_shutdown_guard = init_tracing_subscriber(non_blocking, false, command_name)?;
         }
         _ => {
             _guard = None;
-            tracing_subscriber::fmt()
-                .with_env_filter(
-                    tracing_subscriber::EnvFilter::from_default_env()
-                        .add_directive("longhouse_engine=info".parse()?),
-                )
-                .init();
+            otel_shutdown_guard = init_tracing_subscriber(std::io::stderr, true, command_name)?;
         }
     }
+    let _ = &otel_shutdown_guard;
 
     match cli.command {
         Commands::Connect {

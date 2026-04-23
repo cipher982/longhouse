@@ -44,6 +44,10 @@ clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
+tracing-opentelemetry = "0.32.1"
+opentelemetry = "0.31"
+opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.31.1", features = ["trace", "http-proto", "reqwest-client", "reqwest-rustls"] }
 
 # Random (jitter for 429 backoff)
 rand = "0.8"
@@ -76,6 +80,7 @@ fd-lock = "4"
 [dev-dependencies]
 tempfile = "3"
 pretty_assertions = "1"
+temp-env = "0.3.6"
 
 [profile.release]
 opt-level = 3

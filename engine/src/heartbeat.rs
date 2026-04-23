@@ -117,6 +117,19 @@ impl HeartbeatPayload {
 }
 
 /// Send heartbeat to server via the existing authenticated client.
+#[tracing::instrument(
+    level = "info",
+    name = "engine.heartbeat.send",
+    skip(client, payload),
+    fields(
+        otel.kind = "client",
+        http.request.method = "POST",
+        http.route = "/api/agents/heartbeat",
+        longhouse.spool_pending_count = payload.spool_pending_count as u64,
+        longhouse.spool_dead_count = payload.spool_dead_count as u64,
+        longhouse.ship_attempts_1h = payload.ship_attempts_1h as u64,
+    )
+)]
 pub async fn send_heartbeat(client: &ShipperClient, payload: &HeartbeatPayload) -> Result<()> {
     let json = serde_json::to_vec(payload)?;
     client.post_json("/api/agents/heartbeat", json).await
