@@ -1,5 +1,6 @@
-import { type CSSProperties, useState } from "react";
+import { type CSSProperties, useCallback, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import {
   Badge,
   Card,
@@ -13,6 +14,7 @@ import config from "../lib/config";
 import { parseUTC } from "../lib/dateUtils";
 import { useReadinessFlag } from "../lib/readiness-contract";
 import { formatCompactDuration } from "../lib/runnerPresentation";
+import { buildSessionDetailPath, toTitleCaseWords } from "../lib/sessionUtils";
 import type {
   MachineHealthItemResponse,
   ManagedTurnProviderSummaryResponse,
@@ -23,6 +25,20 @@ import type {
 const OVERVIEW_MACHINE_LIMIT = 8;
 const OVERVIEW_SLOW_TURN_LIMIT = 8;
 const DEFAULT_SLOW_THRESHOLD_MS = 30_000;
+
+type DiagnosisTone = "success" | "warning" | "error" | "neutral";
+type StatusBadgeVariant = "success" | "warning" | "error" | "neutral";
+
+interface DiagnosisCardData {
+  key: string;
+  eyebrow: string;
+  title: string;
+  description: string;
+  tone: DiagnosisTone;
+  to?: string;
+  ctaLabel?: string;
+  onAction?: () => void;
+}
 
 function buildWindowLabel(hoursBack: number): string {
   if (hoursBack < 24) {
@@ -46,16 +62,25 @@ async function fetchObservabilityOverview(hoursBack: number): Promise<Observabil
 
   if (!response.ok) {
     if (response.status === 501) {
-      throw new Error("Observability is only available on single-tenant runtimes right now.");
+      throw new Error("Health is only available on single-tenant runtimes right now.");
     }
     if (response.status === 403) {
-      throw new Error("You do not have access to this observability surface.");
+      throw new Error("You do not have access to this health surface.");
     }
     const detail = await response.text();
-    throw new Error(detail || "Failed to fetch observability overview.");
+    throw new Error(detail || "Failed to fetch the current health snapshot.");
   }
 
   return response.json();
+}
+
+function buildTimelineSlicePath(filters: { provider?: string; project?: string; deviceId?: string }): string {
+  const params = new URLSearchParams();
+  if (filters.provider) params.set("provider", filters.provider);
+  if (filters.project) params.set("project", filters.project);
+  if (filters.deviceId) params.set("device_id", filters.deviceId);
+  const query = params.toString();
+  return `/timeline${query ? `?${query}` : ""}`;
 }
 
 function formatLatencyMs(value: number | null | undefined): string {
@@ -76,7 +101,7 @@ function formatGeneratedAt(value: string): string {
   });
 }
 
-function machineStatusVariant(status: string): "success" | "warning" | "error" | "neutral" {
+function machineStatusVariant(status: string): DiagnosisTone {
   switch (status) {
     case "healthy":
       return "success";
@@ -89,10 +114,162 @@ function machineStatusVariant(status: string): "success" | "warning" | "error" |
   }
 }
 
-function providerSlowVariant(provider: ManagedTurnProviderSummaryResponse): "success" | "warning" | "neutral" {
-  if (provider.slow_turns > 0) return "warning";
-  if (provider.completed_turns > 0) return "success";
-  return "neutral";
+function providerStatusBadge(provider: ManagedTurnProviderSummaryResponse): {
+  label: string;
+  variant: Exclude<StatusBadgeVariant, "error">;
+} {
+  if (provider.slow_turns > 0) {
+    return {
+      label: `${provider.slow_turns} slow`,
+      variant: "warning",
+    };
+  }
+  if (provider.completed_turns > 0) {
+    return {
+      label: "Stable",
+      variant: "success",
+    };
+  }
+  return {
+    label: "Idle",
+    variant: "neutral",
+  };
+}
+
+function diagnosisToneBadgeVariant(tone: DiagnosisTone): StatusBadgeVariant {
+  switch (tone) {
+    case "error":
+      return "error";
+    case "warning":
+      return "warning";
+    case "success":
+      return "success";
+    default:
+      return "neutral";
+  }
+}
+
+function buildDiagnosisCards(
+  data: ObservabilityOverviewResponse,
+  callbacks: { scrollToSlowTurns: () => void },
+): DiagnosisCardData[] {
+  const cards: DiagnosisCardData[] = [];
+  const blockedMachines = data.machine_counts.broken + data.machine_counts.offline;
+  const degradedMachines = data.machine_counts.degraded;
+  const unhealthyMachine = data.machines.find((machine) => machine.status !== "healthy");
+  const slowProviders = [...data.providers]
+    .filter((provider) => provider.completed_turns > 0)
+    .sort((left, right) => {
+      const slowDelta = right.slow_turns - left.slow_turns;
+      if (slowDelta !== 0) return slowDelta;
+      return (right.total_turn_time_ms.p95 ?? 0) - (left.total_turn_time_ms.p95 ?? 0);
+    });
+  const topProvider = slowProviders[0] ?? null;
+  const secondProvider = slowProviders[1] ?? null;
+  const totalP95 = data.summary.total_turn_time_ms.p95 ?? null;
+  const submitToSendP95 = data.summary.submit_to_send_ms.p95 ?? null;
+
+  if (blockedMachines > 0 || degradedMachines > 0) {
+    const machineCount = blockedMachines > 0 ? blockedMachines : degradedMachines;
+    const machineLabel =
+      blockedMachines > 0
+        ? `${machineCount} machine${machineCount === 1 ? "" : "s"} blocked or offline`
+        : `${machineCount} machine${machineCount === 1 ? "" : "s"} degraded`;
+
+    cards.push({
+      key: "machine",
+      eyebrow: "Machine signal",
+      title: machineLabel,
+      description: unhealthyMachine
+        ? `${unhealthyMachine.device_id}: ${unhealthyMachine.status_summary}`
+        : "Shipping is not fully healthy on this runtime right now.",
+      tone: blockedMachines > 0 ? "error" : "warning",
+      to: unhealthyMachine?.device_id
+        ? buildTimelineSlicePath({ deviceId: unhealthyMachine.device_id })
+        : "/runners",
+      ctaLabel: unhealthyMachine?.device_id ? "Open machine sessions" : "Open machines",
+    });
+  }
+
+  if (data.summary.completed_turns === 0) {
+    if (cards.length === 0) {
+      cards.push({
+        key: "no-turns",
+        eyebrow: "Turn signal",
+        title: "No completed managed turns in this window",
+        description: "This view can still tell you if machine shipping is healthy, but there is no recent turn latency to compare yet.",
+        tone: "neutral",
+      });
+    }
+    return cards.slice(0, 3);
+  }
+
+  if (topProvider && topProvider.slow_turns > 0) {
+    const providerName = toTitleCaseWords(topProvider.provider);
+    const dominantBySlowTurns =
+      topProvider.slow_turns >= 2 &&
+      (
+        !secondProvider ||
+        secondProvider.slow_turns === 0 ||
+        topProvider.slow_turns >= secondProvider.slow_turns * 2
+      );
+    const dominantByLatency =
+      topProvider.completed_turns >= 3 &&
+      topProvider.slow_turns >= 2 &&
+      !!secondProvider &&
+      (topProvider.total_turn_time_ms.p95 ?? 0) >= Math.max(
+        data.slow_threshold_ms,
+        (secondProvider.total_turn_time_ms.p95 ?? 0) * 1.5,
+      );
+    const dominant = dominantBySlowTurns || dominantByLatency;
+
+    cards.push({
+      key: "provider",
+      eyebrow: "Provider signal",
+      title: dominant ? `${providerName} is driving most of the slow turns` : "Slow turns span more than one provider",
+      description: dominant
+        ? `${topProvider.slow_turns} of ${data.summary.slow_turns} slow turns came from ${providerName}. P95 total turn time is ${formatLatencyMs(topProvider.total_turn_time_ms.p95)}.`
+        : `${data.summary.slow_turns} slow turns appeared across multiple providers in this window. Start with the slow-turn list, not one machine.`,
+      tone: "warning",
+      to: buildTimelineSlicePath({ provider: topProvider.provider }),
+      ctaLabel: dominant ? `Open ${providerName} sessions` : "Open timeline slice",
+    });
+  }
+
+  if (submitToSendP95 != null && totalP95 != null && totalP95 > 0) {
+    const dispatchShare = submitToSendP95 / totalP95;
+    if (submitToSendP95 >= 5_000 || dispatchShare >= 0.35) {
+      cards.push({
+        key: "dispatch-high",
+        eyebrow: "Runtime signal",
+        title: "Dispatch overhead is elevated",
+        description: `P95 submit→send is ${formatLatencyMs(submitToSendP95)}, about ${Math.round(dispatchShare * 100)}% of the full turn. Longhouse overhead may be part of what users feel.`,
+        tone: "warning",
+        onAction: callbacks.scrollToSlowTurns,
+        ctaLabel: "Open slow turns",
+      });
+    } else if (data.summary.slow_turns > 0) {
+      cards.push({
+        key: "dispatch-healthy",
+        eyebrow: "Runtime signal",
+        title: "Dispatch looks healthy; slowness is later in the turn",
+        description: `P95 submit→send is ${formatLatencyMs(submitToSendP95)} against ${formatLatencyMs(totalP95)} total. The slow part is probably after dispatch, not before it.`,
+        tone: "success",
+      });
+    }
+  }
+
+  if (cards.length === 0) {
+    cards.push({
+      key: "healthy",
+      eyebrow: "Current window",
+      title: "No active health regressions in this slice",
+      description: `${data.machine_counts.healthy}/${data.machine_counts.total} machines are healthy and no managed turns crossed ${formatLatencyMs(data.slow_threshold_ms)}.`,
+      tone: "success",
+    });
+  }
+
+  return cards.slice(0, 3);
 }
 
 function MetricCard({
@@ -119,42 +296,100 @@ function MetricCard({
   );
 }
 
-function ProviderSummaryTable({ providers }: { providers: ManagedTurnProviderSummaryResponse[] }) {
+function DiagnosisPanel({ cards }: { cards: DiagnosisCardData[] }) {
+  return (
+    <Card className="observability-panel observability-panel--diagnosis">
+      <Card.Header className="observability-panel__header">
+        <div>
+          <div className="observability-panel__eyebrow">Health snapshot</div>
+          <h3 className="observability-panel__title">What the current window says</h3>
+          <p className="observability-panel__description">
+            These are the highest-confidence readings from this runtime right now, not a generic chart wall.
+          </p>
+        </div>
+      </Card.Header>
+      <Card.Body>
+        <div className="observability-diagnosis-list">
+          {cards.map((card) => (
+            <div
+              key={card.key}
+              className={`observability-diagnosis-card observability-diagnosis-card--${card.tone}`}
+            >
+              <div className="observability-diagnosis-card__header">
+                <div>
+                  <div className="observability-diagnosis-card__eyebrow">{card.eyebrow}</div>
+                  <h4 className="observability-diagnosis-card__title">{card.title}</h4>
+                </div>
+                <Badge variant={diagnosisToneBadgeVariant(card.tone)}>
+                  {card.tone === "error"
+                    ? "Needs attention"
+                    : card.tone === "warning"
+                      ? "Watch"
+                      : card.tone === "success"
+                        ? "Healthy"
+                        : "Info"}
+                </Badge>
+              </div>
+              <p className="observability-diagnosis-card__description">{card.description}</p>
+              {card.onAction && card.ctaLabel ? (
+                <button
+                  type="button"
+                  onClick={card.onAction}
+                  className="ui-button ui-button--ghost ui-button--sm observability-inline-link"
+                >
+                  {card.ctaLabel}
+                </button>
+              ) : null}
+              {card.to && card.ctaLabel ? (
+                <Link to={card.to} className="ui-button ui-button--ghost ui-button--sm observability-inline-link">
+                  {card.ctaLabel}
+                </Link>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      </Card.Body>
+    </Card>
+  );
+}
+
+function ProviderFocusPanel({ providers }: { providers: ManagedTurnProviderSummaryResponse[] }) {
   if (providers.length === 0) {
     return (
       <EmptyState
         title="No managed turns yet"
-        description="Managed turn summary will appear here once Longhouse has observed completed managed turns."
+        description="Provider slices will show up here once Longhouse has observed completed managed turns."
       />
     );
   }
 
   return (
-    <Table className="observability-table">
-      <Table.Header>
-        <Table.Cell isHeader>Provider</Table.Cell>
-        <Table.Cell isHeader>Completed</Table.Cell>
-        <Table.Cell isHeader>Slow</Table.Cell>
-        <Table.Cell isHeader>P95 Total</Table.Cell>
-        <Table.Cell isHeader>P95 Submit→Send</Table.Cell>
-      </Table.Header>
-      <Table.Body>
-        {providers.map((provider) => (
-          <Table.Row key={provider.provider}>
-            <Table.Cell>
-              <div className="observability-provider-cell">
-                <span className="observability-provider-name">{provider.provider}</span>
-                <Badge variant={providerSlowVariant(provider)}>{provider.slow_turns} slow</Badge>
+    <div className="observability-provider-list">
+      {providers.map((provider) => {
+        const badge = providerStatusBadge(provider);
+        return (
+          <Link
+            key={provider.provider}
+            to={buildTimelineSlicePath({ provider: provider.provider })}
+            className="observability-provider-row"
+          >
+            <div className="observability-provider-row__left">
+              <div className="observability-provider-row__name">{toTitleCaseWords(provider.provider)}</div>
+              <div className="observability-provider-row__meta">
+                {provider.completed_turns} turns in this window
               </div>
-            </Table.Cell>
-            <Table.Cell>{provider.completed_turns}</Table.Cell>
-            <Table.Cell>{provider.slow_turns}</Table.Cell>
-            <Table.Cell>{formatLatencyMs(provider.total_turn_time_ms.p95)}</Table.Cell>
-            <Table.Cell>{formatLatencyMs(provider.submit_to_send_ms.p95)}</Table.Cell>
-          </Table.Row>
-        ))}
-      </Table.Body>
-    </Table>
+            </div>
+            <div className="observability-provider-row__right">
+              <div className="observability-provider-row__stats">
+                <span>{formatLatencyMs(provider.total_turn_time_ms.p95)} p95 total</span>
+                <span>{formatLatencyMs(provider.submit_to_send_ms.p95)} dispatch</span>
+              </div>
+              <Badge variant={badge.variant}>{badge.label}</Badge>
+            </div>
+          </Link>
+        );
+      })}
+    </div>
   );
 }
 
@@ -204,6 +439,14 @@ function MachineHealthPanel({ machines }: { machines: MachineHealthItemResponse[
               <span className="observability-stat-value">{machine.consecutive_failures}</span>
             </div>
           </div>
+          <div className="observability-machine-card__actions">
+            <Link
+              to={buildTimelineSlicePath({ deviceId: machine.device_id })}
+              className="ui-button ui-button--ghost ui-button--sm observability-inline-link"
+            >
+              Open machine sessions
+            </Link>
+          </div>
         </div>
       ))}
     </div>
@@ -223,10 +466,9 @@ function SlowTurnsTable({ turns }: { turns: SlowTurnItemResponse[] }) {
   return (
     <Table className="observability-table">
       <Table.Header>
-        <Table.Cell isHeader>Provider</Table.Cell>
         <Table.Cell isHeader>Session</Table.Cell>
         <Table.Cell isHeader>Total</Table.Cell>
-        <Table.Cell isHeader>Submit→Send</Table.Cell>
+        <Table.Cell isHeader>Dispatch</Table.Cell>
         <Table.Cell isHeader>Active→Terminal</Table.Cell>
         <Table.Cell isHeader>Machine</Table.Cell>
       </Table.Header>
@@ -235,15 +477,17 @@ function SlowTurnsTable({ turns }: { turns: SlowTurnItemResponse[] }) {
           <Table.Row key={turn.turn_id}>
             <Table.Cell>
               <div className="observability-provider-stack">
-                <span>{turn.provider}</span>
-                {turn.project ? <span className="observability-cell-subtle">{turn.project}</span> : null}
-              </div>
-            </Table.Cell>
-            <Table.Cell>
-              <div className="observability-provider-stack">
-                <span className="observability-turn-session-id">{turn.session_id.slice(0, 8)}</span>
+                <Link
+                  to={buildSessionDetailPath(
+                    { id: turn.session_id, provider: turn.provider, match_event_id: null },
+                    null,
+                  )}
+                  className="observability-session-link"
+                >
+                  {toTitleCaseWords(turn.provider)} · {turn.session_id.slice(0, 8)}
+                </Link>
                 <span className="observability-cell-subtle">
-                  {turn.device_name || turn.device_id || "Machine unknown"}
+                  {[turn.project, turn.device_name || turn.device_id || "Machine unknown"].filter(Boolean).join(" · ")}
                 </span>
               </div>
             </Table.Cell>
@@ -266,6 +510,7 @@ function SlowTurnsTable({ turns }: { turns: SlowTurnItemResponse[] }) {
 
 export default function ObservabilityPage() {
   const [hoursBack, setHoursBack] = useState(24);
+  const slowTurnsRef = useRef<HTMLDivElement | null>(null);
   const { data, isLoading, error } = useQuery({
     queryKey: ["observability-overview", hoursBack],
     queryFn: () => fetchObservabilityOverview(hoursBack),
@@ -276,12 +521,23 @@ export default function ObservabilityPage() {
 
   useReadinessFlag({ ready: !config.singleTenant || !isLoading });
 
+  const scrollToSlowTurns = useCallback(() => {
+    slowTurnsRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  }, []);
+  const diagnosisCards = useMemo(
+    () => (data ? buildDiagnosisCards(data, { scrollToSlowTurns }) : []),
+    [data, scrollToSlowTurns],
+  );
+
   if (!config.singleTenant) {
     return (
       <PageShell size="wide" className="observability-page-container">
         <EmptyState
-          title="Observability is single-tenant for now"
-          description="This dashboard reads the self-hosted or provisioned runtime telemetry surfaces. Multi-tenant browser access is not wired yet."
+          title="Health is single-tenant for now"
+          description="This page reads the self-hosted or provisioned runtime health surfaces. Multi-tenant browser access is not wired yet."
         />
       </PageShell>
     );
@@ -292,7 +548,7 @@ export default function ObservabilityPage() {
       <PageShell size="wide" className="observability-page-container">
         <EmptyState
           icon={<Spinner size="lg" />}
-          title="Loading observability..."
+          title="Loading health..."
           description="Fetching managed-turn latency and machine transport health."
         />
       </PageShell>
@@ -304,7 +560,7 @@ export default function ObservabilityPage() {
       <PageShell size="wide" className="observability-page-container">
         <EmptyState
           variant="error"
-          title="Error loading observability"
+          title="Error loading health"
           description={error instanceof Error ? error.message : "Unknown error"}
         />
       </PageShell>
@@ -313,19 +569,19 @@ export default function ObservabilityPage() {
 
   const unhealthyMachines = data.machine_counts.broken + data.machine_counts.offline + data.machine_counts.degraded;
   const blockedMachines = data.machine_counts.broken + data.machine_counts.offline;
-  const visibleSlowTurnRows = Math.min(data.slow_turn_total, OVERVIEW_SLOW_TURN_LIMIT);
+  const visibleSlowTurnRows = data.slow_turns.length;
 
   return (
     <PageShell size="wide" className="observability-page-container">
       <div className="observability-page">
         <SectionHeader
-          title="Observability"
-          description="Managed-session latency and machine transport health, built directly into Longhouse instead of a separate telemetry stack."
+          title="Health"
+          description="Machine shipping and managed-session latency on this runtime. Use this page when a session feels slow or a machine stops shipping."
           actions={
             <div className="observability-controls">
               <span className="observability-controls__label">Window</span>
               <select
-                aria-label="Observability window"
+                aria-label="Health window"
                 className="modal-select observability-select"
                 value={hoursBack}
                 onChange={(event) => setHoursBack(Number(event.target.value))}
@@ -344,73 +600,80 @@ export default function ObservabilityPage() {
           <div className="observability-note">
             <strong>{buildWindowLabel(data.hours_back)}</strong>
             <span>
-              Same API surface powers this page and future agent debugging flows. Slow turns currently mean total
-              turn time of at least {formatLatencyMs(data.slow_threshold_ms)}.
+              Slow turns currently mean total turn time of at least {formatLatencyMs(data.slow_threshold_ms)}. This page stays diagnosis-first and links back into real sessions instead of exposing a separate telemetry tool.
             </span>
           </div>
 
-          <div className="observability-metrics-grid">
-            <MetricCard
-              title="Completed Turns"
-              value={data.summary.completed_turns}
-              subtitle={buildWindowLabel(data.hours_back)}
-              accent="var(--color-brand-primary)"
-            />
-            <MetricCard
-              title="Slow Turns"
-              value={data.summary.slow_turns}
-              subtitle={`Showing ${visibleSlowTurnRows} of ${data.slow_turn_total} slow-turn rows`}
-              accent="var(--color-intent-warning)"
-            />
-            <MetricCard
-              title="P95 Total Turn"
-              value={formatLatencyMs(data.summary.total_turn_time_ms.p95)}
-              subtitle={`Max ${formatLatencyMs(data.summary.total_turn_time_ms.max)}`}
-              accent="var(--color-brand-secondary)"
-            />
-            <MetricCard
-              title="P95 Submit→Send"
-              value={formatLatencyMs(data.summary.submit_to_send_ms.p95)}
-              subtitle="Runtime dispatch overhead"
-              accent="var(--color-intent-success)"
-            />
-            <MetricCard
-              title="Unhealthy Machines"
-              value={`${unhealthyMachines}/${data.machine_counts.total}`}
-              subtitle={`${data.machine_counts.healthy} currently healthy`}
-              accent="var(--color-intent-warning)"
-            />
-            <MetricCard
-              title="Broken Or Offline"
-              value={blockedMachines}
-              subtitle={`${data.machine_counts.broken} broken, ${data.machine_counts.offline} offline`}
-              accent="var(--color-intent-error)"
-            />
+          <div className="observability-hero">
+            <DiagnosisPanel cards={diagnosisCards} />
+            <div className="observability-metrics-grid">
+              <MetricCard
+                title="Managed Turns"
+                value={data.summary.completed_turns}
+                subtitle={buildWindowLabel(data.hours_back)}
+                accent="var(--color-brand-primary)"
+              />
+              <MetricCard
+                title="Slow Turns"
+                value={data.summary.slow_turns}
+                subtitle={`Showing ${visibleSlowTurnRows} of ${data.slow_turn_total}`}
+                accent="var(--color-intent-warning)"
+              />
+              <MetricCard
+                title="P95 Total Turn"
+                value={formatLatencyMs(data.summary.total_turn_time_ms.p95)}
+                subtitle={`Max ${formatLatencyMs(data.summary.total_turn_time_ms.max)}`}
+                accent="var(--color-brand-secondary)"
+              />
+              <MetricCard
+                title="P95 Submit→Send"
+                value={formatLatencyMs(data.summary.submit_to_send_ms.p95)}
+                subtitle="Longhouse dispatch slice"
+                accent="var(--color-intent-success)"
+              />
+              <MetricCard
+                title="Healthy Machines"
+                value={`${data.machine_counts.healthy}/${data.machine_counts.total}`}
+                subtitle={`${unhealthyMachines} need attention`}
+                accent="var(--color-intent-success)"
+              />
+              <MetricCard
+                title="Blocked Machines"
+                value={blockedMachines}
+                subtitle={`${data.machine_counts.broken} broken, ${data.machine_counts.offline} offline`}
+                accent="var(--color-intent-error)"
+              />
+            </div>
           </div>
 
           <div className="observability-grid">
             <Card className="observability-panel">
               <Card.Header className="observability-panel__header">
                 <div>
-                  <h3 className="observability-panel__title">Provider Drift</h3>
+                  <div className="observability-panel__eyebrow">Provider focus</div>
+                  <h3 className="observability-panel__title">Which providers are contributing to the pain</h3>
                   <p className="observability-panel__description">
-                    Per-provider latency splits so regressions are visible without log archaeology.
+                    Keep this as a guided slice, not a metrics explorer. Each row jumps straight into the matching timeline view.
                   </p>
                 </div>
               </Card.Header>
               <Card.Body>
-                <ProviderSummaryTable providers={data.providers} />
+                <ProviderFocusPanel providers={data.providers} />
               </Card.Body>
             </Card>
 
             <Card className="observability-panel">
               <Card.Header className="observability-panel__header">
                 <div>
-                  <h3 className="observability-panel__title">Machine Health</h3>
+                  <div className="observability-panel__eyebrow">Machine health</div>
+                  <h3 className="observability-panel__title">Shipping truth from the latest heartbeats</h3>
                   <p className="observability-panel__description">
-                    Latest heartbeat-derived transport state from the shipping path on each machine.
+                    Use this to tell whether the problem is one unhealthy machine or something broader.
                   </p>
                 </div>
+                <Link to="/runners" className="ui-button ui-button--ghost ui-button--sm observability-inline-link">
+                  Open machines
+                </Link>
               </Card.Header>
               <Card.Body>
                 <MachineHealthPanel machines={data.machines} />
@@ -418,19 +681,25 @@ export default function ObservabilityPage() {
             </Card>
           </div>
 
-          <Card className="observability-panel">
-            <Card.Header className="observability-panel__header">
-              <div>
-                <h3 className="observability-panel__title">Recent Slow Turns</h3>
-                <p className="observability-panel__description">
-                  Slowest recent managed turns across sessions, already enriched with current machine state.
-                </p>
-              </div>
-            </Card.Header>
-            <Card.Body>
-              <SlowTurnsTable turns={data.slow_turns} />
-            </Card.Body>
-          </Card>
+          <div id="health-slow-turns" ref={slowTurnsRef}>
+            <Card className="observability-panel">
+              <Card.Header className="observability-panel__header">
+                <div>
+                  <div className="observability-panel__eyebrow">Slow turns</div>
+                  <h3 className="observability-panel__title">The slowest managed turns in this window</h3>
+                  <p className="observability-panel__description">
+                    Each row opens the real session so you can inspect the transcript and timing breakdown in context.
+                  </p>
+                </div>
+                <Link to="/timeline" className="ui-button ui-button--ghost ui-button--sm observability-inline-link">
+                  Open timeline
+                </Link>
+              </Card.Header>
+              <Card.Body>
+                <SlowTurnsTable turns={data.slow_turns} />
+              </Card.Body>
+            </Card>
+          </div>
         </div>
       </div>
     </PageShell>

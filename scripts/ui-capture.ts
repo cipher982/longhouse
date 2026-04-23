@@ -25,7 +25,7 @@ import { mkdirSync, writeFileSync } from "fs";
 import path from "path";
 import { buildTimelineCardStressFixture } from "./ui-fixtures/timelineCardStress";
 
-const PAGES = ["timeline", "chat", "dashboard", "settings"] as const;
+const PAGES = ["timeline", "chat", "dashboard", "settings", "health"] as const;
 type PageName = (typeof PAGES)[number];
 
 const SCENES = [
@@ -285,7 +285,16 @@ async function installSceneMocks(
   });
 }
 
-async function installScenePageOverrides(page: Page, scene: SceneName): Promise<void> {
+async function installScenePageOverrides(page: Page, scene: SceneName, pageName: PageName): Promise<void> {
+  if (pageName === "health") {
+    await page.addInitScript(() => {
+      Object.defineProperty(window, "__SINGLE_TENANT__", {
+        configurable: true,
+        value: true,
+      });
+    });
+  }
+
   if (!sceneUsesMockApi(scene)) {
     return;
   }
@@ -309,7 +318,7 @@ async function captureBundle(
   const url = `${baseUrl}/${pageName}`;
   console.log(`  Navigating to ${url}...`);
 
-  await installScenePageOverrides(page, scene);
+  await installScenePageOverrides(page, scene, pageName);
   await page.goto(url);
 
   // Wait for page stability - prefer shared readiness flags.

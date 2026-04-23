@@ -330,7 +330,7 @@ export type SortOrder = "relevant" | "recent";
 export interface SessionsUrlState {
   project: string;
   provider: string;
-  environment: string;
+  deviceId: string;
   hideAutonomous: boolean;
   daysBack: number;
   searchQuery: string;
@@ -358,11 +358,12 @@ export function readSessionsUrlState(searchParams: URLSearchParams): SessionsUrl
     mode === "semantic" ||
     mode === "smart" ||
     searchParams.get("semantic") === "1";
+  const deviceId = searchParams.get("device_id") || searchParams.get("environment") || "";
 
   return {
     project: searchParams.get("project") || "",
     provider: searchParams.get("provider") || "",
-    environment: searchParams.get("environment") || "",
+    deviceId,
     hideAutonomous: searchParams.get("hide_autonomous") !== "false",
     daysBack: parsePositiveIntParam(searchParams.get("days_back"), DEFAULT_DAYS_BACK),
     searchQuery: searchParams.get("query") || "",
@@ -377,7 +378,7 @@ export function buildSessionsSearchParams(state: SessionsUrlState): URLSearchPar
 
   if (state.project) params.set("project", state.project);
   if (state.provider) params.set("provider", state.provider);
-  if (state.environment) params.set("environment", state.environment);
+  if (state.deviceId) params.set("device_id", state.deviceId);
   if (state.daysBack !== DEFAULT_DAYS_BACK) params.set("days_back", String(state.daysBack));
   if (state.searchQuery) params.set("query", state.searchQuery);
   if (state.aiSearch) params.set("mode", "hybrid");

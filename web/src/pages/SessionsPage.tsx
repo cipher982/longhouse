@@ -162,7 +162,7 @@ export default function SessionsPage() {
   const {
     project,
     provider,
-    environment,
+    deviceId,
     hideAutonomous,
     daysBack,
     searchQuery,
@@ -224,8 +224,8 @@ export default function SessionsPage() {
     (value: string) => updateFilterState({ provider: value }),
     [updateFilterState]
   );
-  const handleEnvironmentChange = useCallback(
-    (value: string) => updateFilterState({ environment: value }),
+  const handleDeviceIdChange = useCallback(
+    (value: string) => updateFilterState({ deviceId: value }),
     [updateFilterState]
   );
   const handleDaysBackChange = useCallback(
@@ -266,7 +266,7 @@ export default function SessionsPage() {
     () => ({
       project: project || undefined,
       provider: provider || undefined,
-      environment: environment || undefined,
+      device_id: deviceId || undefined,
       days_back: daysBack,
       query: debouncedQuery || undefined,
       limit,
@@ -274,7 +274,7 @@ export default function SessionsPage() {
       sort: debouncedQuery ? (sortOrder === "recent" ? "recency" : "relevance") : undefined,
       hide_autonomous: hideAutonomous ? undefined : false,
     }),
-    [project, provider, environment, daysBack, debouncedQuery, limit, aiSearch, sortOrder, hideAutonomous]
+    [project, provider, deviceId, daysBack, debouncedQuery, limit, aiSearch, sortOrder, hideAutonomous]
   );
 
   const timelineStreamEligible = !debouncedQuery && !aiSearch && typeof EventSource !== "undefined";
@@ -418,7 +418,7 @@ export default function SessionsPage() {
     updateUrlState({
       project: "",
       provider: "",
-      environment: "",
+      deviceId: "",
       hideAutonomous: true,
       daysBack: DEFAULT_DAYS_BACK,
       searchQuery: "",
@@ -452,7 +452,7 @@ export default function SessionsPage() {
     }
   }, [queryClient]);
 
-  const hasFilters = !!(project || provider || environment || daysBack !== DEFAULT_DAYS_BACK || searchQuery);
+  const hasFilters = !!(project || provider || deviceId || daysBack !== DEFAULT_DAYS_BACK || searchQuery);
   const showGuidedEmptyState = sessions.length === 0 && !hasFilters;
 
   // Auto-seed demo sessions on first empty load so new users see a populated
@@ -468,7 +468,7 @@ export default function SessionsPage() {
   const activeFilterCount = [
     project,
     provider,
-    environment,
+    deviceId,
     daysBack !== DEFAULT_DAYS_BACK ? "active" : "",
     !hideAutonomous ? "active" : "",
   ].filter(Boolean).length;
@@ -649,8 +649,14 @@ export default function SessionsPage() {
                 onKeyDown={(e) => {
                   const orders: Array<"relevant" | "recent"> = ["relevant", "recent"];
                   const idx = orders.indexOf(sortOrder);
-                  if (e.key === "ArrowLeft") { e.preventDefault(); handleSortOrderChange(orders[(idx + 1) % 2]); }
-                  if (e.key === "ArrowRight") { e.preventDefault(); handleSortOrderChange(orders[(idx + 1) % 2]); }
+                  if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+                    e.preventDefault();
+                    handleSortOrderChange(orders[(idx - 1 + orders.length) % orders.length]);
+                  }
+                  if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+                    e.preventDefault();
+                    handleSortOrderChange(orders[(idx + 1) % orders.length]);
+                  }
                   requestAnimationFrame(() => {
                     const active = e.currentTarget.querySelector<HTMLButtonElement>('[aria-checked="true"]');
                     active?.focus();
@@ -684,10 +690,10 @@ export default function SessionsPage() {
           </div>
 
           {/* Active filter chips */}
-          {(provider || environment || project || daysBack !== DEFAULT_DAYS_BACK || !hideAutonomous) && (
+          {(provider || deviceId || project || daysBack !== DEFAULT_DAYS_BACK || !hideAutonomous) && (
             <div className="sessions-filter-chips">
               {provider && <FilterChip label={provider} onDismiss={() => handleProviderChange("")} />}
-              {environment && <FilterChip label={environment} onDismiss={() => handleEnvironmentChange("")} />}
+              {deviceId && <FilterChip label={deviceId} onDismiss={() => handleDeviceIdChange("")} />}
               {project && <FilterChip label={project} onDismiss={() => handleProjectChange("")} />}
               {daysBack !== DEFAULT_DAYS_BACK && <FilterChip label={`${daysBack}d`} onDismiss={() => handleDaysBackChange(DEFAULT_DAYS_BACK)} />}
               {!hideAutonomous && <FilterChip label="show auto" onDismiss={() => handleHideAutonomousChange(true)} />}
@@ -744,7 +750,7 @@ export default function SessionsPage() {
             onClose={() => setPopoverOpen(false)}
             project={project} setProject={handleProjectChange} projectOptions={projectOptions}
             provider={provider} setProvider={handleProviderChange} providerOptions={providerOptions}
-            environment={environment} setEnvironment={handleEnvironmentChange} machineOptions={machineOptions}
+            deviceId={deviceId} setDeviceId={handleDeviceIdChange} machineOptions={machineOptions}
             daysBack={daysBack} setDaysBack={handleDaysBackChange}
             hideAutonomous={hideAutonomous} setHideAutonomous={handleHideAutonomousChange}
             filtersLoading={filtersLoading}
