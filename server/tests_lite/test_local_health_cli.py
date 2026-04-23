@@ -28,6 +28,8 @@ from zerg.services import session_runtime
 from zerg.services.longhouse_paths import get_agent_db_path
 from zerg.services.longhouse_paths import get_agent_outbox_dir
 from zerg.services.longhouse_paths import get_agent_status_path
+from zerg.services.machine_state import MachineState
+from zerg.services.machine_state import machine_state_source_hash
 
 _REAL_SCAN_PROVIDER_PROCESSES = local_health_service._scan_provider_processes
 _REAL_COLLECT_MANAGED_SESSIONS_BY_PROCESS = local_health_service._collect_managed_sessions_by_process
@@ -125,6 +127,16 @@ def _write_local_config(
     if runner_enabled is not None:
         payload["runner_enabled"] = runner_enabled
     (machine_dir / "state.json").write_text(json.dumps(payload))
+
+
+def _machine_state_hash(*, url: str, machine_name: str) -> str | None:
+    return machine_state_source_hash(
+        MachineState(
+            schema_version=1,
+            runtime_url=url,
+            machine_name=machine_name,
+        )
+    )
 
 
 def _write_runner_env(tmp_path: Path, *, url: str, runner_name: str) -> Path:
@@ -1103,6 +1115,34 @@ def test_collect_local_health_flags_service_generation_drift(monkeypatch, tmp_pa
     assert "service_state_hash_mismatch" in snapshot["reasons"]
     assert snapshot["launch_readiness"]["service_config_generation"] == "stale-generation"
     assert snapshot["launch_readiness"]["service_state_hash"] == "stale-hash"
+
+
+def test_collect_local_health_downgrades_generation_only_drift(monkeypatch, tmp_path: Path):
+    _write_local_config(tmp_path, url="https://demo.longhouse.test", machine_name="cinder")
+    service_file = _write_service_plist(
+        tmp_path,
+        machine_name="cinder",
+        config_generation="stale-generation",
+        state_hash=_machine_state_hash(
+            url="https://demo.longhouse.test",
+            machine_name="cinder",
+        ),
+    )
+    _write_shipper_db(tmp_path, [("/tmp/claude-a.jsonl", "claude", "sess-1", None, "2026-04-14T00:00:00Z")])
+    _write_engine_status(tmp_path, age_seconds=5)
+    monkeypatch.setattr(
+        local_health_service,
+        "get_service_info",
+        lambda *args, **kwargs: _service_info("running", service_file=str(service_file)),
+    )
+    _disable_real_runner_env(monkeypatch, tmp_path)
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "healthy"
+    assert snapshot["launch_readiness"]["state"] == "ready"
+    assert snapshot["launch_readiness"]["reasons"] == []
+    assert snapshot["launch_readiness"]["warnings"] == ["service_generation_mismatch"]
 
 
 def test_collect_local_health_ignores_invalid_stored_url(monkeypatch, tmp_path: Path):

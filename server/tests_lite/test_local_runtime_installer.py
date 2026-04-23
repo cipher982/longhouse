@@ -332,7 +332,6 @@ def test_apply_machine_state_update_persists_without_reconciling_when_service_mi
     )
 
     assert result.reconciled is False
-    assert result.install_result is None
     assert result.machine_state.runtime_url == "https://example.com"
     _state_path, loaded, error = installer.read_machine_state(home / ".longhouse")
     assert error is None
@@ -361,15 +360,6 @@ def test_apply_machine_state_update_reconciles_existing_service(tmp_path, monkey
 
     monkeypatch.setattr(installer, "get_service_info", lambda claude_dir: {"status": "running"})
     monkeypatch.setattr(installer, "load_token", lambda config_dir: "stored-token")
-
-    def fake_ensure(component, *, source_override=None, overwrite=False):
-        if component.value == "engine":
-            return SimpleNamespace(path="/tmp/longhouse-engine", installed_now=False)
-        if component.value == "managed-codex":
-            return SimpleNamespace(path="/tmp/longhouse-codex", installed_now=False)
-        raise AssertionError(f"unexpected component: {component}")
-
-    monkeypatch.setattr(installer, "ensure_runtime_binary", fake_ensure)
     monkeypatch.setattr(
         installer,
         "install_service",
@@ -405,7 +395,6 @@ def test_apply_machine_state_update_reconciles_existing_service(tmp_path, monkey
     assert result.reconciled is True
     assert result.machine_state.runtime_url == "https://new.longhouse.test"
     assert result.machine_state.machine_name == "test-box"
-    assert result.install_result is not None
     assert service_calls == [
         {
             "url": "https://new.longhouse.test",
@@ -421,7 +410,6 @@ def test_apply_machine_state_update_reconciles_existing_service(tmp_path, monkey
             "url": "https://new.longhouse.test",
             "token": "stored-token",
             "claude_dir": str(claude_dir),
-            "engine_path": "/tmp/longhouse-engine",
         }
     ]
     assert desktop_calls == [

@@ -391,6 +391,7 @@ def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dic
     service_machine_name = _extract_service_machine_name(service.get("service_file"))
     service_metadata = _extract_service_metadata(service.get("service_file"))
     reasons: list[str] = []
+    warnings: list[str] = []
     actions: list[str] = []
 
     stored_url = str(config.get("stored_url") or "").strip() or None
@@ -441,12 +442,15 @@ def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dic
         reasons.append("service_machine_name_mismatch")
         _with_action(actions, _repair_command(can_reconcile_from_state=True))
 
-    if can_reconcile_from_state and config_generation and service_config_generation and config_generation != service_config_generation:
-        reasons.append("service_generation_mismatch")
-        _with_action(actions, _repair_command(can_reconcile_from_state=True))
-
     if can_reconcile_from_state and state_hash and service_state_hash and state_hash != service_state_hash:
         reasons.append("service_state_hash_mismatch")
+        _with_action(actions, _repair_command(can_reconcile_from_state=True))
+
+    if can_reconcile_from_state and config_generation and service_config_generation and config_generation != service_config_generation:
+        if state_hash and service_state_hash and state_hash == service_state_hash:
+            warnings.append("service_generation_mismatch")
+        else:
+            reasons.append("service_generation_mismatch")
         _with_action(actions, _repair_command(can_reconcile_from_state=True))
 
     if service_status != "not-installed" and service_file_exists and not shipper_state_exists:
@@ -473,6 +477,7 @@ def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dic
         "state": state,
         "headline": headline,
         "reasons": reasons,
+        "warnings": warnings,
         "suggested_actions": actions,
         "stored_url": stored_url,
         "machine_name": machine_name,

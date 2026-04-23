@@ -130,9 +130,9 @@ def write_machine_state(
         raise RuntimeError(f"Failed to read existing machine state at {state_path}: {error}")
 
     written_at = _to_rfc3339(datetime.now(timezone.utc))
-    next_state = MachineState(
+    draft_state = MachineState(
         schema_version=SCHEMA_VERSION,
-        config_generation=_new_generation(written_at),
+        config_generation=current_state.config_generation if current_state else None,
         runtime_url=_resolve_runtime_url(runtime_url, current_state),
         machine_name=_resolve_machine_name(machine_name, current_state),
         topology_intent=_resolve_text(topology_intent, current_state.topology_intent if current_state else None),
@@ -144,6 +144,26 @@ def write_machine_state(
         ),
         written_by=str(written_by).strip(),
         written_at=written_at,
+    )
+    next_generation = _new_generation(written_at)
+    if (
+        current_state
+        and current_state.config_generation
+        and machine_state_source_hash(current_state) == machine_state_source_hash(draft_state)
+    ):
+        next_generation = current_state.config_generation
+
+    next_state = MachineState(
+        schema_version=draft_state.schema_version,
+        config_generation=next_generation,
+        runtime_url=draft_state.runtime_url,
+        machine_name=draft_state.machine_name,
+        topology_intent=draft_state.topology_intent,
+        desktop_app_enabled=draft_state.desktop_app_enabled,
+        runner_enabled=draft_state.runner_enabled,
+        desired_bundle_version=draft_state.desired_bundle_version,
+        written_by=draft_state.written_by,
+        written_at=draft_state.written_at,
     )
 
     serialized = json.dumps(next_state.to_dict(), indent=2, sort_keys=True) + "\n"

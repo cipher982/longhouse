@@ -64,3 +64,25 @@ def test_clear_machine_runtime_url_preserves_other_machine_state(tmp_path: Path)
     assert loaded.machine_name == "test-box"
     assert loaded.topology_intent == "connect-remote"
     assert loaded.written_by == "auth-clear"
+
+
+def test_write_machine_state_preserves_generation_when_launch_config_is_unchanged(tmp_path: Path):
+    first = write_machine_state(
+        base_dir=tmp_path,
+        written_by="connect-install",
+        runtime_url="https://demo.longhouse.test",
+        machine_name="test-box",
+        topology_intent="connect-remote",
+        desktop_app_enabled=True,
+    )
+
+    second = write_machine_state(
+        base_dir=tmp_path,
+        written_by="auth",
+        runtime_url="https://demo.longhouse.test",
+    )
+
+    assert second.runtime_url == first.runtime_url
+    assert second.machine_name == first.machine_name
+    assert second.config_generation == first.config_generation
+    assert second.written_by == "auth"
