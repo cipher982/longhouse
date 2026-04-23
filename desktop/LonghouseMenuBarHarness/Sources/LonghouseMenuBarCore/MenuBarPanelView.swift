@@ -239,7 +239,7 @@ public struct MenuBarPanelView: View {
                         .help(
                             snapshot.hasResolvedInstalledVersion
                                 ? "Installed Longhouse version"
-                                : "Longhouse cannot read its build identity. Run scripts/build/generate_build_identity.py and reinstall, or run longhouse connect --install."
+                                : "Longhouse cannot read its build identity. Run scripts/build/generate_build_identity.py and reinstall, or run longhouse machine repair."
                         )
                 }
 

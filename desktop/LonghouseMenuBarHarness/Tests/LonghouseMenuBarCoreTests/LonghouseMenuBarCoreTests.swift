@@ -230,7 +230,7 @@ struct LonghouseMenuBarCoreTests {
             severity: "red",
             headline: "Longhouse engine service is stopped",
             reasons: ["service_stopped"],
-            suggestedActions: ["Run: longhouse connect --install"],
+            suggestedActions: ["Run: longhouse machine repair"],
             service: nil,
             engineStatus: nil,
             outbox: nil,
@@ -243,7 +243,7 @@ struct LonghouseMenuBarCoreTests {
 
         #expect(feedback?.style == .warning)
         #expect(feedback?.title == "Repair dry run recorded")
-        #expect(feedback?.detail.contains("longhouse machine reconcile") == true)
+        #expect(feedback?.detail.contains("longhouse machine repair") == true)
     }
 
     @Test
@@ -365,7 +365,7 @@ struct LonghouseMenuBarCoreTests {
             severity: "red",
             headline: "Longhouse engine service is stopped",
             reasons: ["service_stopped"],
-            suggestedActions: ["Run: longhouse connect --install"],
+            suggestedActions: ["Run: longhouse machine repair"],
             service: nil,
             engineStatus: nil,
             outbox: nil,
@@ -399,7 +399,7 @@ struct LonghouseMenuBarCoreTests {
         #expect(invocation?.launchPath == executableURL.path)
         #expect(invocation?.arguments == [
             "machine",
-            "reconcile",
+            "repair",
         ])
     }
 
@@ -414,7 +414,7 @@ struct LonghouseMenuBarCoreTests {
             severity: "red",
             headline: "Longhouse launch config is inconsistent",
             reasons: ["config_url_runner_url_mismatch"],
-            suggestedActions: ["Run: longhouse connect --install"],
+            suggestedActions: ["Run: longhouse machine repair"],
             service: nil,
             engineStatus: nil,
             outbox: nil,
@@ -440,7 +440,7 @@ struct LonghouseMenuBarCoreTests {
         #expect(invocation?.launchPath == executableURL.path)
         #expect(invocation?.arguments == [
             "machine",
-            "reconcile",
+            "repair",
         ])
     }
 
