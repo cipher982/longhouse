@@ -194,6 +194,7 @@ jobs:
       - name: Dispatch local runtime release workflow
         run: |
           gh workflow run local-runtime-release.yml \
+            --repo "${GITHUB_REPOSITORY}" \
             --ref "${GITHUB_REF_NAME}" \
             --field tag_name="${LONGHOUSE_RELEASE_TAG}" \
             --field managed_codex_upstream_ref="${{ needs.detect.outputs.candidate_ref }}" \
