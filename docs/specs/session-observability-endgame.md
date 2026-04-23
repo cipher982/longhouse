@@ -45,6 +45,7 @@ The system is "fully observed" only when all of these are true.
   - engine ship/export
   - ingest decode/write
 - For at least 99% of turns above the slow threshold, a trace or status snapshot exists with enough detail to identify the dominant phase.
+- A machine-facing route can answer "is this machine's shipping path healthy right now?" from latest heartbeat data without opening logs first.
 
 ### Alertability
 
@@ -98,6 +99,7 @@ Required surfaces:
 - `~/.longhouse/agent/engine-status.json`
 - `local-health` JSON
 - server heartbeat rows
+- `GET /api/agents/machines/health`
 
 These must carry enough data to diagnose local transport issues without tailing logs.
 
@@ -155,6 +157,7 @@ These are starting points. Real thresholds should be adjusted from dogfood data.
 
 - engine ship outcome and latency telemetry in heartbeat/status snapshots
 - local-health exposure of those fields
+- server-side machine health summary route over latest heartbeat state
 
 ### Phase 3
 
@@ -169,3 +172,9 @@ These are starting points. Real thresholds should be adjusted from dogfood data.
 ## Done Means
 
 We are done when a future "managed sessions feel slow" report can be answered from telemetry in one pass, without opening local logs first.
+
+Near-term slice success criteria:
+
+- `GET /api/agents/machines/health` returns one latest heartbeat-derived row per device.
+- Each row includes heartbeat freshness, dominant transport reason, rolling ship outcomes, and backlog/dead-letter signals.
+- Operator flows can filter that surface by device and derived state without querying raw heartbeat history directly.
