@@ -26,7 +26,7 @@ EXPECTED_FAILURE_PATTERN='no rollout found for thread id' \
 bash "$HARNESS" --lines 32
 echo ""
 
-echo "[2/4] Expect post-turn subscribe race while rollout is still materializing"
+echo "[2/4] Probe the post-turn boundary; it may still race rollout materialization"
 ENGINE="$ENGINE" \
 CODEX_BIN="$CODEX_BIN" \
 MODE=text \
