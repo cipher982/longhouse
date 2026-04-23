@@ -683,6 +683,44 @@ def _migrate_agents_columns(engine: Engine) -> None:
             if columns and "spool_dead" not in columns:
                 conn.execute(text("ALTER TABLE agent_heartbeats ADD COLUMN spool_dead INTEGER DEFAULT 0"))
                 conn.execute(text("UPDATE agent_heartbeats SET spool_dead = 0 WHERE spool_dead IS NULL"))
+            if columns and "last_ship_attempt_at" not in columns:
+                conn.execute(text("ALTER TABLE agent_heartbeats ADD COLUMN last_ship_attempt_at DATETIME"))
+            if columns and "last_ship_result" not in columns:
+                conn.execute(text("ALTER TABLE agent_heartbeats ADD COLUMN last_ship_result VARCHAR(64)"))
+            if columns and "last_ship_latency_ms" not in columns:
+                conn.execute(text("ALTER TABLE agent_heartbeats ADD COLUMN last_ship_latency_ms INTEGER"))
+            if columns and "last_ship_http_status" not in columns:
+                conn.execute(text("ALTER TABLE agent_heartbeats ADD COLUMN last_ship_http_status INTEGER"))
+            if columns and "ship_attempts_1h" not in columns:
+                conn.execute(text("ALTER TABLE agent_heartbeats ADD COLUMN ship_attempts_1h INTEGER DEFAULT 0"))
+                conn.execute(text("UPDATE agent_heartbeats SET ship_attempts_1h = 0 WHERE ship_attempts_1h IS NULL"))
+            if columns and "ship_successes_1h" not in columns:
+                conn.execute(text("ALTER TABLE agent_heartbeats ADD COLUMN ship_successes_1h INTEGER DEFAULT 0"))
+                conn.execute(text("UPDATE agent_heartbeats SET ship_successes_1h = 0 WHERE ship_successes_1h IS NULL"))
+            if columns and "ship_rate_limited_1h" not in columns:
+                conn.execute(text("ALTER TABLE agent_heartbeats ADD COLUMN ship_rate_limited_1h INTEGER DEFAULT 0"))
+                conn.execute(text("UPDATE agent_heartbeats SET ship_rate_limited_1h = 0 WHERE ship_rate_limited_1h IS NULL"))
+            if columns and "ship_server_errors_1h" not in columns:
+                conn.execute(text("ALTER TABLE agent_heartbeats ADD COLUMN ship_server_errors_1h INTEGER DEFAULT 0"))
+                conn.execute(text("UPDATE agent_heartbeats SET ship_server_errors_1h = 0 WHERE ship_server_errors_1h IS NULL"))
+            if columns and "ship_payload_rejections_1h" not in columns:
+                conn.execute(text("ALTER TABLE agent_heartbeats ADD COLUMN ship_payload_rejections_1h INTEGER DEFAULT 0"))
+                conn.execute(text("UPDATE agent_heartbeats SET ship_payload_rejections_1h = 0 WHERE ship_payload_rejections_1h IS NULL"))
+            if columns and "ship_payload_too_large_1h" not in columns:
+                conn.execute(text("ALTER TABLE agent_heartbeats ADD COLUMN ship_payload_too_large_1h INTEGER DEFAULT 0"))
+                conn.execute(text("UPDATE agent_heartbeats SET ship_payload_too_large_1h = 0 WHERE ship_payload_too_large_1h IS NULL"))
+            if columns and "ship_retryable_client_errors_1h" not in columns:
+                conn.execute(text("ALTER TABLE agent_heartbeats ADD COLUMN ship_retryable_client_errors_1h INTEGER DEFAULT 0"))
+                conn.execute(
+                    text("UPDATE agent_heartbeats SET ship_retryable_client_errors_1h = 0 " "WHERE ship_retryable_client_errors_1h IS NULL")
+                )
+            if columns and "ship_connect_errors_1h" not in columns:
+                conn.execute(text("ALTER TABLE agent_heartbeats ADD COLUMN ship_connect_errors_1h INTEGER DEFAULT 0"))
+                conn.execute(text("UPDATE agent_heartbeats SET ship_connect_errors_1h = 0 WHERE ship_connect_errors_1h IS NULL"))
+            if columns and "ship_latency_p50_ms_1h" not in columns:
+                conn.execute(text("ALTER TABLE agent_heartbeats ADD COLUMN ship_latency_p50_ms_1h INTEGER"))
+            if columns and "ship_latency_p95_ms_1h" not in columns:
+                conn.execute(text("ALTER TABLE agent_heartbeats ADD COLUMN ship_latency_p95_ms_1h INTEGER"))
             conn.commit()
     except Exception:
         logger.debug("agent_heartbeats table migration skipped (table may not exist yet)", exc_info=True)

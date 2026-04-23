@@ -108,6 +108,12 @@ async def ingest_heartbeat(
                         last_ship_at = datetime.fromisoformat(payload.last_ship_at.replace("Z", "+00:00"))
                     except ValueError:
                         pass
+                last_ship_attempt_at: datetime | None = None
+                if payload.last_ship_attempt_at:
+                    try:
+                        last_ship_attempt_at = datetime.fromisoformat(payload.last_ship_attempt_at.replace("Z", "+00:00"))
+                    except ValueError:
+                        pass
 
                 wire_bytes = len(await request.body())
                 payload_json = json.dumps(payload.model_dump())
@@ -140,10 +146,24 @@ async def ingest_heartbeat(
             _now = datetime.now(timezone.utc)
             _version = payload.version
             _last_ship = last_ship_at
+            _last_ship_attempt = last_ship_attempt_at
+            _last_ship_result = payload.last_ship_result
+            _last_ship_latency_ms = payload.last_ship_latency_ms
+            _last_ship_http_status = payload.last_ship_http_status
             _spool = payload.spool_pending_count
             _spool_dead = payload.spool_dead_count
             _parse_err = payload.parse_error_count_1h
             _consec = payload.consecutive_ship_failures
+            _ship_attempts = payload.ship_attempts_1h
+            _ship_successes = payload.ship_successes_1h
+            _ship_rate_limited = payload.ship_rate_limited_1h
+            _ship_server_errors = payload.ship_server_errors_1h
+            _ship_payload_rejections = payload.ship_payload_rejections_1h
+            _ship_payload_too_large = payload.ship_payload_too_large_1h
+            _ship_retryable_client_errors = payload.ship_retryable_client_errors_1h
+            _ship_connect_errors = payload.ship_connect_errors_1h
+            _ship_latency_p50 = payload.ship_latency_p50_ms_1h
+            _ship_latency_p95 = payload.ship_latency_p95_ms_1h
             _disk = payload.disk_free_bytes
             _offline = 1 if payload.is_offline else 0
 
@@ -153,10 +173,24 @@ async def ingest_heartbeat(
                     received_at=_now,
                     version=_version,
                     last_ship_at=_last_ship,
+                    last_ship_attempt_at=_last_ship_attempt,
+                    last_ship_result=_last_ship_result,
+                    last_ship_latency_ms=_last_ship_latency_ms,
+                    last_ship_http_status=_last_ship_http_status,
                     spool_pending=_spool,
                     spool_dead=_spool_dead,
                     parse_errors_1h=_parse_err,
                     consecutive_failures=_consec,
+                    ship_attempts_1h=_ship_attempts,
+                    ship_successes_1h=_ship_successes,
+                    ship_rate_limited_1h=_ship_rate_limited,
+                    ship_server_errors_1h=_ship_server_errors,
+                    ship_payload_rejections_1h=_ship_payload_rejections,
+                    ship_payload_too_large_1h=_ship_payload_too_large,
+                    ship_retryable_client_errors_1h=_ship_retryable_client_errors,
+                    ship_connect_errors_1h=_ship_connect_errors,
+                    ship_latency_p50_ms_1h=_ship_latency_p50,
+                    ship_latency_p95_ms_1h=_ship_latency_p95,
                     disk_free_bytes=_disk,
                     is_offline=_offline,
                     raw_json=_payload_json,

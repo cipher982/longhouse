@@ -90,7 +90,22 @@ def test_heartbeat_endpoint_creates_row(tmp_path):
             assert len(rows) == 1
             hb = rows[0]
             assert hb.version == "0.5.0"
+            assert hb.last_ship_attempt_at is None
+            assert hb.last_ship_result is None
+            assert hb.last_ship_latency_ms is None
+            assert hb.last_ship_http_status is None
             assert hb.spool_pending == 3
+            assert hb.spool_dead == 0
+            assert hb.ship_attempts_1h == 0
+            assert hb.ship_successes_1h == 0
+            assert hb.ship_rate_limited_1h == 0
+            assert hb.ship_server_errors_1h == 0
+            assert hb.ship_payload_rejections_1h == 0
+            assert hb.ship_payload_too_large_1h == 0
+            assert hb.ship_retryable_client_errors_1h == 0
+            assert hb.ship_connect_errors_1h == 0
+            assert hb.ship_latency_p50_ms_1h is None
+            assert hb.ship_latency_p95_ms_1h is None
             assert hb.disk_free_bytes == 50_000_000_000
             assert hb.is_offline == 0
     finally:
@@ -211,7 +226,23 @@ def test_heartbeat_endpoint_persists_transport_summary_fields(tmp_path):
         with SessionLocal() as db:
             row = db.query(AgentHeartbeat).one()
             raw = json.loads(row.raw_json)
+            assert row.last_ship_attempt_at is not None
+            # SQLite drops timezone info on round-trip; Postgres preserves UTC.
+            assert row.last_ship_attempt_at.replace(tzinfo=None) == datetime(2026, 4, 23, 20, 0, 3)
+            assert row.last_ship_result == "rate_limited"
+            assert row.last_ship_latency_ms == 187
+            assert row.last_ship_http_status == 429
             assert row.spool_dead == 2
+            assert row.ship_attempts_1h == 12
+            assert row.ship_successes_1h == 8
+            assert row.ship_rate_limited_1h == 3
+            assert row.ship_server_errors_1h == 1
+            assert row.ship_payload_rejections_1h == 0
+            assert row.ship_payload_too_large_1h == 0
+            assert row.ship_retryable_client_errors_1h == 0
+            assert row.ship_connect_errors_1h == 0
+            assert row.ship_latency_p50_ms_1h == 140
+            assert row.ship_latency_p95_ms_1h == 260
             assert raw["last_ship_attempt_at"] == "2026-04-23T20:00:03Z"
             assert raw["last_ship_result"] == "rate_limited"
             assert raw["last_ship_latency_ms"] == 187
