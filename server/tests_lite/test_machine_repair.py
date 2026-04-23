@@ -59,6 +59,29 @@ def test_replay_machine_backlog_accepts_log_prefixed_json(monkeypatch):
     assert result.summary == {"status": "ok", "spool_replayed": 2, "spool_pending": 0}
 
 
+def test_replay_machine_backlog_ignores_trailing_output_after_json(monkeypatch):
+    monkeypatch.setattr(machine_repair, "get_engine_executable", lambda: "/tmp/longhouse-engine")
+    monkeypatch.setattr(
+        machine_repair.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout='2026-04-23T17:12:43Z INFO replaying\\n{"status":"ok","spool_replayed":3,"spool_pending":1}\\n2026-04-23T17:12:44Z INFO done\\n',
+            stderr="",
+        ),
+    )
+
+    result = machine_repair.replay_machine_backlog(
+        url="https://demo.longhouse.test",
+        token="zdt_test",
+        claude_dir="/tmp/.claude",
+    )
+
+    assert result.attempted is True
+    assert result.success is True
+    assert result.summary == {"status": "ok", "spool_replayed": 3, "spool_pending": 1}
+
+
 def test_repair_machine_runtime_reconciles_replays_and_collects_health(monkeypatch, tmp_path):
     calls: list[tuple[str, object]] = []
     monkeypatch.setattr(

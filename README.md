@@ -66,7 +66,8 @@ Hosted beta (we run the Runtime Host for you) lands later at <https://longhouse.
 ```bash
 longhouse doctor              # diagnose
 longhouse upgrade             # update CLI
-longhouse connect --install   # reinstall hooks + machine agent
+longhouse machine repair      # repair a configured machine
+longhouse connect --install   # first install or force reinstall
 ```
 
 `longhouse --help` lists every subcommand. Full docs: <https://longhouse.ai/docs>.

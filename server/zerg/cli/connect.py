@@ -327,7 +327,10 @@ def _attempt_post_auth_spool_replay(*, url: str, token: str, claude_dir: str | N
         claude_dir=claude_dir,
     )
     if replay.warning:
-        typer.secho(replay.warning, fg=typer.colors.YELLOW)
+        typer.secho(
+            f"Authenticated, but {replay.warning[0].lower()}{replay.warning[1:]}" if replay.warning else "",
+            fg=typer.colors.YELLOW,
+        )
 
 
 def _finalize_auth_success(
