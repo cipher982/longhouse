@@ -375,6 +375,11 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
             .clone()
             .context("remote TUI did not emit thread/started")?;
         let mut thread_path = state.thread_path.clone();
+        if subscribe_after_rollout && thread_path.is_none() {
+            bail!(
+                "remote TUI thread/started did not include a rollout path; cannot enforce after_rollout subscribe phase"
+            );
+        }
         if subscribe_before_turn {
             let resume_response = subscribe_to_thread(
                 &config,
@@ -490,9 +495,10 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
 
     if subscribe_after_turn || subscribe_after_rollout {
         if subscribe_after_rollout {
-            if let Some(path) = thread_path.as_deref() {
-                wait_for_thread_rollout(Path::new(path), Duration::from_secs(5)).await?;
-            }
+            let path = thread_path
+                .as_deref()
+                .context("missing rollout path for after_rollout subscribe phase")?;
+            wait_for_thread_rollout(Path::new(path), Duration::from_secs(5)).await?;
         }
         let resume_response = subscribe_to_thread(
             &config,

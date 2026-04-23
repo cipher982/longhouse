@@ -1855,7 +1855,8 @@ fn adopt_thread_identity(
         context.subscribed_thread_id = None;
         context.state.thread_subscription_attempts = 0;
         context.state.thread_subscription_last_error = None;
-        context.state.thread_subscription_status = None;
+        context.state.thread_subscription_status =
+            Some(derive_thread_subscription_status(context).as_str().to_string());
     }
     sync_thread_binding(
         config,
@@ -2428,6 +2429,11 @@ async fn handle_bridge_followup(
                             continue;
                         }
                         if retryable {
+                            update_thread_subscription_tracking(
+                                context,
+                                derive_thread_subscription_status(context),
+                                Some(error_text),
+                            )?;
                             return Ok(());
                         }
                         break;
@@ -3302,7 +3308,10 @@ mod tests {
         assert_eq!(context.runtime.thread_id.as_deref(), Some("thr-new"));
         assert_eq!(context.subscribed_thread_id, None);
         assert_eq!(context.state.thread_subscription_attempts, 0);
-        assert_eq!(context.state.thread_subscription_status, None);
+        assert_eq!(
+            context.state.thread_subscription_status.as_deref(),
+            Some(ThreadSubscriptionStatus::WaitingForTurn.as_str())
+        );
         assert_eq!(context.state.thread_subscription_last_error, None);
     }
 
