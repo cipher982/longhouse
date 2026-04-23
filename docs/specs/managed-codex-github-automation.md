@@ -61,21 +61,13 @@ The intended split is:
 
 The deterministic mirror lane should be boring. The workflow now defaults to `latest_published_release`, not `latest_tag`, on unattended runs.
 
-Schedule auto-dispatch should only happen when all of these are true:
+Schedule auto-dispatch fires when all of these are true:
 
 - upstream published release is newer than the currently pinned upstream Codex version
 - `patch_status == applies_cleanly`
-- target Longhouse release tag is configured
-- the target Longhouse release does not already publish the same managed Codex build version
+- the latest Longhouse release tag (resolved live via `gh release view`) does not already publish the same managed Codex build version
 
-Repository variables:
-
-- `LONGHOUSE_RUNTIME_RELEASE_TAG`
-  Existing Longhouse release tag whose runtime assets should be refreshed
-- `MANAGED_CODEX_AUTO_DISPATCH`
-  Set to `true` to let the scheduled watcher dispatch the runtime release workflow automatically
-- `MANAGED_CODEX_BUILD_SUFFIX`
-  Optional suffix override for the managed build version; defaults to `longhouse.1`
+The target Longhouse release tag is always the latest published release on this repo; there is no repo var to configure. The managed build suffix is fixed to `longhouse.1` — edit the workflow if that ever needs to change. Manual `workflow_dispatch` runs accept a `dry_run` input to detect without dispatching the rebuild.
 
 ## Why The Advisory Step Is Separate
 

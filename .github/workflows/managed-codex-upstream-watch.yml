@@ -18,20 +18,11 @@ on:
           - latest_published_release
           - latest_tag
           - latest_prerelease_release
-      dispatch_runtime_release:
-        description: "Dispatch local-runtime-release.yml for the detected candidate"
+      dry_run:
+        description: "Detect only; skip rebuild dispatch even if an update is available"
         required: false
         default: false
         type: boolean
-      longhouse_release_tag:
-        description: "Existing Longhouse release tag to publish from when dispatching runtime release"
-        required: false
-        type: string
-      managed_codex_build_suffix:
-        description: "Managed Codex build suffix (for example longhouse.1)"
-        required: false
-        default: "longhouse.1"
-        type: string
 
 permissions:
   contents: read
@@ -71,8 +62,6 @@ jobs:
 
       - name: Parse report
         id: report
-        env:
-          MANAGED_CODEX_BUILD_SUFFIX: ${{ inputs.managed_codex_build_suffix || vars.MANAGED_CODEX_BUILD_SUFFIX || 'longhouse.1' }}
         run: |
           python3 - <<'PY'
           import json
@@ -80,7 +69,7 @@ jobs:
           from pathlib import Path
 
           report = json.loads(Path("artifacts/managed-codex-report.json").read_text())
-          desired_build_version = f"{report['candidate_tag']['version']}+{os.environ['MANAGED_CODEX_BUILD_SUFFIX']}"
+          desired_build_version = f"{report['candidate_tag']['version']}+longhouse.1"
           output_path = Path(os.environ["GITHUB_OUTPUT"])
           with output_path.open("a", encoding="utf-8") as fh:
               fh.write(f"update_needed={'true' if report['update_needed_by_tag'] else 'false'}\n")
@@ -92,19 +81,26 @@ jobs:
               fh.write(f"desired_build_version={desired_build_version}\n")
           PY
 
+      - name: Resolve latest Longhouse release tag
+        id: resolve_release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          LONGHOUSE_RELEASE_TAG="$(gh release view --repo "${GITHUB_REPOSITORY}" --json tagName -q .tagName)"
+          if [[ -z "${LONGHOUSE_RELEASE_TAG}" ]]; then
+            echo "No published Longhouse release found on ${GITHUB_REPOSITORY}" >&2
+            exit 1
+          fi
+          echo "longhouse_release_tag=${LONGHOUSE_RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+
       - name: Inspect current published managed Codex version
         id: publish_state
         env:
           GH_TOKEN: ${{ github.token }}
-          LONGHOUSE_RELEASE_TAG: ${{ inputs.longhouse_release_tag || vars.LONGHOUSE_RUNTIME_RELEASE_TAG || '' }}
+          LONGHOUSE_RELEASE_TAG: ${{ steps.resolve_release.outputs.longhouse_release_tag }}
           DESIRED_BUILD_VERSION: ${{ steps.report.outputs.desired_build_version }}
         run: |
           echo "longhouse_release_tag=${LONGHOUSE_RELEASE_TAG}" >> "$GITHUB_OUTPUT"
-          if [[ -z "${LONGHOUSE_RELEASE_TAG}" ]]; then
-            echo "current_published_version=" >> "$GITHUB_OUTPUT"
-            echo "already_published=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
 
           mkdir -p current-release
           if ! gh release download "${LONGHOUSE_RELEASE_TAG}" \
@@ -187,7 +183,7 @@ jobs:
 
   dispatch-runtime-release:
     needs: detect
-    if: ${{ needs.detect.outputs.update_needed == 'true' && needs.detect.outputs.patch_status == 'applies_cleanly' && needs.detect.outputs.already_published != 'true' && needs.detect.outputs.longhouse_release_tag != '' && ((github.event_name == 'workflow_dispatch' && inputs.dispatch_runtime_release) || (github.event_name == 'schedule' && vars.MANAGED_CODEX_AUTO_DISPATCH == 'true')) }}
+    if: ${{ needs.detect.outputs.update_needed == 'true' && needs.detect.outputs.patch_status == 'applies_cleanly' && needs.detect.outputs.already_published != 'true' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
@@ -195,13 +191,6 @@ jobs:
       DESIRED_BUILD_VERSION: ${{ needs.detect.outputs.desired_build_version }}
 
     steps:
-      - name: Validate dispatch inputs
-        run: |
-          if [[ -z "${LONGHOUSE_RELEASE_TAG}" ]]; then
-            echo "longhouse_release_tag is required when dispatch_runtime_release=true" >&2
-            exit 1
-          fi
-
       - name: Dispatch local runtime release workflow
         run: |
           gh workflow run local-runtime-release.yml \
