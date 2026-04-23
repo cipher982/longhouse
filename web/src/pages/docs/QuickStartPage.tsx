@@ -104,7 +104,8 @@ longhouse codex     # Codex CLI with control channel`}
       </p>
       <CodeBlock title="terminal">
         {`longhouse doctor            # diagnose issues
-longhouse connect --install  # repair onboarding and automatic imports`}
+longhouse machine repair    # repair an already-linked machine
+longhouse connect --install # first install or force reinstall`}
       </CodeBlock>
       <p>
         On macOS, <code>Longhouse.app</code> and the menu bar show the same

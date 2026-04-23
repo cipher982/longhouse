@@ -128,8 +128,15 @@ longhouse sessions continue SESSION_ID`}
       <h3>longhouse connect</h3>
       <p>Manage the background session shipping service.</p>
       <CodeBlock title="terminal">
-        {`longhouse connect --install     # repair onboarding
+        {`longhouse connect --install     # first install / link this machine
 longhouse connect --status      # check shipping status`}
+      </CodeBlock>
+
+      <h3>longhouse machine</h3>
+      <p>Repair or reconfigure an already-linked machine.</p>
+      <CodeBlock title="terminal">
+        {`longhouse machine repair                       # repair local runtime + replay backlog
+longhouse machine configure --machine-name my-vps  # update canonical machine config`}
       </CodeBlock>
 
       <h2>Setup & Maintenance</h2>

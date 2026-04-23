@@ -387,7 +387,7 @@ def codex(
     if not resolved_codex_bin:
         typer.secho(
             "Managed Codex runtime is not installed yet. Run `longhouse onboard` to complete setup, "
-            "`longhouse connect --install` if you've already onboarded, or set "
+            "`longhouse machine repair` if you've already onboarded, or set "
             f"{_CODEX_BIN_ENV} / --codex-bin to override it explicitly.",
             fg=typer.colors.RED,
         )

@@ -855,7 +855,7 @@ def _handle_status() -> None:
                     detail = f"{detail} ({version})"
                 typer.echo(detail)
             elif runtime_mode == "broken-install":
-                typer.echo("Desktop App runtime: install is missing, broken, or unsupported (run: longhouse connect --install)")
+                typer.echo("Desktop App runtime: install is missing, broken, or unsupported (run: longhouse machine repair)")
 
 
 def _handle_uninstall() -> None:

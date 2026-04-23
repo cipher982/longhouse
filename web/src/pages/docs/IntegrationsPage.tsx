@@ -111,9 +111,10 @@ export default function IntegrationsPage() {
         re-importing is safe and idempotent.
       </p>
       <p>
-        The background shipping service (<code>longhouse connect --install</code>)
-        handles automatic imports and repairs the local hook path. You can also
-        trigger a one-time import with:
+        The background shipping service is installed with <code>longhouse connect --install</code>.
+        Once a machine is already linked, use <code>longhouse machine repair</code> to
+        repair the local hook path and shipping runtime. You can also trigger a
+        one-time import with:
       </p>
       <CodeBlock title="terminal">{`longhouse ship`}</CodeBlock>
 

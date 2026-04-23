@@ -104,7 +104,7 @@ export default function ConfigurationPage() {
         (useful when multiple machines report to the same instance):
       </p>
       <CodeBlock title="terminal">
-        {`longhouse connect --install --machine-name my-vps`}
+        {`longhouse machine configure --machine-name my-vps`}
       </CodeBlock>
       <p>
         This is read at engine startup, not live. Re-run the install/repair
