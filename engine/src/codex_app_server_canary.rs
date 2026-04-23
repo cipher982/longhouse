@@ -97,6 +97,7 @@ pub struct CanaryConfig {
     pub isolate_home: bool,
     pub keep_home: bool,
     pub verify_hooks: bool,
+    pub ws_read_throttle_ms: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -340,11 +341,12 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
     let _ = initialize_response;
     send_notification(&mut client, &mut logger, "initialized", json!({})).await?;
 
-    let needs_remote_tui_owned_thread = config.spawn_remote_tui && config.resume_thread_id.is_none();
-    let subscribe_before_turn =
-        needs_remote_tui_owned_thread && config.remote_tui_subscribe_phase == RemoteTuiSubscribePhase::PreTurn;
-    let subscribe_after_turn =
-        needs_remote_tui_owned_thread && config.remote_tui_subscribe_phase == RemoteTuiSubscribePhase::PostTurn;
+    let needs_remote_tui_owned_thread =
+        config.spawn_remote_tui && config.resume_thread_id.is_none();
+    let subscribe_before_turn = needs_remote_tui_owned_thread
+        && config.remote_tui_subscribe_phase == RemoteTuiSubscribePhase::PreTurn;
+    let subscribe_after_turn = needs_remote_tui_owned_thread
+        && config.remote_tui_subscribe_phase == RemoteTuiSubscribePhase::PostTurn;
     let subscribe_after_rollout = needs_remote_tui_owned_thread
         && config.remote_tui_subscribe_phase == RemoteTuiSubscribePhase::AfterRollout;
     let (thread_id, mut thread_path) = if needs_remote_tui_owned_thread {
@@ -849,6 +851,7 @@ async fn spawn_client(
                 let _ = ws_write.close().await;
             });
             let ws_events_tx = events_tx.clone();
+            let read_throttle_ms = config.ws_read_throttle_ms;
             tokio::spawn(async move {
                 while let Some(message) = ws_read.next().await {
                     match message {
@@ -868,6 +871,9 @@ async fn spawn_client(
                                 .send(StreamEvent::Stderr(format!("websocket read error: {err}")));
                             break;
                         }
+                    }
+                    if read_throttle_ms > 0 {
+                        tokio::time::sleep(Duration::from_millis(read_throttle_ms)).await;
                     }
                 }
             });
@@ -1795,6 +1801,7 @@ for line in sys.stdin:
             isolate_home: false,
             keep_home: false,
             verify_hooks: false,
+            ws_read_throttle_ms: 0,
         })
         .await
         .unwrap();
@@ -1932,6 +1939,7 @@ for line in sys.stdin:
             isolate_home: false,
             keep_home: false,
             verify_hooks: false,
+            ws_read_throttle_ms: 0,
         })
         .await
         .unwrap();

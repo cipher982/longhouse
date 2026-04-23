@@ -20,6 +20,11 @@ Environment overrides:
   REMOTE_TUI_GRACE_MS    post-launch TUI grace window (default: 5000)
   SUBSCRIBE_PHASE        second-client subscribe timing: preturn, postturn, or after_rollout
                         (default: postturn)
+  WS_READ_THROTTLE_MS    ms to sleep between each WS read on the canary (default: 2).
+                        Non-zero throttle is what makes the server-side outbound
+                        queue actually fill under a burst, which is how we trip
+                        the slow-connection disconnect path on unpatched Codex.
+                        Set to 0 to drain as fast as possible (no bug repro).
   EXPECTED_FAILURE_PATTERN
                         if set, treat a nonzero canary exit as success when the
                         JSONL log contains this literal substring
@@ -40,6 +45,7 @@ LINES="${LINES:-20000}"
 EVENT_TIMEOUT_SECS="${EVENT_TIMEOUT_SECS:-180}"
 REMOTE_TUI_GRACE_MS="${REMOTE_TUI_GRACE_MS:-5000}"
 SUBSCRIBE_PHASE="${SUBSCRIBE_PHASE:-postturn}"
+WS_READ_THROTTLE_MS="${WS_READ_THROTTLE_MS:-2}"
 EXPECTED_FAILURE_PATTERN="${EXPECTED_FAILURE_PATTERN:-}"
 LOG_DIR="${LOG_DIR:-}"
 CWD="${CWD:-}"
@@ -143,6 +149,7 @@ cmd=(
   --remote-tui-grace-ms "$REMOTE_TUI_GRACE_MS"
   --remote-tui-subscribe-phase "$SUBSCRIBE_PHASE"
   --remote-tui-log "$REMOTE_TUI_LOG"
+  --ws-read-throttle-ms "$WS_READ_THROTTLE_MS"
   --log-jsonl "$JSONL_LOG"
   --json
 )
@@ -163,6 +170,7 @@ echo "  cwd:      $CWD"
 echo "  log_dir:  $LOG_DIR"
 echo "  lines:    $LINES"
 echo "  subscribe_phase: $SUBSCRIBE_PHASE"
+echo "  ws_read_throttle_ms: $WS_READ_THROTTLE_MS"
 echo ""
 
 set +e

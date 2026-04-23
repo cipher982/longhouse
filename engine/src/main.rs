@@ -312,6 +312,13 @@ enum Commands {
         /// Verify Codex hook presence by watching the isolated outbox for idle/thinking/idle
         #[arg(long)]
         verify_hooks: bool,
+
+        /// Sleep this many ms between each websocket message read. Used by the remote
+        /// backpressure probe to deliberately drain slower than the server produces,
+        /// so the server-side outbound queue can fill and trip the slow-connection
+        /// disconnect path on unpatched Codex. 0 disables throttling.
+        #[arg(long, default_value = "0")]
+        ws_read_throttle_ms: u64,
     },
 
     /// Bind a transcript path to a managed Longhouse session ID.
@@ -744,6 +751,7 @@ fn main() -> anyhow::Result<()> {
             real_home,
             keep_home,
             verify_hooks,
+            ws_read_throttle_ms,
         } => {
             let rt = tokio::runtime::Runtime::new()?;
             let summary = rt.block_on(run_codex_app_server_canary(CanaryConfig {
@@ -776,6 +784,7 @@ fn main() -> anyhow::Result<()> {
                 isolate_home: !real_home,
                 keep_home,
                 verify_hooks,
+                ws_read_throttle_ms,
             }))?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&summary)?);
