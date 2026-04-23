@@ -210,9 +210,10 @@ test("session detail keeps the transcript readable on mobile", async ({
     (mainBox?.y ?? 0) + 80,
   );
 
-  await page.locator('[data-row-kind="tool"]').first().click();
-  const inspectorPane = page.locator(".workspace-shell__pane--inspector");
-  await expect(inspectorPane).toBeVisible();
-  await inspectorPane.scrollIntoViewIfNeeded();
+  // Inspector pane removed; tool rows expand in-place now.
+  const firstTool = page.locator('[data-row-kind="tool"]').first();
+  await firstTool.click();
+  await expect(firstTool).toHaveClass(/is-expanded/);
+  await firstTool.scrollIntoViewIfNeeded();
   await saveScreenshot(page, testInfo, "session-detail-mobile-tool-selected.png");
 });
