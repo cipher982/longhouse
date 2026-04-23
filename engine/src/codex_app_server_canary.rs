@@ -839,7 +839,7 @@ async fn spawn_client(
                 .context("timed out waiting for websocket listen URL")?
                 .context("app-server websocket listener did not announce a URL")?;
             let ws_url = if config.proxy_codex_ws {
-                spawn_codex_ws_relay(&upstream_ws_url)
+                crate::codex_ws_relay::spawn(&upstream_ws_url)
                     .await
                     .with_context(|| format!("spawning WS relay in front of {upstream_ws_url}"))?
             } else {
@@ -1294,92 +1294,6 @@ async fn shutdown_child(client: &mut RpcClient) -> Result<()> {
     }
     let _ = client.child.wait().await;
     Ok(())
-}
-
-/// Drain-and-forward TCP relay between codex's WS listener and the canary client.
-///
-/// codex binds to upstream_url like `ws://127.0.0.1:4601`. We bind on an
-/// ephemeral port and, on accept, dial upstream and splice bytes in both
-/// directions. Large SO_RCVBUF/SO_SNDBUF on every socket keeps the kernel
-/// buffers generous so codex's internal mpsc(128) has room to flush even
-/// when the canary consumer is slow.
-///
-/// Returns a ws:// URL pointing at the relay's listening port. The relay
-/// accepts exactly one inbound connection then keeps forwarding until either
-/// side closes.
-async fn spawn_codex_ws_relay(upstream_url: &str) -> Result<String> {
-    use tokio::io::copy;
-    use tokio::net::{TcpListener, TcpStream};
-
-    let upstream_addr = upstream_url
-        .strip_prefix("ws://")
-        .ok_or_else(|| anyhow!("relay only supports ws:// URLs, got {upstream_url}"))?
-        .to_string();
-
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .context("binding relay listener")?;
-    let local_addr = listener.local_addr().context("reading relay listen addr")?;
-    let relay_url = format!("ws://{}", local_addr);
-
-    tokio::spawn(async move {
-        loop {
-            let (mut inbound, _peer) = match listener.accept().await {
-                Ok(pair) => pair,
-                Err(err) => {
-                    eprintln!("relay accept failed: {err}");
-                    return;
-                }
-            };
-            let upstream_addr = upstream_addr.clone();
-            tokio::spawn(async move {
-                let _ = inbound.set_nodelay(true);
-                let mut outbound = match TcpStream::connect(&upstream_addr).await {
-                    Ok(sock) => sock,
-                    Err(err) => {
-                        eprintln!("relay upstream dial to {upstream_addr} failed: {err}");
-                        return;
-                    }
-                };
-                let _ = outbound.set_nodelay(true);
-                set_large_socket_buffers(&inbound);
-                set_large_socket_buffers(&outbound);
-
-                let (mut ri, mut wi) = inbound.split();
-                let (mut ro, mut wo) = outbound.split();
-                let client_to_server = copy(&mut ri, &mut wo);
-                let server_to_client = copy(&mut ro, &mut wi);
-                let _ = tokio::join!(client_to_server, server_to_client);
-            });
-        }
-    });
-
-    Ok(relay_url)
-}
-
-fn set_large_socket_buffers(sock: &tokio::net::TcpStream) {
-    use std::os::fd::{AsRawFd, RawFd};
-    // 16 MiB. Kernel clamps silently; getsockopt would confirm actual size
-    // but we don't need the read-back here — if the clamp is smaller than
-    // we ask, we still get whatever the platform allows.
-    let desired: libc::c_int = 16 * 1024 * 1024;
-    let fd: RawFd = sock.as_raw_fd();
-    unsafe {
-        let _ = libc::setsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_RCVBUF,
-            &desired as *const _ as *const libc::c_void,
-            std::mem::size_of_val(&desired) as libc::socklen_t,
-        );
-        let _ = libc::setsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_SNDBUF,
-            &desired as *const _ as *const libc::c_void,
-            std::mem::size_of_val(&desired) as libc::socklen_t,
-        );
-    }
 }
 
 fn extract_websocket_listen_url(line: &str) -> Option<String> {
