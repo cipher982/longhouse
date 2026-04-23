@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from zerg.services.machine_state import clear_machine_runtime_url
+from zerg.services.machine_state import machine_state_source_hash
 from zerg.services.machine_state import read_machine_state
 from zerg.services.machine_state import write_machine_state
 
@@ -86,3 +87,27 @@ def test_write_machine_state_preserves_generation_when_launch_config_is_unchange
     assert second.machine_name == first.machine_name
     assert second.config_generation == first.config_generation
     assert second.written_by == "auth"
+
+
+def test_machine_state_generation_ignores_legacy_topology_and_runner_flags(tmp_path: Path):
+    first = write_machine_state(
+        base_dir=tmp_path,
+        written_by="connect-install",
+        runtime_url="https://demo.longhouse.test",
+        machine_name="test-box",
+        topology_intent="connect-remote",
+        runner_enabled=True,
+        desktop_app_enabled=True,
+    )
+
+    second = write_machine_state(
+        base_dir=tmp_path,
+        written_by="machine-configure",
+        topology_intent="serve-local",
+        runner_enabled=False,
+    )
+
+    assert second.topology_intent == "serve-local"
+    assert second.runner_enabled is False
+    assert second.config_generation == first.config_generation
+    assert machine_state_source_hash(second) == machine_state_source_hash(first)

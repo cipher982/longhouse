@@ -193,7 +193,7 @@ def clear_machine_runtime_url(base_dir: Path | None = None, *, written_by: str) 
 
 
 def machine_state_source_hash(state: MachineState | None) -> str | None:
-    """Return a stable hash of durable machine-state facts."""
+    """Return a stable hash of durable launch-critical machine-state facts."""
     if state is None:
         return None
 
@@ -201,9 +201,7 @@ def machine_state_source_hash(state: MachineState | None) -> str | None:
         "schema_version": state.schema_version,
         "runtime_url": state.runtime_url,
         "machine_name": state.machine_name,
-        "topology_intent": state.topology_intent,
         "desktop_app_enabled": state.desktop_app_enabled,
-        "runner_enabled": state.runner_enabled,
         "desired_bundle_version": state.desired_bundle_version,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")

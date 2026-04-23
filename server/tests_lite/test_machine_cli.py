@@ -117,6 +117,7 @@ def test_machine_configure_reconciles_with_overrides(monkeypatch):
         }
     ]
     assert "Updated machine config and reconciled machine generation 20260414-test" in result.output
+    assert "--topology-intent is legacy metadata" in result.output
 
 
 def test_machine_configure_requires_override():

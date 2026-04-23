@@ -927,7 +927,6 @@ def _handle_install(
             machine_name=resolved_name,
             menubar=menubar,
             codex_source=codex_source,
-            topology_intent="connect-remote",
         )
     except RuntimeError as e:
         typer.secho(f"[ERROR] {e}", fg=typer.colors.RED)
