@@ -4,6 +4,7 @@ from zerg.services.longhouse_paths import get_agent_db_path
 from zerg.services.longhouse_paths import get_agent_log_dir
 from zerg.services.longhouse_paths import get_agent_outbox_dir
 from zerg.services.longhouse_paths import get_agent_status_path
+from zerg.services.longhouse_paths import is_stable_longhouse_home
 from zerg.services.longhouse_paths import resolve_longhouse_home
 from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
 
@@ -37,6 +38,17 @@ def test_resolve_longhouse_home_maps_custom_provider_env_to_sibling_longhouse(tm
 
 def test_resolve_longhouse_home_from_provider_home_maps_custom_provider_path(tmp_path):
     assert resolve_longhouse_home_from_provider_home(tmp_path / "claude-config") == tmp_path / ".longhouse"
+
+
+def test_is_stable_longhouse_home_tracks_longhouse_home_override(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    scratch_home = home / ".longhouse-dev"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("LONGHOUSE_HOME", str(scratch_home))
+
+    assert is_stable_longhouse_home() is False
+    assert is_stable_longhouse_home(scratch_home) is False
+    assert is_stable_longhouse_home(home / ".longhouse") is True
 
 
 def test_agent_state_paths_live_under_agent_dir(tmp_path):

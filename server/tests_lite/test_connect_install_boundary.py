@@ -110,6 +110,48 @@ def test_handle_install_prompts_for_machine_name_when_missing(monkeypatch):
     ]
 
 
+def test_handle_install_reports_scratch_mode_skips(monkeypatch, capsys):
+    monkeypatch.setattr(connect, "_verify_and_warn_path", lambda: None)
+    monkeypatch.setattr(
+        connect,
+        "reconcile_local_runtime",
+        lambda **kwargs: SimpleNamespace(
+            install_result=SimpleNamespace(
+                machine_name="test-box-dev",
+                engine_runtime=SimpleNamespace(path="/tmp/longhouse-engine", installed_now=False),
+                codex_runtime=SimpleNamespace(path="/tmp/longhouse-codex", installed_now=False),
+                service_result={
+                    "message": "Scratch Longhouse home active; skipped global service install.",
+                    "service": "skipped",
+                },
+                hooks=SimpleNamespace(
+                    actions=["Scratch Longhouse home active; skipped Claude/Codex hook install."],
+                    warning=None,
+                ),
+                desktop_app_result={
+                    "message": "Scratch Longhouse home active; skipped desktop app install.",
+                    "skipped": True,
+                },
+            )
+        ),
+    )
+
+    connect._handle_install(
+        url="http://127.0.0.1:8080",
+        token=None,
+        claude_dir=None,
+        interval=1,
+        machine_name="test-box-dev",
+        codex_source=None,
+        menubar=True,
+    )
+
+    output = capsys.readouterr().out
+    assert "[WARN] Scratch Longhouse home active; skipped global service install." in output
+    assert "[WARN] Scratch Longhouse home active; skipped Claude/Codex hook install." in output
+    assert "[WARN] Scratch Longhouse home active; skipped desktop app install." in output
+
+
 def test_connect_install_skips_auto_auth_when_no_token(monkeypatch):
     calls: list[tuple[str, dict]] = []
 

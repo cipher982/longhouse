@@ -956,21 +956,33 @@ def _handle_install(
                 f"  [OK] Managed Codex runtime ready at {codex_runtime.path}",
                 fg=typer.colors.GREEN,
             )
-    typer.secho(f"[OK] {install_result.service_result['message']}", fg=typer.colors.GREEN)
+    service_skipped = str(install_result.service_result.get("service") or "").strip().lower() == "skipped"
+    typer.secho(
+        f"[{'WARN' if service_skipped else 'OK'}] {install_result.service_result['message']}",
+        fg=typer.colors.YELLOW if service_skipped else typer.colors.GREEN,
+    )
     typer.echo(f"  Machine Agent: {install_result.service_result.get('service', 'N/A')}")
     typer.echo("  Config: " f"{install_result.service_result.get('plist_path') or install_result.service_result.get('unit_path', 'N/A')}")
 
     typer.echo("")
     typer.echo("Installing CLI hooks (Claude Code + Codex)...")
     for action in install_result.hooks.actions:
-        typer.secho(f"  [OK] {action}", fg=typer.colors.GREEN)
+        skipped = "skipped" in action.lower()
+        typer.secho(
+            f"  [{'WARN' if skipped else 'OK'}] {action}",
+            fg=typer.colors.YELLOW if skipped else typer.colors.GREEN,
+        )
     if install_result.hooks.warning:
         typer.secho(f"  [WARN] Hook installation failed: {install_result.hooks.warning}", fg=typer.colors.YELLOW)
 
     if install_result.desktop_app_result:
+        desktop_skipped = bool(install_result.desktop_app_result.get("skipped"))
         typer.echo("")
         typer.echo("Longhouse.app:")
-        typer.secho(f"  [OK] {install_result.desktop_app_result['message']}", fg=typer.colors.GREEN)
+        typer.secho(
+            f"  [{'WARN' if desktop_skipped else 'OK'}] {install_result.desktop_app_result['message']}",
+            fg=typer.colors.YELLOW if desktop_skipped else typer.colors.GREEN,
+        )
         typer.echo(f"  Config: {install_result.desktop_app_result.get('plist_path', 'N/A')}")
         if install_result.desktop_app_result.get("app_path"):
             typer.echo(f"  App: {install_result.desktop_app_result['app_path']}")

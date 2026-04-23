@@ -4,8 +4,15 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Literal
 
 _PROVIDER_HOME_NAMES = frozenset({".claude", ".codex", ".gemini"})
+LonghouseHomeMode = Literal["stable", "scratch"]
+
+
+def canonical_longhouse_home() -> Path:
+    """Return the default durable Longhouse home for this user."""
+    return (Path.home() / ".longhouse").expanduser().resolve(strict=False)
 
 
 def resolve_longhouse_home(base_dir: Path | None = None) -> Path:
@@ -34,6 +41,16 @@ def resolve_longhouse_home(base_dir: Path | None = None) -> Path:
         return resolve_longhouse_home_from_provider_home(provider_home)
 
     return Path.home() / ".longhouse"
+
+
+def classify_longhouse_home(base_dir: Path | None = None) -> LonghouseHomeMode:
+    """Classify a Longhouse home as the stable default or a scratch override."""
+    resolved = resolve_longhouse_home(base_dir).expanduser().resolve(strict=False)
+    return "stable" if resolved == canonical_longhouse_home() else "scratch"
+
+
+def is_stable_longhouse_home(base_dir: Path | None = None) -> bool:
+    return classify_longhouse_home(base_dir) == "stable"
 
 
 def resolve_longhouse_home_from_provider_home(provider_home: str | Path | None) -> Path:
