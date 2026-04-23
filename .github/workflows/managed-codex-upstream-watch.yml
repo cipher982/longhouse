@@ -1,0 +1,131 @@
+name: Managed Codex Upstream Watch
+
+on:
+  schedule:
+    - cron: "23 11 * * *"
+  workflow_dispatch:
+    inputs:
+      candidate_tag:
+        description: "Optional explicit upstream rust-v* tag to inspect"
+        required: false
+        type: string
+      dispatch_runtime_release:
+        description: "Dispatch local-runtime-release.yml for the detected candidate"
+        required: false
+        default: false
+        type: boolean
+      longhouse_release_tag:
+        description: "Existing Longhouse release tag to publish from when dispatching runtime release"
+        required: false
+        type: string
+      managed_codex_build_suffix:
+        description: "Managed Codex build suffix (for example longhouse.1)"
+        required: false
+        default: "longhouse.1"
+        type: string
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      update_needed: ${{ steps.report.outputs.update_needed }}
+      patch_status: ${{ steps.report.outputs.patch_status }}
+      candidate_tag: ${{ steps.report.outputs.candidate_tag }}
+      candidate_version: ${{ steps.report.outputs.candidate_version }}
+      candidate_ref: ${{ steps.report.outputs.candidate_ref }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Run upstream managed Codex check
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag || '' }}
+        run: |
+          mkdir -p artifacts
+          args=(--json --write-agent-prompt artifacts/managed-codex-agent-prompt.txt)
+          if [[ -n "${CANDIDATE_TAG}" ]]; then
+            args+=(--candidate-tag "${CANDIDATE_TAG}")
+          fi
+          python3 scripts/release/check-managed-codex-upstream.py "${args[@]}" > artifacts/managed-codex-report.json
+
+      - name: Parse report
+        id: report
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = json.loads(Path("artifacts/managed-codex-report.json").read_text())
+          output_path = Path(os.environ["GITHUB_OUTPUT"])
+          with output_path.open("a", encoding="utf-8") as fh:
+              fh.write(f"update_needed={'true' if report['update_needed_by_tag'] else 'false'}\n")
+              fh.write(f"patch_status={report['patch_status']}\n")
+              fh.write(f"candidate_tag={report['candidate_tag']['name']}\n")
+              fh.write(f"candidate_version={report['candidate_tag']['version']}\n")
+              fh.write(f"candidate_ref={report['candidate_tag']['commit_sha']}\n")
+          PY
+
+      - name: Write job summary
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("artifacts/managed-codex-report.json").read_text())
+          latest_release = report.get("latest_published_release") or {}
+          print("## Managed Codex Upstream Watch")
+          print("")
+          print(f"- Pinned upstream version: `{report['pinned_upstream_version']}`")
+          print(f"- Pinned upstream ref: `{report['pinned_upstream_ref']}`")
+          print(f"- Candidate tag: `{report['candidate_tag']['name']}`")
+          print(f"- Candidate version: `{report['candidate_tag']['version']}`")
+          print(f"- Candidate ref: `{report['candidate_tag']['commit_sha']}`")
+          print(f"- Patch status: `{report['patch_status']}`")
+          print(f"- Update needed: `{str(report['update_needed_by_tag']).lower()}`")
+          if latest_release:
+              print(f"- Latest published release: `{latest_release.get('tag_name')}`")
+          print("")
+          print(report["recommendation"])
+          PY
+
+      - name: Upload watch artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: managed-codex-upstream-watch
+          path: |
+            artifacts/managed-codex-report.json
+            artifacts/managed-codex-agent-prompt.txt
+          retention-days: 14
+
+  dispatch-runtime-release:
+    needs: detect
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.dispatch_runtime_release && needs.detect.outputs.update_needed == 'true' }}
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      LONGHOUSE_RELEASE_TAG: ${{ inputs.longhouse_release_tag || '' }}
+      MANAGED_CODEX_BUILD_SUFFIX: ${{ inputs.managed_codex_build_suffix || 'longhouse.1' }}
+
+    steps:
+      - name: Validate dispatch inputs
+        run: |
+          if [[ -z "${LONGHOUSE_RELEASE_TAG}" ]]; then
+            echo "longhouse_release_tag is required when dispatch_runtime_release=true" >&2
+            exit 1
+          fi
+
+      - name: Dispatch local runtime release workflow
+        run: |
+          gh workflow run local-runtime-release.yml \
+            --ref "${GITHUB_REF_NAME}" \
+            --field tag_name="${LONGHOUSE_RELEASE_TAG}" \
+            --field managed_codex_upstream_ref="${{ needs.detect.outputs.candidate_ref }}" \
+            --field managed_codex_upstream_version="${{ needs.detect.outputs.candidate_version }}" \
+            --field managed_codex_build_version="${{ needs.detect.outputs.candidate_version }}+${MANAGED_CODEX_BUILD_SUFFIX}"
