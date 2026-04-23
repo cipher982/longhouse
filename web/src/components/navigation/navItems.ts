@@ -18,6 +18,9 @@ const DEMO_ITEMS: NavItem[] = [
 export function getNavItems(role?: string | null): NavItem[] {
   if (config.demoMode) return [...DEMO_ITEMS];
   const items = [...BASE_ITEMS];
+  if (config.singleTenant) {
+    items.push({ label: "Observability", href: "/observability", testId: "global-observability-tab" });
+  }
   if (role === "ADMIN") {
     items.push({ label: "Admin", href: "/admin", testId: "global-admin-tab" });
   }

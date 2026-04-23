@@ -26,6 +26,15 @@ export type TopAutomationUsage = Schemas["TopAutomationUsage"];
 export type AdminUserDetailResponse = Schemas["AdminUserDetailResponse"];
 export type OpsSummary = Schemas["OpsSummary"];
 export type OpsTopAutomation = Schemas["OpsTopAutomation"];
+export type MachineHealthItemResponse = Schemas["MachineHealthItemResponse"];
+export type MachineHealthListResponse = Schemas["MachineHealthListResponse"];
+export type MachineHealthStatusCountsResponse = Schemas["MachineHealthStatusCountsResponse"];
+export type ManagedTurnProviderSummaryResponse = Schemas["ManagedTurnProviderSummaryResponse"];
+export type ManagedTurnSummaryResponse = Schemas["ManagedTurnSummaryResponse"];
+export type ManagedTurnsSummaryEnvelopeResponse = Schemas["ManagedTurnsSummaryEnvelopeResponse"];
+export type ObservabilityOverviewResponse = Schemas["ObservabilityOverviewResponse"];
+export type SlowTurnItemResponse = Schemas["SlowTurnItemResponse"];
+export type SlowTurnsListResponse = Schemas["SlowTurnsListResponse"];
 
 export type EmailKeyStatus = Schemas["EmailKeyStatus"];
 export type EmailStatusResponse = Schemas["EmailStatusResponse"];

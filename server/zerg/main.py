@@ -134,6 +134,7 @@ from zerg.routers.mcp_servers import router as automation_mcp_servers_router
 from zerg.routers.metrics import router as metrics_router
 from zerg.routers.models import router as models_router
 from zerg.routers.oauth import router as oauth_router
+from zerg.routers.observability import router as observability_router
 from zerg.routers.ops import beacon_router as ops_beacon_router
 from zerg.routers.ops import router as ops_router
 from zerg.routers.presence import router as presence_router
@@ -268,6 +269,7 @@ api_app.include_router(email_config_router)
 api_app.include_router(capabilities_router)
 api_app.include_router(ops_router)
 api_app.include_router(ops_beacon_router)
+api_app.include_router(observability_router)
 api_app.include_router(fiche_config_router)
 api_app.include_router(automation_connectors_router)
 api_app.include_router(account_connectors_router)
