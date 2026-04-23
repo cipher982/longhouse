@@ -328,7 +328,7 @@ def _attempt_post_auth_spool_replay(*, url: str, token: str, claude_dir: str | N
     )
     if replay.warning:
         typer.secho(
-            f"Authenticated, but {replay.warning[0].lower()}{replay.warning[1:]}" if replay.warning else "",
+            f"Authenticated, but {replay.warning[0].lower()}{replay.warning[1:]}",
             fg=typer.colors.YELLOW,
         )
 
