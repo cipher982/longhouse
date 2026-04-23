@@ -186,15 +186,34 @@ pub async fn cmd_ship(
 
     if files_to_ship.is_empty() {
         let spool = Spool::new(&conn);
-        let spool_pending = spool.pending_count()?;
-        let spool_dead = spool.dead_count()?;
-        let recent_dead_letters = recent_dead_letter_json(&spool, 5)?;
+        let mut spool_pending = spool.pending_count()?;
+        let mut spool_dead = spool.dead_count()?;
+        let mut recent_dead_letters = recent_dead_letter_json(&spool, 5)?;
+        let mut spool_replayed = 0usize;
+
+        if !dry_run && spool_pending > 0 {
+            let client = ShipperClient::with_compression(&config, algo)?;
+            let (ok, _failed) = shipper::replay_spool_batch_with_batch_bytes(
+                &conn,
+                &client,
+                algo,
+                100,
+                config.max_batch_bytes,
+            )
+            .await?;
+            spool_replayed = ok;
+            spool_pending = spool.pending_count()?;
+            spool_dead = spool.dead_count()?;
+            recent_dead_letters = recent_dead_letter_json(&spool, 5)?;
+        }
+
         if json_output {
             let summary = serde_json::json!({
                 "status": "ok",
                 "files_scanned": all_files.len(),
                 "files_shipped": 0,
                 "events_shipped": 0,
+                "spool_replayed": spool_replayed,
                 "spool_pending": spool_pending,
                 "spool_dead": spool_dead,
                 "recent_dead_letters": recent_dead_letters,
@@ -203,6 +222,9 @@ pub async fn cmd_ship(
             println!("{}", serde_json::to_string_pretty(&summary)?);
         } else {
             eprintln!("Nothing to ship — all files up to date.");
+            if spool_replayed > 0 {
+                eprintln!("Spool replayed: {}", spool_replayed);
+            }
             if spool_dead > 0 {
                 eprintln!("Dead-lettered ranges retained: {}", spool_dead);
                 print_recent_dead_letters(&spool, 3, |line| eprintln!("{}", line))?;

@@ -250,9 +250,13 @@ def auth(
     # If token provided directly, validate and store
     if token:
         if _validate_token(url, token):
-            save_token(token, config_dir)
-            _persist_selected_url(url, claude_dir, written_by="auth")
-            typer.secho(f"Token validated and stored for {device_name}", fg=typer.colors.GREEN)
+            _finalize_auth_success(
+                url=url,
+                token=token,
+                config_dir=config_dir,
+                claude_dir=claude_dir,
+                success_message=f"Token validated and stored for {device_name}",
+            )
         else:
             typer.secho("Invalid token", fg=typer.colors.RED)
             raise typer.Exit(code=1)
@@ -291,9 +295,13 @@ def auth(
 
     # Validate and store
     if _validate_token(url, token):
-        save_token(token, config_dir)
-        _persist_selected_url(url, claude_dir, written_by="auth")
-        typer.secho(f"Authenticated successfully as {device_name}", fg=typer.colors.GREEN)
+        _finalize_auth_success(
+            url=url,
+            token=token,
+            config_dir=config_dir,
+            claude_dir=claude_dir,
+            success_message=f"Authenticated successfully as {device_name}",
+        )
     else:
         typer.secho("Invalid or expired token", fg=typer.colors.RED)
         raise typer.Exit(code=1)
@@ -312,6 +320,71 @@ def _validate_token(url: str, token: str) -> bool:
             return response.status_code in (200, 501)  # 501 = Postgres not available but auth passed
     except Exception:
         return False
+
+
+def _attempt_post_auth_spool_replay(*, url: str, token: str, claude_dir: str | None) -> None:
+    """Best-effort replay of queued local backlog after auth repair succeeds."""
+    try:
+        engine = get_engine_executable()
+    except RuntimeError as exc:
+        logging.getLogger(__name__).debug("Skipping post-auth spool replay: %s", exc)
+        return
+
+    env = os.environ.copy()
+    if claude_dir:
+        env["CLAUDE_CONFIG_DIR"] = claude_dir
+
+    try:
+        result = subprocess.run(
+            [
+                engine,
+                "ship",
+                "--url",
+                url,
+                "--token",
+                token,
+                "--json",
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Post-auth spool replay failed to start: %s", exc)
+        typer.secho(
+            "Authenticated, but queued shipping could not be replayed immediately. " "Run `longhouse ship` if backlog stays stuck.",
+            fg=typer.colors.YELLOW,
+        )
+        return
+
+    if result.returncode == 0:
+        return
+
+    detail = (result.stderr or result.stdout or "").strip().splitlines()
+    logging.getLogger(__name__).warning(
+        "Post-auth spool replay exited %s%s",
+        result.returncode,
+        f": {detail[0]}" if detail else "",
+    )
+    typer.secho(
+        "Authenticated, but queued shipping could not be replayed immediately. " "Run `longhouse ship` if backlog stays stuck.",
+        fg=typer.colors.YELLOW,
+    )
+
+
+def _finalize_auth_success(
+    *,
+    url: str,
+    token: str,
+    config_dir: Path | None,
+    claude_dir: str | None,
+    success_message: str,
+) -> None:
+    save_token(token, config_dir)
+    _persist_selected_url(url, claude_dir, written_by="auth")
+    typer.secho(success_message, fg=typer.colors.GREEN)
+    _attempt_post_auth_spool_replay(url=url, token=token, claude_dir=claude_dir)
 
 
 def _resolve_configured_url(url: object | None, config_dir: Path | None) -> str:
