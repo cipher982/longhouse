@@ -38,6 +38,7 @@ from zerg.services.session_messages import resolve_session_message_owner_id
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_turns import get_session_turn_by_id
 from zerg.services.session_turns import list_session_turns
+from zerg.services.session_turns import materialize_managed_transcript_turns
 from zerg.services.session_views import ActiveSessionResponse
 from zerg.services.session_views import ActiveSessionsResponse
 from zerg.services.session_views import EventsListResponse
@@ -737,6 +738,9 @@ async def get_session_turns(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session {session_id} not found",
         )
+
+    if materialize_managed_transcript_turns(db, session_id=session.id):
+        db.commit()
 
     normalized_order = str(order or "asc").strip().lower()
     if normalized_order not in {"asc", "desc"}:

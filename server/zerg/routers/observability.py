@@ -24,6 +24,7 @@ from zerg.services.observability_views import build_observability_overview_respo
 from zerg.services.observability_views import build_slow_turns_list_response
 from zerg.services.session_turns import list_managed_completed_turns
 from zerg.services.session_turns import list_slow_session_turns
+from zerg.services.session_turns import materialize_recent_managed_transcript_turns
 
 router = APIRouter(
     prefix="/observability",
@@ -103,6 +104,15 @@ async def list_slow_turns(
     ),
     db: Session = Depends(get_db),
 ) -> SlowTurnsListResponse:
+    if materialize_recent_managed_transcript_turns(
+        db,
+        provider=provider,
+        project=project,
+        device_id=device_id,
+        hours_back=hours_back,
+    ):
+        db.commit()
+
     summaries, total = list_slow_session_turns(
         db,
         provider=provider,
@@ -157,6 +167,15 @@ async def summarize_turns(
     ),
     db: Session = Depends(get_db),
 ) -> ManagedTurnsSummaryEnvelopeResponse:
+    if materialize_recent_managed_transcript_turns(
+        db,
+        provider=provider,
+        project=project,
+        device_id=device_id,
+        hours_back=hours_back,
+    ):
+        db.commit()
+
     summaries = list_managed_completed_turns(
         db,
         provider=provider,
@@ -218,6 +237,15 @@ async def read_observability_overview(
     ),
     db: Session = Depends(get_db),
 ) -> ObservabilityOverviewResponse:
+    if materialize_recent_managed_transcript_turns(
+        db,
+        provider=provider,
+        project=project,
+        device_id=device_id,
+        hours_back=hours_back,
+    ):
+        db.commit()
+
     recent_within_seconds = _resolve_recent_machine_window_seconds(
         recent_within_hours=recent_within_hours,
     )

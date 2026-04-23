@@ -20,11 +20,10 @@ from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionTurn
+from zerg.services import session_turns as session_turns_service
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
-from zerg.services import session_turns as session_turns_service
-from zerg.services.session_turns import SESSION_TURN_STATE_ACTIVE
 from zerg.services.session_turns import SESSION_TURN_STATE_DURABLE
 from zerg.services.session_turns import SESSION_TURN_STATE_FAILED
 from zerg.services.session_turns import SESSION_TURN_STATE_TERMINAL
@@ -35,8 +34,10 @@ from zerg.services.session_turns import mark_session_turn_active
 from zerg.services.session_turns import mark_session_turn_failed
 from zerg.services.session_turns import mark_session_turn_send_accepted
 from zerg.services.session_turns import mark_session_turn_terminal
+from zerg.services.session_turns import materialize_managed_transcript_turns
 from zerg.services.session_turns import maybe_mark_session_turn_durable
 from zerg.services.write_serializer import WriteSerializer
+from zerg.utils.time import normalize_utc
 
 
 def _make_db(tmp_path):
@@ -342,6 +343,132 @@ def test_agents_store_ingest_marks_canonical_session_turn_durable(tmp_path):
         assert row.durable_assistant_event_id is not None
         assert row.durable_at is not None
         assert row.state == SESSION_TURN_STATE_DURABLE
+
+
+def test_materialize_managed_transcript_turns_backfills_native_completed_turns_idempotently(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        session = _seed_session(db)
+        user_at = datetime(2026, 4, 23, 20, 0, 0, tzinfo=timezone.utc)
+        assistant_at = datetime(2026, 4, 23, 20, 0, 18, tzinfo=timezone.utc)
+        db.add_all(
+            [
+                AgentEvent(
+                    session_id=session.id,
+                    role="user",
+                    content_text="continue",
+                    timestamp=user_at,
+                ),
+                AgentEvent(
+                    session_id=session.id,
+                    role="assistant",
+                    content_text="done",
+                    timestamp=assistant_at,
+                ),
+            ]
+        )
+        db.commit()
+
+        created = materialize_managed_transcript_turns(db, session_id=session.id)
+        assert created == 1
+        db.commit()
+
+        row = db.query(SessionTurn).filter(SessionTurn.session_id == session.id).one()
+        assert row.request_id == f"native:{row.user_event_id}:{row.durable_assistant_event_id}"
+        assert row.state == SESSION_TURN_STATE_DURABLE
+        assert normalize_utc(row.user_submitted_at) == user_at
+        assert row.send_accepted_at is None
+        assert row.active_phase_observed_at is None
+        assert row.terminal_at is None
+        assert normalize_utc(row.durable_at) == assistant_at
+
+        assert materialize_managed_transcript_turns(db, session_id=session.id) == 0
+        assert db.query(SessionTurn).filter(SessionTurn.session_id == session.id).count() == 1
+
+
+def test_materialize_managed_transcript_turns_skips_session_with_pending_request_turn(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        session = _seed_session(db)
+        create_session_turn(
+            db,
+            session_id=session.id,
+            request_id="req-pending-native-skip",
+        )
+        mark_session_turn_send_accepted(
+            db,
+            session_id=session.id,
+            request_id="req-pending-native-skip",
+        )
+        db.add_all(
+            [
+                AgentEvent(
+                    session_id=session.id,
+                    role="user",
+                    content_text="continue",
+                    timestamp=datetime(2026, 4, 23, 20, 10, 0, tzinfo=timezone.utc),
+                ),
+                AgentEvent(
+                    session_id=session.id,
+                    role="assistant",
+                    content_text="done",
+                    timestamp=datetime(2026, 4, 23, 20, 10, 11, tzinfo=timezone.utc),
+                ),
+            ]
+        )
+        db.commit()
+
+        assert materialize_managed_transcript_turns(db, session_id=session.id) == 0
+        assert db.query(SessionTurn).filter(SessionTurn.session_id == session.id).count() == 1
+        row = db.query(SessionTurn).filter(SessionTurn.request_id == "req-pending-native-skip").one()
+        assert row.user_event_id is None
+        assert row.durable_assistant_event_id is None
+
+
+def test_agents_store_ingest_materializes_native_managed_transcript_turn_without_request_row(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        session = _seed_session(db)
+        store = AgentsStore(db)
+        result = store.ingest_session(
+            SessionIngest(
+                id=session.id,
+                provider="claude",
+                environment="development",
+                project="zerg",
+                device_id="cinder",
+                cwd="/Users/davidrose/git/zerg",
+                started_at=session.started_at,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="continue",
+                        timestamp=datetime(2026, 4, 23, 20, 5, 0, tzinfo=timezone.utc),
+                        source_path="/tmp/session.jsonl",
+                        source_offset=0,
+                    ),
+                    EventIngest(
+                        role="assistant",
+                        content_text="done",
+                        timestamp=datetime(2026, 4, 23, 20, 5, 12, tzinfo=timezone.utc),
+                        source_path="/tmp/session.jsonl",
+                        source_offset=1,
+                    ),
+                ],
+            )
+        )
+
+        assert result.events_inserted == 2
+
+        row = db.query(SessionTurn).filter(SessionTurn.session_id == session.id).one()
+        assert row.request_id == f"native:{row.user_event_id}:{row.durable_assistant_event_id}"
+        assert row.state == SESSION_TURN_STATE_DURABLE
+        assert row.user_event_id is not None
+        assert row.durable_assistant_event_id is not None
+        assert row.durable_at is not None
 
 
 def test_mark_session_turn_failed_does_not_overwrite_durable_state(tmp_path):

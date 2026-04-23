@@ -23,6 +23,7 @@ from zerg.database import make_engine
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.auth import get_current_user
 from zerg.main import api_app
+from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
@@ -319,14 +320,79 @@ def test_browser_observability_routes_expose_overview_and_raw_slices(tmp_path, m
             "healthy-machine",
         }
 
-        widened = client.get(
-            "/observability/machines/health"
-            "?stale_after_seconds=3600"
-            "&recent_within_hours=720"
-        )
+        widened = client.get("/observability/machines/health?stale_after_seconds=3600&recent_within_hours=720")
         assert widened.status_code == 200
         widened_payload = widened.json()
         assert widened_payload["total"] == 3
         assert "ancient-machine" in {machine["device_id"] for machine in widened_payload["machines"]}
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_browser_observability_overview_materializes_managed_native_turns(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    pinned_now = datetime(2026, 4, 23, 21, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(session_turns_service, "utc_now", lambda: pinned_now)
+    monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+    monkeypatch.setattr(observability_views, "utc_now", lambda: pinned_now)
+
+    with SessionLocal() as db:
+        session = _seed_session(
+            db,
+            provider="claude",
+            project="zerg",
+            device_id="cinder",
+            managed_transport="claude_channel_bridge",
+        )
+        db.add_all(
+            [
+                AgentEvent(
+                    session_id=session.id,
+                    role="user",
+                    content_text="continue",
+                    timestamp=pinned_now - timedelta(minutes=12),
+                ),
+                AgentEvent(
+                    session_id=session.id,
+                    role="assistant",
+                    content_text="done",
+                    timestamp=pinned_now - timedelta(minutes=12) + timedelta(seconds=14),
+                ),
+            ]
+        )
+        db.commit()
+        _seed_heartbeat(
+            db,
+            device_id="cinder",
+            received_at=pinned_now - timedelta(minutes=1),
+        )
+        session_id = session.id
+
+    client = _make_client(SessionLocal)
+
+    try:
+        overview = client.get(
+            "/observability/overview"
+            "?hours_back=24"
+            "&slow_threshold_ms=30000"
+            "&stale_after_seconds=3600"
+            "&machine_limit=4"
+            "&slow_turn_limit=4"
+        )
+        assert overview.status_code == 200, overview.text
+
+        payload = overview.json()
+        assert payload["summary"]["completed_turns"] == 1
+        assert payload["summary"]["durable_turns"] == 1
+        assert payload["summary"]["total_turn_time_ms"] == {
+            "p50": 14000,
+            "p95": 14000,
+            "max": 14000,
+        }
+
+        with SessionLocal() as verify_db:
+            row = verify_db.query(SessionTurn).filter(SessionTurn.session_id == session_id).one()
+            assert row.request_id.startswith("native:")
+            assert row.state == SESSION_TURN_STATE_DURABLE
     finally:
         api_app.dependency_overrides.clear()

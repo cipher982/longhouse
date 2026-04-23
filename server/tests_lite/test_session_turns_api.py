@@ -1,5 +1,6 @@
 import os
 from datetime import datetime
+from datetime import timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -12,6 +13,7 @@ from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionTurn
@@ -47,7 +49,7 @@ def _get_client(session_factory):
     api_app.dependency_overrides.clear()
 
 
-def _seed_session(db) -> AgentSession:
+def _seed_session(db, *, managed_transport: str | None = None) -> AgentSession:
     session = AgentSession(
         id=uuid4(),
         provider="codex",
@@ -57,6 +59,7 @@ def _seed_session(db) -> AgentSession:
         user_messages=3,
         assistant_messages=3,
         tool_calls=1,
+        managed_transport=managed_transport,
     )
     db.add(session)
     db.commit()
@@ -233,6 +236,49 @@ def test_list_session_turns_supports_desc_order_pagination_and_utc_strings(tmp_p
         assert data["turns"][0]["user_submitted_at"].endswith("Z")
         assert data["turns"][0]["created_at"].endswith("Z")
         assert third.id not in [item["id"] for item in data["turns"]]
+
+
+def test_list_session_turns_materializes_managed_native_turns_from_transcript(tmp_path):
+    session_factory = _make_db(tmp_path)
+    db = session_factory()
+    try:
+        session = _seed_session(db, managed_transport="claude_channel_bridge")
+        db.add_all(
+            [
+                AgentEvent(
+                    session_id=session.id,
+                    role="user",
+                    content_text="continue",
+                    timestamp=datetime(2026, 4, 16, 10, 1, 0, tzinfo=timezone.utc),
+                ),
+                AgentEvent(
+                    session_id=session.id,
+                    role="assistant",
+                    content_text="done",
+                    timestamp=datetime(2026, 4, 16, 10, 1, 11, tzinfo=timezone.utc),
+                ),
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    for client in _get_client(session_factory):
+        response = client.get(f"/agents/sessions/{session.id}/turns")
+        assert response.status_code == 200, response.text
+        data = response.json()
+
+        assert data["total"] == 1
+        assert data["turns"][0]["request_id"].startswith("native:")
+        assert data["turns"][0]["state"] == SESSION_TURN_STATE_DURABLE
+        assert data["turns"][0]["timing"] == {
+            "submit_to_send_ms": None,
+            "submit_to_active_ms": None,
+            "submit_to_terminal_ms": None,
+            "active_to_terminal_ms": None,
+            "terminal_to_durable_ms": None,
+            "total_turn_time_ms": 11000,
+        }
 
 
 def test_get_session_turn_detail_returns_envelope(tmp_path):

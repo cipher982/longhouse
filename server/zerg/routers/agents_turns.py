@@ -18,6 +18,7 @@ from zerg.services.observability_views import build_managed_turns_summary_envelo
 from zerg.services.observability_views import build_slow_turns_list_response
 from zerg.services.session_turns import list_managed_completed_turns
 from zerg.services.session_turns import list_slow_session_turns
+from zerg.services.session_turns import materialize_recent_managed_transcript_turns
 
 router = APIRouter(prefix="/agents/turns", tags=["agents"])
 
@@ -60,6 +61,15 @@ async def list_slow_turns(
     _single: None = Depends(require_single_tenant),
 ) -> SlowTurnsListResponse:
     """List recent slow managed turns across sessions, enriched with current machine health."""
+
+    if materialize_recent_managed_transcript_turns(
+        db,
+        provider=provider,
+        project=project,
+        device_id=device_id,
+        hours_back=hours_back,
+    ):
+        db.commit()
 
     summaries, total = list_slow_session_turns(
         db,
@@ -118,6 +128,15 @@ async def summarize_turns(
     _single: None = Depends(require_single_tenant),
 ) -> ManagedTurnsSummaryEnvelopeResponse:
     """Summarize recent completed managed turns overall and by provider."""
+
+    if materialize_recent_managed_transcript_turns(
+        db,
+        provider=provider,
+        project=project,
+        device_id=device_id,
+        hours_back=hours_back,
+    ):
+        db.commit()
 
     summaries = list_managed_completed_turns(
         db,
