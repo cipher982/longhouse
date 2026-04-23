@@ -15,6 +15,7 @@ from zerg.schemas.observability import MachineHealthStatus
 from zerg.schemas.observability import ManagedTurnsSummaryEnvelopeResponse
 from zerg.schemas.observability import ObservabilityOverviewResponse
 from zerg.schemas.observability import SlowTurnsListResponse
+from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEALTH_RECENT_WITHIN_SECONDS
 from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS
 from zerg.services.agent_heartbeat_health import list_machine_transport_health
 from zerg.services.observability_views import build_machine_health_list_response
@@ -31,6 +32,10 @@ router = APIRouter(
 )
 
 
+def _resolve_recent_machine_window_seconds(*, recent_within_hours: int) -> int:
+    return max(1, recent_within_hours) * 60 * 60
+
+
 @router.get("/machines/health", response_model=MachineHealthListResponse)
 async def list_machine_health(
     device_id: str | None = Query(None, description="Filter to one device"),
@@ -42,6 +47,12 @@ async def list_machine_health(
         le=24 * 60 * 60,
         description="Treat heartbeats older than this as offline",
     ),
+    recent_within_hours: int = Query(
+        DEFAULT_MACHINE_HEALTH_RECENT_WITHIN_SECONDS // 3600,
+        ge=1,
+        le=24 * 30,
+        description="Only include machines with a heartbeat in this recent window",
+    ),
     db: Session = Depends(get_db),
 ) -> MachineHealthListResponse:
     summaries, total = list_machine_transport_health(
@@ -49,6 +60,9 @@ async def list_machine_health(
         device_id=device_id,
         status=status,
         stale_after_seconds=stale_after_seconds,
+        recent_within_seconds=_resolve_recent_machine_window_seconds(
+            recent_within_hours=recent_within_hours,
+        ),
         limit=limit,
     )
     return build_machine_health_list_response(summaries, total=total)
@@ -196,8 +210,17 @@ async def read_observability_overview(
         le=24 * 60 * 60,
         description="Treat heartbeats older than this as offline when enriching machine status",
     ),
+    recent_within_hours: int = Query(
+        DEFAULT_MACHINE_HEALTH_RECENT_WITHIN_SECONDS // 3600,
+        ge=1,
+        le=24 * 30,
+        description="Only include machines with a heartbeat in this recent window",
+    ),
     db: Session = Depends(get_db),
 ) -> ObservabilityOverviewResponse:
+    recent_within_seconds = _resolve_recent_machine_window_seconds(
+        recent_within_hours=recent_within_hours,
+    )
     turn_summaries = list_managed_completed_turns(
         db,
         provider=provider,
@@ -213,6 +236,7 @@ async def read_observability_overview(
         device_id=device_id,
         status=machine_status,
         stale_after_seconds=stale_after_seconds,
+        recent_within_seconds=recent_within_seconds,
         limit=10_000,
     )
     return build_observability_overview_response(
