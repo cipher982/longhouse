@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from datetime import timedelta
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -13,6 +14,7 @@ from zerg.utils.time import normalize_utc
 from zerg.utils.time import utc_now
 
 DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS = 15 * 60
+DEFAULT_MACHINE_HEALTH_RECENT_WITHIN_SECONDS = 72 * 60 * 60
 
 _STATE_SORT_ORDER = {
     "broken": 0,
@@ -64,6 +66,7 @@ def list_machine_transport_health(
     device_id: str | None = None,
     status: str | None = None,
     stale_after_seconds: int = DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS,
+    recent_within_seconds: int | None = None,
     limit: int = 20,
 ) -> tuple[list[MachineTransportHealthSummary], int]:
     if device_id:
@@ -71,6 +74,7 @@ def list_machine_transport_health(
             db,
             device_ids=[device_id],
             stale_after_seconds=stale_after_seconds,
+            recent_within_seconds=recent_within_seconds,
         )
         summaries = list(summary_map.values())
     else:
@@ -78,11 +82,18 @@ def list_machine_transport_health(
             load_machine_transport_health_map(
                 db,
                 stale_after_seconds=stale_after_seconds,
+                recent_within_seconds=recent_within_seconds,
             ).values()
         )
     if status:
         summaries = [item for item in summaries if item.status == status]
-    summaries.sort(key=lambda item: (_STATE_SORT_ORDER.get(item.status, 99), -item.last_heartbeat_at.timestamp(), item.device_id))
+    summaries.sort(
+        key=lambda item: (
+            _STATE_SORT_ORDER.get(item.status, 99),
+            -item.last_heartbeat_at.timestamp(),
+            item.device_id,
+        )
+    )
     total = len(summaries)
     return summaries[:limit], total
 
@@ -92,13 +103,20 @@ def load_machine_transport_health_map(
     *,
     device_ids: list[str] | tuple[str, ...] | set[str] | None = None,
     stale_after_seconds: int = DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS,
+    recent_within_seconds: int | None = None,
 ) -> dict[str, MachineTransportHealthSummary]:
     # Heartbeats are append-only server-side writes, so max(id) gives us the
     # newest durable row per device without a timestamp self-join.
+    recent_after = None
+    normalized_recent_within_seconds = int(recent_within_seconds) if recent_within_seconds is not None else None
+    if normalized_recent_within_seconds is not None and normalized_recent_within_seconds > 0:
+        recent_after = utc_now() - timedelta(seconds=normalized_recent_within_seconds)
     latest_ids = db.query(func.max(AgentHeartbeat.id).label("heartbeat_id"))
     normalized_device_ids = sorted({str(device_id).strip() for device_id in device_ids or [] if str(device_id).strip()})
     if normalized_device_ids:
         latest_ids = latest_ids.filter(AgentHeartbeat.device_id.in_(normalized_device_ids))
+    if recent_after is not None:
+        latest_ids = latest_ids.filter(AgentHeartbeat.received_at >= recent_after)
     latest_ids = latest_ids.group_by(AgentHeartbeat.device_id).subquery()
 
     rows = db.query(AgentHeartbeat).join(latest_ids, AgentHeartbeat.id == latest_ids.c.heartbeat_id).all()

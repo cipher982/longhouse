@@ -220,6 +220,11 @@ def test_browser_observability_routes_expose_overview_and_raw_slices(tmp_path, m
             device_id="healthy-machine",
             received_at=pinned_now - timedelta(minutes=1),
         )
+        _seed_heartbeat(
+            db,
+            device_id="ancient-machine",
+            received_at=pinned_now - timedelta(days=14),
+        )
 
     client = _make_client(SessionLocal)
 
@@ -244,6 +249,10 @@ def test_browser_observability_routes_expose_overview_and_raw_slices(tmp_path, m
             "offline": 0,
             "broken": 1,
         }
+        assert {machine["device_id"] for machine in payload["machines"]} == {
+            "broken-machine",
+            "healthy-machine",
+        }
         assert payload["machines"][0]["device_id"] == "broken-machine"
         assert payload["machines"][0]["status"] == "broken"
         assert payload["machines"][1]["device_id"] == "healthy-machine"
@@ -254,6 +263,21 @@ def test_browser_observability_routes_expose_overview_and_raw_slices(tmp_path, m
         assert payload["providers"][0]["completed_turns"] == 2
         assert payload["providers"][1]["provider"] == "claude"
         assert payload["providers"][1]["completed_turns"] == 1
+
+        overview_wide_turn_window = client.get(
+            "/observability/overview"
+            "?hours_back=168"
+            "&slow_threshold_ms=30000"
+            "&stale_after_seconds=3600"
+            "&machine_limit=4"
+            "&slow_turn_limit=2"
+        )
+        assert overview_wide_turn_window.status_code == 200
+        overview_wide_turn_window_payload = overview_wide_turn_window.json()
+        assert overview_wide_turn_window_payload["machine_counts"]["total"] == 2
+        assert "ancient-machine" not in {
+            machine["device_id"] for machine in overview_wide_turn_window_payload["machines"]
+        }
 
         summary = client.get(
             "/observability/turns/summary"
@@ -285,5 +309,24 @@ def test_browser_observability_routes_expose_overview_and_raw_slices(tmp_path, m
         broken_payload = broken.json()
         assert broken_payload["total"] == 1
         assert broken_payload["machines"][0]["device_id"] == "broken-machine"
+
+        recent_default = client.get("/observability/machines/health?stale_after_seconds=3600")
+        assert recent_default.status_code == 200
+        recent_default_payload = recent_default.json()
+        assert recent_default_payload["total"] == 2
+        assert {machine["device_id"] for machine in recent_default_payload["machines"]} == {
+            "broken-machine",
+            "healthy-machine",
+        }
+
+        widened = client.get(
+            "/observability/machines/health"
+            "?stale_after_seconds=3600"
+            "&recent_within_hours=720"
+        )
+        assert widened.status_code == 200
+        widened_payload = widened.json()
+        assert widened_payload["total"] == 3
+        assert "ancient-machine" in {machine["device_id"] for machine in widened_payload["machines"]}
     finally:
         api_app.dependency_overrides.clear()
