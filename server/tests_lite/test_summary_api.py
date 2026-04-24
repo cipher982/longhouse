@@ -19,6 +19,7 @@ from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
 from zerg.services.agents_store import AgentsStore
@@ -55,6 +56,19 @@ def _seed_session(db, *, summary=None, summary_title=None, project="test-project
     db.commit()
     db.refresh(session)
     return session
+
+
+def _seed_session_event(db, session, *, role="assistant", content_text="Semantic snippet content that is long enough."):
+    event = AgentEvent(
+        session_id=session.id,
+        role=role,
+        content_text=content_text,
+        timestamp=datetime.now(timezone.utc),
+    )
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+    return event
 
 
 def _get_client(session_factory):
@@ -231,6 +245,50 @@ def test_list_sessions_hybrid_mode_batches_semantic_session_loads(tmp_path):
             assert resp.status_code == 200, resp.text
 
     assert batch_calls == [[str(first.id), str(second.id)]]
+
+
+def test_list_sessions_hybrid_mode_uses_semantic_snippet_fallback(tmp_path):
+    """Hybrid mode surfaces semantic snippet text when lexical matching contributes nothing."""
+    factory = _make_db(tmp_path)
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            summary="Semantic snippet fallback session.",
+            summary_title="Semantic Snippet Fallback",
+            environment="work-macbook",
+        )
+        _seed_session_event(
+            db,
+            session,
+            content_text="Semantic snippet fallback survives the hybrid search path.",
+        )
+    finally:
+        db.close()
+
+    async def fake_generate_embedding(_query, _config):
+        return [1.0, 0.0, 0.0, 0.0]
+
+    def fake_load_session_embeddings(self, _db, _model, _dims):
+        self._session_loaded = True
+
+    def fake_load_turn_embeddings(self, _db, _model, _dims):
+        self._turn_loaded = True
+
+    with (
+        patch("zerg.models_config.get_embedding_config_with_db_fallback", return_value=SimpleNamespace(model="test-model", dims=4)),
+        patch("zerg.services.session_processing.embeddings.generate_embedding", fake_generate_embedding),
+        patch("zerg.services.search.lexical_search", return_value=[]),
+        patch("zerg.services.embedding_cache.EmbeddingCache.load_session_embeddings", fake_load_session_embeddings),
+        patch("zerg.services.embedding_cache.EmbeddingCache.search_sessions", return_value=[(session.id, 0.9)]),
+        patch("zerg.services.embedding_cache.EmbeddingCache.load_turn_embeddings", fake_load_turn_embeddings),
+        patch("zerg.services.embedding_cache.EmbeddingCache.search_turns", return_value=[(str(session.id), 0, 0.8, 0, 0)]),
+    ):
+        for client in _get_client(factory):
+            resp = client.get("/agents/sessions?mode=hybrid&days_back=1&limit=5&query=semantic")
+            assert resp.status_code == 200, resp.text
+            payload = resp.json()
+            assert payload["sessions"][0]["match_snippet"] == "Semantic snippet fallback survives the hybrid search path."
 
 
 def test_get_session_includes_summary(tmp_path):

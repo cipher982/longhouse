@@ -314,7 +314,7 @@ async def list_sessions(
                 except Exception:
                     pass
 
-            semantic_snippet_map: dict[int, str] = {}
+            semantic_snippet_map: dict[str, str] = {}
             if config and query and query_vec is not None:
                 no_snippet_ids = {str(s.id) for s in fused if not (match_map.get(s.id) or {}).get("snippet")}
                 if no_snippet_ids:
@@ -336,7 +336,7 @@ async def list_sessions(
                             count = max(1, (eend or estart) - estart + 1)
                             events = (
                                 db.query(AgentEvent)
-                                .filter(AgentEvent.session_id == int(tsid))
+                                .filter(AgentEvent.session_id == tsid)
                                 .order_by(AgentEvent.id)
                                 .offset(estart)
                                 .limit(count)
@@ -345,7 +345,7 @@ async def list_sessions(
                             for ev in events:
                                 ct = (ev.content_text or "").strip()
                                 if len(ct) > 20:
-                                    semantic_snippet_map[int(tsid)] = ct[:200]
+                                    semantic_snippet_map[tsid] = ct[:200]
                                     break
                     except Exception:
                         pass
@@ -377,7 +377,7 @@ async def list_sessions(
                     ),
                     first_user_message=first_user_map.get(s.id),
                     match_event_id=(match_map.get(s.id) or {}).get("event_id"),
-                    match_snippet=(match_map.get(s.id) or {}).get("snippet") or semantic_snippet_map.get(s.id),
+                    match_snippet=(match_map.get(s.id) or {}).get("snippet") or semantic_snippet_map.get(str(s.id)),
                     match_role=(match_map.get(s.id) or {}).get("role"),
                     match_score=sem_score_map.get(s.id),
                 )
