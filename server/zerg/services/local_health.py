@@ -1198,11 +1198,11 @@ def _binding_by_session_id(base_dir: Path) -> dict[str, dict[str, str | None]]:
     return latest
 
 
-def _collect_managed_codex_summary(
+def _collect_managed_codex_sessions(
     base_dir: Path,
     *,
     phase_overlay: dict[str, dict[str, str | None]] | None = None,
-) -> tuple[dict[str, Any] | None, list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[str | None, list[dict[str, Any]], list[dict[str, Any]]]:
     state_dir = _codex_bridge_state_dir(base_dir)
     if not state_dir.exists():
         return None, [], []
@@ -1309,17 +1309,7 @@ def _collect_managed_codex_summary(
             }
         )
 
-    if not sessions and not orphan_bridges:
-        return None, [], []
-
-    managed_summary = {
-        "attached_count": sum(1 for item in sessions if item["state"] == "attached"),
-        "detached_count": sum(1 for item in sessions if item["state"] == "detached"),
-        "degraded_count": sum(1 for item in sessions if item["state"] == "degraded"),
-        "orphan_bridge_count": len(orphan_bridges),
-        "latest_activity_at": latest_activity_at,
-    }
-    return managed_summary, sessions, orphan_bridges
+    return latest_activity_at, sessions, orphan_bridges
 
 
 _UUID_RE = re.compile(
@@ -1480,7 +1470,7 @@ def _collect_unmanaged_processes(
 
 def _merge_managed_sessions(
     *,
-    bridge_summary: dict[str, Any] | None,
+    bridge_latest_activity_at: str | None,
     bridge_sessions: list[dict[str, Any]],
     bridge_orphans: list[dict[str, Any]],
     process_sessions: list[dict[str, Any]],
@@ -1501,7 +1491,7 @@ def _merge_managed_sessions(
     if not sessions and not bridge_orphans:
         return None, [], []
 
-    latest_activity_at = bridge_summary.get("latest_activity_at") if bridge_summary else None
+    latest_activity_at = bridge_latest_activity_at
     for row in sessions:
         latest_activity_at = _max_rfc3339(latest_activity_at, row.get("last_activity_at"))
 
@@ -1974,7 +1964,7 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
     activity_summary = _collect_activity_summary(resolved_base_dir, now=now)
     with _process_snapshot_scope():
         provider_processes = _scan_provider_processes()
-        bridge_summary, bridge_sessions, orphan_bridges = _collect_managed_codex_summary(
+        bridge_latest_activity_at, bridge_sessions, orphan_bridges = _collect_managed_codex_sessions(
             resolved_base_dir,
             phase_overlay=phase_overlay,
         )
@@ -1986,7 +1976,7 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
         )
         unmanaged_processes = _collect_unmanaged_processes(scanned_processes=provider_processes)
     managed_summary, managed_sessions, orphan_bridges = _merge_managed_sessions(
-        bridge_summary=bridge_summary,
+        bridge_latest_activity_at=bridge_latest_activity_at,
         bridge_sessions=bridge_sessions,
         bridge_orphans=orphan_bridges,
         process_sessions=process_sessions,
