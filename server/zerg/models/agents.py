@@ -420,6 +420,18 @@ class SessionTurn(AgentsBase):
         index=True,
     )
     request_id = Column(String(64), nullable=True, index=True)
+    source_kind = Column(
+        String(32),
+        nullable=False,
+        default="managed_live",
+        server_default=text("'managed_live'"),
+    )
+    timing_confidence = Column(
+        String(20),
+        nullable=False,
+        default="exact",
+        server_default=text("'exact'"),
+    )
     expected_user_text_hash = Column(String(64), nullable=True)
     state = Column(String(20), nullable=False)
     terminal_phase = Column(String(32), nullable=True)

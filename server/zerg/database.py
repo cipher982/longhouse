@@ -753,6 +753,24 @@ def _migrate_agents_columns(engine: Engine) -> None:
         with engine.connect() as conn:
             columns = {row[1] for row in conn.execute(text("PRAGMA table_info(session_turns)"))}
             if columns:
+                if "source_kind" not in columns:
+                    conn.execute(
+                        text(
+                            """
+                            ALTER TABLE session_turns
+                            ADD COLUMN source_kind VARCHAR(32) NOT NULL DEFAULT 'managed_live'
+                            """
+                        )
+                    )
+                if "timing_confidence" not in columns:
+                    conn.execute(
+                        text(
+                            """
+                            ALTER TABLE session_turns
+                            ADD COLUMN timing_confidence VARCHAR(20) NOT NULL DEFAULT 'exact'
+                            """
+                        )
+                    )
                 if "expected_user_text_hash" not in columns:
                     conn.execute(text("ALTER TABLE session_turns ADD COLUMN expected_user_text_hash VARCHAR(64)"))
                 conn.execute(

@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 from cryptography.fernet import Fernet
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
@@ -178,6 +179,61 @@ def test_session_turn_partial_unique_request_id_allows_null_and_rejects_duplicat
         with pytest.raises(IntegrityError):
             db.commit()
         db.rollback()
+
+
+def test_initialize_database_migrates_legacy_session_turn_columns(tmp_path):
+    db_path = tmp_path / "test_session_turns_legacy.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    SessionLocal = make_sessionmaker(engine)
+    initialize_database(engine)
+
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE session_turns"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE session_turns (
+                    id INTEGER NOT NULL PRIMARY KEY,
+                    session_id CHAR(36) NOT NULL,
+                    request_id VARCHAR(64),
+                    state VARCHAR(20) NOT NULL,
+                    terminal_phase VARCHAR(32),
+                    error_code VARCHAR(64),
+                    user_event_id INTEGER,
+                    durable_assistant_event_id INTEGER,
+                    baseline_event_id INTEGER,
+                    baseline_runtime_cursor INTEGER,
+                    user_submitted_at DATETIME NOT NULL,
+                    send_accepted_at DATETIME,
+                    active_phase_observed_at DATETIME,
+                    terminal_at DATETIME,
+                    durable_at DATETIME,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+
+    initialize_database(engine)
+
+    with engine.connect() as conn:
+        columns = {str(row[1]): row for row in conn.execute(text("PRAGMA table_info(session_turns)"))}
+        assert "source_kind" in columns
+        assert "timing_confidence" in columns
+        assert "expected_user_text_hash" in columns
+
+    with SessionLocal() as db:
+        session = _seed_session(db)
+        turn = create_session_turn(
+            db,
+            session_id=session.id,
+            request_id="req-legacy-schema",
+        )
+        db.commit()
+        db.refresh(turn)
+        assert turn.source_kind == session_turns_service.SESSION_TURN_SOURCE_MANAGED_LIVE
+        assert turn.timing_confidence == session_turns_service.SESSION_TURN_CONFIDENCE_EXACT
 
 
 def test_session_turn_durable_matching_uses_last_assistant_reply_after_user_event(tmp_path):
@@ -376,6 +432,8 @@ def test_materialize_managed_transcript_turns_backfills_native_completed_turns_i
 
         row = db.query(SessionTurn).filter(SessionTurn.session_id == session.id).one()
         assert row.request_id == f"native:{row.user_event_id}:{row.durable_assistant_event_id}"
+        assert row.source_kind == session_turns_service.SESSION_TURN_SOURCE_TRANSCRIPT_RECONSTRUCTED
+        assert row.timing_confidence == session_turns_service.SESSION_TURN_CONFIDENCE_INFERRED
         assert row.state == SESSION_TURN_STATE_DURABLE
         assert normalize_utc(row.user_submitted_at) == user_at
         assert row.send_accepted_at is None
