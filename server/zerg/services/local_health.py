@@ -13,8 +13,8 @@ import plistlib
 import re
 import shlex
 import sqlite3
-import subprocess
 from collections.abc import Mapping
+from contextlib import contextmanager
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -56,6 +56,7 @@ ACTIVITY_RECENCY_BANDS = [
 ]
 RECENT_TOUCH_LIMIT = 4
 BRIDGE_STATUS_DIR = "managed-local/codex-bridge"
+_PROCESS_SNAPSHOT: tuple[list[dict[str, Any]], list[dict[str, Any]]] | None = None
 
 
 def _utc_now() -> datetime:
@@ -826,32 +827,104 @@ def _codex_bridge_state_dir(base_dir: Path) -> Path:
     return base_dir.parent / ".claude" / BRIDGE_STATUS_DIR
 
 
-def _collect_process_rows() -> list[dict[str, Any]]:
+def _compute_process_snapshot() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     try:
-        completed = subprocess.run(
-            ["ps", "-axo", "pid=,ppid=,command="],
-            capture_output=True,
-            check=True,
-            text=True,
-        )
-    except Exception:
-        return []
+        import psutil  # imported lazily to keep module import cheap
+    except ImportError:
+        return [], []
 
-    rows: list[dict[str, Any]] = []
-    for raw_line in completed.stdout.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        parts = line.split(None, 2)
-        if len(parts) < 3:
-            continue
+    me = os.getuid()
+    process_rows: list[dict[str, Any]] = []
+    provider_processes: list[dict[str, Any]] = []
+
+    for proc in psutil.process_iter(["pid", "ppid", "cmdline", "create_time"]):
         try:
-            pid = int(parts[0])
-            ppid = int(parts[1])
-        except ValueError:
+            info = proc.info
+            cmdline = [str(arg) for arg in (info.get("cmdline") or []) if str(arg)]
+            command = " ".join(cmdline)
+            pid = int(info.get("pid") or 0)
+            ppid = int(info.get("ppid") or 0)
+            if pid > 0 and command:
+                process_rows.append({"pid": pid, "ppid": ppid, "command": command})
+
+            if proc.uids().real != me:
+                continue
+            if not cmdline:
+                continue
+
+            executable = cmdline[0].rsplit("/", 1)[-1]
+            if executable == "longhouse-codex":
+                continue
+
+            provider = _provider_for_cmdline(cmdline)
+            if not provider:
+                continue
+            if provider == "codex" and any(arg == "app-server" for arg in cmdline[1:]):
+                continue
+
+            try:
+                env = proc.environ()
+            except (psutil.AccessDenied, psutil.NoSuchProcess):
+                env = {}
+
+            session_id = _normalize_optional_string(env.get("LONGHOUSE_MANAGED_SESSION_ID")) if env else None
+            if not session_id:
+                session_id = _session_id_from_argv(cmdline)
+
+            device_id = env.get("LONGHOUSE_DEVICE_ID") if env else None
+
+            try:
+                cwd = proc.cwd()
+            except (psutil.AccessDenied, psutil.NoSuchProcess):
+                cwd = None
+
+            started_at = (
+                datetime.fromtimestamp(float(info["create_time"]), tz=timezone.utc)
+                .isoformat()
+                .replace(
+                    "+00:00",
+                    "Z",
+                )
+            )
+
+            provider_processes.append(
+                {
+                    "session_id": session_id,
+                    "provider": provider,
+                    "pid": pid,
+                    "cwd": cwd,
+                    "workspace_label": Path(cwd).name if cwd else None,
+                    "device_id": device_id,
+                    "started_at": started_at,
+                }
+            )
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, KeyError, TypeError, ValueError):
             continue
-        rows.append({"pid": pid, "ppid": ppid, "command": parts[2]})
-    return rows
+
+    return process_rows, provider_processes
+
+
+@contextmanager
+def _process_snapshot_scope():
+    global _PROCESS_SNAPSHOT
+
+    previous = _PROCESS_SNAPSHOT
+    _PROCESS_SNAPSHOT = _compute_process_snapshot()
+    try:
+        yield
+    finally:
+        _PROCESS_SNAPSHOT = previous
+
+
+def _collect_process_snapshot() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if _PROCESS_SNAPSHOT is not None:
+        return _PROCESS_SNAPSHOT
+    return _compute_process_snapshot()
+
+
+def _collect_process_rows() -> list[dict[str, Any]]:
+    process_rows, _ = _collect_process_snapshot()
+    return process_rows
 
 
 def _load_session_binding_rows(base_dir: Path) -> list[dict[str, str | None]]:
@@ -1027,10 +1100,6 @@ def _load_managed_session_phase_state(base_dir: Path, *, now: datetime) -> dict[
             next_row["last_activity_at"] = _max_rfc3339(row.get("last_activity_at"), current.get("last_activity_at") if current else None)
             merged[session_id] = next_row
     return {session_id: row for session_id, row in merged.items() if _should_keep_managed_phase_row(row, now=now)}
-
-
-def _bridge_process_exists(process_rows: list[dict[str, Any]], pid: int) -> bool:
-    return any(int(row.get("pid") or 0) == pid for row in process_rows)
 
 
 def _bridge_is_alive(state_file: Path) -> bool:
@@ -1293,66 +1362,8 @@ def _session_id_from_argv(cmdline: list[str]) -> str | None:
 
 def _scan_provider_processes() -> list[dict[str, Any]]:
     """Collect live Claude/Codex CLI processes owned by the current user."""
-
-    try:
-        import psutil  # imported lazily to keep module import cheap
-    except ImportError:
-        return []
-
-    me = os.getuid()
-    processes: list[dict[str, Any]] = []
-
-    for proc in psutil.process_iter(["pid", "cmdline", "create_time"]):
-        try:
-            if proc.uids().real != me:
-                continue
-
-            info = proc.info
-            cmdline = info.get("cmdline") or []
-            executable = cmdline[0].rsplit("/", 1)[-1] if cmdline else ""
-            if executable == "longhouse-codex":
-                continue
-            provider = _provider_for_cmdline(cmdline)
-            if not provider:
-                continue
-            if provider == "codex" and any(arg == "app-server" for arg in cmdline[1:]):
-                continue
-
-            try:
-                env = proc.environ()
-            except (psutil.AccessDenied, psutil.NoSuchProcess):
-                env = {}
-
-            session_id = None
-            if env:
-                session_id = _normalize_optional_string(env.get("LONGHOUSE_MANAGED_SESSION_ID"))
-            if not session_id:
-                session_id = _session_id_from_argv(cmdline)
-
-            device_id = env.get("LONGHOUSE_DEVICE_ID") if env else None
-
-            try:
-                cwd = proc.cwd()
-            except (psutil.AccessDenied, psutil.NoSuchProcess):
-                cwd = None
-
-            started_at = datetime.fromtimestamp(info["create_time"], tz=timezone.utc).isoformat().replace("+00:00", "Z")
-
-            processes.append(
-                {
-                    "session_id": session_id,
-                    "provider": provider,
-                    "pid": info["pid"],
-                    "cwd": cwd,
-                    "workspace_label": Path(cwd).name if cwd else None,
-                    "device_id": device_id,
-                    "started_at": started_at,
-                }
-            )
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-
-    return processes
+    _, provider_processes = _collect_process_snapshot()
+    return provider_processes
 
 
 def _collect_managed_sessions_by_process(
@@ -1952,19 +1963,20 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
     engine_status = _collect_engine_status(resolved_base_dir, now=now)
     outbox = _collect_outbox(resolved_base_dir, now=now)
     activity_summary = _collect_activity_summary(resolved_base_dir, now=now)
-    provider_processes = _scan_provider_processes()
-    bridge_summary, bridge_sessions, orphan_bridges = _collect_managed_codex_summary(
-        resolved_base_dir,
-        phase_overlay=phase_overlay,
-    )
-    bridge_session_ids = {row.get("session_id") for row in bridge_sessions if row.get("session_id")}
-    process_sessions = _collect_managed_sessions_by_process(
-        now=now,
-        existing_session_ids=bridge_session_ids,
-        phase_overlay=phase_overlay,
-        scanned_processes=provider_processes,
-    )
-    unmanaged_processes = _collect_unmanaged_processes(scanned_processes=provider_processes)
+    with _process_snapshot_scope():
+        provider_processes = _scan_provider_processes()
+        bridge_summary, bridge_sessions, orphan_bridges = _collect_managed_codex_summary(
+            resolved_base_dir,
+            phase_overlay=phase_overlay,
+        )
+        bridge_session_ids = {row.get("session_id") for row in bridge_sessions if row.get("session_id")}
+        process_sessions = _collect_managed_sessions_by_process(
+            now=now,
+            existing_session_ids=bridge_session_ids,
+            phase_overlay=phase_overlay,
+            scanned_processes=provider_processes,
+        )
+        unmanaged_processes = _collect_unmanaged_processes(scanned_processes=provider_processes)
     managed_summary, managed_sessions, orphan_bridges = _merge_managed_sessions(
         bridge_summary=bridge_summary,
         bridge_sessions=bridge_sessions,
