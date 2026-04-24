@@ -571,8 +571,8 @@ def test_collect_local_health_uses_managed_session_phase_state_for_codex_bridge_
             (
                 "sess-attached",
                 "codex",
-                "/Users/test/git/zerg",
-                "zerg",
+                "/Users/test/git/zerg-canonical",
+                "zerg-canonical",
                 "blocked",
                 "shell",
                 "codex_bridge",
@@ -590,7 +590,7 @@ def test_collect_local_health_uses_managed_session_phase_state_for_codex_bridge_
             "session_id": "sess-attached",
             "pid": 7771,
             "ws_url": "ws://127.0.0.1:49760",
-            "cwd": "/Users/test/git/zerg",
+            "cwd": "/Users/test/git/bridge-cwd",
             "status": "ready",
             "updated_at": "2026-04-17T17:31:00Z",
             "thread_path": str(rollout_path),
@@ -614,6 +614,7 @@ def test_collect_local_health_uses_managed_session_phase_state_for_codex_bridge_
 
     snapshot = local_health_service.collect_local_health(tmp_path)
 
+    assert snapshot["managed_sessions"][0]["workspace_label"] == "zerg-canonical"
     assert snapshot["managed_sessions"][0]["phase"] == "blocked on shell"
     assert snapshot["managed_sessions"][0]["phase_observed_at"] == "2026-04-17T17:31:30Z"
     assert snapshot["managed_sessions"][0]["last_activity_at"] == "2026-04-17T17:31:30Z"
@@ -1888,7 +1889,7 @@ def test_process_scan_uses_phase_overlay_when_available(monkeypatch, tmp_path: P
         cmdline=["claude", "--session-id", session_id],
         create_time=now.timestamp(),
         env={"LONGHOUSE_MANAGED_SESSION_ID": session_id},
-        cwd="/Users/test/git/zerg",
+        cwd="/Users/test/git/process-cwd",
     )
     _patch_process_iter(monkeypatch, [proc])
     _write_managed_session_state_rows(
@@ -1897,8 +1898,8 @@ def test_process_scan_uses_phase_overlay_when_available(monkeypatch, tmp_path: P
             (
                 session_id,
                 "claude",
-                "/Users/test/git/zerg",
-                "zerg",
+                "/Users/test/git/zerg-canonical",
+                "zerg-canonical",
                 "running",
                 "Bash",
                 "claude_hook",
@@ -1914,6 +1915,8 @@ def test_process_scan_uses_phase_overlay_when_available(monkeypatch, tmp_path: P
     )
 
     assert len(rows) == 1
+    assert rows[0]["cwd"] == "/Users/test/git/zerg-canonical"
+    assert rows[0]["workspace_label"] == "zerg-canonical"
     assert rows[0]["phase"] == "running Bash"
     assert rows[0]["phase_observed_at"] == "2026-04-19T00:04:00Z"
     assert rows[0]["last_activity_at"] == "2026-04-19T00:04:00Z"
