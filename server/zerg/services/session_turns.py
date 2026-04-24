@@ -31,6 +31,20 @@ from zerg.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
 
+SESSION_TURN_SOURCE_MANAGED_LIVE = "managed_live"
+SESSION_TURN_SOURCE_TRANSCRIPT_RECONSTRUCTED = "transcript_reconstructed"
+SESSION_TURN_SOURCE_VALUES = {
+    SESSION_TURN_SOURCE_MANAGED_LIVE,
+    SESSION_TURN_SOURCE_TRANSCRIPT_RECONSTRUCTED,
+}
+
+SESSION_TURN_CONFIDENCE_EXACT = "exact"
+SESSION_TURN_CONFIDENCE_INFERRED = "inferred"
+SESSION_TURN_CONFIDENCE_VALUES = {
+    SESSION_TURN_CONFIDENCE_EXACT,
+    SESSION_TURN_CONFIDENCE_INFERRED,
+}
+
 SESSION_TURN_STATE_CREATED = "created"
 SESSION_TURN_STATE_SEND_ACCEPTED = "send_accepted"
 SESSION_TURN_STATE_ACTIVE = "active"
@@ -83,6 +97,24 @@ def hash_user_text(text: str) -> str:
     return hashlib.sha256(str(text).encode("utf-8")).hexdigest()
 
 
+def _normalize_turn_source_kind(value: str | None) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in SESSION_TURN_SOURCE_VALUES:
+        return normalized
+    if normalized:
+        logger.warning("Unknown session turn source_kind '%s'; defaulting to %s", normalized, SESSION_TURN_SOURCE_MANAGED_LIVE)
+    return SESSION_TURN_SOURCE_MANAGED_LIVE
+
+
+def _normalize_turn_confidence(value: str | None) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in SESSION_TURN_CONFIDENCE_VALUES:
+        return normalized
+    if normalized:
+        logger.warning("Unknown session turn timing_confidence '%s'; defaulting to %s", normalized, SESSION_TURN_CONFIDENCE_EXACT)
+    return SESSION_TURN_CONFIDENCE_EXACT
+
+
 def run_session_turn_write(
     *,
     db_bind,
@@ -131,6 +163,8 @@ def create_session_turn(
     *,
     session_id: UUID,
     request_id: str | None,
+    source_kind: str = SESSION_TURN_SOURCE_MANAGED_LIVE,
+    timing_confidence: str = SESSION_TURN_CONFIDENCE_EXACT,
     baseline_event_id: int | None = None,
     baseline_runtime_cursor: int | None = None,
     user_submitted_at: datetime | None = None,
@@ -151,6 +185,8 @@ def create_session_turn(
     turn = SessionTurn(
         session_id=session_id,
         request_id=request_id,
+        source_kind=_normalize_turn_source_kind(source_kind),
+        timing_confidence=_normalize_turn_confidence(timing_confidence),
         expected_user_text_hash=hash_user_text(expected_user_text) if expected_user_text else None,
         state=SESSION_TURN_STATE_CREATED,
         baseline_event_id=baseline_event_id if baseline_event_id and baseline_event_id > 0 else None,
@@ -226,6 +262,8 @@ def materialize_managed_transcript_turns(
                     db,
                     session_id=session_id,
                     request_id=request_id,
+                    source_kind=SESSION_TURN_SOURCE_TRANSCRIPT_RECONSTRUCTED,
+                    timing_confidence=SESSION_TURN_CONFIDENCE_INFERRED,
                     user_submitted_at=user_submitted_at,
                     expected_user_text=normalized_user_text or None,
                 )
