@@ -80,8 +80,10 @@ async def semantic_search_sessions(
             cache.load_session_embeddings(db, config.model, config.dims)
 
         results = cache.search_sessions(query_vec, limit=limit, session_filter=valid_ids)
+        ordered_ids = [sid for sid, _score in results]
+        session_map = {str(session.id): session for session in db.query(AgentSession).filter(AgentSession.id.in_(ordered_ids)).all()}
         for sid, score in results:
-            session = db.query(AgentSession).filter(AgentSession.id == sid).first()
+            session = session_map.get(str(sid))
             if not session:
                 continue
             matched_rows.append((session, session.summary or session.summary_title or None, score))
@@ -94,12 +96,22 @@ async def semantic_search_sessions(
             limit=min(limit * 8, 200),
             session_filter=valid_ids,
         )
+        unique_session_ids: list[str] = []
         seen_sessions: set[str] = set()
         for sid, _chunk_index, score, event_start, _event_end in turn_hits:
             sid_str = str(sid)
             if sid_str in seen_sessions:
                 continue
-            session = db.query(AgentSession).filter(AgentSession.id == sid).first()
+            unique_session_ids.append(sid_str)
+            seen_sessions.add(sid_str)
+
+        session_map = {str(session.id): session for session in db.query(AgentSession).filter(AgentSession.id.in_(unique_session_ids)).all()}
+        seen_sessions.clear()
+        for sid, _chunk_index, score, event_start, _event_end in turn_hits:
+            sid_str = str(sid)
+            if sid_str in seen_sessions:
+                continue
+            session = session_map.get(sid_str)
             if not session:
                 continue
 
