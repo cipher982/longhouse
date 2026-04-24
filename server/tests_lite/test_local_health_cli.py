@@ -2546,7 +2546,6 @@ def test_merge_bridge_row_wins_on_session_id_collision():
     }
 
     summary, sessions, orphans = local_health_service._merge_managed_sessions(
-        bridge_latest_activity_at="2026-04-19T00:00:00Z",
         bridge_sessions=[bridge_row],
         bridge_orphans=[],
         process_sessions=[process_row, process_only_row],
@@ -2564,7 +2563,6 @@ def test_merge_bridge_row_wins_on_session_id_collision():
 
 def test_merge_returns_none_summary_when_nothing_present():
     summary, sessions, orphans = local_health_service._merge_managed_sessions(
-        bridge_latest_activity_at=None,
         bridge_sessions=[],
         bridge_orphans=[],
         process_sessions=[],
