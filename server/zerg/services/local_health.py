@@ -32,6 +32,10 @@ from zerg.services.machine_repair import recommended_machine_repair_command
 from zerg.services.machine_state import machine_state_source_hash
 from zerg.services.machine_state import read_machine_state
 from zerg.services.shipper.service import get_service_info
+from zerg.services.transport_health import TransportHealthAssessment
+from zerg.services.transport_health import TransportHealthSample
+from zerg.services.transport_health import assess_transport_health
+from zerg.services.transport_health import transport_health_sample_from_engine_status_payload
 
 SCHEMA_VERSION = 1
 ENGINE_FRESH_SECONDS = 30
@@ -715,6 +719,15 @@ def _collect_engine_status(base_dir: Path, *, now: datetime) -> dict[str, Any]:
             "age_seconds": age_seconds,
             "payload": None,
             "error": str(exc),
+        }
+    if not isinstance(payload, Mapping):
+        return {
+            "path": str(status_path),
+            "exists": True,
+            "fresh": False,
+            "age_seconds": age_seconds,
+            "payload": None,
+            "error": "engine status payload must be a JSON object",
         }
 
     return {
@@ -1650,6 +1663,8 @@ def _classify_health(
     *,
     service: dict[str, Any],
     engine_status: dict[str, Any],
+    transport_sample: TransportHealthSample | None,
+    transport_assessment: TransportHealthAssessment | None,
     outbox: dict[str, Any],
     launch_readiness: dict[str, Any],
     managed_summary: dict[str, Any] | None,
@@ -1665,11 +1680,7 @@ def _classify_health(
     engine_exists = bool(engine_status.get("exists"))
     engine_error = engine_status.get("error")
     engine_age = engine_status.get("age_seconds")
-    spool_pending = int(payload.get("spool_pending_count") or 0)
-    spool_dead = int(payload.get("spool_dead_count") or 0)
-    ship_failures = int(payload.get("consecutive_ship_failures") or 0)
-    parse_errors = int(payload.get("parse_error_count_1h") or 0)
-    is_offline = bool(payload.get("is_offline") or False)
+    spool_pending = transport_sample.spool_pending if transport_sample is not None else int(payload.get("spool_pending_count") or 0)
     disk_free_bytes = payload.get("disk_free_bytes")
     outbox_count = int(outbox.get("file_count") or 0)
     outbox_oldest = outbox.get("oldest_age_seconds")
@@ -1695,6 +1706,30 @@ def _classify_health(
     for action in launch_actions:
         _with_action(actions, action)
 
+    if transport_assessment is not None:
+        for reason in transport_assessment.reasons:
+            if reason not in reasons:
+                reasons.append(reason)
+        if any(
+            reason in transport_assessment.reasons
+            for reason in (
+                "consecutive_failures",
+                "connect_errors",
+                "server_errors",
+                "rate_limited",
+                "retryable_client_errors",
+                "payload_rejected",
+                "payload_too_large",
+            )
+        ):
+            _with_action(actions, f"Inspect logs: {engine_log_path}")
+        if "reported_offline" in transport_assessment.reasons:
+            _with_action(actions, "Verify network reachability to your Longhouse URL")
+        if "parse_errors" in transport_assessment.reasons:
+            _with_action(actions, "Inspect recent dead letters and parser errors")
+        if "spool_dead" in transport_assessment.reasons:
+            _with_action(actions, "Repair dead letters before trusting continuity")
+
     if service_status == "not-installed":
         reasons.append("service_not_installed")
         if not shipper_state_missing:
@@ -1719,24 +1754,8 @@ def _classify_health(
     elif engine_age is not None and engine_age > ENGINE_FRESH_SECONDS:
         reasons.append("engine_status_aging")
 
-    if is_offline:
-        reasons.append("engine_offline")
-        _with_action(actions, "Verify network reachability to your Longhouse URL")
-
-    if ship_failures > 0:
-        reasons.append("ship_failures")
-        _with_action(actions, f"Inspect logs: {engine_log_path}")
-
-    if parse_errors > 0:
-        reasons.append("parse_errors")
-        _with_action(actions, "Inspect recent dead letters and parser errors")
-
-    if spool_pending >= DEGRADED_BACKLOG_COUNT:
+    if spool_pending >= DEGRADED_BACKLOG_COUNT and "spool_pending" not in reasons:
         reasons.append("spool_pending")
-
-    if spool_dead > 0:
-        reasons.append("spool_dead")
-        _with_action(actions, "Repair dead letters before trusting continuity")
 
     if orphan_bridge_count > 0:
         reasons.append("orphaned_managed_bridge")
@@ -1794,7 +1813,7 @@ def _classify_health(
         broken = True
     if engine_error:
         broken = True
-    if spool_dead > 0:
+    if transport_assessment is not None and transport_assessment.status == "broken":
         broken = True
     if isinstance(disk_free_bytes, int) and disk_free_bytes < DISK_BROKEN_BYTES:
         broken = True
@@ -1816,9 +1835,10 @@ def _classify_health(
             degraded = True
         if engine_age is not None and engine_age > ENGINE_FRESH_SECONDS:
             degraded = True
-        if is_offline or ship_failures > 0 or parse_errors > 0:
-            degraded = True
-        if spool_pending >= DEGRADED_BACKLOG_COUNT:
+        # Transport severity is now delegated to the shared reducer. Keep
+        # local overlays here, but let transport_assessment remain the single
+        # source of truth for shipping-state degradation semantics.
+        if transport_assessment is not None and transport_assessment.status in ("offline", "degraded"):
             degraded = True
         if outbox_count >= DEGRADED_BACKLOG_COUNT and outbox_oldest is not None and outbox_oldest > OUTBOX_DEGRADED_AGE_SECONDS:
             degraded = True
@@ -1862,7 +1882,7 @@ def _classify_health(
 
     if degraded:
         headline = "Longhouse shipping is degraded"
-        if "engine_offline" in reasons:
+        if "reported_offline" in reasons:
             headline = "Longhouse is retrying while offline"
         elif "engine_status_missing" in reasons and service_status == "running":
             headline = "Longhouse is waiting for its first local status update"
@@ -1878,6 +1898,50 @@ def _classify_health(
         return ("degraded", "yellow", headline, reasons, actions)
 
     return ("healthy", "green", "Longhouse shipping healthy", reasons, actions)
+
+
+def _collect_transport_health(
+    engine_status: dict[str, Any],
+) -> tuple[TransportHealthSample | None, TransportHealthAssessment | None]:
+    if not bool(engine_status.get("exists")):
+        return None, None
+    if engine_status.get("error"):
+        return None, None
+    raw_payload = engine_status.get("payload")
+    if not isinstance(raw_payload, Mapping):
+        return None, None
+    sample = transport_health_sample_from_engine_status_payload(raw_payload)
+    return sample, assess_transport_health(sample)
+
+
+def _serialize_transport_health(
+    *,
+    sample: TransportHealthSample | None,
+    assessment: TransportHealthAssessment | None,
+) -> dict[str, Any] | None:
+    if sample is None or assessment is None:
+        return None
+    return {
+        "source": "engine_status",
+        "status": assessment.status,
+        "status_reason": assessment.status_reason,
+        "status_summary": assessment.status_summary,
+        "reasons": list(assessment.reasons),
+        "ship_attempts_1h": sample.ship_attempts_1h,
+        "ship_successes_1h": sample.ship_successes_1h,
+        "ship_success_rate_1h": sample.ship_success_rate_1h,
+        "ship_rate_limited_1h": sample.ship_rate_limited_1h,
+        "ship_server_errors_1h": sample.ship_server_errors_1h,
+        "ship_payload_rejections_1h": sample.ship_payload_rejections_1h,
+        "ship_payload_too_large_1h": sample.ship_payload_too_large_1h,
+        "ship_retryable_client_errors_1h": sample.ship_retryable_client_errors_1h,
+        "ship_connect_errors_1h": sample.ship_connect_errors_1h,
+        "spool_pending": sample.spool_pending,
+        "spool_dead": sample.spool_dead,
+        "parse_errors_1h": sample.parse_errors_1h,
+        "consecutive_failures": sample.consecutive_failures,
+        "is_offline": sample.is_offline,
+    }
 
 
 def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]:
@@ -1908,9 +1972,12 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
         process_sessions=process_sessions,
     )
     launch_readiness = _collect_launch_readiness(resolved_base_dir, service=service)
+    transport_sample, transport_assessment = _collect_transport_health(engine_status)
     health_state, severity, headline, reasons, suggested_actions = _classify_health(
         service=service,
         engine_status=engine_status,
+        transport_sample=transport_sample,
+        transport_assessment=transport_assessment,
         outbox=outbox,
         launch_readiness=launch_readiness,
         managed_summary=managed_summary,
@@ -1928,6 +1995,10 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
         "suggested_actions": suggested_actions,
         "service": service,
         "engine_status": engine_status,
+        "transport_health": _serialize_transport_health(
+            sample=transport_sample,
+            assessment=transport_assessment,
+        ),
         "outbox": outbox,
         "activity_summary": activity_summary,
         "managed_summary": managed_summary,
