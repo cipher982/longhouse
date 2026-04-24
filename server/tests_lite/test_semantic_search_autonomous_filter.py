@@ -12,6 +12,7 @@ from zerg.database import make_engine
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import SessionEmbedding
+from zerg.services.agents_store import AgentsStore
 from zerg.services.embedding_cache import EmbeddingCache
 from zerg.services.search import SessionFilters
 from zerg.services.search import semantic_search
@@ -133,5 +134,48 @@ def test_semantic_search_can_include_autonomous_when_requested(monkeypatch, tmp_
 
         assert set(result_ids) == {normal_id, sidechain_id, zero_user_id}
         assert len(result_ids) == 3
+
+    EmbeddingCache.reset()
+
+
+def test_semantic_search_batches_session_loads(monkeypatch, tmp_path):
+    """semantic_search bulk-loads ranked sessions instead of fetching each one individually."""
+    EmbeddingCache.reset()
+    SessionLocal = _make_db(tmp_path)
+
+    first_id = str(uuid4())
+    second_id = str(uuid4())
+
+    with SessionLocal() as db:
+        _create_session_with_embedding(db, session_id=first_id, user_messages=1, is_sidechain=0, vec=[1.0, 0.0, 0.0, 0.0])
+        _create_session_with_embedding(db, session_id=second_id, user_messages=1, is_sidechain=0, vec=[0.7, 0.3, 0.0, 0.0])
+
+        monkeypatch.setattr(
+            "zerg.models_config.get_embedding_config_with_db_fallback",
+            lambda db: SimpleNamespace(model="test-model", dims=4),
+        )
+        monkeypatch.setattr(
+            "zerg.services.session_processing.embeddings.generate_embedding",
+            _fake_generate_embedding,
+        )
+
+        batch_calls: list[list[str]] = []
+        original_get_sessions_ordered = AgentsStore.get_sessions_ordered
+
+        def record_get_sessions_ordered(self, session_ids):
+            batch_calls.append([str(session_id) for session_id in session_ids])
+            return original_get_sessions_ordered(self, session_ids)
+
+        monkeypatch.setattr(AgentsStore, "get_sessions_ordered", record_get_sessions_ordered)
+
+        results = semantic_search(
+            "find similar sessions",
+            db,
+            SessionFilters(project="zerg", hide_autonomous=True),
+            limit=10,
+        )
+
+        assert [str(session.id) for session, _score in results] == [first_id, second_id]
+        assert batch_calls == [[first_id, second_id]]
 
     EmbeddingCache.reset()

@@ -296,8 +296,10 @@ async def list_sessions(
                 valid_ids = {str(row[0]) for row in filter_q.all()}
 
                 sem_results = cache.search_sessions(query_vec, limit=fetch_limit, session_filter=valid_ids)
+                store = AgentsStore(db)
+                session_map = {str(session.id): session for session in store.get_sessions_ordered([sid for sid, _score in sem_results])}
                 for sid, score in sem_results:
-                    session = db.query(AgentSession).filter(AgentSession.id == sid).first()
+                    session = session_map.get(str(sid))
                     if session:
                         sem_hits.append((session, score))
             else:

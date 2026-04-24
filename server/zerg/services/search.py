@@ -87,6 +87,7 @@ def semantic_search(
     import asyncio
 
     from zerg.models_config import get_embedding_config_with_db_fallback
+    from zerg.services.agents_store import AgentsStore
     from zerg.services.embedding_cache import EmbeddingCache
     from zerg.services.session_processing.embeddings import generate_embedding
 
@@ -133,10 +134,12 @@ def semantic_search(
     valid_ids = {str(row[0]) for row in filter_query.all()}
 
     results = cache.search_sessions(query_vec, limit=fetch_limit, session_filter=valid_ids)
+    store = AgentsStore(db)
+    session_map = {str(session.id): session for session in store.get_sessions_ordered([sid for sid, _score in results])}
 
     sessions_with_scores: list[tuple[AgentSession, float]] = []
     for sid, score in results:
-        session = db.query(AgentSession).filter(AgentSession.id == sid).first()
+        session = session_map.get(str(sid))
         if session:
             sessions_with_scores.append((session, score))
 

@@ -225,6 +225,25 @@ class AgentsStore:
         path.reverse()
         return path
 
+    def get_sessions_ordered(self, session_ids: list[UUID | str]) -> list[AgentSession]:
+        ordered_ids: list[UUID] = []
+        seen: set[UUID] = set()
+        for session_id in session_ids:
+            session_uuid = session_id if isinstance(session_id, UUID) else UUID(str(session_id))
+            if session_uuid in seen:
+                continue
+            ordered_ids.append(session_uuid)
+            seen.add(session_uuid)
+        if not ordered_ids:
+            return []
+
+        sessions = self.db.query(AgentSession).filter(AgentSession.id.in_(ordered_ids)).all()
+        session_map: dict[UUID, AgentSession] = {}
+        for session in sessions:
+            self._coerce_session_lineage_defaults(session)
+            session_map[session.id] = session
+        return [session_map[session_id] for session_id in ordered_ids if session_id in session_map]
+
     def get_session_projection_page(
         self,
         session_or_id: UUID | AgentSession,
