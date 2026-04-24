@@ -5,10 +5,16 @@
 //! - frequent local status-file writes for ambient UX / debugging
 //! - less frequent server heartbeats to `/api/agents/heartbeat`
 
+use std::sync::OnceLock;
+
 use anyhow::Result;
 use serde::Serialize;
 
 use crate::build_identity::BuildIdentity;
+
+/// Captured once per daemon process at the first write_status_file call.
+/// Compared against the on-disk binary mtime to detect "restart pending".
+static DAEMON_STARTED_AT: OnceLock<String> = OnceLock::new();
 use crate::config;
 use crate::error_tracker::ConsecutiveErrorTracker;
 use crate::error_tracker::RecentIssueTracker;
@@ -173,9 +179,25 @@ pub fn write_status_file(
     struct StatusFile<'a> {
         #[serde(flatten)]
         payload: &'a HeartbeatPayload,
-        /// Compiled-in engine build identity. Menu bar / local-health read
-        /// this to detect drift between engine, CLI, and desktop app builds.
+        /// Build identity compiled into the currently-running engine binary.
+        /// Compare this against the on-disk engine binary via `binary_mtime`
+        /// (see below) to detect "daemon needs restart" after an
+        /// `make install-engine`.
         build: BuildIdentity,
+        /// Path of the engine binary the daemon started from (std::env::current_exe).
+        /// Stat this path on the reader side and compare mtime against
+        /// `daemon_started_at` to detect whether the binary on disk is newer
+        /// than the in-memory daemon.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        binary_path: Option<String>,
+        /// Modification time of the binary at the path above, ISO 8601. Captured
+        /// fresh on each write. If `binary_mtime > daemon_started_at` the daemon
+        /// is running a stale binary and a restart is pending.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        binary_mtime: Option<String>,
+        /// Start time of the current daemon process, ISO 8601. Captured once
+        /// at process startup.
+        daemon_started_at: String,
         recent_dead_letters: Vec<StatusDeadLetter>,
         /// Ledger rows whose phase is still within its freshness window.
         /// Same LWW rows that back `session_phase_state` so consumers can
@@ -196,9 +218,16 @@ pub fn write_status_file(
         .map(status_dead_letter_from_entry)
         .collect();
     let now_utc = chrono::Utc::now();
+    let daemon_started_at = DAEMON_STARTED_AT
+        .get_or_init(|| now_utc.to_rfc3339())
+        .clone();
+    let (binary_path, binary_mtime) = inspect_current_exe();
     let status = StatusFile {
         payload,
         build: BuildIdentity::current(),
+        binary_path,
+        binary_mtime,
+        daemon_started_at,
         recent_dead_letters,
         phase_ledger,
         phase_ledger_status: ledger_status,
@@ -217,6 +246,23 @@ pub fn write_status_file(
             let _ = std::fs::rename(&tmp_path, status_path);
         }
     }
+}
+
+fn inspect_current_exe() -> (Option<String>, Option<String>) {
+    // Returns (binary_path, binary_mtime_iso8601). Both cheap filesystem
+    // operations; OK to run per write. If either fails (e.g. the binary was
+    // deleted between invocations), we return None and consumers can skip the
+    // restart-pending check for this tick.
+    let exe = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(_) => return (None, None),
+    };
+    let exe_path = exe.to_string_lossy().into_owned();
+    let mtime = std::fs::metadata(&exe)
+        .and_then(|md| md.modified())
+        .ok()
+        .and_then(|st| chrono::DateTime::<chrono::Utc>::from(st).to_rfc3339().into());
+    (Some(exe_path), mtime)
 }
 
 fn status_dead_letter_from_entry(entry: DeadLetterEntry) -> StatusDeadLetter {
