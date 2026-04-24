@@ -185,10 +185,11 @@ async def launch_managed_local_this_device(
 
     owner_id = _resolve_agents_owner_id(db, device_token)
     token_device_id = str(getattr(device_token, "device_id", "") or "").strip()
+    if not token_device_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Device token is missing device_id")
+    # machine_name is a display label; routing is always by device_id.
     machine_name = (body.machine_name or "").strip() or token_device_id
-    runner_target = token_device_id or machine_name
-    if not runner_target:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Could not determine this device name")
+    runner_target = token_device_id
 
     try:
         result = await launch_managed_local_session(
