@@ -360,7 +360,7 @@ async def list_sessions(
             )
             first_user_map = store.get_first_message_map([s.id for s in fused], role="user", max_len=80)
             sem_score_map = {s.id: score for s, score in sem_hits}
-            thread_cache: dict[str, tuple[str, int]] = {}
+            thread_cache = store.batch_thread_meta(fused)
 
             response_sessions = [
                 build_session_response(
@@ -434,7 +434,7 @@ async def list_sessions(
         match_map = store.get_session_matches(session_ids, query, context_mode=context_mode) if query else {}
         activity_map = store.get_last_activity_map(session_ids)
         first_user_map = store.get_first_message_map(session_ids, role="user", max_len=80)
-        thread_cache: dict[str, tuple[str, int]] = {}
+        thread_cache = store.batch_thread_meta(sessions)
         now = datetime.now(timezone.utc)
         runtime_state_map = await _load_surface_runtime_state_map(
             db=db,
@@ -1066,7 +1066,7 @@ async def get_session_thread(
         activity_map = store.get_last_activity_map(thread_session_ids)
     with timing.span("load_first_user"):
         first_user_map = store.get_first_message_map(thread_session_ids, role="user", max_len=80)
-    thread_cache: dict[str, tuple[str, int]] = {}
+    thread_cache = store.batch_thread_meta(thread_sessions)
     now = datetime.now(timezone.utc)
     with timing.span("load_runtime"):
         runtime_state_map = await _load_surface_runtime_state_map(
@@ -1349,7 +1349,7 @@ async def get_session_workspace(
             load_from_end=True,
         )
 
-    thread_cache: dict[str, tuple[str, int]] = {}
+    thread_cache = store.batch_thread_meta(thread_sessions)
     now = datetime.now(timezone.utc)
     with timing.span("load_runtime"):
         runtime_state_map = await _load_surface_runtime_state_map(

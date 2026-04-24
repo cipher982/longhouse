@@ -11,6 +11,7 @@ Uses in-memory SQLite with inline setup (no shared conftest).
 from datetime import datetime
 from datetime import timezone
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -111,6 +112,50 @@ def test_list_sessions_includes_summary(tmp_path):
         assert session["continuation_kind"] == "local"
         assert session["origin_label"] == "work-macbook"
         assert session["is_writable_head"] is True
+
+
+def test_list_sessions_uses_batched_thread_meta(tmp_path):
+    """GET /agents/sessions preloads thread metadata instead of per-thread lookups."""
+    factory = _make_db(tmp_path)
+    db = factory()
+    try:
+        first = _seed_session(
+            db,
+            summary="First session.",
+            summary_title="First",
+            environment="cinder",
+        )
+        second = _seed_session(
+            db,
+            summary="Second session.",
+            summary_title="Second",
+            environment="cinder",
+        )
+    finally:
+        db.close()
+
+    batch_calls: list[list[str]] = []
+    original_batch_thread_meta = AgentsStore.batch_thread_meta
+
+    def record_batch_thread_meta(self, sessions):
+        batch_calls.append([str(session.id) for session in sessions])
+        return original_batch_thread_meta(self, sessions)
+
+    with (
+        patch.object(AgentsStore, "batch_thread_meta", record_batch_thread_meta),
+        patch.object(AgentsStore, "get_thread_head", side_effect=AssertionError("per-thread head lookup should be preloaded")),
+        patch.object(
+            AgentsStore,
+            "list_thread_sessions",
+            side_effect=AssertionError("per-thread session lookup should be preloaded"),
+        ),
+    ):
+        for client in _get_client(factory):
+            resp = client.get("/agents/sessions?days_back=1&limit=5")
+            assert resp.status_code == 200, resp.text
+
+    assert len(batch_calls) == 1
+    assert set(batch_calls[0]) == {str(first.id), str(second.id)}
 
 
 def test_list_sessions_hybrid_mode_serializes_datetimes(tmp_path):
