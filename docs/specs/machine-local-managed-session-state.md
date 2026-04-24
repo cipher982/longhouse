@@ -206,7 +206,7 @@ It should no longer reconstruct normal managed-session rows from:
 
 - `_collect_managed_codex_summary(...)`
 - `_collect_managed_sessions_by_process(...)`
-- `_load_managed_session_phase_overlay(...)`
+- `_load_managed_session_phase_state(...)`
 - `_merge_managed_sessions(...)`
 
 Those code paths should either disappear or move under diagnostics/repair-only
