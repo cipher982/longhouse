@@ -1807,6 +1807,48 @@ def _patch_process_iter(monkeypatch, procs: list[_FakeProc]) -> None:
     monkeypatch.setattr(psutil, "process_iter", fake_iter)
 
 
+def test_process_snapshot_scope_reuses_single_scan(monkeypatch):
+    calls = 0
+
+    def fake_compute():
+        nonlocal calls
+        calls += 1
+        return (
+            [{"pid": 101, "ppid": 1, "command": "claude --session-id sess-1"}],
+            [
+                {
+                    "session_id": "11111111-2222-3333-4444-555555555555",
+                    "provider": "claude",
+                    "pid": 101,
+                    "cwd": "/Users/test/git/zerg",
+                    "workspace_label": "zerg",
+                    "device_id": "device-1",
+                    "started_at": "2026-04-19T00:00:00Z",
+                }
+            ],
+        )
+
+    monkeypatch.setattr(local_health_service, "_compute_process_snapshot", fake_compute)
+
+    with local_health_service._process_snapshot_scope():
+        assert local_health_service._collect_process_rows() == [
+            {"pid": 101, "ppid": 1, "command": "claude --session-id sess-1"}
+        ]
+        assert local_health_service._scan_provider_processes() == [
+            {
+                "session_id": "11111111-2222-3333-4444-555555555555",
+                "provider": "claude",
+                "pid": 101,
+                "cwd": "/Users/test/git/zerg",
+                "workspace_label": "zerg",
+                "device_id": "device-1",
+                "started_at": "2026-04-19T00:00:00Z",
+            }
+        ]
+
+    assert calls == 1
+
+
 def test_process_scan_detects_claude_via_env(monkeypatch, tmp_path: Path):
     now = datetime(2026, 4, 19, 0, 0, 0, tzinfo=timezone.utc)
     proc = _FakeProc(
