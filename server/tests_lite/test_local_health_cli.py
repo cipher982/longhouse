@@ -200,7 +200,7 @@ def _disable_real_runner_env(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         local_health_service,
         "_collect_managed_sessions_by_process",
-        lambda *, now, existing_session_ids, phase_overlay=None, scanned_processes=None: [],
+        lambda *, existing_session_ids, phase_overlay=None, scanned_processes=None: [],
     )
 
 
@@ -1864,9 +1864,7 @@ def test_process_scan_detects_claude_via_env(monkeypatch, tmp_path: Path):
     )
     _patch_process_iter(monkeypatch, [proc])
 
-    rows = local_health_service._collect_managed_sessions_by_process(
-        now=now, existing_session_ids=set()
-    )
+    rows = local_health_service._collect_managed_sessions_by_process(existing_session_ids=set())
 
     assert len(rows) == 1
     row = rows[0]
@@ -1911,7 +1909,6 @@ def test_process_scan_uses_phase_overlay_when_available(monkeypatch, tmp_path: P
     )
 
     rows = local_health_service._collect_managed_sessions_by_process(
-        now=now,
         existing_session_ids=set(),
         phase_overlay=local_health_service._load_managed_session_phase_state(tmp_path, now=now),
     )
@@ -1951,7 +1948,6 @@ def test_process_scan_humanizes_needs_user_phase(monkeypatch, tmp_path: Path):
     )
 
     rows = local_health_service._collect_managed_sessions_by_process(
-        now=now,
         existing_session_ids=set(),
         phase_overlay=local_health_service._load_managed_session_phase_state(tmp_path, now=now),
     )
@@ -1991,7 +1987,6 @@ def test_process_scan_marks_unknown_phase_contract_drift(monkeypatch, tmp_path: 
     )
 
     rows = local_health_service._collect_managed_sessions_by_process(
-        now=now,
         existing_session_ids=set(),
         phase_overlay=local_health_service._load_managed_session_phase_state(tmp_path, now=now),
     )
@@ -2256,9 +2251,7 @@ def test_process_scan_falls_back_to_argv_when_env_empty(monkeypatch, tmp_path: P
     )
     _patch_process_iter(monkeypatch, [proc])
 
-    rows = local_health_service._collect_managed_sessions_by_process(
-        now=now, existing_session_ids=set()
-    )
+    rows = local_health_service._collect_managed_sessions_by_process(existing_session_ids=set())
 
     assert len(rows) == 1
     assert rows[0]["session_id"] == "11111111-2222-3333-4444-555555555555"
@@ -2276,9 +2269,7 @@ def test_process_scan_skips_unmanaged_bare_cli(monkeypatch):
     )
     _patch_process_iter(monkeypatch, [proc])
 
-    rows = local_health_service._collect_managed_sessions_by_process(
-        now=now, existing_session_ids=set()
-    )
+    rows = local_health_service._collect_managed_sessions_by_process(existing_session_ids=set())
     assert rows == []
 
 
@@ -2387,9 +2378,7 @@ def test_process_scan_skips_other_user_processes(monkeypatch):
     )
     _patch_process_iter(monkeypatch, [proc])
 
-    rows = local_health_service._collect_managed_sessions_by_process(
-        now=now, existing_session_ids=set()
-    )
+    rows = local_health_service._collect_managed_sessions_by_process(existing_session_ids=set())
     assert rows == []
 
 
@@ -2403,9 +2392,7 @@ def test_process_scan_dedupes_against_existing_bridge_ids(monkeypatch):
     )
     _patch_process_iter(monkeypatch, [proc])
 
-    rows = local_health_service._collect_managed_sessions_by_process(
-        now=now, existing_session_ids={"sess-codex-1"}
-    )
+    rows = local_health_service._collect_managed_sessions_by_process(existing_session_ids={"sess-codex-1"})
     assert rows == []
 
 
@@ -2420,9 +2407,7 @@ def test_process_scan_rejects_empty_env_session_id(monkeypatch):
     )
     _patch_process_iter(monkeypatch, [proc])
 
-    rows = local_health_service._collect_managed_sessions_by_process(
-        now=now, existing_session_ids=set()
-    )
+    rows = local_health_service._collect_managed_sessions_by_process(existing_session_ids=set())
     assert len(rows) == 1
     assert rows[0]["session_id"] == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 
@@ -2438,9 +2423,7 @@ def test_process_scan_rejects_whitespace_only_env_session_id(monkeypatch):
     )
     _patch_process_iter(monkeypatch, [proc])
 
-    rows = local_health_service._collect_managed_sessions_by_process(
-        now=now, existing_session_ids=set()
-    )
+    rows = local_health_service._collect_managed_sessions_by_process(existing_session_ids=set())
     assert rows == []
 
 
@@ -2455,9 +2438,7 @@ def test_process_scan_rejects_non_uuid_argv_session_id(monkeypatch):
     )
     _patch_process_iter(monkeypatch, [proc])
 
-    rows = local_health_service._collect_managed_sessions_by_process(
-        now=now, existing_session_ids=set()
-    )
+    rows = local_health_service._collect_managed_sessions_by_process(existing_session_ids=set())
     assert rows == []
 
 
@@ -2472,9 +2453,7 @@ def test_process_scan_env_wins_over_argv(monkeypatch):
     )
     _patch_process_iter(monkeypatch, [proc])
 
-    rows = local_health_service._collect_managed_sessions_by_process(
-        now=now, existing_session_ids=set()
-    )
+    rows = local_health_service._collect_managed_sessions_by_process(existing_session_ids=set())
     assert len(rows) == 1
     assert rows[0]["session_id"] == "env11111-2222-4333-8444-555566667777"
 
@@ -2496,9 +2475,7 @@ def test_process_scan_continues_past_access_denied_env(monkeypatch):
     )
     _patch_process_iter(monkeypatch, [blocked, visible])
 
-    rows = local_health_service._collect_managed_sessions_by_process(
-        now=now, existing_session_ids=set()
-    )
+    rows = local_health_service._collect_managed_sessions_by_process(existing_session_ids=set())
     session_ids = {row["session_id"] for row in rows}
     assert session_ids == {
         "11111111-1111-4111-8111-111111111111",
@@ -2526,9 +2503,7 @@ def test_process_scan_dedupes_duplicate_session_ids(monkeypatch):
     )
     _patch_process_iter(monkeypatch, [first, second])
 
-    rows = local_health_service._collect_managed_sessions_by_process(
-        now=now, existing_session_ids=set()
-    )
+    rows = local_health_service._collect_managed_sessions_by_process(existing_session_ids=set())
     assert len(rows) == 1
     assert rows[0]["pid"] == 30001
     assert rows[0]["cwd"] == "/Users/test/first"
@@ -2602,7 +2577,7 @@ def test_collect_local_health_reports_claude_managed_session_via_process_scan(mo
     monkeypatch.setattr(
         local_health_service,
         "_collect_managed_sessions_by_process",
-        lambda *, now, existing_session_ids, phase_overlay=None, scanned_processes=None: [
+        lambda *, existing_session_ids, phase_overlay=None, scanned_processes=None: [
             {
                 "session_id": "bfb567fb-7e0f-4552-8411-24f682751484",
                 "provider": "claude",
