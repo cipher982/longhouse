@@ -352,6 +352,8 @@ def test_collect_local_health_healthy(monkeypatch, tmp_path: Path):
     assert snapshot["severity"] == "green"
     assert snapshot["headline"] == "Longhouse shipping healthy"
     assert snapshot["engine_status"]["fresh"] is True
+    assert snapshot["transport_health"]["status"] == "healthy"
+    assert snapshot["transport_health"]["status_summary"] == "Shipping healthy."
     assert snapshot["activity_summary"]["exists"] is False
     assert snapshot["launch_readiness"]["state"] == "unconfigured"
 
@@ -365,7 +367,44 @@ def test_collect_local_health_degraded_while_waiting_for_first_status(monkeypatc
     assert snapshot["health_state"] == "degraded"
     assert snapshot["severity"] == "yellow"
     assert "engine_status_missing" in snapshot["reasons"]
+    assert snapshot["transport_health"] is None
     assert "first local status update" in snapshot["headline"].lower()
+
+
+def test_collect_local_health_uses_shared_transport_burst_classifier(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(
+        tmp_path,
+        age_seconds=5,
+        payload={
+            "ship_attempts_1h": 20,
+            "ship_successes_1h": 18,
+            "ship_connect_errors_1h": 2,
+        },
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "degraded"
+    assert "connect_errors" in snapshot["reasons"]
+    assert snapshot["transport_health"]["status"] == "degraded"
+    assert snapshot["transport_health"]["status_reason"] == "connect_errors"
+    assert snapshot["transport_health"]["status_summary"] == "2 ship connect error(s) in the last hour."
+
+
+def test_collect_local_health_flags_non_object_engine_status_payload(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    status_path = get_agent_status_path(tmp_path)
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    status_path.write_text('"broken"')
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "broken"
+    assert "engine_status_unreadable" in snapshot["reasons"]
+    assert snapshot["transport_health"] is None
 
 
 def test_collect_local_health_degraded_when_status_is_aging(monkeypatch, tmp_path: Path):
