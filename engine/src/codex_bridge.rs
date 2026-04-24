@@ -183,7 +183,6 @@ struct BridgeContext {
     state_file: PathBuf,
     state: BridgeStateFile,
     runtime: BridgeRuntimeSink,
-    current_exe: PathBuf,
     last_progress_emit: Option<Instant>,
     runtime_tracker: CodexRuntimeTracker,
     subscribed_thread_id: Option<String>,
@@ -587,8 +586,6 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     // would replace the inode and break the lock.
     acquire_bridge_lock(&bridge_lock_path(&config.state_file))?;
 
-    let current_exe =
-        std::env::current_exe().context("resolving current executable for codex-bridge run")?;
     let mut client = spawn_app_server_client(&config).await?;
     let ws_url = client.ws_url.clone();
 
@@ -635,7 +632,6 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
             thread_id: None,
             local_db_path: resolve_bridge_agent_db_path(config.longhouse_home.as_deref()).ok(),
         },
-        current_exe,
         last_progress_emit: None,
         runtime_tracker: CodexRuntimeTracker::default(),
         subscribed_thread_id: None,
@@ -2551,7 +2547,6 @@ mod tests {
                 thread_id: None,
                 local_db_path: Some(resolve_bridge_agent_db_path(Some(temp.path())).unwrap()),
             },
-            current_exe: PathBuf::from("/bin/echo"),
             last_progress_emit: None,
             runtime_tracker: CodexRuntimeTracker::default(),
             subscribed_thread_id: None,
