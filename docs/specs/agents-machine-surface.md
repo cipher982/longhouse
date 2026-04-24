@@ -127,6 +127,8 @@ The browser owns presentation-first routes such as `/api/timeline/*`.
 That browser surface is a veneer, not the canon:
 
 - browser routes use browser auth and browser-specific UX concerns
+- hosted iOS companion flows are user-auth clients too, so they stay on the
+  browser/user surface instead of presenting a machine token
 - machine clients should prefer `/api/agents/*`
 - new machine-first features should not launch only under `/api/timeline/*`
 - duplicated browser and machine routes should share service logic where practical, but contract ownership stays with the machine surface
