@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "collected_at": "2026-04-24T00:45:00Z",
+  "health_state": "healthy",
+  "severity": "green",
+  "headline": "Longhouse shipping healthy",
+  "reasons": [],
+  "suggested_actions": [],
+  "service": {
+    "platform": "macos",
+    "status": "running",
+    "service_name": "com.longhouse.shipper",
+    "service_file": "/Users/davidrose/Library/LaunchAgents/com.longhouse.shipper.plist",
+    "log_path": "/Users/davidrose/.longhouse/agent/logs/engine.log.*"
+  },
+  "engine_status": {
+    "path": "/Users/davidrose/.longhouse/agent/engine-status.json",
+    "exists": true,
+    "fresh": true,
+    "age_seconds": 3,
+    "payload": {
+      "version": "0.1.15-dev+aaaaaaaa.dirty",
+      "daemon_pid": 24653,
+      "last_ship_at": "2026-04-24T00:44:58Z",
+      "spool_pending_count": 0,
+      "spool_dead_count": 0,
+      "parse_error_count_1h": 0,
+      "consecutive_ship_failures": 0,
+      "disk_free_bytes": 37299638272,
+      "is_offline": false,
+      "recent_dead_letters": [],
+      "last_updated": "2026-04-24T00:44:59Z",
+      "build": {
+        "version": "0.1.15",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "commit_short": "aaaaaaaa",
+        "dirty": true,
+        "built_at": "2026-04-24T00:30:00Z",
+        "channel": "dev"
+      },
+      "binary_path": "/Users/davidrose/git/zerg/engine/target/release/longhouse-engine",
+      "binary_mtime": "2026-04-24T00:44:00Z",
+      "daemon_started_at": "2026-04-24T00:30:05Z"
+    },
+    "error": null
+  },
+  "outbox": {
+    "path": "/Users/davidrose/.longhouse/agent/outbox",
+    "file_count": 0,
+    "oldest_age_seconds": null
+  },
+  "activity_summary": {
+    "path": "/Users/davidrose/.longhouse/agent/longhouse-shipper.db",
+    "exists": true,
+    "error": null,
+    "sessions_today": 14,
+    "sessions_recent": 3,
+    "provider_counts_today": {
+      "claude": 8,
+      "codex": 5
+    },
+    "provider_counts_recent": {
+      "claude": 2,
+      "codex": 1
+    },
+    "recent_touches": [
+      { "provider": "claude", "workspace_label": "zerg", "last_updated": "2026-04-24T00:44:58Z" }
+    ],
+    "session_recency_bands": [
+      { "label": "0-1m", "session_count": 0 },
+      { "label": "1-5m", "session_count": 0 },
+      { "label": "5-15m", "session_count": 3 },
+      { "label": "15-60m", "session_count": 5 },
+      { "label": "1-6h", "session_count": 2 },
+      { "label": "6h+", "session_count": 4 }
+    ],
+    "latest_activity_at": "2026-04-24T00:44:58Z",
+    "recent_window_minutes": 15
+  },
+  "launch_readiness": {
+    "state": "ready",
+    "headline": "Managed launch configuration looks coherent",
+    "reasons": [],
+    "suggested_actions": [],
+    "stored_url": "https://demo.longhouse.test",
+    "machine_name": "cinder",
+    "service_machine_name": "cinder",
+    "runner": {
+      "path": "/Users/davidrose/.config/longhouse/runner.env",
+      "exists": true,
+      "error": null,
+      "runner_name": "cinder",
+      "runner_id": null,
+      "runner_urls": [
+        "https://demo.longhouse.test"
+      ],
+      "install_mode": "desktop"
+    }
+  },
+  "build": {
+    "installed": {
+      "version": "0.1.15",
+      "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "commit_short": "bbbbbbbb",
+      "dirty": true,
+      "built_at": "2026-04-24T00:44:00Z",
+      "channel": "dev"
+    },
+    "engine": {
+      "version": "0.1.15",
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "commit_short": "aaaaaaaa",
+      "dirty": true,
+      "built_at": "2026-04-24T00:30:00Z",
+      "channel": "dev"
+    },
+    "engine_restart_pending": true,
+    "restart_pending_reasons": {
+      "commit_mismatch": true,
+      "binary_newer_than_daemon": false
+    }
+  }
+}

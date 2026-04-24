@@ -94,7 +94,7 @@ We collapse `/api/version` and `/api/system/info` version-adjacent fields into `
 
 ### Mismatch detection
 
-`longhouse connect --status` and the menu bar both compare CLI / engine / app short SHAs. If they diverge, the surface shows `build drift` and names which components disagree. This is the operator-facing answer to "something's wrong after an update."
+`longhouse connect --status` and the menu bar compare the installed Longhouse build against the running engine daemon. If the daemon is still on the old binary after `make install-engine` or `make install-cli`, the surface shows `engine restart pending` instead of a scary broken-state warning. This is the operator-facing answer to "what still needs a restart after an update?"
 
 ## Build-time wiring
 
@@ -144,7 +144,7 @@ The Makefile / `scripts/` sprawl problem is real but orthogonal. Tracked as a se
 ## Out of scope for v1
 
 - Delta / differential updates for the CLI. PyPI `uv tool upgrade` stays the upgrade path.
-- Auto-rollback on build drift. Menu bar shows the warning; user acts.
+- Auto-rollback on engine restart pending or related build mismatch states. Menu bar shows the warning; user acts.
 - Per-commit build identity for hosted runtime beyond SHA. If someone wants "which push landed on demo at 3:14pm" that's in `/api/health` already.
 - Signing/attestation of `build-identity.json`. Trust model is "same repo, same developer" for now.
 
@@ -160,7 +160,7 @@ The Makefile / `scripts/` sprawl problem is real but orthogonal. Tracked as a se
 1. **P0** — this spec + docket item (done).
 2. **P1** — `generate_build_identity.py` + tests.
 3. **P2** — Python build-identity module, CLI `--version`, `/api/health` `build` block. Wheel force-includes the JSON. `make dogfood-refresh` switches to wheel build+install.
-4. **P3** — Engine `build.rs` + `BuildIdentity` struct. `longhouse-engine --version` prints qualified string. Engine stamps identity into `~/.claude/engine-status.json`. Menu bar reads and displays. Drift detection (CLI vs engine vs app short SHAs).
+4. **P3** — Engine `build.rs` + `BuildIdentity` struct. `longhouse-engine --version` prints qualified string. Engine stamps identity into `~/.claude/engine-status.json`. Menu bar reads and displays. Restart-pending detection (installed build vs running engine daemon).
 5. **P4** — iOS xcconfig + XcodeGen build phase + Swift reader + About screen.
 6. **P5** — `.bumpversion.toml` + shared-version wrapper replacing the in-line semver rewriter in `release.sh`.
 7. **P6** — cleanup: strip hardcoded `0.1.15-local` fallback strings, kill `/api/version` if redundant, record AGENTS.md learning.

@@ -278,8 +278,8 @@ public struct MenuBarPanelView: View {
                 subtleChip(title: updateChip, tint: .yellow)
             }
 
-            if let driftChip = snapshot.buildDriftChipLabel {
-                subtleChip(title: driftChip, tint: .orange)
+            if let restartChip = snapshot.restartPendingChipLabel {
+                subtleChip(title: restartChip, tint: .yellow)
             }
         }
     }
