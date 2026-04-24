@@ -823,19 +823,22 @@ class AgentsStore:
 
         Hash is based on content that uniquely identifies an event.
         """
-        content = json.dumps(
-            {
-                "role": event.role,
-                "content_text": event.content_text,
-                "tool_name": event.tool_name,
-                "tool_input_json": event.tool_input_json,
-                "tool_output_text": event.tool_output_text,
-                "tool_call_id": event.tool_call_id,
-                "timestamp": event.timestamp.isoformat(),
-            },
-            sort_keys=True,
-            default=str,
-        )
+        payload: dict[str, Any] = {
+            "role": event.role,
+            "content_text": event.content_text,
+            "tool_name": event.tool_name,
+            "tool_input_json": event.tool_input_json,
+            "tool_output_text": event.tool_output_text,
+            "tool_call_id": event.tool_call_id,
+        }
+        if event.raw_json:
+            # Stable replays of the same source line should not drift just because
+            # the parser normalized timestamp tzinfo differently on a later ingest.
+            payload["source_line_hash"] = self._compute_line_hash(event.raw_json)
+        else:
+            payload["timestamp"] = event.timestamp.isoformat()
+
+        content = json.dumps(payload, sort_keys=True, default=str)
         return hashlib.sha256(content.encode()).hexdigest()
 
     def _compute_line_hash(self, raw_json: str) -> str:
