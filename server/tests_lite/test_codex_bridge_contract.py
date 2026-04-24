@@ -144,9 +144,8 @@ def test_bridge_state_file_schema_matches_python_reader(tmp_path: Path) -> None:
         # Only run the Python collector while the engine is alive. Otherwise
         # `_bridge_is_alive` considers the state stale and purges it.
         if lock_held and proc.poll() is None:
-            latest_activity_at, sessions, orphans = _collect_managed_codex_sessions(base_dir)
+            sessions, orphans = _collect_managed_codex_sessions(base_dir)
             # No binding rows exist, so the bridge shows up as an orphan.
-            assert latest_activity_at is not None
             assert sessions == []
             assert len(orphans) == 1
             orphan = orphans[0]

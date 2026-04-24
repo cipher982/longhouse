@@ -1202,16 +1202,15 @@ def _collect_managed_codex_sessions(
     base_dir: Path,
     *,
     phase_overlay: dict[str, dict[str, str | None]] | None = None,
-) -> tuple[str | None, list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     state_dir = _codex_bridge_state_dir(base_dir)
     if not state_dir.exists():
-        return None, [], []
+        return [], []
 
     process_rows = _collect_process_rows()
     binding_by_session = _binding_by_session_id(base_dir)
     sessions: list[dict[str, Any]] = []
     orphan_bridges: list[dict[str, Any]] = []
-    latest_activity_at: str | None = None
 
     for path in sorted(state_dir.glob("*.json")):
         try:
@@ -1226,7 +1225,6 @@ def _collect_managed_codex_sessions(
         ws_url = _normalize_optional_string(state.get("ws_url"))
         session_id = _normalize_optional_string(state.get("session_id"))
         bridge_updated_at = _normalize_optional_string(state.get("updated_at"))
-        latest_activity_at = _max_rfc3339(latest_activity_at, bridge_updated_at)
 
         attached_process = _find_attached_codex_process(process_rows, ws_url)
         binding = binding_by_session.get(session_id or "")
@@ -1309,7 +1307,7 @@ def _collect_managed_codex_sessions(
             }
         )
 
-    return latest_activity_at, sessions, orphan_bridges
+    return sessions, orphan_bridges
 
 
 _UUID_RE = re.compile(
@@ -1470,7 +1468,6 @@ def _collect_unmanaged_processes(
 
 def _merge_managed_sessions(
     *,
-    bridge_latest_activity_at: str | None,
     bridge_sessions: list[dict[str, Any]],
     bridge_orphans: list[dict[str, Any]],
     process_sessions: list[dict[str, Any]],
@@ -1491,9 +1488,11 @@ def _merge_managed_sessions(
     if not sessions and not bridge_orphans:
         return None, [], []
 
-    latest_activity_at = bridge_latest_activity_at
+    latest_activity_at = None
     for row in sessions:
         latest_activity_at = _max_rfc3339(latest_activity_at, row.get("last_activity_at"))
+    for row in bridge_orphans:
+        latest_activity_at = _max_rfc3339(latest_activity_at, row.get("heartbeat_at"), row.get("started_at"))
 
     managed_summary = {
         "attached_count": sum(1 for item in sessions if item.get("state") == "attached"),
@@ -1964,7 +1963,7 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
     activity_summary = _collect_activity_summary(resolved_base_dir, now=now)
     with _process_snapshot_scope():
         provider_processes = _scan_provider_processes()
-        bridge_latest_activity_at, bridge_sessions, orphan_bridges = _collect_managed_codex_sessions(
+        bridge_sessions, orphan_bridges = _collect_managed_codex_sessions(
             resolved_base_dir,
             phase_overlay=phase_overlay,
         )
@@ -1976,7 +1975,6 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
         )
         unmanaged_processes = _collect_unmanaged_processes(scanned_processes=provider_processes)
     managed_summary, managed_sessions, orphan_bridges = _merge_managed_sessions(
-        bridge_latest_activity_at=bridge_latest_activity_at,
         bridge_sessions=bridge_sessions,
         bridge_orphans=orphan_bridges,
         process_sessions=process_sessions,
