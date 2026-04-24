@@ -1275,6 +1275,9 @@ def _collect_managed_codex_summary(
         if reason_codes:
             normalized_state = "degraded"
         phase_state = phase_overlay.get(session_id or "") if phase_overlay else None
+        workspace_label = _normalize_optional_string(phase_state.get("workspace_label")) if phase_state else None
+        if workspace_label is None:
+            workspace_label = Path(str(state.get("cwd") or "")).name or None
         phase_observed_at = phase_state.get("observed_at") if phase_state else None
         phase_last_activity_at = phase_state.get("last_activity_at") if phase_state else None
 
@@ -1282,7 +1285,7 @@ def _collect_managed_codex_summary(
             {
                 "session_id": session_id,
                 "provider": "codex",
-                "workspace_label": Path(str(state.get("cwd") or "")).name or None,
+                "workspace_label": workspace_label,
                 "branch": None,
                 "state": normalized_state,
                 "raw_phase": phase_state.get("phase") if phase_state else None,
@@ -1398,6 +1401,12 @@ def _collect_managed_sessions_by_process(
 
         provider = _normalize_optional_string(proc_row.get("provider")) or "unknown"
         phase_state = phase_overlay.get(session_id or "") if phase_overlay else None
+        workspace_label = _normalize_optional_string(phase_state.get("workspace_label")) if phase_state else None
+        if workspace_label is None:
+            workspace_label = _normalize_optional_string(proc_row.get("workspace_label"))
+        workspace_path = _normalize_optional_string(phase_state.get("workspace_path")) if phase_state else None
+        if workspace_path is None:
+            workspace_path = _normalize_optional_string(proc_row.get("cwd"))
         phase_observed_at = phase_state.get("observed_at") if phase_state else None
 
         sessions.append(
@@ -1405,8 +1414,8 @@ def _collect_managed_sessions_by_process(
                 "session_id": session_id,
                 "provider": provider,
                 "pid": proc_row.get("pid"),
-                "workspace_label": _normalize_optional_string(proc_row.get("workspace_label")),
-                "cwd": _normalize_optional_string(proc_row.get("cwd")),
+                "workspace_label": workspace_label,
+                "cwd": workspace_path,
                 "device_id": _normalize_optional_string(proc_row.get("device_id")),
                 "started_at": started_at,
                 "branch": None,
