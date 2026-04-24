@@ -1,5 +1,5 @@
 """Rust-to-Python contract: the state file written by `longhouse-engine
-codex-bridge run` must carry exactly the fields `_collect_managed_codex_summary`
+codex-bridge run` must carry exactly the fields `_collect_managed_codex_sessions`
 inspects, with the right JSON types.
 
 This catches drift between engine/src/codex_bridge.rs::BridgeStateFile and
@@ -27,7 +27,7 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from zerg.services.local_health import (  # noqa: E402
     BRIDGE_STATUS_DIR,
-    _collect_managed_codex_summary,
+    _collect_managed_codex_sessions,
 )
 
 ENGINE_BIN = shutil.which("longhouse-engine")
@@ -58,7 +58,7 @@ def _wait_for_lock_held(lock_path: Path, deadline: float) -> bool:
 
 
 def test_bridge_state_file_schema_matches_python_reader(tmp_path: Path) -> None:
-    """Engine writes every field `_collect_managed_codex_summary` reads."""
+    """Engine writes every field `_collect_managed_codex_sessions` reads."""
     # base_dir mimics `~/.longhouse`; state dir resolves to
     # `<base_dir.parent>/.claude/managed-local/codex-bridge`.
     base_dir = tmp_path / ".longhouse"
@@ -111,7 +111,7 @@ def test_bridge_state_file_schema_matches_python_reader(tmp_path: Path) -> None:
         raw = json.loads(state_file.read_text())
 
         # Fields the Python reader inspects. Types must match what
-        # `_collect_managed_codex_summary` + `_normalize_optional_string`
+        # `_collect_managed_codex_sessions` + `_normalize_optional_string`
         # + `_managed_session_phase` expect.
         assert isinstance(raw["session_id"], str) and raw["session_id"] == SESSION_ID
         assert isinstance(raw["pid"], int) and raw["pid"] > 0
@@ -144,10 +144,10 @@ def test_bridge_state_file_schema_matches_python_reader(tmp_path: Path) -> None:
         # Only run the Python collector while the engine is alive. Otherwise
         # `_bridge_is_alive` considers the state stale and purges it.
         if lock_held and proc.poll() is None:
-            now = datetime.now(timezone.utc)
-            summary, sessions, orphans = _collect_managed_codex_summary(base_dir, now=now)
+            latest_activity_at, sessions, orphans = _collect_managed_codex_sessions(base_dir)
             # No binding rows exist, so the bridge shows up as an orphan.
-            assert summary is not None
+            assert latest_activity_at is not None
+            assert sessions == []
             assert len(orphans) == 1
             orphan = orphans[0]
             assert orphan["session_id"] == SESSION_ID
