@@ -80,8 +80,7 @@ async def semantic_search_sessions(
             cache.load_session_embeddings(db, config.model, config.dims)
 
         results = cache.search_sessions(query_vec, limit=limit, session_filter=valid_ids)
-        ordered_ids = [sid for sid, _score in results]
-        session_map = {str(session.id): session for session in db.query(AgentSession).filter(AgentSession.id.in_(ordered_ids)).all()}
+        session_map = {str(session.id): session for session in store.get_sessions_ordered([sid for sid, _score in results])}
         for sid, score in results:
             session = session_map.get(str(sid))
             if not session:
@@ -105,7 +104,7 @@ async def semantic_search_sessions(
             unique_session_ids.append(sid_str)
             seen_sessions.add(sid_str)
 
-        session_map = {str(session.id): session for session in db.query(AgentSession).filter(AgentSession.id.in_(unique_session_ids)).all()}
+        session_map = {str(session.id): session for session in store.get_sessions_ordered(unique_session_ids)}
         seen_sessions.clear()
         for sid, _chunk_index, score, event_start, _event_end in turn_hits:
             sid_str = str(sid)
