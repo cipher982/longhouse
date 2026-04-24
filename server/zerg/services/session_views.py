@@ -25,8 +25,6 @@ from zerg.services.agents_store import AgentsStore
 from zerg.services.managed_local_transport import build_managed_local_attach_command
 from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_runtime import SessionRuntimeView
-from zerg.services.session_runtime import load_runtime_state_map  # noqa: F401 — re-exported
-from zerg.services.session_runtime import resolve_runtime_overlay  # noqa: F401 — re-exported
 from zerg.services.session_runtime import should_include_runtime_view
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_loop_mode import SessionLoopMode

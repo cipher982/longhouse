@@ -23,9 +23,9 @@ from zerg.services.agents_store import AgentsStore
 from zerg.services.session_messages import MESSAGE_STATUS_DELIVERING
 from zerg.services.session_messages import MESSAGE_STATUS_FAILED
 from zerg.services.session_messages import MESSAGE_STATUS_QUEUED
+from zerg.services.session_runtime import load_runtime_state_map
+from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.session_views import WallSessionResponse
-from zerg.services.session_views import load_runtime_state_map
-from zerg.services.session_views import resolve_runtime_overlay
 
 
 def serialize_session_message(message: SessionMessage, *, delivery_status: str | None = None) -> dict[str, Any]:

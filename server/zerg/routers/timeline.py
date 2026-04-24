@@ -44,6 +44,7 @@ from zerg.routers import agents_search as _search_router
 from zerg.routers import agents_sessions as _sessions_router
 from zerg.services.agents_store import AgentsStore
 from zerg.services.session_runtime import load_runtime_state_map
+from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.session_views import DemoSeedResponse
 from zerg.services.session_views import EventsListResponse
 from zerg.services.session_views import FiltersResponse
@@ -63,7 +64,6 @@ from zerg.services.session_views import SessionTurnsListResponse
 from zerg.services.session_views import SessionWorkspaceResponse
 from zerg.services.session_views import build_session_response
 from zerg.services.session_views import normalize_utc_datetime
-from zerg.services.session_views import resolve_runtime_overlay
 from zerg.utils.server_timing import ServerTimingRecorder
 from zerg.utils.time import UTCBaseModel
 
