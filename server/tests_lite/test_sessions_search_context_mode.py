@@ -252,3 +252,54 @@ def test_semantic_search_batches_thread_meta_for_result_set(tmp_path):
 
     assert len(batch_calls) == 1
     assert set(batch_calls[0]) == {first_id, second_id}
+
+
+def test_recall_active_context_dedupes_session_boundary_lookups(tmp_path):
+    factory = _make_db(tmp_path)
+    _seed_compacted_session(factory)
+
+    boundary_calls: list[str] = []
+    original_get_active_context_boundary = AgentsStore.get_active_context_boundary
+
+    class FakeEmbeddingCache:
+        def __init__(self):
+            self._session_loaded = False
+            self._turn_loaded = False
+
+        def load_session_embeddings(self, db, model, dims):
+            self._session_loaded = True
+
+        def load_turn_embeddings(self, db, model, dims):
+            self._turn_loaded = True
+
+        def search_turns(self, query_vec, limit, session_filter):
+            assert len(session_filter) == 1
+            session_id = next(iter(session_filter))
+            return [
+                (session_id, 0, 0.91, 3, 3),
+                (session_id, 1, 0.82, 4, 4),
+            ]
+
+    async def fake_generate_embedding(query, config):
+        return [0.1, 0.2, 0.3]
+
+    def record_get_active_context_boundary(self, session_id, *, branch_mode="head"):
+        boundary_calls.append(str(session_id))
+        return original_get_active_context_boundary(self, session_id, branch_mode=branch_mode)
+
+    with (
+        patch("zerg.models_config.get_embedding_config_with_db_fallback", return_value=SimpleNamespace(model="fake", dims=3)),
+        patch("zerg.services.embedding_cache.EmbeddingCache", FakeEmbeddingCache),
+        patch("zerg.services.session_processing.embeddings.generate_embedding", fake_generate_embedding),
+        patch.object(AgentsStore, "get_active_context_boundary", record_get_active_context_boundary),
+    ):
+        for client in _get_client(factory):
+            resp = client.get(
+                "/agents/recall",
+                params={"query": "continue migration", "days_back": 90, "context_mode": "active_context", "max_results": 5},
+            )
+            assert resp.status_code == 200, resp.text
+            payload = resp.json()
+            assert payload["total"] == 2
+
+    assert len(boundary_calls) == 1
