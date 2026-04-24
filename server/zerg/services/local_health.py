@@ -1368,7 +1368,6 @@ def _scan_provider_processes() -> list[dict[str, Any]]:
 
 def _collect_managed_sessions_by_process(
     *,
-    now: datetime,
     existing_session_ids: set[str],
     phase_overlay: dict[str, dict[str, str | None]] | None = None,
     scanned_processes: list[dict[str, Any]] | None = None,
@@ -1971,7 +1970,6 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
         )
         bridge_session_ids = {row.get("session_id") for row in bridge_sessions if row.get("session_id")}
         process_sessions = _collect_managed_sessions_by_process(
-            now=now,
             existing_session_ids=bridge_session_ids,
             phase_overlay=phase_overlay,
             scanned_processes=provider_processes,
