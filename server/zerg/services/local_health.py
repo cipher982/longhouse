@@ -602,47 +602,83 @@ def _collect_build_identity(*, engine_status: dict[str, Any]) -> dict[str, Any]:
     """Compare CLI build identity against engine build identity.
 
     Returns the CLI identity, engine identity (short SHA only, since that's
-    all we need for drift detection), and a list of drifting components.
-    A drift means the short SHAs disagree; same commit_short = same build.
+    all we need for drift detection), and whether the running engine daemon
+    is behind the installed/on-disk binary.
+
+    We report "engine restart pending" instead of a scary drift pill when:
+    - the engine daemon's build commit_short differs from the installed CLI's, OR
+    - the engine daemon's current_exe mtime is newer than its daemon_started_at
+      (binary replaced on disk since the daemon started — e.g. after `make
+      install-engine`).
+
+    This is a benign state, not an error. Daemons don't hot-reload; the user
+    just needs to restart the shipper when convenient.
     """
     from zerg.build_info import BuildIdentityMissing
     from zerg.build_info import load as load_build_identity
 
-    cli_block: dict[str, Any]
+    installed_block: dict[str, Any]
     try:
         cli = load_build_identity()
-        cli_block = cli.as_dict()
-        cli_short: str | None = cli.commit_short
+        installed_block = cli.as_dict()
+        installed_short: str | None = cli.commit_short
     except BuildIdentityMissing as exc:
-        cli_block = {"error": "missing", "detail": str(exc)}
-        cli_short = None
+        installed_block = {"error": "missing", "detail": str(exc)}
+        installed_short = None
 
     # engine-status.json is engine-controlled but user-writable; guard
-    # against corrupt payloads (non-object top level, non-object build) so
-    # local-health degrades cleanly instead of raising and taking the whole
-    # menu bar snapshot down.
+    # against corrupt payloads so local-health degrades cleanly instead of
+    # raising and taking the whole menu bar snapshot down.
     raw_payload = engine_status.get("payload") if engine_status else None
     engine_payload: Mapping[str, Any] = raw_payload if isinstance(raw_payload, Mapping) else {}
     raw_engine_build = engine_payload.get("build")
     engine_build: Mapping[str, Any] = raw_engine_build if isinstance(raw_engine_build, Mapping) else {}
     engine_short = engine_build.get("commit_short") if engine_build else None
 
-    components: list[dict[str, Any]] = []
-    if cli_short:
-        components.append({"name": "cli", "commit_short": cli_short})
-    if engine_short:
-        components.append({"name": "engine", "commit_short": engine_short})
+    binary_mtime_raw = engine_payload.get("binary_mtime") if engine_payload else None
+    daemon_started_at_raw = engine_payload.get("daemon_started_at") if engine_payload else None
+    binary_mtime = _parse_iso8601(binary_mtime_raw)
+    daemon_started_at = _parse_iso8601(daemon_started_at_raw)
 
-    # Drift: two or more components with different commit_short values.
-    shorts = {c["commit_short"] for c in components}
-    drift = len(shorts) > 1
+    commit_mismatch = bool(installed_short and engine_short and installed_short != engine_short)
+    binary_newer_than_daemon = binary_mtime is not None and daemon_started_at is not None and binary_mtime > daemon_started_at
+    engine_restart_pending = commit_mismatch or binary_newer_than_daemon
 
     return {
-        "cli": cli_block,
+        "installed": installed_block,
         "engine": engine_build if engine_build else None,
-        "drift": drift,
-        "components": components,
+        "engine_restart_pending": engine_restart_pending,
+        "restart_pending_reasons": {
+            "commit_mismatch": commit_mismatch,
+            "binary_newer_than_daemon": binary_newer_than_daemon,
+        },
+        # Back-compat for existing menu bar / clients that still key off `cli`
+        # and `drift`. Safe to remove once HealthSnapshot.swift is updated.
+        "cli": installed_block,
+        "drift": engine_restart_pending,
+        "components": [
+            component
+            for component in (
+                {"name": "cli", "commit_short": installed_short} if installed_short else None,
+                {"name": "engine", "commit_short": engine_short} if engine_short else None,
+            )
+            if component is not None
+        ],
     }
+
+
+def _parse_iso8601(value: Any) -> datetime | None:
+    """Parse an ISO-8601 string emitted by the engine. Returns None on any
+    failure — the caller treats a missing/unparseable value as "can't tell"
+    and falls back to commit_short comparison alone."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        # datetime.fromisoformat in Py 3.11+ handles most RFC 3339 shapes,
+        # including the fractional seconds + offset the engine emits.
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def _collect_engine_status(base_dir: Path, *, now: datetime) -> dict[str, Any]:
