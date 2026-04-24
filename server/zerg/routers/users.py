@@ -14,6 +14,7 @@ from fastapi import HTTPException
 from fastapi import Query
 from fastapi import UploadFile
 from fastapi import status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from zerg.crud import update_user
@@ -23,9 +24,12 @@ from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
 from zerg.events import EventType
 from zerg.events.decorators import publish_event
+from zerg.models.user import User
 from zerg.schemas.schemas import UserOut
 from zerg.schemas.schemas import UserUpdate
 from zerg.schemas.usage import UserUsageResponse
+from zerg.services.apns_sender import set_user_apns_enabled
+from zerg.services.apns_sender import user_apns_enabled
 
 # Avatar helper
 from zerg.services.avatar_service import store_avatar_for_user
@@ -34,6 +38,14 @@ from zerg.services.avatar_service import store_avatar_for_user
 from zerg.services.usage_service import get_user_usage
 
 router = APIRouter(tags=["users"], dependencies=[Depends(get_current_user)])
+
+
+class UserNotificationSettingsResponse(BaseModel):
+    apns_enabled: bool
+
+
+class UserNotificationSettingsUpdate(BaseModel):
+    apns_enabled: bool
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +107,32 @@ async def update_current_user(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     return updated
+
+
+@router.get("/users/me/notifications", response_model=UserNotificationSettingsResponse)
+def read_current_user_notification_settings(current_user=Depends(get_current_user)) -> UserNotificationSettingsResponse:
+    """Return the authenticated user's mobile notification settings."""
+
+    return UserNotificationSettingsResponse(apns_enabled=user_apns_enabled(current_user))
+
+
+@router.patch("/users/me/notifications", response_model=UserNotificationSettingsResponse)
+@publish_event(EventType.USER_UPDATED)
+async def update_current_user_notification_settings(
+    patch: UserNotificationSettingsUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+) -> UserNotificationSettingsResponse:
+    """Update mobile notification preferences for the authenticated user."""
+
+    user = db.query(User).filter(User.id == current_user.id).first()
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    set_user_apns_enabled(user, patch.apns_enabled)
+    db.commit()
+    db.refresh(user)
+    return UserNotificationSettingsResponse(apns_enabled=user_apns_enabled(user))
 
 
 # ---------------------------------------------------------------------------

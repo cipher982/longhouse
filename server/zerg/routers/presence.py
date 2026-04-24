@@ -44,6 +44,8 @@ from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
+from zerg.services.apns_sender import prepare_session_attention_push
+from zerg.services.apns_sender import send_session_attention_push
 from zerg.services.session_messages import deliver_queued_session_messages
 from zerg.services.session_messages import is_session_message_deliverable_state
 from zerg.services.session_messages import resolve_session_message_owner_id
@@ -145,7 +147,10 @@ async def upsert_presence(
             now=_now,
         ).presence_state
 
-    def _do_presence_writes(write_db: Session) -> str | None:
+    owner_id = resolve_session_message_owner_id(db, _token)
+
+    def _do_presence_writes(write_db: Session):
+        previous_presence_state = _canonical_presence_state(write_db, session_uuid)
         ingest_result: RuntimeEventBatchResult = ingest_runtime_events(write_db, [runtime_event])
         canonical_presence_state = _canonical_presence_state(write_db, session_uuid)
         if (
@@ -161,16 +166,29 @@ async def upsert_presence(
                 {"user_state": "active", "user_state_at": _now},
                 synchronize_session=False,
             )
-        return canonical_presence_state
+        attention_push = prepare_session_attention_push(
+            write_db,
+            owner_id=owner_id,
+            session_id=session_uuid,
+            previous_state=previous_presence_state,
+            current_state=canonical_presence_state,
+            occurred_at=_now,
+        )
+        return canonical_presence_state, attention_push
 
     ws = get_write_serializer()
-    canonical_presence_state = await ws.execute_or_direct(_do_presence_writes, db, label="presence")
+    canonical_presence_state, attention_push = await ws.execute_or_direct(_do_presence_writes, db, label="presence")
 
     if session_uuid is not None and is_session_message_deliverable_state(canonical_presence_state):
         await deliver_queued_session_messages(
             db=db,
-            owner_id=resolve_session_message_owner_id(db, _token),
+            owner_id=owner_id,
             target_session_id=session_uuid,
             target_presence_state=canonical_presence_state,
         )
+    if attention_push is not None:
+        try:
+            await send_session_attention_push(attention_push)
+        except Exception:  # pragma: no cover - push send should never fail the hook path
+            logger.exception("Failed to send APNs attention push for session %s", attention_push.session_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

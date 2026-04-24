@@ -4,9 +4,10 @@ import SwiftUI
 struct InboxView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var viewModel = InboxViewModel()
+    @State private var path: [SessionRoute] = []
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             Group {
                 if viewModel.isInitialLoading {
                     ProgressView().controlSize(.large)
@@ -20,7 +21,16 @@ struct InboxView: View {
             }
             .navigationTitle("Inbox")
             .refreshable { await viewModel.refresh(using: appState) }
-            .task { await viewModel.load(using: appState) }
+            .task {
+                await appState.ensurePushRegistrationIfPossible()
+                await viewModel.load(using: appState)
+                consumePendingPushIfNeeded()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .longhouseOpenSessionFromPush)) { note in
+                if let sessionID = note.object as? String {
+                    openSession(sessionID: sessionID)
+                }
+            }
         }
     }
 
@@ -29,7 +39,7 @@ struct InboxView: View {
             if !viewModel.attention.isEmpty {
                 Section("Needs you") {
                     ForEach(viewModel.attention) { session in
-                        NavigationLink(value: session) {
+                        NavigationLink(value: SessionRoute(sessionId: session.id, fallbackTitle: session.title)) {
                             AttentionRow(session: session)
                         }
                     }
@@ -38,7 +48,7 @@ struct InboxView: View {
             if !viewModel.recent.isEmpty {
                 Section("Recent") {
                     ForEach(viewModel.recent) { session in
-                        NavigationLink(value: session) {
+                        NavigationLink(value: SessionRoute(sessionId: session.id, fallbackTitle: session.title)) {
                             SessionRow(session: session)
                         }
                     }
@@ -46,8 +56,8 @@ struct InboxView: View {
             }
         }
         .listStyle(.insetGrouped)
-        .navigationDestination(for: SessionSummary.self) { session in
-            SessionView(sessionId: session.id, fallbackTitle: session.title)
+        .navigationDestination(for: SessionRoute.self) { route in
+            SessionView(sessionId: route.sessionId, fallbackTitle: route.fallbackTitle)
         }
     }
 
@@ -74,6 +84,21 @@ struct InboxView: View {
         }
         .padding()
     }
+
+    private func consumePendingPushIfNeeded() {
+        if let sessionID = PushNotificationStore.consumePendingSessionID(), !sessionID.isEmpty {
+            openSession(sessionID: sessionID)
+        }
+    }
+
+    private func openSession(sessionID: String) {
+        path = [SessionRoute(sessionId: sessionID, fallbackTitle: "Session")]
+    }
+}
+
+private struct SessionRoute: Hashable {
+    let sessionId: String
+    let fallbackTitle: String
 }
 
 private struct AttentionRow: View {

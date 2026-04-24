@@ -135,6 +135,51 @@ struct LonghouseAPI: Sendable {
         }
     }
 
+    func notificationSettings() async throws -> UserNotificationSettings {
+        var request = URLRequest(url: baseURL.appendingPathComponent("/api/users/me/notifications"))
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (data, httpResponse) = try await data(for: request)
+        guard httpResponse.statusCode == 200 else {
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
+        return try JSONDecoder.snakeCase.decode(UserNotificationSettings.self, from: data)
+    }
+
+    func updateNotificationSettings(apnsEnabled: Bool) async throws -> UserNotificationSettings {
+        var request = URLRequest(url: baseURL.appendingPathComponent("/api/users/me/notifications"))
+        request.httpMethod = "PATCH"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["apns_enabled": apnsEnabled])
+
+        let (data, httpResponse) = try await data(for: request)
+        guard httpResponse.statusCode == 200 else {
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
+        return try JSONDecoder.snakeCase.decode(UserNotificationSettings.self, from: data)
+    }
+
+    func registerAPNSDevice(deviceToken: String, pushEnvironment: String, appBuildId: String?) async throws {
+        var request = URLRequest(url: baseURL.appendingPathComponent("/api/devices/apns-register"))
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        var body: [String: Any] = [
+            "device_token": deviceToken,
+            "platform": "ios",
+            "push_environment": pushEnvironment,
+        ]
+        if let appBuildId, !appBuildId.isEmpty {
+            body["app_build_id"] = appBuildId
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (_, httpResponse) = try await data(for: request)
+        guard httpResponse.statusCode == 200 else {
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
+    }
+
     func refreshSession() async throws {
         var request = URLRequest(url: baseURL.appendingPathComponent("/api/auth/refresh"))
         request.httpMethod = "POST"
@@ -202,4 +247,8 @@ extension JSONDecoder {
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         return decoder
     }()
+}
+
+struct UserNotificationSettings: Decodable, Equatable {
+    let apnsEnabled: Bool
 }

@@ -5,6 +5,10 @@ struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @State private var showingServerSheet = false
     @State private var showingSignOutConfirm = false
+    @State private var apnsEnabled = true
+    @State private var notificationsLoaded = false
+    @State private var notificationsError: String?
+    @State private var isSavingNotifications = false
 
     var body: some View {
         NavigationStack {
@@ -18,6 +22,29 @@ struct SettingsView: View {
                         Button("Change") { showingServerSheet = true }
                             .font(.callout)
                     }
+                }
+
+                Section {
+                    Toggle("iPhone push alerts", isOn: Binding(
+                        get: { apnsEnabled },
+                        set: { newValue in
+                            let previousValue = apnsEnabled
+                            apnsEnabled = newValue
+                            Task { await updateNotificationPreference(newValue, previousValue: previousValue) }
+                        }
+                    ))
+                    .disabled(!notificationsLoaded || isSavingNotifications)
+
+                    if let notificationsError {
+                        Text(notificationsError)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Notifications")
+                } footer: {
+                    Text("Alerts fire when a session needs you or becomes blocked. The app asks for iOS notification permission from Inbox the first time it opens.")
+                        .font(.caption2)
                 }
 
                 Section {
@@ -47,6 +74,9 @@ struct SettingsView: View {
                 Button("Sign out", role: .destructive) { appState.signOut() }
                 Button("Cancel", role: .cancel) { }
             }
+            .task(id: appState.serverURL) {
+                await loadNotificationSettings()
+            }
         }
     }
 
@@ -65,6 +95,50 @@ struct SettingsView: View {
             return "build identity: decode failed"
         case .failure(.invalidPayload(let reason)):
             return "build identity: invalid (\(reason))"
+        }
+    }
+
+    private func loadNotificationSettings() async {
+        notificationsLoaded = false
+        notificationsError = nil
+
+        guard let api = LonghouseAPI(host: appState.serverURL) else {
+            notificationsError = "Invalid server URL"
+            return
+        }
+
+        do {
+            let settings = try await api.notificationSettings()
+            apnsEnabled = settings.apnsEnabled
+        } catch LonghouseAPIError.notAuthenticated {
+            notificationsError = "Sign in again to manage notifications."
+        } catch {
+            notificationsError = "Couldn't load notification settings."
+        }
+
+        notificationsLoaded = true
+    }
+
+    private func updateNotificationPreference(_ enabled: Bool, previousValue: Bool) async {
+        guard let api = LonghouseAPI(host: appState.serverURL) else {
+            apnsEnabled = previousValue
+            notificationsError = "Invalid server URL"
+            return
+        }
+
+        isSavingNotifications = true
+        defer { isSavingNotifications = false }
+
+        do {
+            let settings = try await api.updateNotificationSettings(apnsEnabled: enabled)
+            apnsEnabled = settings.apnsEnabled
+            notificationsError = nil
+        } catch LonghouseAPIError.notAuthenticated {
+            apnsEnabled = previousValue
+            notificationsError = "Sign in again to manage notifications."
+        } catch {
+            apnsEnabled = previousValue
+            notificationsError = "Couldn't save notification settings."
         }
     }
 }
