@@ -1,8 +1,8 @@
 # Machine-Local Managed Session State
 
-Status: Proposed
+Status: Partially shipped; remaining work is simplification
 Owner: local runtime + desktop
-Updated: 2026-04-22
+Updated: 2026-04-24
 
 ## Goal
 
@@ -15,6 +15,10 @@ The design target is simple:
 - provider-owned local state writes current truth
 - `longhouse local-health --json` reads that truth
 - the menu bar renders that truth
+
+Update: the canonical table and dual-write path already landed. The remaining
+pre-launch work is to keep shrinking diagnostics/reconstruction logic so normal
+steady-state rendering depends on fewer side channels.
 
 ## Non-Goals
 
@@ -33,9 +37,9 @@ This spec does **not** change the managed phase display contract in
 Today the local managed-session path looks like this:
 
 ```text
+managed_session_state
+outbox freshness overlay
 Codex bridge state file
-Claude channel state file
-session_phase_state ledger
 process scan
         |
         v
@@ -48,18 +52,20 @@ menu bar renders local-health JSON
 More concretely:
 
 - Codex bridge writes bridge state in `engine/src/codex_bridge.rs`
-- Claude channel writes its own local state in `server/zerg/cli/claude_channel.py`
-- hook outbox and Codex bridge both write phase rows into
-  `engine/src/state/session_phase.rs`
+- hook outbox drain and Codex bridge both write canonical phase rows into
+  `engine/src/state/managed_session_state.rs`
+- the legacy phase ledger in `engine/src/state/session_phase.rs` still exists
+  for diagnostics and cross-checking
 - `server/zerg/services/local_health.py` combines:
+  - `managed_session_state` for current phase/workspace truth
+  - fresh undrained outbox files as a short-lived overlay
   - process scan for managed liveness
   - Codex bridge state for Codex-specific degradation and orphan detection
-  - phase overlay from `session_phase_state`
-  - a Codex-only fallback when a fresh phase row has aged out
 - the menu bar reads only `longhouse local-health --json`
 
-That is much better than the pre-consolidation state, but it still leaves the
-local UI path reconstructing truth instead of reading it.
+That is much better than the pre-consolidation state and fixes the worst drift
+bugs, but it still leaves the local UI path reconstructing final managed rows
+from multiple diagnostics instead of reading a single steady-state projection.
 
 ## Problem
 
@@ -113,53 +119,45 @@ Rules:
 
 ## Canonical Row Shape
 
-Suggested table: `managed_session_state`
+Current shipped table: `managed_session_state`
 
 Primary key:
 
 - `session_id TEXT PRIMARY KEY`
 
-Core columns:
+Current columns:
 
 - `provider TEXT NOT NULL`
 - `workspace_path TEXT`
 - `workspace_label TEXT`
-- `provider_session_id TEXT`
-- `owner_kind TEXT NOT NULL`
-- `owner_pid INTEGER`
-- `owner_heartbeat_at TEXT NOT NULL`
-- `owner_state TEXT NOT NULL`
-- `control_state TEXT`
 - `phase_kind TEXT`
 - `tool_name TEXT`
+- `phase_source TEXT`
 - `phase_observed_at TEXT`
 - `last_activity_at TEXT`
-- `last_error_code TEXT`
-- `detail_json TEXT NOT NULL DEFAULT '{}'`
 - `updated_at TEXT NOT NULL`
 
-Expected enum vocabulary:
+Current enum vocabulary:
 
-- `owner_state`: `attached`, `detached`, `degraded`, `exited`
-- `control_state`: `ready`, `unavailable`
 - `phase_kind`: `thinking`, `running`, `blocked`, `needs_user`, `idle`, `finished`
 
 Important modeling rule:
 
-- `owner_state` and `phase_kind` are separate axes
-- a row may be `attached + idle`
-- a row may be `degraded + blocked`
+- this row currently owns phase/workspace truth, not full liveness truth
 - `phase_kind = NULL` means "owner has not yet reported a phase" or "phase
   unavailable," not "guess working"
+- managed-session `state` (`attached`, `detached`, `degraded`) is still derived
+  in `local_health` from diagnostics such as process scan and bridge status
 
-Provider-specific details that should not get their own permanent columns yet
-can live under `detail_json`.
+If a later simplification still needs stored owner/control state, add it only
+after a concrete consumer proves the current phase/workspace row is
+insufficient.
 
 ## Writer Responsibilities
 
 ### Codex
 
-Codex bridge becomes the owner of Codex managed-session current truth.
+Codex bridge is already a writer for Codex managed-session current truth.
 
 It should update the row when:
 
@@ -172,26 +170,27 @@ It should update the row when:
 - approval or user-input attention is requested
 - a fatal bridge/control error occurs
 
-Codex should write all steady-state fields directly. `local-health` should not
-need to inspect a bridge state file to decide whether a healthy attached Codex
-session is idle or thinking.
+Codex now writes canonical phase/workspace truth directly. `local-health`
+should not need to inspect a bridge state file to decide whether a healthy
+attached Codex session is idle or thinking.
 
 ### Claude
 
-Claude channel bridge becomes the owner of Claude managed-session current
-truth.
+Claude phase truth currently lands through the engine outbox drain mirroring
+hook events into `managed_session_state`. The Claude channel bridge still owns
+live-control delivery, but it is not the canonical phase writer today.
 
-It should write the same row shape Codex writes:
+The effective Claude writer path already produces the same canonical row shape
+Codex uses:
 
 - session identity
 - workspace identity
-- owner heartbeat
+- observed phase/workspace truth
 - current phase
-- control readiness
 - last activity
 
-Claude should stop depending on process scan as the primary source for normal
-managed-session visibility once this path exists.
+The remaining work is to reduce how much normal Claude visibility still depends
+on process scan for liveness.
 
 ## Consumer Responsibilities
 
@@ -253,27 +252,40 @@ That split is intentional:
 
 ### Stage 1: Add canonical store
 
-- add `managed_session_state` schema and minimal store helpers
-- add unit tests for LWW/upsert behavior and state transitions
+Shipped.
+
+- `managed_session_state` schema and store helpers landed in the engine local DB
+- unit tests cover LWW/upsert behavior and state transitions
 
 ### Stage 2: Dual-write Codex
 
+Shipped.
+
 - Codex bridge writes canonical rows alongside current bridge state and phase
   ledger updates
-- add Codex integration tests for phase and liveness transitions
+- integration coverage exists for canonical phase persistence
 
 ### Stage 3: Dual-write Claude
 
-- Claude channel bridge writes the same canonical row shape
-- add Claude integration tests for the same transition set
+Shipped in a narrower form than originally proposed.
+
+- the engine outbox drain mirrors Claude hook events into the same canonical
+  row shape
+- the Claude channel bridge still handles live-control transport, not phase
+  persistence
 
 ### Stage 4: Read canonical state in local-health
 
-- switch normal managed-session output to `managed_session_state`
-- keep existing scans and bridge probes only for diagnostics and fallback
-  comparison during rollout
+Shipped, but not fully simplified.
+
+- normal managed-session phase/workspace output now reads
+  `managed_session_state`
+- scans, bridge probes, and outbox overlay still participate in final row
+  shaping for liveness and diagnostics
 
 ### Stage 5: Delete reconstruction path
+
+Remaining.
 
 - remove normal-path joins between process scan, bridge files, and phase ledger
 - keep only the diagnostics pieces that still earn their keep
@@ -291,25 +303,26 @@ Add direct tests for `managed_session_state` covering:
 - initial write
 - newer write replacing older write
 - stale write rejected
-- null-to-value and value-to-null transitions
-- state transitions across `owner_state`, `control_state`, and `phase_kind`
+- workspace preservation when newer signals omit cwd
+- unknown phase rejected at write time
 
 ### 2. Provider writer integration tests
 
 Codex integration tests should feed realistic bridge events and assert final
-canonical row state for:
+canonical phase/workspace row state for:
 
-- launch -> attached + idle
-- turn start -> attached + thinking
-- tool execution -> attached + running + tool name
-- approval wait -> attached + blocked
-- user input wait -> attached + needs_user
-- turn complete -> attached + idle
-- bridge alive but control unavailable -> degraded
-- owner heartbeat stale -> detached or degraded, never thinking
+- launch -> idle phase present
+- turn start -> thinking
+- tool execution -> running + tool name
+- approval wait -> blocked
+- user input wait -> needs_user
+- turn complete -> idle
+- bridge alive but control unavailable leaves phase truth intact while
+  diagnostics mark the session degraded
+- owner heartbeat/path restarts never resurrect stale phase rows
 
-Claude integration tests should cover the same state family through the Claude
-channel bridge path.
+Claude integration tests should cover the same phase family through the Claude
+managed hook/outbox path.
 
 ### 3. local-health integration tests
 
@@ -363,8 +376,8 @@ This spec is complete when:
 
 - machine-local managed-session truth is readable from one canonical table
 - Codex and Claude both write the same state shape
-- `local-health` no longer reconstructs normal managed rows from process scan
-  plus phase overlay
+- `local-health` no longer reconstructs normal managed rows from process scan,
+  bridge state, and overlay paths
 - menu bar behavior is unchanged except it becomes harder to drift
 - seam tests prove provider events produce the expected rendered local state
 
