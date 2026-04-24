@@ -182,11 +182,17 @@ test-readmes: ## @internal README contract tests (MODE=smoke|full)
 # Engine
 # ---------------------------------------------------------------------------
 install-engine: ## Build + install Rust engine binary
+	@python3 scripts/build/generate_build_identity.py
 	cd engine && cargo build --release
 	codesign -s - engine/target/release/longhouse-engine
 	@mkdir -p $$HOME/.local/bin
 	@ln -sf "$(CURDIR)/engine/target/release/longhouse-engine" "$$HOME/.local/bin/longhouse-engine"
 	@echo "longhouse-engine installed"
+
+install-cli: ## Reinstall the longhouse CLI from current repo source (no engine/hooks/app refresh)
+	@python3 scripts/build/generate_build_identity.py
+	cd server && uv tool install -e . --reinstall
+	@echo "longhouse CLI installed"
 
 dogfood: dogfood-refresh ## Refresh the real local runtime from current repo source
 
