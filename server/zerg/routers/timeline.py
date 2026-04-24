@@ -1,4 +1,11 @@
-"""Browser-owned timeline/session archive API routes."""
+"""Browser-owned timeline/session archive API routes.
+
+This router is the cookie-auth presentation veneer for user-facing clients.
+Most per-session inspection routes intentionally delegate into the canonical
+``/api/agents/*`` service layer so browser and machine reads do not drift.
+The browser-specific behavior that remains here is thread-card timeline
+listing/streaming plus short-lived UI caches.
+"""
 
 from __future__ import annotations
 
