@@ -2241,6 +2241,8 @@ def test_managed_session_phase_state_keeps_newer_stored_last_activity_when_outbo
     assert overlay["sess-1"]["phase"] == "thinking"
     assert overlay["sess-1"]["observed_at"] == outbox_observed_at
     assert overlay["sess-1"]["last_activity_at"] == stored_last_activity_at
+    assert overlay["sess-1"]["workspace_path"] == "/Users/test/git/citi"
+    assert overlay["sess-1"]["workspace_label"] == "citi"
 
 
 def test_process_scan_falls_back_to_argv_when_env_empty(monkeypatch, tmp_path: Path):

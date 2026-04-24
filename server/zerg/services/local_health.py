@@ -1093,6 +1093,10 @@ def _load_managed_session_phase_state(base_dir: Path, *, now: datetime) -> dict[
         current = merged.get(session_id)
         if current is None or _max_rfc3339(row.get("observed_at"), current.get("observed_at")) == row.get("observed_at"):
             next_row = dict(row)
+            if current is not None:
+                for field_name in ("workspace_path", "workspace_label"):
+                    if _normalize_optional_string(next_row.get(field_name)) is None:
+                        next_row[field_name] = current.get(field_name)
             next_row["last_activity_at"] = _max_rfc3339(row.get("last_activity_at"), current.get("last_activity_at") if current else None)
             merged[session_id] = next_row
     return {session_id: row for session_id, row in merged.items() if _should_keep_managed_phase_row(row, now=now)}
