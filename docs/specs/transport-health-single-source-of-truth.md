@@ -51,8 +51,8 @@ Layers:
      - `reasons`
 3. **Surface overlays**
    - hosted adds heartbeat freshness and fleet filtering
-   - local adds engine-status freshness, install/config drift, outbox age,
-     managed-session control state, and build drift
+  - local adds engine-status freshness, install/config drift, outbox age,
+    managed-session control state, and engine restart pending
 
 The shared reducer owns transport semantics such as:
 

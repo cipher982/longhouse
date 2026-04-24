@@ -64,6 +64,25 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func decodesRestartPendingFixture() throws {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/restart-pending.json")
+
+        let snapshot = try FixtureHealthSnapshotSource(fileURL: fixtureURL).load()
+
+        #expect(snapshot.parsedSeverity == .green)
+        #expect(snapshot.displaySeverity == .green)
+        #expect(snapshot.hasResolvedInstalledVersion == true)
+        #expect(snapshot.installedVersionLabel == "0.1.15-dev+bbbbbbbb.dirty")
+        #expect(snapshot.engineRestartPending == true)
+        #expect(snapshot.restartPendingChipLabel == "RESTART PENDING")
+        #expect(snapshot.needsMenuBarAttention == false)
+    }
+
+    @Test
     func parsesRuntimeArguments() throws {
         let config = try HarnessRuntimeConfig.parse(arguments: [
             "--input", "/tmp/example.json",
@@ -1100,7 +1119,7 @@ struct LonghouseMenuBarCoreTests {
             orphanBridges: [],
             launchReadiness: nil,
             build: BuildIdentitySnapshot(
-                cli: BuildIdentityRecord(
+                installed: BuildIdentityRecord(
                     version: "0.1.15",
                     commit: "d4d4a106fedcba98765432100123456789abcdef",
                     commitShort: "d4d4a106",
@@ -1120,8 +1139,7 @@ struct LonghouseMenuBarCoreTests {
                     error: nil,
                     detail: nil
                 ),
-                drift: false,
-                components: []
+                engineRestartPending: false
             ),
             updateInfo: nil
         )

@@ -485,35 +485,29 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     }
 
     public var installedVersionLabel: String {
-        // Only the qualified build identity ("0.2.0-dev+b672fcca[.dirty]"
-        // or "0.2.0 (b672fcca)") can tell two different commits apart.
-        // If it's missing, surface that loudly — never fall back to PyPI's
-        // raw release version, which made drift invisible for the user.
-        if let qualified = build?.cli?.qualified {
-            return qualified
-        }
-        return "BUILD IDENTITY MISSING"
+        // Qualified build identity ("0.2.0-dev+b672fcca[.dirty]" or
+        // "0.2.0 (b672fcca)"). If missing, surface loudly rather than
+        // fall back to raw PyPI release version.
+        build?.installed?.qualified ?? "BUILD IDENTITY MISSING"
     }
 
     public var hasResolvedInstalledVersion: Bool {
-        build?.cli?.qualified != nil
+        build?.installed?.qualified != nil
     }
 
-    /// True when menu bar can see that CLI, engine, or app short SHAs
-    /// disagree — a "build drift" warning to surface in the header.
-    public var hasBuildDrift: Bool {
-        build?.drift == true
+    /// True when the shipper daemon is running a stale engine binary:
+    /// installed vs engine commit_short disagree, or the on-disk engine
+    /// binary is newer than the daemon's start time. Benign; needs a
+    /// daemon restart.
+    public var engineRestartPending: Bool {
+        build?.engineRestartPending == true
     }
 
-    /// Short chip string for the drifting components.
-    public var buildDriftChipLabel: String? {
-        guard hasBuildDrift else { return nil }
-        let components = build?.components ?? []
-        if components.isEmpty {
-            return "BUILD DRIFT"
-        }
-        let parts = components.map { "\($0.name) \($0.commitShort)" }
-        return "BUILD DRIFT · \(parts.joined(separator: " vs "))"
+    /// Soft chip surfaced in the header when a daemon restart is pending.
+    /// Intentionally not alarming — normal post-install state, not an error.
+    public var restartPendingChipLabel: String? {
+        guard engineRestartPending else { return nil }
+        return "RESTART PENDING"
     }
 
     public var statusItemSummaryLabel: String {
@@ -1040,25 +1034,22 @@ public struct EngineStatusSnapshot: Codable, Equatable, Sendable {
     public let error: String?
 }
 
-/// Build identity block emitted by `longhouse local-health --json` (the
-/// `build` key on the top-level snapshot). Shows CLI + engine short SHAs
-/// and whether they agree — the "build drift" surface.
+/// Build identity block emitted by `longhouse local-health --json`. The
+/// producer keeps `cli` / `drift` aliases during the cutover so we don't
+/// need any Swift-side compat.
 public struct BuildIdentitySnapshot: Codable, Equatable, Sendable {
-    public let cli: BuildIdentityRecord?
+    public let installed: BuildIdentityRecord?
     public let engine: BuildIdentityRecord?
-    public let drift: Bool?
-    public let components: [BuildIdentityComponent]?
+    public let engineRestartPending: Bool?
 
     public init(
-        cli: BuildIdentityRecord?,
+        installed: BuildIdentityRecord?,
         engine: BuildIdentityRecord?,
-        drift: Bool?,
-        components: [BuildIdentityComponent]?
+        engineRestartPending: Bool?
     ) {
-        self.cli = cli
+        self.installed = installed
         self.engine = engine
-        self.drift = drift
-        self.components = components
+        self.engineRestartPending = engineRestartPending
     }
 }
 
