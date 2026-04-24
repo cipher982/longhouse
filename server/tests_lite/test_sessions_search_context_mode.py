@@ -2,6 +2,7 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -122,6 +123,45 @@ def _seed_compacted_session(factory):
         db.close()
 
 
+def _seed_simple_session(factory, name: str) -> str:
+    db = factory()
+    try:
+        store = AgentsStore(db)
+        result = store.ingest_session(
+            SessionIngest(
+                provider="claude",
+                environment="production",
+                project="zerg",
+                device_id=f"{name}-device",
+                cwd="/tmp",
+                git_repo=None,
+                git_branch=None,
+                started_at=_ts(10),
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text=f"{name} question",
+                        timestamp=_ts(11),
+                        source_path=f"/tmp/{name}.jsonl",
+                        source_offset=0,
+                        raw_json='{"type":"user"}',
+                    ),
+                    EventIngest(
+                        role="assistant",
+                        content_text=f"{name} answer",
+                        timestamp=_ts(12),
+                        source_path=f"/tmp/{name}.jsonl",
+                        source_offset=1,
+                        raw_json='{"type":"assistant"}',
+                    ),
+                ],
+            )
+        )
+        return str(result.session_id)
+    finally:
+        db.close()
+
+
 def test_sessions_query_context_mode_filters_pre_compaction_matches(tmp_path):
     factory = _make_db(tmp_path)
     _seed_compacted_session(factory)
@@ -160,3 +200,55 @@ def test_context_mode_validation_on_search_endpoints(tmp_path):
         bad_recall = client.get("/agents/recall", params={"query": "test", "context_mode": "bad"})
         assert bad_recall.status_code == 400
         assert "context_mode" in bad_recall.json()["detail"]
+
+
+def test_semantic_search_batches_thread_meta_for_result_set(tmp_path):
+    factory = _make_db(tmp_path)
+    first_id = _seed_simple_session(factory, "first")
+    second_id = _seed_simple_session(factory, "second")
+
+    batch_calls: list[list[str]] = []
+    original_batch_thread_meta = AgentsStore.batch_thread_meta
+
+    class FakeEmbeddingCache:
+        def __init__(self):
+            self._session_loaded = False
+
+        def load_session_embeddings(self, db, model, dims):
+            self._session_loaded = True
+
+        def search_sessions(self, query_vec, limit, session_filter):
+            assert first_id in session_filter
+            assert second_id in session_filter
+            return [(first_id, 0.91), (second_id, 0.82)]
+
+    async def fake_generate_embedding(query, config):
+        return [0.1, 0.2, 0.3]
+
+    def record_batch_thread_meta(self, sessions):
+        batch_calls.append([str(session.id) for session in sessions])
+        return original_batch_thread_meta(self, sessions)
+
+    with (
+        patch("zerg.models_config.get_embedding_config_with_db_fallback", return_value=SimpleNamespace(model="fake", dims=3)),
+        patch("zerg.services.embedding_cache.EmbeddingCache", FakeEmbeddingCache),
+        patch("zerg.services.session_processing.embeddings.generate_embedding", fake_generate_embedding),
+        patch.object(AgentsStore, "batch_thread_meta", record_batch_thread_meta),
+        patch.object(AgentsStore, "get_thread_head", side_effect=AssertionError("semantic search should preload thread metadata")),
+        patch.object(
+            AgentsStore,
+            "list_thread_sessions",
+            side_effect=AssertionError("semantic search should preload thread metadata"),
+        ),
+    ):
+        for client in _get_client(factory):
+            resp = client.get(
+                "/agents/sessions/semantic",
+                params={"query": "anything", "days_back": 90, "context_mode": "forensic", "limit": 5},
+            )
+            assert resp.status_code == 200, resp.text
+            payload = resp.json()
+            assert payload["total"] == 2
+
+    assert len(batch_calls) == 1
+    assert set(batch_calls[0]) == {first_id, second_id}

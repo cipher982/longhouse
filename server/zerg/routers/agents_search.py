@@ -22,7 +22,6 @@ from zerg.services.agents_store import AgentsStore
 from zerg.services.session_views import RecallMatch
 from zerg.services.session_views import RecallResponse
 from zerg.services.session_views import SemanticSearchResponse
-from zerg.services.session_views import SessionResponse
 from zerg.services.session_views import build_session_response
 
 logger = logging.getLogger(__name__)
@@ -73,9 +72,8 @@ async def semantic_search_sessions(
     filter_query = filter_query.filter(AgentSession.user_messages > 0).filter(AgentSession.is_sidechain == 0)
     valid_ids = {str(row[0]) for row in filter_query.all()}
 
-    sessions: list[SessionResponse] = []
+    matched_rows: list[tuple[AgentSession, str | None, float]] = []
     store = AgentsStore(db)
-    thread_cache: dict[str, tuple[str, int]] = {}
 
     if context_mode == "forensic":
         if not cache._session_loaded:
@@ -86,15 +84,7 @@ async def semantic_search_sessions(
             session = db.query(AgentSession).filter(AgentSession.id == sid).first()
             if not session:
                 continue
-            sessions.append(
-                build_session_response(
-                    store,
-                    session,
-                    thread_cache=thread_cache,
-                    match_snippet=session.summary or session.summary_title or None,
-                    match_score=score,
-                )
-            )
+            matched_rows.append((session, session.summary or session.summary_title or None, score))
     else:
         if not cache._turn_loaded:
             cache.load_turn_embeddings(db, config.model, config.dims)
@@ -135,18 +125,22 @@ async def semantic_search_sessions(
                 if snippet_source and len(snippet_source) > 200
                 else (snippet_source or session.summary or session.summary_title or None)
             )
-            sessions.append(
-                build_session_response(
-                    store,
-                    session,
-                    thread_cache=thread_cache,
-                    match_snippet=snippet,
-                    match_score=score,
-                )
-            )
+            matched_rows.append((session, snippet, score))
             seen_sessions.add(sid_str)
-            if len(sessions) >= limit:
+            if len(matched_rows) >= limit:
                 break
+
+    thread_cache = store.batch_thread_meta([session for session, _snippet, _score in matched_rows])
+    sessions = [
+        build_session_response(
+            store,
+            session,
+            thread_cache=thread_cache,
+            match_snippet=snippet,
+            match_score=score,
+        )
+        for session, snippet, score in matched_rows
+    ]
 
     return SemanticSearchResponse(sessions=sessions, total=len(sessions))
 
