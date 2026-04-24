@@ -93,6 +93,7 @@ class AgentsStore:
         """
         root_ids: set[UUID] = set()
         for s in sessions:
+            self._coerce_session_lineage_defaults(s)
             root_ids.add(s.thread_root_session_id or s.id)
         if not root_ids:
             return {}

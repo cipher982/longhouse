@@ -611,9 +611,9 @@ def get_thread_meta(store: AgentsStore, session: AgentSession, thread_cache: Dic
     cached = thread_cache.get(root_id)
     if cached is not None:
         return cached
-    head = store.get_thread_head(session)
-    thread_sessions = store.list_thread_sessions(session)
-    meta = (str(head.id if head else session.id), max(1, len(thread_sessions)))
+
+    batched = store.batch_thread_meta([session])
+    meta = batched.get(root_id, (str(session.id), 1))
     thread_cache[root_id] = meta
     return meta
 
