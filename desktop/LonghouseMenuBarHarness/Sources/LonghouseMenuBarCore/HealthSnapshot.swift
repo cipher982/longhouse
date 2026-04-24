@@ -1034,9 +1034,7 @@ public struct EngineStatusSnapshot: Codable, Equatable, Sendable {
     public let error: String?
 }
 
-/// Build identity block emitted by `longhouse local-health --json`. The
-/// producer keeps `cli` / `drift` aliases during the cutover so we don't
-/// need any Swift-side compat.
+/// Build identity block emitted by `longhouse local-health --json`.
 public struct BuildIdentitySnapshot: Codable, Equatable, Sendable {
     public let installed: BuildIdentityRecord?
     public let engine: BuildIdentityRecord?

@@ -1,5 +1,5 @@
-"""Tests for `_collect_build_identity` — the CLI/engine drift detector
-that feeds the local-health snapshot and menu bar."""
+"""Tests for `_collect_build_identity` — the installed/engine restart-pending
+detector that feeds the local-health snapshot and menu bar."""
 
 from __future__ import annotations
 
@@ -67,41 +67,41 @@ def _install_cli_identity(monkeypatch: pytest.MonkeyPatch):
     _install_resource(monkeypatch, CLI_PAYLOAD)
 
 
-def test_no_drift_when_cli_and_engine_agree(_install_cli_identity) -> None:
+def test_no_restart_pending_when_installed_and_engine_agree(_install_cli_identity) -> None:
     engine_build = {**CLI_PAYLOAD}
     result = local_health_service._collect_build_identity(
         engine_status=_engine_status(engine_build)
     )
 
-    assert result["drift"] is False
-    assert result["cli"]["commit_short"] == "aaaaaaaa"
+    assert result["engine_restart_pending"] is False
+    assert result["installed"]["commit_short"] == "aaaaaaaa"
     assert result["engine"]["commit_short"] == "aaaaaaaa"
     names = {c["name"] for c in result["components"]}
-    assert names == {"cli", "engine"}
+    assert names == {"installed", "engine"}
 
 
-def test_flags_drift_when_short_shas_differ(_install_cli_identity) -> None:
+def test_flags_restart_pending_when_short_shas_differ(_install_cli_identity) -> None:
     engine_build = {**CLI_PAYLOAD, "commit_short": "bbbbbbbb"}
     result = local_health_service._collect_build_identity(
         engine_status=_engine_status(engine_build)
     )
 
-    assert result["drift"] is True
-    assert result["cli"]["commit_short"] == "aaaaaaaa"
+    assert result["engine_restart_pending"] is True
+    assert result["installed"]["commit_short"] == "aaaaaaaa"
     assert result["engine"]["commit_short"] == "bbbbbbbb"
 
 
-def test_engine_missing_build_block_does_not_drift(_install_cli_identity) -> None:
+def test_engine_missing_build_block_does_not_mark_restart_pending(_install_cli_identity) -> None:
     """An engine that predates the build block still registers as "same" —
-    we only flag drift when we have two short SHAs that disagree."""
+    we only flag restart pending when we have two short SHAs that disagree."""
     result = local_health_service._collect_build_identity(
         engine_status=_engine_status(None)
     )
 
-    assert result["drift"] is False
+    assert result["engine_restart_pending"] is False
     assert result["engine"] is None
     names = [c["name"] for c in result["components"]]
-    assert names == ["cli"]
+    assert names == ["installed"]
 
 
 def test_engine_payload_not_a_mapping_is_tolerated(_install_cli_identity) -> None:
@@ -110,9 +110,9 @@ def test_engine_payload_not_a_mapping_is_tolerated(_install_cli_identity) -> Non
     engine_status = {"path": "/tmp/x", "exists": True, "payload": "nonsense", "error": None}
     result = local_health_service._collect_build_identity(engine_status=engine_status)
 
-    assert result["drift"] is False
+    assert result["engine_restart_pending"] is False
     assert result["engine"] is None
-    assert [c["name"] for c in result["components"]] == ["cli"]
+    assert [c["name"] for c in result["components"]] == ["installed"]
 
 
 def test_engine_build_not_a_mapping_is_tolerated(_install_cli_identity) -> None:
@@ -124,7 +124,7 @@ def test_engine_build_not_a_mapping_is_tolerated(_install_cli_identity) -> None:
     }
     result = local_health_service._collect_build_identity(engine_status=engine_status)
 
-    assert result["drift"] is False
+    assert result["engine_restart_pending"] is False
     assert result["engine"] is None
 
 
@@ -136,8 +136,8 @@ def test_cli_identity_missing_surfaces_error(monkeypatch: pytest.MonkeyPatch) ->
         engine_status=_engine_status(engine_build)
     )
 
-    assert result["cli"]["error"] == "missing"
+    assert result["installed"]["error"] == "missing"
     # With CLI missing we only have one short SHA — nothing to compare.
-    assert result["drift"] is False
+    assert result["engine_restart_pending"] is False
     names = [c["name"] for c in result["components"]]
     assert names == ["engine"]

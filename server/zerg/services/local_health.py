@@ -657,14 +657,10 @@ def _collect_build_identity(*, engine_status: dict[str, Any]) -> dict[str, Any]:
             "commit_mismatch": commit_mismatch,
             "binary_newer_than_daemon": binary_newer_than_daemon,
         },
-        # Back-compat for existing menu bar / clients that still key off `cli`
-        # and `drift`. Safe to remove once HealthSnapshot.swift is updated.
-        "cli": installed_block,
-        "drift": engine_restart_pending,
         "components": [
             component
             for component in (
-                {"name": "cli", "commit_short": installed_short} if installed_short else None,
+                {"name": "installed", "commit_short": installed_short} if installed_short else None,
                 {"name": "engine", "commit_short": engine_short} if engine_short else None,
             )
             if component is not None
