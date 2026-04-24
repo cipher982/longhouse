@@ -1,11 +1,7 @@
-"""Search service — lexical and semantic session search.
-
-Extracted from routers/agents.py to support ranking modes and hybrid RRF fusion.
-"""
+"""Search helpers for session ranking and hybrid fusion."""
 
 from __future__ import annotations
 
-import logging
 import math
 from dataclasses import dataclass
 from dataclasses import field
@@ -17,8 +13,6 @@ from typing import Optional
 from sqlalchemy.orm import Session as DBSession
 
 from zerg.models.agents import AgentSession
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -68,82 +62,6 @@ def lexical_search(
         context_mode=filters.context_mode,
     )
     return sessions
-
-
-def semantic_search(
-    q: str,
-    db: DBSession,
-    filters: SessionFilters,
-    limit: int,
-    over_fetch: bool = False,
-) -> list[tuple[AgentSession, float]]:
-    """Semantic similarity search over session embeddings.
-
-    Returns list of (session, similarity_score) ordered by score descending.
-    Returns empty list if embeddings are not configured.
-
-    When over_fetch=True, fetches min(limit * 3, 200) results for RRF fusion.
-    """
-    import asyncio
-
-    from zerg.models_config import get_embedding_config_with_db_fallback
-    from zerg.services.agents_store import AgentsStore
-    from zerg.services.embedding_cache import EmbeddingCache
-    from zerg.services.session_processing.embeddings import generate_embedding
-
-    config = get_embedding_config_with_db_fallback(db=db)
-    if not config:
-        return []
-
-    fetch_limit = min(limit * 3, 200) if over_fetch else limit
-
-    # Generate query embedding (sync wrapper for use in sync context)
-    try:
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-
-        if loop and loop.is_running():
-            # We're in an async context; use thread pool to avoid nested event loops
-            import concurrent.futures
-
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(asyncio.run, generate_embedding(q, config))
-                query_vec = future.result(timeout=30)
-        else:
-            query_vec = asyncio.run(generate_embedding(q, config))
-    except Exception:
-        logger.exception("Failed to generate query embedding for semantic search")
-        return []
-
-    cache = EmbeddingCache()
-    if not cache._session_loaded:
-        cache.load_session_embeddings(db, config.model, config.dims)
-
-    since = datetime.now(timezone.utc) - timedelta(days=filters.days_back)
-    filter_query = db.query(AgentSession.id).filter(AgentSession.started_at >= since)
-    if filters.project:
-        filter_query = filter_query.filter(AgentSession.project == filters.project)
-    if filters.provider:
-        filter_query = filter_query.filter(AgentSession.provider == filters.provider)
-    if filters.environment:
-        filter_query = filter_query.filter(AgentSession.environment == filters.environment)
-    if filters.hide_autonomous:
-        filter_query = filter_query.filter(AgentSession.user_messages > 0).filter(AgentSession.is_sidechain == 0)
-    valid_ids = {str(row[0]) for row in filter_query.all()}
-
-    results = cache.search_sessions(query_vec, limit=fetch_limit, session_filter=valid_ids)
-    store = AgentsStore(db)
-    session_map = {str(session.id): session for session in store.get_sessions_ordered([sid for sid, _score in results])}
-
-    sessions_with_scores: list[tuple[AgentSession, float]] = []
-    for sid, score in results:
-        session = session_map.get(str(sid))
-        if session:
-            sessions_with_scores.append((session, score))
-
-    return sessions_with_scores
 
 
 _RRF_K = 60
