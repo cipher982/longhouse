@@ -175,7 +175,7 @@ coolify app logs longhouse-control-plane
 **Hosted ship does NOT update David's laptop.** The `longhouse` CLI,
 `longhouse-engine` daemon, and `Longhouse.app` menu bar are installed
 into his system and only move when rebuilt locally. If you forget this
-step, the menu bar will show "build drift" and David is stuck
+step, the menu bar will show "restart pending" and David is stuck
 dogfooding old code.
 
 After **every** successful `make ship` — not conditionally, not "if
