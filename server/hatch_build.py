@@ -33,10 +33,5 @@ class LonghouseBuildHook(BuildHookInterface):
                 "a wheel or sdist. See docs/specs/release-and-build-identity.md."
             )
 
-
-# Back-compat name for any callers that imported the old class.
-EditableFrontendHook = LonghouseBuildHook
-
-
 def get_build_hook() -> type[BuildHookInterface]:
     return LonghouseBuildHook
