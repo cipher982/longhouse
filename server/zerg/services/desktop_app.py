@@ -47,18 +47,11 @@ def build_snapshot_arguments(*, claude_dir: str | None = None) -> list[str]:
     return command
 
 
-build_local_health_command = build_snapshot_command
-build_local_health_arguments = build_snapshot_arguments
-
-
 def default_install_desktop_app() -> bool:
     raw = os.getenv("LONGHOUSE_INSTALL_MENUBAR")
     if raw:
         return raw.strip().lower() not in {"0", "false", "no"}
     return detect_platform() == Platform.MACOS and not os.getenv("SSH_CONNECTION") and not os.getenv("CI")
-
-
-default_install_menubar = default_install_desktop_app
 
 
 def _log_dir(claude_dir: str | None) -> Path:
@@ -342,9 +335,3 @@ def uninstall_desktop_app_service() -> dict[str, str]:
         return {"success": "true", "platform": "macos", "message": "Longhouse desktop app not installed"}
 
     return {"success": "true", "platform": "macos", "message": "Longhouse desktop app removed"}
-
-
-get_menubar_service_status = get_desktop_app_service_status
-get_menubar_service_info = get_desktop_app_service_info
-install_menubar_service = install_desktop_app_service
-uninstall_menubar_service = uninstall_desktop_app_service
