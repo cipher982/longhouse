@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
-from datetime import timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
 from cryptography.fernet import Fernet
-import pytest
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
@@ -16,7 +13,6 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret-value")
 os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-value")
 
-import zerg.routers.agents_sessions as agents_sessions_router
 from zerg.services.session_capabilities import build_session_capabilities
 
 
@@ -34,6 +30,8 @@ def _make_session(**overrides):
     }
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
 def test_build_session_capabilities_marks_native_managed_local_session():
     session = _make_session(
         execution_home="managed_local",
@@ -65,29 +63,3 @@ def test_build_session_capabilities_drops_legacy_tmux_sessions_out_of_live_contr
     assert capabilities.live_control_available is False
     assert capabilities.host_reattach_available is False
     assert capabilities.reply_to_live_session_available is False
-
-
-@pytest.mark.asyncio
-async def test_load_surface_runtime_state_map_returns_loaded_state(monkeypatch):
-    session = _make_session(
-        execution_home="managed_local",
-        managed_transport="claude_channel_bridge",
-        source_runner_id=17,
-    )
-    load_calls: list[list[object]] = []
-
-    def fake_load_runtime_state_map(_db, session_ids):
-        load_calls.append(list(session_ids))
-        return {str(session.id): {"pass": len(load_calls)}}
-
-    monkeypatch.setattr(agents_sessions_router, "load_runtime_state_map", fake_load_runtime_state_map)
-
-    runtime_state_map = await agents_sessions_router._load_surface_runtime_state_map(
-        db=object(),
-        sessions=[session],
-        owner_id=7,
-        occurred_at=datetime.now(timezone.utc),
-    )
-
-    assert load_calls == [[session.id]]
-    assert runtime_state_map == {str(session.id): {"pass": 1}}

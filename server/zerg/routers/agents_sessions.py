@@ -37,6 +37,7 @@ from zerg.services.session_coordination import serialize_session_message
 from zerg.services.session_messages import create_session_message
 from zerg.services.session_messages import resolve_session_message_owner_id
 from zerg.services.session_runtime import load_runtime_state_map
+from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.session_turns import get_session_turn_by_id
 from zerg.services.session_turns import list_session_turns
 from zerg.services.session_turns import materialize_managed_transcript_turns
@@ -68,7 +69,6 @@ from zerg.services.session_views import build_event_response
 from zerg.services.session_views import build_session_response
 from zerg.services.session_views import build_session_turn_response
 from zerg.services.session_views import normalize_utc_datetime
-from zerg.services.session_views import resolve_runtime_overlay
 from zerg.services.startup_context import STARTUP_CONTEXT_DEFAULT_DAYS_BACK
 from zerg.services.startup_context import STARTUP_CONTEXT_DEFAULT_LIMIT
 from zerg.services.startup_context import STARTUP_CONTEXT_MAX_DAYS_BACK
@@ -84,17 +84,6 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 
 VALID_USER_STATES = {"active", "parked", "snoozed", "archived"}
 _CURRENT_SESSION_HEADER = "X-Longhouse-Session-Id"
-
-
-async def _load_surface_runtime_state_map(
-    *,
-    db: Session,
-    sessions: list[AgentSession],
-    owner_id: int | None,
-    occurred_at: datetime,
-) -> dict[str, object]:
-    session_ids = [session.id for session in sessions]
-    return load_runtime_state_map(db, session_ids)
 
 
 def _parse_message_session_header(request: Request) -> UUID | None:
@@ -353,12 +342,7 @@ async def list_sessions(
             session_ids = [s.id for s in fused]
             activity_map = store.get_last_activity_map(session_ids)
             now = datetime.now(timezone.utc)
-            runtime_state_map = await _load_surface_runtime_state_map(
-                db=db,
-                sessions=fused,
-                owner_id=getattr(_auth, "owner_id", None),
-                occurred_at=now,
-            )
+            runtime_state_map = load_runtime_state_map(db, [session.id for session in fused])
             first_user_map = store.get_first_message_map([s.id for s in fused], role="user", max_len=80)
             sem_score_map = {s.id: score for s, score in sem_hits}
             thread_cache = store.batch_thread_meta(fused)
@@ -437,12 +421,7 @@ async def list_sessions(
         first_user_map = store.get_first_message_map(session_ids, role="user", max_len=80)
         thread_cache = store.batch_thread_meta(sessions)
         now = datetime.now(timezone.utc)
-        runtime_state_map = await _load_surface_runtime_state_map(
-            db=db,
-            sessions=sessions,
-            owner_id=getattr(_auth, "owner_id", None),
-            occurred_at=now,
-        )
+        runtime_state_map = load_runtime_state_map(db, [session.id for session in sessions])
 
         response_sessions = [
             build_session_response(
@@ -827,12 +806,7 @@ async def list_active_sessions(
         last_user = store.get_last_message_map(session_ids, role="user", max_len=300)
         last_ai = store.get_last_message_map(session_ids, role="assistant", max_len=300)
         now = datetime.now(timezone.utc)
-        runtime_state_map = await _load_surface_runtime_state_map(
-            db=db,
-            sessions=sessions,
-            owner_id=getattr(_auth, "owner_id", None),
-            occurred_at=now,
-        )
+        runtime_state_map = load_runtime_state_map(db, [session.id for session in sessions])
         items: List[ActiveSessionResponse] = []
         for s in sessions:
             last_activity_at = normalize_utc_datetime(last_activity.get(s.id) or s.ended_at or s.started_at) or now
@@ -1013,12 +987,7 @@ async def get_session(
         first_user_map = store.get_first_message_map([session.id], role="user", max_len=80)
     now = datetime.now(timezone.utc)
     with timing.span("load_runtime"):
-        runtime_state_map = await _load_surface_runtime_state_map(
-            db=db,
-            sessions=[session],
-            owner_id=getattr(_auth, "owner_id", None),
-            occurred_at=now,
-        )
+        runtime_state_map = load_runtime_state_map(db, [session.id])
     with timing.span("build_response"):
         result = build_session_response(
             store,
@@ -1068,12 +1037,7 @@ async def get_session_thread(
     thread_cache = store.batch_thread_meta(thread_sessions)
     now = datetime.now(timezone.utc)
     with timing.span("load_runtime"):
-        runtime_state_map = await _load_surface_runtime_state_map(
-            db=db,
-            sessions=thread_sessions,
-            owner_id=getattr(_auth, "owner_id", None),
-            occurred_at=now,
-        )
+        runtime_state_map = load_runtime_state_map(db, [item.id for item in thread_sessions])
 
     with timing.span("build_response"):
         result = SessionThreadResponse(
@@ -1351,12 +1315,7 @@ async def get_session_workspace(
     thread_cache = store.batch_thread_meta(thread_sessions)
     now = datetime.now(timezone.utc)
     with timing.span("load_runtime"):
-        runtime_state_map = await _load_surface_runtime_state_map(
-            db=db,
-            sessions=thread_sessions,
-            owner_id=getattr(_auth, "owner_id", None),
-            occurred_at=now,
-        )
+        runtime_state_map = load_runtime_state_map(db, [item.id for item in thread_sessions])
     with timing.span("build_thread_responses"):
         thread_response_map = {
             str(item.id): build_session_response(
