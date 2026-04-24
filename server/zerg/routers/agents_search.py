@@ -202,27 +202,56 @@ async def recall_sessions(
     results = cache.search_turns(query_vec, limit=max_results, session_filter=valid_ids)
 
     store = AgentsStore(db)
+    ordered_session_ids = []
+    seen_session_ids: set[str] = set()
+    for session_id, _chunk_index, _score, _event_start, _event_end in results:
+        session_key = str(session_id)
+        if session_key in seen_session_ids:
+            continue
+        ordered_session_ids.append(session_id)
+        seen_session_ids.add(session_key)
+
+    events_by_session: dict[str, list[AgentEvent]] = {str(session_id): [] for session_id in ordered_session_ids}
+    if ordered_session_ids:
+        all_events = (
+            db.query(AgentEvent)
+            .filter(AgentEvent.session_id.in_(ordered_session_ids))
+            .order_by(AgentEvent.session_id, AgentEvent.timestamp, AgentEvent.id)
+            .all()
+        )
+        for event in all_events:
+            events_by_session.setdefault(str(event.session_id), []).append(event)
+
+    active_start_index_cache: dict[str, int] = {}
+    if context_mode == "active_context":
+        for session_id in ordered_session_ids:
+            session_key = str(session_id)
+            session_events = events_by_session.get(session_key, [])
+            total_events = len(session_events)
+            boundary = store.get_active_context_boundary(session_id)
+            if boundary is None:
+                active_start_index_cache[session_key] = 0
+                continue
+            active_start_index = total_events
+            for idx, event in enumerate(session_events):
+                if store.is_event_in_active_context(event, boundary):
+                    active_start_index = idx
+                    break
+            active_start_index_cache[session_key] = active_start_index
+
     matches = []
     for session_id, chunk_index, score, event_start, event_end in results:
-        events_query = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp, AgentEvent.id)
-        all_events = events_query.all()
+        all_events = events_by_session.get(str(session_id), [])
         total_events = len(all_events)
         if total_events == 0:
             continue
 
-        active_start_index = 0
+        active_start_index = active_start_index_cache.get(str(session_id), 0)
         if context_mode == "active_context":
-            boundary = store.get_active_context_boundary(session_id)
-            if boundary is not None:
-                active_start_index = total_events
-                for idx, event in enumerate(all_events):
-                    if store.is_event_in_active_context(event, boundary):
-                        active_start_index = idx
-                        break
-                if active_start_index >= total_events:
-                    continue
-                if event_end is not None and event_end < active_start_index:
-                    continue
+            if active_start_index >= total_events:
+                continue
+            if event_end is not None and event_end < active_start_index:
+                continue
 
         context = []
         if event_start is not None and event_end is not None:
