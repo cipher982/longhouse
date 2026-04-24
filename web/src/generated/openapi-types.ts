@@ -1707,6 +1707,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/users/me/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Current User Notification Settings
+         * @description Return the authenticated user's mobile notification settings.
+         */
+        get: operations["read_current_user_notification_settings_users_me_notifications_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Current User Notification Settings
+         * @description Update mobile notification preferences for the authenticated user.
+         */
+        patch: operations["update_current_user_notification_settings_users_me_notifications_patch"];
+        trace?: never;
+    };
     "/api/users/me/avatar": {
         parameters: {
             query?: never;
@@ -4094,6 +4118,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/devices/apns-register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register Apns Device
+         * @description Register or refresh an APNs device token for the current browser user.
+         */
+        post: operations["register_apns_device_devices_apns_register_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/devices/tokens/{token_id}": {
         parameters: {
             query?: never;
@@ -4208,6 +4252,49 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * APNSRegisterRequest
+         * @description Register or refresh an iOS APNs device token for the current user.
+         */
+        APNSRegisterRequest: {
+            /** Device Token */
+            device_token: string;
+            /**
+             * Platform
+             * @default ios
+             * @constant
+             */
+            platform: "ios";
+            /** App Build Id */
+            app_build_id?: string | null;
+            /**
+             * Push Environment
+             * @default sandbox
+             * @enum {string}
+             */
+            push_environment: "sandbox" | "production";
+        };
+        /**
+         * APNSRegisterResponse
+         * @description Response for APNs device registration upsert.
+         */
+        APNSRegisterResponse: {
+            /** Id */
+            id: string;
+            /** Platform */
+            platform: string;
+            /** Device Token Suffix */
+            device_token_suffix: string;
+            /** Push Environment */
+            push_environment: string;
+            /** App Build Id */
+            app_build_id?: string | null;
+            /**
+             * Last Seen At
+             * Format: date-time
+             */
+            last_seen_at: string;
+        };
         /**
          * AccountConnectorStatusResponse
          * @description Status of a connector type at account level.
@@ -7971,7 +8058,7 @@ export interface components {
             session_id: string;
             /**
              * Request Id
-             * @description Transport/control request id when available
+             * @description Transport request id when available, otherwise a synthetic canonical id for reconstructed native turns
              */
             request_id?: string | null;
             /**
@@ -8890,6 +8977,16 @@ export interface components {
             };
             /** By Provider */
             by_provider: components["schemas"]["UsageStatsByProvider"][];
+        };
+        /** UserNotificationSettingsResponse */
+        UserNotificationSettingsResponse: {
+            /** Apns Enabled */
+            apns_enabled: boolean;
+        };
+        /** UserNotificationSettingsUpdate */
+        UserNotificationSettingsUpdate: {
+            /** Apns Enabled */
+            apns_enabled: boolean;
         };
         /** UserOut */
         UserOut: {
@@ -11995,6 +12092,59 @@ export interface operations {
             };
         };
     };
+    read_current_user_notification_settings_users_me_notifications_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserNotificationSettingsResponse"];
+                };
+            };
+        };
+    };
+    update_current_user_notification_settings_users_me_notifications_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserNotificationSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserNotificationSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     upload_current_user_avatar_users_me_avatar_post: {
         parameters: {
             query?: never;
@@ -12854,6 +13004,8 @@ export interface operations {
                 limit?: number;
                 /** @description Treat heartbeats older than this as offline */
                 stale_after_seconds?: number;
+                /** @description Only include machines with a heartbeat in this recent window */
+                recent_within_hours?: number;
             };
             header?: never;
             path?: never;
@@ -13000,6 +13152,8 @@ export interface operations {
                 slow_turn_limit?: number;
                 /** @description Treat heartbeats older than this as offline when enriching machine status */
                 stale_after_seconds?: number;
+                /** @description Only include machines with a heartbeat in this recent window */
+                recent_within_hours?: number;
             };
             header?: never;
             path?: never;
@@ -16284,6 +16438,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CreateTokenResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_apns_device_devices_apns_register_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["APNSRegisterRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APNSRegisterResponse"];
                 };
             };
             /** @description Validation Error */
