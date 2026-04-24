@@ -23,6 +23,7 @@ from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import SessionIngest
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import build_runtime_view
+from zerg.services.session_runtime import current_presence_state_for_session
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
@@ -238,6 +239,40 @@ def test_presence_endpoint_mirrors_into_runtime_state(tmp_path):
         assert state.last_runtime_signal_at is not None
         assert state.freshness_expires_at is not None
         assert db.query(SessionRuntimeEvent).filter(SessionRuntimeEvent.runtime_key == runtime_key).count() == 1
+
+    engine.dispose()
+
+
+def test_current_presence_state_for_session_uses_runtime_overlay(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_current_presence_state.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=10))
+        runtime_key = runtime_key_for_session("claude", str(session.id))
+
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="phase_signal",
+                    phase="blocked",
+                    tool_name="bash",
+                    occurred_at=now - timedelta(seconds=5),
+                    freshness_ms=phase_freshness_ms("blocked"),
+                    dedupe_key="blocked-live",
+                    payload={},
+                )
+            ],
+        )
+        db.commit()
+
+        assert current_presence_state_for_session(db, session.id, session=session, now=now) == "blocked"
 
     engine.dispose()
 

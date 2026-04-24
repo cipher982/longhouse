@@ -52,10 +52,9 @@ from zerg.services.session_messages import resolve_session_message_owner_id
 from zerg.services.session_runtime import RuntimeEventBatchResult
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import coerce_session_uuid
+from zerg.services.session_runtime import current_presence_state_for_session
 from zerg.services.session_runtime import ingest_runtime_events
-from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import phase_freshness_ms
-from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.session_runtime import runtime_key_for_session
 from zerg.services.write_serializer import get_write_serializer
 from zerg.utils.time import UTCBaseModel
@@ -133,26 +132,14 @@ async def upsert_presence(
     except ValueError:
         session_uuid = None
 
-    def _canonical_presence_state(write_db: Session, target_session_uuid: UUID | None) -> str | None:
-        if target_session_uuid is None:
-            return None
-        session = write_db.query(AgentSession).filter(AgentSession.id == target_session_uuid).first()
-        if session is None:
-            return None
-        runtime_state_map = load_runtime_state_map(write_db, [target_session_uuid])
-        return resolve_runtime_overlay(
-            session,
-            last_activity_at=session.last_activity_at,
-            runtime_state_map=runtime_state_map,
-            now=_now,
-        ).presence_state
-
     owner_id = resolve_session_message_owner_id(db, _token)
 
     def _do_presence_writes(write_db: Session):
-        previous_presence_state = _canonical_presence_state(write_db, session_uuid)
+        previous_presence_state = current_presence_state_for_session(write_db, session_uuid, now=_now) if session_uuid is not None else None
         ingest_result: RuntimeEventBatchResult = ingest_runtime_events(write_db, [runtime_event])
-        canonical_presence_state = _canonical_presence_state(write_db, session_uuid)
+        canonical_presence_state = (
+            current_presence_state_for_session(write_db, session_uuid, now=_now) if session_uuid is not None else None
+        )
         if (
             auto_resume
             and runtime_key in ingest_result.updated_runtime_keys

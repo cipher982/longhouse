@@ -320,6 +320,27 @@ def resolve_runtime_overlay(
     )
 
 
+def current_presence_state_for_session(
+    db: Session,
+    session_id: UUID,
+    *,
+    session: AgentSession | None = None,
+    now: datetime | None = None,
+) -> str | None:
+    target_session = session or db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    if target_session is None:
+        return None
+
+    runtime_state_map = load_runtime_state_map(db, [session_id])
+    runtime_overlay = resolve_runtime_overlay(
+        target_session,
+        last_activity_at=target_session.last_activity_at,
+        runtime_state_map=runtime_state_map,
+        now=now or datetime.now(timezone.utc),
+    )
+    return runtime_overlay.presence_state
+
+
 def load_runtime_state_map(db: Session, session_ids: list[UUID]) -> dict[str, SessionRuntimeState]:
     if not session_ids:
         return {}
