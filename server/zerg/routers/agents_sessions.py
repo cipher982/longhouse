@@ -15,6 +15,7 @@ from fastapi import Query
 from fastapi import Request
 from fastapi import Response
 from fastapi import status
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
@@ -246,8 +247,6 @@ async def list_sessions(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Pagination (offset) is not supported for mode=hybrid",
                 )
-            from sqlalchemy import or_
-
             from zerg.models_config import get_embedding_config_with_db_fallback
             from zerg.services.search import SessionFilters
             from zerg.services.search import lexical_search
@@ -470,8 +469,6 @@ async def list_sessions(
                 key=lambda r: r.timeline_anchor_at or r.last_activity_at or r.started_at,
                 reverse=True,
             )
-
-        from sqlalchemy import or_
 
         has_real = total == 0 or (
             db.query(AgentSession.id)

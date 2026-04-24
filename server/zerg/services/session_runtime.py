@@ -26,7 +26,6 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.utils.time import normalize_utc
 
 RuntimeEventKind = Literal["phase_signal", "progress_signal", "terminal_signal", "binding_signal"]
-RuntimePhase = Literal["thinking", "running", "blocked", "needs_user", "idle", "finished"]
 
 PHASE_FRESHNESS = {
     "thinking": timedelta(seconds=90),
@@ -39,7 +38,6 @@ INFERRED_PROGRESS_WINDOW = timedelta(minutes=5)
 LIVE_EXECUTION_PHASES = {"thinking", "running"}
 ATTENTION_PHASES = {"blocked", "needs_user"}
 KNOWN_PHASES = {"thinking", "running", "blocked", "needs_user", "idle", "finished"}
-PRESENCE_STALE_THRESHOLD = timedelta(minutes=10)
 
 
 def _latest_timestamp(*values: datetime | None) -> datetime | None:
