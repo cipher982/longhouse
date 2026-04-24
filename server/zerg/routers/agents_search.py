@@ -1,6 +1,5 @@
 """Agents API — semantic search and recall endpoints."""
 
-import logging
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -23,8 +22,6 @@ from zerg.services.session_views import RecallMatch
 from zerg.services.session_views import RecallResponse
 from zerg.services.session_views import SemanticSearchResponse
 from zerg.services.session_views import build_session_response
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
