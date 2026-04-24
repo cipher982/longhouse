@@ -10,13 +10,14 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentHeartbeat
+from zerg.services.transport_health import TransportHealthAssessment
+from zerg.services.transport_health import assess_transport_health
+from zerg.services.transport_health import transport_health_sample_from_heartbeat
 from zerg.utils.time import normalize_utc
 from zerg.utils.time import utc_now
 
 DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS = 15 * 60
 DEFAULT_MACHINE_HEALTH_RECENT_WITHIN_SECONDS = 72 * 60 * 60
-TRANSPORT_ERROR_DEGRADED_MIN_COUNT = 2
-TRANSPORT_ERROR_DEGRADED_MIN_RATE = 0.10
 
 _STATE_SORT_ORDER = {
     "broken": 0,
@@ -24,15 +25,6 @@ _STATE_SORT_ORDER = {
     "degraded": 2,
     "healthy": 3,
 }
-
-
-def _is_transport_error_burst(*, error_count: int, ship_attempts: int) -> bool:
-    """Return True only for sustained transport noise, not one-off blips."""
-    if error_count <= 0:
-        return False
-    if ship_attempts <= 0:
-        return False
-    return error_count >= TRANSPORT_ERROR_DEGRADED_MIN_COUNT and (error_count / ship_attempts) >= TRANSPORT_ERROR_DEGRADED_MIN_RATE
 
 
 @dataclass(frozen=True)
@@ -152,122 +144,34 @@ def build_machine_transport_health_summary(
     last_heartbeat_at = normalize_utc(row.received_at) or observed_now
     heartbeat_age_seconds = max(0, int((observed_now - last_heartbeat_at).total_seconds()))
 
-    ship_attempts_1h = int(row.ship_attempts_1h or 0)
-    ship_successes_1h = int(row.ship_successes_1h or 0)
-    ship_success_rate_1h = None
-    if ship_attempts_1h > 0:
-        ship_success_rate_1h = round(ship_successes_1h / ship_attempts_1h, 4)
+    sample = transport_health_sample_from_heartbeat(row)
+    transport = assess_transport_health(sample)
 
-    spool_pending = int(row.spool_pending or 0)
-    spool_dead = int(row.spool_dead or 0)
-    parse_errors_1h = int(row.parse_errors_1h or 0)
-    consecutive_failures = int(row.consecutive_failures or 0)
-    ship_rate_limited_1h = int(row.ship_rate_limited_1h or 0)
-    ship_server_errors_1h = int(row.ship_server_errors_1h or 0)
-    ship_payload_rejections_1h = int(row.ship_payload_rejections_1h or 0)
-    ship_payload_too_large_1h = int(row.ship_payload_too_large_1h or 0)
-    ship_retryable_client_errors_1h = int(row.ship_retryable_client_errors_1h or 0)
-    ship_connect_errors_1h = int(row.ship_connect_errors_1h or 0)
+    ship_attempts_1h = sample.ship_attempts_1h
+    ship_successes_1h = sample.ship_successes_1h
+    ship_success_rate_1h = sample.ship_success_rate_1h
+    spool_pending = sample.spool_pending
+    spool_dead = sample.spool_dead
+    parse_errors_1h = sample.parse_errors_1h
+    consecutive_failures = sample.consecutive_failures
+    ship_rate_limited_1h = sample.ship_rate_limited_1h
+    ship_server_errors_1h = sample.ship_server_errors_1h
+    ship_payload_rejections_1h = sample.ship_payload_rejections_1h
+    ship_payload_too_large_1h = sample.ship_payload_too_large_1h
+    ship_retryable_client_errors_1h = sample.ship_retryable_client_errors_1h
+    ship_connect_errors_1h = sample.ship_connect_errors_1h
     disk_free_bytes = int(row.disk_free_bytes or 0)
-    is_offline = bool(row.is_offline)
+    is_offline = sample.is_offline
     is_stale = heartbeat_age_seconds > stale_after_seconds
-    connect_error_burst = _is_transport_error_burst(
-        error_count=ship_connect_errors_1h,
-        ship_attempts=ship_attempts_1h,
+    reasons = _overlay_heartbeat_staleness(
+        transport=transport,
+        is_stale=is_stale,
     )
-    server_error_burst = _is_transport_error_burst(
-        error_count=ship_server_errors_1h,
-        ship_attempts=ship_attempts_1h,
+    status, status_reason, status_summary = _overlay_heartbeat_status(
+        transport=transport,
+        is_stale=is_stale,
+        heartbeat_age_seconds=heartbeat_age_seconds,
     )
-    rate_limited_burst = _is_transport_error_burst(
-        error_count=ship_rate_limited_1h,
-        ship_attempts=ship_attempts_1h,
-    )
-    retryable_client_error_burst = _is_transport_error_burst(
-        error_count=ship_retryable_client_errors_1h,
-        ship_attempts=ship_attempts_1h,
-    )
-
-    reasons: list[str] = []
-    if is_stale:
-        reasons.append("heartbeat_stale")
-    if is_offline:
-        reasons.append("reported_offline")
-    if spool_dead > 0:
-        reasons.append("spool_dead")
-    if ship_payload_rejections_1h > 0:
-        reasons.append("payload_rejected")
-    if ship_payload_too_large_1h > 0:
-        reasons.append("payload_too_large")
-    if parse_errors_1h > 0:
-        reasons.append("parse_errors")
-    if consecutive_failures > 0:
-        reasons.append("consecutive_failures")
-    if connect_error_burst:
-        reasons.append("connect_errors")
-    if server_error_burst:
-        reasons.append("server_errors")
-    if rate_limited_burst:
-        reasons.append("rate_limited")
-    if retryable_client_error_burst:
-        reasons.append("retryable_client_errors")
-    if spool_pending > 0:
-        reasons.append("spool_pending")
-
-    # Known continuity-loss conditions win over liveness because the operator
-    # still needs to repair them after the machine comes back.
-    if spool_dead > 0:
-        status = "broken"
-        status_reason = "spool_dead"
-        status_summary = f"{spool_dead} dead-letter range(s) need repair."
-    elif ship_payload_rejections_1h > 0:
-        status = "broken"
-        status_reason = "payload_rejected"
-        status_summary = f"{ship_payload_rejections_1h} ship payload rejection(s) in the last hour."
-    elif ship_payload_too_large_1h > 0:
-        status = "broken"
-        status_reason = "payload_too_large"
-        status_summary = f"{ship_payload_too_large_1h} ship payload too-large rejection(s) in the last hour."
-    elif is_stale:
-        status = "offline"
-        status_reason = "heartbeat_stale"
-        status_summary = f"Last heartbeat {heartbeat_age_seconds}s ago."
-    elif is_offline:
-        status = "offline"
-        status_reason = "reported_offline"
-        status_summary = "Engine reported offline."
-    elif parse_errors_1h > 0:
-        status = "degraded"
-        status_reason = "parse_errors"
-        status_summary = f"{parse_errors_1h} parse error(s) in the last hour."
-    elif consecutive_failures > 0:
-        status = "degraded"
-        status_reason = "consecutive_failures"
-        status_summary = f"{consecutive_failures} consecutive ship failure(s)."
-    elif connect_error_burst:
-        status = "degraded"
-        status_reason = "connect_errors"
-        status_summary = f"{ship_connect_errors_1h} ship connect error(s) in the last hour."
-    elif server_error_burst:
-        status = "degraded"
-        status_reason = "server_errors"
-        status_summary = f"{ship_server_errors_1h} ship server error(s) in the last hour."
-    elif rate_limited_burst:
-        status = "degraded"
-        status_reason = "rate_limited"
-        status_summary = f"{ship_rate_limited_1h} rate-limit response(s) in the last hour."
-    elif retryable_client_error_burst:
-        status = "degraded"
-        status_reason = "retryable_client_errors"
-        status_summary = f"{ship_retryable_client_errors_1h} retryable client error(s) in the last hour."
-    elif spool_pending > 0:
-        status = "degraded"
-        status_reason = "spool_pending"
-        status_summary = f"{spool_pending} pending spool item(s)."
-    else:
-        status = "healthy"
-        status_reason = "healthy"
-        status_summary = "Shipping healthy."
 
     return MachineTransportHealthSummary(
         device_id=row.device_id,
@@ -302,4 +206,37 @@ def build_machine_transport_health_summary(
         consecutive_failures=consecutive_failures,
         disk_free_bytes=disk_free_bytes,
         is_offline=is_offline,
+    )
+
+
+def _overlay_heartbeat_staleness(
+    *,
+    transport: TransportHealthAssessment,
+    is_stale: bool,
+) -> tuple[str, ...]:
+    reasons = list(transport.reasons)
+    if is_stale and "heartbeat_stale" not in reasons:
+        reasons.insert(0, "heartbeat_stale")
+    return tuple(reasons)
+
+
+def _overlay_heartbeat_status(
+    *,
+    transport: TransportHealthAssessment,
+    is_stale: bool,
+    heartbeat_age_seconds: int,
+) -> tuple[str, str, str]:
+    # Heartbeat freshness is a hosted-only liveness overlay. Keep continuity
+    # failures broken, but let stale heartbeats supersede non-broken in-band
+    # transport states such as "reported_offline".
+    if is_stale and transport.status != "broken":
+        return (
+            "offline",
+            "heartbeat_stale",
+            f"Last heartbeat {heartbeat_age_seconds}s ago.",
+        )
+    return (
+        transport.status,
+        transport.status_reason,
+        transport.status_summary,
     )
