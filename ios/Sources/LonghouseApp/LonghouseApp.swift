@@ -5,6 +5,7 @@ import WidgetKit
 @main
 struct LonghouseApp: App {
     @StateObject private var appState = AppState()
+    @UIApplicationDelegateAdaptor(LonghousePushAppDelegate.self) private var pushDelegate
 
     var body: some Scene {
         WindowGroup {
@@ -12,6 +13,11 @@ struct LonghouseApp: App {
                 .environmentObject(appState)
                 .onOpenURL { url in
                     GIDSignIn.sharedInstance.handle(url)
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .longhouseAPNSDeviceTokenUpdated)) { _ in
+                    Task {
+                        await appState.syncStoredAPNSTokenIfPossible()
+                    }
                 }
                 .task {
                     let environment = ProcessInfo.processInfo.environment
@@ -81,6 +87,7 @@ final class AppState: ObservableObject {
         case .authenticated:
             isAuthenticated = true
             authError = nil
+            await syncStoredAPNSTokenIfPossible()
         case .indeterminate:
             isAuthenticated = hasSession || hasRefresh
         case .unauthenticated:
@@ -104,6 +111,7 @@ final class AppState: ObservableObject {
 
         if isSignedIn {
             authError = nil
+            await syncStoredAPNSTokenIfPossible()
         } else {
             KeychainHelper.deleteAuthToken()
             authError = "Signed in, but failed to restore the session"
@@ -214,6 +222,37 @@ final class AppState: ObservableObject {
     func signOut() {
         Task {
             await signOutLocallyAndRemotely()
+        }
+    }
+
+    func ensurePushRegistrationIfPossible() async {
+        guard isAuthenticated else {
+            return
+        }
+        let granted = await PushNotificationStore.ensureAuthorizedAndRegister()
+        guard granted else {
+            return
+        }
+        await syncStoredAPNSTokenIfPossible()
+    }
+
+    func syncStoredAPNSTokenIfPossible() async {
+        guard isAuthenticated, let api = LonghouseAPI(host: serverURL) else {
+            return
+        }
+        guard let deviceToken = PushNotificationStore.storedDeviceToken() else {
+            return
+        }
+        do {
+            try await api.registerAPNSDevice(
+                deviceToken: deviceToken,
+                pushEnvironment: PushNotificationStore.pushEnvironment,
+                appBuildId: PushNotificationStore.currentAppBuildID
+            )
+        } catch LonghouseAPIError.notAuthenticated {
+            return
+        } catch {
+            NSLog("Longhouse APNs sync failed: %@", error.localizedDescription)
         }
     }
 

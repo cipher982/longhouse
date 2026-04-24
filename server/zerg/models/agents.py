@@ -130,6 +130,11 @@ class AgentSession(AgentsBase):
     # Reflection tracking — stamped when session has been analyzed by reflection service
     reflected_at = Column(DateTime(timezone=True), nullable=True)
 
+    # Debounce outgoing mobile pager pushes when a session flaps in and out of
+    # attention states.
+    last_attention_push_at = Column(DateTime(timezone=True), nullable=True)
+    last_attention_push_state = Column(String(20), nullable=True)
+
     # Sidechain flag: True when session is a Task sub-agent (not a human-initiated session)
     is_sidechain = Column(Integer, nullable=False, server_default=text("0"))
 

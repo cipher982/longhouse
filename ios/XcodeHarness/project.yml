@@ -67,6 +67,11 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_STRICT_CONCURRENCY: complete
         CODE_SIGN_ENTITLEMENTS: Longhouse.entitlements
+      configs:
+        Debug:
+          APS_ENVIRONMENT: development
+        Release:
+          APS_ENVIRONMENT: production
     info:
       path: Info.plist
       properties:

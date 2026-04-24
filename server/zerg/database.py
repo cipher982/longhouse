@@ -127,6 +127,7 @@ Base = declarative_base(metadata=_metadata)
 # Import all models at module level to ensure they are registered with Base
 try:
     from zerg.models.agents import SessionEmbedding  # noqa: F401
+    from zerg.models.apns_device_registration import APNSDeviceRegistration  # noqa: F401
     from zerg.models.models import Connector  # noqa: F401
     from zerg.models.models import Conversation  # noqa: F401
     from zerg.models.models import ConversationBinding  # noqa: F401
@@ -448,6 +449,7 @@ def initialize_database(engine: Engine = None) -> None:
     # Import all models to ensure they are registered with Base
     from zerg.models.agents import AgentsBase
     from zerg.models.agents import SessionEmbedding  # noqa: F401
+    from zerg.models.apns_device_registration import APNSDeviceRegistration  # noqa: F401
     from zerg.models.models import Connector  # noqa: F401
     from zerg.models.models import Conversation  # noqa: F401
     from zerg.models.models import ConversationBinding  # noqa: F401
@@ -594,6 +596,10 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 )
             if "reflected_at" not in columns:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN reflected_at DATETIME"))
+            if "last_attention_push_at" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN last_attention_push_at DATETIME"))
+            if "last_attention_push_state" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN last_attention_push_state VARCHAR(20)"))
             if "user_state" not in columns:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN user_state VARCHAR(20) DEFAULT 'active' NOT NULL"))
                 conn.execute(text("UPDATE sessions SET user_state = 'active' WHERE user_state IS NULL"))

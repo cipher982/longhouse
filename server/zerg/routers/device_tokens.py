@@ -12,6 +12,7 @@ import secrets
 from datetime import datetime
 from datetime import timezone
 from typing import List
+from typing import Literal
 from typing import Optional
 from uuid import UUID
 
@@ -25,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
+from zerg.models.apns_device_registration import APNSDeviceRegistration
 from zerg.models.device_token import DeviceToken
 from zerg.services.write_serializer import get_write_serializer
 from zerg.utils.time import UTCBaseModel
@@ -93,6 +95,26 @@ class TokenListResponse(BaseModel):
 
     tokens: List[TokenResponse]
     total: int
+
+
+class APNSRegisterRequest(BaseModel):
+    """Register or refresh an iOS APNs device token for the current user."""
+
+    device_token: str = Field(..., min_length=16, max_length=255, pattern=r"^[A-Fa-f0-9]+$")
+    platform: Literal["ios"] = "ios"
+    app_build_id: Optional[str] = Field(None, max_length=255)
+    push_environment: Literal["sandbox", "production"] = "sandbox"
+
+
+class APNSRegisterResponse(UTCBaseModel):
+    """Response for APNs device registration upsert."""
+
+    id: str
+    platform: str
+    device_token_suffix: str
+    push_environment: str
+    app_build_id: Optional[str] = None
+    last_seen_at: datetime
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +198,72 @@ def list_device_tokens(
             for t in tokens
         ],
         total=len(tokens),
+    )
+
+
+@router.post("/apns-register", response_model=APNSRegisterResponse)
+async def register_apns_device(
+    request: APNSRegisterRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+) -> APNSRegisterResponse:
+    """Register or refresh an APNs device token for the current browser user."""
+    normalized_token = str(request.device_token or "").strip().lower()
+    build_id = str(request.app_build_id or "").strip() or None
+    now = datetime.now(timezone.utc)
+    ws = get_write_serializer()
+
+    def _register_device(wdb: Session) -> tuple[str, str, str, str | None, datetime]:
+        registration = (
+            wdb.query(APNSDeviceRegistration)
+            .filter(
+                APNSDeviceRegistration.owner_id == current_user.id,
+                APNSDeviceRegistration.device_token == normalized_token,
+            )
+            .first()
+        )
+        if registration is None:
+            registration = APNSDeviceRegistration(
+                owner_id=current_user.id,
+                platform=request.platform,
+                device_token=normalized_token,
+                push_environment=request.push_environment,
+                app_build_id=build_id,
+                last_seen_at=now,
+            )
+            wdb.add(registration)
+            wdb.flush()
+        else:
+            registration.platform = request.platform
+            registration.push_environment = request.push_environment
+            registration.app_build_id = build_id
+            registration.last_seen_at = now
+            registration.revoked_at = None
+
+        wdb.flush()
+        wdb.refresh(registration)
+        return (
+            str(registration.id),
+            registration.platform,
+            registration.push_environment,
+            registration.app_build_id,
+            registration.last_seen_at,
+        )
+
+    registration_id, platform, push_environment, registration_build_id, last_seen_at = await ws.execute_or_direct(
+        _register_device,
+        db,
+        label="apns-device-register",
+    )
+
+    logger.info("Registered APNs device for user %s (%s)", current_user.id, request.push_environment)
+    return APNSRegisterResponse(
+        id=registration_id,
+        platform=platform,
+        device_token_suffix=normalized_token[-12:],
+        push_environment=push_environment,
+        app_build_id=registration_build_id,
+        last_seen_at=last_seen_at,
     )
 
 
@@ -285,10 +373,10 @@ def validate_device_token(token: str, db: Session) -> DeviceToken | None:
     # Debounce last_used_at writes — at most once per hour per token.
     # Every-request writes cause SQLite write-lock contention under load.
     # When the write serializer is active, keep auth validation read-only.
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     last = device_token.last_used_at
-    if last is not None and last.tzinfo is not None:
-        last = last.replace(tzinfo=None)
+    if last is not None and last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
     if last is None or (now - last).total_seconds() > 3600:
         if get_write_serializer().is_configured:
             return device_token

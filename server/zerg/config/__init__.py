@@ -211,6 +211,12 @@ class Settings:  # noqa: D401 – simple data container
     loop_push_vapid_private_key: str | None = None
     loop_push_vapid_subject: str | None = None
 
+    # iOS APNs push -----------------------------------------------------
+    apns_team_id: str | None = None
+    apns_key_id: str | None = None
+    apns_private_key_p8: str | None = None
+    apns_topic: str | None = None
+
     # Memory Files -----------------------------------------------------
     memory_files_enabled: bool = False
     memory_files_context_enabled: bool = False
@@ -258,6 +264,11 @@ class Settings:  # noqa: D401 – simple data container
     def loop_push_enabled(self) -> bool:  # noqa: D401
         """Return True when Loop PWA web push is fully configured."""
         return bool(self.loop_push_vapid_public_key and self.loop_push_vapid_private_key and self.loop_push_vapid_subject)
+
+    @property
+    def apns_enabled(self) -> bool:  # noqa: D401
+        """Return True when APNs token-auth settings are fully configured."""
+        return bool(self.apns_team_id and self.apns_key_id and self.apns_private_key_p8 and self.apns_topic)
 
     @property
     def db_is_sqlite(self) -> bool:
@@ -529,6 +540,10 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         loop_push_vapid_public_key=os.getenv("LOOP_PUSH_VAPID_PUBLIC_KEY"),
         loop_push_vapid_private_key=os.getenv("LOOP_PUSH_VAPID_PRIVATE_KEY"),
         loop_push_vapid_subject=os.getenv("LOOP_PUSH_VAPID_SUBJECT"),
+        apns_team_id=os.getenv("APNS_TEAM_ID"),
+        apns_key_id=os.getenv("APNS_KEY_ID"),
+        apns_private_key_p8=os.getenv("APNS_PRIVATE_KEY_P8"),
+        apns_topic=os.getenv("APNS_TOPIC", "ai.longhouse.ios"),
     )
 
 
