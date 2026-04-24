@@ -1904,7 +1904,7 @@ def test_process_scan_uses_phase_overlay_when_available(monkeypatch, tmp_path: P
                 "Bash",
                 "claude_hook",
                 "2026-04-19T00:04:00Z",
-                "2026-04-19T00:04:00Z",
+                "2026-04-19T00:05:00Z",
             )
         ],
     )
@@ -1919,7 +1919,7 @@ def test_process_scan_uses_phase_overlay_when_available(monkeypatch, tmp_path: P
     assert rows[0]["workspace_label"] == "zerg-canonical"
     assert rows[0]["phase"] == "running Bash"
     assert rows[0]["phase_observed_at"] == "2026-04-19T00:04:00Z"
-    assert rows[0]["last_activity_at"] == "2026-04-19T00:04:00Z"
+    assert rows[0]["last_activity_at"] == "2026-04-19T00:05:00Z"
 
 
 def test_process_scan_humanizes_needs_user_phase(monkeypatch, tmp_path: Path):

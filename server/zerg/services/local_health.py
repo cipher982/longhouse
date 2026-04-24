@@ -1408,6 +1408,7 @@ def _collect_managed_sessions_by_process(
         if workspace_path is None:
             workspace_path = _normalize_optional_string(proc_row.get("cwd"))
         phase_observed_at = phase_state.get("observed_at") if phase_state else None
+        phase_last_activity_at = phase_state.get("last_activity_at") if phase_state else None
 
         sessions.append(
             {
@@ -1426,7 +1427,7 @@ def _collect_managed_sessions_by_process(
                     phase_state.get("tool_name") if phase_state else None,
                 ),
                 "phase_observed_at": phase_observed_at,
-                "last_activity_at": _max_rfc3339(started_at, phase_observed_at) or started_at,
+                "last_activity_at": _max_rfc3339(started_at, phase_last_activity_at, phase_observed_at) or started_at,
                 "bridge_status": None,
                 "bridge_pid": None,
                 "bridge_heartbeat_at": None,
