@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
+import subprocess
+import sys
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
@@ -66,3 +70,51 @@ def test_transport_health_keeps_single_transient_connect_error_healthy():
     assert assessment.status_reason == "healthy"
     assert assessment.status_summary == "Shipping healthy."
     assert assessment.reasons == ()
+
+
+def test_local_health_cli_does_not_require_database_url(tmp_path):
+    repo_server_dir = Path(__file__).resolve().parent.parent
+    build_identity_path = repo_server_dir / "zerg" / "build_identity.json"
+    build_identity_existed = build_identity_path.exists()
+    if not build_identity_existed:
+        build_identity_path.write_text(
+            json.dumps(
+                {
+                    "version": "0.0.0",
+                    "commit": "0" * 40,
+                    "commit_short": "00000000",
+                    "dirty": False,
+                    "built_at": "2026-04-24T00:00:00Z",
+                    "channel": "dev",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    env = os.environ.copy()
+    env.pop("DATABASE_URL", None)
+    env.pop("TESTING", None)
+    env["HOME"] = str(tmp_path)
+
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-m", "zerg.cli.main", "local-health", "--json"],
+            capture_output=True,
+            text=True,
+            cwd=repo_server_dir,
+            env=env,
+            check=False,
+        )
+    finally:
+        if not build_identity_existed and build_identity_path.exists():
+            build_identity_path.unlink()
+
+    assert completed.returncode == 0, (
+        "local-health CLI should not require DATABASE_URL just to read local machine state.\n"
+        f"stdout:\n{completed.stdout}\n"
+        f"stderr:\n{completed.stderr}"
+    )
+    payload = json.loads(completed.stdout)
+    assert payload["schema_version"] == 1
+    assert "health_state" in payload

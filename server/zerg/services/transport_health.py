@@ -4,9 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 from typing import Any
 
-from zerg.models.agents import AgentHeartbeat
+if TYPE_CHECKING:
+    # Only used as a type hint below. Importing at runtime pulls in the full
+    # SQLAlchemy models package, which requires DATABASE_URL and breaks
+    # CLI-only entrypoints like `longhouse local-health`.
+    from zerg.models.agents import AgentHeartbeat
 
 TRANSPORT_ERROR_DEGRADED_MIN_COUNT = 2
 TRANSPORT_ERROR_DEGRADED_MIN_RATE = 0.10
