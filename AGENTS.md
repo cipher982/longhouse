@@ -257,7 +257,7 @@ launchctl kickstart -k gui/$(id -u)/ai.longhouse.app
 ```
 
 No conditionals. Not "if the runtime changed." Always. The menu bar
-will show "build drift" otherwise, and David is stuck running old
+will show "restart pending" otherwise, and David is stuck running old
 code while hosted is already on the new SHA.
 
 **iOS:** if the change touched `ios/`, call it out explicitly — David
