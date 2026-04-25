@@ -106,13 +106,15 @@ Completed in `ios-timeline-refresh`.
 
 ### Phase 3: Explicit Watch Session
 
-Build after widget freshness is stable.
+Completed in `ios-timeline-refresh`.
 
-- Add `Watch session` from session detail and, optionally, the widget.
+- Add `Watch session` from session detail.
 - Start one Live Activity for that session.
-- Update/end via ActivityKit pushes on phase transitions.
-- Handle activity duration limits by ending cleanly or requiring explicit user
-  renewal.
+- Register the per-activity ActivityKit update token with the server.
+- Update via APNs Live Activity pushes on phase transitions.
+- End locally and revoke the server registration when the user stops watching.
+- Do not auto-renew system-expired activities; the user can explicitly watch
+  the session again if they still want it.
 
 ## Non-Goals
 
@@ -145,4 +147,19 @@ Build after widget freshness is stable.
   later valid token can still receive the next set transition.
 - Older iOS installs continue to use the original static widget and snapshot
   fallback.
+- Backend and iOS tests cover the new behavior.
+
+## Acceptance Criteria For Phase 3
+
+- Session detail exposes an explicit watch/stop control.
+- Starting watch creates one ActivityKit Live Activity for that session and
+  registers its update token with the server.
+- The widget extension provides the Live Activity lock-screen and Dynamic
+  Island presentation.
+- Presence transitions send APNs `liveactivity` updates with content-state
+  shaped exactly like the Swift `ActivityAttributes.ContentState`.
+- Live Activity update pushes are state-hash debounced and rolled back when
+  APNs accepts no target.
+- Stopping watch ends the local Live Activity and marks the server registration
+  ended.
 - Backend and iOS tests cover the new behavior.
