@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 
 ATTENTION_PUSH_STATES = {"needs_user", "blocked"}
 ATTENTION_PUSH_DEBOUNCE = timedelta(seconds=30)
+ATTENTION_NOTIFICATION_CATEGORY = "LONGHOUSE_SESSION_ATTENTION"
+ATTENTION_NOTIFICATION_THREAD_PREFIX = "longhouse-session"
 _APNS_PROVIDER_TOKEN_TTL = timedelta(minutes=50)
 
 _cached_provider_token: str | None = None
@@ -41,8 +43,12 @@ class SessionAttentionPush:
     state: Literal["needs_user", "blocked"]
     title: str
     summary: str
+    project: str | None
+    provider: str | None
+    tool_name: str | None
     alert_title: str
     alert_body: str
+    collapse_id: str
     targets: tuple[APNSDeviceTarget, ...]
 
 
@@ -71,6 +77,7 @@ def prepare_session_attention_push(
     previous_state: str | None,
     current_state: str | None,
     occurred_at: datetime,
+    current_tool_name: str | None = None,
 ) -> SessionAttentionPush | None:
     if owner_id is None or current_state not in ATTENTION_PUSH_STATES or previous_state == current_state:
         return None
@@ -117,16 +124,13 @@ def prepare_session_attention_push(
     session.last_attention_push_at = occurred_at
     session.last_attention_push_state = current_state
 
-    title = (
-        str(getattr(session, "summary_title", "") or "").strip()
-        or str(getattr(session, "managed_session_name", "") or "").strip()
-        or str(getattr(session, "project", "") or "").strip()
-        or str(getattr(session, "provider", "") or "").strip()
-        or "Longhouse session"
-    )
+    provider = _clean_label(getattr(session, "provider", None))
+    project = _clean_label(getattr(session, "project", None))
+    tool_name = _clean_label(current_tool_name)
+    title = _session_title(session)
     summary = str(getattr(session, "summary", "") or "").strip() or title
-    alert_title = "Needs you" if current_state == "needs_user" else "Blocked"
-    alert_body = _trim_alert_text(summary if summary else title)
+    alert_title = _attention_alert_title(state=current_state, provider=provider)
+    alert_body = _attention_alert_body(state=current_state, project=project, title=title, tool_name=tool_name)
 
     targets = tuple(
         APNSDeviceTarget(
@@ -143,8 +147,12 @@ def prepare_session_attention_push(
         state=current_state,
         title=title,
         summary=summary,
+        project=project,
+        provider=provider,
+        tool_name=tool_name,
         alert_title=alert_title,
         alert_body=alert_body,
+        collapse_id=f"lh-attn-{session.id}",
         targets=targets,
     )
 
@@ -156,19 +164,7 @@ async def send_session_attention_push(notification: SessionAttentionPush) -> Non
 
     provider_token = _provider_token()
     topic = str(settings.apns_topic or "ai.longhouse.ios").strip() or "ai.longhouse.ios"
-    payload = {
-        "aps": {
-            "alert": {
-                "title": notification.alert_title,
-                "body": notification.alert_body,
-            },
-            "sound": "default",
-        },
-        "session_id": notification.session_id,
-        "title": notification.title,
-        "summary": notification.summary,
-        "state": notification.state,
-    }
+    payload = build_session_attention_payload(notification)
 
     async with httpx.AsyncClient(http2=True, timeout=10.0) as client:
         for target in notification.targets:
@@ -178,6 +174,8 @@ async def send_session_attention_push(notification: SessionAttentionPush) -> Non
                 "apns-topic": topic,
                 "apns-push-type": "alert",
                 "apns-priority": "10",
+                "apns-collapse-id": notification.collapse_id,
+                "apns-expiration": str(int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp())),
             }
             url = f"https://{host}/3/device/{target.device_token}"
             try:
@@ -193,6 +191,61 @@ async def send_session_attention_push(notification: SessionAttentionPush) -> Non
                     response.status_code,
                     response.text,
                 )
+
+
+def build_session_attention_payload(notification: SessionAttentionPush) -> dict:
+    return {
+        "aps": {
+            "alert": {
+                "title": notification.alert_title,
+                "body": notification.alert_body,
+            },
+            "category": ATTENTION_NOTIFICATION_CATEGORY,
+            "thread-id": f"{ATTENTION_NOTIFICATION_THREAD_PREFIX}-{notification.session_id}",
+            "sound": "default",
+        },
+        "session_id": notification.session_id,
+        "title": notification.title,
+        "summary": notification.summary,
+        "state": notification.state,
+        "attention_state": notification.state,
+        "project": notification.project,
+        "provider": notification.provider,
+        "tool_name": notification.tool_name,
+    }
+
+
+def _session_title(session: AgentSession) -> str:
+    return (
+        str(getattr(session, "summary_title", "") or "").strip()
+        or str(getattr(session, "managed_session_name", "") or "").strip()
+        or str(getattr(session, "project", "") or "").strip()
+        or str(getattr(session, "provider", "") or "").strip()
+        or "Longhouse session"
+    )
+
+
+def _attention_alert_title(*, state: str, provider: str | None) -> str:
+    if state == "blocked":
+        return "Needs permission"
+    if provider:
+        return f"{provider.capitalize()} needs you"
+    return "Needs you"
+
+
+def _attention_alert_body(*, state: str, project: str | None, title: str, tool_name: str | None) -> str:
+    parts: list[str] = []
+    if project:
+        parts.append(project)
+    if state == "blocked" and tool_name:
+        parts.append(f"Blocked on {tool_name}")
+    parts.append(title)
+    return _trim_alert_text(" · ".join(parts))
+
+
+def _clean_label(value: object) -> str | None:
+    cleaned = str(value or "").strip()
+    return cleaned or None
 
 
 def _trim_alert_text(value: str, limit: int = 180) -> str:

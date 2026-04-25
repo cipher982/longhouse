@@ -25,6 +25,9 @@ from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
 from zerg.models.apns_device_registration import APNSDeviceRegistration
 from zerg.models.user import User
+from zerg.services.apns_sender import ATTENTION_NOTIFICATION_CATEGORY
+from zerg.services.apns_sender import ATTENTION_NOTIFICATION_THREAD_PREFIX
+from zerg.services.apns_sender import build_session_attention_payload
 
 
 def _make_db(tmp_path, name: str = "test_apns.db"):
@@ -238,7 +241,16 @@ def test_presence_attention_transition_sends_and_debounces_push(tmp_path):
     second_notification = send_mock.await_args_list[1].args[0]
     assert first_notification.session_id == session_id
     assert first_notification.state == "needs_user"
+    assert first_notification.alert_title == "Claude needs you"
+    assert first_notification.alert_body == "zerg · Fix failing build"
+    assert first_notification.collapse_id == f"lh-attn-{session_id}"
     assert second_notification.state == "needs_user"
+    payload = build_session_attention_payload(first_notification)
+    assert payload["aps"]["category"] == ATTENTION_NOTIFICATION_CATEGORY
+    assert payload["aps"]["thread-id"] == f"{ATTENTION_NOTIFICATION_THREAD_PREFIX}-{session_id}"
+    assert payload["attention_state"] == "needs_user"
+    assert payload["project"] == "zerg"
+    assert payload["provider"] == "claude"
 
     with SessionLocal() as db:
         session = db.query(AgentSession).filter(AgentSession.id == session_id).first()

@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import UserNotifications
 @testable import Longhouse
 
 struct PushNotificationsTests {
@@ -19,5 +20,13 @@ struct PushNotificationsTests {
 
         #expect(PushNotificationStore.consumePendingSessionID() == "session-123")
         #expect(PushNotificationStore.consumePendingSessionID() == nil)
+    }
+
+    @Test
+    func attentionNotificationCategoryOffersOpenSessionAction() throws {
+        let categories = LonghouseNotificationCategory.allCategories()
+        let attention = try #require(categories.first { $0.identifier == LonghouseNotificationCategory.sessionAttention })
+
+        #expect(attention.actions.map(\.identifier) == [LonghouseNotificationCategory.openSessionAction])
     }
 }

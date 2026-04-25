@@ -7,6 +7,26 @@ extension Notification.Name {
     static let longhouseOpenSessionFromPush = Notification.Name("longhouse.openSessionFromPush")
 }
 
+enum LonghouseNotificationCategory {
+    static let sessionAttention = "LONGHOUSE_SESSION_ATTENTION"
+    static let openSessionAction = "LONGHOUSE_OPEN_SESSION"
+
+    static func allCategories() -> Set<UNNotificationCategory> {
+        let openSession = UNNotificationAction(
+            identifier: openSessionAction,
+            title: "Open session",
+            options: [.foreground]
+        )
+        let attention = UNNotificationCategory(
+            identifier: sessionAttention,
+            actions: [openSession],
+            intentIdentifiers: [],
+            options: [.customDismissAction]
+        )
+        return [attention]
+    }
+}
+
 enum PushNotificationStore {
     nonisolated(unsafe) private static let defaults = UserDefaults.standard
     private static let deviceTokenKey = "longhouse.apns.deviceToken"
@@ -84,6 +104,7 @@ final class LonghousePushAppDelegate: NSObject, UIApplicationDelegate, UNUserNot
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+        UNUserNotificationCenter.current().setNotificationCategories(LonghouseNotificationCategory.allCategories())
         if let userInfo = launchOptions?[.remoteNotification] as? [AnyHashable: Any] {
             Self.handlePushPayload(userInfo)
         }
@@ -110,7 +131,14 @@ final class LonghousePushAppDelegate: NSObject, UIApplicationDelegate, UNUserNot
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse
     ) async {
-        Self.handlePushPayload(response.notification.request.content.userInfo)
+        switch response.actionIdentifier {
+        case UNNotificationDismissActionIdentifier:
+            return
+        case UNNotificationDefaultActionIdentifier, LonghouseNotificationCategory.openSessionAction:
+            Self.handlePushPayload(response.notification.request.content.userInfo)
+        default:
+            Self.handlePushPayload(response.notification.request.content.userInfo)
+        }
     }
 
     private nonisolated static func handlePushPayload(_ userInfo: [AnyHashable: Any]) {

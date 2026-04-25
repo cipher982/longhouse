@@ -25,7 +25,7 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    Toggle("iPhone push alerts", isOn: Binding(
+                    Toggle("Attention alerts", isOn: Binding(
                         get: { apnsEnabled },
                         set: { newValue in
                             let previousValue = apnsEnabled
@@ -43,7 +43,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Notifications")
                 } footer: {
-                    Text("Alerts fire when a session needs you or becomes blocked. The app asks for iOS notification permission from Inbox the first time it opens.")
+                    Text("Alerts fire when a session is waiting for you or needs permission. The app asks for iOS notification permission from Timeline the first time it opens.")
                         .font(.caption2)
                 }
 
