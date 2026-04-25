@@ -358,6 +358,31 @@ def test_collect_local_health_healthy(monkeypatch, tmp_path: Path):
     assert snapshot["launch_readiness"]["state"] == "unconfigured"
 
 
+def test_collect_local_health_surfaces_codex_provider_cli(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr(
+        local_health_service.shutil,
+        "which",
+        lambda name: "/opt/homebrew/bin/codex" if name == "codex" else None,
+    )
+    monkeypatch.setattr(
+        local_health_service.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout="codex-cli 0.125.0\n", stderr=""),
+    )
+    _write_engine_status(tmp_path, age_seconds=5)
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["provider_clis"]["codex"] == {
+        "path": "/opt/homebrew/bin/codex",
+        "source": "PATH",
+        "version": {"ok": True, "value": "codex-cli 0.125.0", "error": None},
+        "env_override": None,
+    }
+
+
 def test_collect_local_health_degraded_while_waiting_for_first_status(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
@@ -439,6 +464,7 @@ def test_collect_local_health_flags_detached_managed_session(monkeypatch, tmp_pa
         {
             "session_id": "sess-detached",
             "pid": 7771,
+            "codex_bin": "/opt/homebrew/bin/codex",
             "ws_url": "ws://127.0.0.1:49760",
             "cwd": "/Users/test/git/zerg",
             "status": "ready",
@@ -475,6 +501,7 @@ def test_collect_local_health_flags_detached_managed_session(monkeypatch, tmp_pa
         {
             "session_id": "sess-detached",
             "provider": "codex",
+            "provider_cli": {"path": "/opt/homebrew/bin/codex", "source": "bridge_state"},
             "workspace_label": "zerg",
             "branch": None,
             "state": "detached",
@@ -503,10 +530,11 @@ def test_collect_local_health_flags_orphaned_managed_bridge(monkeypatch, tmp_pat
     _write_codex_bridge_state(
         state_dir,
         "sess-orphan",
-        {
-            "session_id": "sess-orphan",
-            "pid": 8881,
-            "ws_url": "ws://127.0.0.1:49888",
+            {
+                "session_id": "sess-orphan",
+                "pid": 8881,
+                "codex_bin": "/opt/homebrew/bin/codex",
+                "ws_url": "ws://127.0.0.1:49888",
             "cwd": "/Users/test/git/citi",
             "status": "ready",
             "updated_at": "2026-04-17T18:02:00Z",
@@ -539,9 +567,10 @@ def test_collect_local_health_flags_orphaned_managed_bridge(monkeypatch, tmp_pat
     assert snapshot["managed_sessions"] == []
     assert snapshot["orphan_bridges"] == [
         {
-            "session_id": "sess-orphan",
-            "provider": "codex",
-            "pid": 8881,
+                "session_id": "sess-orphan",
+                "provider": "codex",
+                "provider_cli": {"path": "/opt/homebrew/bin/codex", "source": "bridge_state"},
+                "pid": 8881,
             "workspace_label": "citi",
             "status": "orphan",
             "started_at": "2026-04-17T18:02:00Z",

@@ -12,7 +12,9 @@ import os
 import plistlib
 import re
 import shlex
+import shutil
 import sqlite3
+import subprocess
 from collections.abc import Mapping
 from contextlib import contextmanager
 from datetime import datetime
@@ -56,6 +58,7 @@ ACTIVITY_RECENCY_BANDS = [
 ]
 RECENT_TOUCH_LIMIT = 4
 BRIDGE_STATUS_DIR = "managed-local/codex-bridge"
+CODEX_BIN_ENV = "LONGHOUSE_CODEX_BIN"
 _PROCESS_SNAPSHOT: tuple[list[dict[str, Any]], list[dict[str, Any]]] | None = None
 
 
@@ -134,6 +137,65 @@ def _normalize_binding_path(path: str | None) -> str | None:
     if normalized is None:
         return None
     return str(Path(normalized).expanduser().resolve(strict=False))
+
+
+def _resolve_provider_cli_candidate(candidate: str | None) -> str | None:
+    normalized = _normalize_optional_string(candidate)
+    if normalized is None:
+        return None
+    looks_like_path = normalized.startswith((".", "~", "/")) or "/" in normalized or "\\" in normalized
+    if looks_like_path:
+        path = Path(normalized).expanduser()
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path.resolve())
+        return None
+    return shutil.which(normalized)
+
+
+def _provider_cli_version(path: str | None) -> dict[str, object]:
+    if not path:
+        return {"ok": False, "value": None, "error": "provider CLI not found"}
+    try:
+        completed = subprocess.run(
+            [path, "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=1,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"ok": False, "value": None, "error": str(exc)}
+    output = ((completed.stdout or "").strip() or (completed.stderr or "").strip()).splitlines()
+    value = output[0].strip() if output else ""
+    if completed.returncode == 0 and value:
+        return {"ok": True, "value": value, "error": None}
+    return {
+        "ok": False,
+        "value": value or None,
+        "error": f"--version exited with code {completed.returncode}",
+    }
+
+
+def _provider_cli_reference(path: str | None, *, source: str) -> dict[str, str | None]:
+    return {"path": _normalize_optional_string(path), "source": source}
+
+
+def _collect_provider_clis() -> dict[str, Any]:
+    env_candidate = _normalize_optional_string(os.environ.get(CODEX_BIN_ENV))
+    if env_candidate:
+        codex_path = _resolve_provider_cli_candidate(env_candidate)
+        codex_source = CODEX_BIN_ENV if codex_path else f"{CODEX_BIN_ENV}:missing"
+    else:
+        codex_path = shutil.which("codex")
+        codex_source = "PATH" if codex_path else "missing"
+    return {
+        "codex": {
+            "path": codex_path,
+            "source": codex_source,
+            "version": _provider_cli_version(codex_path),
+            "env_override": env_candidate,
+        }
+    }
 
 
 _THREAD_SUBSCRIPTION_TRANSIENT_STATES = frozenset(
@@ -883,6 +945,7 @@ def _compute_process_snapshot() -> tuple[list[dict[str, Any]], list[dict[str, An
                 {
                     "session_id": session_id,
                     "provider": provider,
+                    "provider_cli": _provider_cli_reference(cmdline[0] if cmdline else None, source="process"),
                     "pid": pid,
                     "cwd": cwd,
                     "workspace_label": Path(cwd).name if cwd else None,
@@ -1232,6 +1295,7 @@ def _collect_managed_codex_sessions(
         thread_subscription_attempts = _normalize_optional_int(state.get("thread_subscription_attempts")) or 0
         thread_subscription_last_error = _normalize_optional_string(state.get("thread_subscription_last_error"))
         app_server = _find_bridge_child_process(process_rows, bridge_pid=bridge_pid, needle=" app-server ")
+        codex_bin = _normalize_optional_string(state.get("codex_bin"))
         bridge_heartbeat_at = bridge_updated_at
         has_turn_activity = bool(
             _normalize_optional_string(state.get("active_turn_id")) or _normalize_optional_string(state.get("last_turn_status"))
@@ -1242,6 +1306,7 @@ def _collect_managed_codex_sessions(
                 {
                     "session_id": session_id,
                     "provider": "codex",
+                    "provider_cli": _provider_cli_reference(codex_bin, source="bridge_state"),
                     "pid": bridge_pid,
                     "workspace_label": Path(str(state.get("cwd") or "")).name or None,
                     "status": "orphan",
@@ -1283,6 +1348,7 @@ def _collect_managed_codex_sessions(
             {
                 "session_id": session_id,
                 "provider": "codex",
+                "provider_cli": _provider_cli_reference(codex_bin, source="bridge_state"),
                 "workspace_label": workspace_label,
                 "branch": None,
                 "state": normalized_state,
@@ -1402,6 +1468,7 @@ def _collect_managed_sessions_by_process(
             {
                 "session_id": session_id,
                 "provider": provider,
+                "provider_cli": proc_row.get("provider_cli") or _provider_cli_reference(None, source="process"),
                 "pid": proc_row.get("pid"),
                 "workspace_label": workspace_label,
                 "cwd": workspace_path,
@@ -1956,6 +2023,7 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
     service = _collect_service(resolved_base_dir)
     engine_status = _collect_engine_status(resolved_base_dir, now=now)
     outbox = _collect_outbox(resolved_base_dir, now=now)
+    provider_clis = _collect_provider_clis()
     activity_summary = _collect_activity_summary(resolved_base_dir, now=now)
     with _process_snapshot_scope():
         provider_processes = _scan_provider_processes()
@@ -2004,6 +2072,7 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
             assessment=transport_assessment,
         ),
         "outbox": outbox,
+        "provider_clis": provider_clis,
         "activity_summary": activity_summary,
         "managed_summary": managed_summary,
         "managed_sessions": managed_sessions,
