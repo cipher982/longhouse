@@ -26,11 +26,9 @@ targets:
       - path: ../Resources/Assets.xcassets
         buildPhase: resources
         createIntermediateGroups: true
-      # Required resource. If xcodegen can't find the file, fail loudly —
-      # the Makefile runs scripts/build/generate_build_identity.py plus
-      # stage_ios_build_identity.sh before xcodegen, so an "absent at
-      # generate time" means the dev loop was skipped. Better a loud
-      # xcodegen failure than a silent "build identity missing" runtime.
+      # Required resource. If xcodegen can't find the file, fail loudly.
+      # The Makefile/CI path generates it before project generation, and the
+      # Xcode pre-build phase refreshes it again for direct phone builds.
       - path: ../Resources/build-identity.json
         buildPhase: resources
         createIntermediateGroups: true
@@ -45,11 +43,9 @@ targets:
       Debug: Configs/Longhouse.xcconfig
       Release: Configs/Longhouse.xcconfig
     preBuildScripts:
-      # Always refresh the bundled build-identity.json. This is a cheap
-      # `cp`; dependency-based caching would let a stale identity stick
-      # around when Xcode decides inputs haven't changed. The script itself
-      # exits non-zero if .build/build-identity.json is missing, so a skipped
-      # generator run fails the build instead of bundling stale identity.
+      # Always refresh the bundled build-identity.json. The script regenerates
+      # identity before copying so direct Xcode builds cannot bundle stale
+      # commit metadata after a new commit.
       - script: "\"$PROJECT_DIR/../../scripts/build/stage_ios_build_identity.sh\""
         name: Stage build identity
         basedOnDependencyAnalysis: false

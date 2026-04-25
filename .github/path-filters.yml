@@ -29,6 +29,8 @@ runner:
 
 ios:
   - 'ios/**'
+  - 'scripts/build/generate_build_identity.py'
+  - 'scripts/build/stage_ios_build_identity.sh'
   # Re-run iOS tests when CI plumbing changes to verify the job itself
   - 'Makefile'
   - 'scripts/ci/run_ios_tests.sh'
