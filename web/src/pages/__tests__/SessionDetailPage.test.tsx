@@ -276,27 +276,30 @@ describe("SessionDetailPage", () => {
     expect(
       screen.queryByTestId("session-continuation-unavailable"),
     ).not.toBeInTheDocument();
-    expect(screen.getByTestId("session-sidebar-runtime")).toHaveTextContent(
-      "Working",
-    );
-    expect(screen.getByTestId("session-sidebar-runtime")).toHaveTextContent(
-      "Running Shell",
-    );
-    expect(screen.getByTestId("session-sidebar-runtime")).toHaveTextContent(
-      "Live on cinder",
-    );
     expect(
-      screen.getByTestId("session-detail-header-runtime"),
-    ).toHaveTextContent("Working");
+      screen.queryByTestId("session-sidebar-runtime"),
+    ).not.toBeInTheDocument();
     expect(
-      screen.getByTestId("session-detail-header-runtime"),
-    ).toHaveTextContent("Running Shell");
+      screen.queryByTestId("session-detail-header-runtime"),
+    ).not.toBeInTheDocument();
     expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
       "Working",
     );
     expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
       "Running Shell",
     );
+    expect(
+      screen.getByRole("group", { name: "Primary loop modes" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Assist" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    expect(screen.getByRole("button", { name: "Autopilot" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    expect(screen.getByText("Advanced · Assistance off")).toBeInTheDocument();
     expect(
       screen.queryByTestId("session-attach-callout"),
     ).not.toBeInTheDocument();
@@ -420,7 +423,7 @@ describe("SessionDetailPage", () => {
             role: "assistant",
             content_text: null,
             tool_name: "Bash",
-            tool_input_json: null,
+            tool_input_json: { command: "git status --short" },
             tool_output_text: null,
             tool_call_id: "tc-pending",
             timestamp: "2026-03-22T22:04:00Z",
@@ -431,6 +434,10 @@ describe("SessionDetailPage", () => {
 
       mockWorkspaceState({ session, model });
       renderSessionDetailPage();
+
+      expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
+        "Running shell · git status --short",
+      );
 
       {
         const label = screen.getByText("Bash");
@@ -579,14 +586,14 @@ describe("SessionDetailPage", () => {
     renderSessionDetailPage();
 
     expect(
-      screen.getByTestId("session-detail-header-runtime"),
-    ).toHaveTextContent("Turn 00:45");
+      screen.queryByTestId("session-detail-header-runtime"),
+    ).not.toBeInTheDocument();
     expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
       "Turn 00:45",
     );
   });
 
-  it("keeps managed waiting states explicit in the detail header, sidebar, and dock", () => {
+  it("keeps managed waiting states explicit in the dock", () => {
     const session = makeSession({
       ended_at: null,
       status: "active",
@@ -652,15 +659,12 @@ describe("SessionDetailPage", () => {
 
     renderSessionDetailPage();
 
-    expect(screen.getByTestId("session-sidebar-runtime")).toHaveTextContent(
-      "Waiting for you",
-    );
-    expect(screen.getByTestId("session-sidebar-runtime")).toHaveTextContent(
-      "Reply needed",
-    );
     expect(
-      screen.getByTestId("session-detail-header-runtime"),
-    ).toHaveTextContent("Waiting for you");
+      screen.queryByTestId("session-sidebar-runtime"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("session-detail-header-runtime"),
+    ).not.toBeInTheDocument();
     expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
       "Waiting for you",
     );

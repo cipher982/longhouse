@@ -32,8 +32,35 @@ import { useReadinessFlag } from "../lib/readiness-contract";
 import { getRuntimeElapsedLabel } from "../lib/sessionTiming";
 import { setSessionAction } from "../services/api/agents";
 import { DEMO_READ_ONLY_MESSAGE } from "../services/api/base";
-import { getSessionInteractionCapabilities } from "../lib/sessionWorkspace";
+import {
+  getSessionInteractionCapabilities,
+  getToolDisplayInfo,
+  getToolSummary,
+  type TimelineItem,
+} from "../lib/sessionWorkspace";
 import "../styles/session-workspace.css";
+
+function normalizeRunningToolLabel(label: string): string {
+  const lower = label.trim().toLowerCase();
+  if (lower === "bash" || lower === "shell" || lower === "terminal") {
+    return "shell";
+  }
+  return label;
+}
+
+function getActiveToolDetail(items: TimelineItem[]): string | null {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item.kind !== "tool") continue;
+    const { interaction } = item;
+    if (interaction.resultEvent || interaction.pairing === "orphan") continue;
+    const info = getToolDisplayInfo(interaction.toolName);
+    const toolLabel = normalizeRunningToolLabel(info.displayName);
+    const summary = getToolSummary(interaction);
+    return summary ? `Running ${toolLabel} · ${summary}` : `Running ${toolLabel}`;
+  }
+  return null;
+}
 
 function SessionDetailWorkspaceRoute({
   highlightEventId,
@@ -77,6 +104,7 @@ function SessionDetailWorkspaceRoute({
     () => getRuntimeElapsedLabel(session, turns, nowMs),
     [session, turns, nowMs],
   );
+  const activeToolDetail = useMemo(() => getActiveToolDetail(items), [items]);
 
   const navigateToSession = (nextSessionId: string) => {
     navigate(`/timeline/${nextSessionId}`, {
@@ -224,14 +252,6 @@ function SessionDetailWorkspaceRoute({
                   <span className="session-workspace-header__name">
                     {title}
                   </span>
-                  <SessionRuntimeStrip
-                    session={displaySession}
-                    interaction={interaction}
-                    hostLabel={runtimeHostLabel}
-                    elapsedLabel={runtimeElapsedLabel}
-                    variant="inline"
-                    testId="session-detail-header-runtime"
-                  />
                 </div>
               </div>
             }
@@ -286,6 +306,9 @@ function SessionDetailWorkspaceRoute({
                   interaction={interaction}
                   hostLabel={runtimeHostLabel}
                   elapsedLabel={runtimeElapsedLabel}
+                  detailOverride={
+                    interaction.isManagedLocalSession ? activeToolDetail : null
+                  }
                   variant="dock"
                   testId="session-control-strip"
                 />

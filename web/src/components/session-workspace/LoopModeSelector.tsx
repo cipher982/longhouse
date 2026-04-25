@@ -5,7 +5,6 @@ const LOOP_MODE_OPTIONS: Array<{
   label: string;
   hint: string;
 }> = [
-  { value: "manual", label: "Manual", hint: "Observe only" },
   { value: "assist", label: "Assist", hint: "Suggest and nudge" },
   { value: "autopilot", label: "Autopilot", hint: "Continue bounded turns" },
 ];
@@ -23,13 +22,15 @@ export function LoopModeSelector({
   pending = false,
   onChange,
 }: LoopModeSelectorProps) {
+  const manualActive = currentMode === "manual";
+
   return (
     <div className="session-pane-section">
       <div className="session-pane-section-title">Loop Mode</div>
       <div
         className="session-loop-mode"
-        role="radiogroup"
-        aria-label="Session loop mode"
+        role="group"
+        aria-label="Primary loop modes"
         data-testid="session-loop-mode-group"
       >
         {LOOP_MODE_OPTIONS.map((option) => {
@@ -38,19 +39,41 @@ export function LoopModeSelector({
             <button
               key={option.value}
               type="button"
-              role="radio"
-              aria-checked={isActive}
+              aria-pressed={isActive}
               className={`session-loop-mode__option${isActive ? " is-active" : ""}`}
               onClick={() => onChange?.(option.value)}
               disabled={pending || !onChange}
+              title={option.hint}
             >
               <span className="session-loop-mode__label">{option.label}</span>
-              <span className="session-loop-mode__hint">{option.hint}</span>
             </button>
           );
         })}
       </div>
-      <div className="session-loop-mode__caption">{caption}</div>
+      <div className="session-loop-mode__caption">
+        {manualActive ? "Assistance is off." : caption}
+      </div>
+      <details className="session-loop-mode__advanced">
+        <summary className="session-loop-mode__advanced-summary">
+          Advanced
+          {manualActive ? " · Assistance off" : ""}
+        </summary>
+        <div className="session-loop-mode__advanced-body">
+          <button
+            type="button"
+            className={`session-loop-mode__manual-button${manualActive ? " is-active" : ""}`}
+            aria-pressed={manualActive}
+            onClick={() => onChange?.("manual")}
+            disabled={pending || !onChange || manualActive}
+          >
+            Turn off assistance
+          </button>
+          <span className="session-loop-mode__manual-copy">
+            Manual mode only observes the session. Keep this for debugging or
+            provider-cost control.
+          </span>
+        </div>
+      </details>
     </div>
   );
 }

@@ -19,6 +19,7 @@ interface SessionRuntimeStripProps {
   >;
   hostLabel?: string | null;
   elapsedLabel?: string | null;
+  detailOverride?: string | null;
   variant?: "inline" | "block" | "dock";
   testId?: string;
 }
@@ -46,6 +47,7 @@ export function SessionRuntimeStrip({
   interaction,
   hostLabel,
   elapsedLabel,
+  detailOverride,
   variant = "inline",
   testId,
 }: SessionRuntimeStripProps) {
@@ -62,7 +64,7 @@ export function SessionRuntimeStrip({
         : "Recent progress"
       : getCardRuntimePhaseLabel(runtime);
   const runtimeDetail = interaction.isManagedLocalSession
-    ? runtimeDisplay.detail
+    ? (detailOverride ?? runtimeDisplay.detail)
     : null;
   const runtimeMeta = getRuntimeMetaLabel(runtime);
   const resolvedHostLabel =
