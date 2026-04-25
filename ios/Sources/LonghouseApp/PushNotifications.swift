@@ -72,6 +72,13 @@ enum PushNotificationStore {
         return sessionID?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    static func clearPendingSessionID(_ sessionID: String) {
+        let pending = defaults.string(forKey: pendingSessionKey)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if pending == sessionID {
+            defaults.removeObject(forKey: pendingSessionKey)
+        }
+    }
+
     static func reloadWidgetTimelines() {
         WidgetCenter.shared.reloadAllTimelines()
     }
