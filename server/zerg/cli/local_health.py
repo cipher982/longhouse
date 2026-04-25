@@ -88,6 +88,19 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
     typer.echo(f"  ship failures: {payload.get('consecutive_ship_failures', 0)}")
     typer.echo(f"  offline: {'yes' if payload.get('is_offline') else 'no'}")
 
+    provider_clis = dict(snapshot.get("provider_clis") or {})
+    if provider_clis:
+        typer.echo("")
+        typer.echo("Provider CLIs")
+        for provider, raw_info in sorted(provider_clis.items()):
+            info = dict(raw_info or {})
+            version = dict(info.get("version") or {})
+            typer.echo(f"  {provider}: {info.get('path') or '-'}")
+            typer.echo(f"    source: {info.get('source') or '-'}")
+            typer.echo(f"    version: {version.get('value') or '-'}")
+            if version.get("error"):
+                typer.echo(f"    version error: {version['error']}")
+
     typer.echo("")
     typer.echo("Outbox")
     typer.echo(f"  path: {outbox.get('path', '-')}")
