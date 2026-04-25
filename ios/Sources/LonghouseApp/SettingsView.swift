@@ -43,7 +43,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Notifications")
                 } footer: {
-                    Text("Alerts fire when a session is waiting for you or needs permission. The app asks for iOS notification permission from Timeline the first time it opens.")
+                    Text("Alerts fire when a session is waiting for you or needs permission. The app asks for iOS notification permission the first time it opens.")
                         .font(.caption2)
                 }
 
