@@ -70,6 +70,7 @@ class SessionAttentionResolutionPush:
     previous_state: Literal["needs_user", "blocked"]
     current_state: str
     occurred_at: datetime
+    attention_push_at: datetime
     collapse_id: str
     targets: tuple[APNSDeviceTarget, ...]
 
@@ -112,6 +113,26 @@ def clear_session_attention_push_stamp(
     return True
 
 
+def clear_session_attention_resolution_stamp(
+    db: Session,
+    *,
+    session_id: str,
+    state: str,
+    attention_push_at: datetime,
+) -> bool:
+    """Clear a pre-send resolution stamp when no APNs target accepted the push."""
+
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    if session is None:
+        return False
+    if str(session.last_attention_push_state or "").strip() != _resolved_attention_state(state):
+        return False
+    if not _same_instant(session.last_attention_push_at, attention_push_at):
+        return False
+    session.last_attention_push_state = state
+    return True
+
+
 def prepare_session_attention_push(
     db: Session,
     *,
@@ -129,10 +150,8 @@ def prepare_session_attention_push(
     if session is None:
         return None
 
-    last_attention_push_at = session.last_attention_push_at
-    if last_attention_push_at is not None and last_attention_push_at.tzinfo is None:
-        last_attention_push_at = last_attention_push_at.replace(tzinfo=timezone.utc)
-    last_attention_push_state = str(session.last_attention_push_state or "").strip() or None
+    last_attention_push_at = _as_aware_utc(session.last_attention_push_at)
+    last_attention_push_state = _base_attention_state(session.last_attention_push_state)
     is_repeat_attention_state = last_attention_push_state == current_state
     if (
         is_repeat_attention_state
@@ -188,15 +207,23 @@ def prepare_session_attention_resolution_push(
     if session is None:
         return None
 
+    last_attention_push_at = _as_aware_utc(session.last_attention_push_at)
+    last_attention_push_state = str(session.last_attention_push_state or "").strip() or None
+    if last_attention_push_state != previous_state or last_attention_push_at is None:
+        return None
+
     targets = _active_ios_targets_for_owner(db, owner_id=owner_id, log_context="attention resolution push")
     if not targets:
         return None
+
+    session.last_attention_push_state = _resolved_attention_state(previous_state)
 
     return SessionAttentionResolutionPush(
         session_id=str(session.id),
         previous_state=previous_state,
         current_state=str(current_state or "unknown"),
         occurred_at=occurred_at,
+        attention_push_at=last_attention_push_at,
         collapse_id=_collapse_id("lh-attn-resolved", str(session.id)),
         targets=targets,
     )
@@ -423,14 +450,33 @@ def _trim_alert_text(value: str, limit: int = 180) -> str:
     return compact[: limit - 1].rstrip() + "…"
 
 
+def _resolved_attention_state(state: str) -> str:
+    return f"{state}:resolved"
+
+
+def _base_attention_state(state: str | None) -> str | None:
+    value = str(state or "").strip()
+    if value.endswith(":resolved"):
+        value = value[: -len(":resolved")]
+    return value if value in ATTENTION_PUSH_STATES else None
+
+
 def _same_instant(left: datetime | None, right: datetime) -> bool:
     if left is None:
         return False
-    if left.tzinfo is None:
-        left = left.replace(tzinfo=timezone.utc)
-    if right.tzinfo is None:
-        right = right.replace(tzinfo=timezone.utc)
+    left = _as_aware_utc(left)
+    right = _as_aware_utc(right)
+    if left is None or right is None:
+        return False
     return abs((left - right).total_seconds()) < 0.001
+
+
+def _as_aware_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _apns_host(push_environment: Literal["sandbox", "production"]) -> str:

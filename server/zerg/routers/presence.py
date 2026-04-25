@@ -45,6 +45,7 @@ from zerg.database import get_db
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
 from zerg.services.apns_sender import clear_session_attention_push_stamp
+from zerg.services.apns_sender import clear_session_attention_resolution_stamp
 from zerg.services.apns_sender import prepare_session_attention_push
 from zerg.services.apns_sender import prepare_session_attention_resolution_push
 from zerg.services.apns_sender import send_session_attention_push
@@ -214,7 +215,19 @@ async def upsert_presence(
             await ws.execute_or_direct(_clear_attention_push_stamp, db, label="presence-attention-push-clear")
     if attention_resolution_push is not None:
         try:
-            await send_session_attention_resolution_push(attention_resolution_push)
+            resolution_accepted = await send_session_attention_resolution_push(attention_resolution_push)
         except Exception:  # pragma: no cover - push send should never fail the hook path
             logger.exception("Failed to send APNs attention resolution push for session %s", attention_resolution_push.session_id)
+        else:
+            if not resolution_accepted:
+
+                def _clear_attention_resolution_stamp(write_db: Session) -> bool:
+                    return clear_session_attention_resolution_stamp(
+                        write_db,
+                        session_id=attention_resolution_push.session_id,
+                        state=attention_resolution_push.previous_state,
+                        attention_push_at=attention_resolution_push.attention_push_at,
+                    )
+
+                await ws.execute_or_direct(_clear_attention_resolution_stamp, db, label="presence-attention-resolution-clear")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
