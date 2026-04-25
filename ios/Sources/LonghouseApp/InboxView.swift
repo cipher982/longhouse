@@ -128,6 +128,7 @@ struct TimelineView: View {
     }
 
     private func openSession(sessionID: String) {
+        PushNotificationStore.clearPendingSessionID(sessionID)
         path = [SessionRoute(sessionId: sessionID, fallbackTitle: "Session")]
     }
 }

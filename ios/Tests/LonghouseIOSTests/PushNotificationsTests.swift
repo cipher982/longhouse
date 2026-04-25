@@ -23,6 +23,17 @@ struct PushNotificationsTests {
     }
 
     @Test
+    func pendingSessionCanBeClearedAfterLiveOpen() throws {
+        PushNotificationStore.storePendingSessionID("session-123")
+        PushNotificationStore.clearPendingSessionID("other-session")
+        #expect(PushNotificationStore.consumePendingSessionID() == "session-123")
+
+        PushNotificationStore.storePendingSessionID("session-456")
+        PushNotificationStore.clearPendingSessionID("session-456")
+        #expect(PushNotificationStore.consumePendingSessionID() == nil)
+    }
+
+    @Test
     func attentionNotificationCategoryOffersOpenSessionAction() throws {
         let categories = LonghouseNotificationCategory.allCategories()
         let attention = try #require(categories.first { $0.identifier == LonghouseNotificationCategory.sessionAttention })
