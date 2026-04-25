@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from hashlib import sha256
 from typing import Literal
 
 import httpx
@@ -25,6 +26,16 @@ ATTENTION_PUSH_STATES = {"needs_user", "blocked"}
 ATTENTION_PUSH_DEBOUNCE = timedelta(seconds=30)
 ATTENTION_NOTIFICATION_CATEGORY = "LONGHOUSE_SESSION_ATTENTION"
 ATTENTION_NOTIFICATION_THREAD_PREFIX = "longhouse-session"
+PROVIDER_DISPLAY_NAMES = {
+    "claude": "Claude",
+    "codex": "Codex",
+    "cursor": "Cursor",
+    "gemini": "Gemini",
+    "oikos": "Oikos",
+    "openai": "OpenAI",
+    "zai": "z.ai",
+    "z.ai": "z.ai",
+}
 _APNS_PROVIDER_TOKEN_TTL = timedelta(minutes=50)
 
 _cached_provider_token: str | None = None
@@ -89,7 +100,13 @@ def prepare_session_attention_push(
     last_attention_push_at = session.last_attention_push_at
     if last_attention_push_at is not None and last_attention_push_at.tzinfo is None:
         last_attention_push_at = last_attention_push_at.replace(tzinfo=timezone.utc)
-    if last_attention_push_at is not None and (occurred_at - last_attention_push_at) < ATTENTION_PUSH_DEBOUNCE:
+    last_attention_push_state = str(session.last_attention_push_state or "").strip() or None
+    is_repeat_attention_state = last_attention_push_state == current_state
+    if (
+        is_repeat_attention_state
+        and last_attention_push_at is not None
+        and (occurred_at - last_attention_push_at) < ATTENTION_PUSH_DEBOUNCE
+    ):
         return None
 
     try:
@@ -152,7 +169,7 @@ def prepare_session_attention_push(
         tool_name=tool_name,
         alert_title=alert_title,
         alert_body=alert_body,
-        collapse_id=f"lh-attn-{session.id}",
+        collapse_id=_attention_collapse_id(str(session.id)),
         targets=targets,
     )
 
@@ -165,6 +182,7 @@ async def send_session_attention_push(notification: SessionAttentionPush) -> Non
     provider_token = _provider_token()
     topic = str(settings.apns_topic or "ai.longhouse.ios").strip() or "ai.longhouse.ios"
     payload = build_session_attention_payload(notification)
+    expiration = str(int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()))
 
     async with httpx.AsyncClient(http2=True, timeout=10.0) as client:
         for target in notification.targets:
@@ -175,7 +193,7 @@ async def send_session_attention_push(notification: SessionAttentionPush) -> Non
                 "apns-push-type": "alert",
                 "apns-priority": "10",
                 "apns-collapse-id": notification.collapse_id,
-                "apns-expiration": str(int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp())),
+                "apns-expiration": expiration,
             }
             url = f"https://{host}/3/device/{target.device_token}"
             try:
@@ -206,7 +224,7 @@ def build_session_attention_payload(notification: SessionAttentionPush) -> dict:
         },
         "session_id": notification.session_id,
         "title": notification.title,
-        "summary": notification.summary,
+        "summary": _trim_alert_text(notification.summary, limit=500),
         "state": notification.state,
         "attention_state": notification.state,
         "project": notification.project,
@@ -229,7 +247,7 @@ def _attention_alert_title(*, state: str, provider: str | None) -> str:
     if state == "blocked":
         return "Needs permission"
     if provider:
-        return f"{provider.capitalize()} needs you"
+        return f"{_provider_display_name(provider)} needs you"
     return "Needs you"
 
 
@@ -246,6 +264,21 @@ def _attention_alert_body(*, state: str, project: str | None, title: str, tool_n
 def _clean_label(value: object) -> str | None:
     cleaned = str(value or "").strip()
     return cleaned or None
+
+
+def _provider_display_name(provider: str) -> str:
+    cleaned = str(provider or "").strip()
+    if not cleaned:
+        return "Session"
+    return PROVIDER_DISPLAY_NAMES.get(cleaned.lower(), cleaned.replace("_", " ").title())
+
+
+def _attention_collapse_id(session_id: str) -> str:
+    candidate = f"lh-attn-{session_id}"
+    if len(candidate.encode("utf-8")) <= 64:
+        return candidate
+    digest = sha256(session_id.encode("utf-8")).hexdigest()[:32]
+    return f"lh-attn-{digest}"
 
 
 def _trim_alert_text(value: str, limit: int = 180) -> str:

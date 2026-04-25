@@ -1,6 +1,7 @@
 import Foundation
 @preconcurrency import UIKit
 @preconcurrency import UserNotifications
+import WidgetKit
 
 extension Notification.Name {
     static let longhouseAPNSDeviceTokenUpdated = Notification.Name("longhouse.apnsDeviceTokenUpdated")
@@ -71,6 +72,29 @@ enum PushNotificationStore {
         return sessionID?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    static func reloadWidgetTimelines() {
+        WidgetCenter.shared.reloadAllTimelines()
+    }
+
+    static func removeResolvedAttentionNotifications(activeSessionIDs: Set<String>) {
+        let center = UNUserNotificationCenter.current()
+        center.getDeliveredNotifications { delivered in
+            let resolvedIdentifiers = delivered.compactMap { notification -> String? in
+                let content = notification.request.content
+                let userInfo = content.userInfo
+                let isAttentionAlert = content.categoryIdentifier == LonghouseNotificationCategory.sessionAttention
+                    || userInfo["attention_state"] != nil
+                guard isAttentionAlert, let sessionID = userInfo["session_id"] as? String else {
+                    return nil
+                }
+                return activeSessionIDs.contains(sessionID) ? nil : notification.request.identifier
+            }
+            if !resolvedIdentifiers.isEmpty {
+                center.removeDeliveredNotifications(withIdentifiers: resolvedIdentifiers)
+            }
+        }
+    }
+
     @MainActor
     static func ensureAuthorizedAndRegister() async -> Bool {
         let center = UNUserNotificationCenter.current()
@@ -137,12 +161,13 @@ final class LonghousePushAppDelegate: NSObject, UIApplicationDelegate, UNUserNot
         case UNNotificationDefaultActionIdentifier, LonghouseNotificationCategory.openSessionAction:
             Self.handlePushPayload(response.notification.request.content.userInfo)
         default:
-            Self.handlePushPayload(response.notification.request.content.userInfo)
+            return
         }
     }
 
     private nonisolated static func handlePushPayload(_ userInfo: [AnyHashable: Any]) {
         if let sessionID = userInfo["session_id"] as? String, !sessionID.isEmpty {
+            PushNotificationStore.reloadWidgetTimelines()
             PushNotificationStore.storePendingSessionID(sessionID)
         }
     }

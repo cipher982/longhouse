@@ -236,15 +236,19 @@ def test_presence_attention_transition_sends_and_debounces_push(tmp_path):
             )
             assert fifth.status_code == 204, fifth.text
 
-    assert send_mock.await_count == 2
+    assert send_mock.await_count == 3
     first_notification = send_mock.await_args_list[0].args[0]
     second_notification = send_mock.await_args_list[1].args[0]
+    third_notification = send_mock.await_args_list[2].args[0]
     assert first_notification.session_id == session_id
     assert first_notification.state == "needs_user"
     assert first_notification.alert_title == "Claude needs you"
     assert first_notification.alert_body == "zerg · Fix failing build"
     assert first_notification.collapse_id == f"lh-attn-{session_id}"
-    assert second_notification.state == "needs_user"
+    assert second_notification.state == "blocked"
+    assert second_notification.alert_title == "Needs permission"
+    assert second_notification.alert_body == "zerg · Blocked on Bash · Fix failing build"
+    assert third_notification.state == "needs_user"
     payload = build_session_attention_payload(first_notification)
     assert payload["aps"]["category"] == ATTENTION_NOTIFICATION_CATEGORY
     assert payload["aps"]["thread-id"] == f"{ATTENTION_NOTIFICATION_THREAD_PREFIX}-{session_id}"
