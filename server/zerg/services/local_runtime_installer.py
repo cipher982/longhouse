@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import plistlib
 import shlex
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -31,6 +32,8 @@ from zerg.services.shipper import install_service
 from zerg.services.shipper import load_token
 from zerg.services.shipper import sanitize_machine_name
 from zerg.services.shipper import save_token
+
+_LEGACY_MANAGED_CODEX_LAUNCHER_MARKER = "# longhouse-managed-codex-launcher"
 
 
 @dataclass(frozen=True)
@@ -154,6 +157,30 @@ def _service_targets_state_root(service_info: dict[str, object], state_root: Pat
     return service_home.resolve(strict=False) == state_root.expanduser().resolve(strict=False)
 
 
+def _is_legacy_managed_codex_launcher(path: Path) -> bool:
+    try:
+        return path.is_file() and _LEGACY_MANAGED_CODEX_LAUNCHER_MARKER in path.read_text(errors="ignore")
+    except OSError:
+        return False
+
+
+def _cleanup_legacy_managed_codex_runtime(config_dir: Path) -> None:
+    launcher_path = Path.home() / ".local" / "bin" / "longhouse-codex"
+    if _is_legacy_managed_codex_launcher(launcher_path):
+        try:
+            launcher_path.unlink()
+        except OSError:
+            pass
+
+    runtime_dir = config_dir / "runtimes" / "codex"
+    try:
+        shutil.rmtree(runtime_dir)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
+
+
 def _reconcile_launch_artifacts(
     *,
     url: str,
@@ -222,6 +249,8 @@ def _install_local_runtime_artifacts(
 
     engine_runtime = ensure_runtime_binary(RuntimeComponent.ENGINE)
     home_mode = classify_longhouse_home(config_dir)
+    if home_mode == "stable":
+        _cleanup_legacy_managed_codex_runtime(config_dir)
     if home_mode == "scratch":
         desktop_app_result = None
         if menubar:
