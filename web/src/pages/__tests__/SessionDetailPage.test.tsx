@@ -304,7 +304,7 @@ describe("SessionDetailPage", () => {
       "Debug",
     );
     expect(screen.getByTestId("session-debug-attach")).toHaveTextContent(
-      "Open in terminal command",
+      "Terminal UI command",
     );
     expect(screen.getByTestId("session-debug-attach-command")).toHaveTextContent(
       "codex-bridge attach --session-id session-codex",
@@ -382,7 +382,7 @@ describe("SessionDetailPage", () => {
       "Debug",
     );
     expect(screen.getByTestId("session-debug-attach")).toHaveTextContent(
-      "Open in terminal command",
+      "Terminal UI command",
     );
     expect(screen.getByTestId("session-debug-attach-command")).toHaveTextContent(
       "codex-bridge attach --session-id session-codex",

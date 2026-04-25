@@ -36,7 +36,7 @@ function getCapabilityMeta({
     return `Live on ${hostLabel}`;
   }
   if (hostReattachAvailable) {
-    return `Continue on ${hostLabel}`;
+    return "Browser control offline";
   }
   return "Search only";
 }
