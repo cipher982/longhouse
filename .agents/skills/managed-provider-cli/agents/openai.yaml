@@ -1,0 +1,4 @@
+interface:
+  display_name: "Managed Provider CLI"
+  short_description: "Longhouse managed Claude/Codex/Gemini control paths."
+  default_prompt: "Use managed-provider-cli to inspect or change Longhouse managed provider CLI behavior."
