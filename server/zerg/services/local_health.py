@@ -60,6 +60,11 @@ RECENT_TOUCH_LIMIT = 4
 BRIDGE_STATUS_DIR = "managed-local/codex-bridge"
 _PROCESS_SNAPSHOT: tuple[list[dict[str, Any]], list[dict[str, Any]]] | None = None
 
+CONTROL_PATH_MANAGED = "managed"
+CONTROL_PATH_UNMANAGED = "unmanaged"
+LIVENESS_MODEL_CODEX_BRIDGE = "codex_bridge"
+LIVENESS_MODEL_PROCESS_SCAN = "process_scan"
+
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -448,7 +453,8 @@ def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dic
     config = _collect_local_config(base_dir)
     runner = _collect_runner_config(include_global_runner=_state_root_tracks_machine_runner(base_dir))
     shipper_db_path = get_agent_db_path(base_dir)
-    service_file = Path(str(service.get("service_file") or "").strip()) if str(service.get("service_file") or "").strip() else None
+    service_file_raw = str(service.get("service_file") or "").strip()
+    service_file = Path(service_file_raw) if service_file_raw else None
     service_machine_name = _extract_service_machine_name(service.get("service_file"))
     service_metadata = _extract_service_metadata(service.get("service_file"))
     reasons: list[str] = []
@@ -1133,7 +1139,10 @@ def _load_managed_session_phase_state(base_dir: Path, *, now: datetime) -> dict[
                 for field_name in ("workspace_path", "workspace_label"):
                     if _normalize_optional_string(next_row.get(field_name)) is None:
                         next_row[field_name] = current.get(field_name)
-            next_row["last_activity_at"] = _max_rfc3339(row.get("last_activity_at"), current.get("last_activity_at") if current else None)
+            next_row["last_activity_at"] = _max_rfc3339(
+                row.get("last_activity_at"),
+                current.get("last_activity_at") if current else None,
+            )
             merged[session_id] = next_row
     return {session_id: row for session_id, row in merged.items() if _should_keep_managed_phase_row(row, now=now)}
 
@@ -1283,6 +1292,8 @@ def _collect_managed_codex_sessions(
                 {
                     "session_id": session_id,
                     "provider": "codex",
+                    "control_path": CONTROL_PATH_MANAGED,
+                    "liveness_model": LIVENESS_MODEL_CODEX_BRIDGE,
                     "provider_cli": _provider_cli_reference(codex_bin, source="bridge_state"),
                     "pid": bridge_pid,
                     "workspace_label": Path(str(state.get("cwd") or "")).name or None,
@@ -1325,6 +1336,8 @@ def _collect_managed_codex_sessions(
             {
                 "session_id": session_id,
                 "provider": "codex",
+                "control_path": CONTROL_PATH_MANAGED,
+                "liveness_model": LIVENESS_MODEL_CODEX_BRIDGE,
                 "provider_cli": _provider_cli_reference(codex_bin, source="bridge_state"),
                 "workspace_label": workspace_label,
                 "branch": None,
@@ -1445,6 +1458,8 @@ def _collect_managed_sessions_by_process(
             {
                 "session_id": session_id,
                 "provider": provider,
+                "control_path": CONTROL_PATH_MANAGED,
+                "liveness_model": LIVENESS_MODEL_PROCESS_SCAN,
                 "provider_cli": proc_row.get("provider_cli") or _provider_cli_reference(None, source="process"),
                 "pid": proc_row.get("pid"),
                 "workspace_label": workspace_label,
@@ -1491,6 +1506,9 @@ def _collect_unmanaged_processes(
         processes.append(
             {
                 "provider": _normalize_optional_string(proc_row.get("provider")),
+                "control_path": CONTROL_PATH_UNMANAGED,
+                "liveness_model": LIVENESS_MODEL_PROCESS_SCAN,
+                "provider_cli": proc_row.get("provider_cli") or _provider_cli_reference(None, source="process"),
                 "pid": proc_row.get("pid"),
                 "workspace_label": _normalize_optional_string(proc_row.get("workspace_label")),
                 "cwd": _normalize_optional_string(proc_row.get("cwd")),

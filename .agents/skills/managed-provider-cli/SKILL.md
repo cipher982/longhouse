@@ -89,6 +89,7 @@ After changes:
 - Use `managed` for Longhouse-owned control paths.
 - Use `unmanaged` for imported/discovered sessions without live control ownership.
 - Use `live`, `reattachable`, `phase-known`, and `running` separately; do not collapse them into one status.
+- In local-health JSON, keep `control_path`, `liveness_model`, and `state` separate; do not infer managed/unmanaged ownership from process liveness or attached/detached state.
 - Avoid naming constants or paths as if Longhouse owns a provider binary when the behavior is only wrapper config or update-check suppression.
 
 ## Fallback Rule
