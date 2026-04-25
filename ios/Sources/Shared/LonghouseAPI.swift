@@ -13,35 +13,18 @@ struct LonghouseAPI: Sendable {
     }
 
     func sessionsNeedingAttention() async throws -> [SessionSummary] {
-        var components = URLComponents(url: baseURL.appendingPathComponent("/api/timeline/sessions"), resolvingAgainstBaseURL: false)!
-        components.queryItems = [
-            URLQueryItem(name: "days_back", value: "14"),
-            URLQueryItem(name: "limit", value: "20"),
-        ]
-        var request = URLRequest(url: components.url!)
-        request.addValue("application/json", forHTTPHeaderField: "Accept")
-
-        let (data, httpResponse) = try await data(for: request)
-        guard httpResponse.statusCode == 200 else {
-            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
-        }
-
-        let decoded = try JSONDecoder.snakeCase.decode(SessionsResponse.self, from: data)
-        let heads = decoded.sessions.map(\.head)
-        let actionable = heads.filter { ($0.presenceState == "needs_user" || $0.presenceState == "blocked") && $0.userState == "active" }
-        return actionable.map { session in
-            SessionSummary(
-                id: session.id,
-                title: session.summaryTitle ?? session.summary ?? session.provider ?? "Session",
-                presenceState: session.presenceState ?? "unknown",
-                provider: session.provider,
-                project: session.project,
-                lastActivityAt: session.lastActivityAt
-            )
-        }
+        try await timelineSessions(limit: 30).filter(\.needsAttention)
     }
 
     func recentSessions(limit: Int = 30) async throws -> [SessionSummary] {
+        try await timelineSessions(limit: limit)
+    }
+
+    func recentActiveSessions(limit: Int = 30) async throws -> [SessionSummary] {
+        try await timelineSessions(limit: limit).filter(\.isUserActive)
+    }
+
+    func timelineSessions(limit: Int = 30) async throws -> [SessionSummary] {
         var components = URLComponents(url: baseURL.appendingPathComponent("/api/timeline/sessions"), resolvingAgainstBaseURL: false)!
         components.queryItems = [
             URLQueryItem(name: "days_back", value: "14"),
@@ -56,14 +39,30 @@ struct LonghouseAPI: Sendable {
         }
 
         let decoded = try JSONDecoder.snakeCase.decode(SessionsResponse.self, from: data)
-        return decoded.sessions.map(\.head).map { session in
-            SessionSummary(
+        return decoded.sessions.map { card in
+            let session = card.head
+            return SessionSummary(
                 id: session.id,
                 title: session.summaryTitle ?? session.summary ?? session.provider ?? "Session",
                 presenceState: session.presenceState ?? "unknown",
                 provider: session.provider,
                 project: session.project,
-                lastActivityAt: session.lastActivityAt
+                lastActivityAt: session.lastActivityAt,
+                summary: session.summary,
+                userState: session.userState,
+                status: session.status,
+                displayPhase: session.displayPhase,
+                presenceTool: session.presenceTool,
+                activeTool: session.activeTool,
+                gitBranch: session.gitBranch,
+                homeLabel: session.homeLabel,
+                headOriginLabel: card.headOriginLabel,
+                timelineAnchorAt: session.timelineAnchorAt,
+                userMessages: session.userMessages,
+                toolCalls: session.toolCalls,
+                liveControlAvailable: session.capabilities?.liveControlAvailable,
+                hostReattachAvailable: session.capabilities?.hostReattachAvailable,
+                replyToLiveSessionAvailable: session.capabilities?.replyToLiveSessionAvailable
             )
         }
     }

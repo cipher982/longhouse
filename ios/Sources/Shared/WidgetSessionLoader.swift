@@ -90,14 +90,14 @@ enum WidgetSessionLoader {
         }
 
         do {
-            let sessions = try await api.sessionsNeedingAttention()
+            let sessions = try await api.recentActiveSessions(limit: 8)
             logger.log("Widget loaded \(sessions.count, privacy: .public) sessions")
             return .loaded(sessions: sessions, debugState: SharedAuthStore.debugState(for: serverURL))
         } catch LonghouseAPIError.notAuthenticated {
             logger.log("Widget session expired, attempting refresh")
             do {
                 try await api.refreshSession()
-                let sessions = try await api.sessionsNeedingAttention()
+                let sessions = try await api.recentActiveSessions(limit: 8)
                 logger.log("Widget refresh succeeded with \(sessions.count, privacy: .public) sessions")
                 return .loaded(sessions: sessions, debugState: SharedAuthStore.debugState(for: serverURL))
             } catch LonghouseAPIError.notAuthenticated {
