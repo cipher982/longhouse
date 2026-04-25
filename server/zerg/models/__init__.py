@@ -5,6 +5,7 @@ from .agents import AgentEvent
 from .agents import AgentsBase
 from .agents import AgentSession
 from .apns_device_registration import APNSDeviceRegistration
+from .apns_live_activity_registration import APNSLiveActivityRegistration
 from .apns_widget_push_state import APNSWidgetPushState
 from .connector import Connector
 from .conversation import Conversation
@@ -53,6 +54,7 @@ __all__ = [
     "AgentsBase",
     # Core models (split into separate files)
     "APNSDeviceRegistration",
+    "APNSLiveActivityRegistration",
     "APNSWidgetPushState",
     "DeviceToken",
     "Fiche",

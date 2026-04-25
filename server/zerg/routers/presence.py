@@ -44,14 +44,17 @@ from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
+from zerg.services.apns_sender import clear_live_activity_push_stamp
 from zerg.services.apns_sender import clear_session_attention_push_stamp
 from zerg.services.apns_sender import clear_session_attention_resolution_stamp
 from zerg.services.apns_sender import clear_widget_timeline_push_stamp
 from zerg.services.apns_sender import prepare_session_attention_push
 from zerg.services.apns_sender import prepare_session_attention_resolution_push
+from zerg.services.apns_sender import prepare_session_live_activity_pushes
 from zerg.services.apns_sender import prepare_widget_timeline_push
 from zerg.services.apns_sender import send_session_attention_push
 from zerg.services.apns_sender import send_session_attention_resolution_push
+from zerg.services.apns_sender import send_session_live_activity_push
 from zerg.services.apns_sender import send_widget_timeline_push
 from zerg.services.session_messages import deliver_queued_session_messages
 from zerg.services.session_messages import is_session_message_deliverable_state
@@ -188,10 +191,18 @@ async def upsert_presence(
             owner_id=owner_id,
             occurred_at=_now,
         )
-        return canonical_presence_state, attention_push, attention_resolution_push, widget_push
+        live_activity_pushes = prepare_session_live_activity_pushes(
+            write_db,
+            owner_id=owner_id,
+            session_id=session_uuid,
+            current_state=canonical_presence_state,
+            current_tool_name=runtime_tool_name,
+            occurred_at=_now,
+        )
+        return canonical_presence_state, attention_push, attention_resolution_push, widget_push, live_activity_pushes
 
     ws = get_write_serializer()
-    canonical_presence_state, attention_push, attention_resolution_push, widget_push = await ws.execute_or_direct(
+    canonical_presence_state, attention_push, attention_resolution_push, widget_push, live_activity_pushes = await ws.execute_or_direct(
         _do_presence_writes,
         db,
         label="presence",
@@ -256,4 +267,25 @@ async def upsert_presence(
                     )
 
                 await ws.execute_or_direct(_clear_widget_timeline_stamp, db, label="presence-widget-push-clear")
+    for live_activity_push in live_activity_pushes:
+        try:
+            live_activity_accepted = await send_session_live_activity_push(live_activity_push)
+        except Exception:  # pragma: no cover - push send should never fail the hook path
+            logger.exception(
+                "Failed to send APNs Live Activity push for session %s",
+                live_activity_push.session_id,
+            )
+            live_activity_accepted = False
+        if not live_activity_accepted:
+
+            def _clear_live_activity_stamp(write_db: Session) -> bool:
+                return clear_live_activity_push_stamp(
+                    write_db,
+                    registration_id=live_activity_push.registration_id,
+                    state_hash=live_activity_push.state_hash,
+                    previous_state_hash=live_activity_push.previous_state_hash,
+                    previous_push_at=live_activity_push.previous_push_at,
+                )
+
+            await ws.execute_or_direct(_clear_live_activity_stamp, db, label="presence-live-activity-clear")
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -9,6 +9,7 @@ from datetime import timedelta
 from datetime import timezone
 from hashlib import sha256
 from typing import Literal
+from uuid import UUID
 
 import httpx
 import jwt
@@ -18,6 +19,7 @@ from sqlalchemy.orm import Session
 from zerg.config import get_settings
 from zerg.models.agents import AgentSession
 from zerg.models.apns_device_registration import APNSDeviceRegistration
+from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration
 from zerg.models.apns_widget_push_state import APNSWidgetPushState
 from zerg.models.user import User
 from zerg.services.session_runtime import load_runtime_state_map
@@ -29,6 +31,7 @@ ATTENTION_PUSH_STATES = {"needs_user", "blocked"}
 ATTENTION_PUSH_DEBOUNCE = timedelta(seconds=30)
 WIDGET_PUSH_DEBOUNCE = timedelta(seconds=30)
 WIDGET_PUSH_PLATFORM = "ios_widget"
+LIVE_ACTIVITY_PUSH_DEBOUNCE = timedelta(seconds=15)
 ATTENTION_NOTIFICATION_CATEGORY = "LONGHOUSE_SESSION_ATTENTION"
 ATTENTION_NOTIFICATION_THREAD_PREFIX = "longhouse-session"
 PROVIDER_DISPLAY_NAMES = {
@@ -89,6 +92,27 @@ class WidgetTimelinePush:
     occurred_at: datetime
     collapse_id: str
     targets: tuple[APNSDeviceTarget, ...]
+
+
+@dataclass(frozen=True)
+class LiveActivityPush:
+    registration_id: str
+    owner_id: int
+    session_id: str
+    activity_id: str
+    push_token: str
+    push_environment: Literal["sandbox", "production"]
+    state_hash: str
+    previous_state_hash: str | None
+    previous_push_at: datetime | None
+    occurred_at: datetime
+    title: str
+    provider: str
+    project: str | None
+    presence_state: str
+    display_phase: str
+    active_tool: str | None
+    is_attention: bool
 
 
 def user_apns_enabled(user: User | None) -> bool:
@@ -164,6 +188,24 @@ def clear_widget_timeline_push_stamp(
         return False
     state.state_hash = previous_state_hash
     state.last_push_at = previous_push_at
+    return True
+
+
+def clear_live_activity_push_stamp(
+    db: Session,
+    *,
+    registration_id: str,
+    state_hash: str,
+    previous_state_hash: str | None,
+    previous_push_at: datetime | None,
+) -> bool:
+    """Rollback a Live Activity push stamp when APNs accepts no update."""
+
+    registration = db.query(APNSLiveActivityRegistration).filter(APNSLiveActivityRegistration.id == registration_id).first()
+    if registration is None or registration.last_state_hash != state_hash:
+        return False
+    registration.last_state_hash = previous_state_hash
+    registration.last_push_at = previous_push_at
     return True
 
 
@@ -318,6 +360,99 @@ def prepare_widget_timeline_push(
     )
 
 
+def prepare_session_live_activity_pushes(
+    db: Session,
+    *,
+    owner_id: int | None,
+    session_id: UUID | None,
+    current_state: str | None,
+    current_tool_name: str | None,
+    occurred_at: datetime,
+) -> tuple[LiveActivityPush, ...]:
+    if owner_id is None or session_id is None:
+        return ()
+
+    try:
+        registrations = (
+            db.query(APNSLiveActivityRegistration)
+            .filter(
+                APNSLiveActivityRegistration.owner_id == owner_id,
+                APNSLiveActivityRegistration.session_id == str(session_id),
+                APNSLiveActivityRegistration.ended_at.is_(None),
+            )
+            .order_by(APNSLiveActivityRegistration.last_seen_at.desc(), APNSLiveActivityRegistration.created_at.desc())
+            .all()
+        )
+    except OperationalError as exc:
+        if _is_missing_optional_table(exc):
+            logger.warning("APNs Live Activity table unavailable; skipping Live Activity push for session %s", session_id)
+            return ()
+        raise
+
+    if not registrations:
+        return ()
+
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    if session is None:
+        return ()
+
+    provider = str(getattr(session, "provider", None) or "Session")
+    presence_state = str(current_state or getattr(session, "status", None) or "unknown")
+    active_tool = str(current_tool_name or "").strip() or None
+    display_phase = _live_activity_display_phase(presence_state, active_tool)
+    title = _session_title(session)
+    project = _session_project(session)
+    is_attention = presence_state in ATTENTION_PUSH_STATES
+    state_hash = _live_activity_state_hash(
+        title=title,
+        provider=provider,
+        project=project,
+        presence_state=presence_state,
+        display_phase=display_phase,
+        active_tool=active_tool,
+        is_attention=is_attention,
+    )
+
+    notifications: list[LiveActivityPush] = []
+    for registration in registrations:
+        previous_state_hash = registration.last_state_hash
+        previous_push_at = registration.last_push_at
+        previous_push_at_utc = _as_aware_utc(previous_push_at)
+        if previous_state_hash == state_hash:
+            continue
+        if previous_push_at_utc is not None and (occurred_at - previous_push_at_utc) < LIVE_ACTIVITY_PUSH_DEBOUNCE:
+            continue
+
+        push_environment: Literal["sandbox", "production"] = (
+            "production" if str(registration.push_environment or "sandbox") == "production" else "sandbox"
+        )
+
+        registration.last_state_hash = state_hash
+        registration.last_push_at = occurred_at
+        notifications.append(
+            LiveActivityPush(
+                registration_id=str(registration.id),
+                owner_id=owner_id,
+                session_id=str(session_id),
+                activity_id=str(registration.activity_id),
+                push_token=str(registration.push_token),
+                push_environment=push_environment,
+                state_hash=state_hash,
+                previous_state_hash=previous_state_hash,
+                previous_push_at=previous_push_at,
+                occurred_at=occurred_at,
+                title=title,
+                provider=provider,
+                project=project,
+                presence_state=presence_state,
+                display_phase=display_phase,
+                active_tool=active_tool,
+                is_attention=is_attention,
+            )
+        )
+    return tuple(notifications)
+
+
 async def send_session_attention_push(notification: SessionAttentionPush) -> bool:
     settings = get_settings()
     if settings.testing or not settings.apns_enabled:
@@ -441,6 +576,50 @@ async def send_widget_timeline_push(notification: WidgetTimelinePush) -> bool:
     return accepted
 
 
+async def send_session_live_activity_push(notification: LiveActivityPush) -> bool:
+    settings = get_settings()
+    if settings.testing or not settings.apns_enabled:
+        return False
+
+    provider_token = _provider_token()
+    topic = f"{str(settings.apns_topic or 'ai.longhouse.ios').strip() or 'ai.longhouse.ios'}.push-type.liveactivity"
+    payload = build_session_live_activity_payload(notification)
+    expiration = str(int((datetime.now(timezone.utc) + timedelta(minutes=5)).timestamp()))
+    headers = {
+        "authorization": f"bearer {provider_token}",
+        "apns-topic": topic,
+        "apns-push-type": "liveactivity",
+        "apns-priority": "5",
+        "apns-collapse-id": _collapse_id("lh-live", notification.activity_id),
+        "apns-expiration": expiration,
+    }
+    host = _apns_host(notification.push_environment)
+    url = f"https://{host}/3/device/{notification.push_token}"
+
+    async with httpx.AsyncClient(http2=True, timeout=10.0) as client:
+        try:
+            response = await client.post(url, headers=headers, json=payload)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "APNs Live Activity push failed for session %s activity %s: %s",
+                notification.session_id,
+                notification.activity_id,
+                exc,
+            )
+            return False
+        if response.status_code >= 300:
+            logger.warning(
+                "APNs rejected Live Activity push for session %s activity %s (%s): %s %s",
+                notification.session_id,
+                notification.activity_id,
+                notification.push_environment,
+                response.status_code,
+                response.text,
+            )
+            return False
+    return True
+
+
 def build_session_attention_payload(notification: SessionAttentionPush) -> dict:
     return {
         "aps": {
@@ -481,6 +660,25 @@ def build_widget_timeline_payload() -> dict:
         "aps": {
             "content-changed": True,
         },
+    }
+
+
+def build_session_live_activity_payload(notification: LiveActivityPush) -> dict:
+    timestamp = int(notification.occurred_at.timestamp())
+    return {
+        "aps": {
+            "timestamp": timestamp,
+            "event": "update",
+            "content-state": {
+                "presenceState": notification.presence_state,
+                "displayPhase": notification.display_phase,
+                "activeTool": notification.active_tool,
+                "updatedAt": timestamp,
+                "isAttention": notification.is_attention,
+            },
+            "stale-date": timestamp + 300,
+            "relevance-score": 80 if notification.is_attention else 50,
+        }
     }
 
 
@@ -553,6 +751,44 @@ def _widget_active_set_hash(db: Session, *, now: datetime) -> str:
     return sha256("|".join(parts).encode("utf-8")).hexdigest()
 
 
+def _live_activity_state_hash(
+    *,
+    title: str,
+    provider: str,
+    project: str | None,
+    presence_state: str,
+    display_phase: str,
+    active_tool: str | None,
+    is_attention: bool,
+) -> str:
+    parts = [
+        title,
+        provider,
+        project or "",
+        presence_state,
+        display_phase,
+        active_tool or "",
+        "attention" if is_attention else "normal",
+    ]
+    return sha256("|".join(parts).encode("utf-8")).hexdigest()
+
+
+def _live_activity_display_phase(presence_state: str, active_tool: str | None) -> str:
+    match presence_state:
+        case "running":
+            return f"Running {active_tool}" if active_tool else "Running"
+        case "thinking":
+            return "Thinking"
+        case "needs_user":
+            return "Waiting on you"
+        case "blocked":
+            return f"Blocked on {active_tool}" if active_tool else "Needs permission"
+        case "idle":
+            return "Idle"
+        case _:
+            return "Recent progress"
+
+
 def _session_title(session: AgentSession) -> str:
     return (
         str(getattr(session, "summary_title", "") or "").strip()
@@ -561,6 +797,11 @@ def _session_title(session: AgentSession) -> str:
         or str(getattr(session, "provider", "") or "").strip()
         or "Longhouse session"
     )
+
+
+def _session_project(session: AgentSession) -> str | None:
+    project = str(getattr(session, "project", "") or "").strip()
+    return project or None
 
 
 def _attention_alert_title(*, state: str, provider: str | None) -> str:

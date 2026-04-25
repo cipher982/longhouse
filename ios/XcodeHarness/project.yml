@@ -78,6 +78,8 @@ targets:
         GIDClientID: 658453123272-8d0plghk6gbsgamhp66rn8gi2vbc65i2.apps.googleusercontent.com
         UIBackgroundModes:
           - remote-notification
+        NSSupportsLiveActivities: true
+        NSSupportsLiveActivitiesFrequentUpdates: true
         CFBundleURLTypes:
           - CFBundleURLSchemes:
               - com.googleusercontent.apps.658453123272-8d0plghk6gbsgamhp66rn8gi2vbc65i2
@@ -114,6 +116,7 @@ targets:
     info:
       path: WidgetInfo.plist
       properties:
+        NSSupportsLiveActivities: true
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
 

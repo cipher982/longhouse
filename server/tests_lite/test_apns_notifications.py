@@ -24,6 +24,7 @@ from zerg.main import api_app
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
 from zerg.models.apns_device_registration import APNSDeviceRegistration
+from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration
 from zerg.models.apns_widget_push_state import APNSWidgetPushState
 from zerg.models.user import User
 from zerg.services.apns_sender import ATTENTION_NOTIFICATION_CATEGORY
@@ -32,6 +33,7 @@ from zerg.services.apns_sender import SessionAttentionPush
 from zerg.services.apns_sender import _attention_collapse_id
 from zerg.services.apns_sender import build_session_attention_payload
 from zerg.services.apns_sender import build_session_attention_resolution_payload
+from zerg.services.apns_sender import build_session_live_activity_payload
 from zerg.services.apns_sender import build_widget_timeline_payload
 
 
@@ -143,6 +145,67 @@ def test_apns_registration_accepts_widget_tokens(tmp_path):
         row = db.query(APNSDeviceRegistration).one()
         assert row.platform == "ios_widget"
         assert row.device_token == token
+
+    _cleanup_overrides()
+    engine.dispose()
+
+
+def test_apns_live_activity_registration_upserts_and_ends(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path)
+    _seed_user(SessionLocal)
+    session_id = str(uuid4())
+
+    def override_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+        id=1,
+        email="user@example.com",
+        role="ADMIN",
+    )
+
+    with TestClient(api_app) as client:
+        register_response = client.post(
+            "/devices/apns-live-activity/register",
+            json={
+                "session_id": session_id,
+                "activity_id": "activity-1",
+                "push_token": "a" * 64,
+                "push_environment": "sandbox",
+                "app_build_id": "0.1.0-dev+aaaa1111",
+            },
+        )
+        assert register_response.status_code == 200, register_response.text
+
+        refresh_response = client.post(
+            "/devices/apns-live-activity/register",
+            json={
+                "session_id": session_id,
+                "activity_id": "activity-1",
+                "push_token": "b" * 64,
+                "push_environment": "production",
+            },
+        )
+        assert refresh_response.status_code == 200, refresh_response.text
+
+        end_response = client.post(
+            "/devices/apns-live-activity/end",
+            json={"activity_id": "activity-1"},
+        )
+        assert end_response.status_code == 204, end_response.text
+
+    with SessionLocal() as db:
+        row = db.query(APNSLiveActivityRegistration).one()
+        assert row.session_id == session_id
+        assert row.activity_id == "activity-1"
+        assert row.push_token == "b" * 64
+        assert row.push_environment == "production"
+        assert row.ended_at is not None
 
     _cleanup_overrides()
     engine.dispose()
@@ -693,6 +756,162 @@ def test_presence_widget_push_missing_state_table_degrades(tmp_path):
             assert response.status_code == 204, response.text
 
     widget_send_mock.assert_not_awaited()
+    _cleanup_overrides()
+    engine.dispose()
+
+
+def test_presence_live_activity_pushes_session_state_and_debounces(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+
+    with SessionLocal() as db:
+        db.add(User(id=1, email="user@example.com", role="ADMIN"))
+        db.commit()
+        db.add(
+            APNSLiveActivityRegistration(
+                owner_id=1,
+                session_id=session_id,
+                activity_id="activity-1",
+                push_token="a" * 64,
+                push_environment="sandbox",
+                app_build_id="0.1.0-dev+aaaa1111",
+            )
+        )
+        db.add(
+            AgentSession(
+                id=session_id,
+                provider="codex",
+                environment="test",
+                project="zerg",
+                started_at=datetime.now(timezone.utc),
+                loop_mode="manual",
+                summary_title="Watched session",
+            )
+        )
+        db.commit()
+
+    def override_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    def override_verify_agents_token():
+        return SimpleNamespace(device_id="devbox", id="token-1", owner_id=1)
+
+    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+
+    t0 = datetime.now(timezone.utc).replace(microsecond=0)
+    live_send_mock = AsyncMock(return_value=True)
+    with patch("zerg.routers.presence.send_session_live_activity_push", live_send_mock):
+        with TestClient(api_app) as client:
+            for state, seconds, tool_name in [
+                ("thinking", 0, None),
+                ("running", 5, "bash"),
+                ("running", 20, "bash"),
+                ("running", 40, "bash"),
+            ]:
+                body = {
+                    "session_id": session_id,
+                    "state": state,
+                    "occurred_at": (t0 + timedelta(seconds=seconds)).isoformat(),
+                }
+                if tool_name:
+                    body["tool_name"] = tool_name
+                response = client.post(
+                    "/agents/presence",
+                    json=body,
+                    headers={"X-Agents-Token": "device-token"},
+                )
+                assert response.status_code == 204, response.text
+
+    assert live_send_mock.await_count == 2
+    first_push = live_send_mock.await_args_list[0].args[0]
+    second_push = live_send_mock.await_args_list[1].args[0]
+    assert first_push.activity_id == "activity-1"
+    assert first_push.push_token == "a" * 64
+    assert first_push.presence_state == "thinking"
+    assert second_push.presence_state == "running"
+    assert second_push.display_phase == "Running bash"
+    payload = build_session_live_activity_payload(second_push)
+    assert payload["aps"]["event"] == "update"
+    assert payload["aps"]["content-state"]["presenceState"] == "running"
+    assert payload["aps"]["content-state"]["displayPhase"] == "Running bash"
+    assert payload["aps"]["content-state"]["activeTool"] == "bash"
+
+    with SessionLocal() as db:
+        row = db.query(APNSLiveActivityRegistration).one()
+        assert row.last_state_hash == second_push.state_hash
+
+    _cleanup_overrides()
+    engine.dispose()
+
+
+def test_presence_live_activity_send_failure_clears_stamp(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+
+    with SessionLocal() as db:
+        db.add(User(id=1, email="user@example.com", role="ADMIN"))
+        db.commit()
+        db.add(
+            APNSLiveActivityRegistration(
+                owner_id=1,
+                session_id=session_id,
+                activity_id="activity-1",
+                push_token="a" * 64,
+                push_environment="sandbox",
+                app_build_id="0.1.0-dev+aaaa1111",
+            )
+        )
+        db.add(
+            AgentSession(
+                id=session_id,
+                provider="codex",
+                environment="test",
+                project="zerg",
+                started_at=datetime.now(timezone.utc),
+                loop_mode="manual",
+                summary_title="Live Activity failure",
+            )
+        )
+        db.commit()
+
+    def override_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    def override_verify_agents_token():
+        return SimpleNamespace(device_id="devbox", id="token-1", owner_id=1)
+
+    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+
+    live_send_mock = AsyncMock(return_value=False)
+    with patch("zerg.routers.presence.send_session_live_activity_push", live_send_mock):
+        with TestClient(api_app) as client:
+            response = client.post(
+                "/agents/presence",
+                json={
+                    "session_id": session_id,
+                    "state": "thinking",
+                    "occurred_at": datetime.now(timezone.utc).isoformat(),
+                },
+                headers={"X-Agents-Token": "device-token"},
+            )
+            assert response.status_code == 204, response.text
+
+    assert live_send_mock.await_count == 1
+    with SessionLocal() as db:
+        row = db.query(APNSLiveActivityRegistration).one()
+        assert row.last_state_hash is None
+        assert row.last_push_at is None
+
     _cleanup_overrides()
     engine.dispose()
 

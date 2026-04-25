@@ -184,6 +184,46 @@ struct LonghouseAPI: Sendable {
         }
     }
 
+    func registerAPNSLiveActivity(
+        sessionId: String,
+        activityId: String,
+        pushToken: String,
+        pushEnvironment: String,
+        appBuildId: String?
+    ) async throws {
+        var request = URLRequest(url: baseURL.appendingPathComponent("/api/devices/apns-live-activity/register"))
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        var body: [String: Any] = [
+            "session_id": sessionId,
+            "activity_id": activityId,
+            "push_token": pushToken,
+            "push_environment": pushEnvironment,
+        ]
+        if let appBuildId, !appBuildId.isEmpty {
+            body["app_build_id"] = appBuildId
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (_, httpResponse) = try await data(for: request)
+        guard httpResponse.statusCode == 200 else {
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
+    }
+
+    func endAPNSLiveActivity(activityId: String) async throws {
+        var request = URLRequest(url: baseURL.appendingPathComponent("/api/devices/apns-live-activity/end"))
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["activity_id": activityId])
+
+        let (_, httpResponse) = try await data(for: request)
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
+    }
+
     func refreshSession() async throws {
         var request = URLRequest(url: baseURL.appendingPathComponent("/api/auth/refresh"))
         request.httpMethod = "POST"
