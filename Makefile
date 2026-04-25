@@ -8,7 +8,7 @@ COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/dock
 E2E_BACKEND_PORT ?=
 E2E_FRONTEND_PORT ?=
 
-.PHONY: help dev dev-demo stop test test-ios test-ios-helper test-frontend test-engine test-runner test-control-plane test-e2e test-e2e-core test-e2e-a11y test-e2e-cp test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-sse validate-sdk validate-makefile validate-build-identity regen-ws regen-sse generate-sdk qa-live reprovision deploy-status ship-watch ship release ui-capture test-shipper-e2e test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-e2e-continuation-provider test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest eval dogfood dogfood-refresh dogfood-check
+.PHONY: help dev dev-demo stop test test-ios test-ios-helper test-frontend test-engine test-runner test-control-plane test-e2e test-e2e-core test-e2e-a11y test-e2e-cp test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-sse validate-sdk validate-makefile validate-build-identity validate-managed-codex-contract regen-ws regen-sse generate-sdk qa-live reprovision deploy-status ship-watch ship release ui-capture test-shipper-e2e test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-e2e-continuation-provider test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest eval dogfood dogfood-refresh dogfood-check
 
 # ---------------------------------------------------------------------------
 # Help
@@ -211,11 +211,15 @@ validate: ## Run all contract checks
 	@$(MAKE) validate-sdk
 	@$(MAKE) validate-makefile
 	@$(MAKE) validate-build-identity
+	@$(MAKE) validate-managed-codex-contract
 	@$(MAKE) lint-test-patterns
 
 validate-build-identity: ## @internal Build identity freshness check
 	@python3 scripts/build/generate_build_identity.py >/dev/null
 	@python3 scripts/build/check_build_identity_fresh.py
+
+validate-managed-codex-contract: ## @internal Guard against reintroducing packaged managed Codex runtimes
+	@bash scripts/qa/check-managed-codex-contract.sh
 
 validate-ws: ## @internal WebSocket contract check
 	@cd server && \
