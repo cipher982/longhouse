@@ -103,7 +103,9 @@ export function SessionCard({
   const session = compatibilityMode ? detailSession : thread.head;
   const interaction = getSessionInteractionCapabilities({ session });
   const cardCapabilityLabel =
-    interaction.mode === "managed_local_unavailable" ? "Reattach" : null;
+    interaction.mode === "managed_local_unavailable"
+      ? "Browser control offline"
+      : null;
   const turnCount = session.user_messages;
   const toolCount = session.tool_calls;
   const runtime = resolveSessionRuntimeState(session);
@@ -128,7 +130,7 @@ export function SessionCard({
         runtimeDisplay.detail,
         interaction.liveControlAvailable
           ? `Live on ${runtimeHostLabel}`
-          : `Continue on ${runtimeHostLabel}`,
+          : "Browser control offline",
         runtimeMetaLabel && runtimeMetaLabel !== "Live on host"
           ? runtimeMetaLabel
           : null,

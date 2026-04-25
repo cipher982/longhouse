@@ -472,7 +472,7 @@ describe("SessionsPage", () => {
     expect(screen.queryByTestId("session-card-capability")).not.toBeInTheDocument();
   });
 
-  it("shows a compact reattach badge when a managed session needs the host terminal", async () => {
+  it("shows a browser-control-offline badge when a managed session cannot accept browser prompts", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
@@ -500,10 +500,10 @@ describe("SessionsPage", () => {
     renderSessionsPage("/timeline");
 
     const capability = await screen.findByTestId("session-card-capability");
-    expect(capability).toHaveTextContent("Reattach");
+    expect(capability).toHaveTextContent("Browser control offline");
     expect(capability).toHaveAttribute(
       "title",
-      "This live Codex session is visible here, but you need the host terminal to keep driving it.",
+      "This live Codex session is visible here, but the browser cannot send prompts right now.",
     );
     expect(screen.queryByTestId("session-card-management")).not.toBeInTheDocument();
   });

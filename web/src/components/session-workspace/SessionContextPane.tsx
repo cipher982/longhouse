@@ -195,7 +195,7 @@ export function SessionContextPane({
           <summary className="session-pane-disclosure__summary">
             <span className="session-pane-disclosure__title">Debug</span>
             <span className="session-pane-disclosure__meta">
-              Open in terminal command
+              Terminal UI command
             </span>
           </summary>
           <div className="session-pane-disclosure__body">

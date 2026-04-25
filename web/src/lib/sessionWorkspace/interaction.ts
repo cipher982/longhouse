@@ -102,7 +102,7 @@ export function getSessionInteractionCapabilities({
 
   const title =
     mode === "managed_local"
-      ? "Continue this session"
+      ? "Live browser control"
       : mode === "managed_local_unavailable"
         ? "Browser control is offline"
         : "Search and inspect this session";
