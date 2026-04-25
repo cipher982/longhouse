@@ -297,10 +297,16 @@ describe("SessionDetailPage", () => {
     expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
       "Running Shell",
     );
-    expect(screen.getByTestId("session-attach-callout")).toHaveTextContent(
-      "Reattach the live Codex terminal",
+    expect(
+      screen.queryByTestId("session-attach-callout"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("session-debug-attach")).toHaveTextContent(
+      "Debug",
     );
-    expect(screen.getByTestId("session-attach-command")).toHaveTextContent(
+    expect(screen.getByTestId("session-debug-attach")).toHaveTextContent(
+      "Terminal attach",
+    );
+    expect(screen.getByTestId("session-debug-attach-command")).toHaveTextContent(
       "codex-bridge attach --session-id session-codex",
     );
     expect(
@@ -329,6 +335,65 @@ describe("SessionDetailPage", () => {
     // redesigned timeline). The old right-rail inspector with its 'Status'
     // meta-list is gone.
     expect(screen.getByText("output")).toBeInTheDocument();
+  });
+
+  it("shows the host terminal attach command as recovery when browser control is unavailable", () => {
+    const session = makeSession({
+      ended_at: null,
+      status: "working",
+      presence_state: "running",
+      active_tool: "Bash",
+      runtime_source: "managed_local_transport",
+      confidence: "live",
+      display_phase: "Running Bash",
+      last_live_at: "2026-03-22T22:04:30Z",
+      capabilities: makeCapabilities({
+        live_control_available: false,
+        host_reattach_available: true,
+        reply_to_live_session_available: false,
+      }),
+    });
+    const model = buildTimelineModel([
+      {
+        kind: "event",
+        session_id: session.id,
+        timestamp: "2026-03-22T22:00:01Z",
+        event: {
+          id: 1,
+          role: "assistant",
+          content_text: "Transcript row from degraded Codex.",
+          tool_name: null,
+          tool_input_json: null,
+          tool_output_text: null,
+          tool_call_id: null,
+          timestamp: "2026-03-22T22:00:01Z",
+          in_active_context: true,
+        },
+      },
+    ]);
+    mockWorkspaceState({ session, model });
+
+    renderSessionDetailPage();
+
+    expect(screen.getByTestId("session-attach-callout")).toHaveTextContent(
+      "Continue from host terminal",
+    );
+    expect(screen.getByTestId("session-attach-callout")).toHaveTextContent(
+      "browser control is unavailable",
+    );
+    expect(screen.getByTestId("session-attach-command")).toHaveTextContent(
+      "codex-bridge attach --session-id session-codex",
+    );
+    expect(
+      screen.queryByTestId("session-debug-attach"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByTestId("session-continuation-unavailable"),
+    ).toHaveTextContent("Browser control is offline");
+    expect(screen.getByTestId("session-chat")).toHaveAttribute(
+      "data-disabled-reason",
+      "Longhouse can still see this live Codex session, but it cannot send prompts from the browser right now. Continue from the host terminal.",
+    );
   });
 
   it("keeps unresolved live tool calls pending from the row into the inspector", () => {

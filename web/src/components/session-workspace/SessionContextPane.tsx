@@ -59,47 +59,35 @@ export function SessionContextPane({
     isViewingHead,
     headThreadSession,
   });
-  const isManagedLocalCodex = interaction.isManagedLocalCodex;
   const turnCount = session.user_messages + session.assistant_messages;
   const homeLabel = normalizeExecutionVenueLabel(session.home_label);
   const sessionControl = session.control ?? null;
   const attachCommand = interaction.hostReattachAvailable
     ? sessionControl?.attach_command?.trim() || null
     : null;
+  const showAttachRecovery =
+    Boolean(attachCommand) && !interaction.liveControlAvailable;
+  const showAttachDebug =
+    Boolean(attachCommand) && interaction.liveControlAvailable;
   const attachRunnerLabel =
     sessionControl?.source_runner_name?.trim() ||
     homeLabel ||
     interaction.sourceOriginLabel ||
     "this machine";
-  const statusEyebrow = interaction.liveControlAvailable
-    ? "Live session"
-    : interaction.hostReattachAvailable
-      ? "Managed session"
-      : "Imported session";
-  const statusSummary = interaction.liveControlAvailable
-    ? `Live on ${attachRunnerLabel}. Send prompts from Longhouse or reattach on the host.`
-    : interaction.hostReattachAvailable
-      ? `Live on ${attachRunnerLabel}. This view stays synced, but continue from the host terminal.`
-      : interaction.managedLaunchSuggestion
-        ? `Archived here only. Start the next ${interaction.providerLabel} session through Longhouse when you need live control.`
-        : "Archived here only.";
   const loopModeCaption = config.demoMode
     ? "Preview only in the demo."
     : !interaction.isManagedLocalSession
       ? "Stored preference only."
       : interaction.liveControlAvailable
         ? "Review posture only."
-        : isManagedLocalCodex
-          ? "Stored here. Applies when Longhouse regains control."
-          : "Stored here. Applies when Longhouse regains control.";
-  const attachDisclosureCopy = interaction.liveControlAvailable
-    ? `Run this on ${attachRunnerLabel} to reopen the live terminal without breaking the Longhouse control path.`
-    : `Run this on ${attachRunnerLabel} to reopen the live terminal session.`;
+        : "Stored here. Applies when Longhouse regains control.";
+  const attachRecoveryCopy = `Longhouse can still see this session here, but browser control is unavailable. Run this on ${attachRunnerLabel} to continue from the terminal.`;
+  const attachDebugCopy = `Optional recovery command. Run this on ${attachRunnerLabel} to open a terminal UI for this existing managed ${interaction.providerLabel} session.`;
   const shouldShowNotice =
     continuationNotice && !interaction.managedLaunchSuggestion;
   const showControlSection =
     interaction.isManagedLocalSession ||
-    attachCommand ||
+    showAttachRecovery ||
     shouldShowNotice ||
     interaction.managedLaunchSuggestion;
 
@@ -165,16 +153,14 @@ export function SessionContextPane({
       {/* Zone 2 — Actions */}
       {showControlSection ? (
         <div className="session-pane-section session-pane-section--actions">
-          {attachCommand ? (
+          {showAttachRecovery ? (
             <details
               className="session-pane-disclosure"
               data-testid="session-attach-callout"
             >
               <summary className="session-pane-disclosure__summary">
                 <span className="session-pane-disclosure__title">
-                  {isManagedLocalCodex
-                    ? "Reattach the live Codex terminal"
-                    : "Reattach on the host machine"}
+                  Continue from host terminal
                 </span>
                 <span className="session-pane-disclosure__meta">
                   {attachRunnerLabel}
@@ -182,7 +168,7 @@ export function SessionContextPane({
               </summary>
               <div className="session-pane-disclosure__body">
                 <div className="session-pane-disclosure__copy">
-                  {attachDisclosureCopy}
+                  {attachRecoveryCopy}
                 </div>
                 <pre
                   className="inspector-code-block"
@@ -230,6 +216,31 @@ export function SessionContextPane({
             onChange={onLoopModeChange}
           />
         </div>
+      ) : null}
+
+      {showAttachDebug ? (
+        <details
+          className="session-pane-disclosure"
+          data-testid="session-debug-attach"
+        >
+          <summary className="session-pane-disclosure__summary">
+            <span className="session-pane-disclosure__title">Debug</span>
+            <span className="session-pane-disclosure__meta">
+              Terminal attach
+            </span>
+          </summary>
+          <div className="session-pane-disclosure__body">
+            <div className="session-pane-disclosure__copy">
+              {attachDebugCopy}
+            </div>
+            <pre
+              className="inspector-code-block"
+              data-testid="session-debug-attach-command"
+            >
+              <code>{attachCommand}</code>
+            </pre>
+          </div>
+        </details>
       ) : null}
 
       {/* Zone 3 — Metadata (collapsed) */}
