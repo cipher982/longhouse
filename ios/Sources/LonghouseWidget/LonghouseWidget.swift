@@ -103,9 +103,11 @@ struct LonghouseWidgets: WidgetBundle {
     var body: some Widget {
         SessionsWidget()
         SessionWatchLiveActivityWidget()
+        #if compiler(>=6.2)
         if #available(iOSApplicationExtension 26.0, *) {
             PushSessionsWidget()
         }
+        #endif
     }
 }
 
@@ -234,6 +236,9 @@ private func liveActivityStateColor(_ state: String) -> Color {
     }
 }
 
+#if compiler(>=6.2)
+// WidgetKit push APIs are introduced with the iOS 26 SDK. Runtime availability
+// alone is not enough because older CI SDKs cannot type-check these symbols.
 @available(iOSApplicationExtension 26.0, *)
 struct PushSessionsWidget: Widget {
     let kind = LonghouseWidgetConstants.pushSessionsKind
@@ -283,3 +288,4 @@ struct SessionsWidgetPushHandler: WidgetPushHandler {
         #endif
     }
 }
+#endif
