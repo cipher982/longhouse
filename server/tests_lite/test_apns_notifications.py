@@ -30,6 +30,7 @@ from zerg.services.apns_sender import ATTENTION_NOTIFICATION_THREAD_PREFIX
 from zerg.services.apns_sender import SessionAttentionPush
 from zerg.services.apns_sender import _attention_collapse_id
 from zerg.services.apns_sender import build_session_attention_payload
+from zerg.services.apns_sender import build_session_attention_resolution_payload
 
 
 def _make_db(tmp_path, name: str = "test_apns.db"):
@@ -187,8 +188,12 @@ def test_presence_attention_transition_sends_and_debounces_push(tmp_path):
 
     t0 = datetime.now(timezone.utc).replace(microsecond=0)
     send_mock = AsyncMock(return_value=True)
+    resolution_send_mock = AsyncMock(return_value=True)
 
-    with patch("zerg.routers.presence.send_session_attention_push", send_mock):
+    with (
+        patch("zerg.routers.presence.send_session_attention_push", send_mock),
+        patch("zerg.routers.presence.send_session_attention_resolution_push", resolution_send_mock),
+    ):
         with TestClient(api_app) as client:
             first = client.post(
                 "/agents/presence",
@@ -247,9 +252,12 @@ def test_presence_attention_transition_sends_and_debounces_push(tmp_path):
             assert fifth.status_code == 204, fifth.text
 
     assert send_mock.await_count == 3
+    assert resolution_send_mock.await_count == 2
     first_notification = send_mock.await_args_list[0].args[0]
     second_notification = send_mock.await_args_list[1].args[0]
     third_notification = send_mock.await_args_list[2].args[0]
+    first_resolution = resolution_send_mock.await_args_list[0].args[0]
+    second_resolution = resolution_send_mock.await_args_list[1].args[0]
     assert first_notification.session_id == session_id
     assert first_notification.state == "needs_user"
     assert first_notification.alert_title == "Claude needs you"
@@ -259,6 +267,15 @@ def test_presence_attention_transition_sends_and_debounces_push(tmp_path):
     assert second_notification.alert_title == "Needs permission"
     assert second_notification.alert_body == "zerg · Blocked on Bash · Fix failing build"
     assert third_notification.state == "needs_user"
+    assert first_resolution.session_id == session_id
+    assert first_resolution.previous_state == "needs_user"
+    assert first_resolution.current_state == "idle"
+    assert first_resolution.collapse_id == f"lh-attn-resolved-{session_id}"
+    assert second_resolution.previous_state == "blocked"
+    resolution_payload = build_session_attention_resolution_payload(first_resolution)
+    assert resolution_payload["aps"] == {"content-available": 1}
+    assert resolution_payload["event"] == "attention_resolved"
+    assert resolution_payload["attention_state"] == "resolved"
     payload = build_session_attention_payload(first_notification)
     assert payload["aps"]["category"] == ATTENTION_NOTIFICATION_CATEGORY
     assert payload["aps"]["thread-id"] == f"{ATTENTION_NOTIFICATION_THREAD_PREFIX}-{session_id}"

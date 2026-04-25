@@ -1,6 +1,6 @@
 import Foundation
 
-struct SessionSummary: Identifiable, Hashable, Sendable {
+struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     let id: String
     let title: String
     let presenceState: String
@@ -130,6 +130,13 @@ struct SessionSummary: Identifiable, Hashable, Sendable {
             return nil
         }
         return summary
+    }
+
+    static func attentionWidgetOrder(_ sessions: [SessionSummary], limit: Int) -> [SessionSummary] {
+        let active = sessions.filter(\.isUserActive)
+        let attention = active.filter(\.needsAttention)
+        let recent = active.filter { !$0.needsAttention }
+        return Array((attention + recent).prefix(limit))
     }
 }
 
