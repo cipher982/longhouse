@@ -54,7 +54,10 @@ fn resolve_codex_bridge_start_roots(
     isolation_root: Option<PathBuf>,
 ) -> anyhow::Result<(Option<PathBuf>, Option<PathBuf>)> {
     if let Some(root) = isolation_root {
-        return Ok((Some(root.join("codex-bridge")), Some(root.join("longhouse"))));
+        return Ok((
+            Some(root.join("codex-bridge")),
+            Some(root.join("longhouse")),
+        ));
     }
     if state_root.is_some() && longhouse_home.is_none() {
         anyhow::bail!(
@@ -502,6 +505,10 @@ enum CodexBridgeCommands {
         #[arg(long)]
         state_root: Option<PathBuf>,
 
+        /// Debug/operator escape hatch: route directly to Codex app-server if bridge IPC is unavailable.
+        #[arg(long, hide = true)]
+        allow_direct_ws_fallback: bool,
+
         #[arg(long)]
         json: bool,
     },
@@ -912,8 +919,11 @@ fn main() -> anyhow::Result<()> {
                     start_timeout_secs,
                     json,
                 } => {
-                    let (state_root, longhouse_home) =
-                        resolve_codex_bridge_start_roots(state_root, longhouse_home, isolation_root)?;
+                    let (state_root, longhouse_home) = resolve_codex_bridge_start_roots(
+                        state_root,
+                        longhouse_home,
+                        isolation_root,
+                    )?;
                     let summary = rt.block_on(cmd_codex_bridge_start(BridgeStartConfig {
                         session_id,
                         cwd,
@@ -994,12 +1004,14 @@ fn main() -> anyhow::Result<()> {
                     session_id,
                     text,
                     state_root,
+                    allow_direct_ws_fallback,
                     json,
                 } => {
                     let summary = rt.block_on(cmd_codex_bridge_send(BridgeSendConfig {
                         session_id,
                         text,
                         state_root,
+                        allow_direct_ws_fallback,
                     }))?;
                     if json {
                         println!("{}", serde_json::to_string_pretty(&summary)?);
@@ -1063,9 +1075,61 @@ mod tests {
         let state = PathBuf::from("/tmp/state");
         let home = PathBuf::from("/tmp/home");
         let (state_root, longhouse_home) =
-            resolve_codex_bridge_start_roots(Some(state.clone()), Some(home.clone()), None).unwrap();
+            resolve_codex_bridge_start_roots(Some(state.clone()), Some(home.clone()), None)
+                .unwrap();
 
         assert_eq!(state_root, Some(state));
         assert_eq!(longhouse_home, Some(home));
+    }
+
+    #[test]
+    fn codex_bridge_send_direct_ws_fallback_defaults_off() {
+        let cli = Cli::try_parse_from([
+            "longhouse-engine",
+            "codex-bridge",
+            "send",
+            "--session-id",
+            "sess-test",
+            "--text",
+            "hello",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::CodexBridge {
+                command:
+                    CodexBridgeCommands::Send {
+                        allow_direct_ws_fallback,
+                        ..
+                    },
+            } => assert!(!allow_direct_ws_fallback),
+            _ => panic!("expected codex-bridge send command"),
+        }
+    }
+
+    #[test]
+    fn codex_bridge_send_accepts_explicit_direct_ws_fallback() {
+        let cli = Cli::try_parse_from([
+            "longhouse-engine",
+            "codex-bridge",
+            "send",
+            "--session-id",
+            "sess-test",
+            "--text",
+            "hello",
+            "--allow-direct-ws-fallback",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::CodexBridge {
+                command:
+                    CodexBridgeCommands::Send {
+                        allow_direct_ws_fallback,
+                        ..
+                    },
+            } => assert!(allow_direct_ws_fallback),
+            _ => panic!("expected codex-bridge send command"),
+        }
     }
 }
