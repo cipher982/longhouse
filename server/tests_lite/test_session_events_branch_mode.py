@@ -158,3 +158,72 @@ def test_events_api_branch_mode_head_vs_all(tmp_path):
         assert "branch_mode" in bad_resp.json()["detail"]
     finally:
         api_app.dependency_overrides.clear()
+
+
+def test_events_api_anchor_tail_returns_latest_window(tmp_path):
+    client = _make_client(tmp_path)
+    try:
+        session_id = "aaaaaaaa-0000-0000-0000-000000000177"
+        source_path = "/tmp/tail-api.jsonl"
+        events = []
+        source_lines = []
+        for idx in range(1, 6):
+            raw_json = f'{{"type":"user","text":"event {idx}"}}'
+            events.append(
+                {
+                    "role": "user",
+                    "content_text": f"event {idx}",
+                    "timestamp": f"2026-01-01T00:00:0{idx}Z",
+                    "source_path": source_path,
+                    "source_offset": idx,
+                    "raw_json": raw_json,
+                }
+            )
+            source_lines.append(
+                {
+                    "source_path": source_path,
+                    "source_offset": idx,
+                    "raw_json": raw_json,
+                }
+            )
+
+        _ingest(
+            client,
+            {
+                "id": session_id,
+                "provider": "claude",
+                "environment": "production",
+                "started_at": "2026-01-01T00:00:00Z",
+                "events": events,
+                "source_lines": source_lines,
+            },
+        )
+
+        response = client.get(
+            f"/agents/sessions/{session_id}/events",
+            params={"limit": 2, "anchor": "tail"},
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["total"] == 5
+        assert [row["content_text"] for row in data["events"]] == ["event 4", "event 5"]
+
+        previous_response = client.get(
+            f"/agents/sessions/{session_id}/events",
+            params={"limit": 2, "anchor": "tail", "offset": 2},
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert previous_response.status_code == 200, previous_response.text
+        previous_data = previous_response.json()
+        assert [row["content_text"] for row in previous_data["events"]] == ["event 2", "event 3"]
+
+        bad_response = client.get(
+            f"/agents/sessions/{session_id}/events",
+            params={"anchor": "middle"},
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert bad_response.status_code == 400
+        assert "anchor" in bad_response.json()["detail"]
+    finally:
+        api_app.dependency_overrides.clear()

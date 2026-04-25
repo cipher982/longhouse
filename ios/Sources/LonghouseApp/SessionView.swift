@@ -95,6 +95,13 @@ struct SessionView: View {
                             withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
                         }
                     }
+                    .onAppear {
+                        if let last = viewModel.items.last {
+                            DispatchQueue.main.async {
+                                proxy.scrollTo(last.id, anchor: .bottom)
+                            }
+                        }
+                    }
                 }
             }
         }

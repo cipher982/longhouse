@@ -2379,6 +2379,7 @@ class AgentsStore:
         branch_mode: str = "head",
         limit: int = 100,
         offset: int = 0,
+        load_from_end: bool = False,
     ) -> List[AgentEvent]:
         """Get events for a session with optional filtering."""
         stmt = select(AgentEvent).where(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp, AgentEvent.id)
@@ -2400,6 +2401,11 @@ class AgentsStore:
             stmt, empty = self._apply_query_filter(stmt, session_id, query)
             if empty:
                 return []
+
+        if load_from_end:
+            total_stmt = select(func.count()).select_from(stmt.order_by(None).subquery())
+            total = int(self.db.execute(total_stmt).scalar_one() or 0)
+            offset = max(0, total - limit - offset)
 
         stmt = stmt.limit(limit).offset(offset)
         return list(self.db.execute(stmt).scalars().all())

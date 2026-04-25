@@ -78,13 +78,14 @@ struct LonghouseAPI: Sendable {
         return try JSONDecoder.snakeCase.decode(SessionDetail.self, from: data)
     }
 
-    func sessionEvents(id: String, limit: Int = 200) async throws -> [SessionEvent] {
+    func sessionEvents(id: String, limit: Int = 200, anchor: String = "tail") async throws -> [SessionEvent] {
         var components = URLComponents(
             url: baseURL.appendingPathComponent("/api/timeline/sessions/\(id)/events"),
             resolvingAgainstBaseURL: false
         )!
         components.queryItems = [
             URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "anchor", value: anchor),
             URLQueryItem(name: "branch_mode", value: "head"),
         ]
         var request = URLRequest(url: components.url!)

@@ -15749,6 +15749,8 @@ export interface operations {
                 context_mode?: string;
                 /** @description Branch projection mode: head|all */
                 branch_mode?: string;
+                /** @description Page anchor: start|tail */
+                anchor?: string;
                 /** @description Max results */
                 limit?: number;
                 /** @description Offset for pagination */
