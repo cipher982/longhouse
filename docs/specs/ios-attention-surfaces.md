@@ -94,12 +94,15 @@ Completed in `ios-timeline-refresh`.
 
 ### Phase 2B: WidgetKit Push For iOS 26+
 
-Build after Phase 2A is stable.
+Completed in `ios-timeline-refresh`.
 
 - Register WidgetKit push tokens from the widget extension.
 - Send widget pushes when the attention/active set changes.
 - Debounce server-side by set-level transitions, not by event or tool call.
 - Preserve timeline-based fallback for older iOS and budget exhaustion.
+- Ship the push-enabled iOS 26 surface as a second widget kind, `Timeline
+  Live`, because the legacy static widget must stay available on older iOS
+  releases and the push-handler modifier is iOS 26-only.
 
 ### Phase 3: Explicit Watch Session
 
@@ -128,4 +131,18 @@ Build after widget freshness is stable.
   delivered attention alerts, and asks WidgetKit to reload.
 - The widget uses the shared snapshot when a fresh fetch cannot complete.
 - Widget rows are ordered by attention first, then most-recent active.
+- Backend and iOS tests cover the new behavior.
+
+## Acceptance Criteria For Phase 2B
+
+- The widget extension registers WidgetKit push tokens as `ios_widget` APNs
+  registrations.
+- The server sends APNs widget pushes with the WidgetKit push type and widget
+  topic only to widget-token registrations.
+- Widget pushes are keyed by the active-session set hash and debounced so tool
+  chatter does not create push churn.
+- If APNs accepts no widget target, the server rolls back the push stamp so a
+  later valid token can still receive the next set transition.
+- Older iOS installs continue to use the original static widget and snapshot
+  fallback.
 - Backend and iOS tests cover the new behavior.

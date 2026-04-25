@@ -158,14 +158,19 @@ struct LonghouseAPI: Sendable {
         return try JSONDecoder.snakeCase.decode(UserNotificationSettings.self, from: data)
     }
 
-    func registerAPNSDevice(deviceToken: String, pushEnvironment: String, appBuildId: String?) async throws {
+    func registerAPNSDevice(
+        deviceToken: String,
+        pushEnvironment: String,
+        appBuildId: String?,
+        platform: String = "ios"
+    ) async throws {
         var request = URLRequest(url: baseURL.appendingPathComponent("/api/devices/apns-register"))
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
 
         var body: [String: Any] = [
             "device_token": deviceToken,
-            "platform": "ios",
+            "platform": platform,
             "push_environment": pushEnvironment,
         ]
         if let appBuildId, !appBuildId.isEmpty {
