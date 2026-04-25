@@ -189,10 +189,10 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.canChatFromBrowser).toBe(false);
     expect(capabilities.managementLabel).toBe("Managed");
     expect(capabilities.managedLaunchSuggestion).toBeNull();
-    expect(capabilities.capabilityLabel).toBe("Reattach on host");
-    expect(capabilities.composerDisabledReason).toMatch(/host control channel/i);
+    expect(capabilities.capabilityLabel).toBe("Continue on host");
+    expect(capabilities.composerDisabledReason).toMatch(/host terminal/i);
     expect(capabilities.primaryActionLabel).toBe("Unavailable");
-    expect(capabilities.notice?.title).toMatch(/Codex session needs host attach/i);
+    expect(capabilities.notice?.title).toBe("Browser control is offline");
   });
 
   it("shows reattach when a managed-local Claude session loses its live control channel", () => {
@@ -216,7 +216,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.canChatFromBrowser).toBe(false);
     expect(capabilities.managementLabel).toBe("Managed");
     expect(capabilities.managedLaunchSuggestion).toBeNull();
-    expect(capabilities.capabilityLabel).toBe("Reattach on host");
+    expect(capabilities.capabilityLabel).toBe("Continue on host");
   });
 
   it("treats a synced Claude transcript as search-only", () => {

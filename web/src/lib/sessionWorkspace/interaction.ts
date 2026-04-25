@@ -71,7 +71,7 @@ export function getSessionInteractionCapabilities({
   const managementDescription = isManagedLocalSession
     ? liveControlAvailable
       ? "Longhouse owns the live control path for this session."
-      : "Longhouse owns this session, but live control currently requires reattaching on the host."
+      : "Longhouse owns this session, but browser control currently requires continuing from the host terminal."
     : unsupportedManagementDescription;
 
   const submitLabel =
@@ -83,7 +83,7 @@ export function getSessionInteractionCapabilities({
     mode === "managed_local"
       ? "Live control"
       : mode === "managed_local_unavailable"
-        ? "Reattach on host"
+        ? "Continue on host"
         : "Search only";
 
   const capabilityVariant =
@@ -95,7 +95,7 @@ export function getSessionInteractionCapabilities({
 
   const capabilityDescription =
     mode === "managed_local"
-      ? `Message this live ${providerLabel} session from Longhouse, or reattach on the host machine.`
+      ? `Message this live ${providerLabel} session from Longhouse.`
       : mode === "managed_local_unavailable"
         ? `This live ${providerLabel} session is visible here, but you need the host terminal to keep driving it.`
         : unsupportedCapabilityDescription;
@@ -111,7 +111,7 @@ export function getSessionInteractionCapabilities({
     mode === "managed_local"
       ? `Longhouse can send your next prompt into this live ${providerLabel} session on ${sourceOriginLabel}, and the results sync back into the timeline here.`
       : mode === "managed_local_unavailable"
-        ? `This managed live ${providerLabel} session is still visible here, but Longhouse cannot inject prompts right now. Reattach on the host machine to continue.`
+        ? `Longhouse can still see this live ${providerLabel} session, but browser control is offline. Continue from the host terminal.`
         : unsupportedDescription;
 
   const placeholder =
@@ -124,8 +124,8 @@ export function getSessionInteractionCapabilities({
   const notice =
     mode === "managed_local_unavailable"
         ? {
-            title: isManagedLocalCodex ? "Codex session needs host attach" : "Live session needs host attach",
-            body: `This live ${providerLabel} session is visible here, but Longhouse cannot reach its host control channel right now. Reattach on the host machine to continue.`,
+            title: "Browser control is offline",
+            body: `Longhouse can still see this live ${providerLabel} session, but it cannot send prompts from the browser right now. Continue from the host terminal.`,
           }
       : mode === "unsupported"
         ? {
