@@ -25,7 +25,6 @@ interface SessionContextPaneProps {
   isViewingHead: boolean;
   onOpenSession: (sessionId: string) => void;
   onOpenLatest: () => void;
-  onPrimaryAction?: () => void;
   continuationNotice?: {
     title: string;
     body: string;
@@ -51,7 +50,6 @@ export function SessionContextPane({
   isViewingHead,
   onOpenSession,
   onOpenLatest,
-  onPrimaryAction,
   continuationNotice = null,
   loopModePending = false,
   onLoopModeChange,
@@ -100,7 +98,7 @@ export function SessionContextPane({
   const shouldShowNotice =
     continuationNotice && !interaction.managedLaunchSuggestion;
   const showControlSection =
-    interaction.canChatFromBrowser ||
+    interaction.isManagedLocalSession ||
     attachCommand ||
     shouldShowNotice ||
     interaction.managedLaunchSuggestion;
@@ -167,16 +165,6 @@ export function SessionContextPane({
       {/* Zone 2 — Actions */}
       {showControlSection ? (
         <div className="session-pane-section session-pane-section--actions">
-          {interaction.canChatFromBrowser && onPrimaryAction ? (
-            <Button
-              type="button"
-              variant="primary"
-              size="sm"
-              onClick={onPrimaryAction}
-            >
-              Focus composer
-            </Button>
-          ) : null}
           {attachCommand ? (
             <details
               className="session-pane-disclosure"
