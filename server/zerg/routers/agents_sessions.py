@@ -1072,6 +1072,7 @@ async def get_session_events(
     query: Optional[str] = Query(None, description="Content search within session events"),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
     branch_mode: str = Query("head", description="Branch projection mode: head|all"),
+    anchor: str = Query("start", description="Page anchor: start|tail"),
     limit: int = Query(100, ge=1, le=1000, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     db: Session = Depends(get_db),
@@ -1099,6 +1100,11 @@ async def get_session_events(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="branch_mode must be one of: head, all",
         )
+    if anchor not in {"start", "tail"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="anchor must be one of: start, tail",
+        )
 
     events = store.get_session_events(
         session_id,
@@ -1109,6 +1115,7 @@ async def get_session_events(
         branch_mode=branch_mode,
         limit=limit,
         offset=offset,
+        load_from_end=anchor == "tail",
     )
     boundary = store.get_active_context_boundary(session_id, branch_mode=branch_mode)
     head_branch_id = store.get_head_branch_id(session_id)
