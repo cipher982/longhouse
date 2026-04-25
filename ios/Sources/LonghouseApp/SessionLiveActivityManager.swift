@@ -7,6 +7,8 @@ final class SessionLiveActivityManager: ObservableObject {
     @Published private(set) var isBusy = false
     @Published var errorMessage: String?
 
+    private var tokenObserverTasks: [String: Task<Void, Never>] = [:]
+
     var isWatching: Bool { watchedSessionId != nil }
 
     init() {
@@ -50,6 +52,8 @@ final class SessionLiveActivityManager: ObservableObject {
 
         do {
             for activity in Activity<SessionWatchAttributes>.activities where activity.attributes.sessionId != detail.id {
+                tokenObserverTasks[activity.id]?.cancel()
+                tokenObserverTasks[activity.id] = nil
                 await activity.end(nil, dismissalPolicy: .immediate)
             }
             let content = ActivityContent(
@@ -76,6 +80,8 @@ final class SessionLiveActivityManager: ObservableObject {
 
         let activities = Activity<SessionWatchAttributes>.activities.filter { $0.attributes.sessionId == sessionId }
         for activity in activities {
+            tokenObserverTasks[activity.id]?.cancel()
+            tokenObserverTasks[activity.id] = nil
             try? await markEnded(activityId: activity.id, appState: appState)
             await activity.end(nil, dismissalPolicy: .immediate)
         }
@@ -84,11 +90,14 @@ final class SessionLiveActivityManager: ObservableObject {
     }
 
     private func observePushTokenUpdates(for activity: Activity<SessionWatchAttributes>, appState: AppState) {
-        Task {
+        tokenObserverTasks[activity.id]?.cancel()
+        tokenObserverTasks[activity.id] = Task { [weak self] in
             for await tokenData in activity.pushTokenUpdates {
+                if Task.isCancelled { break }
                 let token = tokenData.map { String(format: "%02x", $0) }.joined()
-                try? await register(activity: activity, pushToken: token, appState: appState)
+                try? await self?.register(activity: activity, pushToken: token, appState: appState)
             }
+            self?.tokenObserverTasks[activity.id] = nil
         }
     }
 
