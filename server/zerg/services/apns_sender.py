@@ -589,7 +589,7 @@ async def send_session_live_activity_push(notification: LiveActivityPush) -> boo
         "authorization": f"bearer {provider_token}",
         "apns-topic": topic,
         "apns-push-type": "liveactivity",
-        "apns-priority": "5",
+        "apns-priority": "10" if notification.is_attention else "5",
         "apns-collapse-id": _collapse_id("lh-live", notification.activity_id),
         "apns-expiration": expiration,
     }

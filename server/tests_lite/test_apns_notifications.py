@@ -778,6 +778,16 @@ def test_presence_live_activity_pushes_session_state_and_debounces(tmp_path):
             )
         )
         db.add(
+            APNSLiveActivityRegistration(
+                owner_id=1,
+                session_id=session_id,
+                activity_id="activity-2",
+                push_token="b" * 64,
+                push_environment="sandbox",
+                app_build_id="0.1.0-dev+aaaa1111",
+            )
+        )
+        db.add(
             AgentSession(
                 id=session_id,
                 provider="codex",
@@ -827,23 +837,24 @@ def test_presence_live_activity_pushes_session_state_and_debounces(tmp_path):
                 )
                 assert response.status_code == 204, response.text
 
-    assert live_send_mock.await_count == 2
-    first_push = live_send_mock.await_args_list[0].args[0]
-    second_push = live_send_mock.await_args_list[1].args[0]
-    assert first_push.activity_id == "activity-1"
-    assert first_push.push_token == "a" * 64
-    assert first_push.presence_state == "thinking"
-    assert second_push.presence_state == "running"
-    assert second_push.display_phase == "Running bash"
-    payload = build_session_live_activity_payload(second_push)
+    assert live_send_mock.await_count == 4
+    pushes = [call.args[0] for call in live_send_mock.await_args_list]
+    first_pushes = [push for push in pushes if push.presence_state == "thinking"]
+    second_pushes = [push for push in pushes if push.presence_state == "running"]
+    assert len(first_pushes) == 2
+    assert len(second_pushes) == 2
+    assert {push.activity_id for push in first_pushes} == {"activity-1", "activity-2"}
+    assert {push.push_token for push in first_pushes} == {"a" * 64, "b" * 64}
+    assert all(push.display_phase == "Running bash" for push in second_pushes)
+    payload = build_session_live_activity_payload(second_pushes[0])
     assert payload["aps"]["event"] == "update"
     assert payload["aps"]["content-state"]["presenceState"] == "running"
     assert payload["aps"]["content-state"]["displayPhase"] == "Running bash"
     assert payload["aps"]["content-state"]["activeTool"] == "bash"
 
     with SessionLocal() as db:
-        row = db.query(APNSLiveActivityRegistration).one()
-        assert row.last_state_hash == second_push.state_hash
+        rows = db.query(APNSLiveActivityRegistration).all()
+        assert {row.last_state_hash for row in rows} == {push.state_hash for push in second_pushes}
 
     _cleanup_overrides()
     engine.dispose()

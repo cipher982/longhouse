@@ -278,13 +278,13 @@ async def upsert_presence(
             live_activity_accepted = False
         if not live_activity_accepted:
 
-            def _clear_live_activity_stamp(write_db: Session) -> bool:
+            def _clear_live_activity_stamp(write_db: Session, push=live_activity_push) -> bool:
                 return clear_live_activity_push_stamp(
                     write_db,
-                    registration_id=live_activity_push.registration_id,
-                    state_hash=live_activity_push.state_hash,
-                    previous_state_hash=live_activity_push.previous_state_hash,
-                    previous_push_at=live_activity_push.previous_push_at,
+                    registration_id=push.registration_id,
+                    state_hash=push.state_hash,
+                    previous_state_hash=push.previous_state_hash,
+                    previous_push_at=push.previous_push_at,
                 )
 
             await ws.execute_or_direct(_clear_live_activity_stamp, db, label="presence-live-activity-clear")
