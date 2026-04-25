@@ -1057,4 +1057,15 @@ mod tests {
 
         assert!(err.contains("--state-root only isolates bridge files"));
     }
+
+    #[test]
+    fn codex_bridge_explicit_roots_pass_through() {
+        let state = PathBuf::from("/tmp/state");
+        let home = PathBuf::from("/tmp/home");
+        let (state_root, longhouse_home) =
+            resolve_codex_bridge_start_roots(Some(state.clone()), Some(home.clone()), None).unwrap();
+
+        assert_eq!(state_root, Some(state));
+        assert_eq!(longhouse_home, Some(home));
+    }
 }

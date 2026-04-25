@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
+from zerg.provider_cli_contract import LEGACY_MANAGED_CODEX_LAUNCHER_MARKER
 from zerg.services.desktop_app import install_desktop_app_service
 from zerg.services.local_health import collect_launch_readiness
 from zerg.services.longhouse_paths import classify_longhouse_home
@@ -32,8 +33,6 @@ from zerg.services.shipper import install_service
 from zerg.services.shipper import load_token
 from zerg.services.shipper import sanitize_machine_name
 from zerg.services.shipper import save_token
-
-_LEGACY_MANAGED_CODEX_LAUNCHER_MARKER = "# longhouse-managed-codex-launcher"
 
 
 @dataclass(frozen=True)
@@ -159,7 +158,7 @@ def _service_targets_state_root(service_info: dict[str, object], state_root: Pat
 
 def _is_legacy_managed_codex_launcher(path: Path) -> bool:
     try:
-        return path.is_file() and _LEGACY_MANAGED_CODEX_LAUNCHER_MARKER in path.read_text(errors="ignore")
+        return path.is_file() and LEGACY_MANAGED_CODEX_LAUNCHER_MARKER in path.read_text(errors="ignore")
     except OSError:
         return False
 

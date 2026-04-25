@@ -94,12 +94,10 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
         typer.echo("Provider CLIs")
         for provider, raw_info in sorted(provider_clis.items()):
             info = dict(raw_info or {})
-            version = dict(info.get("version") or {})
             typer.echo(f"  {provider}: {info.get('path') or '-'}")
             typer.echo(f"    source: {info.get('source') or '-'}")
-            typer.echo(f"    version: {version.get('value') or '-'}")
-            if version.get("error"):
-                typer.echo(f"    version error: {version['error']}")
+            if info.get("resolution_error"):
+                typer.echo(f"    resolution error: {info['resolution_error']}")
 
     typer.echo("")
     typer.echo("Outbox")

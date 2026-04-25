@@ -14,7 +14,6 @@ import re
 import shlex
 import shutil
 import sqlite3
-import subprocess
 from collections.abc import Mapping
 from contextlib import contextmanager
 from datetime import datetime
@@ -25,6 +24,7 @@ from typing import Any
 
 from zerg.managed_phase_contract import display_label_for_phase
 from zerg.managed_phase_contract import is_known_raw_phase
+from zerg.provider_cli_contract import CODEX_BIN_ENV
 from zerg.services.longhouse_paths import get_agent_db_path
 from zerg.services.longhouse_paths import get_agent_log_dir
 from zerg.services.longhouse_paths import get_agent_outbox_dir
@@ -58,7 +58,6 @@ ACTIVITY_RECENCY_BANDS = [
 ]
 RECENT_TOUCH_LIMIT = 4
 BRIDGE_STATUS_DIR = "managed-local/codex-bridge"
-CODEX_BIN_ENV = "LONGHOUSE_CODEX_BIN"
 _PROCESS_SNAPSHOT: tuple[list[dict[str, Any]], list[dict[str, Any]]] | None = None
 
 
@@ -152,30 +151,6 @@ def _resolve_provider_cli_candidate(candidate: str | None) -> str | None:
     return shutil.which(normalized)
 
 
-def _provider_cli_version(path: str | None) -> dict[str, object]:
-    if not path:
-        return {"ok": False, "value": None, "error": "provider CLI not found"}
-    try:
-        completed = subprocess.run(
-            [path, "--version"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=1,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return {"ok": False, "value": None, "error": str(exc)}
-    output = ((completed.stdout or "").strip() or (completed.stderr or "").strip()).splitlines()
-    value = output[0].strip() if output else ""
-    if completed.returncode == 0 and value:
-        return {"ok": True, "value": value, "error": None}
-    return {
-        "ok": False,
-        "value": value or None,
-        "error": f"--version exited with code {completed.returncode}",
-    }
-
-
 def _provider_cli_reference(path: str | None, *, source: str) -> dict[str, str | None]:
     return {"path": _normalize_optional_string(path), "source": source}
 
@@ -184,15 +159,17 @@ def _collect_provider_clis() -> dict[str, Any]:
     env_candidate = _normalize_optional_string(os.environ.get(CODEX_BIN_ENV))
     if env_candidate:
         codex_path = _resolve_provider_cli_candidate(env_candidate)
-        codex_source = CODEX_BIN_ENV if codex_path else f"{CODEX_BIN_ENV}:missing"
+        codex_source = CODEX_BIN_ENV
+        codex_resolution_error = None if codex_path else f"{CODEX_BIN_ENV} did not resolve to an executable"
     else:
         codex_path = shutil.which("codex")
         codex_source = "PATH" if codex_path else "missing"
+        codex_resolution_error = None if codex_path else "`codex` not found on PATH"
     return {
         "codex": {
             "path": codex_path,
             "source": codex_source,
-            "version": _provider_cli_version(codex_path),
+            "resolution_error": codex_resolution_error,
             "env_override": env_candidate,
         }
     }
