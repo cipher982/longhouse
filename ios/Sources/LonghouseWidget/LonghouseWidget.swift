@@ -65,7 +65,7 @@ struct SessionProvider: TimelineProvider {
     func getTimeline(in context: Context, completion: @escaping @Sendable (Timeline<SessionEntry>) -> Void) {
         Task { @Sendable in
             let entry = await fetchSessions()
-            let nextUpdate = Calendar.current.date(byAdding: .minute, value: 5, to: .now)!
+            let nextUpdate = Calendar.current.date(byAdding: .minute, value: 2, to: .now)!
             completion(Timeline(entries: [entry], policy: .after(nextUpdate)))
         }
     }
@@ -111,8 +111,8 @@ struct SessionsWidget: Widget {
                     Color(.systemFill).opacity(0.6)
                 }
         }
-        .configurationDisplayName("Sessions")
-        .description("Sessions needing your attention")
+        .configurationDisplayName("Timeline")
+        .description("Most recent active sessions")
         .supportedFamilies([.systemSmall, .systemMedium])
     }
 }

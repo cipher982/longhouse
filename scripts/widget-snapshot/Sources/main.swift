@@ -8,10 +8,26 @@ struct SessionSummary: Identifiable {
     let id: String
     let title: String
     let presenceState: String
+    let status: String?
     let provider: String?
     let project: String?
     var isBlocked: Bool { presenceState == "blocked" }
-    var attentionLabel: String { isBlocked ? "Needs permission" : "Waiting on you" }
+    var isNeedsUser: Bool { presenceState == "needs_user" }
+    var isExecuting: Bool { presenceState == "thinking" || presenceState == "running" || status == "working" || status == "active" }
+    var isIdle: Bool { presenceState == "idle" || status == "idle" }
+    var displayPhaseLabel: String {
+        switch presenceState {
+        case "running": return "Running"
+        case "thinking": return "Thinking"
+        case "needs_user": return "Needs you"
+        case "blocked": return "Needs permission"
+        case "idle": return "Idle"
+        default:
+            if status == "completed" { return "Completed" }
+            if status == "working" || status == "active" { return "Recent progress" }
+            return "Recent"
+        }
+    }
 }
 
 struct WidgetSmallView: View {
@@ -28,8 +44,8 @@ struct WidgetSmallView: View {
             Spacer()
             Text("2")
                 .font(.system(size: 36, weight: .bold))
-                .foregroundStyle(.orange)
-            Text("sessions waiting")
+                .foregroundStyle(.blue)
+            Text("active sessions")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             Spacer()
@@ -56,9 +72,9 @@ struct WidgetMediumView: View {
                 }
                 .foregroundStyle(.secondary)
                 Spacer()
-                Text("2 waiting")
+                Text("2 active")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(.blue)
             }
             .padding(.bottom, 8)
 
@@ -66,7 +82,7 @@ struct WidgetMediumView: View {
                 ForEach(sessions) { session in
                     HStack(spacing: 8) {
                         Circle()
-                            .fill(session.isBlocked ? .red : .orange)
+                            .fill(widgetRuntimeColor(session))
                             .frame(width: 6, height: 6)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(session.title)
@@ -78,9 +94,9 @@ struct WidgetMediumView: View {
                                         .font(.system(size: 10))
                                         .foregroundStyle(.secondary)
                                 }
-                                Text(session.attentionLabel)
+                                Text(session.displayPhaseLabel)
                                     .font(.system(size: 10))
-                                    .foregroundStyle(session.isBlocked ? .red.opacity(0.8) : .orange.opacity(0.8))
+                                    .foregroundStyle(widgetRuntimeColor(session).opacity(0.85))
                             }
                         }
                         Spacer()
@@ -96,11 +112,21 @@ struct WidgetMediumView: View {
     }
 }
 
+private func widgetRuntimeColor(_ session: SessionSummary) -> Color {
+    if session.isBlocked { return .orange }
+    if session.isNeedsUser { return .yellow }
+    if session.presenceState == "running" { return .green }
+    if session.presenceState == "thinking" { return .orange }
+    if session.isExecuting { return .orange }
+    if session.isIdle || session.status == "completed" { return .secondary }
+    return .blue
+}
+
 let outputDir = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "/tmp"
 
 let sessions = [
-    SessionSummary(id: "1", title: "Fixing auth flow in login", presenceState: "needs_user", provider: "claude", project: "longhouse"),
-    SessionSummary(id: "2", title: "Deploy pipeline stuck", presenceState: "blocked", provider: "claude", project: "zerg"),
+    SessionSummary(id: "1", title: "Debugging Codex Launch Path Bug", presenceState: "thinking", status: "working", provider: "codex", project: "zerg"),
+    SessionSummary(id: "2", title: "Simple Arithmetic Calculation", presenceState: "idle", status: "completed", provider: "gemini", project: "gemini"),
 ]
 
 @MainActor

@@ -36,14 +36,14 @@ private struct LoadingScreen: View {
 
 private struct AuthenticatedPager: View {
     @EnvironmentObject var appState: AppState
-    @State private var selectedTab: PagerTab = .inbox
+    @State private var selectedTab: PagerTab = .timeline
 
     var body: some View {
         TabView(selection: $selectedTab) {
-            InboxView()
-                .tag(PagerTab.inbox)
+            TimelineView()
+                .tag(PagerTab.timeline)
                 .tabItem {
-                    Label("Inbox", systemImage: "tray.full")
+                    Label("Timeline", systemImage: "rectangle.stack")
                 }
             SettingsView()
                 .tag(PagerTab.settings)
@@ -52,13 +52,13 @@ private struct AuthenticatedPager: View {
                 }
         }
         .onReceive(NotificationCenter.default.publisher(for: .longhouseOpenSessionFromPush)) { _ in
-            selectedTab = .inbox
+            selectedTab = .timeline
         }
     }
 }
 
 private enum PagerTab {
-    case inbox
+    case timeline
     case settings
 }
 
