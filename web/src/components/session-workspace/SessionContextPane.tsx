@@ -65,10 +65,7 @@ export function SessionContextPane({
   const attachCommand = interaction.hostReattachAvailable
     ? sessionControl?.attach_command?.trim() || null
     : null;
-  const showAttachRecovery =
-    Boolean(attachCommand) && !interaction.liveControlAvailable;
-  const showAttachDebug =
-    Boolean(attachCommand) && interaction.liveControlAvailable;
+  const showAttachDebug = Boolean(attachCommand);
   const attachRunnerLabel =
     sessionControl?.source_runner_name?.trim() ||
     homeLabel ||
@@ -81,13 +78,11 @@ export function SessionContextPane({
       : interaction.liveControlAvailable
         ? "Review posture only."
         : "Stored here. Applies when Longhouse regains control.";
-  const attachRecoveryCopy = `Longhouse can still see this session here, but browser control is unavailable. Run this on ${attachRunnerLabel} to continue from the terminal.`;
-  const attachDebugCopy = `Optional recovery command. Run this on ${attachRunnerLabel} to open a terminal UI for this existing managed ${interaction.providerLabel} session.`;
+  const attachDebugCopy = `Run this on ${attachRunnerLabel} to open this existing managed ${interaction.providerLabel} session in a terminal UI. This does not restart the session.`;
   const shouldShowNotice =
     continuationNotice && !interaction.managedLaunchSuggestion;
   const showControlSection =
     interaction.isManagedLocalSession ||
-    showAttachRecovery ||
     shouldShowNotice ||
     interaction.managedLaunchSuggestion;
 
@@ -153,32 +148,6 @@ export function SessionContextPane({
       {/* Zone 2 — Actions */}
       {showControlSection ? (
         <div className="session-pane-section session-pane-section--actions">
-          {showAttachRecovery ? (
-            <details
-              className="session-pane-disclosure"
-              data-testid="session-attach-callout"
-            >
-              <summary className="session-pane-disclosure__summary">
-                <span className="session-pane-disclosure__title">
-                  Continue from host terminal
-                </span>
-                <span className="session-pane-disclosure__meta">
-                  {attachRunnerLabel}
-                </span>
-              </summary>
-              <div className="session-pane-disclosure__body">
-                <div className="session-pane-disclosure__copy">
-                  {attachRecoveryCopy}
-                </div>
-                <pre
-                  className="inspector-code-block"
-                  data-testid="session-attach-command"
-                >
-                  <code>{attachCommand}</code>
-                </pre>
-              </div>
-            </details>
-          ) : null}
           {interaction.managedLaunchSuggestion ? (
             <ManagedLaunchHintCard
               suggestion={interaction.managedLaunchSuggestion}
@@ -226,7 +195,7 @@ export function SessionContextPane({
           <summary className="session-pane-disclosure__summary">
             <span className="session-pane-disclosure__title">Debug</span>
             <span className="session-pane-disclosure__meta">
-              Terminal attach
+              Open in terminal command
             </span>
           </summary>
           <div className="session-pane-disclosure__body">

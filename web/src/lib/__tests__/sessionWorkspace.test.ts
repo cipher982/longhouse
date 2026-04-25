@@ -189,8 +189,8 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.canChatFromBrowser).toBe(false);
     expect(capabilities.managementLabel).toBe("Managed");
     expect(capabilities.managedLaunchSuggestion).toBeNull();
-    expect(capabilities.capabilityLabel).toBe("Continue on host");
-    expect(capabilities.composerDisabledReason).toMatch(/host terminal/i);
+    expect(capabilities.capabilityLabel).toBe("Browser control offline");
+    expect(capabilities.composerDisabledReason).toMatch(/cannot send prompts/i);
     expect(capabilities.primaryActionLabel).toBe("Unavailable");
     expect(capabilities.notice?.title).toBe("Browser control is offline");
   });
@@ -216,7 +216,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.canChatFromBrowser).toBe(false);
     expect(capabilities.managementLabel).toBe("Managed");
     expect(capabilities.managedLaunchSuggestion).toBeNull();
-    expect(capabilities.capabilityLabel).toBe("Continue on host");
+    expect(capabilities.capabilityLabel).toBe("Browser control offline");
   });
 
   it("treats a synced Claude transcript as search-only", () => {
