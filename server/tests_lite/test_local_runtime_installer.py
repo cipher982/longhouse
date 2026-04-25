@@ -82,6 +82,66 @@ def test_install_local_runtime_does_not_create_global_mcp_configs(tmp_path, monk
     assert not (home / ".codex" / "config.toml").exists()
 
 
+def test_install_local_runtime_removes_legacy_managed_codex_runtime(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    claude_dir = home / ".claude"
+    launcher = home / ".local" / "bin" / "longhouse-codex"
+    launcher.parent.mkdir(parents=True, exist_ok=True)
+    launcher.write_text("#!/bin/sh\n# longhouse-managed-codex-launcher\n")
+    launcher.chmod(0o755)
+    runtime_payload = home / ".longhouse" / "runtimes" / "codex" / "current" / "codex"
+    runtime_payload.parent.mkdir(parents=True, exist_ok=True)
+    runtime_payload.write_text("old codex")
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(
+        installer,
+        "write_machine_state",
+        lambda **kwargs: _stub_machine_state(**kwargs),
+    )
+    monkeypatch.setattr(installer, "save_token", lambda token, config_dir: None)
+    monkeypatch.setattr(installer, "sanitize_machine_name", lambda machine_name: machine_name)
+    monkeypatch.setattr(
+        installer,
+        "ensure_runtime_binary",
+        lambda component, **_kwargs: SimpleNamespace(path="/tmp/longhouse-engine", installed_now=False),
+    )
+    monkeypatch.setattr(
+        installer,
+        "install_service",
+        lambda **kwargs: {"message": "ok", "service": "launchd", "plist_path": "/tmp/test.plist"},
+    )
+    monkeypatch.setattr(installer, "install_hooks", lambda **kwargs: ["hooks installed"])
+
+    installer.install_local_runtime(
+        url="https://example.com",
+        token=None,
+        claude_dir=str(claude_dir),
+        machine_name="test-box",
+        menubar=False,
+    )
+
+    assert not launcher.exists()
+    assert not (home / ".longhouse" / "runtimes" / "codex").exists()
+
+
+def test_legacy_managed_codex_cleanup_preserves_unmarked_launcher(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    launcher = home / ".local" / "bin" / "longhouse-codex"
+    launcher.parent.mkdir(parents=True, exist_ok=True)
+    launcher.write_text("#!/bin/sh\necho user-owned\n")
+    runtime_dir = home / ".longhouse" / "runtimes" / "codex"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setenv("HOME", str(home))
+
+    installer._cleanup_legacy_managed_codex_runtime(home / ".longhouse")
+
+    assert launcher.exists()
+    assert launcher.read_text() == "#!/bin/sh\necho user-owned\n"
+    assert not runtime_dir.exists()
+
+
 def test_install_local_runtime_installs_desktop_app_when_requested(tmp_path, monkeypatch):
     home = tmp_path / "home"
     claude_dir = home / ".claude"
