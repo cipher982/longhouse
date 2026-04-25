@@ -304,7 +304,7 @@ describe("SessionDetailPage", () => {
       "Debug",
     );
     expect(screen.getByTestId("session-debug-attach")).toHaveTextContent(
-      "Terminal attach",
+      "Open in terminal command",
     );
     expect(screen.getByTestId("session-debug-attach-command")).toHaveTextContent(
       "codex-bridge attach --session-id session-codex",
@@ -337,7 +337,7 @@ describe("SessionDetailPage", () => {
     expect(screen.getByText("output")).toBeInTheDocument();
   });
 
-  it("shows the host terminal attach command as recovery when browser control is unavailable", () => {
+  it("keeps terminal attach in debug when browser control is unavailable", () => {
     const session = makeSession({
       ended_at: null,
       status: "working",
@@ -375,24 +375,24 @@ describe("SessionDetailPage", () => {
 
     renderSessionDetailPage();
 
-    expect(screen.getByTestId("session-attach-callout")).toHaveTextContent(
-      "Continue from host terminal",
+    expect(
+      screen.queryByTestId("session-attach-callout"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("session-debug-attach")).toHaveTextContent(
+      "Debug",
     );
-    expect(screen.getByTestId("session-attach-callout")).toHaveTextContent(
-      "browser control is unavailable",
+    expect(screen.getByTestId("session-debug-attach")).toHaveTextContent(
+      "Open in terminal command",
     );
-    expect(screen.getByTestId("session-attach-command")).toHaveTextContent(
+    expect(screen.getByTestId("session-debug-attach-command")).toHaveTextContent(
       "codex-bridge attach --session-id session-codex",
     );
-    expect(
-      screen.queryByTestId("session-debug-attach"),
-    ).not.toBeInTheDocument();
     expect(
       screen.getByTestId("session-continuation-unavailable"),
     ).toHaveTextContent("Browser control is offline");
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
       "data-disabled-reason",
-      "Longhouse can still see this live Codex session, but it cannot send prompts from the browser right now. Continue from the host terminal.",
+      "Longhouse can still see this live Codex session, but it cannot send prompts from the browser right now.",
     );
   });
 

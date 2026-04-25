@@ -71,7 +71,7 @@ export function getSessionInteractionCapabilities({
   const managementDescription = isManagedLocalSession
     ? liveControlAvailable
       ? "Longhouse owns the live control path for this session."
-      : "Longhouse owns this session, but browser control currently requires continuing from the host terminal."
+      : "Longhouse owns this session, but browser control is currently offline."
     : unsupportedManagementDescription;
 
   const submitLabel =
@@ -83,7 +83,7 @@ export function getSessionInteractionCapabilities({
     mode === "managed_local"
       ? "Live control"
       : mode === "managed_local_unavailable"
-        ? "Continue on host"
+        ? "Browser control offline"
         : "Search only";
 
   const capabilityVariant =
@@ -97,21 +97,21 @@ export function getSessionInteractionCapabilities({
     mode === "managed_local"
       ? `Message this live ${providerLabel} session from Longhouse.`
       : mode === "managed_local_unavailable"
-        ? `This live ${providerLabel} session is visible here, but you need the host terminal to keep driving it.`
+        ? `This live ${providerLabel} session is visible here, but the browser cannot send prompts right now.`
         : unsupportedCapabilityDescription;
 
   const title =
     mode === "managed_local"
       ? "Continue this session"
       : mode === "managed_local_unavailable"
-        ? "Continue this session on the host"
+        ? "Browser control is offline"
         : "Search and inspect this session";
 
   const description =
     mode === "managed_local"
       ? `Longhouse can send your next prompt into this live ${providerLabel} session on ${sourceOriginLabel}, and the results sync back into the timeline here.`
       : mode === "managed_local_unavailable"
-        ? `Longhouse can still see this live ${providerLabel} session, but browser control is offline. Continue from the host terminal.`
+        ? `Longhouse can still see this live ${providerLabel} session, but it cannot send prompts from the browser right now.`
         : unsupportedDescription;
 
   const placeholder =
@@ -125,7 +125,7 @@ export function getSessionInteractionCapabilities({
     mode === "managed_local_unavailable"
         ? {
             title: "Browser control is offline",
-            body: `Longhouse can still see this live ${providerLabel} session, but it cannot send prompts from the browser right now. Continue from the host terminal.`,
+            body: `Longhouse can still see this live ${providerLabel} session, but it cannot send prompts from the browser right now.`,
           }
       : mode === "unsupported"
         ? {
