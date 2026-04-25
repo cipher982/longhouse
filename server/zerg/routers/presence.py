@@ -160,6 +160,7 @@ async def upsert_presence(
             previous_state=previous_presence_state,
             current_state=canonical_presence_state,
             occurred_at=_now,
+            current_tool_name=runtime_tool_name,
         )
         return canonical_presence_state, attention_push
 
