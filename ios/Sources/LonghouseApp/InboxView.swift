@@ -323,6 +323,7 @@ final class TimelineViewModel: ObservableObject {
             let attentionIds = Set(attention.map(\.id))
             self.attention = attention
             self.recent = sessions.filter { !attentionIds.contains($0.id) }
+            WidgetSessionSnapshotStore.save(sessions: sessions)
             PushNotificationStore.removeResolvedAttentionNotifications(activeSessionIDs: attentionIds)
             self.lastUpdatedAt = Date()
             self.errorMessage = nil

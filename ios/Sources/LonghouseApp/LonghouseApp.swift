@@ -329,6 +329,7 @@ final class AppState: ObservableObject {
     private func clearLocalSession() async {
         SharedAuthStore.clearManagedCookies(for: serverURL)
         SharedAuthStore.removeSharedCookieStorage(for: serverURL)
+        WidgetSessionSnapshotStore.clear()
         KeychainHelper.deleteAuthToken()
         isAuthenticated = false
     }

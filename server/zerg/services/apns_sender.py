@@ -64,6 +64,16 @@ class SessionAttentionPush:
     targets: tuple[APNSDeviceTarget, ...]
 
 
+@dataclass(frozen=True)
+class SessionAttentionResolutionPush:
+    session_id: str
+    previous_state: Literal["needs_user", "blocked"]
+    current_state: str
+    occurred_at: datetime
+    collapse_id: str
+    targets: tuple[APNSDeviceTarget, ...]
+
+
 def user_apns_enabled(user: User | None) -> bool:
     if user is None:
         return False
@@ -131,33 +141,8 @@ def prepare_session_attention_push(
     ):
         return None
 
-    try:
-        user = db.query(User).filter(User.id == owner_id).first()
-    except OperationalError as exc:
-        if _is_missing_optional_table(exc):
-            logger.debug("Skipping APNs attention push; users table is unavailable", exc_info=exc)
-            return None
-        raise
-    if not user_apns_enabled(user):
-        return None
-
-    try:
-        registrations = (
-            db.query(APNSDeviceRegistration)
-            .filter(
-                APNSDeviceRegistration.owner_id == owner_id,
-                APNSDeviceRegistration.platform == "ios",
-                APNSDeviceRegistration.revoked_at.is_(None),
-            )
-            .order_by(APNSDeviceRegistration.last_seen_at.desc(), APNSDeviceRegistration.created_at.desc())
-            .all()
-        )
-    except OperationalError as exc:
-        if _is_missing_optional_table(exc):
-            logger.debug("Skipping APNs attention push; registration table is unavailable", exc_info=exc)
-            return None
-        raise
-    if not registrations:
+    targets = _active_ios_targets_for_owner(db, owner_id=owner_id, log_context="attention push")
+    if not targets:
         return None
 
     session.last_attention_push_at = occurred_at
@@ -171,16 +156,6 @@ def prepare_session_attention_push(
     alert_title = _attention_alert_title(state=current_state, provider=provider)
     alert_body = _attention_alert_body(state=current_state, project=project, title=title, tool_name=tool_name)
 
-    targets = tuple(
-        APNSDeviceTarget(
-            device_token=registration.device_token,
-            push_environment="production" if registration.push_environment == "production" else "sandbox",
-        )
-        for registration in registrations
-    )
-    if not targets:
-        return None
-
     return SessionAttentionPush(
         session_id=str(session.id),
         state=current_state,
@@ -193,6 +168,36 @@ def prepare_session_attention_push(
         alert_title=alert_title,
         alert_body=alert_body,
         collapse_id=_attention_collapse_id(str(session.id)),
+        targets=targets,
+    )
+
+
+def prepare_session_attention_resolution_push(
+    db: Session,
+    *,
+    owner_id: int | None,
+    session_id,
+    previous_state: str | None,
+    current_state: str | None,
+    occurred_at: datetime,
+) -> SessionAttentionResolutionPush | None:
+    if owner_id is None or session_id is None or previous_state not in ATTENTION_PUSH_STATES or current_state in ATTENTION_PUSH_STATES:
+        return None
+
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    if session is None:
+        return None
+
+    targets = _active_ios_targets_for_owner(db, owner_id=owner_id, log_context="attention resolution push")
+    if not targets:
+        return None
+
+    return SessionAttentionResolutionPush(
+        session_id=str(session.id),
+        previous_state=previous_state,
+        current_state=str(current_state or "unknown"),
+        occurred_at=occurred_at,
+        collapse_id=_collapse_id("lh-attn-resolved", str(session.id)),
         targets=targets,
     )
 
@@ -238,6 +243,47 @@ async def send_session_attention_push(notification: SessionAttentionPush) -> boo
     return accepted
 
 
+async def send_session_attention_resolution_push(notification: SessionAttentionResolutionPush) -> bool:
+    settings = get_settings()
+    if settings.testing or not settings.apns_enabled:
+        return False
+
+    provider_token = _provider_token()
+    topic = str(settings.apns_topic or "ai.longhouse.ios").strip() or "ai.longhouse.ios"
+    payload = build_session_attention_resolution_payload(notification)
+    expiration = str(int((datetime.now(timezone.utc) + timedelta(minutes=30)).timestamp()))
+    accepted = False
+
+    async with httpx.AsyncClient(http2=True, timeout=10.0) as client:
+        for target in notification.targets:
+            host = _apns_host(target.push_environment)
+            headers = {
+                "authorization": f"bearer {provider_token}",
+                "apns-topic": topic,
+                "apns-push-type": "background",
+                "apns-priority": "5",
+                "apns-collapse-id": notification.collapse_id,
+                "apns-expiration": expiration,
+            }
+            url = f"https://{host}/3/device/{target.device_token}"
+            try:
+                response = await client.post(url, headers=headers, json=payload)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("APNs resolution push failed for session %s: %s", notification.session_id, exc)
+                continue
+            if response.status_code >= 300:
+                logger.warning(
+                    "APNs rejected resolution push for session %s (%s): %s %s",
+                    notification.session_id,
+                    target.push_environment,
+                    response.status_code,
+                    response.text,
+                )
+            else:
+                accepted = True
+    return accepted
+
+
 def build_session_attention_payload(notification: SessionAttentionPush) -> dict:
     return {
         "aps": {
@@ -258,6 +304,62 @@ def build_session_attention_payload(notification: SessionAttentionPush) -> dict:
         "provider": notification.provider,
         "tool_name": notification.tool_name,
     }
+
+
+def build_session_attention_resolution_payload(notification: SessionAttentionResolutionPush) -> dict:
+    return {
+        "aps": {
+            "content-available": 1,
+        },
+        "event": "attention_resolved",
+        "session_id": notification.session_id,
+        "state": notification.current_state,
+        "attention_state": "resolved",
+        "previous_attention_state": notification.previous_state,
+    }
+
+
+def _active_ios_targets_for_owner(
+    db: Session,
+    *,
+    owner_id: int,
+    log_context: str,
+) -> tuple[APNSDeviceTarget, ...] | None:
+    try:
+        user = db.query(User).filter(User.id == owner_id).first()
+    except OperationalError as exc:
+        if _is_missing_optional_table(exc):
+            logger.debug("Skipping APNs %s; users table is unavailable", log_context, exc_info=exc)
+            return None
+        raise
+    if not user_apns_enabled(user):
+        return None
+
+    try:
+        registrations = (
+            db.query(APNSDeviceRegistration)
+            .filter(
+                APNSDeviceRegistration.owner_id == owner_id,
+                APNSDeviceRegistration.platform == "ios",
+                APNSDeviceRegistration.revoked_at.is_(None),
+            )
+            .order_by(APNSDeviceRegistration.last_seen_at.desc(), APNSDeviceRegistration.created_at.desc())
+            .all()
+        )
+    except OperationalError as exc:
+        if _is_missing_optional_table(exc):
+            logger.debug("Skipping APNs %s; registration table is unavailable", log_context, exc_info=exc)
+            return None
+        raise
+
+    targets = tuple(
+        APNSDeviceTarget(
+            device_token=registration.device_token,
+            push_environment="production" if registration.push_environment == "production" else "sandbox",
+        )
+        for registration in registrations
+    )
+    return targets or None
 
 
 def _session_title(session: AgentSession) -> str:
@@ -303,11 +405,15 @@ def _provider_display_name(provider: str) -> str:
 
 
 def _attention_collapse_id(session_id: str) -> str:
-    candidate = f"lh-attn-{session_id}"
+    return _collapse_id("lh-attn", session_id)
+
+
+def _collapse_id(prefix: str, identifier: str) -> str:
+    candidate = f"{prefix}-{identifier}"
     if len(candidate.encode("utf-8")) <= 64:
         return candidate
-    digest = sha256(session_id.encode("utf-8")).hexdigest()[:32]
-    return f"lh-attn-{digest}"
+    digest = sha256(identifier.encode("utf-8")).hexdigest()[:32]
+    return f"{prefix}-{digest}"
 
 
 def _trim_alert_text(value: str, limit: int = 180) -> str:

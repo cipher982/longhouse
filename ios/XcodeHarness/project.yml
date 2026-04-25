@@ -76,6 +76,8 @@ targets:
       path: Info.plist
       properties:
         GIDClientID: 658453123272-8d0plghk6gbsgamhp66rn8gi2vbc65i2.apps.googleusercontent.com
+        UIBackgroundModes:
+          - remote-notification
         CFBundleURLTypes:
           - CFBundleURLSchemes:
               - com.googleusercontent.apps.658453123272-8d0plghk6gbsgamhp66rn8gi2vbc65i2

@@ -102,6 +102,26 @@ enum PushNotificationStore {
         }
     }
 
+    static func removeDeliveredAttentionNotifications(sessionIDs: Set<String>) {
+        guard !sessionIDs.isEmpty else { return }
+        let center = UNUserNotificationCenter.current()
+        center.getDeliveredNotifications { delivered in
+            let identifiers = delivered.compactMap { notification -> String? in
+                let content = notification.request.content
+                let userInfo = content.userInfo
+                let isAttentionAlert = content.categoryIdentifier == LonghouseNotificationCategory.sessionAttention
+                    || userInfo["attention_state"] != nil
+                guard isAttentionAlert, let sessionID = userInfo["session_id"] as? String else {
+                    return nil
+                }
+                return sessionIDs.contains(sessionID) ? notification.request.identifier : nil
+            }
+            if !identifiers.isEmpty {
+                center.removeDeliveredNotifications(withIdentifiers: identifiers)
+            }
+        }
+    }
+
     @MainActor
     static func ensureAuthorizedAndRegister() async -> Bool {
         let center = UNUserNotificationCenter.current()
@@ -151,6 +171,17 @@ final class LonghousePushAppDelegate: NSObject, UIApplicationDelegate, UNUserNot
         NSLog("Longhouse APNs registration failed: %@", error.localizedDescription)
     }
 
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        Task {
+            let result = await Self.handleBackgroundPushPayload(userInfo)
+            completionHandler(result)
+        }
+    }
+
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
@@ -176,6 +207,39 @@ final class LonghousePushAppDelegate: NSObject, UIApplicationDelegate, UNUserNot
         if let sessionID = userInfo["session_id"] as? String, !sessionID.isEmpty {
             PushNotificationStore.reloadWidgetTimelines()
             PushNotificationStore.storePendingSessionID(sessionID)
+        }
+    }
+
+    private nonisolated static func handleBackgroundPushPayload(_ userInfo: [AnyHashable: Any]) async -> UIBackgroundFetchResult {
+        let event = userInfo["event"] as? String
+        let attentionState = userInfo["attention_state"] as? String
+        guard event == "attention_resolved" || attentionState == "resolved" else {
+            return .noData
+        }
+
+        let resolvedSessionID = (userInfo["session_id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let serverURL = SharedAuthStore.loadServerURL(), let api = LonghouseAPI(host: serverURL) else {
+            if let resolvedSessionID, !resolvedSessionID.isEmpty {
+                PushNotificationStore.removeDeliveredAttentionNotifications(sessionIDs: [resolvedSessionID])
+            }
+            PushNotificationStore.reloadWidgetTimelines()
+            return .noData
+        }
+
+        do {
+            let sessions = try await api.recentSessions(limit: 40)
+            let attentionIds = Set(sessions.filter(\.needsAttention).map(\.id))
+            WidgetSessionSnapshotStore.save(sessions: sessions)
+            PushNotificationStore.removeResolvedAttentionNotifications(activeSessionIDs: attentionIds)
+            PushNotificationStore.reloadWidgetTimelines()
+            return .newData
+        } catch {
+            if let resolvedSessionID, !resolvedSessionID.isEmpty {
+                PushNotificationStore.removeDeliveredAttentionNotifications(sessionIDs: [resolvedSessionID])
+                PushNotificationStore.reloadWidgetTimelines()
+                return .noData
+            }
+            return .failed
         }
     }
 }
