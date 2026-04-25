@@ -25,20 +25,20 @@ from zerg.cli._common import ensure_managed_launch_preflight as _ensure_managed_
 from zerg.cli._common import interactive_stdio as _interactive_stdio
 from zerg.cli._common import load_api_credentials as _load_api_credentials
 from zerg.cli._common import open_session_url as _open_session_url
+from zerg.provider_cli_contract import CODEX_BIN_ENV
+from zerg.provider_cli_contract import LEGACY_MANAGED_CODEX_LAUNCHER_MARKER
 from zerg.services.session_continuity import get_machine_name_label
 from zerg.services.shipper.service import get_engine_executable
 from zerg.session_loop_mode import SessionLoopMode
 
 app = typer.Typer(
     name="codex",
-    help="Launch and inspect managed Longhouse Codex sessions.",
+    help="Launch a managed Longhouse Codex session by default; subcommands inspect bridge state.",
     invoke_without_command=True,
     no_args_is_help=False,
 )
 
-_CODEX_BIN_ENV = "LONGHOUSE_CODEX_BIN"
 _CODEX_DISABLE_UPDATE_CHECK_CONFIG = "check_for_update_on_startup=false"
-_LEGACY_MANAGED_CODEX_LAUNCHER_MARKER = "# longhouse-managed-codex-launcher"
 _ROLLOUT_TURN_EVENT_TYPES = {"task_started", "task_complete", "turn_aborted"}
 _ROLLOUT_TERMINAL_EVENT_TYPES = {"task_complete", "turn_aborted"}
 _ROLLOUT_TAIL_LINES = 256
@@ -68,9 +68,9 @@ def _resolve_codex_binary_with_source(explicit: str | None = None) -> dict[str, 
     normalized = str(explicit or "").strip()
     if normalized:
         return {"path": _resolve_explicit_codex_binary(normalized, source="--codex-bin"), "source": "--codex-bin"}
-    env_candidate = str(os.environ.get(_CODEX_BIN_ENV) or "").strip()
+    env_candidate = str(os.environ.get(CODEX_BIN_ENV) or "").strip()
     if env_candidate:
-        return {"path": _resolve_explicit_codex_binary(env_candidate, source=_CODEX_BIN_ENV), "source": _CODEX_BIN_ENV}
+        return {"path": _resolve_explicit_codex_binary(env_candidate, source=CODEX_BIN_ENV), "source": CODEX_BIN_ENV}
     resolved = shutil.which("codex")
     return {"path": resolved, "source": "PATH" if resolved else "missing"}
 
@@ -141,7 +141,7 @@ def _lock_file_held(lock_path: Path) -> bool | None:
         return None
 
 
-def _read_codex_bridge_states(state_root: Path) -> list[dict[str, object]]:
+def _read_codex_bridge_states(state_root: Path, *, check_readyz: bool = False) -> list[dict[str, object]]:
     if not state_root.exists():
         return []
     states: list[dict[str, object]] = []
@@ -169,7 +169,7 @@ def _read_codex_bridge_states(state_root: Path) -> list[dict[str, object]]:
                 "lock_held": _lock_file_held(lock_path),
                 "codex_bin": str(state.get("codex_bin") or ""),
                 "ws_url": ws_url,
-                "readyz_healthy": _bridge_readyz_healthy(ws_url) if ws_url else None,
+                "readyz_healthy": _bridge_readyz_healthy(ws_url) if check_readyz and ws_url else None,
                 "thread_id": str(state.get("thread_id") or ""),
                 "thread_path": str(state.get("thread_path") or ""),
                 "last_turn_status": str(state.get("last_turn_status") or ""),
@@ -180,20 +180,20 @@ def _read_codex_bridge_states(state_root: Path) -> list[dict[str, object]]:
     return states
 
 
-def _collect_codex_doctor(*, codex_bin: str | None, state_root: Path | None) -> dict[str, object]:
+def _collect_codex_doctor(*, codex_bin: str | None, state_root: Path | None, check_readyz: bool = False) -> dict[str, object]:
     resolution = _resolve_codex_binary_with_source(codex_bin)
     resolved_codex_bin = resolution["path"]
     home = Path.home()
     legacy_launcher = home / ".local" / "bin" / "longhouse-codex"
     legacy_runtime_dir = home / ".longhouse" / "runtimes" / "codex"
     resolved_state_root = state_root or _default_codex_bridge_state_root()
-    bridge_states = _read_codex_bridge_states(resolved_state_root)
+    bridge_states = _read_codex_bridge_states(resolved_state_root, check_readyz=check_readyz)
     return {
         "codex_binary": {
             "path": resolved_codex_bin,
             "source": resolution["source"],
             "version": _codex_version(resolved_codex_bin),
-            "env_override": os.environ.get(_CODEX_BIN_ENV),
+            "env_override": os.environ.get(CODEX_BIN_ENV),
         },
         "legacy_artifacts": {
             "launcher": {
@@ -209,6 +209,7 @@ def _collect_codex_doctor(*, codex_bin: str | None, state_root: Path | None) -> 
         "bridge": {
             "state_root": str(resolved_state_root),
             "state_root_exists": resolved_state_root.exists(),
+            "readyz_checked": check_readyz,
             "sessions": bridge_states,
         },
     }
@@ -216,7 +217,7 @@ def _collect_codex_doctor(*, codex_bin: str | None, state_root: Path | None) -> 
 
 def _legacy_codex_launcher_has_marker(path: Path) -> bool:
     try:
-        return path.is_file() and _LEGACY_MANAGED_CODEX_LAUNCHER_MARKER in path.read_text(errors="ignore")
+        return path.is_file() and LEGACY_MANAGED_CODEX_LAUNCHER_MARKER in path.read_text(errors="ignore")
     except OSError:
         return False
 
@@ -234,7 +235,7 @@ def _render_codex_doctor(payload: dict[str, object], *, json_output: bool) -> No
     typer.echo(f"  version: {version.get('value') or '-'}")
     if version.get("error"):
         typer.echo(f"  version error: {version['error']}")
-    typer.echo(f"  {_CODEX_BIN_ENV}: {binary.get('env_override') or '-'}")
+    typer.echo(f"  {CODEX_BIN_ENV}: {binary.get('env_override') or '-'}")
 
     artifacts = dict(payload["legacy_artifacts"])
     launcher = dict(artifacts["launcher"])
@@ -251,6 +252,7 @@ def _render_codex_doctor(payload: dict[str, object], *, json_output: bool) -> No
     typer.echo("")
     typer.echo("Bridge")
     typer.echo(f"  state root: {bridge.get('state_root')}")
+    typer.echo(f"  readyz checked: {'yes' if bridge.get('readyz_checked') else 'no'}")
     typer.echo(f"  state files: {len(sessions)}")
     for session in sessions:
         state = dict(session)
@@ -565,7 +567,7 @@ def codex(
     codex_bin: str | None = typer.Option(
         None,
         "--codex-bin",
-        help=("Debug override for the Codex executable used by managed sessions " f"(defaults to {_CODEX_BIN_ENV}, then `codex` on PATH)."),
+        help=("Debug override for the Codex executable used by managed sessions " f"(defaults to {CODEX_BIN_ENV}, then `codex` on PATH)."),
     ),
     bypass_approvals: bool = typer.Option(
         False,
@@ -589,7 +591,7 @@ def codex(
     if not resolved_codex_bin:
         typer.secho(
             "Codex executable not found. Install the OpenAI Codex CLI so `codex` is on PATH, "
-            f"or set {_CODEX_BIN_ENV} / --codex-bin explicitly for debugging.",
+            f"or set {CODEX_BIN_ENV} / --codex-bin explicitly for debugging.",
             fg=typer.colors.RED,
         )
         raise typer.Exit(code=1)
@@ -695,7 +697,7 @@ def codex_doctor(
     codex_bin: str | None = typer.Option(
         None,
         "--codex-bin",
-        help=("Debug override for the Codex executable to inspect " f"(defaults to {_CODEX_BIN_ENV}, then `codex` on PATH)."),
+        help=("Debug override for the Codex executable to inspect " f"(defaults to {CODEX_BIN_ENV}, then `codex` on PATH)."),
     ),
     state_root: Path | None = typer.Option(
         None,
@@ -706,11 +708,16 @@ def codex_doctor(
         help="Codex bridge state root override (default: ~/.claude/managed-local/codex-bridge).",
     ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+    check_readyz: bool = typer.Option(
+        False,
+        "--check-readyz",
+        help="Actively probe each bridge relay readyz endpoint. Off by default to keep doctor fast.",
+    ),
 ) -> None:
     """Inspect the managed Codex binary, legacy artifacts, and bridge state."""
 
     try:
-        payload = _collect_codex_doctor(codex_bin=codex_bin, state_root=state_root)
+        payload = _collect_codex_doctor(codex_bin=codex_bin, state_root=state_root, check_readyz=check_readyz)
     except _NativeBridgeError as exc:
         typer.secho(str(exc), fg=typer.colors.RED)
         raise typer.Exit(code=1)

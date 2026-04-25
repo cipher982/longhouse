@@ -1,0 +1,4 @@
+"""Provider CLI ownership constants shared by CLI and local health surfaces."""
+
+CODEX_BIN_ENV = "LONGHOUSE_CODEX_BIN"
+LEGACY_MANAGED_CODEX_LAUNCHER_MARKER = "# longhouse-managed-codex-launcher"

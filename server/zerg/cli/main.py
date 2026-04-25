@@ -120,7 +120,7 @@ app.add_typer(messages_app, name="messages", help="Durable session inbox command
 app.add_typer(sessions_app, name="sessions", help="Session inspection commands")
 app.add_typer(config_app, name="config", help="Configuration management")
 app.add_typer(claude_channel_app, name="claude-channel", help="Claude channel bridge commands", hidden=True)
-app.add_typer(codex_app, name="codex", help="Managed Codex session commands")
+app.add_typer(codex_app, name="codex")
 app.add_typer(local_health_app, name="local-health")
 app.add_typer(machine_app, name="machine", help="Machine runtime repair and reconciliation")
 

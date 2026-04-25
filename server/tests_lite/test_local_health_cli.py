@@ -366,11 +366,6 @@ def test_collect_local_health_surfaces_codex_provider_cli(monkeypatch, tmp_path:
         "which",
         lambda name: "/opt/homebrew/bin/codex" if name == "codex" else None,
     )
-    monkeypatch.setattr(
-        local_health_service.subprocess,
-        "run",
-        lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout="codex-cli 0.125.0\n", stderr=""),
-    )
     _write_engine_status(tmp_path, age_seconds=5)
 
     snapshot = local_health_service.collect_local_health(tmp_path)
@@ -378,8 +373,24 @@ def test_collect_local_health_surfaces_codex_provider_cli(monkeypatch, tmp_path:
     assert snapshot["provider_clis"]["codex"] == {
         "path": "/opt/homebrew/bin/codex",
         "source": "PATH",
-        "version": {"ok": True, "value": "codex-cli 0.125.0", "error": None},
+        "resolution_error": None,
         "env_override": None,
+    }
+
+
+def test_collect_local_health_surfaces_missing_codex_env_override(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setenv(local_health_service.CODEX_BIN_ENV, "/missing/codex")
+    _write_engine_status(tmp_path, age_seconds=5)
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["provider_clis"]["codex"] == {
+        "path": None,
+        "source": local_health_service.CODEX_BIN_ENV,
+        "resolution_error": "LONGHOUSE_CODEX_BIN did not resolve to an executable",
+        "env_override": "/missing/codex",
     }
 
 
