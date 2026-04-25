@@ -1,6 +1,6 @@
 import Foundation
 
-struct SessionSummary: Codable, Identifiable, Hashable, Sendable {
+struct SessionSummary: Identifiable, Hashable, Sendable {
     let id: String
     let title: String
     let presenceState: String

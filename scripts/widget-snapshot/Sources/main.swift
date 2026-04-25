@@ -13,6 +13,8 @@ struct SessionSummary: Identifiable {
     let project: String?
     var isBlocked: Bool { presenceState == "blocked" }
     var isNeedsUser: Bool { presenceState == "needs_user" }
+    var isUserActive: Bool { true }
+    var needsAttention: Bool { (isBlocked || isNeedsUser) && isUserActive }
     var isExecuting: Bool { presenceState == "thinking" || presenceState == "running" || status == "working" || status == "active" }
     var isIdle: Bool { presenceState == "idle" || status == "idle" }
     var displayPhaseLabel: String {
@@ -31,6 +33,8 @@ struct SessionSummary: Identifiable {
 }
 
 struct WidgetSmallView: View {
+    let sessions: [SessionSummary]
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 4) {
@@ -42,10 +46,10 @@ struct WidgetSmallView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Text("2")
+            Text("\(widgetMetric.count)")
                 .font(.system(size: 36, weight: .bold))
-                .foregroundStyle(.blue)
-            Text("active sessions")
+                .foregroundStyle(widgetMetric.color)
+            Text(widgetMetric.label)
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             Spacer()
@@ -55,6 +59,10 @@ struct WidgetSmallView: View {
         .frame(width: 170, height: 170)
         .background(Color.black.opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+    }
+
+    private var widgetMetric: WidgetMetric {
+        buildWidgetMetric(sessions: sessions, totalActive: sessions.count)
     }
 }
 
@@ -72,9 +80,9 @@ struct WidgetMediumView: View {
                 }
                 .foregroundStyle(.secondary)
                 Spacer()
-                Text("2 active")
+                Text("\(widgetMetric.count) \(widgetMetric.shortLabel)")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(widgetMetric.color)
             }
             .padding(.bottom, 8)
 
@@ -110,6 +118,35 @@ struct WidgetMediumView: View {
         .background(Color.black.opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
+
+    private var widgetMetric: WidgetMetric {
+        buildWidgetMetric(sessions: sessions, totalActive: sessions.count)
+    }
+}
+
+private struct WidgetMetric {
+    let count: Int
+    let label: String
+    let shortLabel: String
+    let color: Color
+}
+
+private func buildWidgetMetric(sessions: [SessionSummary], totalActive: Int) -> WidgetMetric {
+    let attentionCount = sessions.filter(\.needsAttention).count
+    if attentionCount > 0 {
+        return WidgetMetric(
+            count: attentionCount,
+            label: attentionCount == 1 ? "needs you" : "need you",
+            shortLabel: attentionCount == 1 ? "needs you" : "need you",
+            color: .orange
+        )
+    }
+    return WidgetMetric(
+        count: totalActive,
+        label: totalActive == 1 ? "active session" : "active sessions",
+        shortLabel: "active",
+        color: .blue
+    )
 }
 
 private func widgetRuntimeColor(_ session: SessionSummary) -> Color {
@@ -131,7 +168,7 @@ let sessions = [
 
 @MainActor
 func renderWidget() {
-    let smallView = WidgetSmallView()
+    let smallView = WidgetSmallView(sessions: sessions)
         .environment(\.colorScheme, .dark)
     let smallRenderer = ImageRenderer(content: smallView)
     smallRenderer.scale = 3.0

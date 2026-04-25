@@ -36,6 +36,9 @@ struct TimelineView: View {
                 viewModel.startAutoRefresh(using: appState)
                 consumePendingPushIfNeeded()
             }
+            .onAppear {
+                viewModel.resumeAutoRefresh(using: appState)
+            }
             .onDisappear {
                 viewModel.stopAutoRefresh()
             }
@@ -96,9 +99,9 @@ struct TimelineView: View {
 
     private var emptyView: some View {
         ContentUnavailableView(
-            "No active sessions",
+            "No timeline sessions",
             systemImage: "rectangle.stack",
-            description: Text("Recent active sessions will appear here as Longhouse syncs them.")
+            description: Text("Sessions will appear here as Longhouse syncs them.")
         )
     }
 
@@ -287,8 +290,10 @@ final class TimelineViewModel: ObservableObject {
     @Published var isRefreshing = false
     @Published var lastUpdatedAt: Date?
 
-    private var refreshTask: Task<Void, Never>?
+    private var autoRefreshTask: Task<Void, Never>?
     private var lastWidgetReloadAt: Date?
+    private var activeRefreshCount = 0
+    private var consecutiveRefreshFailures = 0
 
     var isEmpty: Bool { attention.isEmpty && recent.isEmpty }
 
@@ -298,41 +303,52 @@ final class TimelineViewModel: ObservableObject {
     }
 
     func refresh(using appState: AppState, reloadWidget: Bool = false) async {
-        guard !isRefreshing else { return }
         guard let api = LonghouseAPI(host: appState.serverURL) else {
             errorMessage = "Invalid server URL"
             isInitialLoading = false
             return
         }
+        activeRefreshCount += 1
         isRefreshing = true
         defer {
-            isRefreshing = false
+            activeRefreshCount = max(0, activeRefreshCount - 1)
+            isRefreshing = activeRefreshCount > 0
             isInitialLoading = false
         }
 
         do {
-            let sessions = try await api.recentActiveSessions(limit: 40)
+            let sessions = try await api.recentSessions(limit: 40)
             let attention = sessions.filter(\.needsAttention)
             let attentionIds = Set(attention.map(\.id))
             self.attention = attention
             self.recent = sessions.filter { !attentionIds.contains($0.id) }
             self.lastUpdatedAt = Date()
             self.errorMessage = nil
+            self.consecutiveRefreshFailures = 0
             if reloadWidget {
                 reloadWidgetTimelineIfNeeded()
             }
         } catch LonghouseAPIError.notAuthenticated {
             errorMessage = "Session expired. Sign in again."
+            consecutiveRefreshFailures += 1
         } catch {
             errorMessage = "Couldn't load sessions: \(error.localizedDescription)"
+            consecutiveRefreshFailures += 1
         }
     }
 
+    func resumeAutoRefresh(using appState: AppState) {
+        startAutoRefresh(using: appState)
+        guard !isInitialLoading else { return }
+        Task { await refresh(using: appState, reloadWidget: true) }
+    }
+
     func startAutoRefresh(using appState: AppState) {
-        guard refreshTask == nil else { return }
-        refreshTask = Task { [weak self] in
+        guard autoRefreshTask == nil else { return }
+        autoRefreshTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                let delay = await self?.autoRefreshDelayNanoseconds ?? 4_000_000_000
+                try? await Task.sleep(nanoseconds: delay)
                 if Task.isCancelled { break }
                 await self?.refresh(using: appState, reloadWidget: true)
             }
@@ -340,8 +356,19 @@ final class TimelineViewModel: ObservableObject {
     }
 
     func stopAutoRefresh() {
-        refreshTask?.cancel()
-        refreshTask = nil
+        autoRefreshTask?.cancel()
+        autoRefreshTask = nil
+    }
+
+    private var autoRefreshDelayNanoseconds: UInt64 {
+        switch consecutiveRefreshFailures {
+        case 0:
+            return 4_000_000_000
+        case 1:
+            return 8_000_000_000
+        default:
+            return 16_000_000_000
+        }
     }
 
     private func reloadWidgetTimelineIfNeeded() {
@@ -372,7 +399,7 @@ private func runtimeColor(_ session: SessionSummary) -> Color {
 }
 
 private func providerColor(_ provider: String?) -> Color {
-    switch provider {
+    switch provider?.lowercased() {
     case "codex": return .green
     case "gemini": return .blue
     case "claude": return .orange
@@ -382,7 +409,7 @@ private func providerColor(_ provider: String?) -> Color {
 }
 
 private func providerIcon(_ provider: String?) -> String {
-    switch provider {
+    switch provider?.lowercased() {
     case "codex": return "terminal"
     case "gemini": return "sparkles"
     case "claude": return "sparkle"

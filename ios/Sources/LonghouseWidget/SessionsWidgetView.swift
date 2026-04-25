@@ -43,10 +43,10 @@ struct SessionsWidgetView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             } else {
-                Text("\(entry.totalActive)")
+                Text("\(widgetMetric.count)")
                     .font(.system(size: 36, weight: .bold))
-                    .foregroundStyle(.blue)
-                Text(entry.totalActive == 1 ? "active session" : "active sessions")
+                    .foregroundStyle(widgetMetric.color)
+                Text(widgetMetric.label)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -70,9 +70,9 @@ struct SessionsWidgetView: View {
                 Spacer()
 
                 if !entry.sessions.isEmpty || entry.isPlaceholder {
-                    Text("\(entry.totalActive) active")
+                    Text("\(widgetMetric.count) \(widgetMetric.shortLabel)")
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.blue)
+                        .foregroundStyle(widgetMetric.color)
                 }
             }
             .padding(.bottom, 8)
@@ -122,6 +122,24 @@ struct SessionsWidgetView: View {
             }
         }
     }
+
+    private var widgetMetric: WidgetMetric {
+        let attentionCount = entry.sessions.filter(\.needsAttention).count
+        if attentionCount > 0 {
+            return WidgetMetric(
+                count: attentionCount,
+                label: attentionCount == 1 ? "needs you" : "need you",
+                shortLabel: attentionCount == 1 ? "needs you" : "need you",
+                color: .orange
+            )
+        }
+        return WidgetMetric(
+            count: entry.totalActive,
+            label: entry.totalActive == 1 ? "active session" : "active sessions",
+            shortLabel: "active",
+            color: .blue
+        )
+    }
 }
 
 struct SessionRow: View {
@@ -153,6 +171,13 @@ struct SessionRow: View {
             Spacer()
         }
     }
+}
+
+private struct WidgetMetric {
+    let count: Int
+    let label: String
+    let shortLabel: String
+    let color: Color
 }
 
 private func widgetRuntimeColor(_ session: SessionSummary) -> Color {

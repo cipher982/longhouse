@@ -13,8 +13,8 @@ struct SessionEntry: TimelineEntry {
     static let placeholder = SessionEntry(
         date: .now,
         sessions: [
-            SessionSummary(id: "1", title: "Fixing auth flow in login", presenceState: "needs_user", provider: "claude", project: "longhouse", lastActivityAt: nil),
-            SessionSummary(id: "2", title: "Deploy pipeline stuck", presenceState: "blocked", provider: "claude", project: "zerg", lastActivityAt: nil),
+            SessionSummary(id: "1", title: "Debugging Codex Launch Path Bug", presenceState: "thinking", provider: "codex", project: "zerg", lastActivityAt: nil, status: "working"),
+            SessionSummary(id: "2", title: "Simple Arithmetic Calculation", presenceState: "idle", provider: "gemini", project: "gemini", lastActivityAt: nil, status: "completed"),
         ],
         totalActive: 2,
         isPlaceholder: true,
