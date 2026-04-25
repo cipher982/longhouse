@@ -1,16 +1,143 @@
 import Foundation
 
-struct SessionSummary: Codable, Identifiable, Hashable, Sendable {
+struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     let id: String
     let title: String
     let presenceState: String
     let provider: String?
     let project: String?
     let lastActivityAt: String?
+    let summary: String?
+    let userState: String?
+    let status: String?
+    let displayPhase: String?
+    let presenceTool: String?
+    let activeTool: String?
+    let gitBranch: String?
+    let homeLabel: String?
+    let headOriginLabel: String?
+    let timelineAnchorAt: String?
+    let userMessages: Int?
+    let toolCalls: Int?
+    let liveControlAvailable: Bool?
+    let hostReattachAvailable: Bool?
+    let replyToLiveSessionAvailable: Bool?
+
+    init(
+        id: String,
+        title: String,
+        presenceState: String,
+        provider: String?,
+        project: String?,
+        lastActivityAt: String?,
+        summary: String? = nil,
+        userState: String? = nil,
+        status: String? = nil,
+        displayPhase: String? = nil,
+        presenceTool: String? = nil,
+        activeTool: String? = nil,
+        gitBranch: String? = nil,
+        homeLabel: String? = nil,
+        headOriginLabel: String? = nil,
+        timelineAnchorAt: String? = nil,
+        userMessages: Int? = nil,
+        toolCalls: Int? = nil,
+        liveControlAvailable: Bool? = nil,
+        hostReattachAvailable: Bool? = nil,
+        replyToLiveSessionAvailable: Bool? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.presenceState = presenceState
+        self.provider = provider
+        self.project = project
+        self.lastActivityAt = lastActivityAt
+        self.summary = summary
+        self.userState = userState
+        self.status = status
+        self.displayPhase = displayPhase
+        self.presenceTool = presenceTool
+        self.activeTool = activeTool
+        self.gitBranch = gitBranch
+        self.homeLabel = homeLabel
+        self.headOriginLabel = headOriginLabel
+        self.timelineAnchorAt = timelineAnchorAt
+        self.userMessages = userMessages
+        self.toolCalls = toolCalls
+        self.liveControlAvailable = liveControlAvailable
+        self.hostReattachAvailable = hostReattachAvailable
+        self.replyToLiveSessionAvailable = replyToLiveSessionAvailable
+    }
 
     var isBlocked: Bool { presenceState == "blocked" }
     var isNeedsUser: Bool { presenceState == "needs_user" }
+    var isUserActive: Bool { userState == nil || userState == "active" }
+    var needsAttention: Bool { (isBlocked || isNeedsUser) && isUserActive }
+    var isExecuting: Bool {
+        presenceState == "thinking" || presenceState == "running" || status == "working" || status == "active"
+    }
+    var isIdle: Bool { presenceState == "idle" || status == "idle" }
     var attentionLabel: String { isBlocked ? "Needs permission" : "Waiting on you" }
+    var timelineAnchor: String? { timelineAnchorAt ?? lastActivityAt }
+    var turnCount: Int { userMessages ?? 0 }
+    var toolCount: Int { toolCalls ?? 0 }
+
+    var providerLabel: String {
+        guard let provider, !provider.isEmpty else { return "Session" }
+        return provider.prefix(1).uppercased() + provider.dropFirst()
+    }
+
+    var projectLabel: String {
+        guard let project, !project.isEmpty else { return "Unknown project" }
+        return project
+    }
+
+    var managementLabel: String {
+        if liveControlAvailable == true || replyToLiveSessionAvailable == true {
+            return "Live control"
+        }
+        if hostReattachAvailable == true {
+            return "Reattach"
+        }
+        return "Unmanaged"
+    }
+
+    var displayPhaseLabel: String {
+        if let displayPhase = displayPhase?.trimmingCharacters(in: .whitespacesAndNewlines), !displayPhase.isEmpty {
+            return displayPhase
+        }
+        let tool = activeTool ?? presenceTool
+        switch presenceState {
+        case "running":
+            return tool.map { "Running \($0)" } ?? "Running"
+        case "thinking":
+            return "Thinking"
+        case "needs_user":
+            return "Needs you"
+        case "blocked":
+            return tool.map { "Blocked on \($0)" } ?? "Needs permission"
+        case "idle":
+            return "Idle"
+        default:
+            if status == "completed" { return "Completed" }
+            if status == "working" || status == "active" { return "Recent progress" }
+            return "Recent"
+        }
+    }
+
+    var summaryPreview: String? {
+        guard let summary = summary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty else {
+            return nil
+        }
+        return summary
+    }
+
+    static func attentionWidgetOrder(_ sessions: [SessionSummary], limit: Int) -> [SessionSummary] {
+        let active = sessions.filter(\.isUserActive)
+        let attention = active.filter(\.needsAttention)
+        let recent = active.filter { !$0.needsAttention }
+        return Array((attention + recent).prefix(limit))
+    }
 }
 
 struct SessionsResponse: Codable, Sendable {
@@ -19,17 +146,28 @@ struct SessionsResponse: Codable, Sendable {
 
 struct TimelineCard: Codable, Sendable {
     let head: TimelineSession
+    let headOriginLabel: String?
 }
 
 struct TimelineSession: Codable, Sendable {
     let id: String
     let summaryTitle: String?
     let summary: String?
+    let status: String?
     let presenceState: String?
+    let presenceTool: String?
+    let activeTool: String?
+    let displayPhase: String?
     let userState: String?
     let provider: String?
     let project: String?
+    let gitBranch: String?
+    let homeLabel: String?
+    let timelineAnchorAt: String?
     let lastActivityAt: String?
+    let userMessages: Int?
+    let toolCalls: Int?
+    let capabilities: SessionCapabilities?
 }
 
 struct SessionCapabilities: Codable, Sendable {
