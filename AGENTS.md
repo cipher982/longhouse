@@ -197,16 +197,11 @@ If you touch a secondary area, either simplify it toward the core story or expla
 - Do not use "started in Longhouse" in user-facing copy. It sounds like the website. Prefer `managed` / `unmanaged`, then separately describe whether the session is steerable, observe-only, or only has transcript-level liveness.
 - The timeline, wall, and workspace should all tell you whether the session you are looking at is managed before you try to drive it. Always rely on `session.capabilities` so you do not assume bare CLI sessions can behave like managed ones.
 
-## Provider CLI Control Paths
+## Provider CLI Control
 
-Longhouse manages session control, not provider binary distribution. A managed wrapper should be explainable as: user-owned provider CLI plus Longhouse-owned control path plus Runtime Host/Machine Agent state.
-
-- **Claude managed path**: `longhouse claude` relies on Claude's native channel/MCP/stdin control path. There is no detached bridge daemon, bridge state file, or flock sidecar.
-- **Codex managed path**: `longhouse codex` resolves stock upstream `codex` from PATH by default, or only from explicit `--codex-bin` / `LONGHOUSE_CODEX_BIN` debug overrides. It starts `longhouse-engine codex-bridge`; the bridge starts `codex app-server`, fronts it with the TCP/WebSocket relay in `engine/src/codex_ws_relay.rs`, and attaches the user TUI with `codex --enable tui_app_server --remote ...`.
-- **Codex binary contract**: Longhouse must not ship a Codex runtime payload, install `longhouse-codex`, keep `~/.longhouse/runtimes/codex`, download Codex release assets, or patch a custom Codex fork. The install/repair path may remove those old artifacts.
-- **Hooks are not provider binaries**: names like `longhouse-codex-hook.sh` are Longhouse hook scripts for session state and ingest. They do not mean Longhouse owns the `codex` executable.
-- **Liveness is provider-specific**: Codex liveness comes from bridge state, lock sidecar, and process/remote-TUI checks under `~/.claude/managed-local/codex-bridge/`. Claude liveness comes from process scanning (`local_health._collect_managed_sessions_by_process`).
-- **Phase is not liveness**: managed session phase in `local_health` comes from `session_phase_state` plus hook outbox files. Process scans and bridge scans answer whether something is alive, not what phase the turn is in.
+- Longhouse manages session control, not provider binary distribution. Managed wrappers should be explainable as: user-owned provider CLI plus Longhouse-owned control path plus Runtime Host/Machine Agent state.
+- Use `.agents/skills/managed-provider-cli/SKILL.md` for Codex/Claude/Gemini managed-session work, provider binary drift, bridge/relay/hooks/liveness, or changes to this terminology.
+- Codex's hard contract: stock upstream `codex` from PATH by default; `--codex-bin` / `LONGHOUSE_CODEX_BIN` are explicit debug overrides; no `longhouse-codex`, no `~/.longhouse/runtimes/codex`, no release-asset or custom-fork lane.
 
 ## High-Signal Gotchas
 

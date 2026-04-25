@@ -1,0 +1,96 @@
+---
+name: managed-provider-cli
+description: Longhouse managed provider CLI control paths for Claude, Codex, Gemini, and similar CLIs. Use when investigating or changing managed sessions, provider binary ownership, `longhouse claude`, `longhouse codex`, bridge/relay/hook behavior, local-health liveness, reattach behavior, stale provider runtimes, or AGENTS.md guidance about managed vs unmanaged sessions.
+---
+
+# Managed Provider CLI
+
+Use this skill when a task touches how Longhouse starts, observes, steers, or repairs provider CLIs. The core rule: Longhouse manages session control, not provider binary distribution.
+
+## Mental Model
+
+- **Provider CLI**: an upstream executable the user installs separately, such as `claude`, `codex`, or `gemini`.
+- **Managed session**: Longhouse owns the control path. It does not imply Longhouse owns, vendors, pins, patches, or updates the provider binary.
+- **Unmanaged session**: Longhouse ingests or discovers a bare provider CLI session but does not own a live control path.
+- **Machine Agent**: `longhouse-engine`; ships local events, owns runtime hooks/state, and may run provider-specific bridge processes.
+- **Runtime Host**: FastAPI/web/database product runtime. It stores session state and exposes `/api/agents/*`.
+
+## Provider Paths
+
+### Claude
+
+- `longhouse claude` relies on Claude's native channel/MCP/stdin control path.
+- No detached bridge daemon, bridge state file, or flock sidecar should be required for Claude liveness.
+- Claude liveness in local health comes from process scanning, especially `local_health._collect_managed_sessions_by_process`.
+
+### Codex
+
+- `longhouse codex` resolves the user's stock upstream `codex` from PATH by default.
+- `--codex-bin` and `LONGHOUSE_CODEX_BIN` are explicit debug/operator overrides, not the normal install path.
+- The Python CLI starts `longhouse-engine codex-bridge`.
+- The Rust bridge starts `codex app-server`, fronts it with `engine/src/codex_ws_relay.rs`, and attaches the TUI with `codex --enable tui_app_server --remote ...`.
+- Bridge state, logs, lock sidecars, and IPC sockets live under `~/.claude/managed-local/codex-bridge/` unless overridden.
+- Hook scripts such as `longhouse-codex-hook.sh` are Longhouse hook scripts, not provider binaries.
+
+Hard Codex contract:
+
+- Do not ship a Codex runtime payload.
+- Do not install or generate `longhouse-codex`.
+- Do not keep or recreate `~/.longhouse/runtimes/codex`.
+- Do not download Codex release assets or patch a custom Codex fork.
+- Install/repair code may remove old managed-Codex artifacts conservatively.
+
+### Gemini And Future CLIs
+
+- Start from the same ownership rule: Longhouse can own the wrapper/control path, but the provider CLI remains user-owned unless the product decision explicitly changes.
+- Do not infer one provider's liveness/control model from another provider. Split behavior when the provider mechanics differ.
+
+## Workflows
+
+### Debug Version Or Binary Drift
+
+1. Compare `command -v <provider>` and `<provider> --version` with the process actually attached to the managed session.
+2. For Codex, check whether `LONGHOUSE_CODEX_BIN` or `--codex-bin` is forcing a non-PATH binary.
+3. Check for stale legacy artifacts:
+   - `~/.local/bin/longhouse-codex`
+   - `~/.longhouse/runtimes/codex`
+4. Verify the wrapper is launching the provider binary directly, not a Longhouse-owned payload.
+5. If stale Codex runtime artifacts exist, prefer the existing local runtime cleanup path over ad hoc deletion.
+
+### Debug Codex Bridge Failures
+
+1. Inspect `~/.codex/log/codex-tui.log`.
+2. Inspect the bridge `.json` state and `.log` under `~/.claude/managed-local/codex-bridge/`.
+3. Inspect rollout JSONL for the thread before trusting `last_turn_status`.
+4. Check app-server `readyz` and whether the relay URL was logged.
+5. For `longhouse-engine codex-bridge` repros, set both `--state-root` and `--longhouse-home` to temp roots. `--state-root` alone still leaves the live shipper DB/session binding under `~/.longhouse`.
+
+### Change Managed Provider Code
+
+Read the relevant path before editing:
+
+- Codex CLI wrapper: `server/zerg/cli/codex.py`
+- Codex bridge: `engine/src/codex_bridge.rs`
+- Codex WS relay: `engine/src/codex_ws_relay.rs`
+- Runtime installer/cleanup: `server/zerg/services/local_runtime_installer.py`
+- Local health/liveness: `server/zerg/services/local_health.py`
+- Managed session state: `engine/src/state/managed_session_state.rs`
+- Phase ledger: `engine/src/state/session_phase.rs`
+
+After changes:
+
+- Run focused tests for the touched layer.
+- For Codex launcher or cleanup changes, run `cd server && uv run pytest tests_lite/test_codex_cli.py tests_lite/test_local_runtime_installer.py`.
+- For bridge/relay changes, run `make test-engine`.
+- For local runtime install changes that affect the dogfood machine, run `make dogfood-refresh`.
+
+## Naming Rules
+
+- Use `managed` for Longhouse-owned control paths.
+- Use `unmanaged` for imported/discovered sessions without live control ownership.
+- Use `live`, `reattachable`, `phase-known`, and `running` separately; do not collapse them into one status.
+- Avoid naming constants or paths as if Longhouse owns a provider binary when the behavior is only wrapper config or update-check suppression.
+
+## Fallback Rule
+
+Avoid hidden fallbacks. If a fallback remains necessary, make it explicit in logs/UI or gate it behind a named debug/operator path. Never use a fallback to silently switch from user-owned provider CLI execution to a Longhouse-owned provider runtime.
