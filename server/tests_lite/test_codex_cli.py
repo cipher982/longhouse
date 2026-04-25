@@ -67,6 +67,7 @@ def test_resolve_codex_binary_uses_codex_on_path(monkeypatch):
     monkeypatch.setattr(codex_cli.shutil, "which", lambda name: "/usr/local/bin/codex" if name == "codex" else None)
 
     assert codex_cli._resolve_codex_binary() == "/usr/local/bin/codex"
+    assert codex_cli._resolve_codex_binary_with_source() == {"path": "/usr/local/bin/codex", "source": "PATH"}
 
 
 def test_resolve_codex_binary_returns_none_when_codex_is_missing(monkeypatch):
@@ -74,6 +75,64 @@ def test_resolve_codex_binary_returns_none_when_codex_is_missing(monkeypatch):
     monkeypatch.setattr(codex_cli.shutil, "which", lambda name: None)
 
     assert codex_cli._resolve_codex_binary() is None
+    assert codex_cli._resolve_codex_binary_with_source() == {"path": None, "source": "missing"}
+
+
+def test_codex_doctor_reports_binary_legacy_artifacts_and_bridge_state(monkeypatch, tmp_path):
+    runner = CliRunner()
+    home = tmp_path / "home"
+    codex_bin = tmp_path / "codex"
+    codex_bin.write_text("#!/bin/sh\necho codex-cli 9.9.9\n")
+    codex_bin.chmod(0o755)
+    launcher = home / ".local" / "bin" / "longhouse-codex"
+    launcher.parent.mkdir(parents=True, exist_ok=True)
+    launcher.write_text(f"#!/bin/sh\n{codex_cli._LEGACY_MANAGED_CODEX_LAUNCHER_MARKER}\n")
+    runtime_dir = home / ".longhouse" / "runtimes" / "codex"
+    runtime_dir.mkdir(parents=True)
+    state_root = tmp_path / "bridge"
+    state_root.mkdir()
+    state_file = state_root / "session-123.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "session_id": "session-123",
+                "cwd": str(tmp_path),
+                "codex_bin": str(codex_bin),
+                "ws_url": None,
+                "thread_id": "thread-123",
+                "thread_path": "",
+                "pid": os.getpid(),
+                "status": "ready",
+                "log_file": str(state_root / "session-123.log"),
+                "active_turn_id": None,
+                "last_turn_status": None,
+                "last_error": None,
+                "updated_at": "2026-04-25T00:00:00Z",
+            }
+        )
+    )
+    state_file.with_suffix(".lock").touch()
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv(codex_cli._CODEX_BIN_ENV, raising=False)
+
+    result = runner.invoke(
+        app,
+        ["codex", "doctor", "--codex-bin", str(codex_bin), "--state-root", str(state_root), "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["codex_binary"]["path"] == str(codex_bin.resolve())
+    assert payload["codex_binary"]["source"] == "--codex-bin"
+    assert payload["codex_binary"]["version"] == {"ok": True, "value": "codex-cli 9.9.9", "error": None}
+    assert payload["legacy_artifacts"]["launcher"]["exists"] is True
+    assert payload["legacy_artifacts"]["launcher"]["legacy_marker"] is True
+    assert payload["legacy_artifacts"]["managed_runtime_dir"]["exists"] is True
+    assert payload["bridge"]["state_root"] == str(state_root)
+    assert payload["bridge"]["sessions"][0]["session_id"] == "session-123"
+    assert payload["bridge"]["sessions"][0]["pid_alive"] is True
+    assert payload["bridge"]["sessions"][0]["lock_file_exists"] is True
 
 
 def test_active_turn_survived_tui_exit_ignores_completed_rollout(monkeypatch, tmp_path):
