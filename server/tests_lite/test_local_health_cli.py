@@ -454,7 +454,7 @@ def test_collect_local_health_flags_detached_managed_session(monkeypatch, tmp_pa
         "_collect_process_rows",
         lambda: [
             {"pid": 7771, "ppid": 1, "command": "longhouse-engine codex-bridge run --session-id sess-detached"},
-            {"pid": 7772, "ppid": 7771, "command": "longhouse-codex app-server --listen ws://127.0.0.1:0"},
+            {"pid": 7772, "ppid": 7771, "command": "/opt/homebrew/bin/codex app-server --listen ws://127.0.0.1:0"},
         ],
     )
 
@@ -519,7 +519,7 @@ def test_collect_local_health_flags_orphaned_managed_bridge(monkeypatch, tmp_pat
         "_collect_process_rows",
         lambda: [
             {"pid": 8881, "ppid": 1, "command": "longhouse-engine codex-bridge run --session-id sess-orphan"},
-            {"pid": 8882, "ppid": 8881, "command": "longhouse-codex app-server --listen ws://127.0.0.1:0"},
+            {"pid": 8882, "ppid": 8881, "command": "/opt/homebrew/bin/codex app-server --listen ws://127.0.0.1:0"},
         ],
     )
 
@@ -603,11 +603,11 @@ def test_collect_local_health_uses_managed_session_phase_state_for_codex_bridge_
         "_collect_process_rows",
         lambda: [
             {"pid": 7771, "ppid": 1, "command": "longhouse-engine codex-bridge run --session-id sess-attached"},
-            {"pid": 7772, "ppid": 7771, "command": "longhouse-codex app-server --listen ws://127.0.0.1:0"},
+            {"pid": 7772, "ppid": 7771, "command": "/opt/homebrew/bin/codex app-server --listen ws://127.0.0.1:0"},
             {
                 "pid": 7773,
                 "ppid": 7000,
-                "command": "/Users/test/.longhouse/runtimes/codex/current/longhouse-codex --enable tui_app_server --remote ws://127.0.0.1:49760",
+                "command": "/opt/homebrew/bin/codex --enable tui_app_server --remote ws://127.0.0.1:49760",
             },
         ],
     )
@@ -676,11 +676,11 @@ def test_collect_local_health_keeps_attached_codex_idle_from_managed_session_sta
         "_collect_process_rows",
         lambda: [
             {"pid": 7771, "ppid": 1, "command": "longhouse-engine codex-bridge run --session-id sess-attached"},
-            {"pid": 7772, "ppid": 7771, "command": "longhouse-codex app-server --listen ws://127.0.0.1:0"},
+            {"pid": 7772, "ppid": 7771, "command": "/opt/homebrew/bin/codex app-server --listen ws://127.0.0.1:0"},
             {
                 "pid": 7773,
                 "ppid": 7000,
-                "command": "/Users/test/.longhouse/runtimes/codex/current/longhouse-codex --enable tui_app_server --remote ws://127.0.0.1:49760",
+                "command": "/opt/homebrew/bin/codex --enable tui_app_server --remote ws://127.0.0.1:49760",
             },
         ],
     )
@@ -733,11 +733,11 @@ def test_collect_local_health_shows_unknown_phase_for_attached_codex_without_man
         "_collect_process_rows",
         lambda: [
             {"pid": 7771, "ppid": 1, "command": "longhouse-engine codex-bridge run --session-id sess-attached"},
-            {"pid": 7772, "ppid": 7771, "command": "longhouse-codex app-server --listen ws://127.0.0.1:0"},
+            {"pid": 7772, "ppid": 7771, "command": "/opt/homebrew/bin/codex app-server --listen ws://127.0.0.1:0"},
             {
                 "pid": 7773,
                 "ppid": 7000,
-                "command": "/Users/test/.longhouse/runtimes/codex/current/longhouse-codex --enable tui_app_server --remote ws://127.0.0.1:49760",
+                "command": "/opt/homebrew/bin/codex --enable tui_app_server --remote ws://127.0.0.1:49760",
             },
         ],
     )
@@ -802,11 +802,11 @@ def test_collect_local_health_flags_unknown_managed_phase_contract_drift(monkeyp
         "_collect_process_rows",
         lambda: [
             {"pid": 7771, "ppid": 1, "command": "longhouse-engine codex-bridge run --session-id sess-unknown-phase"},
-            {"pid": 7772, "ppid": 7771, "command": "longhouse-codex app-server --listen ws://127.0.0.1:0"},
+            {"pid": 7772, "ppid": 7771, "command": "/opt/homebrew/bin/codex app-server --listen ws://127.0.0.1:0"},
             {
                 "pid": 7773,
                 "ppid": 7000,
-                "command": "/Users/test/.longhouse/runtimes/codex/current/longhouse-codex --enable tui_app_server --remote ws://127.0.0.1:49760",
+                "command": "/opt/homebrew/bin/codex --enable tui_app_server --remote ws://127.0.0.1:49760",
             },
         ],
     )
@@ -858,11 +858,11 @@ def test_collect_local_health_recognizes_remote_tui_attach_without_resume_token(
         "_collect_process_rows",
         lambda: [
             {"pid": 7771, "ppid": 1, "command": "longhouse-engine codex-bridge run --session-id sess-attached"},
-            {"pid": 7772, "ppid": 7771, "command": "longhouse-codex app-server --listen ws://127.0.0.1:0"},
+            {"pid": 7772, "ppid": 7771, "command": "/opt/homebrew/bin/codex app-server --listen ws://127.0.0.1:0"},
             {
                 "pid": 7773,
                 "ppid": 7000,
-                "command": "/Users/test/.longhouse/runtimes/codex/current/longhouse-codex --enable tui_app_server --remote ws://127.0.0.1:49760",
+                "command": "/opt/homebrew/bin/codex --enable tui_app_server --remote ws://127.0.0.1:49760",
             },
         ],
     )
@@ -906,11 +906,11 @@ def test_collect_local_health_does_not_flag_missing_rollout_before_first_turn(mo
         "_collect_process_rows",
         lambda: [
             {"pid": 8881, "ppid": 1, "command": "longhouse-engine codex-bridge run --session-id sess-bad-thread"},
-            {"pid": 8882, "ppid": 8881, "command": "longhouse-codex app-server --listen ws://127.0.0.1:0"},
+            {"pid": 8882, "ppid": 8881, "command": "/opt/homebrew/bin/codex app-server --listen ws://127.0.0.1:0"},
             {
                 "pid": 8883,
                 "ppid": 8000,
-                "command": "/Users/test/.longhouse/runtimes/codex/current/longhouse-codex --enable tui_app_server --remote ws://127.0.0.1:49888",
+                "command": "/opt/homebrew/bin/codex --enable tui_app_server --remote ws://127.0.0.1:49888",
             },
         ],
     )
@@ -964,11 +964,11 @@ def test_collect_local_health_keeps_waiting_for_rollout_session_attached_after_t
         "_collect_process_rows",
         lambda: [
             {"pid": 8881, "ppid": 1, "command": "longhouse-engine codex-bridge run --session-id sess-bad-thread"},
-            {"pid": 8882, "ppid": 8881, "command": "longhouse-codex app-server --listen ws://127.0.0.1:0"},
+            {"pid": 8882, "ppid": 8881, "command": "/opt/homebrew/bin/codex app-server --listen ws://127.0.0.1:0"},
             {
                 "pid": 8883,
                 "ppid": 8000,
-                "command": "/Users/test/.longhouse/runtimes/codex/current/longhouse-codex --enable tui_app_server --remote ws://127.0.0.1:49888",
+                "command": "/opt/homebrew/bin/codex --enable tui_app_server --remote ws://127.0.0.1:49888",
             },
         ],
     )
@@ -1023,11 +1023,11 @@ def test_collect_local_health_marks_failed_thread_subscription_as_degraded(monke
         "_collect_process_rows",
         lambda: [
             {"pid": 8881, "ppid": 1, "command": "longhouse-engine codex-bridge run --session-id sess-bad-thread"},
-            {"pid": 8882, "ppid": 8881, "command": "longhouse-codex app-server --listen ws://127.0.0.1:0"},
+            {"pid": 8882, "ppid": 8881, "command": "/opt/homebrew/bin/codex app-server --listen ws://127.0.0.1:0"},
             {
                 "pid": 8883,
                 "ppid": 8000,
-                "command": "/Users/test/.longhouse/runtimes/codex/current/longhouse-codex --enable tui_app_server --remote ws://127.0.0.1:49888",
+                "command": "/opt/homebrew/bin/codex --enable tui_app_server --remote ws://127.0.0.1:49888",
             },
         ],
     )
@@ -1666,7 +1666,7 @@ def test_local_health_menubar_uses_prebuilt_binary_when_installed(monkeypatch):
 
 # ---------------------------------------------------------------------------
 # local-health surfaces the CLI update cache as bundle update state. The CLI's
-# upgrade path now reconciles engine + Codex automatically, so CLI version is
+# upgrade path now reconciles local runtime artifacts automatically, so CLI version is
 # a faithful proxy for the local runtime bundle.
 # ---------------------------------------------------------------------------
 
@@ -2353,7 +2353,7 @@ def test_collect_unmanaged_processes_skips_managed_codex_remote_tui(monkeypatch)
     managed_wrapper = _FakeProc(
         pid=11471,
         cmdline=[
-            "/Users/test/.longhouse/runtimes/codex/current/codex",
+            "/opt/homebrew/bin/codex",
             "-c",
             "check_for_update_on_startup=false",
             "--dangerously-bypass-approvals-and-sandbox",

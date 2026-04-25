@@ -19,12 +19,6 @@ def _render_install_result(result: LocalRuntimeInstallResult) -> None:
         typer.secho(f"  [OK] Engine binary installed at {result.engine_runtime.path}", fg=typer.colors.GREEN)
     else:
         typer.secho(f"  [OK] Engine binary ready at {result.engine_runtime.path}", fg=typer.colors.GREEN)
-    codex_runtime = getattr(result, "codex_runtime", None)
-    if codex_runtime:
-        if codex_runtime.installed_now:
-            typer.secho(f"  [OK] Managed Codex runtime installed at {codex_runtime.path}", fg=typer.colors.GREEN)
-        else:
-            typer.secho(f"  [OK] Managed Codex runtime ready at {codex_runtime.path}", fg=typer.colors.GREEN)
     service_skipped = str(result.service_result.get("service") or "").strip().lower() == "skipped"
     typer.secho(
         f"[{'WARN' if service_skipped else 'OK'}] {result.service_result['message']}",

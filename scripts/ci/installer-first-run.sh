@@ -135,19 +135,6 @@ build_desktop_app_bundle() {
   printf '%s\n' "$app_path"
 }
 
-build_managed_codex_binary() {
-  local binary_path="$1"
-
-  log "🤖 Downloading stock codex binary for installer validation..." >&2
-  "$ROOT_DIR/scripts/release/download-managed-codex.sh" --output "$binary_path" >/dev/null
-
-  if [[ ! -x "$binary_path" ]]; then
-    fail "Managed Codex binary was not created: $binary_path"
-  fi
-
-  printf '%s\n' "$binary_path"
-}
-
 pick_port() {
   python3 - <<'PY'
 import socket
@@ -462,10 +449,6 @@ smoke_runtime_artifact() {
       if ! "$launch_path" --help >/dev/null 2>&1; then
         fail "Released engine binary was installed but did not respond to --help"
       fi
-    elif [[ "$component" == "managed-codex" ]]; then
-      if ! "$launch_path" --version >/dev/null 2>&1; then
-        fail "Released managed Codex binary was installed but did not respond to --version"
-      fi
     fi
   )
 }
@@ -748,25 +731,6 @@ if [[ "$INSTALLER_MODE" == "local" && -x "$ROOT_DIR/engine/target/release/longho
   env_vars+=("LONGHOUSE_ENGINE_SOURCE=$ROOT_DIR/engine/target/release/longhouse-engine")
 fi
 
-if [[ "$INSTALLER_MODE" == "local" ]]; then
-  if [[ -n "${LONGHOUSE_CODEX_SOURCE:-}" ]]; then
-    if [[ ! -f "$LONGHOUSE_CODEX_SOURCE" ]]; then
-      fail "Configured LONGHOUSE_CODEX_SOURCE does not exist: $LONGHOUSE_CODEX_SOURCE"
-    fi
-    chmod +x "$LONGHOUSE_CODEX_SOURCE" 2>/dev/null || true
-    if [[ ! -x "$LONGHOUSE_CODEX_SOURCE" ]]; then
-      fail "Configured LONGHOUSE_CODEX_SOURCE is not executable: $LONGHOUSE_CODEX_SOURCE"
-    fi
-    log "♻️  Reusing configured managed Codex binary: $LONGHOUSE_CODEX_SOURCE"
-  else
-    LONGHOUSE_CODEX_BINARY_SOURCE="$HOME/.longhouse-managed-codex-source/longhouse-codex"
-    mkdir -p "$(dirname "$LONGHOUSE_CODEX_BINARY_SOURCE")"
-    build_managed_codex_binary "$LONGHOUSE_CODEX_BINARY_SOURCE" >/dev/null
-    export LONGHOUSE_CODEX_SOURCE="$LONGHOUSE_CODEX_BINARY_SOURCE"
-  fi
-  env_vars+=("LONGHOUSE_CODEX_SOURCE=$LONGHOUSE_CODEX_SOURCE")
-fi
-
 if [[ "$ENABLE_MENUBAR_SMOKE" == "1" && "$(uname -s)" != "Darwin" ]]; then
   fail "--menubar smoke is only supported on macOS"
 fi
@@ -842,7 +806,6 @@ rm -f "$DOCTOR_JSON"
 if [[ "$ENABLE_RUNTIME_ARTIFACT_SMOKE" == "1" ]]; then
   log "🧱 Verifying released runtime artifacts..."
   smoke_runtime_artifact engine
-  smoke_runtime_artifact managed-codex
   if [[ "$(uname -s)" == "Darwin" ]]; then
     smoke_runtime_artifact desktop-app
   fi

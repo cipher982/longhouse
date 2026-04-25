@@ -176,7 +176,6 @@ for required in \
   "longhouse-$PYVER-py3-none-any.whl" \
   "longhouse-engine-darwin-arm64" \
   "longhouse-engine-linux-x64" \
-  "longhouse-codex-darwin-arm64" \
   "Longhouse-macos-arm64.dmg" \
   "local-runtime-macos-packaging.json"; do
   if ! grep -q "^$required$" <<<"$ASSETS"; then

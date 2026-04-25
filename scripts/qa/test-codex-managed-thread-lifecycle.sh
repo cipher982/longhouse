@@ -10,7 +10,7 @@ if [[ ! -x "$HARNESS" ]]; then
 fi
 
 ENGINE="${ENGINE:-longhouse-engine}"
-CODEX_BIN="${CODEX_BIN:-$HOME/.longhouse/runtimes/codex/current/codex}"
+CODEX_BIN="${CODEX_BIN:-$(command -v codex || true)}"
 
 echo "Managed Codex lifecycle regression suite"
 echo "  engine: $ENGINE"

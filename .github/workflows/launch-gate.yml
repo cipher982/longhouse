@@ -23,7 +23,6 @@ on:
       - 'scripts/ci/runtime-artifact-smoke.py'
       - 'scripts/qa/qa-oss.sh'
       - 'scripts/ops/run-onboarding-funnel.sh'
-      - 'scripts/release/download-managed-codex.sh'
       - 'Makefile'
       - 'README.md'
   release:
@@ -48,7 +47,6 @@ on:
       - 'scripts/ci/runtime-artifact-smoke.py'
       - 'scripts/qa/qa-oss.sh'
       - 'scripts/ops/run-onboarding-funnel.sh'
-      - 'scripts/release/download-managed-codex.sh'
       - 'Makefile'
       - 'README.md'
   schedule:
@@ -109,14 +107,12 @@ jobs:
             macos-latest)
               required_assets+=(
                 "longhouse-engine-darwin-arm64"
-                "longhouse-codex-darwin-arm64"
                 "Longhouse-macos-arm64.zip"
               )
               ;;
             ubuntu-latest)
               required_assets+=(
                 "longhouse-engine-linux-x64"
-                "longhouse-codex-linux-x64"
               )
               ;;
           esac
@@ -168,25 +164,9 @@ jobs:
           python3 -c 'import json, urllib.request; payload = json.load(urllib.request.urlopen("https://pypi.org/pypi/longhouse/json", timeout=10)); print("Latest PyPI versions:"); [print(version) for version in list(payload.get("releases", {}).keys())[-10:]]' >&2 || true
           exit 1
 
-      - name: Download stock codex for installer smoke
-        if: ${{ github.event_name != 'release' }}
-        run: |
-          case "${{ matrix.os }}" in
-            ubuntu-latest) target=x86_64-unknown-linux-gnu ;;
-            macos-latest)  target=aarch64-apple-darwin ;;
-            *) echo "Unsupported matrix os ${{ matrix.os }}"; exit 1 ;;
-          esac
-          scripts/release/download-managed-codex.sh \
-            --target "$target" \
-            --output "${RUNNER_TEMP}/managed-codex/longhouse-codex"
-
       - name: Run disposable installer smoke
         run: |
           chmod +x scripts/ci/installer-first-run.sh
-          if [[ "${{ github.event_name }}" != "release" ]]; then
-            export LONGHOUSE_CODEX_SOURCE="${RUNNER_TEMP}/managed-codex/longhouse-codex"
-            chmod +x "$LONGHOUSE_CODEX_SOURCE"
-          fi
           args=(
             --shell "${{ matrix.shell_path }}"
             --installer-onboard
@@ -246,17 +226,8 @@ jobs:
           bun install --silent
           bunx playwright install --with-deps chromium
 
-      - name: Download stock codex
-        run: |
-          scripts/release/download-managed-codex.sh \
-            --target x86_64-unknown-linux-gnu \
-            --output "${RUNNER_TEMP}/managed-codex/longhouse-codex"
-
       - name: Run launch gate locally
-        run: |
-          export LONGHOUSE_CODEX_SOURCE="${RUNNER_TEMP}/managed-codex/longhouse-codex"
-          chmod +x "$LONGHOUSE_CODEX_SOURCE"
-          make launch-gate-local
+        run: make launch-gate-local
 
       - name: Upload onboarding artifacts
         if: failure()

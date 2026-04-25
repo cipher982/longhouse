@@ -387,11 +387,6 @@ def onboard(
         help="Skip the interactive topology prompt: local or remote.",
         click_type=Choice(["local", "remote"], case_sensitive=False),
     ),
-    codex_source: str | None = typer.Option(
-        None,
-        "--codex-source",
-        help="Advanced: path or URL for the managed Codex runtime artifact installed as longhouse-codex.",
-    ),
 ) -> None:
     """Run the default local quickstart or connect to existing Longhouse."""
     normalized_topology = topology.lower() if topology else None
@@ -546,7 +541,6 @@ def onboard(
                     claude_dir=None,
                     machine_name=socket.gethostname(),
                     menubar=install_menubar,
-                    codex_source=codex_source,
                     written_by="onboard",
                 )
                 installed_desktop_app = install_menubar and bool(getattr(install_result, "desktop_app_result", None))

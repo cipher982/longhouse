@@ -62,40 +62,18 @@ def test_resolve_codex_binary_prefers_flag_then_env(monkeypatch, tmp_path):
     assert codex_cli._resolve_codex_binary() == str(env_bin.resolve())
 
 
-def test_resolve_codex_binary_prefers_ambient_path_before_installed_managed_runtime(monkeypatch):
+def test_resolve_codex_binary_uses_codex_on_path(monkeypatch):
     monkeypatch.delenv(codex_cli._CODEX_BIN_ENV, raising=False)
-    monkeypatch.setattr(
-        codex_cli,
-        "resolve_installed_runtime_artifact",
-        lambda component: type("Artifact", (), {"path": "/tmp/longhouse-codex", "launch_path": "/tmp/codex"})()
-        if component == codex_cli.RuntimeComponent.MANAGED_CODEX
-        else None,
-    )
     monkeypatch.setattr(codex_cli.shutil, "which", lambda name: "/usr/local/bin/codex" if name == "codex" else None)
 
     assert codex_cli._resolve_codex_binary() == "/usr/local/bin/codex"
 
 
-def test_resolve_codex_binary_uses_ambient_path_without_managed_runtime(monkeypatch):
+def test_resolve_codex_binary_returns_none_when_codex_is_missing(monkeypatch):
     monkeypatch.delenv(codex_cli._CODEX_BIN_ENV, raising=False)
-    monkeypatch.setattr(codex_cli, "resolve_installed_runtime_artifact", lambda component: None)
-    monkeypatch.setattr(codex_cli.shutil, "which", lambda name: "/usr/local/bin/codex" if name == "codex" else None)
-
-    assert codex_cli._resolve_codex_binary() == "/usr/local/bin/codex"
-
-
-def test_resolve_codex_binary_falls_back_to_installed_managed_runtime(monkeypatch):
-    monkeypatch.delenv(codex_cli._CODEX_BIN_ENV, raising=False)
-    monkeypatch.setattr(
-        codex_cli,
-        "resolve_installed_runtime_artifact",
-        lambda component: type("Artifact", (), {"path": "/tmp/longhouse-codex", "launch_path": "/tmp/codex"})()
-        if component == codex_cli.RuntimeComponent.MANAGED_CODEX
-        else None,
-    )
     monkeypatch.setattr(codex_cli.shutil, "which", lambda name: None)
 
-    assert codex_cli._resolve_codex_binary() == "/tmp/codex"
+    assert codex_cli._resolve_codex_binary() is None
 
 
 def test_active_turn_survived_tui_exit_ignores_completed_rollout(monkeypatch, tmp_path):
@@ -417,7 +395,7 @@ def test_codex_command_exits_on_bridge_failure(monkeypatch, tmp_path):
     assert "Codex bridge failed: engine not found" in result.output
 
 
-def test_codex_command_exits_when_no_codex_runtime_available(monkeypatch, tmp_path):
+def test_codex_command_exits_when_no_codex_executable_available(monkeypatch, tmp_path):
     runner = CliRunner()
 
     monkeypatch.setattr(
@@ -431,5 +409,5 @@ def test_codex_command_exits_when_no_codex_runtime_available(monkeypatch, tmp_pa
 
     assert result.exit_code == 1
     assert "Codex executable not found." in result.output
-    assert "longhouse onboard" in result.output
-    assert "longhouse machine repair" in result.output
+    assert "codex` is on PATH" in result.output
+    assert "LONGHOUSE_CODEX_BIN" in result.output

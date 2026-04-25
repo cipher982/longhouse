@@ -578,7 +578,7 @@ def upgrade_command(
 
 
 def _reconcile_runtime_after_upgrade() -> None:
-    """Refresh engine, Codex, hooks, and desktop app from the newly installed CLI.
+    """Refresh engine, hooks, and desktop app from the newly installed CLI.
 
     Runs `longhouse machine repair` as a subprocess so the upgraded package is
     loaded in a fresh interpreter. If the machine has never been configured, we
@@ -591,14 +591,14 @@ def _reconcile_runtime_after_upgrade() -> None:
         typer.echo("Run: longhouse machine repair")
         return
 
-    typer.echo("Refreshing engine, Codex, hooks, and desktop app...")
+    typer.echo("Refreshing engine, hooks, and desktop app...")
     completed = subprocess.run(
         [longhouse_bin, "machine", "repair"],
         check=False,
     )
     if completed.returncode != 0:
         typer.secho(
-            "Runtime refresh failed; CLI is upgraded but engine/Codex may be stale.",
+            "Runtime refresh failed; CLI is upgraded but local runtime artifacts may be stale.",
             fg=typer.colors.YELLOW,
         )
         typer.echo("Re-run when ready: longhouse machine repair")

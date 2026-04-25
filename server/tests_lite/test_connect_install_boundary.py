@@ -41,7 +41,6 @@ def test_handle_install_delegates_to_shared_runtime_installer(monkeypatch, capsy
         claude_dir="/tmp/.claude",
         interval=1,
         machine_name="test-box",
-        codex_source="https://example.com/codex.tar.gz",
         menubar=True,
     )
 
@@ -54,11 +53,9 @@ def test_handle_install_delegates_to_shared_runtime_installer(monkeypatch, capsy
             "runtime_url": "https://example.com",
             "machine_name": "test-box",
             "menubar": True,
-            "codex_source": "https://example.com/codex.tar.gz",
         }
     ]
     assert "Machine: test-box" in output
-    assert "Managed Codex source: https://example.com/codex.tar.gz" in output
     assert "Engine binary installed at /tmp/longhouse-engine" in output
     assert "Longhouse.app:" in output
     assert "App: /Applications/Longhouse.app" in output
@@ -91,7 +88,6 @@ def test_handle_install_prompts_for_machine_name_when_missing(monkeypatch):
         claude_dir=None,
         interval=1,
         machine_name=None,
-        codex_source=None,
         menubar=False,
     )
 
@@ -103,7 +99,6 @@ def test_handle_install_prompts_for_machine_name_when_missing(monkeypatch):
             "runtime_url": "https://example.com",
             "machine_name": "fallback-box",
             "menubar": False,
-            "codex_source": None,
         }
     ]
 
@@ -117,7 +112,6 @@ def test_handle_install_reports_scratch_mode_skips(monkeypatch, capsys):
             install_result=SimpleNamespace(
                 machine_name="test-box-dev",
                 engine_runtime=SimpleNamespace(path="/tmp/longhouse-engine", installed_now=False),
-                codex_runtime=SimpleNamespace(path="/tmp/longhouse-codex", installed_now=False),
                 service_result={
                     "message": "Scratch Longhouse home active; skipped global service install.",
                     "service": "skipped",
@@ -140,7 +134,6 @@ def test_handle_install_reports_scratch_mode_skips(monkeypatch, capsys):
         claude_dir=None,
         interval=1,
         machine_name="test-box-dev",
-        codex_source=None,
         menubar=True,
     )
 
@@ -178,7 +171,6 @@ def test_connect_install_skips_auto_auth_when_no_token(monkeypatch):
         uninstall=False,
         status=False,
         machine_name="test-box",
-        codex_source="/tmp/codex",
         menubar=False,
     )
 
@@ -191,7 +183,6 @@ def test_connect_install_skips_auto_auth_when_no_token(monkeypatch):
                 "claude_dir": None,
                 "interval": 300,
                 "machine_name": "test-box",
-                "codex_source": "/tmp/codex",
                 "menubar": False,
             },
         )
@@ -220,7 +211,6 @@ def test_connect_install_uses_stored_url_when_called_directly_without_url(monkey
         uninstall=False,
         status=False,
         machine_name="test-box",
-        codex_source=None,
         menubar=False,
     )
 
@@ -233,34 +223,10 @@ def test_connect_install_uses_stored_url_when_called_directly_without_url(monkey
                 "claude_dir": None,
                 "interval": 300,
                 "machine_name": "test-box",
-                "codex_source": None,
                 "menubar": False,
             },
         )
     ]
-
-
-def test_connect_rejects_codex_source_without_install(monkeypatch):
-    monkeypatch.setattr(connect, "get_zerg_url", lambda config_dir=None: "https://example.com")
-    monkeypatch.setattr(connect, "load_token", lambda config_dir=None: "stored-token")
-
-    with pytest.raises(ClickExit) as exc_info:
-        connect.connect(
-            token=None,
-            interval=300,
-            debounce=500,
-            claude_dir=None,
-            verbose=False,
-            install=False,
-            hooks_only=False,
-            uninstall=False,
-            status=False,
-            machine_name=None,
-            codex_source="/tmp/codex",
-            menubar=False,
-        )
-
-    assert exc_info.value.exit_code == 1
 
 
 def test_handle_status_shows_ambient_app_bundle_details(monkeypatch, capsys):

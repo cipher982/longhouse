@@ -25,14 +25,12 @@ from zerg.cli._common import ensure_managed_launch_preflight as _ensure_managed_
 from zerg.cli._common import interactive_stdio as _interactive_stdio
 from zerg.cli._common import load_api_credentials as _load_api_credentials
 from zerg.cli._common import open_session_url as _open_session_url
-from zerg.services.runtime_artifacts import RuntimeComponent
-from zerg.services.runtime_artifacts import resolve_installed_runtime_artifact
 from zerg.services.session_continuity import get_machine_name_label
 from zerg.services.shipper.service import get_engine_executable
 from zerg.session_loop_mode import SessionLoopMode
 
 _CODEX_BIN_ENV = "LONGHOUSE_CODEX_BIN"
-_MANAGED_CODEX_CONFIG_OVERRIDE = "check_for_update_on_startup=false"
+_CODEX_CONFIG_OVERRIDE = "check_for_update_on_startup=false"
 _ROLLOUT_TURN_EVENT_TYPES = {"task_started", "task_complete", "turn_aborted"}
 _ROLLOUT_TERMINAL_EVENT_TYPES = {"task_complete", "turn_aborted"}
 _ROLLOUT_TAIL_LINES = 256
@@ -54,27 +52,6 @@ def _resolve_explicit_codex_binary(candidate: str, *, source: str) -> str:
     raise _NativeBridgeError(f"{source} points to `{candidate}`, but it was not found on PATH.")
 
 
-def _same_executable(left: str | os.PathLike[str], right: str | os.PathLike[str]) -> bool:
-    try:
-        return Path(left).resolve(strict=True) == Path(right).resolve(strict=True)
-    except OSError:
-        return False
-
-
-def _resolve_ambient_codex_binary() -> str | None:
-    found = shutil.which("codex")
-    if not found:
-        return None
-
-    managed_runtime = resolve_installed_runtime_artifact(RuntimeComponent.MANAGED_CODEX)
-    if managed_runtime is not None:
-        managed_paths = (managed_runtime.path, managed_runtime.launch_path)
-        if any(_same_executable(found, managed_path) for managed_path in managed_paths):
-            return None
-
-    return found
-
-
 def _resolve_codex_binary(explicit: str | None = None) -> str | None:
     normalized = str(explicit or "").strip()
     if normalized:
@@ -82,13 +59,7 @@ def _resolve_codex_binary(explicit: str | None = None) -> str | None:
     env_candidate = str(os.environ.get(_CODEX_BIN_ENV) or "").strip()
     if env_candidate:
         return _resolve_explicit_codex_binary(env_candidate, source=_CODEX_BIN_ENV)
-    ambient_codex = _resolve_ambient_codex_binary()
-    if ambient_codex:
-        return ambient_codex
-    managed_runtime = resolve_installed_runtime_artifact(RuntimeComponent.MANAGED_CODEX)
-    if managed_runtime is not None:
-        return managed_runtime.launch_path
-    return None
+    return shutil.which("codex")
 
 
 def _build_codex_attach_command(
@@ -99,7 +70,7 @@ def _build_codex_attach_command(
     session_id: str | None = None,
     thread_id: str | None = None,
 ) -> str:
-    cmd = [codex_bin, "-c", _MANAGED_CODEX_CONFIG_OVERRIDE]
+    cmd = [codex_bin, "-c", _CODEX_CONFIG_OVERRIDE]
     if thread_id:
         cmd += ["resume", thread_id]
     if bypass_approvals:
@@ -304,7 +275,7 @@ def _run_native_codex_tui(
     # Connect TUI to the bridge's app-server. The TUI calls thread/start which
     # creates the thread; the bridge daemon observes the thread/started notification
     # and posts idle once it knows which thread to drive.
-    cmd = [codex_bin, "-c", _MANAGED_CODEX_CONFIG_OVERRIDE]
+    cmd = [codex_bin, "-c", _CODEX_CONFIG_OVERRIDE]
     if bypass_approvals:
         cmd.append("--dangerously-bypass-approvals-and-sandbox")
     cmd += ["--enable", "tui_app_server", "--remote", ws_url]
@@ -390,10 +361,7 @@ def codex(
     codex_bin: str | None = typer.Option(
         None,
         "--codex-bin",
-        help=(
-            "Codex executable override for managed sessions "
-            f"(defaults to {_CODEX_BIN_ENV}, then `codex` on PATH, then the installed managed runtime)."
-        ),
+        help=("Debug override for the Codex executable used by managed sessions " f"(defaults to {_CODEX_BIN_ENV}, then `codex` on PATH)."),
     ),
     bypass_approvals: bool = typer.Option(
         False,
@@ -413,9 +381,8 @@ def codex(
     resolved_codex_bin = _resolve_codex_binary(codex_bin)
     if not resolved_codex_bin:
         typer.secho(
-            "Codex executable not found. Install Codex on PATH, run `longhouse onboard` / "
-            "`longhouse machine repair` to install Longhouse's managed fallback, or set "
-            f"{_CODEX_BIN_ENV} / --codex-bin explicitly.",
+            "Codex executable not found. Install the OpenAI Codex CLI so `codex` is on PATH, "
+            f"or set {_CODEX_BIN_ENV} / --codex-bin explicitly for debugging.",
             fg=typer.colors.RED,
         )
         raise typer.Exit(code=1)

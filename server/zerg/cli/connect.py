@@ -522,11 +522,6 @@ def connect(
         "-m",
         help="Name for this machine in session labels (skips interactive prompt when using --install)",
     ),
-    codex_source: str | None = typer.Option(
-        None,
-        "--codex-source",
-        help="Advanced: path or URL for the managed Codex runtime artifact installed as longhouse-codex.",
-    ),
     menubar: bool = typer.Option(
         default_install_desktop_app(),
         "--menubar/--no-menubar",
@@ -585,14 +580,9 @@ def connect(
             claude_dir=claude_dir,
             interval=interval,
             machine_name=machine_name,
-            codex_source=codex_source,
             menubar=menubar,
         )
         return
-
-    if codex_source:
-        typer.secho("--codex-source requires --install.", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
 
     # Auto-authenticate if no token exists for active shipping.
     if not token:
@@ -881,7 +871,6 @@ def _handle_install(
     claude_dir: str | None,
     interval: int,
     machine_name: str | None = None,
-    codex_source: str | None = None,
     menubar: bool = False,
 ) -> None:
     """Handle --install flag."""
@@ -901,8 +890,6 @@ def _handle_install(
     typer.echo(f"  URL: {url}")
     if menubar:
         typer.echo("  Desktop App: enabled")
-    if codex_source:
-        typer.echo(f"  Managed Codex source: {codex_source}")
 
     try:
         reconcile_result = reconcile_local_runtime(
@@ -912,7 +899,6 @@ def _handle_install(
             runtime_url=url,
             machine_name=resolved_name,
             menubar=menubar,
-            codex_source=codex_source,
         )
     except RuntimeError as e:
         typer.secho(f"[ERROR] {e}", fg=typer.colors.RED)
@@ -929,18 +915,6 @@ def _handle_install(
         typer.secho(f"  [OK] Engine binary installed at {install_result.engine_runtime.path}", fg=typer.colors.GREEN)
     else:
         typer.secho(f"  [OK] Engine binary ready at {install_result.engine_runtime.path}", fg=typer.colors.GREEN)
-    codex_runtime = getattr(install_result, "codex_runtime", None)
-    if codex_runtime:
-        if codex_runtime.installed_now:
-            typer.secho(
-                f"  [OK] Managed Codex runtime installed at {codex_runtime.path}",
-                fg=typer.colors.GREEN,
-            )
-        else:
-            typer.secho(
-                f"  [OK] Managed Codex runtime ready at {codex_runtime.path}",
-                fg=typer.colors.GREEN,
-            )
     service_skipped = str(install_result.service_result.get("service") or "").strip().lower() == "skipped"
     typer.secho(
         f"[{'WARN' if service_skipped else 'OK'}] {install_result.service_result['message']}",

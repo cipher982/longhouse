@@ -10,7 +10,6 @@ on:
       - 'scripts/qa/test-cli-upgrade.sh'
       - 'scripts/qa/test-local-runtime-packaging.sh'
       - 'scripts/resolve-swift-product-path.sh'
-      - 'scripts/release/download-managed-codex.sh'
       - 'server/pyproject.toml'
       - 'server/zerg/cli/**'
       - 'server/zerg/__main__.py'
@@ -26,7 +25,6 @@ on:
       - 'scripts/qa/test-cli-upgrade.sh'
       - 'scripts/qa/test-local-runtime-packaging.sh'
       - 'scripts/resolve-swift-product-path.sh'
-      - 'scripts/release/download-managed-codex.sh'
       - 'server/pyproject.toml'
       - 'server/zerg/cli/**'
       - 'server/zerg/__main__.py'
@@ -106,23 +104,10 @@ jobs:
         with:
           bun-version: '1.2.20'
 
-      - name: Download stock codex for installer smoke
-        run: |
-          case "${{ matrix.os }}" in
-            ubuntu-latest) target=x86_64-unknown-linux-gnu ;;
-            macos-latest)  target=aarch64-apple-darwin ;;
-            *) echo "Unsupported matrix os ${{ matrix.os }}"; exit 1 ;;
-          esac
-          scripts/release/download-managed-codex.sh \
-            --target "$target" \
-            --output "${RUNNER_TEMP}/managed-codex/longhouse-codex"
-
       - name: Run disposable installer smoke
         env:
           INSTALLER_TEST_MENUBAR: ${{ matrix.menubar_smoke }}
         run: |
-          export LONGHOUSE_CODEX_SOURCE="${RUNNER_TEMP}/managed-codex/longhouse-codex"
-          chmod +x "$LONGHOUSE_CODEX_SOURCE"
           chmod +x scripts/ci/installer-first-run.sh
           ./scripts/ci/installer-first-run.sh --shell "${{ matrix.shell_path }}"
 
@@ -203,20 +188,7 @@ jobs:
         with:
           bun-version: '1.2.20'
 
-      - name: Download stock codex for installer upgrade smoke
-        run: |
-          case "${{ matrix.os }}" in
-            ubuntu-latest) target=x86_64-unknown-linux-gnu ;;
-            macos-latest)  target=aarch64-apple-darwin ;;
-            *) echo "Unsupported matrix os ${{ matrix.os }}"; exit 1 ;;
-          esac
-          scripts/release/download-managed-codex.sh \
-            --target "$target" \
-            --output "${RUNNER_TEMP}/managed-codex/longhouse-codex"
-
       - name: Rehearse install -> upgrade in disposable HOME
         run: |
-          export LONGHOUSE_CODEX_SOURCE="${RUNNER_TEMP}/managed-codex/longhouse-codex"
-          chmod +x "$LONGHOUSE_CODEX_SOURCE"
           chmod +x scripts/qa/test-cli-upgrade.sh
           ./scripts/qa/test-cli-upgrade.sh --shell "${{ matrix.shell_path }}"
