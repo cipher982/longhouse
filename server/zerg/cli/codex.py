@@ -54,6 +54,27 @@ def _resolve_explicit_codex_binary(candidate: str, *, source: str) -> str:
     raise _NativeBridgeError(f"{source} points to `{candidate}`, but it was not found on PATH.")
 
 
+def _same_executable(left: str | os.PathLike[str], right: str | os.PathLike[str]) -> bool:
+    try:
+        return Path(left).resolve(strict=True) == Path(right).resolve(strict=True)
+    except OSError:
+        return False
+
+
+def _resolve_ambient_codex_binary() -> str | None:
+    found = shutil.which("codex")
+    if not found:
+        return None
+
+    managed_runtime = resolve_installed_runtime_artifact(RuntimeComponent.MANAGED_CODEX)
+    if managed_runtime is not None:
+        managed_paths = (managed_runtime.path, managed_runtime.launch_path)
+        if any(_same_executable(found, managed_path) for managed_path in managed_paths):
+            return None
+
+    return found
+
+
 def _resolve_codex_binary(explicit: str | None = None) -> str | None:
     normalized = str(explicit or "").strip()
     if normalized:
@@ -61,6 +82,9 @@ def _resolve_codex_binary(explicit: str | None = None) -> str | None:
     env_candidate = str(os.environ.get(_CODEX_BIN_ENV) or "").strip()
     if env_candidate:
         return _resolve_explicit_codex_binary(env_candidate, source=_CODEX_BIN_ENV)
+    ambient_codex = _resolve_ambient_codex_binary()
+    if ambient_codex:
+        return ambient_codex
     managed_runtime = resolve_installed_runtime_artifact(RuntimeComponent.MANAGED_CODEX)
     if managed_runtime is not None:
         return managed_runtime.launch_path
@@ -366,7 +390,10 @@ def codex(
     codex_bin: str | None = typer.Option(
         None,
         "--codex-bin",
-        help=f"Codex executable override for managed sessions (defaults to {_CODEX_BIN_ENV} or the installed managed runtime).",
+        help=(
+            "Codex executable override for managed sessions "
+            f"(defaults to {_CODEX_BIN_ENV}, then `codex` on PATH, then the installed managed runtime)."
+        ),
     ),
     bypass_approvals: bool = typer.Option(
         False,
@@ -386,9 +413,9 @@ def codex(
     resolved_codex_bin = _resolve_codex_binary(codex_bin)
     if not resolved_codex_bin:
         typer.secho(
-            "Managed Codex runtime is not installed yet. Run `longhouse onboard` to complete setup, "
-            "`longhouse machine repair` if you've already onboarded, or set "
-            f"{_CODEX_BIN_ENV} / --codex-bin to override it explicitly.",
+            "Codex executable not found. Install Codex on PATH, run `longhouse onboard` / "
+            "`longhouse machine repair` to install Longhouse's managed fallback, or set "
+            f"{_CODEX_BIN_ENV} / --codex-bin explicitly.",
             fg=typer.colors.RED,
         )
         raise typer.Exit(code=1)
