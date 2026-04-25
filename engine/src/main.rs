@@ -48,6 +48,22 @@ fn parse_compression_algo(s: &str) -> anyhow::Result<CompressionAlgo> {
     }
 }
 
+fn resolve_codex_bridge_start_roots(
+    state_root: Option<PathBuf>,
+    longhouse_home: Option<PathBuf>,
+    isolation_root: Option<PathBuf>,
+) -> anyhow::Result<(Option<PathBuf>, Option<PathBuf>)> {
+    if let Some(root) = isolation_root {
+        return Ok((Some(root.join("codex-bridge")), Some(root.join("longhouse"))));
+    }
+    if state_root.is_some() && longhouse_home.is_none() {
+        anyhow::bail!(
+            "--state-root only isolates bridge files; pass --longhouse-home too or use --isolation-root <dir>"
+        );
+    }
+    Ok((state_root, longhouse_home))
+}
+
 #[derive(Parser)]
 #[command(
     name = "longhouse-engine",
@@ -403,6 +419,10 @@ enum CodexBridgeCommands {
 
         #[arg(long)]
         longhouse_home: Option<PathBuf>,
+
+        /// Dev/test isolation root. Sets state root to <root>/codex-bridge and Longhouse home to <root>/longhouse.
+        #[arg(long, conflicts_with_all = ["state_root", "longhouse_home"])]
+        isolation_root: Option<PathBuf>,
 
         #[arg(long)]
         log_file: Option<PathBuf>,
@@ -887,10 +907,13 @@ fn main() -> anyhow::Result<()> {
                     auto_approve,
                     state_root,
                     longhouse_home,
+                    isolation_root,
                     log_file,
                     start_timeout_secs,
                     json,
                 } => {
+                    let (state_root, longhouse_home) =
+                        resolve_codex_bridge_start_roots(state_root, longhouse_home, isolation_root)?;
                     let summary = rt.block_on(cmd_codex_bridge_start(BridgeStartConfig {
                         session_id,
                         cwd,
@@ -1010,4 +1033,28 @@ fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codex_bridge_isolation_root_sets_both_roots() {
+        let root = PathBuf::from("/tmp/lh-codex-bridge-test");
+        let (state_root, longhouse_home) =
+            resolve_codex_bridge_start_roots(None, None, Some(root.clone())).unwrap();
+
+        assert_eq!(state_root, Some(root.join("codex-bridge")));
+        assert_eq!(longhouse_home, Some(root.join("longhouse")));
+    }
+
+    #[test]
+    fn codex_bridge_state_root_requires_longhouse_home() {
+        let err = resolve_codex_bridge_start_roots(Some(PathBuf::from("/tmp/state")), None, None)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("--state-root only isolates bridge files"));
+    }
 }

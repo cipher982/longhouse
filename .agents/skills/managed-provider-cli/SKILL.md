@@ -63,7 +63,7 @@ Hard Codex contract:
 2. Inspect the bridge `.json` state and `.log` under `~/.claude/managed-local/codex-bridge/`.
 3. Inspect rollout JSONL for the thread before trusting `last_turn_status`.
 4. Check app-server `readyz` and whether the relay URL was logged.
-5. For `longhouse-engine codex-bridge` repros, set both `--state-root` and `--longhouse-home` to temp roots. `--state-root` alone still leaves the live shipper DB/session binding under `~/.longhouse`.
+5. For `longhouse-engine codex-bridge start` repros, prefer `--isolation-root <tmp-dir>`. It maps bridge state to `<tmp-dir>/codex-bridge` and Longhouse state to `<tmp-dir>/longhouse`. If you use lower-level flags, set both `--state-root` and `--longhouse-home`; `--state-root` alone is intentionally rejected on start.
 
 ### Change Managed Provider Code
 
