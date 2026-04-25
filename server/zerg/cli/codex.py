@@ -30,7 +30,7 @@ from zerg.services.shipper.service import get_engine_executable
 from zerg.session_loop_mode import SessionLoopMode
 
 _CODEX_BIN_ENV = "LONGHOUSE_CODEX_BIN"
-_CODEX_CONFIG_OVERRIDE = "check_for_update_on_startup=false"
+_CODEX_DISABLE_UPDATE_CHECK_CONFIG = "check_for_update_on_startup=false"
 _ROLLOUT_TURN_EVENT_TYPES = {"task_started", "task_complete", "turn_aborted"}
 _ROLLOUT_TERMINAL_EVENT_TYPES = {"task_complete", "turn_aborted"}
 _ROLLOUT_TAIL_LINES = 256
@@ -70,7 +70,7 @@ def _build_codex_attach_command(
     session_id: str | None = None,
     thread_id: str | None = None,
 ) -> str:
-    cmd = [codex_bin, "-c", _CODEX_CONFIG_OVERRIDE]
+    cmd = [codex_bin, "-c", _CODEX_DISABLE_UPDATE_CHECK_CONFIG]
     if thread_id:
         cmd += ["resume", thread_id]
     if bypass_approvals:
@@ -275,7 +275,7 @@ def _run_native_codex_tui(
     # Connect TUI to the bridge's app-server. The TUI calls thread/start which
     # creates the thread; the bridge daemon observes the thread/started notification
     # and posts idle once it knows which thread to drive.
-    cmd = [codex_bin, "-c", _CODEX_CONFIG_OVERRIDE]
+    cmd = [codex_bin, "-c", _CODEX_DISABLE_UPDATE_CHECK_CONFIG]
     if bypass_approvals:
         cmd.append("--dangerously-bypass-approvals-and-sandbox")
     cmd += ["--enable", "tui_app_server", "--remote", ws_url]

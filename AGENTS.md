@@ -39,7 +39,8 @@ Use these nouns consistently. Do not say just "the daemon" without clarifying wh
 - **Desktop App**: macOS `Longhouse.app`. Native local status/setup/repair/menu bar surface. It is not the Runtime Host and not the Machine Agent.
 - **iOS App**: native SwiftUI client for viewing and replying to sessions plus a home-screen widget. Read/steer-only client — does not host a Runtime or run an engine. Always connects to a hosted instance.
 - **Runner**: optional WebSocket command executor for remote execution on user-owned machines.
-- **CLI / Package Layer**: the current delivery and orchestration layer. PyPI `longhouse` installs the CLI plus Runtime Host entrypoint and manages Machine Agent/Desktop App installation. Treat this as first-class for agents and power users, but not the desired human product boundary.
+- **Provider CLI**: an upstream executable the user installs separately, such as `claude`, `codex`, or `gemini`. Longhouse may launch it through a managed control path, but Longhouse does not vendor, pin, or update provider CLIs.
+- **CLI / Package Layer**: the current delivery and orchestration layer. PyPI `longhouse` installs the CLI plus Runtime Host entrypoint and manages Machine Agent/Desktop App installation. It installs Longhouse pieces, not provider CLIs. Treat this as first-class for agents and power users, but not the desired human product boundary.
 
 ### Things we built
 - website landing page, website admin control plane, website 'main app you do everything', macos menu bar, ios app with widget, rust daemon to ship sessions
@@ -191,10 +192,21 @@ If you touch a secondary area, either simplify it toward the core story or expla
 
 ## Managed vs Unmanaged Sessions
 
-- **Managed** means Longhouse owns the control path for the session. Today that usually means the session was launched with `longhouse claude`, `longhouse codex`, or another Longhouse wrapper, and it is reflected by `session.capabilities.live_control_available` or `host_reattach_available`.
+- **Managed** means Longhouse owns the control path for the session, not necessarily the provider binary. Today that usually means the session was launched with `longhouse claude`, `longhouse codex`, or another Longhouse wrapper, and it is reflected by `session.capabilities.live_control_available` or `host_reattach_available`.
 - **Unmanaged** means Longhouse imported or discovered the session but does not own its live control path. Bare provider CLI runs are unmanaged compatibility ingest: searchable, sometimes partially live, but not steerable from the browser.
 - Do not use "started in Longhouse" in user-facing copy. It sounds like the website. Prefer `managed` / `unmanaged`, then separately describe whether the session is steerable, observe-only, or only has transcript-level liveness.
 - The timeline, wall, and workspace should all tell you whether the session you are looking at is managed before you try to drive it. Always rely on `session.capabilities` so you do not assume bare CLI sessions can behave like managed ones.
+
+## Provider CLI Control Paths
+
+Longhouse manages session control, not provider binary distribution. A managed wrapper should be explainable as: user-owned provider CLI plus Longhouse-owned control path plus Runtime Host/Machine Agent state.
+
+- **Claude managed path**: `longhouse claude` relies on Claude's native channel/MCP/stdin control path. There is no detached bridge daemon, bridge state file, or flock sidecar.
+- **Codex managed path**: `longhouse codex` resolves stock upstream `codex` from PATH by default, or only from explicit `--codex-bin` / `LONGHOUSE_CODEX_BIN` debug overrides. It starts `longhouse-engine codex-bridge`; the bridge starts `codex app-server`, fronts it with the TCP/WebSocket relay in `engine/src/codex_ws_relay.rs`, and attaches the user TUI with `codex --enable tui_app_server --remote ...`.
+- **Codex binary contract**: Longhouse must not ship a Codex runtime payload, install `longhouse-codex`, keep `~/.longhouse/runtimes/codex`, download Codex release assets, or patch a custom Codex fork. The install/repair path may remove those old artifacts.
+- **Hooks are not provider binaries**: names like `longhouse-codex-hook.sh` are Longhouse hook scripts for session state and ingest. They do not mean Longhouse owns the `codex` executable.
+- **Liveness is provider-specific**: Codex liveness comes from bridge state, lock sidecar, and process/remote-TUI checks under `~/.claude/managed-local/codex-bridge/`. Claude liveness comes from process scanning (`local_health._collect_managed_sessions_by_process`).
+- **Phase is not liveness**: managed session phase in `local_health` comes from `session_phase_state` plus hook outbox files. Process scans and bridge scans answer whether something is alive, not what phase the turn is in.
 
 ## High-Signal Gotchas
 
@@ -214,10 +226,8 @@ If you touch a secondary area, either simplify it toward the core story or expla
 - Use `scripts/hosted-loop-debug.sh <subdomain>` before improvising hosted loop debugging.
 - If a tool or workflow already provides a completion signal, do not turn it into a polling loop.
 - `/api/timeline/sessions` caps `limit` at 100. Frontend URL parsing needs to clamp to that or the timeline can self-422 on oversized `limit` params.
-- Managed Codex uses the user's stock `codex` executable from PATH by default. Longhouse owns the wrapper, app-server bridge, relay, hooks, and runtime state; it does not ship or install a second Codex binary.
 - Warp-style CLI agent detection appears to key off the final spawned executable basename in the PTY. For managed Codex, debug the attached stock `codex --enable tui_app_server --remote ...` process, not just the shell wrapper or alias that started it.
 - For `longhouse-engine codex-bridge` repros, `--state-root` isolates bridge files only; also set `--longhouse-home` to a temp dir or you will contaminate the live shipper DB/session_binding state under `~/.longhouse`.
-- **Codex and Claude managed sessions have completely different liveness models.** Codex runs a detached Rust daemon with a state file + flock sidecar under `~/.claude/managed-local/codex-bridge/`. Claude runs an MCP server inside the stdio stream — no daemon, no state file, no flock. Claude liveness comes from a process scan (`local_health._collect_managed_sessions_by_process`). When asked about "the bridge," clarify which provider.
 
 ## Pushing Changes
 
@@ -283,7 +293,6 @@ If asked about Sauron, private cron packs, or job failures outside the core prod
 - Control-plane admin calls are user-agent sensitive. Use the existing scripts and curl patterns before improvising custom Python clients.
 - Hosted tenant data on `zerg` lives under `/var/app-data/longhouse/<subdomain>` and mounts to `/data` in the container.
 - If `longhouse.ai` suddenly serves an old landing bundle after a green deploy, check whether the demo runtime was redeployed with `ghcr.io/cipher982/longhouse-runtime:latest`; if `latest` stopped being refreshed, non-runtime deploys can silently roll the public demo back to stale frontend assets.
-- Managed Codex ships **no Codex binary**. It launches the user's stock upstream `codex` from PATH, with `--codex-bin` / `LONGHOUSE_CODEX_BIN` only as explicit debug overrides. The WS backpressure bug is handled engine-side by the TCP relay in `engine/src/codex_ws_relay.rs` that fronts codex's app-server. Don't reintroduce the old custom-fork, release-asset, or patch lanes.
 - Managed Codex TUI exits with `Connection reset without closing handshake` are not necessarily bridge crashes. Check `~/.codex/log/codex-tui.log`, the bridge `.json` state, rollout JSONL, and app-server `readyz` before assuming root cause; the relay should prevent the backpressure-induced variant of this, so if you see one, look at whether the relay spawned (`engine/src/codex_bridge.rs` logs the relay URL) and whether the connection is actually routing through it.
 - Managed Codex bridge state can be stale after startup `thread/resume failed: no rollout found`; if that happens, trust the thread rollout JSONL plus `~/.codex/log/codex-tui.log` over bridge `last_turn_status` for whether the turn actually completed.
 - macOS menu bar work is latency-sensitive: open from cached/loading state, refresh off the main thread, keep `local-health` internal-only, and require PNG harness plus live installed-app capture QA before ship.
