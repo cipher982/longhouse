@@ -101,7 +101,7 @@ class APNSRegisterRequest(BaseModel):
     """Register or refresh an iOS APNs device token for the current user."""
 
     device_token: str = Field(..., min_length=16, max_length=255, pattern=r"^[A-Fa-f0-9]+$")
-    platform: Literal["ios"] = "ios"
+    platform: Literal["ios", "ios_widget"] = "ios"
     app_build_id: Optional[str] = Field(None, max_length=255)
     push_environment: Literal["sandbox", "production"] = "sandbox"
 

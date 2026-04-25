@@ -18,12 +18,17 @@ from sqlalchemy.orm import Session
 from zerg.config import get_settings
 from zerg.models.agents import AgentSession
 from zerg.models.apns_device_registration import APNSDeviceRegistration
+from zerg.models.apns_widget_push_state import APNSWidgetPushState
 from zerg.models.user import User
+from zerg.services.session_runtime import load_runtime_state_map
+from zerg.services.session_runtime import resolve_runtime_overlay
 
 logger = logging.getLogger(__name__)
 
 ATTENTION_PUSH_STATES = {"needs_user", "blocked"}
 ATTENTION_PUSH_DEBOUNCE = timedelta(seconds=30)
+WIDGET_PUSH_DEBOUNCE = timedelta(seconds=30)
+WIDGET_PUSH_PLATFORM = "ios_widget"
 ATTENTION_NOTIFICATION_CATEGORY = "LONGHOUSE_SESSION_ATTENTION"
 ATTENTION_NOTIFICATION_THREAD_PREFIX = "longhouse-session"
 PROVIDER_DISPLAY_NAMES = {
@@ -71,6 +76,17 @@ class SessionAttentionResolutionPush:
     current_state: str
     occurred_at: datetime
     attention_push_at: datetime
+    collapse_id: str
+    targets: tuple[APNSDeviceTarget, ...]
+
+
+@dataclass(frozen=True)
+class WidgetTimelinePush:
+    owner_id: int
+    state_hash: str
+    previous_state_hash: str | None
+    previous_push_at: datetime | None
+    occurred_at: datetime
     collapse_id: str
     targets: tuple[APNSDeviceTarget, ...]
 
@@ -130,6 +146,24 @@ def clear_session_attention_resolution_stamp(
     if not _same_instant(session.last_attention_push_at, attention_push_at):
         return False
     session.last_attention_push_state = state
+    return True
+
+
+def clear_widget_timeline_push_stamp(
+    db: Session,
+    *,
+    owner_id: int,
+    state_hash: str,
+    previous_state_hash: str | None,
+    previous_push_at: datetime | None,
+) -> bool:
+    """Rollback a widget-set push stamp when APNs accepts no widget targets."""
+
+    state = db.query(APNSWidgetPushState).filter(APNSWidgetPushState.owner_id == owner_id).first()
+    if state is None or state.state_hash != state_hash:
+        return False
+    state.state_hash = previous_state_hash
+    state.last_push_at = previous_push_at
     return True
 
 
@@ -231,6 +265,53 @@ def prepare_session_attention_resolution_push(
     )
 
 
+def prepare_widget_timeline_push(
+    db: Session,
+    *,
+    owner_id: int | None,
+    occurred_at: datetime,
+) -> WidgetTimelinePush | None:
+    if owner_id is None:
+        return None
+
+    targets = _active_ios_targets_for_owner(
+        db,
+        owner_id=owner_id,
+        platform=WIDGET_PUSH_PLATFORM,
+        log_context="widget timeline push",
+    )
+    if not targets:
+        return None
+
+    state_hash = _widget_active_set_hash(db, now=occurred_at)
+    widget_state = db.query(APNSWidgetPushState).filter(APNSWidgetPushState.owner_id == owner_id).first()
+    if widget_state is None:
+        widget_state = APNSWidgetPushState(owner_id=owner_id)
+        db.add(widget_state)
+        db.flush()
+
+    previous_state_hash = widget_state.state_hash
+    previous_push_at = widget_state.last_push_at
+    previous_push_at_utc = _as_aware_utc(previous_push_at)
+    if previous_state_hash == state_hash:
+        return None
+    if previous_push_at_utc is not None and (occurred_at - previous_push_at_utc) < WIDGET_PUSH_DEBOUNCE:
+        return None
+
+    widget_state.state_hash = state_hash
+    widget_state.last_push_at = occurred_at
+
+    return WidgetTimelinePush(
+        owner_id=owner_id,
+        state_hash=state_hash,
+        previous_state_hash=previous_state_hash,
+        previous_push_at=previous_push_at,
+        occurred_at=occurred_at,
+        collapse_id=_collapse_id("lh-widget", str(owner_id)),
+        targets=targets,
+    )
+
+
 async def send_session_attention_push(notification: SessionAttentionPush) -> bool:
     settings = get_settings()
     if settings.testing or not settings.apns_enabled:
@@ -313,6 +394,46 @@ async def send_session_attention_resolution_push(notification: SessionAttentionR
     return accepted
 
 
+async def send_widget_timeline_push(notification: WidgetTimelinePush) -> bool:
+    settings = get_settings()
+    if settings.testing or not settings.apns_enabled:
+        return False
+
+    provider_token = _provider_token()
+    topic = f"{str(settings.apns_topic or 'ai.longhouse.ios').strip() or 'ai.longhouse.ios'}.push-type.widgets"
+    payload = build_widget_timeline_payload()
+    expiration = str(int((datetime.now(timezone.utc) + timedelta(minutes=30)).timestamp()))
+    accepted = False
+
+    async with httpx.AsyncClient(http2=True, timeout=10.0) as client:
+        for target in notification.targets:
+            host = _apns_host(target.push_environment)
+            headers = {
+                "authorization": f"bearer {provider_token}",
+                "apns-topic": topic,
+                "apns-push-type": "widgets",
+                "apns-collapse-id": notification.collapse_id,
+                "apns-expiration": expiration,
+            }
+            url = f"https://{host}/3/device/{target.device_token}"
+            try:
+                response = await client.post(url, headers=headers, json=payload)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("APNs widget push failed for user %s: %s", notification.owner_id, exc)
+                continue
+            if response.status_code >= 300:
+                logger.warning(
+                    "APNs rejected widget push for user %s (%s): %s %s",
+                    notification.owner_id,
+                    target.push_environment,
+                    response.status_code,
+                    response.text,
+                )
+            else:
+                accepted = True
+    return accepted
+
+
 def build_session_attention_payload(notification: SessionAttentionPush) -> dict:
     return {
         "aps": {
@@ -348,10 +469,19 @@ def build_session_attention_resolution_payload(notification: SessionAttentionRes
     }
 
 
+def build_widget_timeline_payload() -> dict:
+    return {
+        "aps": {
+            "content-changed": True,
+        },
+    }
+
+
 def _active_ios_targets_for_owner(
     db: Session,
     *,
     owner_id: int,
+    platform: str = "ios",
     log_context: str,
 ) -> tuple[APNSDeviceTarget, ...] | None:
     try:
@@ -369,7 +499,7 @@ def _active_ios_targets_for_owner(
             db.query(APNSDeviceRegistration)
             .filter(
                 APNSDeviceRegistration.owner_id == owner_id,
-                APNSDeviceRegistration.platform == "ios",
+                APNSDeviceRegistration.platform == platform,
                 APNSDeviceRegistration.revoked_at.is_(None),
             )
             .order_by(APNSDeviceRegistration.last_seen_at.desc(), APNSDeviceRegistration.created_at.desc())
@@ -389,6 +519,31 @@ def _active_ios_targets_for_owner(
         for registration in registrations
     )
     return targets or None
+
+
+def _widget_active_set_hash(db: Session, *, now: datetime) -> str:
+    since = now - timedelta(days=14)
+    sessions = (
+        db.query(AgentSession)
+        .filter(
+            AgentSession.user_state == "active",
+            AgentSession.started_at >= since,
+        )
+        .order_by(AgentSession.last_activity_at.desc(), AgentSession.started_at.desc())
+        .limit(8)
+        .all()
+    )
+    runtime_state_map = load_runtime_state_map(db, [session.id for session in sessions])
+    parts: list[str] = []
+    for session in sessions:
+        runtime_overlay = resolve_runtime_overlay(
+            session,
+            last_activity_at=session.last_activity_at,
+            runtime_state_map=runtime_state_map,
+            now=now,
+        )
+        parts.append(f"{session.id}:{runtime_overlay.presence_state or 'unknown'}")
+    return sha256("|".join(parts).encode("utf-8")).hexdigest()
 
 
 def _session_title(session: AgentSession) -> str:

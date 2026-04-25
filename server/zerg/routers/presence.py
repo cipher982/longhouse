@@ -46,10 +46,13 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
 from zerg.services.apns_sender import clear_session_attention_push_stamp
 from zerg.services.apns_sender import clear_session_attention_resolution_stamp
+from zerg.services.apns_sender import clear_widget_timeline_push_stamp
 from zerg.services.apns_sender import prepare_session_attention_push
 from zerg.services.apns_sender import prepare_session_attention_resolution_push
+from zerg.services.apns_sender import prepare_widget_timeline_push
 from zerg.services.apns_sender import send_session_attention_push
 from zerg.services.apns_sender import send_session_attention_resolution_push
+from zerg.services.apns_sender import send_widget_timeline_push
 from zerg.services.session_messages import deliver_queued_session_messages
 from zerg.services.session_messages import is_session_message_deliverable_state
 from zerg.services.session_messages import resolve_session_message_owner_id
@@ -180,10 +183,15 @@ async def upsert_presence(
             current_state=canonical_presence_state,
             occurred_at=_now,
         )
-        return canonical_presence_state, attention_push, attention_resolution_push
+        widget_push = prepare_widget_timeline_push(
+            write_db,
+            owner_id=owner_id,
+            occurred_at=_now,
+        )
+        return canonical_presence_state, attention_push, attention_resolution_push, widget_push
 
     ws = get_write_serializer()
-    canonical_presence_state, attention_push, attention_resolution_push = await ws.execute_or_direct(
+    canonical_presence_state, attention_push, attention_resolution_push, widget_push = await ws.execute_or_direct(
         _do_presence_writes,
         db,
         label="presence",
@@ -230,4 +238,22 @@ async def upsert_presence(
                     )
 
                 await ws.execute_or_direct(_clear_attention_resolution_stamp, db, label="presence-attention-resolution-clear")
+    if widget_push is not None:
+        try:
+            widget_accepted = await send_widget_timeline_push(widget_push)
+        except Exception:  # pragma: no cover - push send should never fail the hook path
+            logger.exception("Failed to send APNs widget timeline push for user %s", widget_push.owner_id)
+        else:
+            if not widget_accepted:
+
+                def _clear_widget_timeline_stamp(write_db: Session) -> bool:
+                    return clear_widget_timeline_push_stamp(
+                        write_db,
+                        owner_id=widget_push.owner_id,
+                        state_hash=widget_push.state_hash,
+                        previous_state_hash=widget_push.previous_state_hash,
+                        previous_push_at=widget_push.previous_push_at,
+                    )
+
+                await ws.execute_or_direct(_clear_widget_timeline_stamp, db, label="presence-widget-push-clear")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
