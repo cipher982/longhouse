@@ -80,6 +80,7 @@ pub struct BridgeSendConfig {
     pub session_id: String,
     pub text: String,
     pub state_root: Option<PathBuf>,
+    pub allow_direct_ws_fallback: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -781,8 +782,8 @@ pub async fn cmd_codex_bridge_send(config: BridgeSendConfig) -> Result<BridgeSen
         .clone()
         .context("bridge state is missing thread_id")?;
 
-    // Try daemon IPC socket first — routes through the persistent connection
-    // which preserves full conversation context.
+    // Managed sends normally route through the daemon IPC socket so they use
+    // the persistent app-server connection and preserve conversation context.
     let paths = resolve_bridge_paths(config.state_root.as_deref(), &config.session_id, None)?;
     let sock_path = ipc_socket_path(&paths.state_file);
     #[cfg(unix)]
@@ -807,14 +808,31 @@ pub async fn cmd_codex_bridge_send(config: BridgeSendConfig) -> Result<BridgeSen
                         "IPC dispatch may have succeeded; not retrying to avoid duplicate turn",
                     ));
                 }
+                if !config.allow_direct_ws_fallback {
+                    bail!(
+                        "IPC dispatch failed for managed Codex session {}; refusing direct WebSocket fallback. Restart the bridge or pass --allow-direct-ws-fallback for explicit debug/operator use: {e}",
+                        config.session_id
+                    );
+                }
                 eprintln!(
-                    "[codex-bridge] IPC connect failed, falling back to direct WebSocket: {e}"
+                    "[codex-bridge] IPC connect failed; explicit --allow-direct-ws-fallback enabled, routing directly to Codex app-server: {e}"
                 );
             }
         }
     }
 
-    // Fallback: direct WebSocket (loses conversation context but still works)
+    if !config.allow_direct_ws_fallback {
+        bail!(
+            "IPC socket {} is missing for managed Codex session {}; refusing direct WebSocket fallback. Restart the bridge or pass --allow-direct-ws-fallback for explicit debug/operator use",
+            sock_path.display(),
+            config.session_id
+        );
+    }
+    eprintln!(
+        "[codex-bridge] explicit --allow-direct-ws-fallback enabled; direct WebSocket sends may lose daemon conversation context"
+    );
+
+    // Explicit debug/operator fallback: direct WebSocket.
     let ws_url = state
         .ws_url
         .clone()
@@ -2751,6 +2769,44 @@ mod tests {
         let state = Path::new("/tmp/codex-bridge/session-42.json");
         let sock = ipc_socket_path(state);
         assert_eq!(sock, Path::new("/tmp/codex-bridge/session-42.sock"));
+    }
+
+    #[tokio::test]
+    async fn bridge_send_refuses_direct_ws_fallback_without_explicit_flag() {
+        let temp = tempfile::tempdir().unwrap();
+        let session_id = "session-123";
+        let state = BridgeStateFile {
+            session_id: session_id.to_string(),
+            cwd: temp.path().display().to_string(),
+            codex_bin: "codex".to_string(),
+            ws_url: Some("ws://127.0.0.1:9".to_string()),
+            thread_id: Some("thread-123".to_string()),
+            thread_path: None,
+            pid: 42,
+            status: "ready".to_string(),
+            log_file: temp.path().join("bridge.log").display().to_string(),
+            active_turn_id: None,
+            last_turn_status: None,
+            last_error: None,
+            thread_subscription_status: None,
+            thread_subscription_attempts: 0,
+            thread_subscription_last_error: None,
+            updated_at: Utc::now().to_rfc3339(),
+        };
+        write_state_file(&temp.path().join(format!("{session_id}.json")), &state).unwrap();
+
+        let err = cmd_codex_bridge_send(BridgeSendConfig {
+            session_id: session_id.to_string(),
+            text: "continue".to_string(),
+            state_root: Some(temp.path().to_path_buf()),
+            allow_direct_ws_fallback: false,
+        })
+        .await
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("refusing direct WebSocket fallback"));
+        assert!(err.contains("--allow-direct-ws-fallback"));
     }
 
     #[test]
