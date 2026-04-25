@@ -284,7 +284,13 @@ def prepare_widget_timeline_push(
         return None
 
     state_hash = _widget_active_set_hash(db, now=occurred_at)
-    widget_state = db.query(APNSWidgetPushState).filter(APNSWidgetPushState.owner_id == owner_id).first()
+    try:
+        widget_state = db.query(APNSWidgetPushState).filter(APNSWidgetPushState.owner_id == owner_id).first()
+    except OperationalError as exc:
+        if _is_missing_optional_table(exc):
+            logger.warning("APNs widget state table unavailable; skipping widget timeline push for user %s", owner_id)
+            return None
+        raise
     if widget_state is None:
         widget_state = APNSWidgetPushState(owner_id=owner_id)
         db.add(widget_state)
@@ -412,6 +418,7 @@ async def send_widget_timeline_push(notification: WidgetTimelinePush) -> bool:
                 "authorization": f"bearer {provider_token}",
                 "apns-topic": topic,
                 "apns-push-type": "widgets",
+                "apns-priority": "5",
                 "apns-collapse-id": notification.collapse_id,
                 "apns-expiration": expiration,
             }

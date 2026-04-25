@@ -475,6 +475,7 @@ def test_presence_widget_push_uses_set_hash_and_debounce(tmp_path):
                 ("thinking", 0),
                 ("running", 5),
                 ("running", 35),
+                ("running", 70),
             ]:
                 response = client.post(
                     "/agents/presence",
@@ -499,6 +500,199 @@ def test_presence_widget_push_uses_set_hash_and_debounce(tmp_path):
         state = db.query(APNSWidgetPushState).filter(APNSWidgetPushState.owner_id == 1).one()
         assert state.state_hash == second_push.state_hash
 
+    _cleanup_overrides()
+    engine.dispose()
+
+
+def test_presence_widget_push_requires_widget_token(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+
+    with SessionLocal() as db:
+        db.add(User(id=1, email="user@example.com", role="ADMIN"))
+        db.commit()
+        db.add(
+            APNSDeviceRegistration(
+                owner_id=1,
+                platform="ios",
+                device_token="f" * 64,
+                push_environment="sandbox",
+                app_build_id="0.1.0-dev+aaaa1111",
+            )
+        )
+        db.add(
+            AgentSession(
+                id=session_id,
+                provider="codex",
+                environment="test",
+                project="zerg",
+                started_at=datetime.now(timezone.utc),
+                loop_mode="manual",
+                summary_title="No widget token",
+            )
+        )
+        db.commit()
+
+    def override_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    def override_verify_agents_token():
+        return SimpleNamespace(device_id="devbox", id="token-1", owner_id=1)
+
+    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+
+    widget_send_mock = AsyncMock(return_value=True)
+    with patch("zerg.routers.presence.send_widget_timeline_push", widget_send_mock):
+        with TestClient(api_app) as client:
+            response = client.post(
+                "/agents/presence",
+                json={
+                    "session_id": session_id,
+                    "state": "thinking",
+                    "occurred_at": datetime.now(timezone.utc).isoformat(),
+                },
+                headers={"X-Agents-Token": "device-token"},
+            )
+            assert response.status_code == 204, response.text
+
+    widget_send_mock.assert_not_awaited()
+    with SessionLocal() as db:
+        assert db.query(APNSWidgetPushState).count() == 0
+
+    _cleanup_overrides()
+    engine.dispose()
+
+
+def test_presence_widget_push_send_failure_clears_stamp(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+
+    with SessionLocal() as db:
+        db.add(User(id=1, email="user@example.com", role="ADMIN"))
+        db.commit()
+        db.add(
+            APNSDeviceRegistration(
+                owner_id=1,
+                platform="ios_widget",
+                device_token="f" * 64,
+                push_environment="sandbox",
+                app_build_id="0.1.0-dev+aaaa1111",
+            )
+        )
+        db.add(
+            AgentSession(
+                id=session_id,
+                provider="codex",
+                environment="test",
+                project="zerg",
+                started_at=datetime.now(timezone.utc),
+                loop_mode="manual",
+                summary_title="Widget send failure",
+            )
+        )
+        db.commit()
+
+    def override_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    def override_verify_agents_token():
+        return SimpleNamespace(device_id="devbox", id="token-1", owner_id=1)
+
+    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+
+    widget_send_mock = AsyncMock(return_value=False)
+    with patch("zerg.routers.presence.send_widget_timeline_push", widget_send_mock):
+        with TestClient(api_app) as client:
+            response = client.post(
+                "/agents/presence",
+                json={
+                    "session_id": session_id,
+                    "state": "thinking",
+                    "occurred_at": datetime.now(timezone.utc).isoformat(),
+                },
+                headers={"X-Agents-Token": "device-token"},
+            )
+            assert response.status_code == 204, response.text
+
+    assert widget_send_mock.await_count == 1
+    with SessionLocal() as db:
+        state = db.query(APNSWidgetPushState).filter(APNSWidgetPushState.owner_id == 1).one()
+        assert state.state_hash is None
+        assert state.last_push_at is None
+
+    _cleanup_overrides()
+    engine.dispose()
+
+
+def test_presence_widget_push_missing_state_table_degrades(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+
+    with SessionLocal() as db:
+        db.add(User(id=1, email="user@example.com", role="ADMIN"))
+        db.commit()
+        db.add(
+            APNSDeviceRegistration(
+                owner_id=1,
+                platform="ios_widget",
+                device_token="f" * 64,
+                push_environment="sandbox",
+                app_build_id="0.1.0-dev+aaaa1111",
+            )
+        )
+        db.add(
+            AgentSession(
+                id=session_id,
+                provider="codex",
+                environment="test",
+                project="zerg",
+                started_at=datetime.now(timezone.utc),
+                loop_mode="manual",
+                summary_title="Missing widget state table",
+            )
+        )
+        db.commit()
+
+    APNSWidgetPushState.__table__.drop(bind=engine)
+
+    def override_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    def override_verify_agents_token():
+        return SimpleNamespace(device_id="devbox", id="token-1", owner_id=1)
+
+    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+
+    widget_send_mock = AsyncMock(return_value=True)
+    with patch("zerg.routers.presence.send_widget_timeline_push", widget_send_mock):
+        with TestClient(api_app) as client:
+            response = client.post(
+                "/agents/presence",
+                json={
+                    "session_id": session_id,
+                    "state": "thinking",
+                    "occurred_at": datetime.now(timezone.utc).isoformat(),
+                },
+                headers={"X-Agents-Token": "device-token"},
+            )
+            assert response.status_code == 204, response.text
+
+    widget_send_mock.assert_not_awaited()
     _cleanup_overrides()
     engine.dispose()
 
