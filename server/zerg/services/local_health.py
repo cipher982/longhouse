@@ -25,6 +25,10 @@ from typing import Any
 from zerg.managed_phase_contract import display_label_for_phase
 from zerg.managed_phase_contract import is_known_raw_phase
 from zerg.provider_cli_contract import CODEX_BIN_ENV
+from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_BRIDGE_STATE
+from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_MISSING
+from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PATH
+from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PROCESS
 from zerg.services.longhouse_paths import get_agent_db_path
 from zerg.services.longhouse_paths import get_agent_log_dir
 from zerg.services.longhouse_paths import get_agent_outbox_dir
@@ -168,7 +172,7 @@ def _collect_provider_clis() -> dict[str, Any]:
         codex_resolution_error = None if codex_path else f"{CODEX_BIN_ENV} did not resolve to an executable"
     else:
         codex_path = shutil.which("codex")
-        codex_source = "PATH" if codex_path else "missing"
+        codex_source = PROVIDER_CLI_SOURCE_PATH if codex_path else PROVIDER_CLI_SOURCE_MISSING
         codex_resolution_error = None if codex_path else "`codex` not found on PATH"
     return {
         "codex": {
@@ -928,7 +932,10 @@ def _compute_process_snapshot() -> tuple[list[dict[str, Any]], list[dict[str, An
                 {
                     "session_id": session_id,
                     "provider": provider,
-                    "provider_cli": _provider_cli_reference(cmdline[0] if cmdline else None, source="process"),
+                    "provider_cli": _provider_cli_reference(
+                        cmdline[0] if cmdline else None,
+                        source=PROVIDER_CLI_SOURCE_PROCESS,
+                    ),
                     "pid": pid,
                     "cwd": cwd,
                     "workspace_label": Path(cwd).name if cwd else None,
@@ -1294,7 +1301,7 @@ def _collect_managed_codex_sessions(
                     "provider": "codex",
                     "control_path": CONTROL_PATH_MANAGED,
                     "liveness_model": LIVENESS_MODEL_CODEX_BRIDGE,
-                    "provider_cli": _provider_cli_reference(codex_bin, source="bridge_state"),
+                    "provider_cli": _provider_cli_reference(codex_bin, source=PROVIDER_CLI_SOURCE_BRIDGE_STATE),
                     "pid": bridge_pid,
                     "workspace_label": Path(str(state.get("cwd") or "")).name or None,
                     "status": "orphan",
@@ -1338,7 +1345,7 @@ def _collect_managed_codex_sessions(
                 "provider": "codex",
                 "control_path": CONTROL_PATH_MANAGED,
                 "liveness_model": LIVENESS_MODEL_CODEX_BRIDGE,
-                "provider_cli": _provider_cli_reference(codex_bin, source="bridge_state"),
+                "provider_cli": _provider_cli_reference(codex_bin, source=PROVIDER_CLI_SOURCE_BRIDGE_STATE),
                 "workspace_label": workspace_label,
                 "branch": None,
                 "state": normalized_state,
@@ -1460,7 +1467,7 @@ def _collect_managed_sessions_by_process(
                 "provider": provider,
                 "control_path": CONTROL_PATH_MANAGED,
                 "liveness_model": LIVENESS_MODEL_PROCESS_SCAN,
-                "provider_cli": proc_row.get("provider_cli") or _provider_cli_reference(None, source="process"),
+                "provider_cli": proc_row.get("provider_cli") or _provider_cli_reference(None, source=PROVIDER_CLI_SOURCE_PROCESS),
                 "pid": proc_row.get("pid"),
                 "workspace_label": workspace_label,
                 "cwd": workspace_path,
@@ -1508,7 +1515,7 @@ def _collect_unmanaged_processes(
                 "provider": _normalize_optional_string(proc_row.get("provider")),
                 "control_path": CONTROL_PATH_UNMANAGED,
                 "liveness_model": LIVENESS_MODEL_PROCESS_SCAN,
-                "provider_cli": proc_row.get("provider_cli") or _provider_cli_reference(None, source="process"),
+                "provider_cli": proc_row.get("provider_cli") or _provider_cli_reference(None, source=PROVIDER_CLI_SOURCE_PROCESS),
                 "pid": proc_row.get("pid"),
                 "workspace_label": _normalize_optional_string(proc_row.get("workspace_label")),
                 "cwd": _normalize_optional_string(proc_row.get("cwd")),

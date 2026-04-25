@@ -83,6 +83,16 @@ def test_resolve_codex_binary_returns_none_when_codex_is_missing(monkeypatch):
     assert codex_cli._resolve_codex_binary_with_source() == {"path": None, "source": "missing"}
 
 
+def test_codex_version_uses_operator_timeout(monkeypatch):
+    def fake_run(*_args, **kwargs):
+        assert kwargs["timeout"] == codex_cli._CODEX_VERSION_TIMEOUT_SECONDS
+        return SimpleNamespace(returncode=0, stdout="codex-cli 9.9.9\n", stderr="")
+
+    monkeypatch.setattr(codex_cli.subprocess, "run", fake_run)
+
+    assert codex_cli._codex_version("/tmp/codex") == {"ok": True, "value": "codex-cli 9.9.9", "error": None}
+
+
 def test_codex_doctor_reports_binary_legacy_artifacts_and_bridge_state(monkeypatch, tmp_path):
     runner = CliRunner()
     home = tmp_path / "home"
@@ -135,6 +145,10 @@ def test_codex_doctor_reports_binary_legacy_artifacts_and_bridge_state(monkeypat
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
+    assert set(payload) == {"codex_binary", "legacy_artifacts", "bridge"}
+    assert set(payload["codex_binary"]) == {"path", "source", "version", "env_override"}
+    assert set(payload["legacy_artifacts"]) == {"launcher", "managed_runtime_dir"}
+    assert set(payload["bridge"]) == {"state_root", "state_root_exists", "readyz_checked", "sessions"}
     assert payload["codex_binary"]["path"] == str(codex_bin.resolve())
     assert payload["codex_binary"]["source"] == "--codex-bin"
     assert payload["codex_binary"]["version"] == {"ok": True, "value": "codex-cli 9.9.9", "error": None}
@@ -142,6 +156,26 @@ def test_codex_doctor_reports_binary_legacy_artifacts_and_bridge_state(monkeypat
     assert payload["legacy_artifacts"]["launcher"]["legacy_marker"] is True
     assert payload["legacy_artifacts"]["managed_runtime_dir"]["exists"] is True
     assert payload["bridge"]["state_root"] == str(state_root)
+    assert set(payload["bridge"]["sessions"][0]) == {
+        "session_id",
+        "state_file",
+        "log_file",
+        "readable",
+        "status",
+        "pid",
+        "pid_alive",
+        "lock_file",
+        "lock_file_exists",
+        "lock_held",
+        "codex_bin",
+        "ws_url",
+        "readyz_healthy",
+        "thread_id",
+        "thread_path",
+        "last_turn_status",
+        "active_turn_id",
+        "updated_at",
+    }
     assert payload["bridge"]["sessions"][0]["session_id"] == "session-123"
     assert payload["bridge"]["sessions"][0]["pid_alive"] is True
     assert payload["bridge"]["sessions"][0]["lock_file_exists"] is True
@@ -172,13 +206,13 @@ def test_codex_doctor_reports_binary_legacy_artifacts_and_bridge_state(monkeypat
 def test_active_turn_survived_tui_exit_ignores_completed_rollout(monkeypatch, tmp_path):
     rollout = tmp_path / "rollout.jsonl"
     rollout.write_text(
-        '\n'.join(
+        "\n".join(
             [
                 json.dumps({"type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn-live"}}),
                 json.dumps({"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "turn-live"}}),
             ]
         )
-        + '\n'
+        + "\n"
     )
     state_file = tmp_path / "state.json"
     state_file.write_text(
@@ -201,7 +235,7 @@ def test_active_turn_survived_tui_exit_ignores_completed_rollout(monkeypatch, tm
 def test_active_turn_survived_tui_exit_preserves_live_turn(monkeypatch, tmp_path):
     rollout = tmp_path / "rollout.jsonl"
     rollout.write_text(
-        json.dumps({"type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn-live"}}) + '\n'
+        json.dumps({"type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn-live"}}) + "\n"
     )
     state_file = tmp_path / "state.json"
     state_file.write_text(
@@ -224,7 +258,7 @@ def test_active_turn_survived_tui_exit_preserves_live_turn(monkeypatch, tmp_path
 def test_active_turn_survived_tui_exit_requires_healthy_readyz(monkeypatch, tmp_path):
     rollout = tmp_path / "rollout.jsonl"
     rollout.write_text(
-        json.dumps({"type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn-live"}}) + '\n'
+        json.dumps({"type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn-live"}}) + "\n"
     )
     state_file = tmp_path / "state.json"
     state_file.write_text(
@@ -247,13 +281,13 @@ def test_active_turn_survived_tui_exit_requires_healthy_readyz(monkeypatch, tmp_
 def test_active_turn_survived_tui_exit_checks_latest_rollout_when_active_turn_missing(monkeypatch, tmp_path):
     rollout = tmp_path / "rollout.jsonl"
     rollout.write_text(
-        '\n'.join(
+        "\n".join(
             [
                 json.dumps({"type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn-live"}}),
                 json.dumps({"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "turn-live"}}),
             ]
         )
-        + '\n'
+        + "\n"
     )
     state_file = tmp_path / "state.json"
     state_file.write_text(

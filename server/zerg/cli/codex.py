@@ -27,6 +27,9 @@ from zerg.cli._common import load_api_credentials as _load_api_credentials
 from zerg.cli._common import open_session_url as _open_session_url
 from zerg.provider_cli_contract import CODEX_BIN_ENV
 from zerg.provider_cli_contract import LEGACY_MANAGED_CODEX_LAUNCHER_MARKER
+from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_CODEX_BIN_FLAG
+from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_MISSING
+from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PATH
 from zerg.services.session_continuity import get_machine_name_label
 from zerg.services.shipper.service import get_engine_executable
 from zerg.session_loop_mode import SessionLoopMode
@@ -42,6 +45,7 @@ _CODEX_DISABLE_UPDATE_CHECK_CONFIG = "check_for_update_on_startup=false"
 _ROLLOUT_TURN_EVENT_TYPES = {"task_started", "task_complete", "turn_aborted"}
 _ROLLOUT_TERMINAL_EVENT_TYPES = {"task_complete", "turn_aborted"}
 _ROLLOUT_TAIL_LINES = 256
+_CODEX_VERSION_TIMEOUT_SECONDS = 5
 
 
 def _resolve_explicit_codex_binary(candidate: str, *, source: str) -> str:
@@ -67,12 +71,15 @@ def _resolve_codex_binary(explicit: str | None = None) -> str | None:
 def _resolve_codex_binary_with_source(explicit: str | None = None) -> dict[str, str | None]:
     normalized = str(explicit or "").strip()
     if normalized:
-        return {"path": _resolve_explicit_codex_binary(normalized, source="--codex-bin"), "source": "--codex-bin"}
+        return {
+            "path": _resolve_explicit_codex_binary(normalized, source=PROVIDER_CLI_SOURCE_CODEX_BIN_FLAG),
+            "source": PROVIDER_CLI_SOURCE_CODEX_BIN_FLAG,
+        }
     env_candidate = str(os.environ.get(CODEX_BIN_ENV) or "").strip()
     if env_candidate:
         return {"path": _resolve_explicit_codex_binary(env_candidate, source=CODEX_BIN_ENV), "source": CODEX_BIN_ENV}
     resolved = shutil.which("codex")
-    return {"path": resolved, "source": "PATH" if resolved else "missing"}
+    return {"path": resolved, "source": PROVIDER_CLI_SOURCE_PATH if resolved else PROVIDER_CLI_SOURCE_MISSING}
 
 
 def _codex_version(codex_bin: str | None) -> dict[str, object]:
@@ -84,7 +91,7 @@ def _codex_version(codex_bin: str | None) -> dict[str, object]:
             check=False,
             capture_output=True,
             text=True,
-            timeout=3,
+            timeout=_CODEX_VERSION_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {"ok": False, "value": None, "error": str(exc)}
@@ -131,7 +138,7 @@ def _lock_file_held(lock_path: Path) -> bool | None:
 
         with lock_path.open("a+") as handle:
             try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(handle.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
             except BlockingIOError:
                 return True
             else:
@@ -242,10 +249,10 @@ def _render_codex_doctor(payload: dict[str, object], *, json_output: bool) -> No
     runtime = dict(artifacts["managed_runtime_dir"])
     typer.echo("")
     typer.echo("Legacy artifacts")
-    typer.echo(f"  longhouse-codex: {'present' if launcher.get('exists') else 'absent'}" f" ({launcher.get('path')})")
+    typer.echo(f"  longhouse-codex: {'present' if launcher.get('exists') else 'absent'} ({launcher.get('path')})")
     if launcher.get("exists"):
         typer.echo(f"    legacy marker: {'yes' if launcher.get('legacy_marker') else 'no'}")
-    typer.echo(f"  managed runtime dir: {'present' if runtime.get('exists') else 'absent'}" f" ({runtime.get('path')})")
+    typer.echo(f"  managed runtime dir: {'present' if runtime.get('exists') else 'absent'} ({runtime.get('path')})")
 
     bridge = dict(payload["bridge"])
     sessions = list(bridge.get("sessions") or [])
@@ -697,7 +704,7 @@ def codex_doctor(
     codex_bin: str | None = typer.Option(
         None,
         "--codex-bin",
-        help=("Debug override for the Codex executable to inspect " f"(defaults to {CODEX_BIN_ENV}, then `codex` on PATH)."),
+        help=(f"Debug override for the Codex executable to inspect (defaults to {CODEX_BIN_ENV}, then `codex` on PATH)."),
     ),
     state_root: Path | None = typer.Option(
         None,
