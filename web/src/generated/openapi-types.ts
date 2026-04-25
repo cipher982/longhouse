@@ -2913,6 +2913,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sessions/{session_id}/draft-reply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Draft Reply For Live Session
+         * @description Generate a suggested next user message for a live managed-local session.
+         */
+        post: operations["draft_reply_for_live_session_sessions__session_id__draft_reply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/sessions/managed-local/this-device": {
         parameters: {
             query?: never;
@@ -2975,6 +2995,26 @@ export interface paths {
          * @description Machine-facing explicit live-send surface for managed-local sessions.
          */
         post: operations["send_to_live_session_agents_agents_sessions__session_id__send_live_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/sessions/{session_id}/draft-reply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Draft Reply For Live Session Agents
+         * @description Machine-facing draft-reply surface for managed-local sessions.
+         */
+        post: operations["draft_reply_for_live_session_agents_agents_sessions__session_id__draft_reply_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7587,6 +7627,35 @@ export interface components {
              * @description Local reattach command for managed-local sessions
              */
             attach_command?: string | null;
+        };
+        /**
+         * SessionDraftReplyRequest
+         * @description Request a suggested next user message without sending it.
+         */
+        SessionDraftReplyRequest: {
+            /**
+             * Max Chars
+             * @description Maximum draft length
+             * @default 1200
+             */
+            max_chars: number;
+        };
+        /**
+         * SessionDraftReplyResponse
+         * @description Suggested next user message for a managed session.
+         */
+        SessionDraftReplyResponse: {
+            /** Draft Text */
+            draft_text: string;
+            /** Model */
+            model: string;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Based On Event Ids */
+            based_on_event_ids: number[];
         };
         /**
          * SessionExecutionHome
@@ -14150,6 +14219,44 @@ export interface operations {
             };
         };
     };
+    draft_reply_for_live_session_sessions__session_id__draft_reply_post: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SessionDraftReplyRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionDraftReplyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     launch_managed_local_this_device_sessions_managed_local_this_device_post: {
         parameters: {
             query?: never;
@@ -14275,6 +14382,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    draft_reply_for_live_session_agents_agents_sessions__session_id__draft_reply_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SessionDraftReplyRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionDraftReplyResponse"];
                 };
             };
             /** @description Validation Error */

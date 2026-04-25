@@ -19,19 +19,21 @@ from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.oikos_auth import get_current_oikos_user
+from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionTurn
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.services import session_chat_impl
-from zerg.services.managed_local_event_polling import managed_local_events_include_expected_turn
 from zerg.services.managed_local_control import ManagedLocalPhaseUpdate
 from zerg.services.managed_local_control import ManagedLocalTerminalResult
+from zerg.services.managed_local_event_polling import managed_local_events_include_expected_turn
 from zerg.services.session_continuity import session_lock_manager
 from zerg.services.session_turns import create_session_turn
 from zerg.services.session_turns import mark_session_turn_send_accepted
 from zerg.session_execution_home import ManagedSessionTransport
+from zerg.session_execution_home import SessionExecutionHome
 
 
 def _make_db(tmp_path):
@@ -295,6 +297,101 @@ def test_managed_local_codex_dispatch_returns_json_ack(monkeypatch, tmp_path):
             assert data["session_id"] == str(source_session.id)
         finally:
             asyncio.run(session_lock_manager.release(str(source_session.id)))
+            api_app_ref.dependency_overrides = {}
+
+
+def test_managed_local_draft_reply_returns_prefill(monkeypatch, tmp_path):
+    """Draft reply generates a composer prefill without dispatching to the live session."""
+    session_local = _make_db(tmp_path)
+    llm_calls: list[dict[str, object]] = []
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            llm_calls.append(kwargs)
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content="Please run the focused iOS tests and report the result.")
+                    )
+                ]
+            )
+
+    class FakeClient:
+        chat = SimpleNamespace(completions=FakeCompletions())
+
+        async def close(self):
+            return None
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        source_session = _seed_managed_local_session(db, runner=runner, provider="codex")
+        db.add_all(
+            [
+                AgentEvent(
+                    session_id=source_session.id,
+                    role="user",
+                    content_text="Let's add iOS steering.",
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                AgentEvent(
+                    session_id=source_session.id,
+                    role="assistant",
+                    content_text="I added the endpoint and need to run tests.",
+                    timestamp=datetime.now(timezone.utc),
+                ),
+            ]
+        )
+        db.commit()
+        client, api_app_ref = _make_client(db, user)
+
+        monkeypatch.setattr(
+            session_chat_impl,
+            "get_llm_client_with_db_fallback",
+            lambda use_case, db=None: (FakeClient(), "test-draft-model", "openai"),
+        )
+
+        try:
+            response = client.post(
+                f"/api/sessions/{source_session.id}/draft-reply",
+                json={"max_chars": 500},
+            )
+            assert response.status_code == 200, response.text
+            data = response.json()
+            assert data["draft_text"] == "Please run the focused iOS tests and report the result."
+            assert data["model"] == "test-draft-model"
+            assert data["based_on_event_ids"]
+            assert len(llm_calls) == 1
+            assert llm_calls[0]["model"] == "test-draft-model"
+            assert "max_tokens" not in llm_calls[0]
+            prompt = llm_calls[0]["messages"][1]["content"]
+            assert "Let's add iOS steering." in prompt
+            assert "need to run tests" in prompt
+            assert asyncio.run(session_lock_manager.get_lock_info(str(source_session.id))) is None
+        finally:
+            asyncio.run(session_lock_manager.release(str(source_session.id)))
+            api_app_ref.dependency_overrides = {}
+
+
+def test_managed_local_draft_reply_requires_live_control(tmp_path):
+    """Draft reply is not exposed for imported/unmanaged sessions."""
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        source_session = _seed_managed_local_session(db, runner=runner, provider="codex")
+        source_session.execution_home = SessionExecutionHome.LEGACY.value
+        source_session.managed_transport = None
+        source_session.source_runner_id = None
+        db.commit()
+        client, api_app_ref = _make_client(db, user)
+
+        try:
+            response = client.post(
+                f"/api/sessions/{source_session.id}/draft-reply",
+                json={"max_chars": 500},
+            )
+            assert response.status_code == 409
+        finally:
             api_app_ref.dependency_overrides = {}
 
 

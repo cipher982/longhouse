@@ -291,3 +291,10 @@ struct SessionTurnsResponse: Codable, Sendable {
     let turns: [SessionTurn]
     let total: Int
 }
+
+struct DraftReplyResponse: Codable, Sendable {
+    let draftText: String
+    let model: String
+    let generatedAt: String
+    let basedOnEventIds: [Int]
+}

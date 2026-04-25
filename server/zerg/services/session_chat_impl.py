@@ -7,6 +7,7 @@ is too large to live inline in the router endpoints.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import time
@@ -33,6 +34,7 @@ from zerg.metrics import managed_turn_wait_total
 from zerg.models.agents import AgentEvent
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
+from zerg.models_config import get_llm_client_with_db_fallback
 from zerg.observability import get_tracer
 from zerg.observability import mark_span_error
 from zerg.observability import set_span_attributes
@@ -92,6 +94,8 @@ _MANAGED_LOCAL_SYNC_PENDING_NOTE = "".join(
         "to Longhouse.",
     ]
 )
+_DRAFT_REPLY_EVENT_LIMIT = 80
+_DRAFT_REPLY_EVENT_CHAR_LIMIT = 1800
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +144,15 @@ class ManagedLocalSessionLaunchResponse(BaseModel):
     attach_command: str
 
 
+class SessionDraftReplyResponse(BaseModel):
+    """Suggested next user message for a managed session."""
+
+    draft_text: str
+    model: str
+    generated_at: datetime
+    based_on_event_ids: list[int]
+
+
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
@@ -177,6 +190,123 @@ def _managed_local_launch_response(result) -> ManagedLocalSessionLaunchResponse:
         source_runner_name=session.source_runner_name or "",
         managed_session_name=session.managed_session_name or "",
         attach_command=result.attach_command,
+    )
+
+
+def _event_content_for_draft(event: AgentEvent) -> str:
+    if event.tool_name:
+        payload = event.content_text or event.tool_output_text or ""
+        if event.tool_input_json:
+            try:
+                payload = f"input={json.dumps(event.tool_input_json, sort_keys=True)}\n{payload}".strip()
+            except TypeError:
+                payload = str(event.tool_input_json)
+        return f"{event.role} tool {event.tool_name}: {payload}".strip()
+    if event.role == "tool":
+        return f"tool result: {event.tool_output_text or event.content_text or ''}".strip()
+    return f"{event.role}: {event.content_text or ''}".strip()
+
+
+def _format_event_for_draft(event: AgentEvent) -> str:
+    text = _event_content_for_draft(event).strip()
+    if len(text) > _DRAFT_REPLY_EVENT_CHAR_LIMIT:
+        text = f"{text[:_DRAFT_REPLY_EVENT_CHAR_LIMIT].rstrip()} ..."
+    return f"[{event.id}] {text}"
+
+
+def _build_draft_reply_messages(*, source_session, events: list[AgentEvent], max_chars: int) -> list[dict[str, str]]:
+    transcript = "\n\n".join(_format_event_for_draft(event) for event in events)
+    metadata_lines = [
+        f"provider: {source_session.provider or 'unknown'}",
+        f"project: {source_session.project or 'unknown'}",
+        f"cwd: {source_session.cwd or 'unknown'}",
+        f"git_branch: {source_session.git_branch or 'unknown'}",
+        f"session_status: {getattr(source_session, 'status', None) or 'unknown'}",
+    ]
+    system = (
+        "You draft the next human operator message for a coding-agent session. "
+        "Return only the message text. Do not send the message. Do not include explanations, "
+        "markdown fences, labels, or alternatives. Keep it concise, actionable, and faithful to "
+        "the transcript. If the right next step is unclear, ask the agent for the smallest useful "
+        "clarification or status update. Never claim that the user approved, tested, or performed "
+        "work unless that is explicit in the transcript."
+    )
+    user = f"Draft one next user message of at most {max_chars} characters.\n\n" "Session metadata:\n" + "\n".join(
+        metadata_lines
+    ) + "\n\nRecent transcript tail:\n" + (transcript or "(no transcript events)")
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+
+
+async def _close_llm_client(client) -> None:
+    close = getattr(client, "close", None)
+    if close is None:
+        return
+    result = close()
+    if inspect.isawaitable(result):
+        await result
+
+
+async def _build_managed_local_draft_reply_response(
+    *,
+    source_session,
+    request_id: str,
+    max_chars: int,
+    db: Session,
+) -> SessionDraftReplyResponse:
+    _assert_live_session_send_available(source_session)
+
+    events = AgentsStore(db).get_session_events(
+        source_session.id,
+        branch_mode="head",
+        limit=_DRAFT_REPLY_EVENT_LIMIT,
+        load_from_end=True,
+    )
+    if not events:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This session has no transcript events to draft from.",
+        )
+
+    try:
+        client, model, _provider = get_llm_client_with_db_fallback("summarization", db=db)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Draft reply is unavailable because no text LLM provider is configured.",
+        ) from exc
+
+    try:
+        response = await client.chat.completions.create(
+            model=model,
+            messages=_build_draft_reply_messages(source_session=source_session, events=events, max_chars=max_chars),
+        )
+    except Exception as exc:
+        logger.exception("[%s] Draft reply generation failed for session %s", request_id, source_session.id)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Draft reply generation failed.",
+        ) from exc
+    finally:
+        await _close_llm_client(client)
+
+    raw = response.choices[0].message.content if getattr(response, "choices", None) else ""
+    draft_text = str(raw or "").strip()
+    if not draft_text:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Draft reply generation returned an empty response.",
+        )
+    if len(draft_text) > max_chars:
+        draft_text = draft_text[:max_chars].rstrip()
+
+    return SessionDraftReplyResponse(
+        draft_text=draft_text,
+        model=str(model),
+        generated_at=datetime.now(timezone.utc),
+        based_on_event_ids=[event.id for event in events],
     )
 
 
