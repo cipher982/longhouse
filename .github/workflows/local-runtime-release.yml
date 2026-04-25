@@ -43,15 +43,9 @@ jobs:
       - name: Build engine binary
         run: cargo build --manifest-path engine/Cargo.toml --release --bin longhouse-engine
 
-      - name: Download managed Codex (stock upstream)
-        run: |
-          mkdir -p binaries
-          scripts/release/download-managed-codex.sh \
-            --target x86_64-unknown-linux-gnu \
-            --output binaries/longhouse-codex-linux-x64
-
       - name: Collect engine binary
         run: |
+          mkdir -p binaries
           cp engine/target/release/longhouse-engine binaries/longhouse-engine-linux-x64
           chmod +x binaries/longhouse-engine-linux-x64
 
@@ -59,9 +53,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: runtime-longhouse-engine-linux-x64
-          path: |
-            binaries/longhouse-engine-linux-x64
-            binaries/longhouse-codex-linux-x64
+          path: binaries/longhouse-engine-linux-x64
           retention-days: 7
 
   build-engine-linux-arm64:
@@ -86,15 +78,9 @@ jobs:
       - name: Build engine binary
         run: cargo build --manifest-path engine/Cargo.toml --release --bin longhouse-engine
 
-      - name: Download managed Codex (stock upstream)
-        run: |
-          mkdir -p binaries
-          scripts/release/download-managed-codex.sh \
-            --target aarch64-unknown-linux-gnu \
-            --output binaries/longhouse-codex-linux-arm64
-
       - name: Collect engine binary
         run: |
+          mkdir -p binaries
           cp engine/target/release/longhouse-engine binaries/longhouse-engine-linux-arm64
           chmod +x binaries/longhouse-engine-linux-arm64
 
@@ -102,9 +88,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: runtime-longhouse-engine-linux-arm64
-          path: |
-            binaries/longhouse-engine-linux-arm64
-            binaries/longhouse-codex-linux-arm64
+          path: binaries/longhouse-engine-linux-arm64
           retention-days: 7
 
   build-macos:
@@ -142,12 +126,6 @@ jobs:
           mkdir -p binaries
           cp engine/target/release/longhouse-engine binaries/longhouse-engine-darwin-arm64
           chmod +x binaries/longhouse-engine-darwin-arm64
-
-      - name: Download managed Codex (stock upstream)
-        run: |
-          scripts/release/download-managed-codex.sh \
-            --target aarch64-apple-darwin \
-            --output binaries/longhouse-codex-darwin-arm64
 
       - name: Build macOS ambient app payload
         run: |
@@ -263,13 +241,6 @@ jobs:
             --sign "$CODESIGN_IDENTITY" \
             binaries/longhouse-engine-darwin-arm64
           codesign --verify --strict --verbose=2 binaries/longhouse-engine-darwin-arm64
-          codesign \
-            --force \
-            --options runtime \
-            --timestamp \
-            --sign "$CODESIGN_IDENTITY" \
-            binaries/longhouse-codex-darwin-arm64
-          codesign --verify --strict --verbose=2 binaries/longhouse-codex-darwin-arm64
 
       - name: Package macOS desktop app bundle
         env:
@@ -642,8 +613,6 @@ jobs:
           subject-path: |
             binaries/longhouse-engine-darwin-arm64
             binaries/longhouse-engine-linux-x64
-            binaries/longhouse-codex-darwin-arm64
-            binaries/longhouse-codex-linux-x64
             binaries/Longhouse-macos-arm64.dmg
             binaries/Longhouse-macos-arm64.zip
             binaries/local-runtime-macos-packaging.json
@@ -670,14 +639,13 @@ jobs:
         run: ls -la binaries
 
       - name: Upload arm64 assets to release
-        run: gh release upload "$RELEASE_TAG" binaries/longhouse-engine-linux-arm64 binaries/longhouse-codex-linux-arm64 --clobber --repo "${{ github.repository }}"
+        run: gh release upload "$RELEASE_TAG" binaries/longhouse-engine-linux-arm64 --clobber --repo "${{ github.repository }}"
 
       - name: Attest arm64 release artifacts
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: |
             binaries/longhouse-engine-linux-arm64
-            binaries/longhouse-codex-linux-arm64
 
   verify-install-from-release:
     name: "verify-install-from-release--${{ matrix.os }}"

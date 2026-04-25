@@ -776,7 +776,7 @@ def _collect_service(base_dir: Path) -> dict[str, Any]:
 def _collect_update_info() -> dict[str, Any]:
     """Surface the background CLI update cache as bundle update state.
 
-    Since `longhouse upgrade` now reconciles engine + Codex automatically
+    Since `longhouse upgrade` now reconciles local runtime artifacts automatically
     (see update_manager._reconcile_runtime_after_upgrade), the CLI's installed
     version is a faithful proxy for the local runtime bundle. Consumers (menu
     bar, doctor, JSON consumers) can rely on `update_available` and
@@ -846,10 +846,6 @@ def _compute_process_snapshot() -> tuple[list[dict[str, Any]], list[dict[str, An
             if proc.uids().real != me:
                 continue
             if not cmdline:
-                continue
-
-            executable = cmdline[0].rsplit("/", 1)[-1]
-            if executable == "longhouse-codex":
                 continue
 
             provider = _provider_for_cmdline(cmdline)

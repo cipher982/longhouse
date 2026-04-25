@@ -5,14 +5,14 @@ usage() {
   cat <<'EOF'
 Usage: repro-codex-remote-backpressure.sh [--mode command|text] [--lines N] [--log-dir PATH] [--cwd PATH]
 
-Launches `longhouse-engine codex-app-server-canary` against the local managed
-Codex runtime over websocket, attaches a real remote TUI, and asks Codex to run
+Launches `longhouse-engine codex-app-server-canary` against the stock Codex
+binary over websocket, attaches a real remote TUI, and asks Codex to run
 one high-volume shell command so the remote transport sees a burst of
 command-output deltas.
 
 Environment overrides:
   ENGINE                 longhouse-engine binary (default: longhouse-engine)
-  CODEX_BIN              managed codex binary (default: ~/.longhouse/runtimes/codex/current/codex)
+  CODEX_BIN              codex binary (default: first `codex` on PATH)
   MODEL                  optional model override passed to the canary
   MODE                   stress mode: command or text (default: command)
   LINES                  number of lines to request (default: 20000)
@@ -39,7 +39,7 @@ EOF
 }
 
 ENGINE="${ENGINE:-longhouse-engine}"
-CODEX_BIN="${CODEX_BIN:-$HOME/.longhouse/runtimes/codex/current/codex}"
+CODEX_BIN="${CODEX_BIN:-$(command -v codex || true)}"
 MODE="${MODE:-command}"
 LINES="${LINES:-20000}"
 EVENT_TIMEOUT_SECS="${EVENT_TIMEOUT_SECS:-180}"
@@ -87,7 +87,7 @@ if ! command -v "$ENGINE" >/dev/null 2>&1; then
 fi
 
 if [[ ! -x "$CODEX_BIN" ]]; then
-  echo "managed codex binary not found or not executable: $CODEX_BIN" >&2
+  echo "codex binary not found or not executable: ${CODEX_BIN:-<empty>}" >&2
   exit 1
 fi
 
