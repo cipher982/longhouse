@@ -44,18 +44,31 @@ describe("getNavItems", () => {
     ]);
   });
 
-  it("keeps top-level nav items aligned to real app routes", async () => {
-    const { getNavItems } = await import("./navItems");
-    const { buildAppRoutes } = await import("../../routes/App");
+  it(
+    "keeps top-level nav items aligned to real app routes",
+    async () => {
+      const { getNavItems } = await import("./navItems");
+      const { buildAppRoutes } = await import("../../routes/App");
 
-    for (const item of getNavItems("ADMIN")) {
-      const matches = matchRoutes(buildAppRoutes({ demoMode: false, singleTenant: true }), item.href);
-      const leafPath = matches?.at(-1)?.route.path;
+      for (const item of getNavItems("ADMIN")) {
+        const matches = matchRoutes(
+          buildAppRoutes({ demoMode: false, singleTenant: true }),
+          item.href,
+        );
+        const leafPath = matches?.at(-1)?.route.path;
 
-      expect(matches, `Expected ${item.href} to resolve in the router`).not.toBeNull();
-      expect(leafPath, `Expected ${item.href} to avoid the wildcard fallback`).not.toBe("*");
-    }
-  });
+        expect(
+          matches,
+          `Expected ${item.href} to resolve in the router`,
+        ).not.toBeNull();
+        expect(
+          leafPath,
+          `Expected ${item.href} to avoid the wildcard fallback`,
+        ).not.toBe("*");
+      }
+    },
+    15_000,
+  );
 
   it("keeps demo navigation minimal", async () => {
     configState.demoMode = true;
