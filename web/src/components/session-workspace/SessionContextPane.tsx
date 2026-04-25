@@ -15,7 +15,6 @@ import {
 import { LoopModeSelector } from "./LoopModeSelector";
 import { ContinuationsList } from "./ContinuationsList";
 import { ManagedLaunchHintCard } from "./ManagedLaunchHintCard";
-import { SessionRuntimeStrip } from "./SessionRuntimeStrip";
 
 interface SessionContextPaneProps {
   session: AgentSession;
@@ -115,13 +114,6 @@ export function SessionContextPane({
             </Badge>
           ) : null}
         </div>
-        <SessionRuntimeStrip
-          session={session}
-          interaction={interaction}
-          hostLabel={attachRunnerLabel}
-          variant="block"
-          testId="session-sidebar-runtime"
-        />
         <div className="session-context-stats" data-testid="session-stats-line">
           {statsLine}
         </div>
@@ -189,7 +181,7 @@ export function SessionContextPane({
 
       {showAttachDebug ? (
         <details
-          className="session-pane-disclosure"
+          className="session-pane-disclosure session-pane-disclosure--tertiary session-pane-disclosure--debug"
           data-testid="session-debug-attach"
         >
           <summary className="session-pane-disclosure__summary">
@@ -213,9 +205,9 @@ export function SessionContextPane({
       ) : null}
 
       {/* Zone 3 — Metadata (collapsed) */}
-      <details className="session-pane-disclosure">
+      <details className="session-pane-disclosure session-pane-disclosure--tertiary">
         <summary className="session-pane-disclosure__summary">
-          <span className="session-pane-disclosure__title">Details</span>
+          <span className="session-pane-disclosure__title">Metadata</span>
           <span className="session-pane-disclosure__meta">
             {session.git_branch || session.project || ""}
           </span>
@@ -244,11 +236,12 @@ export function SessionContextPane({
       </details>
 
       {session.summary ? (
-        <details className="session-pane-disclosure">
+        <details className="session-pane-disclosure session-pane-disclosure--tertiary session-pane-disclosure--summary">
           <summary className="session-pane-disclosure__summary">
             <span className="session-pane-disclosure__title">
-              Session summary
+              Summary
             </span>
+            <span className="session-pane-disclosure__meta">Read-only</span>
           </summary>
           <div className="session-pane-disclosure__body">
             <div className="session-context-summary">{session.summary}</div>
