@@ -37,16 +37,16 @@ struct SessionsWidgetView: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.leading)
             } else if entry.sessions.isEmpty && !entry.isPlaceholder {
-                Text("All clear")
+                Text("No active sessions")
                     .font(.system(size: 20, weight: .semibold))
-                Text("No sessions need attention")
+                Text("Longhouse is caught up")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             } else {
-                Text("\(entry.totalActive)")
+                Text("\(widgetMetric.count)")
                     .font(.system(size: 36, weight: .bold))
-                    .foregroundStyle(.orange)
-                Text(entry.totalActive == 1 ? "session waiting" : "sessions waiting")
+                    .foregroundStyle(widgetMetric.color)
+                Text(widgetMetric.label)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -70,9 +70,9 @@ struct SessionsWidgetView: View {
                 Spacer()
 
                 if !entry.sessions.isEmpty || entry.isPlaceholder {
-                    Text("\(entry.totalActive) waiting")
+                    Text("\(widgetMetric.count) \(widgetMetric.shortLabel)")
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(widgetMetric.color)
                 }
             }
             .padding(.bottom, 8)
@@ -103,9 +103,9 @@ struct SessionsWidgetView: View {
                         Image(systemName: "checkmark.circle")
                             .font(.system(size: 24))
                             .foregroundStyle(.green)
-                        Text("All clear")
+                        Text("No active sessions")
                             .font(.system(size: 13, weight: .medium))
-                        Text("No sessions need attention")
+                        Text("Longhouse is caught up")
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                     }
@@ -122,6 +122,24 @@ struct SessionsWidgetView: View {
             }
         }
     }
+
+    private var widgetMetric: WidgetMetric {
+        let attentionCount = entry.sessions.filter(\.needsAttention).count
+        if attentionCount > 0 {
+            return WidgetMetric(
+                count: attentionCount,
+                label: attentionCount == 1 ? "needs you" : "need you",
+                shortLabel: attentionCount == 1 ? "needs you" : "need you",
+                color: .orange
+            )
+        }
+        return WidgetMetric(
+            count: entry.totalActive,
+            label: entry.totalActive == 1 ? "active session" : "active sessions",
+            shortLabel: "active",
+            color: .blue
+        )
+    }
 }
 
 struct SessionRow: View {
@@ -130,7 +148,7 @@ struct SessionRow: View {
     var body: some View {
         HStack(spacing: 8) {
             Circle()
-                .fill(session.isBlocked ? .red : .orange)
+                .fill(widgetRuntimeColor(session))
                 .frame(width: 6, height: 6)
 
             VStack(alignment: .leading, spacing: 1) {
@@ -144,15 +162,32 @@ struct SessionRow: View {
                             .font(.system(size: 10))
                             .foregroundStyle(.secondary)
                     }
-                    Text(session.attentionLabel)
+                    Text(session.displayPhaseLabel)
                         .font(.system(size: 10))
-                        .foregroundStyle(session.isBlocked ? .red.opacity(0.8) : .orange.opacity(0.8))
+                        .foregroundStyle(widgetRuntimeColor(session).opacity(0.85))
                 }
             }
 
             Spacer()
         }
     }
+}
+
+private struct WidgetMetric {
+    let count: Int
+    let label: String
+    let shortLabel: String
+    let color: Color
+}
+
+private func widgetRuntimeColor(_ session: SessionSummary) -> Color {
+    if session.isBlocked { return .orange }
+    if session.isNeedsUser { return .yellow }
+    if session.presenceState == "running" { return .green }
+    if session.presenceState == "thinking" { return .orange }
+    if session.isExecuting { return .orange }
+    if session.isIdle || session.status == "completed" { return .secondary }
+    return .blue
 }
 
 #Preview("Medium - Sessions", as: .systemMedium) {

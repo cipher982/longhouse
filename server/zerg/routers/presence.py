@@ -44,8 +44,18 @@ from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
+from zerg.services.apns_sender import clear_live_activity_push_stamp
+from zerg.services.apns_sender import clear_session_attention_push_stamp
+from zerg.services.apns_sender import clear_session_attention_resolution_stamp
+from zerg.services.apns_sender import clear_widget_timeline_push_stamp
 from zerg.services.apns_sender import prepare_session_attention_push
+from zerg.services.apns_sender import prepare_session_attention_resolution_push
+from zerg.services.apns_sender import prepare_session_live_activity_pushes
+from zerg.services.apns_sender import prepare_widget_timeline_push
 from zerg.services.apns_sender import send_session_attention_push
+from zerg.services.apns_sender import send_session_attention_resolution_push
+from zerg.services.apns_sender import send_session_live_activity_push
+from zerg.services.apns_sender import send_widget_timeline_push
 from zerg.services.session_messages import deliver_queued_session_messages
 from zerg.services.session_messages import is_session_message_deliverable_state
 from zerg.services.session_messages import resolve_session_message_owner_id
@@ -98,7 +108,10 @@ async def upsert_presence(
             detail="Managed-local hook token does not match session",
         )
 
-    now = payload.occurred_at.astimezone(timezone.utc) if payload.occurred_at is not None else datetime.now(timezone.utc)
+    if payload.occurred_at is not None:
+        now = payload.occurred_at.astimezone(timezone.utc)
+    else:
+        now = datetime.now(timezone.utc)
 
     runtime_provider = payload.provider or "claude"
     runtime_key = runtime_key_for_session(runtime_provider, payload.session_id)
@@ -135,7 +148,10 @@ async def upsert_presence(
     owner_id = resolve_session_message_owner_id(db, _token)
 
     def _do_presence_writes(write_db: Session):
-        previous_presence_state = current_presence_state_for_session(write_db, session_uuid, now=_now) if session_uuid is not None else None
+        if session_uuid is not None:
+            previous_presence_state = current_presence_state_for_session(write_db, session_uuid, now=_now)
+        else:
+            previous_presence_state = None
         ingest_result: RuntimeEventBatchResult = ingest_runtime_events(write_db, [runtime_event])
         canonical_presence_state = (
             current_presence_state_for_session(write_db, session_uuid, now=_now) if session_uuid is not None else None
@@ -160,11 +176,37 @@ async def upsert_presence(
             previous_state=previous_presence_state,
             current_state=canonical_presence_state,
             occurred_at=_now,
+            current_tool_name=runtime_tool_name,
         )
-        return canonical_presence_state, attention_push
+        attention_resolution_push = prepare_session_attention_resolution_push(
+            write_db,
+            owner_id=owner_id,
+            session_id=session_uuid,
+            previous_state=previous_presence_state,
+            current_state=canonical_presence_state,
+            occurred_at=_now,
+        )
+        widget_push = prepare_widget_timeline_push(
+            write_db,
+            owner_id=owner_id,
+            occurred_at=_now,
+        )
+        live_activity_pushes = prepare_session_live_activity_pushes(
+            write_db,
+            owner_id=owner_id,
+            session_id=session_uuid,
+            current_state=canonical_presence_state,
+            current_tool_name=runtime_tool_name,
+            occurred_at=_now,
+        )
+        return canonical_presence_state, attention_push, attention_resolution_push, widget_push, live_activity_pushes
 
     ws = get_write_serializer()
-    canonical_presence_state, attention_push = await ws.execute_or_direct(_do_presence_writes, db, label="presence")
+    canonical_presence_state, attention_push, attention_resolution_push, widget_push, live_activity_pushes = await ws.execute_or_direct(
+        _do_presence_writes,
+        db,
+        label="presence",
+    )
 
     if session_uuid is not None and is_session_message_deliverable_state(canonical_presence_state):
         await deliver_queued_session_messages(
@@ -174,8 +216,76 @@ async def upsert_presence(
             target_presence_state=canonical_presence_state,
         )
     if attention_push is not None:
+        push_sent = False
         try:
-            await send_session_attention_push(attention_push)
+            push_sent = await send_session_attention_push(attention_push)
         except Exception:  # pragma: no cover - push send should never fail the hook path
             logger.exception("Failed to send APNs attention push for session %s", attention_push.session_id)
+        if not push_sent:
+
+            def _clear_attention_push_stamp(write_db: Session):
+                clear_session_attention_push_stamp(
+                    write_db,
+                    session_id=attention_push.session_id,
+                    state=attention_push.state,
+                    occurred_at=attention_push.occurred_at,
+                )
+
+            await ws.execute_or_direct(_clear_attention_push_stamp, db, label="presence-attention-push-clear")
+    if attention_resolution_push is not None:
+        try:
+            resolution_accepted = await send_session_attention_resolution_push(attention_resolution_push)
+        except Exception:  # pragma: no cover - push send should never fail the hook path
+            logger.exception("Failed to send APNs attention resolution push for session %s", attention_resolution_push.session_id)
+        else:
+            if not resolution_accepted:
+
+                def _clear_attention_resolution_stamp(write_db: Session) -> bool:
+                    return clear_session_attention_resolution_stamp(
+                        write_db,
+                        session_id=attention_resolution_push.session_id,
+                        state=attention_resolution_push.previous_state,
+                        attention_push_at=attention_resolution_push.attention_push_at,
+                    )
+
+                await ws.execute_or_direct(_clear_attention_resolution_stamp, db, label="presence-attention-resolution-clear")
+    if widget_push is not None:
+        try:
+            widget_accepted = await send_widget_timeline_push(widget_push)
+        except Exception:  # pragma: no cover - push send should never fail the hook path
+            logger.exception("Failed to send APNs widget timeline push for user %s", widget_push.owner_id)
+        else:
+            if not widget_accepted:
+
+                def _clear_widget_timeline_stamp(write_db: Session) -> bool:
+                    return clear_widget_timeline_push_stamp(
+                        write_db,
+                        owner_id=widget_push.owner_id,
+                        state_hash=widget_push.state_hash,
+                        previous_state_hash=widget_push.previous_state_hash,
+                        previous_push_at=widget_push.previous_push_at,
+                    )
+
+                await ws.execute_or_direct(_clear_widget_timeline_stamp, db, label="presence-widget-push-clear")
+    for live_activity_push in live_activity_pushes:
+        try:
+            live_activity_accepted = await send_session_live_activity_push(live_activity_push)
+        except Exception:  # pragma: no cover - push send should never fail the hook path
+            logger.exception(
+                "Failed to send APNs Live Activity push for session %s",
+                live_activity_push.session_id,
+            )
+            live_activity_accepted = False
+        if not live_activity_accepted:
+
+            def _clear_live_activity_stamp(write_db: Session, push=live_activity_push) -> bool:
+                return clear_live_activity_push_stamp(
+                    write_db,
+                    registration_id=push.registration_id,
+                    state_hash=push.state_hash,
+                    previous_state_hash=push.previous_state_hash,
+                    previous_push_at=push.previous_push_at,
+                )
+
+            await ws.execute_or_direct(_clear_live_activity_stamp, db, label="presence-live-activity-clear")
     return Response(status_code=status.HTTP_204_NO_CONTENT)

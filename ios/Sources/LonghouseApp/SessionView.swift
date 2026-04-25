@@ -7,6 +7,7 @@ struct SessionView: View {
 
     @EnvironmentObject var appState: AppState
     @StateObject private var viewModel = SessionViewModel()
+    @StateObject private var liveActivityManager = SessionLiveActivityManager()
     @State private var composerText: String = ""
     @FocusState private var composerFocused: Bool
 
@@ -17,9 +18,35 @@ struct SessionView: View {
         }
         .navigationTitle(viewModel.detail?.displayTitle ?? fallbackTitle)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                watchButton
+            }
+        }
         .task(id: sessionId) { await viewModel.start(sessionId: sessionId, appState: appState) }
         .onDisappear { viewModel.stop() }
+        .onChange(of: viewModel.liveActivityFingerprint) { _, _ in
+            guard let detail = viewModel.detail else { return }
+            Task { await liveActivityManager.update(detail: detail) }
+        }
         .refreshable { await viewModel.reload(sessionId: sessionId, appState: appState) }
+    }
+
+    @ViewBuilder
+    private var watchButton: some View {
+        if let detail = viewModel.detail {
+            Button {
+                Task { await liveActivityManager.toggle(detail: detail, appState: appState) }
+            } label: {
+                if liveActivityManager.isBusy {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: liveActivityManager.isWatching(sessionId: detail.id) ? "stop.circle" : "dot.radiowaves.left.and.right")
+                }
+            }
+            .disabled(liveActivityManager.isBusy)
+            .accessibilityLabel(liveActivityManager.isWatching(sessionId: detail.id) ? "Stop watching session" : "Watch session")
+        }
     }
 
     private var transcript: some View {
@@ -702,6 +729,19 @@ final class SessionViewModel: ObservableObject {
         if let presence = detail.presenceState, active.contains(presence) { return true }
         if let status = detail.status, active.contains(status) { return true }
         return false
+    }
+
+    var liveActivityFingerprint: String {
+        guard let detail else { return "" }
+        return [
+            detail.id,
+            detail.displayTitle,
+            detail.presenceState ?? "",
+            detail.status ?? "",
+            detail.presenceTool ?? "",
+            detail.project ?? "",
+            detail.provider,
+        ].joined(separator: "|")
     }
 
     /// Treat "completed" presence or status as terminal. This is a hint for

@@ -76,6 +76,10 @@ targets:
       path: Info.plist
       properties:
         GIDClientID: 658453123272-8d0plghk6gbsgamhp66rn8gi2vbc65i2.apps.googleusercontent.com
+        UIBackgroundModes:
+          - remote-notification
+        NSSupportsLiveActivities: true
+        NSSupportsLiveActivitiesFrequentUpdates: true
         CFBundleURLTypes:
           - CFBundleURLSchemes:
               - com.googleusercontent.apps.658453123272-8d0plghk6gbsgamhp66rn8gi2vbc65i2
@@ -104,9 +108,15 @@ targets:
         SWIFT_STRICT_CONCURRENCY: complete
         TARGETED_DEVICE_FAMILY: "1,2"
         CODE_SIGN_ENTITLEMENTS: LonghouseWidget.entitlements
+      configs:
+        Debug:
+          APS_ENVIRONMENT: development
+        Release:
+          APS_ENVIRONMENT: production
     info:
       path: WidgetInfo.plist
       properties:
+        NSSupportsLiveActivities: true
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
 

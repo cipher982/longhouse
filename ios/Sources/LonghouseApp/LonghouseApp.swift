@@ -12,7 +12,9 @@ struct LonghouseApp: App {
             ContentView()
                 .environmentObject(appState)
                 .onOpenURL { url in
-                    GIDSignIn.sharedInstance.handle(url)
+                    if !handleLonghouseURL(url) {
+                        GIDSignIn.sharedInstance.handle(url)
+                    }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .longhouseAPNSDeviceTokenUpdated)) { _ in
                     Task {
@@ -38,6 +40,21 @@ struct LonghouseApp: App {
                     }
                 }
         }
+    }
+
+    private func handleLonghouseURL(_ url: URL) -> Bool {
+        guard url.scheme == "ai.longhouse.ios" else { return false }
+        let sessionID: String?
+        if url.host == "session" {
+            sessionID = url.pathComponents.dropFirst().first
+        } else if url.pathComponents.dropFirst().first == "session" {
+            sessionID = url.pathComponents.dropFirst(2).first
+        } else {
+            sessionID = nil
+        }
+        guard let sessionID, !sessionID.isEmpty else { return true }
+        PushNotificationStore.storePendingSessionID(sessionID)
+        return true
     }
 }
 
@@ -329,6 +346,7 @@ final class AppState: ObservableObject {
     private func clearLocalSession() async {
         SharedAuthStore.clearManagedCookies(for: serverURL)
         SharedAuthStore.removeSharedCookieStorage(for: serverURL)
+        WidgetSessionSnapshotStore.clear()
         KeychainHelper.deleteAuthToken()
         isAuthenticated = false
     }

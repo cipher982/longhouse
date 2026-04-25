@@ -1,9 +1,11 @@
 import SwiftUI
+import WidgetKit
 
 @MainActor
-struct InboxView: View {
+struct TimelineView: View {
     @EnvironmentObject var appState: AppState
-    @StateObject private var viewModel = InboxViewModel()
+    @Environment(\.scenePhase) private var scenePhase
+    @StateObject private var viewModel = TimelineViewModel()
     @State private var path: [SessionRoute] = []
 
     var body: some View {
@@ -16,15 +18,39 @@ struct InboxView: View {
                 } else if viewModel.isEmpty {
                     emptyView
                 } else {
-                    listBody
+                    timelineBody
                 }
             }
-            .navigationTitle("Inbox")
-            .refreshable { await viewModel.refresh(using: appState) }
+            .navigationTitle("Timeline")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    if viewModel.isRefreshing && !viewModel.isInitialLoading {
+                        ProgressView().controlSize(.small)
+                    }
+                }
+            }
+            .refreshable { await viewModel.refresh(using: appState, reloadWidget: true) }
             .task {
                 await appState.ensurePushRegistrationIfPossible()
                 await viewModel.load(using: appState)
+                viewModel.startAutoRefresh(using: appState)
                 consumePendingPushIfNeeded()
+            }
+            .onAppear {
+                viewModel.resumeAutoRefresh(using: appState)
+            }
+            .onDisappear {
+                viewModel.stopAutoRefresh()
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active {
+                    Task {
+                        await viewModel.refresh(using: appState, reloadWidget: true)
+                        viewModel.startAutoRefresh(using: appState)
+                    }
+                } else {
+                    viewModel.stopAutoRefresh()
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .longhouseOpenSessionFromPush)) { note in
                 if let sessionID = note.object as? String {
@@ -34,38 +60,48 @@ struct InboxView: View {
         }
     }
 
-    private var listBody: some View {
-        List {
-            if !viewModel.attention.isEmpty {
-                Section("Needs you") {
-                    ForEach(viewModel.attention) { session in
-                        NavigationLink(value: SessionRoute(sessionId: session.id, fallbackTitle: session.title)) {
-                            AttentionRow(session: session)
-                        }
-                    }
+    private var timelineBody: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 20) {
+                if !viewModel.attention.isEmpty {
+                    timelineSection(title: "Needs you", sessions: viewModel.attention, emphasized: true)
+                }
+                if !viewModel.recent.isEmpty {
+                    timelineSection(title: "Recent", sessions: viewModel.recent, emphasized: false)
                 }
             }
-            if !viewModel.recent.isEmpty {
-                Section("Recent") {
-                    ForEach(viewModel.recent) { session in
-                        NavigationLink(value: SessionRoute(sessionId: session.id, fallbackTitle: session.title)) {
-                            SessionRow(session: session)
-                        }
-                    }
-                }
-            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 18)
         }
-        .listStyle(.insetGrouped)
+        .background(Color(.systemGroupedBackground))
         .navigationDestination(for: SessionRoute.self) { route in
             SessionView(sessionId: route.sessionId, fallbackTitle: route.fallbackTitle)
         }
     }
 
+    private func timelineSection(title: String, sessions: [SessionSummary], emphasized: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 2)
+
+            VStack(spacing: 10) {
+                ForEach(sessions) { session in
+                    NavigationLink(value: SessionRoute(sessionId: session.id, fallbackTitle: session.title)) {
+                        TimelineSessionCardRow(session: session, emphasized: emphasized)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
     private var emptyView: some View {
         ContentUnavailableView(
-            "Caught up",
-            systemImage: "tray",
-            description: Text("Nothing needs your attention right now.")
+            "No timeline sessions",
+            systemImage: "rectangle.stack",
+            description: Text("Sessions will appear here as Longhouse syncs them.")
         )
     }
 
@@ -78,7 +114,7 @@ struct InboxView: View {
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
             Button("Try again") {
-                Task { await viewModel.refresh(using: appState) }
+                Task { await viewModel.refresh(using: appState, reloadWidget: true) }
             }
             .buttonStyle(.borderedProminent)
         }
@@ -92,6 +128,7 @@ struct InboxView: View {
     }
 
     private func openSession(sessionID: String) {
+        PushNotificationStore.clearPendingSessionID(sessionID)
         path = [SessionRoute(sessionId: sessionID, fallbackTitle: "Session")]
     }
 }
@@ -101,91 +138,307 @@ private struct SessionRoute: Hashable {
     let fallbackTitle: String
 }
 
-private struct AttentionRow: View {
+private struct TimelineSessionCardRow: View {
     let session: SessionSummary
+    let emphasized: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(session.isBlocked ? Color.orange : Color.yellow)
-                    .frame(width: 8, height: 8)
-                Text(session.attentionLabel)
-                    .font(.caption.weight(.semibold))
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(session.projectLabel)
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Spacer(minLength: 12)
+                Text(relativeTime(session.timelineAnchor))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Text(session.title)
-                .font(.body.weight(.medium))
-                .lineLimit(2)
-            HStack(spacing: 6) {
-                if let project = session.project {
-                    Text(project).font(.caption).foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    ProviderBadge(session: session)
+                    if let branch = nonEmpty(session.gitBranch) {
+                        MetadataBadge(systemImage: "arrow.triangle.branch", text: branch)
+                    }
+                    if let origin = nonEmpty(session.headOriginLabel), origin != nonEmpty(session.homeLabel) {
+                        MetadataBadge(text: "Head: \(origin)")
+                    }
                 }
-                if let provider = session.provider {
-                    Text("·").foregroundStyle(.secondary)
-                    Text(provider).font(.caption).foregroundStyle(.secondary)
+                .lineLimit(1)
+
+                HStack(spacing: 8) {
+                    RuntimeBadge(session: session)
+                    MetadataBadge(text: session.managementLabel)
                 }
             }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(session.title)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let summary = session.summaryPreview {
+                    Text(summary)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text("Generating summary")
+                        .font(.subheadline)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+
+            Divider()
+
+            HStack(spacing: 6) {
+                Text("\(session.turnCount) \(session.turnCount == 1 ? "turn" : "turns")")
+                    .foregroundStyle(turnColor(session.turnCount))
+                Text("·")
+                    .foregroundStyle(.tertiary)
+                Text("\(session.toolCount) \(session.toolCount == 1 ? "tool" : "tools")")
+                Spacer(minLength: 12)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.tertiary)
+            }
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.secondary)
         }
-        .padding(.vertical, 4)
+        .padding(14)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(runtimeColor(session))
+                .frame(width: emphasized ? 4 : 3)
+                .padding(.vertical, 12)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(runtimeColor(session).opacity(emphasized ? 0.45 : 0.18), lineWidth: emphasized ? 1.2 : 0.8)
+        }
     }
 }
 
-private struct SessionRow: View {
+private struct ProviderBadge: View {
     let session: SessionSummary
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(session.title)
-                .font(.body)
-                .lineLimit(2)
-            HStack(spacing: 6) {
-                if let project = session.project {
-                    Text(project).font(.caption).foregroundStyle(.secondary)
-                }
-                if let provider = session.provider {
-                    Text("·").foregroundStyle(.secondary)
-                    Text(provider).font(.caption).foregroundStyle(.secondary)
-                }
-            }
+        HStack(spacing: 5) {
+            Image(systemName: providerIcon(session.provider))
+                .font(.caption2.weight(.semibold))
+            Text(session.providerLabel)
+                .font(.caption.weight(.semibold))
         }
-        .padding(.vertical, 2)
+        .foregroundStyle(providerColor(session.provider))
+    }
+}
+
+private struct RuntimeBadge: View {
+    let session: SessionSummary
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(runtimeColor(session))
+                .frame(width: 7, height: 7)
+            Text(session.displayPhaseLabel)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+        }
+        .foregroundStyle(runtimeColor(session))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(runtimeColor(session).opacity(0.14), in: Capsule())
+    }
+}
+
+private struct MetadataBadge: View {
+    let systemImage: String?
+    let text: String
+
+    init(systemImage: String? = nil, text: String) {
+        self.systemImage = systemImage
+        self.text = text
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if let systemImage {
+                Image(systemName: systemImage)
+                    .font(.caption2.weight(.semibold))
+            }
+            Text(text)
+                .font(.caption.weight(.medium))
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(Color(.tertiarySystemGroupedBackground), in: Capsule())
     }
 }
 
 @MainActor
-final class InboxViewModel: ObservableObject {
+final class TimelineViewModel: ObservableObject {
     @Published var attention: [SessionSummary] = []
     @Published var recent: [SessionSummary] = []
     @Published var errorMessage: String?
     @Published var isInitialLoading = true
+    @Published var isRefreshing = false
+    @Published var lastUpdatedAt: Date?
+
+    private var autoRefreshTask: Task<Void, Never>?
+    private var lastWidgetReloadAt: Date?
+    private var activeRefreshCount = 0
+    private var consecutiveRefreshFailures = 0
 
     var isEmpty: Bool { attention.isEmpty && recent.isEmpty }
 
     func load(using appState: AppState) async {
         if !isInitialLoading { return }
-        await refresh(using: appState)
+        await refresh(using: appState, reloadWidget: true)
     }
 
-    func refresh(using appState: AppState) async {
+    func refresh(using appState: AppState, reloadWidget: Bool = false) async {
         guard let api = LonghouseAPI(host: appState.serverURL) else {
             errorMessage = "Invalid server URL"
             isInitialLoading = false
             return
         }
+        activeRefreshCount += 1
+        isRefreshing = true
+        defer {
+            activeRefreshCount = max(0, activeRefreshCount - 1)
+            isRefreshing = activeRefreshCount > 0
+            isInitialLoading = false
+        }
+
         do {
-            async let attentionTask = api.sessionsNeedingAttention()
-            async let recentTask = api.recentSessions(limit: 30)
-            let (attention, recent) = try await (attentionTask, recentTask)
+            let sessions = try await api.recentSessions(limit: 40)
+            let attention = sessions.filter(\.needsAttention)
             let attentionIds = Set(attention.map(\.id))
             self.attention = attention
-            self.recent = recent.filter { !attentionIds.contains($0.id) }
+            self.recent = sessions.filter { !attentionIds.contains($0.id) }
+            WidgetSessionSnapshotStore.save(sessions: sessions)
+            PushNotificationStore.removeResolvedAttentionNotifications(activeSessionIDs: attentionIds)
+            self.lastUpdatedAt = Date()
             self.errorMessage = nil
+            self.consecutiveRefreshFailures = 0
+            if reloadWidget {
+                reloadWidgetTimelineIfNeeded()
+            }
         } catch LonghouseAPIError.notAuthenticated {
             errorMessage = "Session expired. Sign in again."
+            consecutiveRefreshFailures += 1
         } catch {
             errorMessage = "Couldn't load sessions: \(error.localizedDescription)"
+            consecutiveRefreshFailures += 1
         }
-        isInitialLoading = false
     }
+
+    func resumeAutoRefresh(using appState: AppState) {
+        startAutoRefresh(using: appState)
+        guard !isInitialLoading else { return }
+        Task { await refresh(using: appState, reloadWidget: true) }
+    }
+
+    func startAutoRefresh(using appState: AppState) {
+        guard autoRefreshTask == nil else { return }
+        autoRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                let delay = await self?.autoRefreshDelayNanoseconds ?? 4_000_000_000
+                try? await Task.sleep(nanoseconds: delay)
+                if Task.isCancelled { break }
+                await self?.refresh(using: appState, reloadWidget: true)
+            }
+        }
+    }
+
+    func stopAutoRefresh() {
+        autoRefreshTask?.cancel()
+        autoRefreshTask = nil
+    }
+
+    private var autoRefreshDelayNanoseconds: UInt64 {
+        switch consecutiveRefreshFailures {
+        case 0:
+            return 4_000_000_000
+        case 1:
+            return 8_000_000_000
+        default:
+            return 16_000_000_000
+        }
+    }
+
+    private func reloadWidgetTimelineIfNeeded() {
+        let now = Date()
+        guard lastWidgetReloadAt == nil || now.timeIntervalSince(lastWidgetReloadAt!) > 60 else {
+            return
+        }
+        WidgetCenter.shared.reloadAllTimelines()
+        lastWidgetReloadAt = now
+    }
+}
+
+private func nonEmpty(_ value: String?) -> String? {
+    guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+        return nil
+    }
+    return trimmed
+}
+
+private func runtimeColor(_ session: SessionSummary) -> Color {
+    if session.isBlocked { return .orange }
+    if session.isNeedsUser { return .yellow }
+    if session.presenceState == "running" { return .green }
+    if session.presenceState == "thinking" { return .orange }
+    if session.isExecuting { return .orange }
+    if session.isIdle || session.status == "completed" { return .secondary }
+    return .blue
+}
+
+private func providerColor(_ provider: String?) -> Color {
+    switch provider?.lowercased() {
+    case "codex": return .green
+    case "gemini": return .blue
+    case "claude": return .orange
+    case "zai": return .purple
+    default: return .secondary
+    }
+}
+
+private func providerIcon(_ provider: String?) -> String {
+    switch provider?.lowercased() {
+    case "codex": return "terminal"
+    case "gemini": return "sparkles"
+    case "claude": return "sparkle"
+    default: return "chevron.left.forwardslash.chevron.right"
+    }
+}
+
+private func turnColor(_ turnCount: Int) -> Color {
+    if turnCount >= 50 { return .red }
+    if turnCount >= 20 { return .orange }
+    return .secondary
+}
+
+private func relativeTime(_ value: String?) -> String {
+    guard let date = parseLonghouseDate(value) else { return "Recent" }
+    let formatter = RelativeDateTimeFormatter()
+    formatter.unitsStyle = .abbreviated
+    return formatter.localizedString(for: date, relativeTo: Date())
+}
+
+private func parseLonghouseDate(_ value: String?) -> Date? {
+    guard let value else { return nil }
+    let fractional = ISO8601DateFormatter()
+    fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    if let date = fractional.date(from: value) {
+        return date
+    }
+    return ISO8601DateFormatter().date(from: value)
 }

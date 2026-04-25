@@ -35,5 +35,13 @@
 	<string>1</string>
 	<key>GIDClientID</key>
 	<string>658453123272-8d0plghk6gbsgamhp66rn8gi2vbc65i2.apps.googleusercontent.com</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
+	<key>NSSupportsLiveActivitiesFrequentUpdates</key>
+	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
 </dict>
 </plist>

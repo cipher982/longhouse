@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
 from zerg.models.apns_device_registration import APNSDeviceRegistration
+from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration
 from zerg.models.device_token import DeviceToken
 from zerg.services.write_serializer import get_write_serializer
 from zerg.utils.time import UTCBaseModel
@@ -101,7 +102,7 @@ class APNSRegisterRequest(BaseModel):
     """Register or refresh an iOS APNs device token for the current user."""
 
     device_token: str = Field(..., min_length=16, max_length=255, pattern=r"^[A-Fa-f0-9]+$")
-    platform: Literal["ios"] = "ios"
+    platform: Literal["ios", "ios_widget"] = "ios"
     app_build_id: Optional[str] = Field(None, max_length=255)
     push_environment: Literal["sandbox", "production"] = "sandbox"
 
@@ -115,6 +116,34 @@ class APNSRegisterResponse(UTCBaseModel):
     push_environment: str
     app_build_id: Optional[str] = None
     last_seen_at: datetime
+
+
+class APNSLiveActivityRegisterRequest(BaseModel):
+    """Register or refresh one ActivityKit push token for a watched session."""
+
+    session_id: str = Field(..., min_length=1, max_length=64)
+    activity_id: str = Field(..., min_length=1, max_length=255)
+    push_token: str = Field(..., min_length=16, max_length=255, pattern=r"^[A-Fa-f0-9]+$")
+    app_build_id: Optional[str] = Field(None, max_length=255)
+    push_environment: Literal["sandbox", "production"] = "sandbox"
+
+
+class APNSLiveActivityRegisterResponse(UTCBaseModel):
+    """Response for ActivityKit push-token registration upsert."""
+
+    id: str
+    session_id: str
+    activity_id: str
+    push_token_suffix: str
+    push_environment: str
+    app_build_id: Optional[str] = None
+    last_seen_at: datetime
+
+
+class APNSLiveActivityEndRequest(BaseModel):
+    """Mark one ActivityKit registration as ended by the current user."""
+
+    activity_id: str = Field(..., min_length=1, max_length=255)
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +293,127 @@ async def register_apns_device(
         push_environment=push_environment,
         app_build_id=registration_build_id,
         last_seen_at=last_seen_at,
+    )
+
+
+@router.post("/apns-live-activity/register", response_model=APNSLiveActivityRegisterResponse)
+async def register_apns_live_activity(
+    request: APNSLiveActivityRegisterRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+) -> APNSLiveActivityRegisterResponse:
+    """Register or refresh an ActivityKit update token for one watched session."""
+
+    normalized_token = str(request.push_token or "").strip().lower()
+    activity_id = str(request.activity_id or "").strip()
+    session_id = str(request.session_id or "").strip()
+    build_id = str(request.app_build_id or "").strip() or None
+    now = datetime.now(timezone.utc)
+    ws = get_write_serializer()
+
+    def _register_live_activity(wdb: Session) -> tuple[str, str, str, str, str | None, datetime]:
+        registration = (
+            wdb.query(APNSLiveActivityRegistration)
+            .filter(
+                APNSLiveActivityRegistration.owner_id == current_user.id,
+                APNSLiveActivityRegistration.activity_id == activity_id,
+            )
+            .first()
+        )
+        if registration is None:
+            registration = (
+                wdb.query(APNSLiveActivityRegistration)
+                .filter(
+                    APNSLiveActivityRegistration.owner_id == current_user.id,
+                    APNSLiveActivityRegistration.push_token == normalized_token,
+                )
+                .first()
+            )
+        if registration is None:
+            registration = APNSLiveActivityRegistration(
+                owner_id=current_user.id,
+                session_id=session_id,
+                activity_id=activity_id,
+                push_token=normalized_token,
+                push_environment=request.push_environment,
+                app_build_id=build_id,
+                last_seen_at=now,
+            )
+            wdb.add(registration)
+            wdb.flush()
+        else:
+            registration.session_id = session_id
+            registration.activity_id = activity_id
+            registration.push_token = normalized_token
+            registration.push_environment = request.push_environment
+            registration.app_build_id = build_id
+            registration.last_seen_at = now
+            registration.ended_at = None
+
+        wdb.flush()
+        wdb.refresh(registration)
+        return (
+            str(registration.id),
+            registration.session_id,
+            registration.activity_id,
+            registration.push_environment,
+            registration.app_build_id,
+            registration.last_seen_at,
+        )
+
+    (
+        registration_id,
+        stored_session_id,
+        stored_activity_id,
+        push_environment,
+        registration_build_id,
+        last_seen_at,
+    ) = await ws.execute_or_direct(
+        _register_live_activity,
+        db,
+        label="apns-live-activity-register",
+    )
+
+    logger.info("Registered APNs Live Activity for user %s session %s", current_user.id, stored_session_id)
+    return APNSLiveActivityRegisterResponse(
+        id=registration_id,
+        session_id=stored_session_id,
+        activity_id=stored_activity_id,
+        push_token_suffix=normalized_token[-12:],
+        push_environment=push_environment,
+        app_build_id=registration_build_id,
+        last_seen_at=last_seen_at,
+    )
+
+
+@router.post("/apns-live-activity/end", status_code=status.HTTP_204_NO_CONTENT)
+async def end_apns_live_activity(
+    request: APNSLiveActivityEndRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+) -> None:
+    """Mark an ActivityKit update token as ended after the user stops watching."""
+
+    activity_id = str(request.activity_id or "").strip()
+    now = datetime.now(timezone.utc)
+    ws = get_write_serializer()
+
+    def _end_live_activity(wdb: Session) -> None:
+        registration = (
+            wdb.query(APNSLiveActivityRegistration)
+            .filter(
+                APNSLiveActivityRegistration.owner_id == current_user.id,
+                APNSLiveActivityRegistration.activity_id == activity_id,
+            )
+            .first()
+        )
+        if registration is not None:
+            registration.ended_at = now
+
+    await ws.execute_or_direct(
+        _end_live_activity,
+        db,
+        label="apns-live-activity-end",
     )
 
 

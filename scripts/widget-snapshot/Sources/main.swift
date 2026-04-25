@@ -8,13 +8,33 @@ struct SessionSummary: Identifiable {
     let id: String
     let title: String
     let presenceState: String
+    let status: String?
     let provider: String?
     let project: String?
     var isBlocked: Bool { presenceState == "blocked" }
-    var attentionLabel: String { isBlocked ? "Needs permission" : "Waiting on you" }
+    var isNeedsUser: Bool { presenceState == "needs_user" }
+    var isUserActive: Bool { true }
+    var needsAttention: Bool { (isBlocked || isNeedsUser) && isUserActive }
+    var isExecuting: Bool { presenceState == "thinking" || presenceState == "running" || status == "working" || status == "active" }
+    var isIdle: Bool { presenceState == "idle" || status == "idle" }
+    var displayPhaseLabel: String {
+        switch presenceState {
+        case "running": return "Running"
+        case "thinking": return "Thinking"
+        case "needs_user": return "Needs you"
+        case "blocked": return "Needs permission"
+        case "idle": return "Idle"
+        default:
+            if status == "completed" { return "Completed" }
+            if status == "working" || status == "active" { return "Recent progress" }
+            return "Recent"
+        }
+    }
 }
 
 struct WidgetSmallView: View {
+    let sessions: [SessionSummary]
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 4) {
@@ -26,10 +46,10 @@ struct WidgetSmallView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Text("2")
+            Text("\(widgetMetric.count)")
                 .font(.system(size: 36, weight: .bold))
-                .foregroundStyle(.orange)
-            Text("sessions waiting")
+                .foregroundStyle(widgetMetric.color)
+            Text(widgetMetric.label)
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             Spacer()
@@ -39,6 +59,10 @@ struct WidgetSmallView: View {
         .frame(width: 170, height: 170)
         .background(Color.black.opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+    }
+
+    private var widgetMetric: WidgetMetric {
+        buildWidgetMetric(sessions: sessions, totalActive: sessions.count)
     }
 }
 
@@ -56,9 +80,9 @@ struct WidgetMediumView: View {
                 }
                 .foregroundStyle(.secondary)
                 Spacer()
-                Text("2 waiting")
+                Text("\(widgetMetric.count) \(widgetMetric.shortLabel)")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(widgetMetric.color)
             }
             .padding(.bottom, 8)
 
@@ -66,7 +90,7 @@ struct WidgetMediumView: View {
                 ForEach(sessions) { session in
                     HStack(spacing: 8) {
                         Circle()
-                            .fill(session.isBlocked ? .red : .orange)
+                            .fill(widgetRuntimeColor(session))
                             .frame(width: 6, height: 6)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(session.title)
@@ -78,9 +102,9 @@ struct WidgetMediumView: View {
                                         .font(.system(size: 10))
                                         .foregroundStyle(.secondary)
                                 }
-                                Text(session.attentionLabel)
+                                Text(session.displayPhaseLabel)
                                     .font(.system(size: 10))
-                                    .foregroundStyle(session.isBlocked ? .red.opacity(0.8) : .orange.opacity(0.8))
+                                    .foregroundStyle(widgetRuntimeColor(session).opacity(0.85))
                             }
                         }
                         Spacer()
@@ -94,18 +118,57 @@ struct WidgetMediumView: View {
         .background(Color.black.opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
+
+    private var widgetMetric: WidgetMetric {
+        buildWidgetMetric(sessions: sessions, totalActive: sessions.count)
+    }
+}
+
+private struct WidgetMetric {
+    let count: Int
+    let label: String
+    let shortLabel: String
+    let color: Color
+}
+
+private func buildWidgetMetric(sessions: [SessionSummary], totalActive: Int) -> WidgetMetric {
+    let attentionCount = sessions.filter(\.needsAttention).count
+    if attentionCount > 0 {
+        return WidgetMetric(
+            count: attentionCount,
+            label: attentionCount == 1 ? "needs you" : "need you",
+            shortLabel: attentionCount == 1 ? "needs you" : "need you",
+            color: .orange
+        )
+    }
+    return WidgetMetric(
+        count: totalActive,
+        label: totalActive == 1 ? "active session" : "active sessions",
+        shortLabel: "active",
+        color: .blue
+    )
+}
+
+private func widgetRuntimeColor(_ session: SessionSummary) -> Color {
+    if session.isBlocked { return .orange }
+    if session.isNeedsUser { return .yellow }
+    if session.presenceState == "running" { return .green }
+    if session.presenceState == "thinking" { return .orange }
+    if session.isExecuting { return .orange }
+    if session.isIdle || session.status == "completed" { return .secondary }
+    return .blue
 }
 
 let outputDir = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "/tmp"
 
 let sessions = [
-    SessionSummary(id: "1", title: "Fixing auth flow in login", presenceState: "needs_user", provider: "claude", project: "longhouse"),
-    SessionSummary(id: "2", title: "Deploy pipeline stuck", presenceState: "blocked", provider: "claude", project: "zerg"),
+    SessionSummary(id: "1", title: "Debugging Codex Launch Path Bug", presenceState: "thinking", status: "working", provider: "codex", project: "zerg"),
+    SessionSummary(id: "2", title: "Simple Arithmetic Calculation", presenceState: "idle", status: "completed", provider: "gemini", project: "gemini"),
 ]
 
 @MainActor
 func renderWidget() {
-    let smallView = WidgetSmallView()
+    let smallView = WidgetSmallView(sessions: sessions)
         .environment(\.colorScheme, .dark)
     let smallRenderer = ImageRenderer(content: smallView)
     smallRenderer.scale = 3.0
