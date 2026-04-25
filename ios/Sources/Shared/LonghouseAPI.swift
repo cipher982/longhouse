@@ -123,6 +123,20 @@ struct LonghouseAPI: Sendable {
         }
     }
 
+    func draftReply(id: String, maxChars: Int = 1200) async throws -> DraftReplyResponse {
+        var request = URLRequest(url: baseURL.appendingPathComponent("/api/sessions/\(id)/draft-reply"))
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["max_chars": maxChars])
+
+        let (data, httpResponse) = try await data(for: request)
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
+        return try JSONDecoder.snakeCase.decode(DraftReplyResponse.self, from: data)
+    }
+
     func sessionAction(id: String, action: String) async throws {
         var request = URLRequest(url: baseURL.appendingPathComponent("/api/timeline/sessions/\(id)/action"))
         request.httpMethod = "POST"

@@ -14,6 +14,7 @@ struct SessionView: View {
     var body: some View {
         VStack(spacing: 0) {
             transcript
+            liveActivityMessage
             composer
         }
         .navigationTitle(viewModel.detail?.displayTitle ?? fallbackTitle)
@@ -35,17 +36,45 @@ struct SessionView: View {
     @ViewBuilder
     private var watchButton: some View {
         if let detail = viewModel.detail {
-            Button {
-                Task { await liveActivityManager.toggle(detail: detail, appState: appState) }
+            let isWatching = liveActivityManager.isWatching(sessionId: detail.id)
+            Menu {
+                Button {
+                    Task { await liveActivityManager.toggle(detail: detail, appState: appState) }
+                } label: {
+                    Label(
+                        isWatching ? "Stop Lock Screen Updates" : "Start Lock Screen Updates",
+                        systemImage: isWatching ? "stop.circle" : "bell.badge"
+                    )
+                }
             } label: {
                 if liveActivityManager.isBusy {
                     ProgressView().controlSize(.small)
                 } else {
-                    Image(systemName: liveActivityManager.isWatching(sessionId: detail.id) ? "stop.circle" : "dot.radiowaves.left.and.right")
+                    Label(
+                        isWatching ? "Updates On" : "Updates",
+                        systemImage: isWatching ? "bell.fill" : "bell"
+                    )
+                    .labelStyle(.titleAndIcon)
                 }
             }
             .disabled(liveActivityManager.isBusy)
-            .accessibilityLabel(liveActivityManager.isWatching(sessionId: detail.id) ? "Stop watching session" : "Watch session")
+            .accessibilityHint("Opens Lock Screen update options")
+        }
+    }
+
+    @ViewBuilder
+    private var liveActivityMessage: some View {
+        if let error = liveActivityManager.errorMessage {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle")
+                Text(error)
+                    .font(.caption)
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(.orange)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.bar)
         }
     }
 
@@ -119,23 +148,52 @@ struct SessionView: View {
     }
 
     private func composerField(enabled: Bool) -> some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            TextField("Reply", text: $composerText, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
-                .lineLimit(1...6)
-                .focused($composerFocused)
-                .disabled(viewModel.isSending || !enabled)
-            Button {
-                Task { await send() }
-            } label: {
-                if viewModel.isSending {
-                    ProgressView()
-                } else {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.title2)
-                }
+        VStack(alignment: .leading, spacing: 6) {
+            if let draftError = viewModel.draftErrorMessage {
+                Text(draftError)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
             }
-            .disabled(composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.isSending)
+
+            HStack(alignment: .bottom, spacing: 8) {
+                Button {
+                    Task { await draft() }
+                } label: {
+                    if viewModel.isDrafting {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "sparkles")
+                            .font(.title3)
+                    }
+                }
+                .frame(width: 32, height: 32)
+                .disabled(viewModel.isSending || viewModel.isDrafting || !enabled)
+                .accessibilityLabel("Draft reply")
+
+                TextField("Reply", text: $composerText, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(1...6)
+                    .focused($composerFocused)
+                    .disabled(viewModel.isSending || viewModel.isDrafting || !enabled)
+
+                Button {
+                    Task { await send() }
+                } label: {
+                    if viewModel.isSending {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.title2)
+                    }
+                }
+                .disabled(
+                    composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                    viewModel.isSending ||
+                    viewModel.isDrafting
+                )
+                .accessibilityLabel("Send reply")
+            }
         }
         .padding(12)
         .background(.bar)
@@ -162,6 +220,12 @@ struct SessionView: View {
             composerText = ""
             composerFocused = false
         }
+    }
+
+    private func draft() async {
+        guard let draft = await viewModel.draftReply(sessionId: sessionId, appState: appState) else { return }
+        composerText = draft
+        composerFocused = true
     }
 }
 
@@ -639,6 +703,8 @@ final class SessionViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var isInitialLoading = true
     @Published var isSending = false
+    @Published var isDrafting = false
+    @Published var draftErrorMessage: String?
 
     private var expandedIds: Set<String> = []
     private var pollTask: Task<Void, Never>?
@@ -687,6 +753,7 @@ final class SessionViewModel: ObservableObject {
     func send(text: String, sessionId: String, appState: AppState) async -> Bool {
         guard let api = LonghouseAPI(host: appState.serverURL) else { return false }
         isSending = true
+        draftErrorMessage = nil
         defer { isSending = false }
         do {
             try await api.sendLive(id: sessionId, text: text)
@@ -697,6 +764,21 @@ final class SessionViewModel: ObservableObject {
         } catch {
             errorMessage = "Send failed: \(error.localizedDescription)"
             return false
+        }
+    }
+
+    func draftReply(sessionId: String, appState: AppState) async -> String? {
+        guard let api = LonghouseAPI(host: appState.serverURL) else { return nil }
+        isDrafting = true
+        draftErrorMessage = nil
+        defer { isDrafting = false }
+        do {
+            let response = try await api.draftReply(id: sessionId)
+            let draft = response.draftText.trimmingCharacters(in: .whitespacesAndNewlines)
+            return draft.isEmpty ? nil : draft
+        } catch {
+            draftErrorMessage = "Draft unavailable: \(error.localizedDescription)"
+            return nil
         }
     }
 

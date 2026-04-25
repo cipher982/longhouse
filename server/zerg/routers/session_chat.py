@@ -29,11 +29,13 @@ from zerg.services.managed_local_launcher import ManagedLocalLaunchError
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.managed_local_launcher import launch_managed_local_session
 from zerg.services.session_chat_impl import ManagedLocalSessionLaunchResponse
+from zerg.services.session_chat_impl import SessionDraftReplyResponse
 from zerg.services.session_chat_impl import SessionLockInfo
 from zerg.services.session_chat_impl import _acquire_session_lock_or_raise
 from zerg.services.session_chat_impl import _assert_live_session_send_available
 from zerg.services.session_chat_impl import _authorize_live_send
 from zerg.services.session_chat_impl import _build_managed_local_chat_response
+from zerg.services.session_chat_impl import _build_managed_local_draft_reply_response
 from zerg.services.session_chat_impl import _load_session_for_continuation
 from zerg.services.session_chat_impl import _lock_scope_id_for_session
 from zerg.services.session_chat_impl import _managed_local_launch_response
@@ -56,6 +58,12 @@ class SessionMessageRequest(BaseModel):
     """Request to send one message into an explicit session interaction path."""
 
     message: str = Field(..., min_length=1, max_length=10000, description="User message")
+
+
+class SessionDraftReplyRequest(BaseModel):
+    """Request a suggested next user message without sending it."""
+
+    max_chars: int = Field(1200, ge=100, le=4000, description="Maximum draft length")
 
 
 class ManagedLocalThisDeviceLaunchRequest(BaseModel):
@@ -129,6 +137,38 @@ async def send_to_live_session(
         ) from exc
 
 
+@router.post("/{session_id}/draft-reply", response_model=SessionDraftReplyResponse)
+async def draft_reply_for_live_session(
+    session_id: str,
+    body: SessionDraftReplyRequest | None = None,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_oikos_user),
+):
+    """Generate a suggested next user message for a live managed-local session."""
+    request_id = str(uuid.uuid4())[:8]
+    source_session = _load_session_for_continuation(db, session_id)
+    _assert_live_session_send_available(source_session)
+    lock_scope_id = await _acquire_session_lock_or_raise(source_session=source_session, request_id=request_id)
+    try:
+        max_chars = (body or SessionDraftReplyRequest()).max_chars
+        return await _build_managed_local_draft_reply_response(
+            source_session=source_session,
+            request_id=request_id,
+            max_chars=max_chars,
+            db=db,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("[%s] Error in draft_reply_for_live_session", request_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal error: {str(exc)[:200]}",
+        ) from exc
+    finally:
+        await session_lock_manager.release(lock_scope_id, request_id)
+
+
 @agents_router.post("/{session_id}/send-live")
 async def send_to_live_session_agents(
     session_id: str,
@@ -172,6 +212,49 @@ async def send_to_live_session_agents(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Internal error: {str(exc)[:200]}",
         ) from exc
+
+
+@agents_router.post("/{session_id}/draft-reply", response_model=SessionDraftReplyResponse)
+async def draft_reply_for_live_session_agents(
+    session_id: str,
+    request: Request,
+    body: SessionDraftReplyRequest | None = None,
+    db: Session = Depends(get_db),
+    device_token: DeviceToken | None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+):
+    """Machine-facing draft-reply surface for managed-local sessions."""
+    settings = get_settings()
+    resolved_device_token = device_token if isinstance(device_token, DeviceToken) else None
+
+    request_id = str(uuid.uuid4())[:8]
+    source_session = _load_session_for_continuation(db, session_id)
+    _authorize_live_send(
+        request=request,
+        device_token=resolved_device_token,
+        auth_disabled=settings.auth_disabled,
+    )
+    _assert_live_session_send_available(source_session)
+    lock_scope_id = await _acquire_session_lock_or_raise(source_session=source_session, request_id=request_id)
+
+    try:
+        max_chars = (body or SessionDraftReplyRequest()).max_chars
+        return await _build_managed_local_draft_reply_response(
+            source_session=source_session,
+            request_id=request_id,
+            max_chars=max_chars,
+            db=db,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("[%s] Error in draft_reply_for_live_session_agents", request_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal error: {str(exc)[:200]}",
+        ) from exc
+    finally:
+        await session_lock_manager.release(lock_scope_id, request_id)
 
 
 @router.post("/managed-local/this-device", response_model=ManagedLocalSessionLaunchResponse)
