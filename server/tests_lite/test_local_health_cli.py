@@ -318,7 +318,17 @@ def _write_managed_session_state_rows(
                 last_activity_at,
                 phase_observed_at,
             )
-            for session_id, provider, workspace_path, workspace_label, phase_kind, tool_name, phase_source, phase_observed_at, last_activity_at in rows
+            for (
+                session_id,
+                provider,
+                workspace_path,
+                workspace_label,
+                phase_kind,
+                tool_name,
+                phase_source,
+                phase_observed_at,
+                last_activity_at,
+            ) in rows
         ],
     )
     conn.commit()
@@ -512,6 +522,8 @@ def test_collect_local_health_flags_detached_managed_session(monkeypatch, tmp_pa
         {
             "session_id": "sess-detached",
             "provider": "codex",
+            "control_path": "managed",
+            "liveness_model": "codex_bridge",
             "provider_cli": {"path": "/opt/homebrew/bin/codex", "source": "bridge_state"},
             "workspace_label": "zerg",
             "branch": None,
@@ -541,11 +553,11 @@ def test_collect_local_health_flags_orphaned_managed_bridge(monkeypatch, tmp_pat
     _write_codex_bridge_state(
         state_dir,
         "sess-orphan",
-            {
-                "session_id": "sess-orphan",
-                "pid": 8881,
-                "codex_bin": "/opt/homebrew/bin/codex",
-                "ws_url": "ws://127.0.0.1:49888",
+        {
+            "session_id": "sess-orphan",
+            "pid": 8881,
+            "codex_bin": "/opt/homebrew/bin/codex",
+            "ws_url": "ws://127.0.0.1:49888",
             "cwd": "/Users/test/git/citi",
             "status": "ready",
             "updated_at": "2026-04-17T18:02:00Z",
@@ -578,10 +590,12 @@ def test_collect_local_health_flags_orphaned_managed_bridge(monkeypatch, tmp_pat
     assert snapshot["managed_sessions"] == []
     assert snapshot["orphan_bridges"] == [
         {
-                "session_id": "sess-orphan",
-                "provider": "codex",
-                "provider_cli": {"path": "/opt/homebrew/bin/codex", "source": "bridge_state"},
-                "pid": 8881,
+            "session_id": "sess-orphan",
+            "provider": "codex",
+            "control_path": "managed",
+            "liveness_model": "codex_bridge",
+            "provider_cli": {"path": "/opt/homebrew/bin/codex", "source": "bridge_state"},
+            "pid": 8881,
             "workspace_label": "citi",
             "status": "orphan",
             "started_at": "2026-04-17T18:02:00Z",
@@ -660,9 +674,7 @@ def test_collect_local_health_uses_managed_session_phase_state_for_codex_bridge_
     assert snapshot["managed_sessions"][0]["last_activity_at"] == "2026-04-17T17:31:30Z"
 
 
-def test_collect_local_health_keeps_attached_codex_idle_from_managed_session_state(
-    monkeypatch, tmp_path: Path
-):
+def test_collect_local_health_keeps_attached_codex_idle_from_managed_session_state(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
     _write_engine_status(tmp_path, age_seconds=5)
@@ -994,7 +1006,9 @@ def test_collect_local_health_keeps_waiting_for_rollout_session_attached_after_t
             "last_turn_status": "inProgress",
             "thread_subscription_status": "waiting_for_rollout",
             "thread_subscription_attempts": 2,
-            "thread_subscription_last_error": "thread/resume failed: {\"code\":-32600,\"message\":\"no rollout found for thread id thr-live\"}",
+            "thread_subscription_last_error": (
+                'thread/resume failed: {"code":-32600,"message":"no rollout found for thread id thr-live"}'
+            ),
         },
     )
     monkeypatch.setattr(local_health_service, "_codex_bridge_state_dir", lambda base_dir: state_dir)
@@ -1053,7 +1067,7 @@ def test_collect_local_health_marks_failed_thread_subscription_as_degraded(monke
             "last_turn_status": "inProgress",
             "thread_subscription_status": "failed",
             "thread_subscription_attempts": 4,
-            "thread_subscription_last_error": "thread/resume failed: {\"code\":-32000,\"message\":\"permission denied\"}",
+            "thread_subscription_last_error": 'thread/resume failed: {"code":-32000,"message":"permission denied"}',
         },
     )
     monkeypatch.setattr(local_health_service, "_codex_bridge_state_dir", lambda base_dir: state_dir)
@@ -1397,9 +1411,7 @@ def test_collect_local_health_includes_activity_summary(monkeypatch, tmp_path: P
     ]
 
 
-def test_collect_local_health_recent_touches_use_workspace_context_and_ignore_meta_files(
-    monkeypatch, tmp_path: Path
-):
+def test_collect_local_health_recent_touches_use_workspace_context_and_ignore_meta_files(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
     _write_engine_status(tmp_path, age_seconds=5)
@@ -2170,8 +2182,10 @@ def test_managed_session_phase_state_keeps_finished_rows_at_retention_boundary(m
     _disable_real_runner_env(monkeypatch, tmp_path)
     now = datetime(2026, 4, 20, 12, 0, 0, tzinfo=timezone.utc)
     boundary_observed_at = (
-        now - timedelta(seconds=local_health_service._MANAGED_FINISHED_RETENTION_SECONDS)
-    ).isoformat().replace("+00:00", "Z")
+        (now - timedelta(seconds=local_health_service._MANAGED_FINISHED_RETENTION_SECONDS))
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
     _write_managed_session_state_rows(
         tmp_path,
         [
@@ -2246,7 +2260,9 @@ def test_managed_session_phase_state_prefers_newer_outbox_signal(monkeypatch, tm
     assert overlay["sess-1"]["source"] == "claude_hook"
 
 
-def test_managed_session_phase_state_keeps_newer_stored_last_activity_when_outbox_wins_phase(monkeypatch, tmp_path: Path):
+def test_managed_session_phase_state_keeps_newer_stored_last_activity_when_outbox_wins_phase(
+    monkeypatch, tmp_path: Path
+):
     _disable_real_runner_env(monkeypatch, tmp_path)
     now = datetime(2026, 4, 20, 12, 0, 0, tzinfo=timezone.utc)
     stored_phase_at = (now - timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
@@ -2320,6 +2336,10 @@ def test_process_scan_skips_unmanaged_bare_cli(monkeypatch):
 
 def test_collect_unmanaged_processes_reports_live_bare_provider_clis(monkeypatch):
     now = datetime(2026, 4, 19, 0, 0, 0, tzinfo=timezone.utc)
+    codex_vendor_bin = (
+        "/opt/homebrew/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/"
+        "aarch64-apple-darwin/codex/codex"
+    )
     managed_claude = _FakeProc(
         pid=11467,
         cmdline=["claude", "--session-id", "11111111-2222-3333-4444-555555555555"],
@@ -2329,22 +2349,14 @@ def test_collect_unmanaged_processes_reports_live_bare_provider_clis(monkeypatch
     )
     unmanaged_zerg_codex = _FakeProc(
         pid=11468,
-        cmdline=[
-            "/opt/homebrew/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex/codex",
-            "-m",
-            "gpt-5.4",
-        ],
+        cmdline=[codex_vendor_bin, "-m", "gpt-5.4"],
         create_time=(now + timedelta(seconds=30)).timestamp(),
         env={},
         cwd="/Users/test/git/zerg",
     )
     unmanaged_myagents_codex = _FakeProc(
         pid=11469,
-        cmdline=[
-            "/opt/homebrew/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex/codex",
-            "-m",
-            "gpt-5.4",
-        ],
+        cmdline=[codex_vendor_bin, "-m", "gpt-5.4"],
         create_time=(now + timedelta(seconds=60)).timestamp(),
         env={},
         cwd="/Users/test/git/me/myagents",
@@ -2356,6 +2368,9 @@ def test_collect_unmanaged_processes_reports_live_bare_provider_clis(monkeypatch
     assert rows == [
         {
             "provider": "codex",
+            "control_path": "unmanaged",
+            "liveness_model": "process_scan",
+            "provider_cli": {"path": codex_vendor_bin, "source": "process"},
             "pid": 11469,
             "workspace_label": "myagents",
             "cwd": "/Users/test/git/me/myagents",
@@ -2364,6 +2379,9 @@ def test_collect_unmanaged_processes_reports_live_bare_provider_clis(monkeypatch
         },
         {
             "provider": "codex",
+            "control_path": "unmanaged",
+            "liveness_model": "process_scan",
+            "provider_cli": {"path": codex_vendor_bin, "source": "process"},
             "pid": 11468,
             "workspace_label": "zerg",
             "cwd": "/Users/test/git/zerg",
