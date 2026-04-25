@@ -227,7 +227,7 @@ final class LonghousePushAppDelegate: NSObject, UIApplicationDelegate, UNUserNot
         }
 
         do {
-            let sessions = try await api.recentSessions(limit: 40)
+            let sessions = try await api.recentActiveSessions(limit: 40)
             let attentionIds = Set(sessions.filter(\.needsAttention).map(\.id))
             WidgetSessionSnapshotStore.save(sessions: sessions)
             PushNotificationStore.removeResolvedAttentionNotifications(activeSessionIDs: attentionIds)

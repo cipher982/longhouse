@@ -293,6 +293,96 @@ def test_presence_attention_transition_sends_and_debounces_push(tmp_path):
     engine.dispose()
 
 
+def test_presence_resolution_push_requires_unresolved_attention_push(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+
+    with SessionLocal() as db:
+        db.add(User(id=1, email="user@example.com", role="ADMIN"))
+        db.commit()
+        db.add(
+            APNSDeviceRegistration(
+                owner_id=1,
+                platform="ios",
+                device_token="d" * 64,
+                push_environment="sandbox",
+                app_build_id="0.1.0-dev+aaaa1111",
+            )
+        )
+        db.add(
+            AgentSession(
+                id=session_id,
+                provider="codex",
+                environment="test",
+                project="zerg",
+                started_at=datetime.now(timezone.utc),
+                loop_mode="manual",
+                summary_title="Flappy session",
+            )
+        )
+        db.commit()
+
+    def override_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    def override_verify_agents_token():
+        return SimpleNamespace(device_id="devbox", id="token-1", owner_id=1)
+
+    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+
+    t0 = datetime.now(timezone.utc).replace(microsecond=0)
+    send_mock = AsyncMock(return_value=True)
+    resolution_send_mock = AsyncMock(return_value=True)
+
+    with (
+        patch("zerg.routers.presence.send_session_attention_push", send_mock),
+        patch("zerg.routers.presence.send_session_attention_resolution_push", resolution_send_mock),
+    ):
+        with TestClient(api_app) as client:
+            for state, seconds in [
+                ("needs_user", 0),
+                ("idle", 5),
+                ("needs_user", 10),
+                ("idle", 15),
+                ("needs_user", 35),
+                ("idle", 36),
+            ]:
+                response = client.post(
+                    "/agents/presence",
+                    json={
+                        "session_id": session_id,
+                        "state": state,
+                        "occurred_at": (t0 + timedelta(seconds=seconds)).isoformat(),
+                    },
+                    headers={"X-Agents-Token": "device-token"},
+                )
+                assert response.status_code == 204, response.text
+
+    assert send_mock.await_count == 2
+    assert resolution_send_mock.await_count == 2
+    assert send_mock.await_args_list[0].args[0].occurred_at == t0
+    assert send_mock.await_args_list[1].args[0].occurred_at == t0 + timedelta(seconds=35)
+    assert resolution_send_mock.await_args_list[0].args[0].occurred_at == t0 + timedelta(seconds=5)
+    assert resolution_send_mock.await_args_list[1].args[0].occurred_at == t0 + timedelta(seconds=36)
+    with SessionLocal() as db:
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+        assert session is not None
+        assert session.last_attention_push_state == "needs_user:resolved"
+        last_push_at = session.last_attention_push_at
+        assert last_push_at is not None
+        if last_push_at.tzinfo is None:
+            last_push_at = last_push_at.replace(tzinfo=timezone.utc)
+        assert last_push_at == t0 + timedelta(seconds=35)
+
+    _cleanup_overrides()
+    engine.dispose()
+
+
 def test_presence_attention_send_failure_clears_debounce_stamp(tmp_path):
     engine, SessionLocal = _make_db(tmp_path)
     session_id = str(uuid4())
@@ -337,8 +427,12 @@ def test_presence_attention_send_failure_clears_debounce_stamp(tmp_path):
 
     t0 = datetime.now(timezone.utc).replace(microsecond=0)
     send_mock = AsyncMock(return_value=False)
+    resolution_send_mock = AsyncMock(return_value=True)
 
-    with patch("zerg.routers.presence.send_session_attention_push", send_mock):
+    with (
+        patch("zerg.routers.presence.send_session_attention_push", send_mock),
+        patch("zerg.routers.presence.send_session_attention_resolution_push", resolution_send_mock),
+    ):
         with TestClient(api_app) as client:
             first = client.post(
                 "/agents/presence",
@@ -374,6 +468,7 @@ def test_presence_attention_send_failure_clears_debounce_stamp(tmp_path):
             assert third.status_code == 204, third.text
 
     assert send_mock.await_count == 2
+    assert resolution_send_mock.await_count == 0
     with SessionLocal() as db:
         session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
         assert session is not None
