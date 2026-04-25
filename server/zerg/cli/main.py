@@ -10,7 +10,7 @@ from zerg.build_info import BuildIdentityMissing
 from zerg.build_info import load as load_build_identity
 from zerg.cli.claude import claude
 from zerg.cli.claude_channel import app as claude_channel_app
-from zerg.cli.codex import codex
+from zerg.cli.codex import app as codex_app
 from zerg.cli.connect import auth
 from zerg.cli.connect import connect as connect_command
 from zerg.cli.connect import recall
@@ -120,10 +120,11 @@ app.add_typer(messages_app, name="messages", help="Durable session inbox command
 app.add_typer(sessions_app, name="sessions", help="Session inspection commands")
 app.add_typer(config_app, name="config", help="Configuration management")
 app.add_typer(claude_channel_app, name="claude-channel", help="Claude channel bridge commands", hidden=True)
+app.add_typer(codex_app, name="codex", help="Managed Codex session commands")
 app.add_typer(local_health_app, name="local-health")
 app.add_typer(machine_app, name="machine", help="Machine runtime repair and reconciliation")
 
-for command in (serve, status, claude, codex, wall, peers, message, tail, auth, ship, recall):
+for command in (serve, status, claude, wall, peers, message, tail, auth, ship, recall):
     app.command()(command)
 
 app.command(name="continue")(continue_session)

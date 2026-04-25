@@ -29,8 +29,16 @@ from zerg.services.session_continuity import get_machine_name_label
 from zerg.services.shipper.service import get_engine_executable
 from zerg.session_loop_mode import SessionLoopMode
 
+app = typer.Typer(
+    name="codex",
+    help="Launch and inspect managed Longhouse Codex sessions.",
+    invoke_without_command=True,
+    no_args_is_help=False,
+)
+
 _CODEX_BIN_ENV = "LONGHOUSE_CODEX_BIN"
 _CODEX_DISABLE_UPDATE_CHECK_CONFIG = "check_for_update_on_startup=false"
+_LEGACY_MANAGED_CODEX_LAUNCHER_MARKER = "# longhouse-managed-codex-launcher"
 _ROLLOUT_TURN_EVENT_TYPES = {"task_started", "task_complete", "turn_aborted"}
 _ROLLOUT_TERMINAL_EVENT_TYPES = {"task_complete", "turn_aborted"}
 _ROLLOUT_TAIL_LINES = 256
@@ -53,13 +61,207 @@ def _resolve_explicit_codex_binary(candidate: str, *, source: str) -> str:
 
 
 def _resolve_codex_binary(explicit: str | None = None) -> str | None:
+    return _resolve_codex_binary_with_source(explicit)["path"]
+
+
+def _resolve_codex_binary_with_source(explicit: str | None = None) -> dict[str, str | None]:
     normalized = str(explicit or "").strip()
     if normalized:
-        return _resolve_explicit_codex_binary(normalized, source="--codex-bin")
+        return {"path": _resolve_explicit_codex_binary(normalized, source="--codex-bin"), "source": "--codex-bin"}
     env_candidate = str(os.environ.get(_CODEX_BIN_ENV) or "").strip()
     if env_candidate:
-        return _resolve_explicit_codex_binary(env_candidate, source=_CODEX_BIN_ENV)
-    return shutil.which("codex")
+        return {"path": _resolve_explicit_codex_binary(env_candidate, source=_CODEX_BIN_ENV), "source": _CODEX_BIN_ENV}
+    resolved = shutil.which("codex")
+    return {"path": resolved, "source": "PATH" if resolved else "missing"}
+
+
+def _codex_version(codex_bin: str | None) -> dict[str, object]:
+    if not codex_bin:
+        return {"ok": False, "value": None, "error": "codex executable not found"}
+    try:
+        completed = subprocess.run(
+            [codex_bin, "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"ok": False, "value": None, "error": str(exc)}
+    output = ((completed.stdout or "").strip() or (completed.stderr or "").strip()).splitlines()
+    value = output[0].strip() if output else ""
+    if completed.returncode == 0 and value:
+        return {"ok": True, "value": value, "error": None}
+    return {
+        "ok": False,
+        "value": value or None,
+        "error": f"codex --version exited with code {completed.returncode}",
+    }
+
+
+def _default_codex_bridge_state_root() -> Path:
+    return Path.home() / ".claude" / "managed-local" / "codex-bridge"
+
+
+def _pid_alive(pid: object) -> bool | None:
+    try:
+        pid_int = int(pid)
+    except (TypeError, ValueError):
+        return None
+    if pid_int <= 0:
+        return False
+    try:
+        os.kill(pid_int, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return None
+
+
+def _lock_file_held(lock_path: Path) -> bool | None:
+    if not lock_path.exists():
+        return None
+    if os.name != "posix":
+        return None
+    try:
+        import fcntl
+
+        with lock_path.open("a+") as handle:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            else:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                return False
+    except OSError:
+        return None
+
+
+def _read_codex_bridge_states(state_root: Path) -> list[dict[str, object]]:
+    if not state_root.exists():
+        return []
+    states: list[dict[str, object]] = []
+    for state_file in sorted(state_root.glob("*.json")):
+        if state_file.name.endswith(".tmp"):
+            continue
+        try:
+            state = json.loads(state_file.read_text())
+        except (OSError, json.JSONDecodeError):
+            states.append({"state_file": str(state_file), "readable": False})
+            continue
+        lock_path = state_file.with_suffix(".lock")
+        ws_url = str(state.get("ws_url") or "").strip() or None
+        states.append(
+            {
+                "session_id": str(state.get("session_id") or state_file.stem),
+                "state_file": str(state_file),
+                "log_file": str(state.get("log_file") or ""),
+                "readable": True,
+                "status": str(state.get("status") or ""),
+                "pid": state.get("pid"),
+                "pid_alive": _pid_alive(state.get("pid")),
+                "lock_file": str(lock_path),
+                "lock_file_exists": lock_path.exists(),
+                "lock_held": _lock_file_held(lock_path),
+                "codex_bin": str(state.get("codex_bin") or ""),
+                "ws_url": ws_url,
+                "readyz_healthy": _bridge_readyz_healthy(ws_url) if ws_url else None,
+                "thread_id": str(state.get("thread_id") or ""),
+                "thread_path": str(state.get("thread_path") or ""),
+                "last_turn_status": str(state.get("last_turn_status") or ""),
+                "active_turn_id": str(state.get("active_turn_id") or ""),
+                "updated_at": str(state.get("updated_at") or ""),
+            }
+        )
+    return states
+
+
+def _collect_codex_doctor(*, codex_bin: str | None, state_root: Path | None) -> dict[str, object]:
+    resolution = _resolve_codex_binary_with_source(codex_bin)
+    resolved_codex_bin = resolution["path"]
+    home = Path.home()
+    legacy_launcher = home / ".local" / "bin" / "longhouse-codex"
+    legacy_runtime_dir = home / ".longhouse" / "runtimes" / "codex"
+    resolved_state_root = state_root or _default_codex_bridge_state_root()
+    bridge_states = _read_codex_bridge_states(resolved_state_root)
+    return {
+        "codex_binary": {
+            "path": resolved_codex_bin,
+            "source": resolution["source"],
+            "version": _codex_version(resolved_codex_bin),
+            "env_override": os.environ.get(_CODEX_BIN_ENV),
+        },
+        "legacy_artifacts": {
+            "launcher": {
+                "path": str(legacy_launcher),
+                "exists": legacy_launcher.exists(),
+                "legacy_marker": _legacy_codex_launcher_has_marker(legacy_launcher),
+            },
+            "managed_runtime_dir": {
+                "path": str(legacy_runtime_dir),
+                "exists": legacy_runtime_dir.exists(),
+            },
+        },
+        "bridge": {
+            "state_root": str(resolved_state_root),
+            "state_root_exists": resolved_state_root.exists(),
+            "sessions": bridge_states,
+        },
+    }
+
+
+def _legacy_codex_launcher_has_marker(path: Path) -> bool:
+    try:
+        return path.is_file() and _LEGACY_MANAGED_CODEX_LAUNCHER_MARKER in path.read_text(errors="ignore")
+    except OSError:
+        return False
+
+
+def _render_codex_doctor(payload: dict[str, object], *, json_output: bool) -> None:
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2))
+        return
+
+    binary = dict(payload["codex_binary"])
+    version = dict(binary.get("version") or {})
+    typer.echo("Codex")
+    typer.echo(f"  path: {binary.get('path') or '-'}")
+    typer.echo(f"  source: {binary.get('source') or '-'}")
+    typer.echo(f"  version: {version.get('value') or '-'}")
+    if version.get("error"):
+        typer.echo(f"  version error: {version['error']}")
+    typer.echo(f"  {_CODEX_BIN_ENV}: {binary.get('env_override') or '-'}")
+
+    artifacts = dict(payload["legacy_artifacts"])
+    launcher = dict(artifacts["launcher"])
+    runtime = dict(artifacts["managed_runtime_dir"])
+    typer.echo("")
+    typer.echo("Legacy artifacts")
+    typer.echo(f"  longhouse-codex: {'present' if launcher.get('exists') else 'absent'}" f" ({launcher.get('path')})")
+    if launcher.get("exists"):
+        typer.echo(f"    legacy marker: {'yes' if launcher.get('legacy_marker') else 'no'}")
+    typer.echo(f"  managed runtime dir: {'present' if runtime.get('exists') else 'absent'}" f" ({runtime.get('path')})")
+
+    bridge = dict(payload["bridge"])
+    sessions = list(bridge.get("sessions") or [])
+    typer.echo("")
+    typer.echo("Bridge")
+    typer.echo(f"  state root: {bridge.get('state_root')}")
+    typer.echo(f"  state files: {len(sessions)}")
+    for session in sessions:
+        state = dict(session)
+        typer.echo(f"  - {state.get('session_id')}")
+        typer.echo(f"      status: {state.get('status') or '-'}")
+        typer.echo(f"      pid: {state.get('pid') or '-'} alive={state.get('pid_alive')}")
+        typer.echo(f"      lock: exists={state.get('lock_file_exists')} held={state.get('lock_held')}")
+        typer.echo(f"      codex: {state.get('codex_bin') or '-'}")
+        typer.echo(f"      ws: {state.get('ws_url') or '-'} readyz={state.get('readyz_healthy')}")
+        if state.get("thread_id"):
+            typer.echo(f"      thread: {state['thread_id']}")
 
 
 def _build_codex_attach_command(
@@ -312,7 +514,9 @@ def _launch_managed_local_from_api(
     )
 
 
+@app.callback()
 def codex(
+    ctx: typer.Context,
     cwd: Path = typer.Option(
         Path("."),
         "--cwd",
@@ -370,6 +574,9 @@ def codex(
     ),
 ) -> None:
     """Launch a Longhouse Codex session on this machine via the Longhouse API."""
+
+    if ctx.invoked_subcommand:
+        return
 
     resolved_config_dir = Path(config_dir) if config_dir else None
     resolved_url, resolved_token = _load_api_credentials(
@@ -481,3 +688,30 @@ def codex(
             f"Managed bridge cleanup failed after TUI exit: {stop_error}",
             fg=typer.colors.YELLOW,
         )
+
+
+@app.command("doctor")
+def codex_doctor(
+    codex_bin: str | None = typer.Option(
+        None,
+        "--codex-bin",
+        help=("Debug override for the Codex executable to inspect " f"(defaults to {_CODEX_BIN_ENV}, then `codex` on PATH)."),
+    ),
+    state_root: Path | None = typer.Option(
+        None,
+        "--state-root",
+        file_okay=False,
+        dir_okay=True,
+        resolve_path=True,
+        help="Codex bridge state root override (default: ~/.claude/managed-local/codex-bridge).",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Inspect the managed Codex binary, legacy artifacts, and bridge state."""
+
+    try:
+        payload = _collect_codex_doctor(codex_bin=codex_bin, state_root=state_root)
+    except _NativeBridgeError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    _render_codex_doctor(payload, json_output=json_output)
