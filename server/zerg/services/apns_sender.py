@@ -52,6 +52,7 @@ class APNSDeviceTarget:
 class SessionAttentionPush:
     session_id: str
     state: Literal["needs_user", "blocked"]
+    occurred_at: datetime
     title: str
     summary: str
     project: str | None
@@ -78,6 +79,27 @@ def set_user_apns_enabled(user: User, enabled: bool) -> dict:
     prefs["apns_enabled"] = bool(enabled)
     user.prefs = prefs
     return prefs
+
+
+def clear_session_attention_push_stamp(
+    db: Session,
+    *,
+    session_id: str,
+    state: str,
+    occurred_at: datetime,
+) -> bool:
+    """Clear a pre-send debounce stamp when no APNs target accepted the push."""
+
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    if session is None:
+        return False
+    if str(session.last_attention_push_state or "").strip() != state:
+        return False
+    if not _same_instant(session.last_attention_push_at, occurred_at):
+        return False
+    session.last_attention_push_at = None
+    session.last_attention_push_state = None
+    return True
 
 
 def prepare_session_attention_push(
@@ -162,6 +184,7 @@ def prepare_session_attention_push(
     return SessionAttentionPush(
         session_id=str(session.id),
         state=current_state,
+        occurred_at=occurred_at,
         title=title,
         summary=summary,
         project=project,
@@ -174,15 +197,16 @@ def prepare_session_attention_push(
     )
 
 
-async def send_session_attention_push(notification: SessionAttentionPush) -> None:
+async def send_session_attention_push(notification: SessionAttentionPush) -> bool:
     settings = get_settings()
     if settings.testing or not settings.apns_enabled:
-        return
+        return False
 
     provider_token = _provider_token()
     topic = str(settings.apns_topic or "ai.longhouse.ios").strip() or "ai.longhouse.ios"
     payload = build_session_attention_payload(notification)
     expiration = str(int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()))
+    accepted = False
 
     async with httpx.AsyncClient(http2=True, timeout=10.0) as client:
         for target in notification.targets:
@@ -209,6 +233,9 @@ async def send_session_attention_push(notification: SessionAttentionPush) -> Non
                     response.status_code,
                     response.text,
                 )
+            else:
+                accepted = True
+    return accepted
 
 
 def build_session_attention_payload(notification: SessionAttentionPush) -> dict:
@@ -223,7 +250,7 @@ def build_session_attention_payload(notification: SessionAttentionPush) -> dict:
             "sound": "default",
         },
         "session_id": notification.session_id,
-        "title": notification.title,
+        "title": _trim_alert_text(notification.title, limit=200),
         "summary": _trim_alert_text(notification.summary, limit=500),
         "state": notification.state,
         "attention_state": notification.state,
@@ -255,8 +282,10 @@ def _attention_alert_body(*, state: str, project: str | None, title: str, tool_n
     parts: list[str] = []
     if project:
         parts.append(project)
-    if state == "blocked" and tool_name:
-        parts.append(f"Blocked on {tool_name}")
+    if state == "blocked":
+        parts.append(f"Blocked on {tool_name}" if tool_name else "Blocked")
+    elif not project:
+        parts.append("Waiting for you")
     parts.append(title)
     return _trim_alert_text(" · ".join(parts))
 
@@ -286,6 +315,16 @@ def _trim_alert_text(value: str, limit: int = 180) -> str:
     if len(compact) <= limit:
         return compact
     return compact[: limit - 1].rstrip() + "…"
+
+
+def _same_instant(left: datetime | None, right: datetime) -> bool:
+    if left is None:
+        return False
+    if left.tzinfo is None:
+        left = left.replace(tzinfo=timezone.utc)
+    if right.tzinfo is None:
+        right = right.replace(tzinfo=timezone.utc)
+    return abs((left - right).total_seconds()) < 0.001
 
 
 def _apns_host(push_environment: Literal["sandbox", "production"]) -> str:
