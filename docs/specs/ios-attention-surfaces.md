@@ -80,7 +80,7 @@ Completed in `ios-timeline-refresh`.
 
 ### Phase 2A: Cleanup And Shared Widget Snapshot
 
-Build next.
+Completed in `ios-timeline-refresh`.
 
 - Add a background push on attention resolution.
 - In the app background push handler:

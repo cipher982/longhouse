@@ -209,6 +209,8 @@ def prepare_session_attention_resolution_push(
 
     last_attention_push_at = _as_aware_utc(session.last_attention_push_at)
     last_attention_push_state = str(session.last_attention_push_state or "").strip() or None
+    # The raw marker must match the unresolved state. A ":resolved" suffix means
+    # this visible alert has already had one cleanup push scheduled.
     if last_attention_push_state != previous_state or last_attention_push_at is None:
         return None
 
