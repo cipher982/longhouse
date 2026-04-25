@@ -4138,6 +4138,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/devices/apns-live-activity/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register Apns Live Activity
+         * @description Register or refresh an ActivityKit update token for one watched session.
+         */
+        post: operations["register_apns_live_activity_devices_apns_live_activity_register_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/devices/apns-live-activity/end": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * End Apns Live Activity
+         * @description Mark an ActivityKit update token as ended after the user stops watching.
+         */
+        post: operations["end_apns_live_activity_devices_apns_live_activity_end_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/devices/tokens/{token_id}": {
         parameters: {
             query?: never;
@@ -4253,6 +4293,57 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
+         * APNSLiveActivityEndRequest
+         * @description Mark one ActivityKit registration as ended by the current user.
+         */
+        APNSLiveActivityEndRequest: {
+            /** Activity Id */
+            activity_id: string;
+        };
+        /**
+         * APNSLiveActivityRegisterRequest
+         * @description Register or refresh one ActivityKit push token for a watched session.
+         */
+        APNSLiveActivityRegisterRequest: {
+            /** Session Id */
+            session_id: string;
+            /** Activity Id */
+            activity_id: string;
+            /** Push Token */
+            push_token: string;
+            /** App Build Id */
+            app_build_id?: string | null;
+            /**
+             * Push Environment
+             * @default sandbox
+             * @enum {string}
+             */
+            push_environment: "sandbox" | "production";
+        };
+        /**
+         * APNSLiveActivityRegisterResponse
+         * @description Response for ActivityKit push-token registration upsert.
+         */
+        APNSLiveActivityRegisterResponse: {
+            /** Id */
+            id: string;
+            /** Session Id */
+            session_id: string;
+            /** Activity Id */
+            activity_id: string;
+            /** Push Token Suffix */
+            push_token_suffix: string;
+            /** Push Environment */
+            push_environment: string;
+            /** App Build Id */
+            app_build_id?: string | null;
+            /**
+             * Last Seen At
+             * Format: date-time
+             */
+            last_seen_at: string;
+        };
+        /**
          * APNSRegisterRequest
          * @description Register or refresh an iOS APNs device token for the current user.
          */
@@ -4262,9 +4353,9 @@ export interface components {
             /**
              * Platform
              * @default ios
-             * @constant
+             * @enum {string}
              */
-            platform: "ios";
+            platform: "ios" | "ios_widget";
             /** App Build Id */
             app_build_id?: string | null;
             /**
@@ -16472,6 +16563,70 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["APNSRegisterResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_apns_live_activity_devices_apns_live_activity_register_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["APNSLiveActivityRegisterRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APNSLiveActivityRegisterResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    end_apns_live_activity_devices_apns_live_activity_end_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["APNSLiveActivityEndRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
