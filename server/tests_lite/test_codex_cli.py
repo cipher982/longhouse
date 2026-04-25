@@ -62,26 +62,40 @@ def test_resolve_codex_binary_prefers_flag_then_env(monkeypatch, tmp_path):
     assert codex_cli._resolve_codex_binary() == str(env_bin.resolve())
 
 
-def test_resolve_codex_binary_prefers_installed_managed_runtime_before_ambient_path(monkeypatch):
+def test_resolve_codex_binary_prefers_ambient_path_before_installed_managed_runtime(monkeypatch):
     monkeypatch.delenv(codex_cli._CODEX_BIN_ENV, raising=False)
     monkeypatch.setattr(
         codex_cli,
         "resolve_installed_runtime_artifact",
-        lambda component: type("Artifact", (), {"launch_path": "/tmp/codex"})()
+        lambda component: type("Artifact", (), {"path": "/tmp/longhouse-codex", "launch_path": "/tmp/codex"})()
         if component == codex_cli.RuntimeComponent.MANAGED_CODEX
         else None,
     )
     monkeypatch.setattr(codex_cli.shutil, "which", lambda name: "/usr/local/bin/codex" if name == "codex" else None)
 
-    assert codex_cli._resolve_codex_binary() == "/tmp/codex"
+    assert codex_cli._resolve_codex_binary() == "/usr/local/bin/codex"
 
 
-def test_resolve_codex_binary_does_not_fall_back_to_ambient_path(monkeypatch):
+def test_resolve_codex_binary_uses_ambient_path_without_managed_runtime(monkeypatch):
     monkeypatch.delenv(codex_cli._CODEX_BIN_ENV, raising=False)
     monkeypatch.setattr(codex_cli, "resolve_installed_runtime_artifact", lambda component: None)
     monkeypatch.setattr(codex_cli.shutil, "which", lambda name: "/usr/local/bin/codex" if name == "codex" else None)
 
-    assert codex_cli._resolve_codex_binary() is None
+    assert codex_cli._resolve_codex_binary() == "/usr/local/bin/codex"
+
+
+def test_resolve_codex_binary_falls_back_to_installed_managed_runtime(monkeypatch):
+    monkeypatch.delenv(codex_cli._CODEX_BIN_ENV, raising=False)
+    monkeypatch.setattr(
+        codex_cli,
+        "resolve_installed_runtime_artifact",
+        lambda component: type("Artifact", (), {"path": "/tmp/longhouse-codex", "launch_path": "/tmp/codex"})()
+        if component == codex_cli.RuntimeComponent.MANAGED_CODEX
+        else None,
+    )
+    monkeypatch.setattr(codex_cli.shutil, "which", lambda name: None)
+
+    assert codex_cli._resolve_codex_binary() == "/tmp/codex"
 
 
 def test_active_turn_survived_tui_exit_ignores_completed_rollout(monkeypatch, tmp_path):
@@ -416,6 +430,6 @@ def test_codex_command_exits_when_no_codex_runtime_available(monkeypatch, tmp_pa
     result = runner.invoke(app, ["codex", "--cwd", str(tmp_path)])
 
     assert result.exit_code == 1
-    assert "Managed Codex runtime is not installed yet." in result.output
+    assert "Codex executable not found." in result.output
     assert "longhouse onboard" in result.output
     assert "longhouse machine repair" in result.output
