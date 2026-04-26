@@ -2981,6 +2981,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sessions/{session_id}/input": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Session Input Endpoint */
+        post: operations["create_session_input_endpoint_sessions__session_id__input_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/inputs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Session Inputs Endpoint */
+        get: operations["list_session_inputs_endpoint_sessions__session_id__inputs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/inputs/{input_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Cancel Session Input Endpoint */
+        delete: operations["cancel_session_input_endpoint_sessions__session_id__inputs__input_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/sessions/{session_id}/send-live": {
         parameters: {
             query?: never;
@@ -3343,6 +3394,30 @@ export interface paths {
          *     with event-driven refresh.
          */
         get: operations["stream_session_workspace_timeline_sessions__session_id__workspace_stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/canary/sessions/{session_id}/workspace/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Canary Workspace
+         * @description Canary-only SSE: same generator as the browser endpoint, token-auth.
+         *
+         *     The always-on canary observer on cube uses this; requires X-Canary-Token
+         *     matching LONGHOUSE_CANARY_TOKEN. Admin users can still use the browser
+         *     endpoint.
+         */
+        get: operations["stream_canary_workspace_canary_sessions__session_id__workspace_stream_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4666,6 +4741,8 @@ export interface components {
             control?: components["schemas"]["SessionControlResponse"] | null;
             /** @description Canonical session capability flags */
             capabilities: components["schemas"]["SessionCapabilitiesResponse"];
+            /** @description Server-derived display state for clients */
+            runtime_display?: components["schemas"]["SessionRuntimeDisplayResponse"] | null;
             /**
              * @description Session loop mode: assist|autopilot
              * @default assist
@@ -6736,6 +6813,21 @@ export interface components {
              */
             nextCursor: number;
         };
+        /** QueuedInputSummary */
+        QueuedInputSummary: {
+            /** Id */
+            id: number;
+            /** Text */
+            text: string;
+            /** Intent */
+            intent: string;
+            /** Status */
+            status: string;
+            /** Last Error */
+            last_error?: string | null;
+            /** Created At */
+            created_at?: string | null;
+        };
         /**
          * RecallMatch
          * @description A single recall match with context.
@@ -7640,6 +7732,12 @@ export interface components {
              * @default false
              */
             reply_to_live_session_available: boolean;
+            /**
+             * Can Queue Next Input
+             * @description True when the user can queue input to auto-send at the next safe turn boundary
+             * @default false
+             */
+            can_queue_next_input: boolean;
         };
         /** SessionControlResponse */
         SessionControlResponse: {
@@ -7696,6 +7794,37 @@ export interface components {
          * @enum {string}
          */
         SessionExecutionHome: "legacy" | "managed_local" | "managed_hosted" | "cloud_takeover";
+        /**
+         * SessionInputRequest
+         * @description User input targeted at a managed session.
+         */
+        SessionInputRequest: {
+            /** Text */
+            text: string;
+            /**
+             * Intent
+             * @description auto | queue | steer
+             * @default auto
+             */
+            intent: string;
+        };
+        /**
+         * SessionInputResponse
+         * @description Shape returned from POST /api/sessions/{id}/input.
+         */
+        SessionInputResponse: {
+            /**
+             * Outcome
+             * @description sent | queued
+             */
+            outcome: string;
+            /** Input Id */
+            input_id: number;
+            /** Intent */
+            intent: string;
+            /** Queued */
+            queued?: components["schemas"]["QueuedInputSummary"][];
+        };
         /**
          * SessionLockInfo
          * @description Information about a session lock.
@@ -8141,6 +8270,8 @@ export interface components {
             control?: components["schemas"]["SessionControlResponse"] | null;
             /** @description Canonical session capability flags */
             capabilities: components["schemas"]["SessionCapabilitiesResponse"];
+            /** @description Server-derived display state for clients */
+            runtime_display?: components["schemas"]["SessionRuntimeDisplayResponse"] | null;
             /**
              * @description Session loop mode: assist|autopilot
              * @default assist
@@ -8152,6 +8283,86 @@ export interface components {
              * @default active
              */
             user_state: string;
+        };
+        /** SessionRuntimeDisplayResponse */
+        SessionRuntimeDisplayResponse: {
+            /**
+             * Truth Tier
+             * @description Runtime truth tier: none|stale|inferred|fresh|managed-local
+             */
+            truth_tier: string;
+            /**
+             * State
+             * @description Canonical presence state when known
+             */
+            state?: string | null;
+            /**
+             * Tone
+             * @description Stable visual tone for clients
+             */
+            tone: string;
+            /**
+             * Headline
+             * @description Primary user-facing runtime label
+             */
+            headline: string;
+            /**
+             * Detail
+             * @description Secondary user-facing runtime label
+             */
+            detail?: string | null;
+            /**
+             * Phase Label
+             * @description Compact phase label for cards and strips
+             */
+            phase_label: string;
+            /**
+             * Compact Tool Label
+             * @description Normalized tool label for display
+             */
+            compact_tool_label?: string | null;
+            /**
+             * Is Live
+             * @description True when the session is actively executing
+             * @default false
+             */
+            is_live: boolean;
+            /**
+             * Is Executing
+             * @description True when the agent is thinking or running a tool
+             * @default false
+             */
+            is_executing: boolean;
+            /**
+             * Needs Attention
+             * @description True when the user should respond or approve
+             * @default false
+             */
+            needs_attention: boolean;
+            /**
+             * Is Idle
+             * @description True when the runtime is ready for the next prompt
+             * @default false
+             */
+            is_idle: boolean;
+            /**
+             * Heuristic Active
+             * @description True when activity is inferred from recent progress
+             * @default false
+             */
+            heuristic_active: boolean;
+            /**
+             * Is Managed Local Truth
+             * @description True when runtime truth is from a managed-local control path
+             * @default false
+             */
+            is_managed_local_truth: boolean;
+            /**
+             * Has Signal
+             * @description True when clients should render runtime state
+             * @default false
+             */
+            has_signal: boolean;
         };
         /**
          * SessionSummaryResponse
@@ -14393,6 +14604,115 @@ export interface operations {
             };
         };
     };
+    create_session_input_endpoint_sessions__session_id__input_post: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionInputRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionInputResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_session_inputs_endpoint_sessions__session_id__inputs_get: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueuedInputSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_session_input_endpoint_sessions__session_id__inputs__input_id__delete: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+                input_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     send_to_live_session_agents_agents_sessions__session_id__send_live_post: {
         parameters: {
             query?: never;
@@ -15175,6 +15495,39 @@ export interface operations {
         parameters: {
             query?: {
                 /** @description When true, wait for first change before emitting workspace_changed. */
+                skip_initial?: boolean;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stream_canary_workspace_canary_sessions__session_id__workspace_stream_get: {
+        parameters: {
+            query?: {
                 skip_initial?: boolean;
             };
             header?: never;

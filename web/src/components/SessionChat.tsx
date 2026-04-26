@@ -13,7 +13,14 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { buildUrl } from "../services/api/base";
 import { fetchWithRefresh } from "../lib/auth-refresh";
 import { consumeSessionChatSseBuffer, flushSessionChatSseBuffer } from "../lib/sessionChatSse";
-import { fetchSessionLockStatus, type SessionLockInfo } from "../services/api";
+import {
+  cancelSessionInput,
+  fetchSessionInputs,
+  fetchSessionLockStatus,
+  postSessionInput,
+  type QueuedInputSummary,
+  type SessionLockInfo,
+} from "../services/api";
 import type { AgentSession } from "../services/api/agents";
 import type { ManagedLaunchSuggestion } from "../lib/sessionWorkspace";
 import { Badge, Button, Spinner } from "./ui";
@@ -83,6 +90,12 @@ interface SessionChatProps {
   chatMode?: "managed_local";
   composerDisabledReason?: string | null;
   managedLaunchSuggestion?: ManagedLaunchSuggestion | null;
+  /**
+   * When true, sending while the session is locked persists as a queued
+   * input that auto-dispatches at the next turn boundary. Gated by the
+   * `can_queue_next_input` capability on managed-local sessions.
+   */
+  canQueueNextInput?: boolean;
 }
 
 export type SessionChatTarget = Pick<AgentSession, "id" | "project" | "provider">;
@@ -122,6 +135,7 @@ export function SessionChat({
   chatMode,
   composerDisabledReason = null,
   managedLaunchSuggestion = null,
+  canQueueNextInput = false,
 }: SessionChatProps) {
   const isDock = layout === "dock";
   const isManagedLocal = chatMode === "managed_local";
@@ -302,6 +316,34 @@ export function SessionChat({
   );
   const isSendLocked = Boolean(lockInfo?.locked);
 
+  const queuedInputsQuery = useQuery<QueuedInputSummary[]>({
+    queryKey: ["session-inputs", session.id],
+    queryFn: async () => {
+      try {
+        return await fetchSessionInputs(session.id);
+      } catch {
+        return [];
+      }
+    },
+    enabled: Boolean(session.id) && isManagedLocal && canQueueNextInput,
+    retry: false,
+    refetchOnWindowFocus: false,
+    // Poll while any row is queued/delivering so the UI sees drain progress.
+    refetchInterval: (query) => {
+      const rows = query.state.data ?? [];
+      return rows.some((r) => r.status === "queued" || r.status === "delivering")
+        ? 2_000
+        : false;
+    },
+    staleTime: 10_000,
+  });
+  const queuedInputs = queuedInputsQuery.data ?? [];
+  const activeQueuedInputs = queuedInputs.filter(
+    (row) => row.status === "queued" || row.status === "delivering",
+  );
+  const failedInputs = queuedInputs.filter((row) => row.status === "failed");
+  const queueFull = activeQueuedInputs.length >= 5;
+
   const handleCancel = useCallback(() => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -315,46 +357,37 @@ export function SessionChat({
       setPendingManagedLocalMessage(message);
       setIsSubmitting(true);
       try {
-        const response = await fetchWithRefresh(buildUrl(`/sessions/${session.id}/send-live`), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message }),
-          credentials: "include",
+        const result = await postSessionInput(session.id, {
+          text: message,
+          intent: "auto",
         });
 
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          if (response.status === 409) {
-            const lockData = errorData?.detail?.lock_info;
-            queryClient.setQueryData<SessionLockInfo | null>(["session-lock", session.id], {
-              locked: true,
-              holder: lockData?.holder,
-              time_remaining_seconds: lockData?.time_remaining_seconds,
-              fork_available: lockData?.fork_available,
-            });
-            throw new Error("Session is currently in use by another request");
-          }
-          throw new Error(errorData?.error || errorData?.detail || `Request failed: ${response.status}`);
+        // Seed the queued-inputs cache immediately so the chip appears
+        // before the next poll.
+        queryClient.setQueryData<QueuedInputSummary[]>(
+          ["session-inputs", session.id],
+          result.queued,
+        );
+
+        if (result.outcome === "sent") {
+          queryClient.setQueryData<SessionLockInfo | null>(["session-lock", session.id], {
+            locked: true,
+            holder: null,
+            time_remaining_seconds: null,
+            fork_available: true,
+          });
+
+          // Show brief "Sent" confirmation near the compose button.
+          if (sentConfirmationTimerRef.current) clearTimeout(sentConfirmationTimerRef.current);
+          setSentConfirmation(true);
+          sentConfirmationTimerRef.current = setTimeout(() => setSentConfirmation(false), 2000);
+
+          void refreshCurrentSessionWorkspace().finally(() => setPendingManagedLocalMessage(null));
+        } else {
+          // Queued: keep the lock query fresh (it may still show locked=true
+          // because the agent is working) and clear the pending ghost.
+          setPendingManagedLocalMessage(null);
         }
-
-        const result = await response.json();
-        if (!result.accepted) {
-          throw new Error(result.error || "Session did not accept the message");
-        }
-
-        queryClient.setQueryData<SessionLockInfo | null>(["session-lock", session.id], {
-          locked: true,
-          holder: result.request_id ?? null,
-          time_remaining_seconds: null,
-          fork_available: true,
-        });
-
-        // Show brief "Sent" confirmation near the compose button.
-        if (sentConfirmationTimerRef.current) clearTimeout(sentConfirmationTimerRef.current);
-        setSentConfirmation(true);
-        sentConfirmationTimerRef.current = setTimeout(() => setSentConfirmation(false), 2000);
-
-        void refreshCurrentSessionWorkspace().finally(() => setPendingManagedLocalMessage(null));
       } catch (e) {
         setError(e instanceof Error ? e.message : "Unknown error");
         setPendingManagedLocalMessage(null);
@@ -365,12 +398,33 @@ export function SessionChat({
     [queryClient, session.id, refreshCurrentSessionWorkspace],
   );
 
+  const handleCancelQueuedInput = useCallback(
+    async (inputId: number) => {
+      try {
+        await cancelSessionInput(session.id, inputId);
+        // Optimistically drop it from the cache; refetch to confirm.
+        queryClient.setQueryData<QueuedInputSummary[]>(
+          ["session-inputs", session.id],
+          (rows = []) => rows.filter((row) => row.id !== inputId),
+        );
+        void queuedInputsQuery.refetch();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Could not cancel queued input");
+      }
+    },
+    [queryClient, queuedInputsQuery, session.id],
+  );
+
+  const canQueueNow = isSendLocked && canQueueNextInput && !queueFull;
+  // Primary send is blocked only when we can neither send nor queue.
+  const isSendBlocked = isSendLocked && !canQueueNow;
+
   const handleSend = useCallback(
     async (e: FormEvent) => {
       e.preventDefault();
 
       const message = draft.trim();
-      if (!message || isSubmitting || isComposerDisabled || isSendLocked) return;
+      if (!message || isSubmitting || isComposerDisabled || isSendBlocked) return;
 
       setDraft("");
       setError(null);
@@ -378,12 +432,17 @@ export function SessionChat({
 
       await handleManagedLocalSend(message);
     },
-    [draft, isSubmitting, handleManagedLocalSend, isComposerDisabled, isSendLocked],
+    [draft, isSubmitting, handleManagedLocalSend, isComposerDisabled, isSendBlocked],
   );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      // Don't silently queue via Enter while working — require an explicit
+      // click when the outcome would be "queued" so the user sees it.
+      if (isSendLocked) {
+        return;
+      }
       if (
         requireClickForFirstSend &&
         messages.length === 0 &&
@@ -461,7 +520,13 @@ export function SessionChat({
     : isSendLocked
       ? { variant: "warning" as const, label: "Working" }
       : { variant: "neutral" as const, label: "Ready" };
-  const submitButtonLabel = isSendLocked ? "Waiting" : submitLabel;
+  const submitButtonLabel = !isSendLocked
+    ? submitLabel
+    : canQueueNow
+    ? "Queue next"
+    : queueFull
+    ? "Queue full"
+    : "Waiting";
 
   const renderMessages = () =>
     messages.map((msg) => (
@@ -561,9 +626,60 @@ export function SessionChat({
 
       {isSendLocked && !isStreaming && (
         <div className="session-chat-turn-notice">
-          <span>Agent is working. You can draft the next message; sending will be available when it is ready.</span>
+          <span>
+            {canQueueNextInput
+              ? "Agent is working. Your next message will queue and auto-send at the next turn boundary."
+              : "Agent is working. You can draft the next message; sending will be available when it is ready."}
+          </span>
         </div>
       )}
+
+      {isManagedLocal && activeQueuedInputs.length > 0 ? (
+        <div className="session-chat-queued" data-testid="session-chat-queued">
+          <div className="session-chat-queued__label">Queued (auto-sends next)</div>
+          <ul className="session-chat-queued__list">
+            {activeQueuedInputs.map((row) => (
+              <li key={row.id} className="session-chat-queued__item">
+                <span className="session-chat-queued__text">{row.text}</span>
+                <span
+                  className={`session-chat-queued__status session-chat-queued__status--${row.status}`}
+                >
+                  {row.status === "delivering" ? "Sending…" : "Queued"}
+                </span>
+                {row.status === "queued" ? (
+                  <button
+                    type="button"
+                    className="session-chat-queued__cancel"
+                    onClick={() => void handleCancelQueuedInput(row.id)}
+                    aria-label="Cancel queued message"
+                  >
+                    Cancel
+                  </button>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {isManagedLocal && failedInputs.length > 0 ? (
+        <div
+          className="session-chat-queued session-chat-queued--failed"
+          data-testid="session-chat-queued-failed"
+        >
+          <div className="session-chat-queued__label">Delivery failed</div>
+          <ul className="session-chat-queued__list">
+            {failedInputs.map((row) => (
+              <li key={row.id} className="session-chat-queued__item">
+                <span className="session-chat-queued__text">{row.text}</span>
+                <span className="session-chat-queued__status session-chat-queued__status--failed">
+                  {row.last_error || "failed"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {isDock && isManagedLocal ? null : isDock ? (
         <div className="session-chat-messages session-chat-messages--dock">
@@ -675,7 +791,7 @@ export function SessionChat({
                     type="submit"
                     variant="primary"
                     size="sm"
-                    disabled={!draft.trim() || isSubmitting || isDraftingReply || isSendLocked}
+                    disabled={!draft.trim() || isSubmitting || isDraftingReply || isSendBlocked}
                   >
                     {submitButtonLabel}
                   </Button>
@@ -703,7 +819,7 @@ export function SessionChat({
                       type="submit"
                       variant="primary"
                       size="sm"
-                      disabled={isComposerDisabled || !draft.trim() || isSubmitting || isDraftingReply || isSendLocked}
+                      disabled={isComposerDisabled || !draft.trim() || isSubmitting || isDraftingReply || isSendBlocked}
                       title={composerDisabledReason ?? undefined}
                     >
                       {submitButtonLabel}
