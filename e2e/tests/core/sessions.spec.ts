@@ -40,6 +40,11 @@ async function ensureFilterPanelOpen(page: Page): Promise<void> {
   }
 }
 
+async function gotoTimelineReady(page: Page, path = "/timeline"): Promise<void> {
+  await page.goto(path, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
+}
+
 async function ingestSession(
   request: APIRequestContext,
   overrides: Partial<{
@@ -697,8 +702,7 @@ test.describe("Sessions Page", () => {
 
 test.describe("Filter Chips and Popover", () => {
   test("selecting a filter creates a chip in the toolbar", async ({ page }) => {
-    await page.goto("/timeline");
-    await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
+    await gotoTimelineReady(page);
     await ensureDemoProviders(page);
 
     // Select provider filter via popover
@@ -714,8 +718,7 @@ test.describe("Filter Chips and Popover", () => {
   test("dismissing a chip clears the filter and removes the chip", async ({
     page,
   }) => {
-    await page.goto("/timeline?provider=claude");
-    await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
+    await gotoTimelineReady(page, "/timeline?provider=claude");
 
     // Chip should be visible
     const chip = page.locator(".sessions-filter-chip", { hasText: "claude" });
@@ -740,8 +743,7 @@ test.describe("Filter Chips and Popover", () => {
       provider: "claude",
     });
 
-    await page.goto("/timeline");
-    await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
+    await gotoTimelineReady(page);
     await ensureDemoProviders(page);
 
     // Select provider
@@ -771,8 +773,7 @@ test.describe("Filter Chips and Popover", () => {
   });
 
   test("Escape closes the filter popover", async ({ page }) => {
-    await page.goto("/timeline");
-    await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
+    await gotoTimelineReady(page);
     await ensureDemoProviders(page);
 
     // Popover is open (ensureDemoProviders opened it)
@@ -785,8 +786,7 @@ test.describe("Filter Chips and Popover", () => {
   });
 
   test("clicking outside the popover closes it", async ({ page }) => {
-    await page.goto("/timeline");
-    await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
+    await gotoTimelineReady(page);
     await ensureDemoProviders(page);
 
     await expect(page.locator("#filter-panel")).toBeVisible();
@@ -798,8 +798,7 @@ test.describe("Filter Chips and Popover", () => {
   });
 
   test("non-default days filter creates a chip", async ({ page }) => {
-    await page.goto("/timeline");
-    await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
+    await gotoTimelineReady(page);
     await ensureDemoProviders(page);
 
     // Select 30d in the popover
@@ -820,8 +819,7 @@ test.describe("Filter Chips and Popover", () => {
   });
 
   test("filter button badge shows active filter count", async ({ page }) => {
-    await page.goto("/timeline?provider=claude&days_back=30");
-    await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
+    await gotoTimelineReady(page, "/timeline?provider=claude&days_back=30");
 
     // Filter button badge should show 2
     const badge = page.locator(
