@@ -6,6 +6,7 @@ import {
   useAgentSessionWorkspace,
 } from "./useAgentSessions";
 import { useDocumentVisible } from "./useDocumentVisible";
+import { emitRenderBeacon, recordServerClockSkew } from "../lib/renderBeacon";
 import { resolveSessionRuntimeState } from "../lib/sessionRuntime";
 import {
   buildTimelineModel,
@@ -90,8 +91,12 @@ export function useSessionWorkspace(
     const cleanup = connectSessionWorkspaceStream(
       sessionId,
       {
-        onConnected: () => setStreamConnected(true),
-        onWorkspaceChanged: () => {
+        onConnected: (data) => {
+          recordServerClockSkew(data?.server_now_ms);
+          setStreamConnected(true);
+        },
+        onWorkspaceChanged: (data) => {
+          recordServerClockSkew(data?.server_now_ms);
           void queryClient.invalidateQueries({ queryKey: ["agent-session-workspace", sessionId] });
           void queryClient.invalidateQueries({ queryKey: ["agent-session", sessionId] });
           void queryClient.invalidateQueries({ queryKey: ["agent-session-thread", sessionId] });
@@ -100,6 +105,22 @@ export function useSessionWorkspace(
           void queryClient.invalidateQueries({ queryKey: ["agent-session-events", sessionId] });
           void queryClient.invalidateQueries({ queryKey: ["agent-session-events-infinite", sessionId] });
           void queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
+
+          // Fire render beacon after next paint so we measure true end-to-end latency.
+          const sessionSnapshot = queryClient.getQueryData<{ session?: AgentSession }>([
+            "agent-session-workspace",
+            sessionId,
+          ]);
+          const caps = sessionSnapshot?.session?.capabilities;
+          const managed = Boolean(
+            caps && (caps.live_control_available || caps.host_reattach_available),
+          );
+          emitRenderBeacon({
+            sessionId,
+            latestEventId: data.latest_event_id,
+            latestEventEmittedAtMs: data.latest_event_emitted_at_ms ?? null,
+            managed,
+          });
         },
         onError: () => setStreamConnected(false),
       },

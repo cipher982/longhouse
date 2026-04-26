@@ -15,6 +15,7 @@ const streamMocks = vi.hoisted(() => ({
 }));
 const queryClientMocks = vi.hoisted(() => ({
   invalidateQueries: vi.fn(),
+  getQueryData: vi.fn(() => undefined),
 }));
 
 vi.mock("../useAgentSessions", () => agentSessionMocks);
@@ -206,11 +207,13 @@ describe("useSessionWorkspace", () => {
   it("invalidates the workspace query itself when the SSE stream reports a change", () => {
     let handlers:
       | {
-          onConnected?: () => void;
+          onConnected?: (data?: { session_id: string; server_now_ms?: number }) => void;
           onWorkspaceChanged?: (data: {
             session_id: string;
             latest_event_id: number;
             thread_session_count: number;
+            latest_event_emitted_at_ms?: number | null;
+            server_now_ms?: number;
           }) => void;
           onError?: () => void;
         }

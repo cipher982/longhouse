@@ -891,6 +891,10 @@ def _load_workspace_signature(
 
     latest_event_id = (db.query(func.max(AgentEvent.id)).filter(AgentEvent.session_id.in_(thread_session_ids)).scalar()) or 0
 
+    # Latest event emitted_at (the provider/engine timestamp on the newest event).
+    # This feeds client beacons so we can measure true end-to-end latency.
+    latest_event_timestamp = db.query(func.max(AgentEvent.timestamp)).filter(AgentEvent.session_id.in_(thread_session_ids)).scalar()
+
     # Latest runtime signal across thread — the runtime state row advances on every
     # hook-driven phase change, so this replaces the old SessionPresence anchor.
     latest_runtime_signal = (
@@ -908,6 +912,7 @@ def _load_workspace_signature(
         latest_runtime_signal,
         runtime_version_sum,
         len(thread_session_ids),
+        latest_event_timestamp,
     )
 
 
@@ -924,7 +929,12 @@ async def _session_workspace_stream(
 
     yield {
         "event": "connected",
-        "data": json.dumps({"session_id": str(session_id)}),
+        "data": json.dumps(
+            {
+                "session_id": str(session_id),
+                "server_now_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
+            }
+        ),
     }
 
     wait_start: float | None = None
@@ -964,6 +974,11 @@ async def _session_workspace_stream(
         previous_sig = current_sig
 
         detect_ms = round((monotonic() - wait_start) * 1000, 1) if wait_start else 0
+        latest_event_ts = current_sig[6] if len(current_sig) > 6 else None
+        latest_event_ts_ms: int | None = None
+        if latest_event_ts is not None:
+            ts = latest_event_ts if latest_event_ts.tzinfo else latest_event_ts.replace(tzinfo=timezone.utc)
+            latest_event_ts_ms = int(ts.timestamp() * 1000)
         yield {
             "event": "workspace_changed",
             "data": json.dumps(
@@ -972,6 +987,8 @@ async def _session_workspace_stream(
                     "latest_event_id": current_sig[2],
                     "thread_session_count": current_sig[5],
                     "detect_ms": detect_ms,
+                    "latest_event_emitted_at_ms": latest_event_ts_ms,
+                    "server_now_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
                 }
             ),
         }
