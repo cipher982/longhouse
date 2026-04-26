@@ -296,12 +296,11 @@ export function SessionChat({
       lockStatusQuery.data
         ? {
             locked: lockStatusQuery.data.locked,
-            holder: lockStatusQuery.data.holder ?? undefined,
-            timeRemaining: lockStatusQuery.data.time_remaining_seconds ?? undefined,
           }
         : null,
     [lockStatusQuery.data],
   );
+  const isSendLocked = Boolean(lockInfo?.locked);
 
   const handleCancel = useCallback(() => {
     if (abortControllerRef.current) {
@@ -371,7 +370,7 @@ export function SessionChat({
       e.preventDefault();
 
       const message = draft.trim();
-      if (!message || isSubmitting || isComposerDisabled) return;
+      if (!message || isSubmitting || isComposerDisabled || isSendLocked) return;
 
       setDraft("");
       setError(null);
@@ -379,7 +378,7 @@ export function SessionChat({
 
       await handleManagedLocalSend(message);
     },
-    [draft, isSubmitting, handleManagedLocalSend, isComposerDisabled],
+    [draft, isSubmitting, handleManagedLocalSend, isComposerDisabled, isSendLocked],
   );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -459,9 +458,10 @@ export function SessionChat({
       ? { variant: "warning" as const, label: "Drafting" }
     : isSubmitting
       ? { variant: "warning" as const, label: "Sending" }
-      : lockInfo?.locked
-      ? { variant: "warning" as const, label: "Locked" }
+    : isSendLocked
+      ? { variant: "warning" as const, label: "Working" }
       : { variant: "neutral" as const, label: "Ready" };
+  const submitButtonLabel = isSendLocked ? "Waiting" : submitLabel;
 
   const renderMessages = () =>
     messages.map((msg) => (
@@ -559,12 +559,9 @@ export function SessionChat({
         </div>
       )}
 
-      {lockInfo?.locked && !isStreaming && (
-        <div className="session-chat-lock-notice">
-          <span>
-            Session in use{lockInfo.holder ? ` by ${lockInfo.holder}` : ""}.
-            {lockInfo.timeRemaining && ` ~${Math.ceil(lockInfo.timeRemaining)}s remaining.`}
-          </span>
+      {isSendLocked && !isStreaming && (
+        <div className="session-chat-turn-notice">
+          <span>Agent is working. You can draft the next message; sending will be available when it is ready.</span>
         </div>
       )}
 
@@ -663,7 +660,7 @@ export function SessionChat({
                   }}
                   onKeyDown={handleKeyDown}
                   placeholder={composerPlaceholder || "Type a message..."}
-                  disabled={isSubmitting || isDraftingReply || lockInfo?.locked}
+                  disabled={isSubmitting || isDraftingReply}
                   rows={1}
                 />
                 {isManagedLocal && sentConfirmation ? (
@@ -678,9 +675,9 @@ export function SessionChat({
                     type="submit"
                     variant="primary"
                     size="sm"
-                    disabled={!draft.trim() || isSubmitting || isDraftingReply || lockInfo?.locked}
+                    disabled={!draft.trim() || isSubmitting || isDraftingReply || isSendLocked}
                   >
-                    {submitLabel}
+                    {submitButtonLabel}
                   </Button>
                 )}
               </div>
@@ -692,7 +689,7 @@ export function SessionChat({
                   onChange={(e) => handleDraftChange(e.target.value)}
                   onKeyDown={handleKeyDown}
                   placeholder={composerPlaceholder || "Type a message..."}
-                  disabled={isComposerDisabled || isSubmitting || isDraftingReply || lockInfo?.locked}
+                  disabled={isComposerDisabled || isSubmitting || isDraftingReply}
                   rows={2}
                   title={composerDisabledReason ?? undefined}
                 />
@@ -706,10 +703,10 @@ export function SessionChat({
                       type="submit"
                       variant="primary"
                       size="sm"
-                      disabled={isComposerDisabled || !draft.trim() || isSubmitting || isDraftingReply || lockInfo?.locked}
+                      disabled={isComposerDisabled || !draft.trim() || isSubmitting || isDraftingReply || isSendLocked}
                       title={composerDisabledReason ?? undefined}
                     >
-                      {submitLabel}
+                      {submitButtonLabel}
                     </Button>
                   )}
                 </div>

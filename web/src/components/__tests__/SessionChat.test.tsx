@@ -248,7 +248,7 @@ describe("SessionChat", () => {
     expect(getRequestCallCount("/draft-reply")).toBe(0);
   });
 
-  it("allows draft reply while the live session is locked", async () => {
+  it("allows draft reply while the live session is working", async () => {
     const user = userEvent.setup();
     const queryClient = new QueryClient({
       defaultOptions: {
@@ -271,7 +271,10 @@ describe("SessionChat", () => {
 
     renderSessionChat({ chatMode: "managed_local" }, { queryClient });
 
-    expect(screen.getByText("Locked")).toBeInTheDocument();
+    expect(screen.getByText("Working")).toBeInTheDocument();
+    expect(screen.getByText(/Agent is working/i)).toBeInTheDocument();
+    expect(screen.queryByText(/req-1234/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/remaining/i)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /draft reply/i })).toBeEnabled();
 
     await user.click(screen.getByRole("button", { name: /draft reply/i }));
@@ -279,7 +282,8 @@ describe("SessionChat", () => {
     await waitFor(() => {
       expect(screen.getByRole("textbox")).toHaveValue("Prepare a follow-up while it works.");
     });
-    expect(screen.getByRole("button", { name: /send/i })).toBeDisabled();
+    expect(screen.getByRole("textbox")).toBeEnabled();
+    expect(screen.getByRole("button", { name: /waiting/i })).toBeDisabled();
   });
 
   it("shows a clear message when a draft reply is empty", async () => {
@@ -363,10 +367,15 @@ describe("SessionChat", () => {
 
     await waitFor(() => expect(invalidateSpy).toHaveBeenCalledTimes(8));
     await waitFor(() => {
-      expect(screen.getByRole("textbox")).toBeDisabled();
-      expect(screen.getByRole("button", { name: /send/i })).toBeDisabled();
-      expect(screen.getByText("Locked")).toBeInTheDocument();
+      expect(screen.getByRole("textbox")).toBeEnabled();
+      expect(screen.getByRole("button", { name: /waiting/i })).toBeDisabled();
+      expect(screen.getByText("Working")).toBeInTheDocument();
     });
+    expect(screen.queryByText(/req-1234/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/remaining/i)).not.toBeInTheDocument();
+    await user.type(screen.getByRole("textbox"), "Next follow-up{enter}");
+    expect(screen.getByRole("textbox")).toHaveValue("Next follow-up");
+    expect(getRequestCallCount("/send-live")).toBe(1);
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["session-lock", "sess-1"] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["agent-session-workspace", "sess-1"] });
   });
