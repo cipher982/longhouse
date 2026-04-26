@@ -46,9 +46,12 @@ from zerg.services.session_inputs import INPUT_INTENT_AUTO
 from zerg.services.session_inputs import INPUT_INTENT_QUEUE
 from zerg.services.session_inputs import INPUT_INTENT_STEER
 from zerg.services.session_inputs import INPUT_STATUS_QUEUED
+from zerg.services.session_inputs import MAX_QUEUED_PER_SESSION
 from zerg.services.session_inputs import cancel_queued_input
+from zerg.services.session_inputs import count_queued
 from zerg.services.session_inputs import create_session_input
-from zerg.services.session_inputs import list_queued_inputs
+from zerg.services.session_inputs import get_session_input
+from zerg.services.session_inputs import list_recent_inputs
 from zerg.services.session_inputs import mark_failed as _mark_input_failed
 from zerg.session_loop_mode import SessionLoopMode
 from zerg.session_loop_mode import coerce_session_loop_mode
@@ -119,6 +122,8 @@ class QueuedInputSummary(BaseModel):
     id: int
     text: str
     intent: str
+    status: str
+    last_error: str | None = None
     created_at: datetime | None = None
 
 
@@ -365,6 +370,8 @@ def _queued_summary(row) -> QueuedInputSummary:
         id=int(row.id),
         text=row.body,
         intent=row.intent,
+        status=row.status,
+        last_error=row.last_error,
         created_at=row.created_at,
     )
 
@@ -393,22 +400,32 @@ async def _create_session_input_response(
 
     request_id = str(uuid.uuid4())[:8]
 
+    def _cap_check_or_raise() -> None:
+        current = count_queued(db, source_session.id)
+        if current >= MAX_QUEUED_PER_SESSION:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(f"Too many queued inputs for this session ({current}); " "cancel one before queuing another"),
+            )
+
     # Queue intent always persists and returns without attempting dispatch.
     if body.intent == INPUT_INTENT_QUEUE:
+        _cap_check_or_raise()
         row = create_session_input(
             db,
             session_id=source_session.id,
             text=body.text,
+            owner_id=owner_id,
             intent=INPUT_INTENT_QUEUE,
             status=INPUT_STATUS_QUEUED,
             request_id=request_id,
         )
-        queued = list_queued_inputs(db, source_session.id)
+        recent = list_recent_inputs(db, source_session.id)
         return SessionInputResponse(
             outcome="queued",
             input_id=int(row.id),
             intent=INPUT_INTENT_QUEUE,
-            queued=[_queued_summary(r) for r in queued],
+            queued=[_queued_summary(r) for r in recent],
         )
 
     # Auto: try to send now; if the session is locked, persist as queued.
@@ -419,27 +436,30 @@ async def _create_session_input_response(
         ttl_seconds=300,
     )
     if not lock:
+        _cap_check_or_raise()
         row = create_session_input(
             db,
             session_id=source_session.id,
             text=body.text,
+            owner_id=owner_id,
             intent=INPUT_INTENT_AUTO,
             status=INPUT_STATUS_QUEUED,
             request_id=request_id,
         )
-        queued = list_queued_inputs(db, source_session.id)
+        recent = list_recent_inputs(db, source_session.id)
         return SessionInputResponse(
             outcome="queued",
             input_id=int(row.id),
             intent=INPUT_INTENT_AUTO,
-            queued=[_queued_summary(r) for r in queued],
+            queued=[_queued_summary(r) for r in recent],
         )
 
-    # Lock acquired: record a delivered row for audit, then dispatch.
+    # Lock acquired: record a delivering row for audit, then dispatch.
     row = create_session_input(
         db,
         session_id=source_session.id,
         text=body.text,
+        owner_id=owner_id,
         intent=INPUT_INTENT_AUTO,
         status="delivering",
         request_id=request_id,
@@ -483,12 +503,12 @@ async def _create_session_input_response(
     from zerg.services.session_inputs import mark_delivered as _mark_input_delivered
 
     _mark_input_delivered(db, int(row.id))
-    queued = list_queued_inputs(db, source_session.id)
+    recent = list_recent_inputs(db, source_session.id)
     return SessionInputResponse(
         outcome="sent",
         input_id=int(row.id),
         intent=INPUT_INTENT_AUTO,
-        queued=[_queued_summary(r) for r in queued],
+        queued=[_queued_summary(r) for r in recent],
     )
 
 
@@ -515,7 +535,7 @@ async def list_session_inputs_endpoint(
     _current_user: User = Depends(get_current_oikos_user),
 ) -> list[QueuedInputSummary]:
     source_session = _load_session_for_continuation(db, session_id)
-    return [_queued_summary(r) for r in list_queued_inputs(db, source_session.id)]
+    return [_queued_summary(r) for r in list_recent_inputs(db, source_session.id)]
 
 
 @router.delete("/{session_id}/inputs/{input_id}")
@@ -526,16 +546,17 @@ async def cancel_session_input_endpoint(
     _current_user: User = Depends(get_current_oikos_user),
 ) -> dict:
     source_session = _load_session_for_continuation(db, session_id)
-    row = cancel_queued_input(db, input_id)
-    if row is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="queued input not found",
-        )
-    if row.session_id != source_session.id:
+    existing = get_session_input(db, input_id)
+    if existing is None or existing.session_id != source_session.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="queued input not found for this session",
+        )
+    row = cancel_queued_input(db, input_id)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="input is no longer queued",
         )
     return {"cancelled": True, "input_id": int(row.id)}
 

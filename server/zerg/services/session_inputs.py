@@ -40,6 +40,9 @@ VALID_INTENTS = frozenset({INPUT_INTENT_AUTO, INPUT_INTENT_QUEUE, INPUT_INTENT_S
 DELIVERING_STALE_AFTER_SECS = 60.0
 
 
+MAX_QUEUED_PER_SESSION = 5
+
+
 def create_session_input(
     db: Session,
     *,
@@ -47,6 +50,7 @@ def create_session_input(
     text: str,
     intent: str,
     status: str,
+    owner_id: int | None = None,
     request_id: str | None = None,
 ) -> SessionInput:
     if intent not in VALID_INTENTS:
@@ -54,6 +58,7 @@ def create_session_input(
     row = SessionInput(
         session_id=session_id,
         body=text,
+        owner_id=owner_id,
         intent=intent,
         status=status,
         request_id=request_id,
@@ -64,12 +69,48 @@ def create_session_input(
     return row
 
 
+def count_queued(db: Session, session_id: UUID) -> int:
+    return (
+        db.query(SessionInput)
+        .filter(
+            SessionInput.session_id == session_id,
+            SessionInput.status == INPUT_STATUS_QUEUED,
+        )
+        .count()
+    )
+
+
 def list_queued_inputs(db: Session, session_id: UUID) -> list[SessionInput]:
     return (
         db.query(SessionInput)
         .filter(
             SessionInput.session_id == session_id,
             SessionInput.status == INPUT_STATUS_QUEUED,
+        )
+        .order_by(SessionInput.created_at.asc(), SessionInput.id.asc())
+        .all()
+    )
+
+
+RECENT_FAILED_WINDOW_SECS = 15 * 60
+
+
+def list_recent_inputs(db: Session, session_id: UUID) -> list[SessionInput]:
+    """Queued rows + recently-failed rows so the UI can surface drain failures.
+
+    Delivered/cancelled rows are excluded — they've already served their
+    purpose and shouldn't clutter the chip area.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=RECENT_FAILED_WINDOW_SECS)
+    return (
+        db.query(SessionInput)
+        .filter(
+            SessionInput.session_id == session_id,
+            (
+                (SessionInput.status == INPUT_STATUS_QUEUED)
+                | (SessionInput.status == INPUT_STATUS_DELIVERING)
+                | ((SessionInput.status == INPUT_STATUS_FAILED) & (SessionInput.updated_at >= cutoff))
+            ),
         )
         .order_by(SessionInput.created_at.asc(), SessionInput.id.asc())
         .all()

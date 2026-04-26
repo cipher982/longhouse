@@ -78,16 +78,47 @@ async def lifespan(app: FastAPI):
         logger.info("Database tables initialized")
 
         # SessionInput reconciliation: any row stuck in `delivering` at boot
-        # means a prior process died mid-dispatch. Rewind to queued so the
-        # next terminal-phase drain picks it up.
+        # means a prior process died mid-dispatch. Rewind to queued, then
+        # best-effort drain idle sessions so recovered queued rows don't sit
+        # indefinitely waiting for the next terminal release.
         if not _settings.testing:
             try:
                 from zerg.database import get_session_factory
+                from zerg.services.session_inputs import INPUT_STATUS_QUEUED
                 from zerg.services.session_inputs import requeue_stuck_delivering
 
                 session_factory = get_session_factory()
                 with session_factory() as db:
                     requeue_stuck_delivering(db)
+
+                    from zerg.models.agents import SessionInput
+
+                    queued_session_ids = [
+                        row[0]
+                        for row in db.query(SessionInput.session_id).filter(SessionInput.status == INPUT_STATUS_QUEUED).distinct().all()
+                    ]
+
+                if queued_session_ids:
+                    from zerg.database import default_engine
+                    from zerg.services.session_chat_impl import _drain_next_queued_input
+
+                    async def _boot_drain_all() -> None:
+                        for sid in queued_session_ids:
+                            try:
+                                await _drain_next_queued_input(
+                                    db_bind=default_engine,
+                                    session_id=sid,
+                                    lock_scope_id=str(sid),
+                                )
+                            except Exception:
+                                logger.exception(
+                                    "Boot drain failed for session %s (non-fatal)",
+                                    sid,
+                                )
+
+                    import asyncio as _asyncio
+
+                    _asyncio.create_task(_boot_drain_all())
             except Exception as exc:
                 logger.warning(f"SessionInput reconciliation failed (non-fatal): {exc}")
         try:
