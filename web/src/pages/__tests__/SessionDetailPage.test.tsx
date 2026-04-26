@@ -300,6 +300,22 @@ describe("SessionDetailPage", () => {
       "false",
     );
     expect(screen.getByText("Advanced · Assistance off")).toBeInTheDocument();
+    const loopModeTitle = screen.getByText("Loop Mode");
+    const summaryTitle = screen.getByText("Summary");
+    const metadataTitle = screen.getByText("Metadata");
+    const debugTitle = screen.getByText("Debug");
+    expect(
+      loopModeTitle.compareDocumentPosition(summaryTitle) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      summaryTitle.compareDocumentPosition(metadataTitle) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      metadataTitle.compareDocumentPosition(debugTitle) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     expect(
       screen.queryByTestId("session-attach-callout"),
     ).not.toBeInTheDocument();

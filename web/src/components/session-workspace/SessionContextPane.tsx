@@ -72,18 +72,14 @@ export function SessionContextPane({
     "this machine";
   const loopModeCaption = config.demoMode
     ? "Preview only in the demo."
-    : !interaction.isManagedLocalSession
-      ? "Stored preference only."
-      : interaction.liveControlAvailable
-        ? "Review posture only."
-        : "Stored here. Applies when Longhouse regains control.";
+    : interaction.liveControlAvailable
+      ? "Review posture only."
+      : "Stored here. Applies when Longhouse regains control.";
   const attachDebugCopy = `Run this on ${attachRunnerLabel} to open this existing managed ${interaction.providerLabel} session in a terminal UI. This does not restart the session.`;
   const shouldShowNotice =
     continuationNotice && !interaction.managedLaunchSuggestion;
-  const showControlSection =
-    interaction.isManagedLocalSession ||
-    shouldShowNotice ||
-    interaction.managedLaunchSuggestion;
+  const showStateSection =
+    shouldShowNotice || interaction.managedLaunchSuggestion;
 
   const durationStr = formatDuration(session.started_at, session.ended_at);
   const statsLine = [
@@ -94,7 +90,7 @@ export function SessionContextPane({
 
   return (
     <div className="session-context-pane">
-      {/* Zone 1 — Identity + live status */}
+      {/* Identity */}
       <div className="session-pane-section session-pane-section--hero">
         <div className="session-context-title">{title}</div>
         <div className="session-context-subtitle">
@@ -137,9 +133,8 @@ export function SessionContextPane({
         </div>
       ) : null}
 
-      {/* Zone 2 — Actions */}
-      {showControlSection ? (
-        <div className="session-pane-section session-pane-section--actions">
+      {showStateSection ? (
+        <div className="session-pane-section session-pane-section--state">
           {interaction.managedLaunchSuggestion ? (
             <ManagedLaunchHintCard
               suggestion={interaction.managedLaunchSuggestion}
@@ -159,52 +154,32 @@ export function SessionContextPane({
               </div>
             </div>
           ) : null}
-          {interaction.isManagedLocalSession ? (
-            <LoopModeSelector
-              currentMode={session.loop_mode}
-              caption={loopModeCaption}
-              pending={loopModePending}
-              onChange={onLoopModeChange}
-            />
-          ) : null}
-        </div>
-      ) : interaction.isManagedLocalSession ? (
-        <div className="session-pane-section session-pane-section--actions">
-          <LoopModeSelector
-            currentMode={session.loop_mode}
-            caption={loopModeCaption}
-            pending={loopModePending}
-            onChange={onLoopModeChange}
-          />
         </div>
       ) : null}
 
-      {showAttachDebug ? (
-        <details
-          className="session-pane-disclosure session-pane-disclosure--tertiary session-pane-disclosure--debug"
-          data-testid="session-debug-attach"
-        >
+      {interaction.isManagedLocalSession ? (
+        <LoopModeSelector
+          currentMode={session.loop_mode}
+          caption={loopModeCaption}
+          pending={loopModePending}
+          onChange={onLoopModeChange}
+        />
+      ) : null}
+
+      {session.summary ? (
+        <details className="session-pane-disclosure session-pane-disclosure--tertiary session-pane-disclosure--summary">
           <summary className="session-pane-disclosure__summary">
-            <span className="session-pane-disclosure__title">Debug</span>
-            <span className="session-pane-disclosure__meta">
-              Terminal UI command
+            <span className="session-pane-disclosure__title">
+              Summary
             </span>
+            <span className="session-pane-disclosure__meta">Read-only</span>
           </summary>
           <div className="session-pane-disclosure__body">
-            <div className="session-pane-disclosure__copy">
-              {attachDebugCopy}
-            </div>
-            <pre
-              className="inspector-code-block"
-              data-testid="session-debug-attach-command"
-            >
-              <code>{attachCommand}</code>
-            </pre>
+            <div className="session-context-summary">{session.summary}</div>
           </div>
         </details>
       ) : null}
 
-      {/* Zone 3 — Metadata (collapsed) */}
       <details className="session-pane-disclosure session-pane-disclosure--tertiary">
         <summary className="session-pane-disclosure__summary">
           <span className="session-pane-disclosure__title">Metadata</span>
@@ -235,26 +210,37 @@ export function SessionContextPane({
         </div>
       </details>
 
-      {session.summary ? (
-        <details className="session-pane-disclosure session-pane-disclosure--tertiary session-pane-disclosure--summary">
-          <summary className="session-pane-disclosure__summary">
-            <span className="session-pane-disclosure__title">
-              Summary
-            </span>
-            <span className="session-pane-disclosure__meta">Read-only</span>
-          </summary>
-          <div className="session-pane-disclosure__body">
-            <div className="session-context-summary">{session.summary}</div>
-          </div>
-        </details>
-      ) : null}
-
       <ContinuationsList
         sessions={threadSessions}
         currentSessionId={session.id}
         headSessionId={headThreadSession?.id ?? null}
         onOpenSession={onOpenSession}
       />
+
+      {showAttachDebug ? (
+        <details
+          className="session-pane-disclosure session-pane-disclosure--tertiary session-pane-disclosure--debug"
+          data-testid="session-debug-attach"
+        >
+          <summary className="session-pane-disclosure__summary">
+            <span className="session-pane-disclosure__title">Debug</span>
+            <span className="session-pane-disclosure__meta">
+              Terminal UI command
+            </span>
+          </summary>
+          <div className="session-pane-disclosure__body">
+            <div className="session-pane-disclosure__copy">
+              {attachDebugCopy}
+            </div>
+            <pre
+              className="inspector-code-block"
+              data-testid="session-debug-attach-command"
+            >
+              <code>{attachCommand}</code>
+            </pre>
+          </div>
+        </details>
+      ) : null}
     </div>
   );
 }
