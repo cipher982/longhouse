@@ -112,6 +112,12 @@ The Runtime Host converts fresh `attached` rows into runtime phase events:
 - `freshness_expires_at = server_received_at + lease_ttl`
 - `dedupe_key = engine-attached-lease:{machine_id}:{session_id}:{sequence}`
 
+Managed Codex bridge phase events (`source = codex_bridge`) use the same
+15-minute freshness budget as attached leases. They are local owner/control
+signals, not generic short-lived transcript hints, and must not shorten an
+attached lease window when the bridge emits thinking/running transitions after a
+heartbeat.
+
 The Runtime Host converts explicit `detached` rows into recoverable
 control-path-loss events:
 
