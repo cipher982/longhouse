@@ -98,11 +98,6 @@ struct SessionView: View {
                 }
                 .padding()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if viewModel.items.isEmpty {
-                ContentUnavailableView(
-                    "No messages yet",
-                    systemImage: "bubble.left.and.bubble.right"
-                )
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -124,14 +119,22 @@ struct SessionView: View {
                                     }
                                 )
                             }
-                            ForEach(viewModel.items, id: \.id) { item in
-                                TimelineItemView(
-                                    item: item,
-                                    isExpanded: viewModel.isExpanded(item.id),
-                                    sessionEnded: viewModel.isSessionEnded,
-                                    onToggle: { viewModel.toggleExpanded(item.id) }
+                            if viewModel.items.isEmpty {
+                                ContentUnavailableView(
+                                    "No messages yet",
+                                    systemImage: "bubble.left.and.bubble.right"
                                 )
-                                .id(item.id)
+                                .padding(.vertical, 48)
+                            } else {
+                                ForEach(viewModel.items, id: \.id) { item in
+                                    TimelineItemView(
+                                        item: item,
+                                        isExpanded: viewModel.isExpanded(item.id),
+                                        sessionEnded: viewModel.isSessionEnded,
+                                        onToggle: { viewModel.toggleExpanded(item.id) }
+                                    )
+                                    .id(item.id)
+                                }
                             }
                         }
                         .padding(.horizontal)
@@ -924,7 +927,11 @@ final class SessionViewModel: ObservableObject {
         do {
             let response = try await api.draftReply(id: sessionId)
             let draft = response.draftText.trimmingCharacters(in: .whitespacesAndNewlines)
-            return draft.isEmpty ? nil : draft
+            guard !draft.isEmpty else {
+                draftErrorMessage = "No draft suggestion available yet."
+                return nil
+            }
+            return draft
         } catch {
             draftErrorMessage = "Draft unavailable: \(error.localizedDescription)"
             return nil
