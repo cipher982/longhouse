@@ -159,6 +159,9 @@ actor SessionWorkspaceStream {
                 }
             }
         }
+        if !Task.isCancelled {
+            emit(.disconnected(nil))
+        }
     }
 
     private func dispatch(eventName: String, eventId: String?, payload: String) async {
