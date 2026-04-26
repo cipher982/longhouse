@@ -1946,7 +1946,12 @@ fn extract_text_from_raw_content(raw_json: &str) -> Option<String> {
                 .filter_map(|part| part.tool_name.as_ref().cloned())
                 .collect();
             if !tool_refs.is_empty() {
-                let preview = tool_refs.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+                let preview = tool_refs
+                    .iter()
+                    .take(3)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 let suffix = if tool_refs.len() > 3 {
                     format!(", +{} more", tool_refs.len() - 3)
                 } else {
