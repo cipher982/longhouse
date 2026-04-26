@@ -200,7 +200,7 @@ describe("useSessionWorkspace", () => {
       limit: 10,
       order: "desc",
       enabled: true,
-      refetchInterval: 30_000,
+      refetchInterval: 5_000,
     });
   });
 

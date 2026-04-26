@@ -6,6 +6,7 @@ import {
   useAgentSessionWorkspace,
 } from "./useAgentSessions";
 import { useDocumentVisible } from "./useDocumentVisible";
+import { useOnlineEpoch } from "./useOnlineEpoch";
 import { emitRenderBeacon, recordServerClockSkew } from "../lib/renderBeacon";
 import { resolveSessionRuntimeState } from "../lib/sessionRuntime";
 import {
@@ -23,9 +24,10 @@ import {
 const INITIAL_EVENTS_PAGE_SIZE = 200;
 const AUTO_SCROLL_MAX_ATTEMPTS = 12;
 const AUTO_SCROLL_EPSILON_PX = 1;
-/** Fallback polling interval when SSE stream is disconnected. */
+/** Fallback polling interval when SSE stream is disconnected.
+ *  Short so a broken stream still delivers updates within SLA ceiling. */
 const WORKSPACE_FALLBACK_REFRESH_MS =
-  (typeof window !== "undefined" && window.__TEST_WORKSPACE_FALLBACK_MS__) || 30_000;
+  (typeof window !== "undefined" && window.__TEST_WORKSPACE_FALLBACK_MS__) || 5_000;
 
 interface UseSessionWorkspaceOptions {
   highlightEventId?: number | null;
@@ -78,6 +80,7 @@ export function useSessionWorkspace(
 ) {
   const highlightEventId = options.highlightEventId ?? null;
   const documentVisible = useDocumentVisible();
+  const onlineEpoch = useOnlineEpoch();
   const queryClient = useQueryClient();
   const [streamConnected, setStreamConnected] = useState(false);
 
@@ -128,7 +131,7 @@ export function useSessionWorkspace(
     );
 
     return cleanup;
-  }, [sessionId, documentVisible, queryClient]);
+  }, [sessionId, documentVisible, queryClient, onlineEpoch]);
 
   const [showAbandonedBranches, setShowAbandonedBranches] = useState(false);
   const branchMode = showAbandonedBranches ? "all" : "head";
