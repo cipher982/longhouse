@@ -137,6 +137,20 @@ struct LonghouseAPI: Sendable {
         return try JSONDecoder.snakeCase.decode(DraftReplyResponse.self, from: data)
     }
 
+    func setSessionLoopMode(id: String, loopMode: SessionLoopMode) async throws -> LoopModeResponse {
+        var request = URLRequest(url: baseURL.appendingPathComponent("/api/timeline/sessions/\(id)/loop-mode"))
+        request.httpMethod = "PATCH"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["loop_mode": loopMode.rawValue])
+
+        let (data, httpResponse) = try await data(for: request)
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
+        return try JSONDecoder.snakeCase.decode(LoopModeResponse.self, from: data)
+    }
+
     func sessionAction(id: String, action: String) async throws {
         var request = URLRequest(url: baseURL.appendingPathComponent("/api/timeline/sessions/\(id)/action"))
         request.httpMethod = "POST"
