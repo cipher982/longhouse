@@ -235,11 +235,11 @@ export function getRuntimeOutcomeLabel(
     endedAt?: string | null;
   } = {},
 ): string {
-  if (runtime.status === "completed" || endedAt != null) {
-    return "Completed";
-  }
   if (runtime.isExecuting || runtime.needsAttention || runtime.heuristicActive) {
     return "Active";
+  }
+  if (runtime.status === "completed" || endedAt != null) {
+    return "Completed";
   }
   return "Inactive";
 }
