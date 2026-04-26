@@ -1,5 +1,45 @@
 import Foundation
 
+/// Client-side realtime latency beacon.
+///
+/// Measures provider-emitted → iOS-rendered latency. Posts fire-and-forget
+/// to /api/telemetry/client-render. Idempotent per event_id so rapid
+/// re-renders do not double-count.
+actor RenderBeaconReporter {
+    static let shared = RenderBeaconReporter()
+
+    struct Payload: Encodable, Sendable {
+        let event_id: String
+        let session_id: String?
+        let surface: String
+        let managed: Bool
+        let emitted_at_ms: Int64
+        let rendered_at_ms: Int64
+        let clock_skew_ms: Int
+    }
+
+    private var lastBeaconedEventId: String?
+
+    func payload(
+        sessionId: String,
+        latestEventId: String,
+        emittedAt: Date,
+        managed: Bool
+    ) -> Payload? {
+        if lastBeaconedEventId == latestEventId { return nil }
+        lastBeaconedEventId = latestEventId
+        return Payload(
+            event_id: latestEventId,
+            session_id: sessionId,
+            surface: "ios",
+            managed: managed,
+            emitted_at_ms: Int64(emittedAt.timeIntervalSince1970 * 1000),
+            rendered_at_ms: Int64(Date().timeIntervalSince1970 * 1000),
+            clock_skew_ms: 0
+        )
+    }
+}
+
 struct LonghouseAPI: Sendable {
     let baseURL: URL
 
@@ -251,6 +291,15 @@ struct LonghouseAPI: Sendable {
         guard (200..<300).contains(httpResponse.statusCode) else {
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
+    }
+
+    func postRenderBeacon(_ payload: RenderBeaconReporter.Payload) async {
+        var request = URLRequest(url: baseURL.appendingPathComponent("/api/telemetry/client-render"))
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        guard let body = try? JSONEncoder().encode(payload) else { return }
+        request.httpBody = body
+        _ = try? await data(for: request)
     }
 
     func refreshSession() async throws {
