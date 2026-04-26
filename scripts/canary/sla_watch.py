@@ -92,6 +92,30 @@ def percentile_from_histogram(buckets: list[tuple[float, float]], p: float) -> f
     return buckets[-1][0]
 
 
+def delta_buckets(
+    current: list[tuple[float, float]],
+    previous: list[tuple[float, float]],
+) -> list[tuple[float, float]]:
+    """Subtract previous cumulative counts from current to get per-window counts.
+
+    Prometheus histograms are cumulative from process start; scraping raw
+    percentiles makes alerts sticky long after recovery. Windowed alerting
+    requires a delta. Counts can go negative on process restart (counters
+    reset); clamp to 0 in that case.
+    """
+    if not current:
+        return []
+    if not previous or len(previous) != len(current):
+        return current
+    result: list[tuple[float, float]] = []
+    for (le_c, c), (le_p, p) in zip(current, previous):
+        if le_c != le_p:
+            # Bucket schema changed mid-run; trust current, ignore previous.
+            return current
+        result.append((le_c, max(0.0, c - p)))
+    return result
+
+
 def post_webhook(webhook: str, title: str, body: str) -> None:
     try:
         # Detect ntfy — it accepts plain text with a Title header.
@@ -119,6 +143,7 @@ def main() -> int:
     breach_history: deque[bool] = deque(maxlen=ALERT_CONSECUTIVE)
     last_alert_at = 0.0
     ALERT_COOLDOWN_S = 600  # 10 min between re-alerts
+    previous_buckets: list[tuple[float, float]] = []
 
     while not stopping:
         try:
@@ -127,7 +152,11 @@ def main() -> int:
                 print(f"metrics HTTP {resp.status_code}", file=sys.stderr)
                 time.sleep(CHECK_INTERVAL_S)
                 continue
-            buckets = parse_histogram_buckets(resp.text, WATCH_METRIC, {"hop": WATCH_HOP})
+            cumulative = parse_histogram_buckets(resp.text, WATCH_METRIC, {"hop": WATCH_HOP})
+            # Percentile on the delta since last scrape — sliding window that
+            # recovers on its own once latency normalizes.
+            buckets = delta_buckets(cumulative, previous_buckets)
+            previous_buckets = cumulative
             p50 = percentile_from_histogram(buckets, 0.5)
             p95 = percentile_from_histogram(buckets, 0.95)
             p99 = percentile_from_histogram(buckets, 0.99)
