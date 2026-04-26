@@ -76,6 +76,20 @@ async def lifespan(app: FastAPI):
             logger.error(str(_e))
             raise
         logger.info("Database tables initialized")
+
+        # SessionInput reconciliation: any row stuck in `delivering` at boot
+        # means a prior process died mid-dispatch. Rewind to queued so the
+        # next terminal-phase drain picks it up.
+        if not _settings.testing:
+            try:
+                from zerg.database import get_session_factory
+                from zerg.services.session_inputs import requeue_stuck_delivering
+
+                session_factory = get_session_factory()
+                with session_factory() as db:
+                    requeue_stuck_delivering(db)
+            except Exception as exc:
+                logger.warning(f"SessionInput reconciliation failed (non-fatal): {exc}")
         try:
             url = default_engine.url
             masked = str(url).replace(url.password or "", "***") if url.password else str(url)

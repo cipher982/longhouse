@@ -15,6 +15,7 @@ class SessionCapabilityFlags:
     live_control_available: bool
     host_reattach_available: bool
     reply_to_live_session_available: bool
+    can_queue_next_input: bool
     home_label: str | None
 
 
@@ -78,5 +79,9 @@ def build_session_capabilities(session: AgentSession | None) -> SessionCapabilit
         live_control_available=live_control_available,
         host_reattach_available=supports_host_reattach(session),
         reply_to_live_session_available=live_control_available,
+        # Queue-next requires the same dispatch plumbing as a live send; gate
+        # on live_control_available so the UI only shows the queued affordance
+        # on sessions Longhouse can actually deliver into.
+        can_queue_next_input=live_control_available,
         home_label=_execution_home_label(execution_home),
     )

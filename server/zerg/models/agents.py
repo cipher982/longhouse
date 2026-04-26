@@ -588,3 +588,28 @@ class SessionMessage(AgentsBase):
         Index("ix_session_messages_to_status_created", "to_session_id", "delivery_status", "created_at"),
         Index("ix_session_messages_from_created", "from_session_id", "created_at"),
     )
+
+
+class SessionInput(AgentsBase):
+    """Durable user-originated input for a managed session.
+
+    Separate from SessionMessage (agent-to-agent). Holds queued drafts that
+    drain at the next safe turn boundary, and records the effective delivery
+    mode (turn_start, steer, or queued) chosen by the dispatch path.
+    """
+
+    __tablename__ = "session_inputs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(GUID(), nullable=False, index=True)
+    body = Column("text", Text, nullable=False)
+    intent = Column(String(16), nullable=False)  # auto | queue | steer
+    status = Column(String(16), nullable=False, server_default=text("'queued'"))
+    # queued | delivering | delivered | cancelled | failed
+    request_id = Column(String(64), nullable=True)
+    last_error = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    delivered_at = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (Index("ix_session_inputs_session_status_created", "session_id", "status", "created_at"),)

@@ -1,0 +1,185 @@
+"""Durable user-originated session inputs.
+
+Separate from `SessionMessage` (agent-to-agent). Records user text targeted at
+a managed session, along with the user's intent and the lifecycle status.
+
+Status lifecycle:
+  queued -> delivering -> delivered | failed
+  queued -> cancelled  (user-initiated)
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
+from uuid import UUID
+
+from sqlalchemy.orm import Session
+
+from zerg.models.agents import SessionInput
+
+logger = logging.getLogger(__name__)
+
+
+INPUT_INTENT_AUTO = "auto"
+INPUT_INTENT_QUEUE = "queue"
+INPUT_INTENT_STEER = "steer"
+
+INPUT_STATUS_QUEUED = "queued"
+INPUT_STATUS_DELIVERING = "delivering"
+INPUT_STATUS_DELIVERED = "delivered"
+INPUT_STATUS_CANCELLED = "cancelled"
+INPUT_STATUS_FAILED = "failed"
+
+VALID_INTENTS = frozenset({INPUT_INTENT_AUTO, INPUT_INTENT_QUEUE, INPUT_INTENT_STEER})
+
+# Startup reconciliation: any `delivering` row older than this at boot is
+# considered wedged (the process died mid-dispatch) and rewound to queued.
+DELIVERING_STALE_AFTER_SECS = 60.0
+
+
+def create_session_input(
+    db: Session,
+    *,
+    session_id: UUID,
+    text: str,
+    intent: str,
+    status: str,
+    request_id: str | None = None,
+) -> SessionInput:
+    if intent not in VALID_INTENTS:
+        raise ValueError(f"invalid intent: {intent}")
+    row = SessionInput(
+        session_id=session_id,
+        body=text,
+        intent=intent,
+        status=status,
+        request_id=request_id,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def list_queued_inputs(db: Session, session_id: UUID) -> list[SessionInput]:
+    return (
+        db.query(SessionInput)
+        .filter(
+            SessionInput.session_id == session_id,
+            SessionInput.status == INPUT_STATUS_QUEUED,
+        )
+        .order_by(SessionInput.created_at.asc(), SessionInput.id.asc())
+        .all()
+    )
+
+
+def get_session_input(db: Session, input_id: int) -> SessionInput | None:
+    return db.query(SessionInput).filter(SessionInput.id == input_id).first()
+
+
+def cancel_queued_input(db: Session, input_id: int) -> SessionInput | None:
+    """Transition a queued input to cancelled. Returns None if not queued."""
+    row = get_session_input(db, input_id)
+    if row is None or row.status != INPUT_STATUS_QUEUED:
+        return None
+    row.status = INPUT_STATUS_CANCELLED
+    row.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    return row
+
+
+def claim_next_queued(db: Session, session_id: UUID, *, request_id: str) -> SessionInput | None:
+    """Atomically move the oldest queued input to delivering.
+
+    Returns the claimed row or None if nothing to drain.
+    """
+    candidate = (
+        db.query(SessionInput)
+        .filter(
+            SessionInput.session_id == session_id,
+            SessionInput.status == INPUT_STATUS_QUEUED,
+        )
+        .order_by(SessionInput.created_at.asc(), SessionInput.id.asc())
+        .first()
+    )
+    if candidate is None:
+        return None
+
+    claimed = (
+        db.query(SessionInput)
+        .filter(
+            SessionInput.id == candidate.id,
+            SessionInput.status == INPUT_STATUS_QUEUED,
+        )
+        .update(
+            {
+                "status": INPUT_STATUS_DELIVERING,
+                "request_id": request_id,
+                "updated_at": datetime.now(timezone.utc),
+            },
+            synchronize_session=False,
+        )
+    )
+    db.commit()
+    if claimed != 1:
+        return None
+    db.refresh(candidate)
+    return candidate
+
+
+def mark_delivered(db: Session, input_id: int) -> None:
+    now = datetime.now(timezone.utc)
+    db.query(SessionInput).filter(SessionInput.id == input_id).update(
+        {
+            "status": INPUT_STATUS_DELIVERED,
+            "delivered_at": now,
+            "updated_at": now,
+            "last_error": None,
+        },
+        synchronize_session=False,
+    )
+    db.commit()
+
+
+def mark_failed(db: Session, input_id: int, *, error: str) -> None:
+    db.query(SessionInput).filter(SessionInput.id == input_id).update(
+        {
+            "status": INPUT_STATUS_FAILED,
+            "last_error": str(error or "session input delivery failed")[:500],
+            "updated_at": datetime.now(timezone.utc),
+        },
+        synchronize_session=False,
+    )
+    db.commit()
+
+
+def requeue_stuck_delivering(db: Session, *, stale_after_secs: float = DELIVERING_STALE_AFTER_SECS) -> int:
+    """Rewind `delivering` rows older than threshold back to `queued`.
+
+    Called once at runtime startup; wedged rows usually mean the process died
+    mid-dispatch. A short threshold is fine because a real dispatch finishes in
+    well under a second.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_after_secs)
+    updated = (
+        db.query(SessionInput)
+        .filter(
+            SessionInput.status == INPUT_STATUS_DELIVERING,
+            SessionInput.updated_at < cutoff,
+        )
+        .update(
+            {
+                "status": INPUT_STATUS_QUEUED,
+                "request_id": None,
+                "updated_at": datetime.now(timezone.utc),
+            },
+            synchronize_session=False,
+        )
+    )
+    db.commit()
+    if updated:
+        logger.info("Requeued %d stuck SessionInput rows from delivering -> queued", updated)
+    return int(updated)

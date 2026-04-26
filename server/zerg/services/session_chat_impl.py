@@ -32,6 +32,7 @@ from zerg.metrics import managed_turn_requests_total
 from zerg.metrics import managed_turn_wait_seconds
 from zerg.metrics import managed_turn_wait_total
 from zerg.models.agents import AgentEvent
+from zerg.models.agents import SessionInput
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
 from zerg.models_config import get_llm_client_with_db_fallback
@@ -531,6 +532,118 @@ async def _release_managed_local_lock_after_terminal(
             terminal_result.phase,
             released,
         )
+
+        # Drain the oldest queued SessionInput, if any. Runs in a fresh DB
+        # session bound to the same engine; reacquires the session lock via
+        # the normal send path so a racing user send can't double-dispatch.
+        try:
+            await _drain_next_queued_input(
+                db_bind=db_bind,
+                session_id=session_id,
+                lock_scope_id=lock_scope_id,
+            )
+        except Exception:
+            logger.exception(
+                "[%s] Drain of queued SessionInput failed for %s (non-fatal)",
+                request_id,
+                session_id,
+            )
+
+
+async def _drain_next_queued_input(
+    *,
+    db_bind,
+    session_id: UUID,
+    lock_scope_id: str,
+) -> None:
+    """Pop the oldest queued SessionInput for this session and dispatch it.
+
+    Acquires the session lock via the normal send path. If a racing user send
+    took the lock first, the queued row stays queued and will be retried on
+    the next terminal-phase release.
+    """
+    from sqlalchemy.orm import sessionmaker
+
+    from zerg.models.agents import AgentSession
+    from zerg.services.session_inputs import INPUT_STATUS_QUEUED
+    from zerg.services.session_inputs import claim_next_queued
+    from zerg.services.session_inputs import mark_delivered
+    from zerg.services.session_inputs import mark_failed
+
+    Session = sessionmaker(bind=db_bind, expire_on_commit=False)
+    db = Session()
+    try:
+        queued_exists = (
+            db.query(SessionInput)
+            .filter(
+                SessionInput.session_id == session_id,
+                SessionInput.status == INPUT_STATUS_QUEUED,
+            )
+            .first()
+        )
+        if queued_exists is None:
+            return
+
+        source_session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+        if source_session is None:
+            logger.warning("Drain aborted: session %s not found", session_id)
+            return
+        if not build_session_capabilities(source_session).live_control_available:
+            logger.info("Drain aborted: session %s no longer supports live control", session_id)
+            return
+
+        owner_id = _resolve_session_owner_id(db)
+
+        drain_request_id = f"drain-{str(session_id)[:8]}-{int(time.time())}"
+        lock = await session_lock_manager.acquire(
+            session_id=lock_scope_id,
+            holder=drain_request_id,
+            ttl_seconds=300,
+        )
+        if not lock:
+            # User beat us to it. The row stays queued and will retry.
+            logger.info(
+                "Drain yield: lock already held for %s; queued input will retry",
+                session_id,
+            )
+            return
+
+        claimed = claim_next_queued(db, session_id, request_id=drain_request_id)
+        if claimed is None:
+            # Race: the row was cancelled or already claimed. Release and bail.
+            await session_lock_manager.release(lock_scope_id, drain_request_id)
+            return
+
+        try:
+            await _dispatch_managed_local_text(
+                source_session=source_session,
+                owner_id=owner_id,
+                message=claimed.body,
+                request_id=drain_request_id,
+                lock_scope_id=lock_scope_id,
+                db=db,
+            )
+        except Exception as exc:
+            mark_failed(db, int(claimed.id), error=str(exc)[:200])
+            await session_lock_manager.release(lock_scope_id, drain_request_id)
+            logger.exception("Drain dispatch failed for SessionInput %s", claimed.id)
+            return
+
+        mark_delivered(db, int(claimed.id))
+        logger.info("Drained SessionInput %s for session %s", claimed.id, session_id)
+    finally:
+        db.close()
+
+
+def _resolve_session_owner_id(db: Session) -> int:
+    """Pick an owner id for background-origin sends (no user request context).
+
+    Mirrors the single-tenant fallback used by the machine-facing endpoints.
+    """
+    owner = db.query(User.id).order_by(User.id.asc()).first()
+    if owner is None:
+        raise RuntimeError("No Longhouse user is configured")
+    return int(owner[0])
 
 
 async def _observe_managed_local_turn_active_phase(

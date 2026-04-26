@@ -57,6 +57,7 @@ def build_session_capabilities_response(
         live_control_available=capability_flags.live_control_available,
         host_reattach_available=capability_flags.host_reattach_available,
         reply_to_live_session_available=capability_flags.reply_to_live_session_available,
+        can_queue_next_input=capability_flags.can_queue_next_input,
     )
 
 
@@ -106,6 +107,10 @@ class SessionCapabilitiesResponse(BaseModel):
     reply_to_live_session_available: bool = Field(
         False,
         description="True when operator flows may send a direct reply into the live session",
+    )
+    can_queue_next_input: bool = Field(
+        False,
+        description="True when the user can queue input to auto-send at the next safe turn boundary",
     )
 
 

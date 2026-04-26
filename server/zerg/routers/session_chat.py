@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import datetime
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -41,6 +42,14 @@ from zerg.services.session_chat_impl import _lock_scope_id_for_session
 from zerg.services.session_chat_impl import _managed_local_launch_response
 from zerg.services.session_chat_impl import _resolve_agents_owner_id
 from zerg.services.session_continuity import session_lock_manager
+from zerg.services.session_inputs import INPUT_INTENT_AUTO
+from zerg.services.session_inputs import INPUT_INTENT_QUEUE
+from zerg.services.session_inputs import INPUT_INTENT_STEER
+from zerg.services.session_inputs import INPUT_STATUS_QUEUED
+from zerg.services.session_inputs import cancel_queued_input
+from zerg.services.session_inputs import create_session_input
+from zerg.services.session_inputs import list_queued_inputs
+from zerg.services.session_inputs import mark_failed as _mark_input_failed
 from zerg.session_loop_mode import SessionLoopMode
 from zerg.session_loop_mode import coerce_session_loop_mode
 
@@ -97,6 +106,29 @@ class SessionChatError(BaseModel):
     error: str
     code: str
     lock_info: SessionLockInfo | None = None
+
+
+class SessionInputRequest(BaseModel):
+    """User input targeted at a managed session."""
+
+    text: str = Field(..., min_length=1, max_length=10000)
+    intent: str = Field(INPUT_INTENT_AUTO, description="auto | queue | steer")
+
+
+class QueuedInputSummary(BaseModel):
+    id: int
+    text: str
+    intent: str
+    created_at: datetime | None = None
+
+
+class SessionInputResponse(BaseModel):
+    """Shape returned from POST /api/sessions/{id}/input."""
+
+    outcome: str = Field(..., description="sent | queued")
+    input_id: int
+    intent: str
+    queued: list[QueuedInputSummary] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +358,186 @@ async def get_session_lock_status(
             locked=False,
             fork_available=False,
         )
+
+
+def _queued_summary(row) -> QueuedInputSummary:
+    return QueuedInputSummary(
+        id=int(row.id),
+        text=row.body,
+        intent=row.intent,
+        created_at=row.created_at,
+    )
+
+
+async def _create_session_input_response(
+    *,
+    source_session,
+    owner_id: int,
+    body: SessionInputRequest,
+    db: Session,
+) -> SessionInputResponse:
+    # Validate intent. Steer is reserved for Phase 3; reject for now so callers
+    # don't accidentally depend on silent fallback behavior.
+    if body.intent == INPUT_INTENT_STEER:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="intent=steer not yet supported",
+        )
+    if body.intent not in (INPUT_INTENT_AUTO, INPUT_INTENT_QUEUE):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"unknown intent: {body.intent}",
+        )
+
+    _assert_live_session_send_available(source_session)
+
+    request_id = str(uuid.uuid4())[:8]
+
+    # Queue intent always persists and returns without attempting dispatch.
+    if body.intent == INPUT_INTENT_QUEUE:
+        row = create_session_input(
+            db,
+            session_id=source_session.id,
+            text=body.text,
+            intent=INPUT_INTENT_QUEUE,
+            status=INPUT_STATUS_QUEUED,
+            request_id=request_id,
+        )
+        queued = list_queued_inputs(db, source_session.id)
+        return SessionInputResponse(
+            outcome="queued",
+            input_id=int(row.id),
+            intent=INPUT_INTENT_QUEUE,
+            queued=[_queued_summary(r) for r in queued],
+        )
+
+    # Auto: try to send now; if the session is locked, persist as queued.
+    lock_scope_id = str(source_session.thread_root_session_id or source_session.id)
+    lock = await session_lock_manager.acquire(
+        session_id=lock_scope_id,
+        holder=request_id,
+        ttl_seconds=300,
+    )
+    if not lock:
+        row = create_session_input(
+            db,
+            session_id=source_session.id,
+            text=body.text,
+            intent=INPUT_INTENT_AUTO,
+            status=INPUT_STATUS_QUEUED,
+            request_id=request_id,
+        )
+        queued = list_queued_inputs(db, source_session.id)
+        return SessionInputResponse(
+            outcome="queued",
+            input_id=int(row.id),
+            intent=INPUT_INTENT_AUTO,
+            queued=[_queued_summary(r) for r in queued],
+        )
+
+    # Lock acquired: record a delivered row for audit, then dispatch.
+    row = create_session_input(
+        db,
+        session_id=source_session.id,
+        text=body.text,
+        intent=INPUT_INTENT_AUTO,
+        status="delivering",
+        request_id=request_id,
+    )
+    try:
+        dispatch_response = await _build_managed_local_chat_response(
+            source_session=source_session,
+            owner_id=owner_id,
+            message=body.text,
+            request_id=request_id,
+            lock_scope_id=lock_scope_id,
+            db=db,
+        )
+    except HTTPException:
+        await session_lock_manager.release(lock_scope_id, request_id)
+        _mark_input_failed(db, int(row.id), error="dispatch rejected")
+        raise
+    except Exception as exc:
+        await session_lock_manager.release(lock_scope_id, request_id)
+        _mark_input_failed(db, int(row.id), error=str(exc)[:200])
+        logger.exception(f"[{request_id}] Error dispatching session input")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal error: {str(exc)[:200]}",
+        ) from exc
+
+    # _build_managed_local_chat_response may return a 502 JSONResponse on send
+    # failure (it releases the lock itself). Propagate as HTTPException so the
+    # input row is marked failed and the client sees the error.
+    dispatch_status = int(getattr(dispatch_response, "status_code", 200) or 200)
+    if dispatch_status >= 400:
+        _mark_input_failed(db, int(row.id), error=f"dispatch returned {dispatch_status}")
+        # Lock already released by _dispatch_managed_local_text on failure.
+        raise HTTPException(
+            status_code=dispatch_status,
+            detail=f"Managed local dispatch returned {dispatch_status}",
+        )
+
+    # Dispatch accepted — mark the row delivered. Lock release + terminal-phase
+    # observation is handled inside the existing dispatch path.
+    from zerg.services.session_inputs import mark_delivered as _mark_input_delivered
+
+    _mark_input_delivered(db, int(row.id))
+    queued = list_queued_inputs(db, source_session.id)
+    return SessionInputResponse(
+        outcome="sent",
+        input_id=int(row.id),
+        intent=INPUT_INTENT_AUTO,
+        queued=[_queued_summary(r) for r in queued],
+    )
+
+
+@router.post("/{session_id}/input", response_model=SessionInputResponse)
+async def create_session_input_endpoint(
+    session_id: str,
+    body: SessionInputRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_oikos_user),
+) -> SessionInputResponse:
+    source_session = _load_session_for_continuation(db, session_id)
+    return await _create_session_input_response(
+        source_session=source_session,
+        owner_id=current_user.id,
+        body=body,
+        db=db,
+    )
+
+
+@router.get("/{session_id}/inputs", response_model=list[QueuedInputSummary])
+async def list_session_inputs_endpoint(
+    session_id: str,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_oikos_user),
+) -> list[QueuedInputSummary]:
+    source_session = _load_session_for_continuation(db, session_id)
+    return [_queued_summary(r) for r in list_queued_inputs(db, source_session.id)]
+
+
+@router.delete("/{session_id}/inputs/{input_id}")
+async def cancel_session_input_endpoint(
+    session_id: str,
+    input_id: int,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_oikos_user),
+) -> dict:
+    source_session = _load_session_for_continuation(db, session_id)
+    row = cancel_queued_input(db, input_id)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="queued input not found",
+        )
+    if row.session_id != source_session.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="queued input not found for this session",
+        )
+    return {"cancelled": True, "input_id": int(row.id)}
 
 
 @router.delete("/{session_id}/lock")
