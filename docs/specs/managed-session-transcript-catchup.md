@@ -37,6 +37,12 @@ The server/UI watermark work is deferred unless testing still shows stale UI
 after engine catch-up. The immediate product bug is the transcript tail not
 being shipped, not the reducer model.
 
+For managed sessions, the launcher/hook binds the transcript path before the
+phase outbox file is written, so catch-up can resolve the path even before a
+first successful transcript ship. For unmanaged sessions, catch-up uses
+`file_state`; a first-ever unmanaged turn that has never shipped remains
+covered only by watcher/fallback scan.
+
 ## Success Criteria
 
 - Local engine unit tests prove terminal outbox phases schedule multiple
