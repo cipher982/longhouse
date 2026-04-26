@@ -1,10 +1,12 @@
 import type {
   AgentSession,
   AgentSessionStatus,
+  SessionRuntimeDisplay,
 } from "../services/api/agents";
 
 export type KnownPresenceState = "thinking" | "running" | "idle" | "needs_user" | "blocked";
 export type RuntimeTruthTier = "none" | "stale" | "inferred" | "fresh" | "managed-local";
+export type RuntimeTone = "inactive" | "thinking" | "running" | "needs-user" | "blocked" | "idle" | "inferred";
 
 type TimelineRuntimeOverlay = {
   timeline_anchor_at?: string | null;
@@ -17,6 +19,7 @@ type TimelineRuntimeOverlay = {
   display_phase?: string | null;
   active_tool?: string | null;
   confidence?: string | null;
+  runtime_display?: SessionRuntimeDisplay | null;
   capabilities?: AgentSession["capabilities"] | null;
 };
 
@@ -42,7 +45,8 @@ export interface SessionRuntimeState {
   heuristicActive: boolean;
   isManagedLocalTruth: boolean;
   hasSignal: boolean;
-  tone: "inactive" | "thinking" | "running" | "needs-user" | "blocked" | "idle" | "inferred";
+  tone: RuntimeTone;
+  runtimeDisplay: SessionRuntimeDisplay | null;
 }
 
 export function normalizePresenceState(state: string | null | undefined): KnownPresenceState | null {
@@ -193,6 +197,7 @@ function getTone(
 export function resolveSessionRuntimeState(
   session: TimelineRuntimeSession,
 ): SessionRuntimeState {
+  const serverDisplay = session.runtime_display ?? null;
   const sessionTruthTier = getRuntimeTruthTier(session);
   const status = session.status ?? null;
   const presenceState = normalizePresenceState(session.presence_state ?? null);
@@ -206,24 +211,26 @@ export function resolveSessionRuntimeState(
     (presenceState ? session.last_activity_at ?? null : null);
   const runtimeSource = normalizeRuntimeSource(session.runtime_source ?? null);
   const confidence = session.confidence ?? null;
-  const truthTier = sessionTruthTier;
+  const truthTier = normalizeRuntimeTruthTier(serverDisplay?.truth_tier) ?? sessionTruthTier;
 
-  const heuristicActive = isProgressFallback({ status, confidence, runtimeSource, presenceState });
-  const isExecuting = presenceState === "thinking" || presenceState === "running";
-  const needsAttention = presenceState === "needs_user" || presenceState === "blocked";
+  const heuristicActive = serverDisplay?.heuristic_active ?? isProgressFallback({ status, confidence, runtimeSource, presenceState });
+  const isExecuting = serverDisplay?.is_executing ?? (presenceState === "thinking" || presenceState === "running");
+  const needsAttention = serverDisplay?.needs_attention ?? (presenceState === "needs_user" || presenceState === "blocked");
 
-  const isLive = isExecuting;
-  const isIdle = presenceState === "idle" || (!isExecuting && !needsAttention && !heuristicActive && status === "idle");
-  const hasSignal = truthTier !== "none" || presenceState != null || status != null || lastLiveAt != null;
+  const isLive = serverDisplay?.is_live ?? isExecuting;
+  const isIdle = serverDisplay?.is_idle ?? (presenceState === "idle" || (!isExecuting && !needsAttention && !heuristicActive && status === "idle"));
+  const hasSignal = serverDisplay?.has_signal ?? (truthTier !== "none" || presenceState != null || status != null || lastLiveAt != null);
 
-  const displayPhase = getDisplayPhase(
-    presenceState,
-    presenceTool,
-    status,
-    session.ended_at ?? null,
-    session.display_phase ?? null,
-  );
-  const tone = getTone(presenceState, { heuristicActive, isIdle });
+  const displayPhase =
+    serverDisplay?.phase_label ??
+    getDisplayPhase(
+      presenceState,
+      presenceTool,
+      status,
+      session.ended_at ?? null,
+      session.display_phase ?? null,
+    );
+  const tone = normalizeRuntimeTone(serverDisplay?.tone) ?? getTone(presenceState, { heuristicActive, isIdle });
 
   return {
     status,
@@ -239,8 +246,37 @@ export function resolveSessionRuntimeState(
     needsAttention,
     isIdle,
     heuristicActive,
-    isManagedLocalTruth: truthTier === "managed-local",
+    isManagedLocalTruth: serverDisplay?.is_managed_local_truth ?? truthTier === "managed-local",
     hasSignal,
     tone,
+    runtimeDisplay: serverDisplay,
   };
+}
+
+function normalizeRuntimeTruthTier(value: string | null | undefined): RuntimeTruthTier | null {
+  if (
+    value === "none" ||
+    value === "stale" ||
+    value === "inferred" ||
+    value === "fresh" ||
+    value === "managed-local"
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function normalizeRuntimeTone(value: string | null | undefined): RuntimeTone | null {
+  if (
+    value === "inactive" ||
+    value === "thinking" ||
+    value === "running" ||
+    value === "needs-user" ||
+    value === "blocked" ||
+    value === "idle" ||
+    value === "inferred"
+  ) {
+    return value;
+  }
+  return null;
 }

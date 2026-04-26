@@ -215,6 +215,10 @@ export function compactRuntimeToolLabel(toolName: string | null): string | null 
 }
 
 export function getCardRuntimePhaseLabel(runtime: ReturnType<typeof resolveSessionRuntimeState>): string {
+  if (runtime.runtimeDisplay?.phase_label) {
+    return runtime.runtimeDisplay.phase_label;
+  }
+
   const compactTool = compactRuntimeToolLabel(runtime.presenceTool);
 
   if (runtime.presenceState === "running" && compactTool) {
@@ -235,6 +239,13 @@ export function getRuntimeOutcomeLabel(
     endedAt?: string | null;
   } = {},
 ): string {
+  if (
+    runtime.runtimeDisplay?.headline === "Active" ||
+    runtime.runtimeDisplay?.headline === "Completed" ||
+    runtime.runtimeDisplay?.headline === "Inactive"
+  ) {
+    return runtime.runtimeDisplay.headline;
+  }
   if (runtime.isExecuting || runtime.needsAttention || runtime.heuristicActive) {
     return "Active";
   }
@@ -257,6 +268,13 @@ export function getRuntimeDisplayCopy(
     managedLocal?: boolean;
   } = {},
 ): RuntimeDisplayCopy {
+  if (runtime.runtimeDisplay) {
+    return {
+      headline: runtime.runtimeDisplay.headline,
+      detail: runtime.runtimeDisplay.detail,
+    };
+  }
+
   const runtimePhaseLabel = getCardRuntimePhaseLabel(runtime);
   if (!managedLocal) {
     return {
