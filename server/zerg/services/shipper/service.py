@@ -411,7 +411,7 @@ def install_service(
         token: API token (persisted to token file before this is called)
         claude_dir: Claude config directory override
         flush_ms: Milliseconds to flush batched events
-        fallback_scan_secs: Seconds between fallback directory scans
+        fallback_scan_secs: Seconds between reconciliation directory scans
         spool_replay_secs: Seconds between spool replay attempts
         log_dir: Override for engine log directory
 

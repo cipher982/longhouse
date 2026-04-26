@@ -87,16 +87,18 @@ impl SessionWatcher {
                         continue;
                     }
 
-                    // Bounded send — silently drop if channel full (fallback scan will catch it)
+                    // Bounded send. If the OS watcher floods, deterministic
+                    // hook catch-up should keep active sessions fresh; the
+                    // reconciliation scan repairs any remaining missed files.
                     if watcher_tx.try_send(path).is_err() {
                         let n =
                             dropped_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                         // Warn once per 1000 drops
                         if n % 1000 == 0 {
                             eprintln!(
-                            "[engine] WARNING: watcher channel full, {} events dropped (fallback scan will recover)",
-                            n
-                        );
+                                "[engine] WARNING: watcher channel full, {} events dropped (reconciliation scan will repair)",
+                                n
+                            );
                         }
                     }
                 }

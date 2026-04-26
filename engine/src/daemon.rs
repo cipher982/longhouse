@@ -205,7 +205,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         &mut discovery_tasks,
         &providers,
         WorkPriority::Scan,
-        "startup catch-up",
+        "startup reconciliation",
     );
     let initial_retry_paths =
         queue_pending_spool_paths(&mut scheduler, &conn, INITIAL_SPOOL_PATH_LIMIT)?;
@@ -367,18 +367,20 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
-            // Periodic full scan (catch missed events) — skip when offline
+            // Periodic reconciliation scan — repair missed hook/watch work after
+            // restarts, sleeps, or dropped OS notifications. Active-session
+            // freshness should come from hook catch-up and watcher jobs.
             _ = fallback_timer.tick(), if !offline.is_offline => {
                 if discovery_tasks.is_empty() {
-                    tracing::debug!("Starting fallback full scan in background...");
+                    tracing::debug!("Starting reconciliation scan in background...");
                     start_discovery_task(
                         &mut discovery_tasks,
                         &providers,
                         WorkPriority::Scan,
-                        "fallback scan",
+                        "reconciliation scan",
                     );
                 } else {
-                    tracing::debug!("Skipping fallback full scan tick because discovery is still running");
+                    tracing::debug!("Skipping reconciliation scan tick because discovery is still running");
                 }
             }
 
@@ -598,7 +600,7 @@ fn work_context(priority: WorkPriority) -> &'static str {
         WorkPriority::Watch => "watch",
         WorkPriority::Catchup => "hook_catchup",
         WorkPriority::Retry => "spool_replay",
-        WorkPriority::Scan => "fallback_scan",
+        WorkPriority::Scan => "reconciliation_scan",
     }
 }
 
