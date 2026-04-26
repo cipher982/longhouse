@@ -678,67 +678,6 @@
     color: var(--color-text-muted);
   }
 
-  .session-loop-mode__advanced {
-    border-top: 1px solid rgba(158, 124, 90, 0.12);
-    padding-top: var(--space-2);
-  }
-
-  .session-loop-mode__advanced-summary {
-    list-style: none;
-    cursor: pointer;
-    font-size: var(--font-size-xs);
-    color: var(--color-text-muted);
-  }
-
-  .session-loop-mode__advanced-summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .session-loop-mode__advanced-summary::before {
-    content: "›";
-    display: inline-block;
-    margin-right: 6px;
-    transition: transform var(--motion-duration-fast) var(--motion-easing-standard);
-  }
-
-  .session-loop-mode__advanced[open] .session-loop-mode__advanced-summary::before {
-    transform: rotate(90deg);
-  }
-
-  .session-loop-mode__advanced-body {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-    padding-top: var(--space-2);
-  }
-
-  .session-loop-mode__manual-button {
-    align-self: flex-start;
-    padding: 4px 0;
-    border: 0;
-    background: transparent;
-    color: var(--color-text-muted);
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-semibold);
-  }
-
-  .session-loop-mode__manual-button:hover:not(:disabled),
-  .session-loop-mode__manual-button:focus-visible {
-    color: var(--color-text-primary);
-  }
-
-  .session-loop-mode__manual-button.is-active,
-  .session-loop-mode__manual-button:disabled {
-    color: var(--color-text-muted);
-    cursor: not-allowed;
-  }
-
-  .session-loop-mode__manual-copy {
-    font-size: var(--font-size-xs);
-    line-height: 1.45;
-    color: var(--color-text-muted);
-  }
-
   .session-shadow-review {
     display: flex;
     flex-direction: column;
