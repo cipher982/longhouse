@@ -140,21 +140,24 @@ def _infer_git_context(cwd: Path) -> tuple[str | None, str | None]:
     return git_repo, git_branch
 
 
-def _launch_managed_local_from_api(
+def build_managed_local_launch_payload(
     *,
-    url: str,
-    token: str,
     cwd: Path,
+    provider: str,
     project: str | None,
-    loop_mode: SessionLoopMode,
     name: str | None,
+    loop_mode: SessionLoopMode,
     machine_name: str,
     native_claude_channels_available: bool | None = None,
     claude_launch_env: dict[str, str] | None = None,
-    provider: str = "claude",
-) -> ManagedLocalLaunchResponse:
+) -> dict:
+    """Build the exact JSON body posted to /api/sessions/managed-local/this-device.
+
+    Public so contract tests can import it and validate against the live
+    server schema without reproducing the payload shape in two places.
+    """
     git_repo, git_branch = _infer_git_context(cwd)
-    payload = {
+    payload: dict = {
         "cwd": str(cwd),
         "provider": provider,
         "project": project,
@@ -168,6 +171,32 @@ def _launch_managed_local_from_api(
         payload["native_claude_channels_available"] = native_claude_channels_available
         if claude_launch_env:
             payload["claude_launch_env"] = claude_launch_env
+    return payload
+
+
+def _launch_managed_local_from_api(
+    *,
+    url: str,
+    token: str,
+    cwd: Path,
+    project: str | None,
+    loop_mode: SessionLoopMode,
+    name: str | None,
+    machine_name: str,
+    native_claude_channels_available: bool | None = None,
+    claude_launch_env: dict[str, str] | None = None,
+    provider: str = "claude",
+) -> ManagedLocalLaunchResponse:
+    payload = build_managed_local_launch_payload(
+        cwd=cwd,
+        provider=provider,
+        project=project,
+        name=name,
+        loop_mode=loop_mode,
+        machine_name=machine_name,
+        native_claude_channels_available=native_claude_channels_available,
+        claude_launch_env=claude_launch_env,
+    )
 
     try:
         with httpx.Client(timeout=30) as client:
@@ -185,6 +214,23 @@ def _launch_managed_local_from_api(
 
     if response.status_code == 401:
         typer.secho("Authentication failed. Run 'longhouse auth' to re-authenticate.", fg=typer.colors.RED)
+        raise typer.Exit(code=EXIT_SETUP_FAILED)
+
+    if response.status_code == 422:
+        # Almost always means CLI enum/schema drifted from the server since
+        # the user's CLI was installed. Surface a recovery path instead of a
+        # raw validation dump.
+        try:
+            errors = response.json()
+        except ValueError:
+            errors = response.text[:200]
+        typer.secho(
+            "Longhouse server rejected the launch request (422).\n"
+            "Your CLI likely drifted from the server schema. Update with:\n"
+            "  cd ~/git/zerg/server && uv tool install -e .   # or: make dogfood-refresh\n"
+            f"Server detail: {errors}",
+            fg=typer.colors.RED,
+        )
         raise typer.Exit(code=EXIT_SETUP_FAILED)
 
     if response.status_code != 200:
