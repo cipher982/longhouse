@@ -46,37 +46,40 @@ actor SessionWorkspaceStream {
         self.sessionId = sessionId
     }
 
-    func events() -> AsyncStream<Event> {
-        AsyncStream { continuation in
-            Task { await self.setContinuation(continuation) }
-        }
-    }
-
-    private func setContinuation(_ c: AsyncStream<Event>.Continuation) {
-        self.continuation = c
-    }
-
     func clockSkewMs() -> Int64 { serverClockSkewMs }
 
-    func start() {
-        guard task == nil else { return }
-        task = Task { [weak self] in
-            guard let self else { return }
-            var backoffMs: UInt64 = 500
-            while !Task.isCancelled {
-                do {
-                    try await self.openAndDrain()
-                    backoffMs = 500
-                } catch is CancellationError {
-                    break
-                } catch {
-                    await self.emit(.disconnected(error))
+    /// Starts the stream and returns an AsyncStream for events. Must be
+    /// called at most once per instance. Subsequent calls return an empty
+    /// stream so early events cannot be lost to a continuation-attach race.
+    func start() -> AsyncStream<Event> {
+        if task != nil {
+            return AsyncStream { $0.finish() }
+        }
+        return AsyncStream { continuation in
+            self.continuation = continuation
+            self.task = Task { [weak self] in
+                guard let self else { return }
+                var backoffMs: UInt64 = 500
+                while !Task.isCancelled {
+                    do {
+                        try await self.openAndDrain()
+                        backoffMs = 500
+                    } catch is CancellationError {
+                        break
+                    } catch {
+                        await self.emit(.disconnected(error))
+                    }
+                    try? await Task.sleep(nanoseconds: backoffMs * 1_000_000)
+                    backoffMs = min(backoffMs * 2, 15_000)
                 }
-                // Exponential backoff with ceiling.
-                try? await Task.sleep(nanoseconds: backoffMs * 1_000_000)
-                backoffMs = min(backoffMs * 2, 15_000)
+                await self.finishContinuation()
             }
         }
+    }
+
+    private func finishContinuation() {
+        continuation?.finish()
+        continuation = nil
     }
 
     func stop() {
