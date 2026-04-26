@@ -265,7 +265,7 @@ def test_startup_migration_adds_session_execution_home_columns(tmp_path):
     assert row == ("legacy", None, None, None, None)
 
 
-def test_startup_migration_adds_session_loop_mode_and_backfills_manual(tmp_path):
+def test_startup_migration_adds_session_loop_mode_and_backfills_assist(tmp_path):
     db_path = tmp_path / "legacy_sessions_loop_mode.db"
     engine = make_engine(f"sqlite:///{db_path}")
 
@@ -307,7 +307,7 @@ def test_startup_migration_adds_session_loop_mode_and_backfills_manual(tmp_path)
 
     assert "loop_mode" in columns
     assert "loop_thread_id" in columns
-    assert rows == [("00000000-0000-0000-0000-000000000123", "manual", None)]
+    assert rows == [("00000000-0000-0000-0000-000000000123", "assist", None)]
 
 
 def test_startup_migration_adds_turn_review_follow_up_prompt_and_timing_columns(tmp_path):

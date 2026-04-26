@@ -42,6 +42,7 @@ from zerg.services.session_chat_impl import _managed_local_launch_response
 from zerg.services.session_chat_impl import _resolve_agents_owner_id
 from zerg.services.session_continuity import session_lock_manager
 from zerg.session_loop_mode import SessionLoopMode
+from zerg.session_loop_mode import coerce_session_loop_mode
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,7 @@ class ManagedLocalThisDeviceLaunchRequest(BaseModel):
     git_repo: str | None = Field(None, description="Optional git repository path")
     git_branch: str | None = Field(None, description="Optional git branch name")
     display_name: str | None = Field(None, description="Optional display name for the session")
-    loop_mode: SessionLoopMode = Field(SessionLoopMode.MANUAL, description="manual | assist | autopilot")
+    loop_mode: SessionLoopMode = Field(SessionLoopMode.ASSIST, description="assist | autopilot")
     machine_name: str | None = Field(
         None,
         description="Optional local Longhouse machine label override stored on the launched session",
@@ -280,7 +281,7 @@ async def launch_managed_local_this_device(
                 git_repo=body.git_repo,
                 git_branch=body.git_branch,
                 display_name=body.display_name,
-                loop_mode=body.loop_mode.value,
+                loop_mode=coerce_session_loop_mode(body.loop_mode).value,
                 machine_name=machine_name,
                 native_claude_channels_available=body.native_claude_channels_available,
                 claude_launch_env=body.claude_launch_env,

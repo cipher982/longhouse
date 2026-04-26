@@ -123,7 +123,7 @@ class AgentSession(AgentsBase):
     source_runner_id = Column(Integer, nullable=True, index=True)
     source_runner_name = Column(String(255), nullable=True)
     managed_session_name = Column(String(255), nullable=True)
-    loop_mode = Column(String(20), nullable=False, server_default=text(f"'{SessionLoopMode.MANUAL.value}'"))
+    loop_mode = Column(String(20), nullable=False, server_default=text(f"'{SessionLoopMode.ASSIST.value}'"))
     # legacy — loop controller removed, column kept for DB compat
     loop_thread_id = Column(Integer, nullable=True, index=True)
 

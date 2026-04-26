@@ -115,7 +115,7 @@ def _make_session(
     sid: str | None = None,
     *,
     summary: str | None = None,
-    loop_mode: SessionLoopMode = SessionLoopMode.MANUAL,
+    loop_mode: SessionLoopMode = SessionLoopMode.ASSIST,
 ) -> AgentSession:
     """Create a minimal AgentSession row."""
     if sid is None:

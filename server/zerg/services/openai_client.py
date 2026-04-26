@@ -185,6 +185,7 @@ class OpenAIChat:
         streaming: bool = False,
         reasoning_effort: str | None = None,
         extra_body: dict | None = None,
+        default_headers: dict[str, str] | None = None,
     ):
         """Initialize the OpenAI chat client.
 
@@ -195,6 +196,7 @@ class OpenAIChat:
             streaming: Whether to stream responses.
             reasoning_effort: Reasoning effort for o1/o3 models ("low", "medium", "high").
             extra_body: Extra request body fields (e.g., OpenRouter reasoning config).
+            default_headers: Optional headers attached to every SDK request.
         """
         self._model = model
         self._api_key = api_key
@@ -202,6 +204,7 @@ class OpenAIChat:
         self._streaming = streaming
         self._reasoning_effort = reasoning_effort
         self._extra_body = extra_body
+        self._default_headers = default_headers
         self._tools: list[Tool] = []
         self._tool_choice: dict | str | None = None
 
@@ -209,6 +212,7 @@ class OpenAIChat:
         self._client = AsyncOpenAI(
             api_key=api_key,
             base_url=base_url,
+            default_headers=default_headers,
         )
 
     def bind_tools(
@@ -233,6 +237,7 @@ class OpenAIChat:
             streaming=self._streaming,
             reasoning_effort=self._reasoning_effort,
             extra_body=self._extra_body,
+            default_headers=self._default_headers,
         )
         bound._tools = tools
         bound._tool_choice = tool_choice

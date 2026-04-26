@@ -634,14 +634,14 @@ def _migrate_agents_columns(engine: Engine) -> None:
             if "managed_session_name" not in columns:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN managed_session_name VARCHAR(255)"))
             if "loop_mode" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN loop_mode VARCHAR(20) DEFAULT 'manual' NOT NULL"))
-            conn.execute(text("UPDATE sessions SET loop_mode = 'manual' WHERE loop_mode IS NULL"))
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN loop_mode VARCHAR(20) DEFAULT 'assist' NOT NULL"))
+            conn.execute(text("UPDATE sessions SET loop_mode = 'assist' WHERE loop_mode IS NULL OR loop_mode = 'manual'"))
             conn.execute(
                 text(
                     """
                     UPDATE sessions
-                    SET loop_mode = 'manual'
-                    WHERE loop_mode NOT IN ('manual', 'assist', 'autopilot')
+                    SET loop_mode = 'assist'
+                    WHERE loop_mode NOT IN ('assist', 'autopilot')
                     """
                 )
             )

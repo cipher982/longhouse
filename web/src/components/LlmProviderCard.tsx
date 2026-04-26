@@ -110,9 +110,9 @@ export default function LlmProviderCard() {
   const [configuringCap, setConfiguringCap] = useState<Capability | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [form, setForm] = useState<ConfigFormState>({
-    providerName: "openai",
+    providerName: "openrouter",
     apiKey: "",
-    baseUrl: "",
+    baseUrl: "https://openrouter.ai/api/v1",
   });
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isTesting, setIsTesting] = useState(false);
@@ -162,7 +162,7 @@ export default function LlmProviderCard() {
   });
 
   function resetForm() {
-    setForm({ providerName: "openai", apiKey: "", baseUrl: "" });
+    setForm({ providerName: "openrouter", apiKey: "", baseUrl: "https://openrouter.ai/api/v1" });
     setTestResult(null);
     setIsEditing(false);
   }

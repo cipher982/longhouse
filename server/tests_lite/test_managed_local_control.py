@@ -82,7 +82,7 @@ def _seed_user_runner_and_session(db, *, provider: str = "claude"):
         source_runner_id=runner.id,
         source_runner_name=runner.name,
         managed_session_name="lh-zerg-managed-local",
-        loop_mode="manual",
+        loop_mode="assist",
     )
     db.add(session)
     db.commit()

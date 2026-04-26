@@ -74,6 +74,7 @@ from zerg.services.session_turns import run_best_effort_session_turn_write
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_loop_mode import SessionLoopMode
+from zerg.session_loop_mode import coerce_session_loop_mode
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +186,7 @@ def _managed_local_launch_response(result) -> ManagedLocalSessionLaunchResponse:
         provider_session_id=session.provider_session_id or str(session.id),
         execution_home=capabilities.execution_home,
         managed_transport=capabilities.managed_transport,
-        loop_mode=SessionLoopMode(session.loop_mode or SessionLoopMode.MANUAL.value),
+        loop_mode=coerce_session_loop_mode(session.loop_mode),
         source_runner_id=getattr(session, "source_runner_id", None),
         source_runner_name=session.source_runner_name or "",
         managed_session_name=session.managed_session_name or "",

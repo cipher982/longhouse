@@ -97,7 +97,7 @@ describe("Timeline session stream", () => {
         home_label: null,
         branched_from_event_id: null,
         is_writable_head: true,
-        loop_mode: "manual",
+        loop_mode: "assist",
       },
       total: 1,
       has_real_sessions: true,
