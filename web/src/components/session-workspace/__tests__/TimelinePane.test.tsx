@@ -90,8 +90,8 @@ describe("TimelinePane", () => {
     expect(screen.getByText("Paragraph 80: normal response text.")).toBeInTheDocument();
   });
 
-  it("collapses only very large message dumps and can expand them", () => {
-    const hugeMessage = `${"x".repeat(41_000)}\nfinal line after dump`;
+  it("collapses only very large message dumps with a head and tail preview", () => {
+    const hugeMessage = Array.from({ length: 700 }, (_, index) => `Dump line ${index + 1}`).join("\n");
 
     render(
       <TimelinePane
@@ -112,10 +112,14 @@ describe("TimelinePane", () => {
     );
 
     const timeline = screen.getByTestId("session-timeline-list");
-    expect(timeline).not.toHaveTextContent("final line after dump");
+    expect(timeline).toHaveTextContent("Dump line 1");
+    expect(timeline).toHaveTextContent("Dump line 700");
+    expect(timeline).toHaveTextContent("... 400 lines hidden ...");
+    expect(timeline).not.toHaveTextContent("Dump line 350");
     const expand = screen.getByRole("button", { name: "Show full message" });
     fireEvent.click(expand);
-    expect(timeline).toHaveTextContent("final line after dump");
+    expect(timeline).toHaveTextContent("Dump line 350");
+    expect(timeline).not.toHaveTextContent("... 400 lines hidden ...");
     expect(screen.getByRole("button", { name: "Collapse message" })).toBeInTheDocument();
   });
 });
