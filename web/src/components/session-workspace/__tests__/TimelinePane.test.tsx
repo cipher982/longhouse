@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { TimelinePane } from "../TimelinePane";
 import type { TimelineItem } from "../../../lib/sessionWorkspace";
@@ -29,6 +29,16 @@ const messageItem: TimelineItem = {
   },
 };
 
+function makeMessageItem(content: string): TimelineItem {
+  return {
+    kind: "message",
+    event: {
+      ...messageItem.event,
+      content_text: content,
+    },
+  };
+}
+
 describe("TimelinePane", () => {
   it("renders seam items inline in the timeline list", () => {
     render(
@@ -53,5 +63,59 @@ describe("TimelinePane", () => {
     expect(screen.getByText("Continuation begins")).toBeInTheDocument();
     expect(screen.getByText("Synced Cinder history above. New continuation messages below.")).toBeInTheDocument();
     expect(screen.getByText("Paris")).toBeInTheDocument();
+  });
+
+  it("does not collapse normal multi-paragraph assistant prose", () => {
+    const paragraphs = Array.from({ length: 80 }, (_, index) => `Paragraph ${index + 1}: normal response text.`).join("\n\n");
+
+    render(
+      <TimelinePane
+        items={[makeMessageItem(paragraphs)]}
+        totalEntries={1}
+        loadedEntries={1}
+        abandonedEvents={0}
+        showAbandonedBranches={false}
+        onShowAbandonedBranchesChange={vi.fn()}
+        hasPreviousPage={false}
+        isFetchingPreviousPage={false}
+        onFetchPreviousPage={vi.fn()}
+        loading={false}
+        error={null}
+        selectedKey={null}
+        onSelectKey={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Show full message" })).not.toBeInTheDocument();
+    expect(screen.getByText("Paragraph 80: normal response text.")).toBeInTheDocument();
+  });
+
+  it("collapses only very large message dumps and can expand them", () => {
+    const hugeMessage = `${"x".repeat(41_000)}\nfinal line after dump`;
+
+    render(
+      <TimelinePane
+        items={[makeMessageItem(hugeMessage)]}
+        totalEntries={1}
+        loadedEntries={1}
+        abandonedEvents={0}
+        showAbandonedBranches={false}
+        onShowAbandonedBranchesChange={vi.fn()}
+        hasPreviousPage={false}
+        isFetchingPreviousPage={false}
+        onFetchPreviousPage={vi.fn()}
+        loading={false}
+        error={null}
+        selectedKey={null}
+        onSelectKey={vi.fn()}
+      />,
+    );
+
+    const timeline = screen.getByTestId("session-timeline-list");
+    expect(timeline).not.toHaveTextContent("final line after dump");
+    const expand = screen.getByRole("button", { name: "Show full message" });
+    fireEvent.click(expand);
+    expect(timeline).toHaveTextContent("final line after dump");
+    expect(screen.getByRole("button", { name: "Collapse message" })).toBeInTheDocument();
   });
 });

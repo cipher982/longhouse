@@ -1180,10 +1180,11 @@
   .tl-msg__expand {
     align-self: flex-start;
     margin-top: 4px;
-    border: 0;
-    background: transparent;
+    border: 1px solid rgba(204, 144, 84, 0.28);
+    background: rgba(204, 144, 84, 0.08);
     color: var(--color-brand-accent);
     font-size: 12px;
+    font-weight: 600;
     padding: 4px 8px;
     border-radius: 4px;
     cursor: pointer;
