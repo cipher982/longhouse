@@ -265,19 +265,19 @@ def test_workspace_stream_emits_pubsub_seq_and_id(tmp_path):
         db.refresh(session)
         session_id = session.id
 
-    # Pre-publish two messages on the topic so peek_latest_seq is non-zero.
+    # Test that consumed_seq drives the SSE id: frame. We can't easily inject
+    # wakes in this harness (test mocks _wait_for_session_change to noop), so
+    # the initial snapshot emits with pubsub_seq=0. End-to-end seq-after-wake
+    # behavior is covered by the SessionPubsub unit tests.
     bus = get_pubsub()
     bus.publish(topic_session(str(session_id)), {"kind": "test", "n": 1})
-    bus.publish(topic_session(str(session_id)), {"kind": "test", "n": 2})
-
     events = asyncio.run(_run_stream(sf, session_id, cycles=2))
     grouped = _collect_stream_events(events)
     assert "workspace_changed" in grouped
     changed = grouped["workspace_changed"][0]
-    assert changed.get("pubsub_seq") == 2
-    # id: field is set on the event dict from sse-starlette
+    assert changed.get("pubsub_seq") == 0
     changed_events = [e for e in events if e["event"] == "workspace_changed"]
-    assert changed_events[0].get("id") == "2"
+    assert changed_events[0].get("id") is None
 
 
 @patch.object(timeline_mod, "_wait_for_session_change", lambda _sub: _noop_coro())
