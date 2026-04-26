@@ -30,6 +30,7 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.main import api_app
 from zerg.models import User
 from zerg.models.agents import AgentsBase
+from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionTurn
 from zerg.services.managed_local_transport import build_managed_local_attach_command
@@ -305,6 +306,57 @@ def test_timeline_session_turns_accept_browser_session_cookie(tmp_path):
         assert payload["turns"][0]["request_id"] == "req-1"
         assert payload["turns"][0]["state"] == "active"
         assert payload["turns"][0]["user_submitted_at"].endswith("Z")
+    finally:
+        auth_deps._strategy_cache.clear()
+        api_app.dependency_overrides.clear()
+
+
+def test_timeline_session_events_anchor_tail_accepts_browser_session_cookie(tmp_path):
+    session_local = _make_db(tmp_path)
+    with session_local() as db:
+        _seed_user(db)
+        session_id = uuid4()
+        session = AgentSession(
+            id=session_id,
+            provider="codex",
+            environment="development",
+            project="timeline-auth",
+            device_id="cinder",
+            cwd="/tmp/timeline-auth",
+            git_repo=None,
+            git_branch="main",
+            started_at=datetime(2026, 3, 22, 22, 0, tzinfo=timezone.utc),
+            ended_at=None,
+            user_messages=5,
+            assistant_messages=0,
+            tool_calls=0,
+        )
+        db.add(session)
+        for idx in range(1, 6):
+            db.add(
+                AgentEvent(
+                    session_id=session_id,
+                    role="user",
+                    content_text=f"event {idx}",
+                    timestamp=datetime(2026, 3, 22, 22, idx, tzinfo=timezone.utc),
+                )
+            )
+        db.commit()
+
+    client = _make_client(session_local)
+
+    try:
+        with _force_browser_jwt_mode():
+            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
+            response = client.get(
+                f"/timeline/sessions/{session_id}/events",
+                params={"limit": 2, "anchor": "tail", "branch_mode": "head"},
+            )
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["total"] == 5
+        assert [row["content_text"] for row in payload["events"]] == ["event 4", "event 5"]
     finally:
         auth_deps._strategy_cache.clear()
         api_app.dependency_overrides.clear()
