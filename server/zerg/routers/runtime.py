@@ -16,11 +16,13 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.metrics import event_age_at_ingest_seconds
 from zerg.models.agents import AgentSession
+from zerg.services.apns_sender import dispatch_session_presence_pushes
 from zerg.services.session_messages import deliver_queued_session_messages
 from zerg.services.session_messages import is_session_message_deliverable_state
 from zerg.services.session_messages import resolve_session_message_owner_id
 from zerg.services.session_runtime import RuntimeEventBatchIngest
 from zerg.services.session_runtime import RuntimeEventBatchResult
+from zerg.services.session_runtime import current_presence_state_for_session
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
@@ -61,7 +63,14 @@ async def ingest_runtime_event_batch(
                 managed="true",
             ).observe(age_s)
 
+        # Snapshot presence state per session before writing so APNs dispatcher
+        # can distinguish new-attention transitions from repeat states.
+        session_ids_in_batch = sorted({ev.session_id for ev in events if ev.session_id is not None}, key=str)
+        previous_presence_by_session: dict = {}
+
         def _do(wdb: Session) -> RuntimeEventBatchResult:
+            for sid in session_ids_in_batch:
+                previous_presence_by_session[sid] = current_presence_state_for_session(wdb, sid, now=now_utc)
             return ingest_runtime_events(wdb, events)
 
         result = await ws.execute_or_direct(_do, db, label="runtime-events")
@@ -97,6 +106,11 @@ async def ingest_runtime_event_batch(
                 now = datetime.now(timezone.utc)
                 owner_id = resolve_session_message_owner_id(db, _token)
                 runtime_state_map = load_runtime_state_map(db, session_ids)
+                # Tool-name lookup from the batch for attention push context.
+                tool_by_session: dict = {}
+                for ev in events:
+                    if ev.session_id is not None and ev.tool_name:
+                        tool_by_session.setdefault(ev.session_id, ev.tool_name)
                 for session in sessions:
                     current_state = resolve_runtime_overlay(
                         session,
@@ -104,6 +118,19 @@ async def ingest_runtime_event_batch(
                         runtime_state_map=runtime_state_map,
                         now=now,
                     ).presence_state
+                    # APNs fan-out (Live Activity, attention alert, widget push)
+                    # for managed runtime events. Mirrors /api/agents/presence.
+                    await dispatch_session_presence_pushes(
+                        session_id=session.id,
+                        owner_id=owner_id,
+                        previous_presence_state=previous_presence_by_session.get(session.id),
+                        canonical_presence_state=current_state,
+                        tool_name=tool_by_session.get(session.id),
+                        occurred_at=now,
+                        db=db,
+                        ws=ws,
+                        dispatch_label_prefix="runtime",
+                    )
                     if not is_session_message_deliverable_state(current_state):
                         continue
                     await deliver_queued_session_messages(
