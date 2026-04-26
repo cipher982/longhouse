@@ -287,6 +287,19 @@ jobs:
             sleep 5
           done
 
+      - name: Run render-canary SLA check
+        id: render_canary
+        if: always() && steps.qa_live.outcome == 'success'
+        env:
+          HOME: ${{ env.QA_HOME }}
+          LONGHOUSE_CANARY_TOKEN: ${{ secrets.LONGHOUSE_CANARY_TOKEN }}
+        run: |
+          if [[ -z "$LONGHOUSE_CANARY_TOKEN" ]]; then
+            echo "LONGHOUSE_CANARY_TOKEN secret not set; skipping render-canary." >&2
+            exit 0
+          fi
+          make render-canary
+
       - name: Summary
         if: always()
         run: |
@@ -300,6 +313,7 @@ jobs:
             echo "- **Commit:** ${{ needs.gate.outputs.head_sha }}"
             echo "- **Demo image:** \`${{ needs.gate.outputs.runtime_image_name }}:${{ needs.gate.outputs.runtime_image_tag }}\`"
             echo "- **qa-live:** \`${{ steps.qa_live.outcome || 'skipped' }}\`"
+            echo "- **render-canary:** \`${{ steps.render_canary.outcome || 'skipped' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload live QA artifacts
