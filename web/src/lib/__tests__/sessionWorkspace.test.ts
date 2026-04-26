@@ -42,7 +42,7 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     is_writable_head: true,
     control: null,
     capabilities: makeCapabilities(),
-    loop_mode: "manual",
+    loop_mode: "assist",
     ...overrides,
   };
 }

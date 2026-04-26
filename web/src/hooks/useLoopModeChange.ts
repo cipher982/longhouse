@@ -15,7 +15,7 @@ export function useLoopModeChange(session: AgentSession | null) {
   const [loopModeOverride, setLoopModeOverride] = useState<SessionLoopMode | null>(null);
   const [loopModePending, setLoopModePending] = useState(false);
 
-  const effectiveLoopMode = loopModeOverride ?? session?.loop_mode ?? "manual";
+  const effectiveLoopMode = loopModeOverride ?? session?.loop_mode ?? "assist";
 
   const handleLoopModeChange = async (nextMode: SessionLoopMode) => {
     if (!session || loopModePending || nextMode === effectiveLoopMode) {

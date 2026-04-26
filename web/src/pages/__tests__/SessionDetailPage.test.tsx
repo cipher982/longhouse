@@ -122,7 +122,7 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
         "zsh -lc 'exec longhouse-engine codex-bridge attach --session-id session-codex'",
     },
     capabilities: makeCapabilities(),
-    loop_mode: "manual",
+    loop_mode: "assist",
     ...overrides,
   };
 }
@@ -293,15 +293,14 @@ describe("SessionDetailPage", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Assist" })).toHaveAttribute(
       "aria-pressed",
-      "false",
+      "true",
     );
     expect(screen.getByRole("button", { name: "Autopilot" })).toHaveAttribute(
       "aria-pressed",
       "false",
     );
-    expect(screen.getByText("Advanced · Assistance off")).toBeInTheDocument();
     expect(
-      screen.getByText("No automation. You drive this session yourself."),
+      screen.getByText("Drafts replies for review. You choose what gets sent."),
     ).toBeInTheDocument();
     const loopModeTitle = screen.getByText("Loop Mode");
     const summaryTitle = screen.getByText("Summary");

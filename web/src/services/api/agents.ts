@@ -223,7 +223,7 @@ export type PresenceState =
   | (string & {});
 
 export type UserStateAction = "park" | "snooze" | "archive" | "resume";
-export type SessionLoopMode = "manual" | "assist" | "autopilot";
+export type SessionLoopMode = "assist" | "autopilot";
 export type SessionExecutionHome =
   | "legacy"
   | "managed_local"

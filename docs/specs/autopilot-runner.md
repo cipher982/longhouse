@@ -31,7 +31,7 @@ hard stop path from every control surface.
 - **Audit**: every automatic send records who/what generated it, source event
   ids, policy version, prompt text, and result.
 - **Kill switch**: web, iOS, and the machine surface can immediately downgrade
-  to manual.
+  to assist.
 - **Rate limits**: generation and auto-send are limited per session and per
   owner to prevent runaway loops.
 

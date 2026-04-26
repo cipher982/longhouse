@@ -202,7 +202,20 @@
       }
     },
     "david": {
-      "$comment": "David's instance: keep personal usage on direct provider defaults (OpenAI for text, OpenAI embeddings)"
+      "$comment": "David's instance: use OpenRouter for text routing; embeddings stay on the embedding provider.",
+      "text": {
+        "useCases": {
+          "fiche_conversation": "x-ai/grok-4.1-fast",
+          "summarization": "x-ai/grok-4.1-fast",
+          "summary_update": "x-ai/grok-4.1-fast",
+          "reflection": "x-ai/grok-4.1-fast",
+          "bulk_classification": "x-ai/grok-4.1-fast"
+        },
+        "defaults": {
+          "fiche": "x-ai/grok-4.1-fast",
+          "test": "x-ai/grok-4.1-fast"
+        }
+      }
     }
   },
 

@@ -108,6 +108,7 @@ def _make_llm(
 
     from zerg.models_config import ModelProvider
     from zerg.models_config import _get_api_key_env_var
+    from zerg.models_config import build_openai_compatible_client_kwargs
     from zerg.models_config import get_all_models
     from zerg.models_config import get_model_by_id
 
@@ -121,13 +122,17 @@ def _make_llm(
     api_key_env_var = _get_api_key_env_var(model_config)
     api_key = os.getenv(api_key_env_var)
 
-    kwargs: dict = {
-        "model": model,
-        "streaming": settings.llm_token_stream,
-        "api_key": api_key,
-    }
-    if provider != ModelProvider.ANTHROPIC and model_config.base_url:
-        kwargs["base_url"] = model_config.base_url
+    kwargs: dict = {"model": model, "streaming": settings.llm_token_stream}
+    if provider == ModelProvider.ANTHROPIC:
+        kwargs["api_key"] = api_key
+    else:
+        kwargs.update(
+            build_openai_compatible_client_kwargs(
+                provider=provider,
+                api_key=api_key,
+                base_url=model_config.base_url,
+            )
+        )
     if not kwargs["api_key"]:
         raise ValueError(f"{api_key_env_var} not configured but model '{model}' selected")
 

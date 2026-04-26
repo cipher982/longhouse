@@ -270,7 +270,7 @@ def test_presence_attention_transition_sends_and_debounces_push(tmp_path):
                 environment="test",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
-                loop_mode="manual",
+                loop_mode="assist",
                 summary_title="Fix failing build",
                 summary="Fix failing build in repo root",
             )
@@ -420,7 +420,7 @@ def test_presence_resolution_push_requires_unresolved_attention_push(tmp_path):
                 environment="test",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
-                loop_mode="manual",
+                loop_mode="assist",
                 summary_title="Flappy session",
             )
         )
@@ -510,7 +510,7 @@ def test_presence_widget_push_uses_set_hash_and_debounce(tmp_path):
                 environment="test",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
-                loop_mode="manual",
+                loop_mode="assist",
                 summary_title="Widget watched session",
             )
         )
@@ -590,7 +590,7 @@ def test_presence_widget_push_requires_widget_token(tmp_path):
                 environment="test",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
-                loop_mode="manual",
+                loop_mode="assist",
                 summary_title="No widget token",
             )
         )
@@ -654,7 +654,7 @@ def test_presence_widget_push_send_failure_clears_stamp(tmp_path):
                 environment="test",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
-                loop_mode="manual",
+                loop_mode="assist",
                 summary_title="Widget send failure",
             )
         )
@@ -720,7 +720,7 @@ def test_presence_widget_push_missing_state_table_degrades(tmp_path):
                 environment="test",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
-                loop_mode="manual",
+                loop_mode="assist",
                 summary_title="Missing widget state table",
             )
         )
@@ -794,7 +794,7 @@ def test_presence_live_activity_pushes_session_state_and_debounces(tmp_path):
                 environment="test",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
-                loop_mode="manual",
+                loop_mode="assist",
                 summary_title="Watched session",
             )
         )
@@ -884,7 +884,7 @@ def test_presence_live_activity_send_failure_clears_stamp(tmp_path):
                 environment="test",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
-                loop_mode="manual",
+                loop_mode="assist",
                 summary_title="Live Activity failure",
             )
         )
@@ -950,7 +950,7 @@ def test_presence_attention_send_failure_clears_debounce_stamp(tmp_path):
                 environment="test",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
-                loop_mode="manual",
+                loop_mode="assist",
                 summary_title="Review failed tests",
             )
         )
@@ -1046,7 +1046,7 @@ def test_presence_attention_push_respects_user_mute(tmp_path):
                 environment="test",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
-                loop_mode="manual",
+                loop_mode="assist",
                 summary_title="Wait for input",
             )
         )
