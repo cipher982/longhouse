@@ -84,6 +84,21 @@ def test_beacon_rate_limited_per_ip(monkeypatch):
     assert r.status_code == 429
 
 
+def test_beacon_rate_limit_refills_over_time(monkeypatch):
+    now = 1000.0
+    monkeypatch.setattr(telemetry_mod.time, "monotonic", lambda: now)
+    c = _client()
+
+    for _ in range(60):
+        assert c.post("/telemetry/client-render", json=_beacon()).status_code == 200
+    assert c.post("/telemetry/client-render", json=_beacon()).status_code == 429
+
+    now += 1.0
+    for _ in range(20):
+        assert c.post("/telemetry/client-render", json=_beacon()).status_code == 200
+    assert c.post("/telemetry/client-render", json=_beacon()).status_code == 429
+
+
 def test_latency_summary_groups_by_surface_and_managed():
     c = _client()
     now = int(time.time() * 1000)
