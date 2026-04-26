@@ -241,6 +241,46 @@ def test_workspace_stream_missing_session(tmp_path):
 
 
 @patch.object(timeline_mod, "_wait_for_session_change", lambda _sub: _noop_coro())
+def test_workspace_stream_emits_pubsub_seq_and_id(tmp_path):
+    """workspace_changed frame should carry pubsub_seq in data and SSE id."""
+    from zerg.services.session_pubsub import get_pubsub
+    from zerg.services.session_pubsub import reset_pubsub_for_test
+    from zerg.services.session_pubsub import topic_session
+
+    reset_pubsub_for_test()
+    sf = _make_db(tmp_path, name="workspace_stream_seq.db")
+    now = datetime.now(timezone.utc)
+
+    with sf() as db:
+        session = AgentSession(
+            provider="claude",
+            environment="production",
+            project="test",
+            started_at=now,
+            user_messages=1,
+            assistant_messages=1,
+        )
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+        session_id = session.id
+
+    # Pre-publish two messages on the topic so peek_latest_seq is non-zero.
+    bus = get_pubsub()
+    bus.publish(topic_session(str(session_id)), {"kind": "test", "n": 1})
+    bus.publish(topic_session(str(session_id)), {"kind": "test", "n": 2})
+
+    events = asyncio.run(_run_stream(sf, session_id, cycles=2))
+    grouped = _collect_stream_events(events)
+    assert "workspace_changed" in grouped
+    changed = grouped["workspace_changed"][0]
+    assert changed.get("pubsub_seq") == 2
+    # id: field is set on the event dict from sse-starlette
+    changed_events = [e for e in events if e["event"] == "workspace_changed"]
+    assert changed_events[0].get("id") == "2"
+
+
+@patch.object(timeline_mod, "_wait_for_session_change", lambda _sub: _noop_coro())
 def test_workspace_stream_skip_initial(tmp_path):
     """skip_initial=True should delay first workspace_changed by one cycle."""
     sf = _make_db(tmp_path)
