@@ -5,8 +5,8 @@ const LOOP_MODE_OPTIONS: Array<{
   label: string;
   hint: string;
 }> = [
-  { value: "assist", label: "Assist", hint: "Suggest and nudge" },
-  { value: "autopilot", label: "Autopilot", hint: "Continue bounded turns" },
+  { value: "assist", label: "Assist", hint: "Draft replies for approval" },
+  { value: "autopilot", label: "Autopilot", hint: "Preview policy only" },
 ];
 
 interface LoopModeSelectorProps {

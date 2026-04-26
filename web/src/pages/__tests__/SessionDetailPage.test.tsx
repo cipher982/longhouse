@@ -420,7 +420,7 @@ describe("SessionDetailPage", () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
-      screen.getByText("Saved. Active when live control connects."),
+      screen.getByText("Saved as a preference. Active controls return when live control connects."),
     ).toBeInTheDocument();
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
       "data-disabled-reason",

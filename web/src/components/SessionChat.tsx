@@ -50,6 +50,10 @@ interface SSEDone {
   timestamp: string;
 }
 
+interface SessionDraftReplyResponse {
+  draft_text?: string;
+}
+
 // Message for display
 interface ChatMessage {
   id: string;
@@ -127,6 +131,7 @@ export function SessionChat({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDraftingReply, setIsDraftingReply] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [blockedKeyboardSubmit, setBlockedKeyboardSubmit] = useState(false);
@@ -135,7 +140,7 @@ export function SessionChat({
   const [pendingManagedLocalMessage, setPendingManagedLocalMessage] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const dockTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const sentConfirmationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const autoResizeDockTextarea = useCallback((el: HTMLTextAreaElement) => {
@@ -162,8 +167,8 @@ export function SessionChat({
     setDraft(nextDraft);
     if (!nextDraft.trim()) {
       setBlockedKeyboardSubmit(false);
-      if (dockTextareaRef.current) {
-        dockTextareaRef.current.style.height = "auto";
+      if (composerTextareaRef.current) {
+        composerTextareaRef.current.style.height = "auto";
       }
     }
   }, []);
@@ -393,10 +398,66 @@ export function SessionChat({
     }
   };
 
+  const canRequestDraftReply =
+    isManagedLocal &&
+    !isComposerDisabled &&
+    !draft.trim() &&
+    !isSubmitting &&
+    !isStreaming &&
+    !isDraftingReply &&
+    !lockInfo?.locked;
+
+  const handleDraftReply = useCallback(async () => {
+    if (!canRequestDraftReply) return;
+
+    setIsDraftingReply(true);
+    setError(null);
+    try {
+      const response = await fetchWithRefresh(buildUrl(`/sessions/${session.id}/draft-reply`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ max_chars: 1200 }),
+        credentials: "include",
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        const detail =
+          typeof errorData?.detail === "string"
+            ? errorData.detail
+            : typeof errorData?.error === "string"
+              ? errorData.error
+              : `Request failed: ${response.status}`;
+        throw new Error(detail);
+      }
+
+      const result = (await response.json()) as SessionDraftReplyResponse;
+      const draftText = String(result.draft_text ?? "").trim();
+      if (!draftText) {
+        throw new Error("No draft suggestion available yet.");
+      }
+
+      setDraft(draftText);
+      setBlockedKeyboardSubmit(false);
+      window.requestAnimationFrame(() => {
+        composerTextareaRef.current?.focus();
+        if (composerTextareaRef.current) {
+          autoResizeDockTextarea(composerTextareaRef.current);
+        }
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Draft reply is unavailable");
+    } finally {
+      setIsDraftingReply(false);
+    }
+  }, [autoResizeDockTextarea, canRequestDraftReply, session.id]);
+
   const statusBadge = isComposerDisabled
     ? { variant: "warning" as const, label: "Unavailable" }
     : isStreaming
     ? { variant: "success" as const, label: "Streaming" }
+    : isDraftingReply
+      ? { variant: "warning" as const, label: "Drafting" }
     : isSubmitting
       ? { variant: "warning" as const, label: "Sending" }
       : lockInfo?.locked
@@ -569,6 +630,23 @@ export function SessionChat({
             ) : isDock ? null : (
               <div className="session-chat-confirmation session-chat-confirmation--spacer" aria-hidden="true" />
             )}
+            {isManagedLocal ? (
+              <div className="session-chat-draft-row">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleDraftReply}
+                  disabled={!canRequestDraftReply}
+                  title={draft.trim() ? "Draft reply is available when the composer is empty" : undefined}
+                >
+                  {isDraftingReply ? "Drafting" : "Draft reply"}
+                </Button>
+                <span className="session-chat-draft-row__copy">
+                  Review the suggestion before sending.
+                </span>
+              </div>
+            ) : null}
             {isManagedLocal && pendingManagedLocalMessage ? (
               <div className="session-chat-pending-message">
                 <span className="session-chat-pending-message__text">{pendingManagedLocalMessage}</span>
@@ -578,7 +656,7 @@ export function SessionChat({
             {isDock ? (
               <div className="session-chat-composer-row">
                 <textarea
-                  ref={dockTextareaRef}
+                  ref={composerTextareaRef}
                   value={draft}
                   onChange={(e) => {
                     handleDraftChange(e.target.value);
@@ -586,7 +664,7 @@ export function SessionChat({
                   }}
                   onKeyDown={handleKeyDown}
                   placeholder={composerPlaceholder || "Type a message..."}
-                  disabled={isSubmitting || lockInfo?.locked}
+                  disabled={isSubmitting || isDraftingReply || lockInfo?.locked}
                   rows={1}
                 />
                 {isManagedLocal && sentConfirmation ? (
@@ -601,7 +679,7 @@ export function SessionChat({
                     type="submit"
                     variant="primary"
                     size="sm"
-                    disabled={!draft.trim() || isSubmitting || lockInfo?.locked}
+                    disabled={!draft.trim() || isSubmitting || isDraftingReply || lockInfo?.locked}
                   >
                     {submitLabel}
                   </Button>
@@ -610,11 +688,12 @@ export function SessionChat({
             ) : (
               <>
                 <textarea
+                  ref={composerTextareaRef}
                   value={draft}
                   onChange={(e) => handleDraftChange(e.target.value)}
                   onKeyDown={handleKeyDown}
                   placeholder={composerPlaceholder || "Type a message..."}
-                  disabled={isComposerDisabled || isSubmitting || lockInfo?.locked}
+                  disabled={isComposerDisabled || isSubmitting || isDraftingReply || lockInfo?.locked}
                   rows={2}
                   title={composerDisabledReason ?? undefined}
                 />
@@ -628,7 +707,7 @@ export function SessionChat({
                       type="submit"
                       variant="primary"
                       size="sm"
-                      disabled={isComposerDisabled || !draft.trim() || isSubmitting || lockInfo?.locked}
+                      disabled={isComposerDisabled || !draft.trim() || isSubmitting || isDraftingReply || lockInfo?.locked}
                       title={composerDisabledReason ?? undefined}
                     >
                       {submitLabel}
