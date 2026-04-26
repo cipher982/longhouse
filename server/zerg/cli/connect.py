@@ -532,7 +532,7 @@ def connect(
 
     Runtime behavior:
     - Uses OS file watching for near-real-time sync.
-    - Runs a periodic fallback scan (default: 300s, configurable via --interval).
+    - Runs a periodic reconciliation scan (default: 300s, configurable via --interval).
 
     Service management:
         --install    Install the background machine agent + Claude Code hooks

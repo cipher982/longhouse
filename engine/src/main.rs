@@ -143,7 +143,7 @@ enum Commands {
         #[arg(long, default_value = "500")]
         flush_ms: u64,
 
-        /// Fallback full scan interval in seconds
+        /// Reconciliation full scan interval in seconds
         #[arg(long, default_value = "300")]
         fallback_scan_secs: u64,
 

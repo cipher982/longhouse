@@ -1620,7 +1620,7 @@ pub(crate) async fn full_scan_with_batch_bytes_and_parse_tracker(
                 let byte_count = prepared.new_offset.saturating_sub(prepared.offset);
                 let outcome = ship_prepared_file(prepared, client, conn, tracker, None).await?;
                 log_slow_file_processing(
-                    "fallback_scan",
+                    "reconciliation_scan",
                     path,
                     provider_name,
                     event_count,

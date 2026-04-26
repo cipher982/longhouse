@@ -5,8 +5,9 @@
 //! allowing hooks to run as `async: false` without risking stalls.
 //!
 //! This module drains the outbox on a 1-second tick: reads all ready files,
-//! coalesces by session_id (latest state wins), POSTs to `/api/agents/presence`,
-//! and deletes files on success. Files are kept on failure and retried next tick.
+//! coalesces by session_id (latest state wins), returns local phase signals for
+//! transcript catch-up, POSTs to `/api/agents/presence`, and deletes files on
+//! success. Files are kept on failure and retried next tick.
 //! Files older than `STALE_SECS` are deleted without posting (presence is ephemeral).
 
 use std::collections::HashMap;
@@ -87,8 +88,10 @@ pub async fn drain_outbox_with_local_state(
     (result.sent, result.kept)
 }
 
-/// Drain outbox files and return the successfully sent phase signals so the
-/// daemon can schedule transcript catch-up work for the same sessions.
+/// Drain outbox files and return locally valid phase signals so the daemon can
+/// schedule transcript catch-up work for the same sessions. Signals are returned
+/// even when the presence POST fails because transcript shipping is local truth
+/// and should not depend on the runtime accepting a presence update first.
 pub async fn drain_outbox_with_local_state_result(
     dir: &Path,
     client: &ShipperClient,
@@ -220,15 +223,26 @@ async fn drain_outbox_impl(
             payload,
             observed_at,
         } = pending;
+        let provider = normalize_provider(payload.provider.as_deref()).to_string();
+        let session_id = payload.session_id.trim().to_string();
+        let phase = payload.state.trim().to_string();
+        let transcript_path = normalize_transcript_path(payload.transcript_path.as_deref());
+
+        result.signals.push(DrainedPresenceSignal {
+            session_id: session_id.clone(),
+            provider: provider.clone(),
+            phase: phase.clone(),
+            observed_at: observed_at.clone(),
+            transcript_path,
+        });
 
         if let Some(conn) = local_phase_conn.as_ref() {
-            let provider = normalize_provider(payload.provider.as_deref());
             let signal = SessionPhaseSignal {
-                session_id: payload.session_id.trim().to_string(),
-                provider: provider.to_string(),
-                phase: payload.state.trim().to_string(),
+                session_id: session_id.clone(),
+                provider: provider.clone(),
+                phase: phase.clone(),
                 tool_name: payload.tool_name.clone(),
-                source: PhaseSource::for_hook_provider(provider)
+                source: PhaseSource::for_hook_provider(&provider)
                     .as_str()
                     .to_string(),
                 observed_at,
@@ -260,13 +274,6 @@ async fn drain_outbox_impl(
             Ok(_) => {
                 let _ = std::fs::remove_file(&path);
                 result.sent += 1;
-                result.signals.push(DrainedPresenceSignal {
-                    session_id: payload.session_id.trim().to_string(),
-                    provider: normalize_provider(payload.provider.as_deref()).to_string(),
-                    phase: payload.state.trim().to_string(),
-                    observed_at,
-                    transcript_path: normalize_transcript_path(payload.transcript_path.as_deref()),
-                });
             }
             Err(_) => {
                 // Keep for retry next tick.
@@ -620,6 +627,45 @@ mod tests {
         assert_eq!(sent, 0);
         assert_eq!(kept, 1, "file must be kept when POST fails");
         assert!(f.exists(), "file must not be deleted on network error");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_drain_outbox_result_returns_phase_signal_when_post_fails() {
+        use crate::config::ShipperConfig;
+        use crate::pipeline::compressor::CompressionAlgo;
+        use crate::shipping::client::ShipperClient;
+
+        let (addr, _paths, server) = spawn_http_server(503).await;
+        let dir = tempfile::tempdir().unwrap();
+        let db = tempfile::NamedTempFile::new().unwrap();
+
+        let f = write_hook_style(dir.path(), "LOCAL123", "sess-local", "thinking");
+
+        let url = format!("http://{}", addr);
+        let cfg = ShipperConfig::default().with_overrides(
+            Some(&url),
+            None,
+            Some(db.path()),
+            None,
+            None,
+            None,
+        );
+        let client = ShipperClient::with_compression(&cfg, CompressionAlgo::Gzip).unwrap();
+
+        let result =
+            drain_outbox_with_local_state_result(dir.path(), &client, Some(db.path())).await;
+
+        assert_eq!(result.sent, 0);
+        assert_eq!(result.kept, 1);
+        assert_eq!(result.signals.len(), 1);
+        assert_eq!(result.signals[0].session_id, "sess-local");
+        assert_eq!(result.signals[0].phase, "thinking");
+        assert!(
+            f.exists(),
+            "file must still be retried for presence delivery"
+        );
+
+        server.abort();
     }
 
     #[tokio::test(flavor = "current_thread")]
