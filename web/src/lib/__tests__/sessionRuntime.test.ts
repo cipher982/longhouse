@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { TimelineRuntimeSession } from "../sessionRuntime";
 import { resolveSessionRuntimeState } from "../sessionRuntime";
-import { getRuntimeDisplayCopy } from "../sessionUtils";
+import { getRuntimeDisplayCopy, getRuntimeOutcomeLabel } from "../sessionUtils";
 
 function makeSession(overrides: Partial<TimelineRuntimeSession> = {}): TimelineRuntimeSession {
   return {
@@ -79,6 +79,24 @@ describe("resolveSessionRuntimeState", () => {
       headline: "Working",
       detail: "Running Shell",
     });
+  });
+
+  it("uses Active for unmanaged outcome labels when fresh runtime evidence beats stale end time", () => {
+    const runtime = resolveSessionRuntimeState(
+      makeSession({
+        ended_at: "2026-03-21T12:00:00Z",
+        status: "working",
+        confidence: "live",
+        runtime_source: "semantic",
+        presence_state: "running",
+        presence_tool: "bash",
+        display_phase: "Running bash",
+      }),
+    );
+
+    expect(getRuntimeOutcomeLabel(runtime, { endedAt: "2026-03-21T12:00:00Z" })).toBe(
+      "Active",
+    );
   });
 
   it("collapses managed-local blocked state into Waiting for you with approval detail", () => {
