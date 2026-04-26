@@ -73,7 +73,8 @@ def test_beacon_drops_stale_and_negative():
     assert resp.json()["dropped_range"] == 1
 
 
-def test_beacon_rate_limited_per_ip():
+def test_beacon_rate_limited_per_ip(monkeypatch):
+    monkeypatch.setattr(telemetry_mod.time, "monotonic", lambda: 1000.0)
     c = _client()
     # Burst capacity is 60; request the 61st should 429.
     for _ in range(60):
