@@ -105,6 +105,21 @@ def _truth_tier(
     return "none"
 
 
+def _has_renderable_signal(
+    *,
+    truth_tier: str,
+    runtime_source: str | None,
+    presence_state: str | None,
+    heuristic_active: bool,
+    last_live_at: datetime | None,
+) -> bool:
+    if presence_state is not None or heuristic_active or last_live_at is not None:
+        return True
+    if truth_tier in {"fresh", "managed-local", "inferred"}:
+        return True
+    return truth_tier == "stale" and runtime_source != "fallback"
+
+
 def _title_case_words(value: str) -> str:
     words = [word for word in value.split() if word]
     out: list[str] = []
@@ -272,7 +287,13 @@ def build_session_runtime_display(
         )
         detail = None
 
-    has_signal = truth_tier != "none" or presence_state is not None or status is not None or runtime_view.last_live_at is not None
+    has_signal = _has_renderable_signal(
+        truth_tier=truth_tier,
+        runtime_source=runtime_source,
+        presence_state=presence_state,
+        heuristic_active=heuristic_active,
+        last_live_at=runtime_view.last_live_at,
+    )
 
     return SessionRuntimeDisplay(
         truth_tier=truth_tier,

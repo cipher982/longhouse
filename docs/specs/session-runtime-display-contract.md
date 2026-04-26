@@ -66,6 +66,8 @@ debugging, but client UI should prefer `runtime_display`.
   compatibility code, not a second source of truth.
 - `managed`, `live`, `reattachable`, `running`, and `needs_attention` remain
   separate axes. Do not collapse them into a single status string.
+- `has_signal=false` means the client should not spend scarce UI space on a
+  runtime row. Synthetic stale fallback states are intentionally quiet.
 - If web and iOS need a new runtime label or state, add it to
   `runtime_display` first.
 
