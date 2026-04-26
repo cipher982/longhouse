@@ -41,6 +41,7 @@ export interface AgentSession {
   display_phase?: string | null;
   active_tool?: string | null;
   confidence?: string | null;
+  runtime_display?: SessionRuntimeDisplay | null;
   user_messages: number;
   assistant_messages: number;
   tool_calls: number;
@@ -66,6 +67,31 @@ export interface AgentSession {
   user_state?: string;
 }
 
+export interface SessionRuntimeDisplay {
+  truth_tier: "none" | "stale" | "inferred" | "fresh" | "managed-local" | (string & {});
+  state: PresenceState | null;
+  tone:
+    | "inactive"
+    | "thinking"
+    | "running"
+    | "needs-user"
+    | "blocked"
+    | "idle"
+    | "inferred"
+    | (string & {});
+  headline: string;
+  detail: string | null;
+  phase_label: string;
+  compact_tool_label: string | null;
+  is_live: boolean;
+  is_executing: boolean;
+  needs_attention: boolean;
+  is_idle: boolean;
+  heuristic_active: boolean;
+  is_managed_local_truth: boolean;
+  has_signal: boolean;
+}
+
 export interface SessionControl {
   managed_transport: ManagedSessionTransport | null;
   source_runner_id: number | null;
@@ -77,6 +103,7 @@ export interface SessionCapabilities {
   live_control_available: boolean;
   host_reattach_available: boolean;
   reply_to_live_session_available: boolean;
+  can_queue_next_input?: boolean;
 }
 
 export interface AgentSessionsListResponse {

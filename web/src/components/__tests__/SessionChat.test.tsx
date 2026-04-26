@@ -307,7 +307,10 @@ describe("SessionChat", () => {
 
   it("blocks duplicate input until a managed-local ack arrives, then refreshes all workspace caches", async () => {
     const user = userEvent.setup();
-    const deferred = createDeferredResponse();
+    let resolveInput: ((value: unknown) => void) | null = null;
+    const inputDeferred = new Promise((resolve) => {
+      resolveInput = resolve;
+    });
     const queryClient = new QueryClient({
       defaultOptions: {
         queries: { retry: false },
@@ -316,7 +319,7 @@ describe("SessionChat", () => {
     const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
     let lockReads = 0;
 
-    requestMock.mockImplementation((path: string) => {
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
       if (String(path).endsWith("/lock")) {
         lockReads += 1;
         return Promise.resolve(
@@ -330,14 +333,10 @@ describe("SessionChat", () => {
               },
         );
       }
-      return Promise.reject(new Error(`Unexpected request: ${path}`));
-    });
-
-    fetchWithRefreshMock.mockImplementation((url: string) => {
-      if (url.endsWith("/send-live")) {
-        return deferred.promise;
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        return inputDeferred;
       }
-      return Promise.reject(new Error(`Unexpected request: ${url}`));
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
     });
 
     renderSessionChat({ chatMode: "managed_local" }, { queryClient });
@@ -345,25 +344,27 @@ describe("SessionChat", () => {
     await user.type(screen.getByRole("textbox"), "Continue locally");
     await user.click(screen.getByRole("button", { name: /send/i }));
 
-    expect(getLastRequestBody("/send-live")).toEqual({
-      message: "Continue locally",
+    const inputCall = requestMock.mock.calls.find(([path, init]) =>
+      String(path).endsWith("/input") && (init as RequestInit | undefined)?.method === "POST",
+    );
+    expect(inputCall).toBeTruthy();
+    expect(JSON.parse(String((inputCall?.[1] as RequestInit).body ?? "{}"))).toEqual({
+      text: "Continue locally",
+      intent: "auto",
     });
     await waitFor(() => {
       expect(screen.getByRole("textbox")).toBeDisabled();
       expect(screen.getByRole("button", { name: /send/i })).toBeDisabled();
       expect(screen.getByText("Sending")).toBeInTheDocument();
-      // Pending pill shows the message text while in-flight
       expect(screen.getByText("Continue locally")).toBeInTheDocument();
     });
 
-    deferred.resolve(
-      jsonResponse({
-        accepted: true,
-        session_id: "sess-1",
-        request_id: "req-1234",
-        dispatch_ms: 12.5,
-      }),
-    );
+    resolveInput?.({
+      outcome: "sent",
+      input_id: 1,
+      intent: "auto",
+      queued: [],
+    });
 
     await waitFor(() => expect(invalidateSpy).toHaveBeenCalledTimes(8));
     await waitFor(() => {
@@ -375,20 +376,32 @@ describe("SessionChat", () => {
     expect(screen.queryByText(/remaining/i)).not.toBeInTheDocument();
     await user.type(screen.getByRole("textbox"), "Next follow-up{enter}");
     expect(screen.getByRole("textbox")).toHaveValue("Next follow-up");
-    expect(getRequestCallCount("/send-live")).toBe(1);
+    const inputPostCount = requestMock.mock.calls.filter(
+      ([path, init]) =>
+        String(path).endsWith("/input") && (init as RequestInit | undefined)?.method === "POST",
+    ).length;
+    expect(inputPostCount).toBe(1);
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["session-lock", "sess-1"] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["agent-session-workspace", "sess-1"] });
   });
 
   it("requires an explicit click for the first message when configured", async () => {
     const user = userEvent.setup();
-    const deferred = createDeferredResponse();
-
-    fetchWithRefreshMock.mockImplementation((url: string) => {
-      if (url.endsWith("/send-live")) {
-        return deferred.promise;
+    let inputCalls = 0;
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
       }
-      return Promise.reject(new Error(`Unexpected request: ${url}`));
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        inputCalls += 1;
+        return Promise.resolve({
+          outcome: "sent",
+          input_id: inputCalls,
+          intent: "auto",
+          queued: [],
+        });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
     });
 
     renderSessionChat({
@@ -403,10 +416,127 @@ describe("SessionChat", () => {
     expect(screen.getByTestId("session-chat-explicit-submit-hint")).toHaveTextContent(
       "Click send to confirm.",
     );
-    expect(getRequestCallCount("/send-live")).toBe(0);
+    expect(inputCalls).toBe(0);
 
     await user.click(screen.getByRole("button", { name: /send/i }));
 
-    await waitFor(() => expect(getRequestCallCount("/send-live")).toBe(1));
+    await waitFor(() => expect(inputCalls).toBe(1));
+  });
+
+  it("queues an auto send when the session is locked and capability is on", async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData<SessionLockInfo | null>(["session-lock", "sess-1"], {
+      locked: true,
+      holder: null,
+      time_remaining_seconds: null,
+      fork_available: true,
+    });
+
+    let inputsReads = 0;
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: true, fork_available: true });
+      }
+      if (String(path).endsWith("/inputs") && !init) {
+        inputsReads += 1;
+        return Promise.resolve(
+          inputsReads === 1
+            ? []
+            : [
+                {
+                  id: 42,
+                  text: "wait for it",
+                  intent: "auto",
+                  status: "queued",
+                  created_at: null,
+                },
+              ],
+        );
+      }
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        return Promise.resolve({
+          outcome: "queued",
+          input_id: 42,
+          intent: "auto",
+          queued: [
+            {
+              id: 42,
+              text: "wait for it",
+              intent: "auto",
+              status: "queued",
+              created_at: null,
+            },
+          ],
+        });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat(
+      { chatMode: "managed_local", canQueueNextInput: true },
+      { queryClient },
+    );
+
+    // Lock notice adapts to the queue-next affordance.
+    expect(
+      screen.getByText(/queue and auto-send at the next turn boundary/i),
+    ).toBeInTheDocument();
+
+    await user.type(screen.getByRole("textbox"), "wait for it");
+    // Button says "Queue next" while working with queue capability, and is
+    // enabled once a draft exists.
+    const queueButton = await screen.findByRole("button", { name: /queue next/i });
+    expect(queueButton).toBeEnabled();
+    await user.click(queueButton);
+
+    const chip = await screen.findByTestId("session-chat-queued");
+    expect(chip).toHaveTextContent("wait for it");
+    expect(chip).toHaveTextContent(/queued/i);
+    expect(screen.getByRole("button", { name: /cancel queued message/i })).toBeEnabled();
+  });
+
+  it("does not silently queue when Enter is pressed while working", async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData<SessionLockInfo | null>(["session-lock", "sess-1"], {
+      locked: true,
+      holder: null,
+      time_remaining_seconds: null,
+      fork_available: true,
+    });
+
+    let postCalls = 0;
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: true, fork_available: true });
+      }
+      if (String(path).endsWith("/inputs") && !init) {
+        return Promise.resolve([]);
+      }
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        postCalls += 1;
+        return Promise.resolve({
+          outcome: "queued",
+          input_id: postCalls,
+          intent: "auto",
+          queued: [],
+        });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat(
+      { chatMode: "managed_local", canQueueNextInput: true },
+      { queryClient },
+    );
+
+    await user.type(screen.getByRole("textbox"), "do not silently queue{enter}");
+    expect(postCalls).toBe(0);
+    expect(screen.getByRole("textbox")).toHaveValue("do not silently queue");
   });
 });

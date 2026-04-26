@@ -326,6 +326,9 @@ function SessionDetailWorkspaceRoute({
                   composerDisabledReason={interaction.composerDisabledReason}
                   managedLaunchSuggestion={null}
                   submitLabel={interaction.submitLabel}
+                  canQueueNextInput={Boolean(
+                    displaySession.capabilities?.can_queue_next_input,
+                  )}
                   onSessionChanged={(nextSessionId) => {
                     if (!nextSessionId || nextSessionId === session.id) return;
                     navigate(`/timeline/${nextSessionId}`, {

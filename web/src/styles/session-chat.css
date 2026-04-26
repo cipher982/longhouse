@@ -237,6 +237,81 @@
   line-height: 1.4;
 }
 
+.session-chat-queued {
+  padding: var(--space-2) var(--space-3);
+  background: rgba(96, 130, 200, 0.12);
+  border-bottom: 1px solid rgba(96, 130, 200, 0.28);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--font-size-sm);
+}
+
+.session-chat-queued--failed {
+  background: rgba(196, 80, 64, 0.14);
+  border-bottom-color: rgba(196, 80, 64, 0.32);
+}
+
+.session-chat-queued__label {
+  font-weight: 600;
+  color: rgba(220, 230, 245, 0.95);
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.session-chat-queued__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.session-chat-queued__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  background: rgba(8, 12, 24, 0.28);
+  border-radius: var(--radius-sm);
+}
+
+.session-chat-queued__text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(225, 235, 248, 0.92);
+}
+
+.session-chat-queued__status {
+  font-size: var(--font-size-xs);
+  color: rgba(200, 210, 230, 0.75);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.session-chat-queued__status--failed {
+  color: rgba(240, 170, 150, 0.95);
+  text-transform: none;
+}
+
+.session-chat-queued__cancel {
+  background: transparent;
+  border: 1px solid rgba(200, 210, 230, 0.3);
+  border-radius: var(--radius-sm);
+  color: rgba(225, 235, 248, 0.85);
+  padding: 2px var(--space-2);
+  cursor: pointer;
+  font-size: var(--font-size-xs);
+}
+
+.session-chat-queued__cancel:hover {
+  border-color: rgba(225, 235, 248, 0.6);
+}
+
 .session-chat-messages {
   flex: 1;
   overflow-y: auto;
@@ -401,12 +476,6 @@
   justify-content: flex-end;
   align-items: center;
   gap: var(--space-2);
-}
-
-.session-chat-disabled-reason {
-  font-size: var(--font-size-xs);
-  line-height: 1.45;
-  color: rgba(181, 164, 142, 0.78);
 }
 
 .session-chat-composer-unavailable {
