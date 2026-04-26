@@ -153,6 +153,19 @@ def test_selfcheck_reports_all_hops_dead_when_no_observations():
         assert hop in body["hops"]
         assert body["hops"][hop]["last_obs_age_s"] is None
         assert body["hops"][hop]["alive"] is False
+    # Required hops (ingest, sse) must be alive. None = not alive -> ok false.
+    assert body["ok"] is False
+
+
+def test_selfcheck_ok_when_required_alive_even_if_render_absent():
+    c = _client()
+    c.post("/telemetry/canary-observation", json={"canary_seq": 1, "hop": "ingest", "latency_ms": 25})
+    c.post("/telemetry/canary-observation", json={"canary_seq": 1, "hop": "sse", "latency_ms": 150})
+    body = c.get("/telemetry/selfcheck").json()
+    # render never observed but it's optional
+    assert body["hops"]["render"]["alive"] is False
+    assert body["hops"]["render"]["required"] is False
+    assert body["ok"] is True
 
 
 def test_selfcheck_reports_recent_hops_alive():

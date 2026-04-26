@@ -68,6 +68,31 @@ def test_percentile_from_histogram_empty():
     assert sla.percentile_from_histogram([(0.1, 0.0), (float("inf"), 0.0)], 0.5) is None
 
 
+def test_delta_buckets_subtracts_cumulative():
+    sla = _load_sla_watch()
+    prev = [(0.1, 5.0), (0.25, 10.0), (0.5, 20.0), (float("inf"), 20.0)]
+    curr = [(0.1, 5.0), (0.25, 15.0), (0.5, 22.0), (float("inf"), 25.0)]
+    delta = sla.delta_buckets(curr, prev)
+    # Per-window counts
+    assert delta == [(0.1, 0.0), (0.25, 5.0), (0.5, 2.0), (float("inf"), 5.0)]
+
+
+def test_delta_buckets_handles_counter_reset():
+    """On process restart, cumulative counts drop. Clamp to 0, not negative."""
+    sla = _load_sla_watch()
+    prev = [(0.1, 100.0), (0.25, 200.0), (float("inf"), 500.0)]
+    curr = [(0.1, 5.0), (0.25, 12.0), (float("inf"), 20.0)]
+    delta = sla.delta_buckets(curr, prev)
+    for le, count in delta:
+        assert count >= 0, f"bucket {le} negative: {count}"
+
+
+def test_delta_buckets_no_previous_returns_current():
+    sla = _load_sla_watch()
+    curr = [(0.1, 5.0), (float("inf"), 20.0)]
+    assert sla.delta_buckets(curr, []) == curr
+
+
 def test_parse_histogram_different_filter_returns_different_buckets():
     sla = _load_sla_watch()
     ingest = sla.parse_histogram_buckets(SAMPLE_METRICS, "canary_latency_seconds", {"hop": "ingest"})

@@ -250,12 +250,21 @@ async def telemetry_selfcheck(window_s: int = 900) -> dict:
     # expectation — not how we read alive/seq.
     _ = window_s
 
+    # `ingest` and `sse` are the load-bearing hops — the producer and
+    # observer scripts must be running for the full pipeline to be
+    # considered healthy. `render` is optional (only web/iOS beacons
+    # populate it today) so a None there is not a breach signal.
+    _REQUIRED_HOPS = {"ingest", "sse"}
+
     hops: dict[str, dict] = {}
     for hop in _CANARY_HOPS:
         age_s = canary_last_obs_age_s(hop)
+        required = hop in _REQUIRED_HOPS
+        alive = age_s is not None and age_s < 120.0
         hops[hop] = {
             "last_obs_age_s": age_s,
-            "alive": age_s is not None and age_s < 120.0,
+            "required": required,
+            "alive": alive,
         }
 
     # Producer and observer must be roughly in lockstep; if one hop is far
@@ -271,7 +280,12 @@ async def telemetry_selfcheck(window_s: int = 900) -> dict:
         ingest_seq = sse_seq = None
         seq_gap = None
 
-    overall_ok = all(h["alive"] for h in hops.values() if h["last_obs_age_s"] is not None) and (seq_gap is None or abs(seq_gap) < 10)
+    # Required hops must be alive; optional hops can be absent. Never-seen
+    # required hops (age None) count as dead so selfcheck can't lie with
+    # "ok" when the producer never started.
+    required_ok = all(h["alive"] for h in hops.values() if h.get("required"))
+    seq_ok = seq_gap is None or abs(seq_gap) < 10
+    overall_ok = required_ok and seq_ok
 
     return {
         "ok": overall_ok,
