@@ -924,6 +924,7 @@ async def _session_workspace_stream(
     session_factory: sessionmaker,
     session_id: UUID,
     skip_initial: bool,
+    last_event_id: int | None = None,
 ):
     """SSE generator that emits workspace_changed when a session's data mutates.
 
@@ -931,6 +932,9 @@ async def _session_workspace_stream(
     instead of waking every SSE subscriber on every write. DB signature is
     still consulted as the source of truth for what changed, avoiding false
     positives from publishes that don't touch workspace-visible state.
+
+    last_event_id: if provided, the subscription starts from ring-buffered
+    events after that seq, letting reconnects catch up without a DB hit.
     """
     from zerg.services.session_pubsub import get_pubsub
     from zerg.services.session_pubsub import topic_session
@@ -950,7 +954,8 @@ async def _session_workspace_stream(
 
     wait_start: float | None = None
     bus = get_pubsub()
-    with bus.subscribe(topic_session(str(session_id))) as subscription:
+    topic = topic_session(str(session_id))
+    with bus.subscribe(topic, since_seq=last_event_id) as subscription:
         while True:
             if await request.is_disconnected():
                 break
@@ -991,8 +996,12 @@ async def _session_workspace_stream(
             if latest_event_ts is not None:
                 ts = latest_event_ts if latest_event_ts.tzinfo else latest_event_ts.replace(tzinfo=timezone.utc)
                 latest_event_ts_ms = int(ts.timestamp() * 1000)
+            # Per-topic pubsub seq becomes the SSE id: frame so EventSource sends
+            # Last-Event-ID on reconnect for replay.
+            current_seq = bus.peek_latest_seq(topic)
             yield {
                 "event": "workspace_changed",
+                "id": str(current_seq) if current_seq else None,
                 "data": json.dumps(
                     {
                         "session_id": str(session_id),
@@ -1001,6 +1010,7 @@ async def _session_workspace_stream(
                         "detect_ms": detect_ms,
                         "latest_event_emitted_at_ms": latest_event_ts_ms,
                         "server_now_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
+                        "pubsub_seq": current_seq,
                     }
                 ),
             }
@@ -1036,11 +1046,22 @@ async def stream_session_workspace(
     session_factory = make_sessionmaker(db.get_bind())
     db.close()
 
+    # SSE Last-Event-ID for replay on reconnect. Header is canonical; ignore
+    # malformed values rather than 400ing the reconnect.
+    last_event_id: int | None = None
+    raw = request.headers.get("Last-Event-ID")
+    if raw:
+        try:
+            last_event_id = max(0, int(raw))
+        except ValueError:
+            last_event_id = None
+
     return EventSourceResponse(
         _session_workspace_stream(
             request,
             session_factory=session_factory,
             session_id=session_id,
             skip_initial=skip_initial,
+            last_event_id=last_event_id,
         ),
     )
