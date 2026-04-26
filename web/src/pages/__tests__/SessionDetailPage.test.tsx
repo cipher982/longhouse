@@ -366,6 +366,7 @@ describe("SessionDetailPage", () => {
       confidence: "live",
       display_phase: "Running Bash",
       last_live_at: "2026-03-22T22:04:30Z",
+      loop_mode: "assist",
       capabilities: makeCapabilities({
         live_control_available: false,
         host_reattach_available: true,
@@ -406,9 +407,18 @@ describe("SessionDetailPage", () => {
     expect(screen.getByTestId("session-debug-attach-command")).toHaveTextContent(
       "codex-bridge attach --session-id session-codex",
     );
+    const continuationNotice = screen.getByTestId(
+      "session-continuation-unavailable",
+    );
+    expect(continuationNotice).toHaveTextContent("Browser control is offline");
+    const loopModeTitle = screen.getByText("Loop Mode");
     expect(
-      screen.getByTestId("session-continuation-unavailable"),
-    ).toHaveTextContent("Browser control is offline");
+      continuationNotice.compareDocumentPosition(loopModeTitle) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      screen.getByText("Stored here. Applies when Longhouse regains control."),
+    ).toBeInTheDocument();
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
       "data-disabled-reason",
       "Longhouse can still see this live Codex session, but it cannot send prompts from the browser right now.",
