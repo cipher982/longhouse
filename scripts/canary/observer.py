@@ -10,7 +10,7 @@ The producer must be running first so a canary session exists and
 
 Usage:
     LONGHOUSE_CANARY_URL=https://david010.longhouse.ai \
-    LONGHOUSE_CANARY_ADMIN_COOKIE='longhouse_session=...' \
+    LONGHOUSE_CANARY_TOKEN=<shared-secret-set-on-server> \
     python3 scripts/canary/observer.py
 
 Exits non-zero if SSE is unreachable for > UNREACHABLE_TIMEOUT_S.
@@ -44,7 +44,7 @@ def _require_env(key: str) -> str:
 def _post_observation(
     client: httpx.Client,
     base_url: str,
-    admin_cookie: str,
+    canary_token: str,
     *,
     canary_seq: int,
     hop: str,
@@ -54,7 +54,7 @@ def _post_observation(
     try:
         resp = client.post(
             f"{base_url}/api/telemetry/canary-observation",
-            headers={"Cookie": admin_cookie, "Content-Type": "application/json"},
+            headers={"X-Canary-Token": canary_token, "Content-Type": "application/json"},
             json={
                 "canary_seq": canary_seq,
                 "hop": hop,
@@ -96,13 +96,13 @@ def _iter_sse(response: httpx.Response):
 
 def main() -> int:
     base_url = _require_env("LONGHOUSE_CANARY_URL").rstrip("/")
-    admin_cookie = _require_env("LONGHOUSE_CANARY_ADMIN_COOKIE")
+    canary_token = _require_env("LONGHOUSE_CANARY_TOKEN")
     if not SESSION_ID_FILE.exists():
         print(f"FATAL: {SESSION_ID_FILE} not found — start the producer first", file=sys.stderr)
         return 2
 
     session_id = SESSION_ID_FILE.read_text().strip()
-    stream_url = f"{base_url}/api/timeline/sessions/{session_id}/workspace/stream"
+    stream_url = f"{base_url}/api/canary/sessions/{session_id}/workspace/stream"
     print(f"canary observer: session_id={session_id} stream={stream_url}")
 
     stopping = False
@@ -126,7 +126,7 @@ def main() -> int:
                     headers={
                         "Accept": "text/event-stream",
                         "Cache-Control": "no-cache",
-                        "Cookie": admin_cookie,
+                        "X-Canary-Token": canary_token,
                     },
                 ) as response:
                     if response.status_code != 200:
@@ -155,7 +155,7 @@ def main() -> int:
                         _post_observation(
                             client,
                             base_url,
-                            admin_cookie,
+                            canary_token,
                             canary_seq=int(canary_seq),
                             hop="sse",
                             surface="observer",

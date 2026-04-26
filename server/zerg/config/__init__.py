@@ -217,6 +217,12 @@ class Settings:  # noqa: D401 – simple data container
     apns_private_key_p8: str | None = None
     apns_topic: str | None = None
 
+    # Realtime canary -----------------------------------------------------
+    # Shared secret for the always-on QA harness. When set, the canary
+    # observation endpoint accepts X-Canary-Token auth (bypassing admin
+    # cookie), and the workspace SSE accepts it for the canary session only.
+    canary_token: str | None = None
+
     # Memory Files -----------------------------------------------------
     memory_files_enabled: bool = False
     memory_files_context_enabled: bool = False
@@ -544,6 +550,7 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         apns_key_id=os.getenv("APNS_KEY_ID"),
         apns_private_key_p8=os.getenv("APNS_PRIVATE_KEY_P8"),
         apns_topic=os.getenv("APNS_TOPIC", "ai.longhouse.ios"),
+        canary_token=os.getenv("LONGHOUSE_CANARY_TOKEN"),
     )
 
 

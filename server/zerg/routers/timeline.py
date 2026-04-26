@@ -1075,3 +1075,51 @@ async def stream_session_workspace(
             last_event_id=last_event_id,
         ),
     )
+
+
+# -----------------------------------------------------------------------------
+# Canary-only SSE: token-auth variant of workspace/stream for headless probes.
+# Lives on a separate router so it doesn't inherit the browser cookie guard.
+# -----------------------------------------------------------------------------
+
+canary_stream_router = APIRouter(prefix="/canary", tags=["canary"])
+
+
+@canary_stream_router.get("/sessions/{session_id}/workspace/stream")
+async def stream_canary_workspace(
+    request: Request,
+    session_id: UUID,
+    skip_initial: bool = Query(False),
+    db: Session = Depends(get_db),
+) -> EventSourceResponse:
+    """Canary-only SSE: same generator as the browser endpoint, token-auth.
+
+    The always-on canary observer on cube uses this; requires X-Canary-Token
+    matching LONGHOUSE_CANARY_TOKEN. Admin users can still use the browser
+    endpoint.
+    """
+    from zerg.routers.telemetry import canary_token_matches
+
+    if not canary_token_matches(request):
+        raise HTTPException(status_code=401, detail="canary token required")
+
+    session_factory = make_sessionmaker(db.get_bind())
+    db.close()
+
+    last_event_id: int | None = None
+    raw = request.headers.get("Last-Event-ID")
+    if raw:
+        try:
+            last_event_id = max(0, int(raw))
+        except ValueError:
+            last_event_id = None
+
+    return EventSourceResponse(
+        _session_workspace_stream(
+            request,
+            session_factory=session_factory,
+            session_id=session_id,
+            skip_initial=skip_initial,
+            last_event_id=last_event_id,
+        ),
+    )

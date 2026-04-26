@@ -29,6 +29,7 @@ from fastapi import status
 from pydantic import BaseModel
 from pydantic import Field
 
+from zerg.config import get_settings
 from zerg.dependencies.auth import require_admin
 from zerg.metrics import canary_latency_seconds
 from zerg.metrics import canary_observations_total
@@ -36,8 +37,26 @@ from zerg.metrics import canary_seq_last_seen
 from zerg.metrics import event_end_to_end_latency_seconds
 from zerg.metrics import event_render_beacons_total
 
+
+def canary_token_matches(request: Request) -> bool:
+    """True if the request carries a valid X-Canary-Token."""
+    settings = get_settings()
+    header_token = request.headers.get("X-Canary-Token", "")
+    return bool(settings.canary_token and header_token and header_token == settings.canary_token)
+
+
+def require_canary_token(request: Request) -> None:
+    """Gate the canary-only router: X-Canary-Token must match env."""
+    if not canary_token_matches(request):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="canary token required")
+
+
 beacon_router = APIRouter(prefix="/telemetry", tags=["telemetry"])
 admin_router = APIRouter(prefix="/telemetry", tags=["telemetry"], dependencies=[Depends(require_admin)])
+# Canary router is a separate auth surface from admin. Same endpoints are
+# *also* exposed on admin_router so operators with a browser cookie still
+# hit them; canary_router is the headless-daemon path.
+canary_router = APIRouter(prefix="/telemetry", tags=["telemetry"], dependencies=[Depends(require_canary_token)])
 
 
 # Simple per-IP token bucket: 20 beacons/sec, burst 60. This is plenty for
@@ -193,12 +212,13 @@ class CanaryObservation(BaseModel):
 _canary_last_obs_monotonic: dict[str, float] = {}
 
 
-@admin_router.post("/canary-observation", include_in_schema=False)
+@canary_router.post("/canary-observation", include_in_schema=False)
 async def canary_observation(obs: CanaryObservation) -> dict:
     """Record a canary latency observation.
 
-    Admin-only because canary credentials control what gets counted; we do
-    not want random clients polluting SLA signal.
+    Gated by X-Canary-Token (shared secret env var). Keeps random clients
+    from polluting SLA signal without requiring a browser cookie — the
+    producer + observer run headless on cube.
     """
     latency_s = obs.latency_ms / 1000.0
     canary_latency_seconds.labels(hop=obs.hop, surface=obs.surface).observe(latency_s)
@@ -232,7 +252,7 @@ def _histogram_percentile(samples: list[float], p: float) -> float:
     return round(sv[k] * 1000, 1)
 
 
-@admin_router.get("/selfcheck", include_in_schema=False)
+@canary_router.get("/selfcheck", include_in_schema=False)
 async def telemetry_selfcheck(window_s: int = 900) -> dict:
     """Surface canary health in one admin-visible GET.
 

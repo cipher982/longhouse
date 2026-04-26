@@ -9,6 +9,8 @@ from zerg.dependencies.auth import require_admin
 from zerg.routers import telemetry as telemetry_mod
 from zerg.routers.telemetry import admin_router
 from zerg.routers.telemetry import beacon_router
+from zerg.routers.telemetry import canary_router
+from zerg.routers.telemetry import require_canary_token
 
 
 def _client() -> TestClient:
@@ -25,8 +27,10 @@ def _client() -> TestClient:
         pass
     app = FastAPI()
     app.dependency_overrides[require_admin] = lambda: None
+    app.dependency_overrides[require_canary_token] = lambda: None
     app.include_router(beacon_router)
     app.include_router(admin_router)
+    app.include_router(canary_router)
     return TestClient(app)
 
 
@@ -106,6 +110,37 @@ def test_beacon_rate_limit_refills_over_time(monkeypatch):
     for _ in range(20):
         assert c.post("/telemetry/client-render", json=_beacon()).status_code == 200
     assert c.post("/telemetry/client-render", json=_beacon()).status_code == 429
+
+
+def test_canary_token_auth_required_when_no_override(monkeypatch):
+    """Without the dependency override, real token auth kicks in."""
+    app = FastAPI()
+    app.include_router(canary_router)
+    client = TestClient(app)
+
+    # No env -> no token set -> anything rejected
+    monkeypatch.delenv("LONGHOUSE_CANARY_TOKEN", raising=False)
+    r = client.post(
+        "/telemetry/canary-observation",
+        json={"canary_seq": 1, "hop": "sse", "latency_ms": 50},
+    )
+    assert r.status_code == 401
+
+    # Set env, retry with matching header -> 200
+    monkeypatch.setenv("LONGHOUSE_CANARY_TOKEN", "test-secret-123")
+    r = client.post(
+        "/telemetry/canary-observation",
+        headers={"X-Canary-Token": "test-secret-123"},
+        json={"canary_seq": 1, "hop": "sse", "latency_ms": 50},
+    )
+    assert r.status_code == 200
+    # Wrong token -> 401
+    r = client.post(
+        "/telemetry/canary-observation",
+        headers={"X-Canary-Token": "wrong"},
+        json={"canary_seq": 1, "hop": "sse", "latency_ms": 50},
+    )
+    assert r.status_code == 401
 
 
 def test_canary_observation_endpoint_records():
