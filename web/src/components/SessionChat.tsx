@@ -404,8 +404,7 @@ export function SessionChat({
     !draft.trim() &&
     !isSubmitting &&
     !isStreaming &&
-    !isDraftingReply &&
-    !lockInfo?.locked;
+    !isDraftingReply;
 
   const handleDraftReply = useCallback(async () => {
     if (!canRequestDraftReply) return;
