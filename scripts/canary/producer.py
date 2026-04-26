@@ -152,8 +152,33 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _stop)
 
     with httpx.Client(http2=True) as client:
-        # Bootstrap: binding_signal so the session exists.
+        # Bootstrap: create an AgentSession row (runtime events alone don't
+        # create one, so the SSE workspace stream would 404 with
+        # session_not_found). Then a binding_signal so runtime state exists.
         now = datetime.now(timezone.utc)
+        ingest_payload = {
+            "id": session_id,
+            "provider": "canary",
+            "environment": "production",
+            "project": "canary",
+            "device_id": machine_name,
+            "device_name": machine_name,
+            "started_at": now.isoformat().replace("+00:00", "Z"),
+            "events": [],
+        }
+        try:
+            resp = client.post(
+                f"{base_url}/api/agents/ingest",
+                headers={"X-Agents-Token": agents_token, "Content-Type": "application/json"},
+                json=ingest_payload,
+                timeout=15.0,
+            )
+            if resp.status_code >= 300:
+                print(f"session bootstrap failed {resp.status_code}: {resp.text[:500]}", file=sys.stderr)
+                # Non-fatal: session may already exist from prior run.
+        except Exception as exc:
+            print(f"session bootstrap network error: {exc}", file=sys.stderr)
+
         bootstrap = {"events": [_binding_event(session_id, machine_name, now)]}
         try:
             resp = client.post(
@@ -163,10 +188,10 @@ def main() -> int:
                 timeout=15.0,
             )
             if resp.status_code >= 300:
-                print(f"bootstrap failed {resp.status_code}: {resp.text[:500]}", file=sys.stderr)
+                print(f"runtime bootstrap failed {resp.status_code}: {resp.text[:500]}", file=sys.stderr)
                 return 3
         except Exception as exc:
-            print(f"bootstrap network error: {exc}", file=sys.stderr)
+            print(f"runtime bootstrap network error: {exc}", file=sys.stderr)
             return 3
 
         while not stopping:
