@@ -453,6 +453,141 @@ def prepare_session_live_activity_pushes(
     return tuple(notifications)
 
 
+async def dispatch_session_presence_pushes(
+    *,
+    session_id: UUID,
+    owner_id: int | None,
+    previous_presence_state: str | None,
+    canonical_presence_state: str | None,
+    tool_name: str | None,
+    occurred_at: datetime,
+    db: Session,
+    ws,
+    dispatch_label_prefix: str,
+) -> None:
+    """Prepare and send all APNs pushes (attention, resolution, widget, live
+    activity) for a single session presence transition.
+
+    Extracted so the managed runtime path (/api/agents/runtime/events/batch)
+    can drive the same lock-screen / widget / Live Activity fan-out as the
+    hook-outbox presence path. Rolls back debounce stamps if APNs rejects.
+    """
+
+    def _prepare(write_db: Session):
+        attention_push = prepare_session_attention_push(
+            write_db,
+            owner_id=owner_id,
+            session_id=session_id,
+            previous_state=previous_presence_state,
+            current_state=canonical_presence_state,
+            occurred_at=occurred_at,
+            current_tool_name=tool_name,
+        )
+        attention_resolution_push = prepare_session_attention_resolution_push(
+            write_db,
+            owner_id=owner_id,
+            session_id=session_id,
+            previous_state=previous_presence_state,
+            current_state=canonical_presence_state,
+            occurred_at=occurred_at,
+        )
+        widget_push = prepare_widget_timeline_push(
+            write_db,
+            owner_id=owner_id,
+            occurred_at=occurred_at,
+        )
+        live_activity_pushes = prepare_session_live_activity_pushes(
+            write_db,
+            owner_id=owner_id,
+            session_id=session_id,
+            current_state=canonical_presence_state,
+            current_tool_name=tool_name,
+            occurred_at=occurred_at,
+        )
+        return attention_push, attention_resolution_push, widget_push, live_activity_pushes
+
+    attention_push, attention_resolution_push, widget_push, live_activity_pushes = await ws.execute_or_direct(
+        _prepare, db, label=f"{dispatch_label_prefix}-prepare"
+    )
+
+    if attention_push is not None:
+        push_sent = False
+        try:
+            push_sent = await send_session_attention_push(attention_push)
+        except Exception:
+            logger.exception("Failed to send APNs attention push for session %s", attention_push.session_id)
+        if not push_sent:
+
+            def _clear_attention(write_db: Session):
+                clear_session_attention_push_stamp(
+                    write_db,
+                    session_id=attention_push.session_id,
+                    state=attention_push.state,
+                    occurred_at=attention_push.occurred_at,
+                )
+
+            await ws.execute_or_direct(_clear_attention, db, label=f"{dispatch_label_prefix}-attention-clear")
+
+    if attention_resolution_push is not None:
+        resolution_accepted = False
+        try:
+            resolution_accepted = await send_session_attention_resolution_push(attention_resolution_push)
+        except Exception:
+            logger.exception("Failed to send APNs resolution push for session %s", attention_resolution_push.session_id)
+        if not resolution_accepted:
+
+            def _clear_resolution(write_db: Session) -> bool:
+                return clear_session_attention_resolution_stamp(
+                    write_db,
+                    session_id=attention_resolution_push.session_id,
+                    state=attention_resolution_push.previous_state,
+                    attention_push_at=attention_resolution_push.attention_push_at,
+                )
+
+            await ws.execute_or_direct(_clear_resolution, db, label=f"{dispatch_label_prefix}-resolution-clear")
+
+    if widget_push is not None:
+        widget_accepted = False
+        try:
+            widget_accepted = await send_widget_timeline_push(widget_push)
+        except Exception:
+            logger.exception("Failed to send APNs widget push for user %s", widget_push.owner_id)
+        if not widget_accepted:
+
+            def _clear_widget(write_db: Session) -> bool:
+                return clear_widget_timeline_push_stamp(
+                    write_db,
+                    owner_id=widget_push.owner_id,
+                    state_hash=widget_push.state_hash,
+                    previous_state_hash=widget_push.previous_state_hash,
+                    previous_push_at=widget_push.previous_push_at,
+                )
+
+            await ws.execute_or_direct(_clear_widget, db, label=f"{dispatch_label_prefix}-widget-clear")
+
+    for live_activity_push in live_activity_pushes:
+        accepted = False
+        try:
+            accepted = await send_session_live_activity_push(live_activity_push)
+        except Exception:
+            logger.exception(
+                "Failed to send APNs Live Activity push for session %s",
+                live_activity_push.session_id,
+            )
+        if not accepted:
+
+            def _clear_live(write_db: Session, push=live_activity_push) -> bool:
+                return clear_live_activity_push_stamp(
+                    write_db,
+                    registration_id=push.registration_id,
+                    state_hash=push.state_hash,
+                    previous_state_hash=push.previous_state_hash,
+                    previous_push_at=push.previous_push_at,
+                )
+
+            await ws.execute_or_direct(_clear_live, db, label=f"{dispatch_label_prefix}-live-clear")
+
+
 async def send_session_attention_push(notification: SessionAttentionPush) -> bool:
     settings = get_settings()
     if settings.testing or not settings.apns_enabled:
