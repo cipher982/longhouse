@@ -46,6 +46,21 @@ struct PendingPresenceFile {
     observed_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DrainedPresenceSignal {
+    pub session_id: String,
+    pub provider: String,
+    pub phase: String,
+    pub observed_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Default)]
+pub struct OutboxDrainResult {
+    pub sent: usize,
+    pub kept: usize,
+    pub signals: Vec<DrainedPresenceSignal>,
+}
+
 /// Drain all ready presence events from the outbox directory.
 ///
 /// Returns `(sent, kept)`:
@@ -53,16 +68,29 @@ struct PendingPresenceFile {
 /// - `kept`: number of files kept for retry (POST failed)
 #[cfg_attr(not(test), allow(dead_code))]
 pub async fn drain_outbox(dir: &Path, client: &ShipperClient) -> (usize, usize) {
-    drain_outbox_impl(dir, client, None, false).await
+    let result = drain_outbox_impl(dir, client, None, false).await;
+    (result.sent, result.kept)
 }
 
 /// Same as `drain_outbox`, but also mirrors the latest coalesced phase into
 /// the local agent DB so local-health can render accurate per-session phase.
+#[cfg_attr(not(test), allow(dead_code))]
 pub async fn drain_outbox_with_local_state(
     dir: &Path,
     client: &ShipperClient,
     db_path: Option<&Path>,
 ) -> (usize, usize) {
+    let result = drain_outbox_impl(dir, client, db_path, true).await;
+    (result.sent, result.kept)
+}
+
+/// Drain outbox files and return the successfully sent phase signals so the
+/// daemon can schedule transcript catch-up work for the same sessions.
+pub async fn drain_outbox_with_local_state_result(
+    dir: &Path,
+    client: &ShipperClient,
+    db_path: Option<&Path>,
+) -> OutboxDrainResult {
     drain_outbox_impl(dir, client, db_path, true).await
 }
 
@@ -71,11 +99,11 @@ async fn drain_outbox_impl(
     client: &ShipperClient,
     db_path: Option<&Path>,
     persist_local_state: bool,
-) -> (usize, usize) {
+) -> OutboxDrainResult {
     // Nothing to do if outbox doesn't exist yet.
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
-        Err(_) => return (0, 0),
+        Err(_) => return OutboxDrainResult::default(),
     };
 
     let now = SystemTime::now();
@@ -169,8 +197,7 @@ async fn drain_outbox_impl(
     }
 
     // POST coalesced events.
-    let mut sent = 0usize;
-    let mut kept = 0usize;
+    let mut result = OutboxDrainResult::default();
     let local_phase_conn = if persist_local_state {
         match crate::state::db::open_db(db_path) {
             Ok(conn) => Some(conn),
@@ -229,16 +256,22 @@ async fn drain_outbox_impl(
         match client.post_json("/api/agents/presence", bytes).await {
             Ok(_) => {
                 let _ = std::fs::remove_file(&path);
-                sent += 1;
+                result.sent += 1;
+                result.signals.push(DrainedPresenceSignal {
+                    session_id: payload.session_id.trim().to_string(),
+                    provider: normalize_provider(payload.provider.as_deref()).to_string(),
+                    phase: payload.state.trim().to_string(),
+                    observed_at,
+                });
             }
             Err(_) => {
                 // Keep for retry next tick.
-                kept += 1;
+                result.kept += 1;
             }
         }
     }
 
-    (sent, kept)
+    result
 }
 
 fn observed_at_for_payload(
@@ -502,6 +535,42 @@ mod tests {
         let logged = paths.lock().unwrap().clone();
         assert_eq!(logged.len(), 1);
         assert_eq!(logged[0], "/api/agents/presence");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_drain_outbox_result_returns_sent_phase_signal() {
+        use crate::config::ShipperConfig;
+        use crate::pipeline::compressor::CompressionAlgo;
+        use crate::shipping::client::ShipperClient;
+
+        let (addr, _paths, server) = spawn_http_server(204).await;
+        let dir = tempfile::tempdir().unwrap();
+        let db = tempfile::NamedTempFile::new().unwrap();
+
+        write_hook_style(dir.path(), "SIG123", "sess-signal", "needs_user");
+
+        let url = format!("http://{}", addr);
+        let cfg = ShipperConfig::default().with_overrides(
+            Some(&url),
+            None,
+            Some(db.path()),
+            None,
+            None,
+            None,
+        );
+        let client = ShipperClient::with_compression(&cfg, CompressionAlgo::Gzip).unwrap();
+
+        let result =
+            drain_outbox_with_local_state_result(dir.path(), &client, Some(db.path())).await;
+
+        assert_eq!(result.sent, 1);
+        assert_eq!(result.kept, 0);
+        assert_eq!(result.signals.len(), 1);
+        assert_eq!(result.signals[0].session_id, "sess-signal");
+        assert_eq!(result.signals[0].provider, "claude");
+        assert_eq!(result.signals[0].phase, "needs_user");
+
+        server.abort();
     }
 
     #[tokio::test(flavor = "current_thread")]

@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use rusqlite::Connection;
 use tokio::task::JoinSet;
 
 use crate::config::{self, ShipperConfig};
@@ -46,6 +47,11 @@ const PATH_SPOOL_REPLAY_LIMIT: usize = 50;
 const LOCAL_RETRY_DELAY_SECS: u64 = 5;
 const LOCAL_STATUS_INTERVAL_SECS: u64 = 10;
 const SERVER_HEARTBEAT_INTERVAL_SECS: u64 = 5 * 60;
+const TERMINAL_CATCHUP_DELAYS: [Duration; 3] = [
+    Duration::from_secs(0),
+    Duration::from_secs(1),
+    Duration::from_secs(3),
+];
 
 /// Offline / connectivity state.
 struct OfflineState {
@@ -106,6 +112,13 @@ struct PathTaskResult {
 
 struct DeferredRetry {
     due_at: Instant,
+    provider: &'static str,
+}
+
+#[derive(Debug, Clone)]
+struct TranscriptCatchup {
+    due_at: Instant,
+    path: PathBuf,
     provider: &'static str,
 }
 
@@ -176,6 +189,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut in_flight = JoinSet::new();
     let mut discovery_tasks = JoinSet::new();
     let mut deferred_retries = HashMap::new();
+    let mut transcript_catchups = Vec::new();
 
     start_discovery_task(
         &mut discovery_tasks,
@@ -231,6 +245,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
     loop {
         drain_due_local_retries(&mut scheduler, &mut deferred_retries);
+        drain_due_transcript_catchups(&mut scheduler, &mut transcript_catchups);
         if !offline.is_offline {
             start_ready_jobs(&mut scheduler, &mut in_flight, &task_context);
         }
@@ -370,19 +385,30 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
             // Outbox drain: presence events written by hooks (every 1s, skip when offline)
             _ = outbox_timer.tick(), if !offline.is_offline => {
-                let (sent, kept) = outbox::drain_outbox_with_local_state(
+                let outbox_result = outbox::drain_outbox_with_local_state_result(
                     &outbox_dir,
                     &client,
                     config.shipper_config.db_path.as_deref(),
                 )
                 .await;
-                if sent > 0 || kept > 0 {
-                    tracing::debug!("Outbox drain: {} sent, {} pending", sent, kept);
+                if outbox_result.sent > 0 || outbox_result.kept > 0 {
+                    tracing::debug!(
+                        "Outbox drain: {} sent, {} pending",
+                        outbox_result.sent,
+                        outbox_result.kept
+                    );
+                }
+                if !outbox_result.signals.is_empty() {
+                    schedule_transcript_catchups_for_signals(
+                        &conn,
+                        &mut transcript_catchups,
+                        outbox_result.signals,
+                    );
                 }
             }
 
-            // Wake the loop when a delayed local retry may now be ready.
-            _ = local_retry_timer.tick(), if !deferred_retries.is_empty() => {}
+            // Wake the loop when delayed local retry/catch-up work may now be ready.
+            _ = local_retry_timer.tick(), if !deferred_retries.is_empty() || !transcript_catchups.is_empty() => {}
 
             // Daily: prune stale file_state and session_binding entries
             _ = prune_timer.tick() => {
@@ -591,6 +617,130 @@ fn drain_due_local_retries(
     }
 }
 
+fn drain_due_transcript_catchups(
+    scheduler: &mut PathScheduler,
+    transcript_catchups: &mut Vec<TranscriptCatchup>,
+) {
+    let now = Instant::now();
+    let mut index = 0usize;
+    while index < transcript_catchups.len() {
+        if transcript_catchups[index].due_at <= now {
+            let catchup = transcript_catchups.swap_remove(index);
+            scheduler.enqueue(catchup.path, catchup.provider, WorkPriority::Watch);
+        } else {
+            index += 1;
+        }
+    }
+}
+
+fn schedule_transcript_catchups_for_signals(
+    conn: &Connection,
+    transcript_catchups: &mut Vec<TranscriptCatchup>,
+    signals: Vec<outbox::DrainedPresenceSignal>,
+) {
+    for signal in signals {
+        let Some(provider) = provider_name_to_static(&signal.provider) else {
+            tracing::debug!(
+                provider = %signal.provider,
+                session_id = %signal.session_id,
+                "Skipping transcript catch-up for unknown provider"
+            );
+            continue;
+        };
+
+        let Some(path) = resolve_transcript_path_for_session(conn, &signal.session_id, provider)
+        else {
+            tracing::debug!(
+                provider = %signal.provider,
+                session_id = %signal.session_id,
+                phase = %signal.phase,
+                "No transcript path known for presence-driven catch-up"
+            );
+            continue;
+        };
+
+        schedule_transcript_catchup(transcript_catchups, path, provider, &signal.phase);
+    }
+}
+
+fn schedule_transcript_catchup(
+    transcript_catchups: &mut Vec<TranscriptCatchup>,
+    path: PathBuf,
+    provider: &'static str,
+    phase: &str,
+) {
+    if is_terminal_or_attention_phase(phase) {
+        transcript_catchups.retain(|existing| existing.path != path);
+        let now = Instant::now();
+        for delay in TERMINAL_CATCHUP_DELAYS {
+            transcript_catchups.push(TranscriptCatchup {
+                due_at: now + delay,
+                path: path.clone(),
+                provider,
+            });
+        }
+        return;
+    }
+
+    if is_active_phase(phase) && !transcript_catchups.iter().any(|item| item.path == path) {
+        transcript_catchups.push(TranscriptCatchup {
+            due_at: Instant::now(),
+            path,
+            provider,
+        });
+    }
+}
+
+fn resolve_transcript_path_for_session(
+    conn: &Connection,
+    session_id: &str,
+    provider: &str,
+) -> Option<PathBuf> {
+    find_transcript_path(conn, "file_state", session_id, provider)
+        .or_else(|| find_transcript_path(conn, "session_binding", session_id, provider))
+}
+
+fn find_transcript_path(
+    conn: &Connection,
+    table: &str,
+    session_id: &str,
+    provider: &str,
+) -> Option<PathBuf> {
+    let order_column = match table {
+        "file_state" => "last_updated",
+        "session_binding" => "updated_at",
+        _ => return None,
+    };
+    let sql = format!(
+        "SELECT path FROM {table} WHERE session_id = ?1 AND provider = ?2 ORDER BY {order_column} DESC LIMIT 1",
+    );
+    let result = conn.query_row(&sql, rusqlite::params![session_id, provider], |row| {
+        row.get::<_, String>(0)
+    });
+    match result {
+        Ok(path) if Path::new(&path).exists() => Some(PathBuf::from(path)),
+        Ok(_) | Err(rusqlite::Error::QueryReturnedNoRows) => None,
+        Err(err) => {
+            tracing::debug!(
+                error = %err,
+                table,
+                session_id,
+                provider,
+                "Failed to resolve transcript path"
+            );
+            None
+        }
+    }
+}
+
+fn is_terminal_or_attention_phase(phase: &str) -> bool {
+    matches!(phase, "idle" | "needs_user" | "blocked")
+}
+
+fn is_active_phase(phase: &str) -> bool {
+    matches!(phase, "thinking" | "running")
+}
+
 #[tracing::instrument(
     level = "info",
     name = "engine.ship.prepare",
@@ -797,6 +947,110 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_terminal_phase_schedules_immediate_and_delayed_catchups() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        let mut catchups = Vec::new();
+
+        schedule_transcript_catchup(&mut catchups, path.clone(), "claude", "needs_user");
+
+        assert_eq!(catchups.len(), 3);
+
+        let mut scheduler = PathScheduler::new(4);
+        drain_due_transcript_catchups(&mut scheduler, &mut catchups);
+
+        let job = scheduler
+            .pop_launchable()
+            .expect("immediate catch-up queued");
+        assert_eq!(job.path, path);
+        assert_eq!(job.provider, "claude");
+        assert_eq!(job.priority, WorkPriority::Watch);
+        assert_eq!(catchups.len(), 2, "delayed catch-ups remain queued");
+    }
+
+    #[test]
+    fn test_active_phase_schedules_single_catchup() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        let mut catchups = Vec::new();
+
+        schedule_transcript_catchup(&mut catchups, path.clone(), "claude", "thinking");
+        schedule_transcript_catchup(&mut catchups, path.clone(), "claude", "running");
+
+        assert_eq!(catchups.len(), 1);
+
+        let mut scheduler = PathScheduler::new(4);
+        drain_due_transcript_catchups(&mut scheduler, &mut catchups);
+
+        let job = scheduler.pop_launchable().expect("active catch-up queued");
+        assert_eq!(job.path, path);
+        assert!(catchups.is_empty());
+    }
+
+    #[test]
+    fn test_resolves_transcript_path_from_file_state() {
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let transcript = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(db.path())).unwrap();
+        let path = transcript.path().to_string_lossy().to_string();
+
+        FileState::new(&conn)
+            .set_offset(&path, 100, "sess-file-state", "sess-file-state", "claude")
+            .unwrap();
+
+        assert_eq!(
+            resolve_transcript_path_for_session(&conn, "sess-file-state", "claude"),
+            Some(transcript.path().to_path_buf())
+        );
+    }
+
+    #[test]
+    fn test_resolves_transcript_path_from_session_binding() {
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let transcript = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(db.path())).unwrap();
+        let path = transcript.path().to_string_lossy().to_string();
+
+        crate::state::session_binding::SessionBinding::new(&conn)
+            .bind(&path, "sess-binding", "claude")
+            .unwrap();
+
+        assert_eq!(
+            resolve_transcript_path_for_session(&conn, "sess-binding", "claude"),
+            Some(transcript.path().to_path_buf())
+        );
+    }
+
+    #[test]
+    fn test_presence_signal_schedules_bound_terminal_transcript() {
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let transcript = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(db.path())).unwrap();
+        let path = transcript.path().to_string_lossy().to_string();
+
+        FileState::new(&conn)
+            .set_offset(&path, 100, "sess-signal", "sess-signal", "claude")
+            .unwrap();
+
+        let mut catchups = Vec::new();
+        schedule_transcript_catchups_for_signals(
+            &conn,
+            &mut catchups,
+            vec![outbox::DrainedPresenceSignal {
+                session_id: "sess-signal".to_string(),
+                provider: "claude".to_string(),
+                phase: "idle".to_string(),
+                observed_at: chrono::Utc::now(),
+            }],
+        );
+
+        assert_eq!(catchups.len(), 3);
+        assert!(catchups
+            .iter()
+            .all(|catchup| catchup.path == transcript.path()));
+    }
 
     #[test]
     fn test_drain_due_local_retries_enqueues_only_ready_paths() {
