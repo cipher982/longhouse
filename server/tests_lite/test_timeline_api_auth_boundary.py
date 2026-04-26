@@ -357,6 +357,15 @@ def test_timeline_session_events_anchor_tail_accepts_browser_session_cookie(tmp_
         payload = response.json()
         assert payload["total"] == 5
         assert [row["content_text"] for row in payload["events"]] == ["event 4", "event 5"]
+
+        with _force_browser_jwt_mode():
+            response = client.get(
+                f"/timeline/sessions/{session_id}/events",
+                params={"anchor": "middle"},
+            )
+
+        assert response.status_code == 400
+        assert "anchor" in response.json()["detail"]
     finally:
         auth_deps._strategy_cache.clear()
         api_app.dependency_overrides.clear()
