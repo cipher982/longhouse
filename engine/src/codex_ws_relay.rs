@@ -64,9 +64,7 @@ pub async fn spawn(upstream_url: &str) -> Result<String> {
                 let mut outbound = match TcpStream::connect(&upstream_addr).await {
                     Ok(sock) => sock,
                     Err(err) => {
-                        eprintln!(
-                            "codex WS relay upstream dial to {upstream_addr} failed: {err}"
-                        );
+                        eprintln!("codex WS relay upstream dial to {upstream_addr} failed: {err}");
                         return;
                     }
                 };

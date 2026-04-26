@@ -214,14 +214,22 @@ _canary_last_obs_monotonic: dict[str, float] = {}
 
 @canary_router.get("/canary-session", include_in_schema=False)
 async def canary_session_lookup() -> dict:
-    """Return the most-recently-active canary session_id.
+    """Return the session_id of the currently-live canary producer.
 
-    Used by the Playwright render-canary test in CI to discover which
-    session to open without having to plumb a session_id through env.
-    Gated by canary token (same shared secret as observation posts).
+    "Live" means the session has seen activity within the last 5 minutes.
+    This excludes abandoned stress-run sessions that happened to have a
+    newer last_activity_at than the always-on producer. Used by the
+    Playwright render-canary test in CI to discover the target session
+    without plumbing a UUID through env. Gated by canary token.
     """
+    from datetime import datetime
+    from datetime import timedelta
+    from datetime import timezone
+
     from zerg.database import get_db
     from zerg.models.agents import AgentSession
+
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
 
     db_gen = get_db()
     try:
@@ -232,6 +240,7 @@ async def canary_session_lookup() -> dict:
         row = (
             db.query(AgentSession)
             .filter(AgentSession.provider == "canary")
+            .filter(AgentSession.last_activity_at >= cutoff)
             .order_by(AgentSession.last_activity_at.desc().nullslast(), AgentSession.started_at.desc())
             .first()
         )
