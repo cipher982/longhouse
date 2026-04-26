@@ -30,6 +30,9 @@ from pydantic import BaseModel
 from pydantic import Field
 
 from zerg.dependencies.auth import require_admin
+from zerg.metrics import canary_latency_seconds
+from zerg.metrics import canary_observations_total
+from zerg.metrics import canary_seq_last_seen
 from zerg.metrics import event_end_to_end_latency_seconds
 from zerg.metrics import event_render_beacons_total
 
@@ -165,3 +168,49 @@ async def latency_summary(window_s: int = 900) -> dict:
             }
         )
     return {"window_s": window_s, "groups": summary}
+
+
+# -----------------------------------------------------------------------------
+# Canary observation endpoint
+# -----------------------------------------------------------------------------
+
+
+class CanaryObservation(BaseModel):
+    """A single observation from a canary producer or consumer.
+
+    hop identifies where in the pipeline the observation was taken:
+      - "ingest": producer measured server receive vs its own emit
+      - "sse":    SSE observer measured server wake vs producer emit
+      - "render": browser/iOS measured rendered_at vs producer emit
+    """
+
+    canary_seq: int = Field(..., ge=0)
+    hop: Literal["ingest", "sse", "render"]
+    surface: str = Field("server", max_length=32)
+    latency_ms: int = Field(..., ge=0, le=600_000)
+
+
+_canary_last_obs_monotonic: dict[str, float] = {}
+
+
+@admin_router.post("/canary-observation", include_in_schema=False)
+async def canary_observation(obs: CanaryObservation) -> dict:
+    """Record a canary latency observation.
+
+    Admin-only because canary credentials control what gets counted; we do
+    not want random clients polluting SLA signal.
+    """
+    latency_s = obs.latency_ms / 1000.0
+    canary_latency_seconds.labels(hop=obs.hop, surface=obs.surface).observe(latency_s)
+    canary_observations_total.labels(hop=obs.hop, outcome="ok").inc()
+    canary_seq_last_seen.labels(hop=obs.hop).set(obs.canary_seq)
+    _canary_last_obs_monotonic[obs.hop] = time.monotonic()
+    return {"ok": True, "hop": obs.hop, "seq": obs.canary_seq}
+
+
+def canary_last_obs_age_s(hop: str) -> float | None:
+    """How long since we last saw a canary observation on this hop. None if never."""
+    last = _canary_last_obs_monotonic.get(hop)
+    if last is None:
+        return None
+    return round(time.monotonic() - last, 1)

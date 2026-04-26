@@ -208,6 +208,28 @@ try:
         labelnames=("surface", "outcome"),
     )
 
+    # Canary pipeline: always-on synthetic probe measuring emit -> observer
+    # round-trip. Separate from user-facing SLA histograms so canary volume
+    # doesn't pollute real-user percentiles.
+    canary_latency_seconds = Histogram(
+        "canary_latency_seconds",
+        "Synthetic canary hop latency (seconds). Hop: ingest|sse|render.",
+        labelnames=("hop", "surface"),
+        buckets=(0.01, 0.025, 0.05, 0.1, 0.15, 0.25, 0.5, 1, 2, 5, 15, 60),
+    )
+
+    canary_observations_total = Counter(
+        "canary_observations_total",
+        "Canary observations accepted/rejected by hop and outcome.",
+        labelnames=("hop", "outcome"),
+    )
+
+    canary_seq_last_seen = Gauge(
+        "canary_seq_last_seen",
+        "Most recent canary_seq seen per hop; gaps indicate dropped pipeline events.",
+        labelnames=("hop",),
+    )
+
     agents_heartbeat_requests_total = Counter(
         "agents_heartbeat_requests_total",
         "Agent heartbeat requests by auth kind and status",
@@ -323,3 +345,6 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
     event_age_at_ingest_seconds = _NoopHistogram()  # type: ignore[assignment]
     event_end_to_end_latency_seconds = _NoopHistogram()  # type: ignore[assignment]
     event_render_beacons_total = _NoopCounter()  # type: ignore[assignment]
+    canary_latency_seconds = _NoopHistogram()  # type: ignore[assignment]
+    canary_observations_total = _NoopCounter()  # type: ignore[assignment]
+    canary_seq_last_seen = _NoopGauge()  # type: ignore[assignment]
