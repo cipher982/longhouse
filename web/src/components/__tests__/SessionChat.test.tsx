@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { SessionChat, type SessionChatTarget } from "../SessionChat";
+import type { SessionLockInfo } from "../../services/api";
 
 const { fetchWithRefreshMock } = vi.hoisted(() => ({
   fetchWithRefreshMock: vi.fn(),
@@ -245,6 +246,40 @@ describe("SessionChat", () => {
 
     expect(screen.getByRole("button", { name: /draft reply/i })).toBeDisabled();
     expect(getRequestCallCount("/draft-reply")).toBe(0);
+  });
+
+  it("allows draft reply while the live session is locked", async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+      },
+    });
+    queryClient.setQueryData<SessionLockInfo | null>(["session-lock", "sess-1"], {
+      locked: true,
+      holder: "req-1234",
+      time_remaining_seconds: 120,
+      fork_available: true,
+    });
+
+    fetchWithRefreshMock.mockImplementation((url: string) => {
+      if (url.endsWith("/draft-reply")) {
+        return Promise.resolve(jsonResponse({ draft_text: "Prepare a follow-up while it works." }));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderSessionChat({ chatMode: "managed_local" }, { queryClient });
+
+    expect(screen.getByText("Locked")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /draft reply/i })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: /draft reply/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("textbox")).toHaveValue("Prepare a follow-up while it works.");
+    });
+    expect(screen.getByRole("button", { name: /send/i })).toBeDisabled();
   });
 
   it("shows a clear message when a draft reply is empty", async () => {
