@@ -955,6 +955,9 @@ async def _session_workspace_stream(
     wait_start: float | None = None
     bus = get_pubsub()
     topic = topic_session(str(session_id))
+    # Highest pubsub seq actually consumed by this subscription. Used as the
+    # SSE id: so reconnects never skip an event the client hadn't seen.
+    consumed_seq: int = 0
     with bus.subscribe(topic, since_seq=last_event_id) as subscription:
         while True:
             if await request.is_disconnected():
@@ -963,7 +966,9 @@ async def _session_workspace_stream(
             if skip_initial:
                 skip_initial = False
                 wait_start = monotonic()
-                await _wait_for_session_change(subscription)
+                woke_seq = await _wait_for_session_change(subscription)
+                if woke_seq:
+                    consumed_seq = woke_seq
                 continue
 
             with session_factory() as db:
@@ -985,7 +990,9 @@ async def _session_workspace_stream(
                     }
                     last_heartbeat = now
                 wait_start = monotonic()
-                await _wait_for_session_change(subscription)
+                woke_seq = await _wait_for_session_change(subscription)
+                if woke_seq:
+                    consumed_seq = woke_seq
                 continue
 
             previous_sig = current_sig
@@ -996,12 +1003,12 @@ async def _session_workspace_stream(
             if latest_event_ts is not None:
                 ts = latest_event_ts if latest_event_ts.tzinfo else latest_event_ts.replace(tzinfo=timezone.utc)
                 latest_event_ts_ms = int(ts.timestamp() * 1000)
-            # Per-topic pubsub seq becomes the SSE id: frame so EventSource sends
-            # Last-Event-ID on reconnect for replay.
-            current_seq = bus.peek_latest_seq(topic)
+            # consumed_seq is the seq of the publish that woke this cycle —
+            # safer than peek_latest_seq which can race ahead of our DB read.
+            # On first emit before any wake (initial snapshot), fall back to 0.
             yield {
                 "event": "workspace_changed",
-                "id": str(current_seq) if current_seq else None,
+                "id": str(consumed_seq) if consumed_seq else None,
                 "data": json.dumps(
                     {
                         "session_id": str(session_id),
@@ -1010,7 +1017,7 @@ async def _session_workspace_stream(
                         "detect_ms": detect_ms,
                         "latest_event_emitted_at_ms": latest_event_ts_ms,
                         "server_now_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
-                        "pubsub_seq": current_seq,
+                        "pubsub_seq": consumed_seq,
                     }
                 ),
             }
@@ -1019,12 +1026,15 @@ async def _session_workspace_stream(
             last_heartbeat = now
 
             wait_start = monotonic()
-            await _wait_for_session_change(subscription)
+            woke_seq = await _wait_for_session_change(subscription)
+            if woke_seq:
+                consumed_seq = woke_seq
 
 
-async def _wait_for_session_change(subscription) -> None:
-    """Wait for a publish or a short tick for disconnect checks."""
-    await subscription.next_message(timeout=TIMELINE_STREAM_CHANGE_WAIT_SECONDS)
+async def _wait_for_session_change(subscription) -> int:
+    """Wait for a publish or a short tick. Returns the seq of the message that woke us, or 0 on timeout."""
+    msg = await subscription.next_message(timeout=TIMELINE_STREAM_CHANGE_WAIT_SECONDS)
+    return msg.seq if msg else 0
 
 
 @router.get("/sessions/{session_id}/workspace/stream")
