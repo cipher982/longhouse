@@ -205,7 +205,7 @@ def get_openrouter_default_headers() -> dict[str, str]:
 def build_openai_compatible_client_kwargs(
     *,
     provider: ModelProvider | str,
-    api_key: str,
+    api_key: str | None,
     base_url: str | None = None,
 ) -> dict:
     """Build shared AsyncOpenAI/OpenAIChat kwargs for OpenAI-compatible providers."""
