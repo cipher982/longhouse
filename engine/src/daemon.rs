@@ -887,6 +887,8 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         Ok(Some(prepared)) => {
             let event_count = prepared.total_event_count();
             let byte_count = prepared.new_offset.saturating_sub(prepared.offset);
+            let prepared_offset = prepared.offset;
+            let prepared_new_offset = prepared.new_offset;
             match shipper::ship_prepared_file(
                 prepared,
                 &task_context.client,
@@ -897,6 +899,22 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
             .await
             {
                 Ok(outcome) => {
+                    if outcome.events_shipped > 0 || outcome.dead_lettered > 0 {
+                        tracing::info!(
+                            context = work_context(result.job.priority),
+                            path = %result.job.path.display(),
+                            provider = result.job.provider,
+                            offset = prepared_offset,
+                            new_offset = prepared_new_offset,
+                            event_count,
+                            events_shipped = outcome.events_shipped,
+                            byte_count,
+                            bytes_shipped = outcome.bytes_shipped,
+                            dead_lettered = outcome.dead_lettered,
+                            elapsed_ms = file_start.elapsed().as_millis() as u64,
+                            "Shipped transcript path"
+                        );
+                    }
                     shipper::log_slow_file_processing(
                         work_context(result.job.priority),
                         Path::new(&result.job.path),
