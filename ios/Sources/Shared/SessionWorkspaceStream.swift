@@ -1,0 +1,183 @@
+import Foundation
+
+/// Realtime push from the server for a single session workspace.
+///
+/// Thin SSE (text/event-stream) client using URLSession.AsyncBytes. Parses
+/// the event:/id:/data: grammar manually — there's no Apple SSE API.
+///
+/// Lifecycle: create with `start(sessionId:)`, observe via `AsyncStream`,
+/// and call `stop()` on disappear. Automatically sends Last-Event-ID on
+/// reconnect so the server can replay buffered events from the pubsub.
+///
+/// iOS background rules: caller must stop() when scenePhase != .active.
+/// Background URLSession is not used; SSE over URLSession.shared is
+/// foreground-only by Apple's contract.
+actor SessionWorkspaceStream {
+    struct Connected: Decodable, Sendable {
+        let session_id: String
+        let server_now_ms: Int64?
+    }
+
+    struct WorkspaceChanged: Decodable, Sendable {
+        let session_id: String
+        let latest_event_id: Int
+        let thread_session_count: Int?
+        let latest_event_emitted_at_ms: Int64?
+        let server_now_ms: Int64?
+        let pubsub_seq: Int?
+    }
+
+    enum Event: Sendable {
+        case connected(Connected)
+        case changed(WorkspaceChanged)
+        case heartbeat
+        case disconnected(Error?)
+    }
+
+    private let baseURL: URL
+    private let sessionId: String
+    private var task: Task<Void, Never>?
+    private var lastEventId: Int = 0
+    private var serverClockSkewMs: Int64 = 0
+    private var continuation: AsyncStream<Event>.Continuation?
+
+    init(baseURL: URL, sessionId: String) {
+        self.baseURL = baseURL
+        self.sessionId = sessionId
+    }
+
+    func events() -> AsyncStream<Event> {
+        AsyncStream { continuation in
+            Task { await self.setContinuation(continuation) }
+        }
+    }
+
+    private func setContinuation(_ c: AsyncStream<Event>.Continuation) {
+        self.continuation = c
+    }
+
+    func clockSkewMs() -> Int64 { serverClockSkewMs }
+
+    func start() {
+        guard task == nil else { return }
+        task = Task { [weak self] in
+            guard let self else { return }
+            var backoffMs: UInt64 = 500
+            while !Task.isCancelled {
+                do {
+                    try await self.openAndDrain()
+                    backoffMs = 500
+                } catch is CancellationError {
+                    break
+                } catch {
+                    await self.emit(.disconnected(error))
+                }
+                // Exponential backoff with ceiling.
+                try? await Task.sleep(nanoseconds: backoffMs * 1_000_000)
+                backoffMs = min(backoffMs * 2, 15_000)
+            }
+        }
+    }
+
+    func stop() {
+        task?.cancel()
+        task = nil
+        continuation?.finish()
+        continuation = nil
+    }
+
+    private func emit(_ event: Event) {
+        continuation?.yield(event)
+    }
+
+    private func setLastEventId(_ id: Int) {
+        if id > lastEventId { lastEventId = id }
+    }
+
+    private func setSkew(_ serverNowMs: Int64?) {
+        guard let serverNowMs else { return }
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        serverClockSkewMs = nowMs - serverNowMs
+    }
+
+    private func openAndDrain() async throws {
+        let url = baseURL.appendingPathComponent("/api/timeline/sessions/\(sessionId)/workspace/stream")
+        var req = URLRequest(url: url)
+        req.addValue("text/event-stream", forHTTPHeaderField: "Accept")
+        req.addValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        if lastEventId > 0 {
+            req.addValue(String(lastEventId), forHTTPHeaderField: "Last-Event-ID")
+        }
+        if let cookieHeader = SharedAuthStore.cookieHeader(for: baseURL.absoluteString) {
+            req.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+        }
+        // waitsForConnectivity: the URLSession waits during transient network
+        // unavailability (cell→wifi transitions) instead of failing fast.
+        let config = URLSessionConfiguration.default
+        config.waitsForConnectivity = true
+        config.timeoutIntervalForRequest = 600
+        config.timeoutIntervalForResource = 3600
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+
+        let (bytes, response) = try await session.bytes(for: req)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw URLError(.badServerResponse)
+        }
+
+        var eventName = ""
+        var eventId: String? = nil
+        var dataBuffer = ""
+
+        for try await line in bytes.lines {
+            if Task.isCancelled { break }
+            if line.isEmpty {
+                await self.dispatch(eventName: eventName, eventId: eventId, payload: dataBuffer)
+                eventName = ""
+                eventId = nil
+                dataBuffer = ""
+                continue
+            }
+            if line.hasPrefix(":") {
+                // SSE comment / keep-alive. Ignore.
+                continue
+            }
+            if let sep = line.firstIndex(of: ":") {
+                let field = String(line[..<sep])
+                var value = String(line[line.index(after: sep)...])
+                if value.hasPrefix(" ") { value.removeFirst() }
+                switch field {
+                case "event": eventName = value
+                case "id": eventId = value
+                case "data":
+                    if !dataBuffer.isEmpty { dataBuffer.append("\n") }
+                    dataBuffer.append(value)
+                default: break
+                }
+            }
+        }
+    }
+
+    private func dispatch(eventName: String, eventId: String?, payload: String) async {
+        if let eventId, let parsed = Int(eventId) {
+            setLastEventId(parsed)
+        }
+        guard let data = payload.data(using: .utf8) else { return }
+        switch eventName {
+        case "connected":
+            if let c = try? JSONDecoder().decode(Connected.self, from: data) {
+                setSkew(c.server_now_ms)
+                emit(.connected(c))
+            }
+        case "workspace_changed":
+            if let w = try? JSONDecoder().decode(WorkspaceChanged.self, from: data) {
+                setSkew(w.server_now_ms)
+                emit(.changed(w))
+            }
+        case "heartbeat":
+            emit(.heartbeat)
+        default:
+            break
+        }
+    }
+}

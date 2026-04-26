@@ -860,6 +860,9 @@ final class SessionViewModel: ObservableObject {
 
     private var expandedIds: Set<String> = []
     private var pollTask: Task<Void, Never>?
+    private var stream: SessionWorkspaceStream?
+    private var streamTask: Task<Void, Never>?
+    private var streamConnected: Bool = false
 
     func isExpanded(_ id: String) -> Bool { expandedIds.contains(id) }
 
@@ -872,12 +875,18 @@ final class SessionViewModel: ObservableObject {
         if isInitialLoading {
             await reload(sessionId: sessionId, appState: appState)
         }
+        startStream(sessionId: sessionId, appState: appState)
         startVisiblePolling(sessionId: sessionId, appState: appState)
     }
 
     func stop() {
         pollTask?.cancel()
         pollTask = nil
+        streamTask?.cancel()
+        streamTask = nil
+        Task { [stream] in await stream?.stop() }
+        stream = nil
+        streamConnected = false
     }
 
     func reload(sessionId: String, appState: AppState) async {
@@ -956,9 +965,50 @@ final class SessionViewModel: ObservableObject {
         pollTask?.cancel()
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                // Fallback-only: poll at 5s when SSE is disconnected. Skip when
+                // SSE is live since pushes drive updates directly.
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
                 if Task.isCancelled { break }
+                let connected = await MainActor.run { self?.streamConnected ?? false }
+                if connected { continue }
                 await self?.pollTick(sessionId: sessionId, appState: appState)
+            }
+        }
+    }
+
+    private func startStream(sessionId: String, appState: AppState) {
+        streamTask?.cancel()
+        guard let base = URL(string: appState.serverURL) else { return }
+        let s = SessionWorkspaceStream(baseURL: base, sessionId: sessionId)
+        stream = s
+        streamTask = Task { [weak self] in
+            await s.start()
+            for await event in await s.events() {
+                if Task.isCancelled { break }
+                await self?.handleStreamEvent(event, sessionId: sessionId, appState: appState)
+            }
+        }
+    }
+
+    private func handleStreamEvent(_ event: SessionWorkspaceStream.Event, sessionId: String, appState: AppState) async {
+        switch event {
+        case .connected:
+            streamConnected = true
+        case .disconnected:
+            streamConnected = false
+        case .heartbeat:
+            break
+        case .changed:
+            // Push wake → refetch workspace and emit render beacon.
+            guard let api = LonghouseAPI(host: appState.serverURL) else { return }
+            async let detailTask = api.sessionDetail(id: sessionId)
+            async let eventsTask = api.sessionEvents(id: sessionId)
+            if let detail = try? await detailTask {
+                self.detail = detail
+            }
+            if let events = try? await eventsTask {
+                self.items = TimelineBuilder.build(events: events)
+                await reportRenderBeacon(api: api, sessionId: sessionId, events: events)
             }
         }
     }
