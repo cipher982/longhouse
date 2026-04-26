@@ -186,6 +186,9 @@ async def ingest_session(
                 agents_ingest_events_total.labels(provider=provider_label, kind="received").inc(len(data.events))
 
                 # Event age at ingest: emitted_at -> now. Hook token = managed local session.
+                # Only provider-originated events (source_path set by engine) count toward
+                # the SLA histogram. Server-synthesized events (live_session_dispatch) use
+                # now() as timestamp and would deflate p50/p95 with ~0ms samples.
                 managed_label = "true" if isinstance(auth_token, ManagedLocalHookToken) else "false"
                 if data.events:
                     from datetime import datetime
@@ -193,6 +196,8 @@ async def ingest_session(
 
                     now_utc = datetime.now(timezone.utc)
                     for ev in data.events:
+                        if ev.source_path is None:
+                            continue
                         ev_ts = ev.timestamp
                         if ev_ts is None:
                             continue

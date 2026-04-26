@@ -5,6 +5,7 @@ import time
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from zerg.dependencies.auth import require_admin
 from zerg.routers import telemetry as telemetry_mod
 from zerg.routers.telemetry import admin_router
 from zerg.routers.telemetry import beacon_router
@@ -12,7 +13,9 @@ from zerg.routers.telemetry import beacon_router
 
 def _client() -> TestClient:
     telemetry_mod._samples.clear()
+    telemetry_mod._buckets.clear()
     app = FastAPI()
+    app.dependency_overrides[require_admin] = lambda: None
     app.include_router(beacon_router)
     app.include_router(admin_router)
     return TestClient(app)
@@ -68,6 +71,16 @@ def test_beacon_drops_stale_and_negative():
         json=_beacon(emitted_at_ms=now + 10_000, rendered_at_ms=now),
     )
     assert resp.json()["dropped_range"] == 1
+
+
+def test_beacon_rate_limited_per_ip():
+    c = _client()
+    # Burst capacity is 60; request the 61st should 429.
+    for _ in range(60):
+        r = c.post("/telemetry/client-render", json=_beacon())
+        assert r.status_code == 200
+    r = c.post("/telemetry/client-render", json=_beacon())
+    assert r.status_code == 429
 
 
 def test_latency_summary_groups_by_surface_and_managed():
