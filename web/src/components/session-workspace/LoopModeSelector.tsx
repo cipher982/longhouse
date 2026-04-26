@@ -22,8 +22,6 @@ export function LoopModeSelector({
   pending = false,
   onChange,
 }: LoopModeSelectorProps) {
-  const manualActive = currentMode === "manual";
-
   return (
     <div className="session-pane-section">
       <div className="session-pane-section-title">Loop Mode</div>
@@ -53,27 +51,6 @@ export function LoopModeSelector({
       <div className="session-loop-mode__caption">
         {caption}
       </div>
-      <details className="session-loop-mode__advanced">
-        <summary className="session-loop-mode__advanced-summary">
-          Advanced
-          {manualActive ? " · Assistance off" : ""}
-        </summary>
-        <div className="session-loop-mode__advanced-body">
-          <button
-            type="button"
-            className={`session-loop-mode__manual-button${manualActive ? " is-active" : ""}`}
-            aria-pressed={manualActive}
-            onClick={() => onChange?.("manual")}
-            disabled={pending || !onChange || manualActive}
-          >
-            Turn off assistance
-          </button>
-          <span className="session-loop-mode__manual-copy">
-            Manual mode only observes the session. Keep this for debugging or
-            provider-cost control.
-          </span>
-        </div>
-      </details>
     </div>
   );
 }

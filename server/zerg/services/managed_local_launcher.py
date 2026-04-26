@@ -18,6 +18,7 @@ from zerg.services.managed_local_transport import build_managed_local_attach_com
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
+from zerg.session_loop_mode import coerce_session_loop_mode
 
 _VALID_PROVIDERS = {"claude", "codex"}
 _MANAGED_LOCAL_NAME_SAFE_CHARS = re.compile(r"[^A-Za-z0-9_.-]+")
@@ -43,7 +44,7 @@ class ManagedLocalLaunchParams:
     git_repo: str | None = None
     git_branch: str | None = None
     display_name: str | None = None
-    loop_mode: str = "manual"
+    loop_mode: str = "assist"
     machine_name: str | None = None
     native_claude_channels_available: bool | None = None
     claude_launch_env: dict[str, str] | None = None
@@ -159,7 +160,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         tool_calls=0,
         is_writable_head=1,
         is_sidechain=0,
-        loop_mode=params.loop_mode,
+        loop_mode=coerce_session_loop_mode(params.loop_mode).value,
         execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
         managed_transport=transport.value,
         source_runner_id=runner.id,

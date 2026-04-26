@@ -312,7 +312,7 @@ def claude(
     ),
     project: str | None = typer.Option(None, "--project", help="Optional session project label."),
     loop_mode: SessionLoopMode = typer.Option(
-        SessionLoopMode.MANUAL,
+        SessionLoopMode.ASSIST,
         "--loop-mode",
         help="Loop mode to store on the Longhouse session.",
     ),

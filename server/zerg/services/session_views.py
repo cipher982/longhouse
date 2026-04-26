@@ -28,6 +28,7 @@ from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_runtime import should_include_runtime_view
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_loop_mode import SessionLoopMode
+from zerg.session_loop_mode import coerce_session_loop_mode
 from zerg.utils.time import UTCBaseModel
 from zerg.utils.time import normalize_utc
 
@@ -39,10 +40,7 @@ logger = logging.getLogger(__name__)
 
 
 def _coerce_session_loop_mode(value: str | None) -> SessionLoopMode:
-    try:
-        return SessionLoopMode(value or SessionLoopMode.MANUAL.value)
-    except ValueError:
-        return SessionLoopMode.MANUAL
+    return coerce_session_loop_mode(value)
 
 
 def build_attach_command(session: AgentSession) -> str | None:
@@ -162,7 +160,7 @@ class SessionResponse(UTCBaseModel):
     is_sidechain: bool = Field(False, description="True when session is a Task sub-agent (not human-initiated)")
     control: Optional[SessionControlResponse] = Field(None, description="Host-control and managed-launch debugging detail")
     capabilities: SessionCapabilitiesResponse = Field(..., description="Canonical session capability flags")
-    loop_mode: SessionLoopMode = Field(SessionLoopMode.MANUAL, description="Session loop mode: manual|assist|autopilot")
+    loop_mode: SessionLoopMode = Field(SessionLoopMode.ASSIST, description="Session loop mode: assist|autopilot")
     user_state: str = Field("active", description="User classification: active|parked|snoozed|archived")
 
 
@@ -281,7 +279,7 @@ class ActiveSessionResponse(UTCBaseModel):
     home_label: Optional[str] = Field(None, description="User-facing home label, e.g. On this Mac|Hosted|Moved to cloud")
     control: Optional[SessionControlResponse] = Field(None, description="Host-control and managed-launch debugging detail")
     capabilities: SessionCapabilitiesResponse = Field(..., description="Canonical session capability flags")
-    loop_mode: SessionLoopMode = Field(SessionLoopMode.MANUAL, description="Session loop mode: manual|assist|autopilot")
+    loop_mode: SessionLoopMode = Field(SessionLoopMode.ASSIST, description="Session loop mode: assist|autopilot")
 
 
 class ActiveSessionsResponse(UTCBaseModel):
@@ -481,7 +479,7 @@ class SessionActionResponse(BaseModel):
 
 
 class SessionLoopModeRequest(BaseModel):
-    loop_mode: SessionLoopMode = Field(..., description="manual | assist | autopilot")
+    loop_mode: SessionLoopMode = Field(..., description="assist | autopilot")
 
 
 class SessionLoopModeResponse(BaseModel):

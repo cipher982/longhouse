@@ -79,7 +79,7 @@ def _seed_session(
         tool_calls=0,
         is_writable_head=1,
         is_sidechain=0,
-        loop_mode="manual",
+        loop_mode="assist",
         execution_home=execution_home,
     )
     db.add(session)

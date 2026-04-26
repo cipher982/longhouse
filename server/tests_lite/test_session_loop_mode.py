@@ -27,7 +27,7 @@ def _make_db(tmp_path, name="loop_mode.db"):
     return make_sessionmaker(engine)
 
 
-def _seed_session(factory, *, loop_mode="manual"):
+def _seed_session(factory, *, loop_mode="assist"):
     db = factory()
     session = AgentSession(
         provider="claude",
@@ -137,6 +137,21 @@ def test_invalid_loop_mode_rejected(tmp_path):
             headers={"X-Agents-Token": "dev"},
         )
         assert response.status_code == 422
+    finally:
+        from zerg.main import api_app
+
+        api_app.dependency_overrides.clear()
+
+
+def test_legacy_manual_loop_mode_reads_as_assist(tmp_path):
+    factory = _make_db(tmp_path, "legacy_manual_loop_mode.db")
+    session_id = _seed_session(factory, loop_mode="manual")
+    client = _client(factory)
+
+    try:
+        response = client.get(f"/agents/sessions/{session_id}", headers={"X-Agents-Token": "dev"})
+        assert response.status_code == 200
+        assert response.json()["loop_mode"] == "assist"
     finally:
         from zerg.main import api_app
 

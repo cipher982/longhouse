@@ -31,11 +31,23 @@ class ModelProvider(str, Enum):
 
 
 _PROVIDER_DEFAULT_API_KEY_ENVS = {
-    ModelProvider.OPENAI: "OPENAI_API_KEY",
     ModelProvider.OPENROUTER: "OPENROUTER_API_KEY",
+    ModelProvider.OPENAI: "OPENAI_API_KEY",
     ModelProvider.XAI: "XAI_API_KEY",
     ModelProvider.GROQ: "GROQ_API_KEY",
     ModelProvider.ANTHROPIC: "ANTHROPIC_API_KEY",
+}
+
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+OPENROUTER_DEFAULT_HEADERS = {
+    "HTTP-Referer": "https://longhouse.ai",
+    "X-OpenRouter-Title": "Longhouse",
+}
+
+_PROVIDER_DEFAULT_BASE_URLS = {
+    ModelProvider.OPENROUTER: OPENROUTER_BASE_URL,
+    ModelProvider.XAI: "https://api.x.ai/v1",
+    ModelProvider.GROQ: "https://api.groq.com/openai/v1",
 }
 
 
@@ -170,6 +182,42 @@ def _get_api_key_env_var(model_config: ModelConfig) -> str:
     if model_config.api_key_env_var:
         return model_config.api_key_env_var
     return _PROVIDER_DEFAULT_API_KEY_ENVS[model_config.provider]
+
+
+def get_provider_default_base_url(provider: ModelProvider | str | None) -> str | None:
+    """Return the canonical OpenAI-compatible base URL for known providers."""
+
+    if provider is None:
+        return None
+    try:
+        provider_enum = provider if isinstance(provider, ModelProvider) else ModelProvider(str(provider))
+    except ValueError:
+        return None
+    return _PROVIDER_DEFAULT_BASE_URLS.get(provider_enum)
+
+
+def get_openrouter_default_headers() -> dict[str, str]:
+    """Return app attribution headers for OpenRouter requests."""
+
+    return dict(OPENROUTER_DEFAULT_HEADERS)
+
+
+def build_openai_compatible_client_kwargs(
+    *,
+    provider: ModelProvider | str,
+    api_key: str | None,
+    base_url: str | None = None,
+) -> dict:
+    """Build shared AsyncOpenAI/OpenAIChat kwargs for OpenAI-compatible providers."""
+
+    kwargs: dict = {"api_key": api_key}
+    resolved_base_url = base_url or get_provider_default_base_url(provider)
+    if resolved_base_url:
+        kwargs["base_url"] = resolved_base_url
+    provider_value = provider.value if isinstance(provider, ModelProvider) else str(provider)
+    if provider_value == ModelProvider.OPENROUTER.value:
+        kwargs["default_headers"] = get_openrouter_default_headers()
+    return kwargs
 
 
 # =============================================================================
@@ -356,12 +404,10 @@ def get_llm_client_for_use_case(use_case: str) -> tuple:
             kwargs["base_url"] = base_url
         return AsyncAnthropic(**kwargs), model_id, provider
 
-    # OpenAI-compatible providers (openai, xai, groq)
+    # OpenAI-compatible providers (openai, openrouter, xai, groq)
     from openai import AsyncOpenAI
 
-    kwargs = {"api_key": api_key}
-    if base_url:
-        kwargs["base_url"] = base_url
+    kwargs = build_openai_compatible_client_kwargs(provider=provider, api_key=api_key, base_url=base_url)
     return AsyncOpenAI(**kwargs), model_id, provider
 
 
@@ -428,8 +474,8 @@ def get_llm_client_with_db_fallback(use_case: str, db=None) -> tuple:
             row = db.query(LlmProviderConfig).filter(LlmProviderConfig.capability == "text").first()
             if row:
                 api_key = _decrypt(row.encrypted_api_key)
-                base_url = row.base_url
                 db_provider = row.provider_name  # e.g. "groq", "openai"
+                base_url = row.base_url or get_provider_default_base_url(db_provider)
 
                 # Try to resolve the model for the use case from config
                 try:
@@ -449,9 +495,7 @@ def get_llm_client_with_db_fallback(use_case: str, db=None) -> tuple:
 
                 from openai import AsyncOpenAI
 
-                kwargs: dict = {"api_key": api_key}
-                if base_url:
-                    kwargs["base_url"] = base_url
+                kwargs = build_openai_compatible_client_kwargs(provider=db_provider, api_key=api_key, base_url=base_url)
                 return AsyncOpenAI(**kwargs), model_id, provider
         except Exception:
             pass  # Fall through to env-var resolution

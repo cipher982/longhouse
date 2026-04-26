@@ -26,19 +26,15 @@ for the session.
 
 ## Control States
 
-- **Manual**: the user types a message and explicitly sends it into a managed
-  session.
-- **Assist**: in the current product, the user explicitly asks Longhouse to
-  generate a suggested next user message from the latest transcript tail. The
-  draft fills or stages the composer, and the user edits or sends it. Server-
-  triggered assist drafts are a later feature.
+- **Assist**: the default mode. In the current product, Longhouse drafts a
+  suggested next user message from the latest transcript tail for review. The
+  user edits or sends it.
 - **Autopilot**: Longhouse may send bounded follow-up messages without another
   tap, only after a server-side policy runner exists with durable limits,
   escalation rules, and a visible kill switch.
 
-The existing `loop_mode` value is currently policy metadata. It must not be
-treated as an active autopilot controller until a server-side loop actually
-consumes it.
+Legacy `manual` rows are normalized to `assist` on read. `loop_mode` must not be
+treated as an active autopilot controller until a server-side loop actually consumes it.
 
 ## Current State
 

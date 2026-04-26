@@ -4667,8 +4667,8 @@ export interface components {
             /** @description Canonical session capability flags */
             capabilities: components["schemas"]["SessionCapabilitiesResponse"];
             /**
-             * @description Session loop mode: manual|assist|autopilot
-             * @default manual
+             * @description Session loop mode: assist|autopilot
+             * @default assist
              */
             loop_mode: components["schemas"]["SessionLoopMode"];
         };
@@ -5848,6 +5848,8 @@ export interface components {
              * @default false
              */
             is_offline: boolean;
+            /** Managed Sessions */
+            managed_sessions?: components["schemas"]["ManagedSessionLeaseIn"][];
         };
         /**
          * HostedGmailConnectHandoffPayload
@@ -6326,8 +6328,8 @@ export interface components {
              */
             display_name?: string | null;
             /**
-             * @description manual | assist | autopilot
-             * @default manual
+             * @description assist | autopilot
+             * @default assist
              */
             loop_mode: components["schemas"]["SessionLoopMode"];
             /**
@@ -6347,6 +6349,37 @@ export interface components {
             claude_launch_env?: {
                 [key: string]: string;
             } | null;
+        };
+        /** ManagedSessionLeaseIn */
+        ManagedSessionLeaseIn: {
+            /**
+             * Session Id
+             * Format: uuid
+             */
+            session_id: string;
+            /** Provider */
+            provider: string;
+            /** Machine Id */
+            machine_id?: string | null;
+            /** Sequence */
+            sequence: number;
+            /** State */
+            state: string;
+            /** Phase */
+            phase?: string | null;
+            /** Tool Name */
+            tool_name?: string | null;
+            /** Bridge Status */
+            bridge_status?: string | null;
+            /** Thread Subscription Status */
+            thread_subscription_status?: string | null;
+            /** Observed At */
+            observed_at?: string | null;
+            /**
+             * Lease Ttl Ms
+             * @default 900000
+             */
+            lease_ttl_ms: number;
         };
         /**
          * ManagedSessionTransport
@@ -7685,10 +7718,10 @@ export interface components {
          * @description How much autonomy Oikos may exercise for a coding session.
          * @enum {string}
          */
-        SessionLoopMode: "manual" | "assist" | "autopilot";
+        SessionLoopMode: "assist" | "autopilot";
         /** SessionLoopModeRequest */
         SessionLoopModeRequest: {
-            /** @description manual | assist | autopilot */
+            /** @description assist | autopilot */
             loop_mode: components["schemas"]["SessionLoopMode"];
         };
         /** SessionLoopModeResponse */
@@ -8109,8 +8142,8 @@ export interface components {
             /** @description Canonical session capability flags */
             capabilities: components["schemas"]["SessionCapabilitiesResponse"];
             /**
-             * @description Session loop mode: manual|assist|autopilot
-             * @default manual
+             * @description Session loop mode: assist|autopilot
+             * @default assist
              */
             loop_mode: components["schemas"]["SessionLoopMode"];
             /**
@@ -14993,6 +15026,8 @@ export interface operations {
                 context_mode?: string;
                 /** @description Branch projection mode: head|all */
                 branch_mode?: string;
+                /** @description Page anchor: start|tail */
+                anchor?: string;
                 /** @description Max results */
                 limit?: number;
                 /** @description Offset for pagination */
