@@ -215,6 +215,56 @@ describe("SessionChat", () => {
     expect(screen.queryByText(/--resume/i)).not.toBeInTheDocument();
   });
 
+  it("drafts a managed-local reply into an empty composer", async () => {
+    const user = userEvent.setup();
+
+    fetchWithRefreshMock.mockImplementation((url: string) => {
+      if (url.endsWith("/draft-reply")) {
+        return Promise.resolve(jsonResponse({ draft_text: "Ask for a concise status update." }));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderSessionChat({ chatMode: "managed_local" });
+
+    await user.click(screen.getByRole("button", { name: /draft reply/i }));
+
+    expect(getLastRequestBody("/draft-reply")).toEqual({ max_chars: 1200 });
+    await waitFor(() => {
+      expect(screen.getByRole("textbox")).toHaveValue("Ask for a concise status update.");
+    });
+    expect(screen.getByRole("button", { name: /send/i })).toBeEnabled();
+  });
+
+  it("keeps draft reply disabled once the composer has text", async () => {
+    const user = userEvent.setup();
+
+    renderSessionChat({ chatMode: "managed_local" });
+
+    await user.type(screen.getByRole("textbox"), "I already know what to send");
+
+    expect(screen.getByRole("button", { name: /draft reply/i })).toBeDisabled();
+    expect(getRequestCallCount("/draft-reply")).toBe(0);
+  });
+
+  it("shows a clear message when a draft reply is empty", async () => {
+    const user = userEvent.setup();
+
+    fetchWithRefreshMock.mockImplementation((url: string) => {
+      if (url.endsWith("/draft-reply")) {
+        return Promise.resolve(jsonResponse({ draft_text: "   " }));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderSessionChat({ chatMode: "managed_local" });
+
+    await user.click(screen.getByRole("button", { name: /draft reply/i }));
+
+    expect(await screen.findByText("No draft suggestion available yet.")).toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toHaveValue("");
+  });
+
 
   it("blocks duplicate input until a managed-local ack arrives, then refreshes all workspace caches", async () => {
     const user = userEvent.setup();

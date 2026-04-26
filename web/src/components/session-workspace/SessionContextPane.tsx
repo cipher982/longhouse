@@ -73,14 +73,14 @@ export function SessionContextPane({
   const loopModeCaption = config.demoMode
     ? "Preview only in the demo."
     : !interaction.isManagedLocalSession
-      ? "Stored preference only."
+      ? "Stored preference only. Start a managed session to steer from Longhouse."
       : interaction.liveControlAvailable
         ? session.loop_mode === "autopilot"
-          ? "Continues this session automatically within turn limits."
+          ? "Saved as an autopilot preference. Automatic turns are not active until a runner is connected."
           : session.loop_mode === "assist"
-            ? "Suggests next steps. You approve what gets sent."
+            ? "Drafts replies for review. You choose what gets sent."
             : "No automation. You drive this session yourself."
-        : "Saved. Active when live control connects.";
+        : "Saved as a preference. Active controls return when live control connects.";
   const attachDebugCopy = `Run this on ${attachRunnerLabel} to open this existing managed ${interaction.providerLabel} session in a terminal UI. This does not restart the session.`;
   const shouldShowNotice =
     continuationNotice && !interaction.managedLaunchSuggestion;
