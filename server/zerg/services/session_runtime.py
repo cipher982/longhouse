@@ -34,6 +34,7 @@ PHASE_FRESHNESS = {
     "blocked": timedelta(hours=24),
     "needs_user": timedelta(hours=24),
 }
+MANAGED_CODEX_FRESHNESS = timedelta(minutes=15)
 INFERRED_PROGRESS_WINDOW = timedelta(minutes=5)
 LIVE_EXECUTION_PHASES = {"thinking", "running"}
 ATTENTION_PHASES = {"blocked", "needs_user"}
@@ -66,6 +67,16 @@ def phase_freshness_ms(phase: str | None) -> int | None:
     if window is None:
         return None
     return int(window.total_seconds() * 1000)
+
+
+def _phase_signal_freshness_ms(event: RuntimeEventIngest, phase: str) -> int | None:
+    if event.freshness_ms is not None:
+        return event.freshness_ms
+    provider = (event.provider or "").strip().lower()
+    source = (event.source or "").strip().lower()
+    if provider == "codex" and source == "codex_bridge":
+        return int(MANAGED_CODEX_FRESHNESS.total_seconds() * 1000)
+    return phase_freshness_ms(phase)
 
 
 class RuntimeEventIngest(BaseModel):
@@ -503,7 +514,7 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> bool:
             state.active_tool = None
         state.last_runtime_signal_at = occurred_at
         state.last_live_at = occurred_at
-        freshness_ms = event.freshness_ms or phase_freshness_ms(next_phase)
+        freshness_ms = _phase_signal_freshness_ms(event, next_phase)
         state.freshness_expires_at = occurred_at + timedelta(milliseconds=freshness_ms) if freshness_ms is not None else None
         state.terminal_state = None
         state.terminal_at = None

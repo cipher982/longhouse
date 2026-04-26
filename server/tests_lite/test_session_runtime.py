@@ -157,6 +157,59 @@ def test_runtime_reducer_materializes_phase_progress_and_terminal(tmp_path):
     engine.dispose()
 
 
+def test_managed_codex_bridge_signal_does_not_shorten_attached_lease_freshness(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_managed_codex_bridge_freshness.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, provider="codex", started_at=now - timedelta(hours=1))
+        session.execution_home = "managed_local"
+        session.managed_transport = "codex_app_server"
+        runtime_key = runtime_key_for_session("codex", str(session.id))
+        lease_freshness_ms = 15 * 60 * 1000
+
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="engine_attached_lease",
+                    kind="phase_signal",
+                    phase="thinking",
+                    occurred_at=now,
+                    freshness_ms=lease_freshness_ms,
+                    dedupe_key="lease-1",
+                    payload={"state": "attached"},
+                ),
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="codex_bridge",
+                    kind="phase_signal",
+                    phase="thinking",
+                    occurred_at=now + timedelta(seconds=30),
+                    dedupe_key="bridge-thinking-1",
+                    payload={"managed_transport": "codex_app_server"},
+                ),
+            ],
+        )
+        db.commit()
+
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        assert state.phase == "thinking"
+        assert state.last_runtime_signal_at is not None
+        assert state.last_runtime_signal_at.replace(tzinfo=timezone.utc) == now + timedelta(seconds=30)
+        assert state.freshness_expires_at is not None
+        assert state.freshness_expires_at.replace(tzinfo=timezone.utc) == now + timedelta(seconds=30, minutes=15)
+
+    engine.dispose()
+
+
 def test_runtime_batch_endpoint_is_idempotent(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "runtime_endpoint.db")
     now = datetime.now(timezone.utc)
