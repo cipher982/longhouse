@@ -453,62 +453,22 @@ def prepare_session_live_activity_pushes(
     return tuple(notifications)
 
 
-async def dispatch_session_presence_pushes(
+async def send_presence_pushes(
     *,
-    session_id: UUID,
-    owner_id: int | None,
-    previous_presence_state: str | None,
-    canonical_presence_state: str | None,
-    tool_name: str | None,
-    occurred_at: datetime,
+    attention_push: SessionAttentionPush | None,
+    attention_resolution_push: SessionAttentionResolutionPush | None,
+    widget_push: WidgetTimelinePush | None,
+    live_activity_pushes: tuple[LiveActivityPush, ...],
     db: Session,
     ws,
     dispatch_label_prefix: str,
 ) -> None:
-    """Prepare and send all APNs pushes (attention, resolution, widget, live
-    activity) for a single session presence transition.
+    """Send pre-prepared APNs pushes and roll back debounce stamps on reject.
 
-    Extracted so the managed runtime path (/api/agents/runtime/events/batch)
-    can drive the same lock-screen / widget / Live Activity fan-out as the
-    hook-outbox presence path. Rolls back debounce stamps if APNs rejects.
+    Caller is responsible for preparing the pushes atomically with the
+    underlying state write (same WriteSerializer closure). This helper only
+    performs the network send + rollback.
     """
-
-    def _prepare(write_db: Session):
-        attention_push = prepare_session_attention_push(
-            write_db,
-            owner_id=owner_id,
-            session_id=session_id,
-            previous_state=previous_presence_state,
-            current_state=canonical_presence_state,
-            occurred_at=occurred_at,
-            current_tool_name=tool_name,
-        )
-        attention_resolution_push = prepare_session_attention_resolution_push(
-            write_db,
-            owner_id=owner_id,
-            session_id=session_id,
-            previous_state=previous_presence_state,
-            current_state=canonical_presence_state,
-            occurred_at=occurred_at,
-        )
-        widget_push = prepare_widget_timeline_push(
-            write_db,
-            owner_id=owner_id,
-            occurred_at=occurred_at,
-        )
-        live_activity_pushes = prepare_session_live_activity_pushes(
-            write_db,
-            owner_id=owner_id,
-            session_id=session_id,
-            current_state=canonical_presence_state,
-            current_tool_name=tool_name,
-            occurred_at=occurred_at,
-        )
-        return attention_push, attention_resolution_push, widget_push, live_activity_pushes
-
-    attention_push, attention_resolution_push, widget_push, live_activity_pushes = await ws.execute_or_direct(
-        _prepare, db, label=f"{dispatch_label_prefix}-prepare"
-    )
 
     if attention_push is not None:
         push_sent = False

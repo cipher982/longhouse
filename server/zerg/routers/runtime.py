@@ -16,7 +16,11 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.metrics import event_age_at_ingest_seconds
 from zerg.models.agents import AgentSession
-from zerg.services.apns_sender import dispatch_session_presence_pushes
+from zerg.services.apns_sender import prepare_session_attention_push
+from zerg.services.apns_sender import prepare_session_attention_resolution_push
+from zerg.services.apns_sender import prepare_session_live_activity_pushes
+from zerg.services.apns_sender import prepare_widget_timeline_push
+from zerg.services.apns_sender import send_presence_pushes
 from zerg.services.session_messages import deliver_queued_session_messages
 from zerg.services.session_messages import is_session_message_deliverable_state
 from zerg.services.session_messages import resolve_session_message_owner_id
@@ -63,17 +67,77 @@ async def ingest_runtime_event_batch(
                 managed="true",
             ).observe(age_s)
 
-        # Snapshot presence state per session before writing so APNs dispatcher
-        # can distinguish new-attention transitions from repeat states.
+        # Snapshot presence, ingest, and prepare APNs pushes atomically in one
+        # write-serializer closure so the debounce stamps observed by prepare_*
+        # match the state the ingest just committed. Mirrors presence.py.
         session_ids_in_batch = sorted({ev.session_id for ev in events if ev.session_id is not None}, key=str)
-        previous_presence_by_session: dict = {}
+        # Pick first non-empty tool_name per session for attention push context.
+        tool_by_session: dict = {}
+        for ev in events:
+            if ev.session_id is not None and ev.tool_name:
+                tool_by_session.setdefault(ev.session_id, ev.tool_name)
+        owner_id = resolve_session_message_owner_id(db, _token)
 
-        def _do(wdb: Session) -> RuntimeEventBatchResult:
+        def _do(wdb: Session):
+            previous_by_session: dict = {}
             for sid in session_ids_in_batch:
-                previous_presence_by_session[sid] = current_presence_state_for_session(wdb, sid, now=now_utc)
-            return ingest_runtime_events(wdb, events)
+                previous_by_session[sid] = current_presence_state_for_session(wdb, sid, now=now_utc)
+            ingest_result = ingest_runtime_events(wdb, events)
 
-        result = await ws.execute_or_direct(_do, db, label="runtime-events")
+            # Prepare per-session pushes on the post-ingest state.
+            prepared: list[dict] = []
+            if session_ids_in_batch:
+                session_rows = wdb.query(AgentSession).filter(AgentSession.id.in_(session_ids_in_batch)).all()
+                runtime_state_map = load_runtime_state_map(wdb, session_ids_in_batch)
+                for session_row in session_rows:
+                    canonical_state = resolve_runtime_overlay(
+                        session_row,
+                        last_activity_at=session_row.last_activity_at,
+                        runtime_state_map=runtime_state_map,
+                        now=now_utc,
+                    ).presence_state
+                    sid = session_row.id
+                    tool = tool_by_session.get(sid)
+                    prev = previous_by_session.get(sid)
+                    prepared.append(
+                        {
+                            "session_id": sid,
+                            "canonical_state": canonical_state,
+                            "attention_push": prepare_session_attention_push(
+                                wdb,
+                                owner_id=owner_id,
+                                session_id=sid,
+                                previous_state=prev,
+                                current_state=canonical_state,
+                                occurred_at=now_utc,
+                                current_tool_name=tool,
+                            ),
+                            "attention_resolution_push": prepare_session_attention_resolution_push(
+                                wdb,
+                                owner_id=owner_id,
+                                session_id=sid,
+                                previous_state=prev,
+                                current_state=canonical_state,
+                                occurred_at=now_utc,
+                            ),
+                            "widget_push": prepare_widget_timeline_push(
+                                wdb,
+                                owner_id=owner_id,
+                                occurred_at=now_utc,
+                            ),
+                            "live_activity_pushes": prepare_session_live_activity_pushes(
+                                wdb,
+                                owner_id=owner_id,
+                                session_id=sid,
+                                current_state=canonical_state,
+                                current_tool_name=tool,
+                                occurred_at=now_utc,
+                            ),
+                        }
+                    )
+            return ingest_result, prepared
+
+        result, prepared_per_session = await ws.execute_or_direct(_do, db, label="runtime-events")
 
         # Publish per-session after a successful write; SSE subscribers wake directly.
         if events:
@@ -99,46 +163,32 @@ async def ingest_runtime_event_batch(
                 bus.publish(topic_session(sid), payload)
                 bus.publish(TOPIC_TIMELINE, payload)
 
-        session_ids = sorted({event.session_id for event in events if event.session_id is not None}, key=str)
-        if session_ids:
-            sessions = db.query(AgentSession).filter(AgentSession.id.in_(session_ids)).all()
-            if sessions:
-                now = datetime.now(timezone.utc)
-                owner_id = resolve_session_message_owner_id(db, _token)
-                runtime_state_map = load_runtime_state_map(db, session_ids)
-                # Tool-name lookup from the batch for attention push context.
-                tool_by_session: dict = {}
-                for ev in events:
-                    if ev.session_id is not None and ev.tool_name:
-                        tool_by_session.setdefault(ev.session_id, ev.tool_name)
-                for session in sessions:
-                    current_state = resolve_runtime_overlay(
-                        session,
-                        last_activity_at=session.last_activity_at,
-                        runtime_state_map=runtime_state_map,
-                        now=now,
-                    ).presence_state
-                    # APNs fan-out (Live Activity, attention alert, widget push)
-                    # for managed runtime events. Mirrors /api/agents/presence.
-                    await dispatch_session_presence_pushes(
-                        session_id=session.id,
-                        owner_id=owner_id,
-                        previous_presence_state=previous_presence_by_session.get(session.id),
-                        canonical_presence_state=current_state,
-                        tool_name=tool_by_session.get(session.id),
-                        occurred_at=now,
-                        db=db,
-                        ws=ws,
-                        dispatch_label_prefix="runtime",
-                    )
-                    if not is_session_message_deliverable_state(current_state):
-                        continue
+        # Send pre-prepared APNs pushes + deliver queued messages, per session.
+        # Per-session exception fence so one bad dispatch doesn't skip the rest.
+        for item in prepared_per_session:
+            sid = item["session_id"]
+            canonical_state = item["canonical_state"]
+            try:
+                await send_presence_pushes(
+                    attention_push=item["attention_push"],
+                    attention_resolution_push=item["attention_resolution_push"],
+                    widget_push=item["widget_push"],
+                    live_activity_pushes=item["live_activity_pushes"],
+                    db=db,
+                    ws=ws,
+                    dispatch_label_prefix="runtime",
+                )
+                if is_session_message_deliverable_state(canonical_state):
                     await deliver_queued_session_messages(
                         db=db,
                         owner_id=owner_id,
-                        target_session_id=session.id,
-                        target_presence_state=current_state,
+                        target_session_id=sid,
+                        target_presence_state=canonical_state,
                     )
+            except Exception:
+                import logging
+
+                logging.getLogger(__name__).exception("APNs dispatch failed for session %s; continuing batch", sid)
 
         return result
     except HTTPException:
