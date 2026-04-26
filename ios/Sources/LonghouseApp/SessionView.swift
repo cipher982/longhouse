@@ -6,6 +6,7 @@ struct SessionView: View {
     let fallbackTitle: String
 
     @EnvironmentObject var appState: AppState
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var viewModel = SessionViewModel()
     @StateObject private var liveActivityManager = SessionLiveActivityManager()
     @State private var composerText: String = ""
@@ -30,6 +31,19 @@ struct SessionView: View {
         }
         .task(id: sessionId) { await viewModel.start(sessionId: sessionId, appState: appState) }
         .onDisappear { viewModel.stop() }
+        .onChange(of: scenePhase) { _, newPhase in
+            // SSE over URLSession is foreground-only per Apple's contract.
+            // Tear down on background/inactive so we're not leaking a dead
+            // connection; restart on return to active.
+            switch newPhase {
+            case .active:
+                Task { await viewModel.start(sessionId: sessionId, appState: appState) }
+            case .background, .inactive:
+                viewModel.stop()
+            @unknown default:
+                break
+            }
+        }
         .onChange(of: viewModel.liveActivityFingerprint) { _, _ in
             guard let detail = viewModel.detail else { return }
             Task { await liveActivityManager.update(detail: detail) }
@@ -982,8 +996,8 @@ final class SessionViewModel: ObservableObject {
         let s = SessionWorkspaceStream(baseURL: base, sessionId: sessionId)
         stream = s
         streamTask = Task { [weak self] in
-            await s.start()
-            for await event in await s.events() {
+            let events = await s.start()
+            for await event in events {
                 if Task.isCancelled { break }
                 await self?.handleStreamEvent(event, sessionId: sessionId, appState: appState)
             }
