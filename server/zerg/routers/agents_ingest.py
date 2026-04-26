@@ -250,6 +250,24 @@ async def ingest_session(
                 agents_ingest_events_total.labels(provider=provider_label, kind="inserted").inc(result.events_inserted)
                 agents_ingest_events_total.labels(provider=provider_label, kind="skipped").inc(result.events_skipped)
 
+            # Publish to per-session pubsub so SSE subscribers wake directly.
+            # Lives outside the DB transaction: publish only reflects persisted state.
+            if result.events_inserted > 0:
+                from zerg.services.session_pubsub import TOPIC_TIMELINE
+                from zerg.services.session_pubsub import get_pubsub
+                from zerg.services.session_pubsub import topic_session
+
+                bus = get_pubsub()
+                session_id_str = str(result.session_id)
+                payload = {
+                    "kind": "ingest",
+                    "session_id": session_id_str,
+                    "events_inserted": result.events_inserted,
+                    "provider": provider_label,
+                }
+                bus.publish(topic_session(session_id_str), payload)
+                bus.publish(TOPIC_TIMELINE, payload)
+
             set_span_attributes(
                 span,
                 {
