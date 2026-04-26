@@ -227,6 +227,23 @@ export function getCardRuntimePhaseLabel(runtime: ReturnType<typeof resolveSessi
   return runtime.displayPhase;
 }
 
+export function getRuntimeOutcomeLabel(
+  runtime: ReturnType<typeof resolveSessionRuntimeState>,
+  {
+    endedAt = null,
+  }: {
+    endedAt?: string | null;
+  } = {},
+): string {
+  if (runtime.status === "completed" || endedAt != null) {
+    return "Completed";
+  }
+  if (runtime.isExecuting || runtime.needsAttention || runtime.heuristicActive) {
+    return "Active";
+  }
+  return "Inactive";
+}
+
 export interface RuntimeDisplayCopy {
   headline: string;
   detail: string | null;

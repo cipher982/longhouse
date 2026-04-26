@@ -905,12 +905,12 @@ describe("SessionsPage", () => {
     });
   });
 
-  it("renders live runtime state directly on the main timeline cards", async () => {
+  it("renders outcome runtime state directly on unmanaged timeline cards", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
           makeTimelineCard({
-            ended_at: "2026-03-21T12:03:00Z",
+            ended_at: null,
             status: "working",
             presence_state: "running",
             presence_tool: "bash",
@@ -929,7 +929,8 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
-    expect(await screen.findByText("Running Shell")).toBeInTheDocument();
+    expect(await screen.findByText("Active")).toBeInTheDocument();
+    expect(screen.queryByText("Running Shell")).not.toBeInTheDocument();
     expect(screen.queryByText("Working")).not.toBeInTheDocument();
     expect(screen.queryByText("Fresh signal")).not.toBeInTheDocument();
     expect(screen.queryByText("In progress")).not.toBeInTheDocument();
@@ -998,7 +999,8 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
-    expect(await screen.findByText("Recent progress")).toBeInTheDocument();
+    expect(await screen.findByText("Active")).toBeInTheDocument();
+    expect(screen.queryByText("Recent progress")).not.toBeInTheDocument();
     expect(screen.queryByText("In progress")).not.toBeInTheDocument();
   });
 
@@ -1023,7 +1025,7 @@ describe("SessionsPage", () => {
 
     const { container } = renderSessionsPage();
 
-    await screen.findByText("Recent progress");
+    await screen.findByText("Active");
 
     const card = container.querySelector(".session-card");
     expect(card).toHaveClass("session-card--inferred");

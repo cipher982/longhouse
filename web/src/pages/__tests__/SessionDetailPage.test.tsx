@@ -300,6 +300,9 @@ describe("SessionDetailPage", () => {
       "false",
     );
     expect(screen.getByText("Advanced · Assistance off")).toBeInTheDocument();
+    expect(
+      screen.getByText("No automation. You drive this session yourself."),
+    ).toBeInTheDocument();
     const loopModeTitle = screen.getByText("Loop Mode");
     const summaryTitle = screen.getByText("Summary");
     const metadataTitle = screen.getByText("Metadata");
