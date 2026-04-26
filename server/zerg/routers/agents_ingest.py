@@ -23,6 +23,7 @@ from zerg.metrics import agents_ingest_events_total
 from zerg.metrics import agents_ingest_payload_bytes
 from zerg.metrics import agents_ingest_requests_total
 from zerg.metrics import agents_ingest_write_seconds
+from zerg.metrics import event_age_at_ingest_seconds
 from zerg.models.device_token import DeviceToken
 from zerg.observability import get_tracer
 from zerg.observability import set_span_attributes
@@ -183,6 +184,31 @@ async def ingest_session(
                     },
                 )
                 agents_ingest_events_total.labels(provider=provider_label, kind="received").inc(len(data.events))
+
+                # Event age at ingest: emitted_at -> now. Hook token = managed local session.
+                managed_label = "true" if isinstance(auth_token, ManagedLocalHookToken) else "false"
+                if data.events:
+                    from datetime import datetime
+                    from datetime import timezone
+
+                    now_utc = datetime.now(timezone.utc)
+                    for ev in data.events:
+                        ev_ts = ev.timestamp
+                        if ev_ts is None:
+                            continue
+                        if ev_ts.tzinfo is None:
+                            ev_ts = ev_ts.replace(tzinfo=timezone.utc)
+                        age_s = (now_utc - ev_ts).total_seconds()
+                        # Clamp negative (clock skew) to 0; ignore ancient replays > 1h.
+                        if age_s < 0:
+                            age_s = 0.0
+                        elif age_s > 3600:
+                            continue
+                        event_age_at_ingest_seconds.labels(
+                            surface="ingest",
+                            provider=provider_label,
+                            managed=managed_label,
+                        ).observe(age_s)
                 set_span_attributes(
                     span,
                     {

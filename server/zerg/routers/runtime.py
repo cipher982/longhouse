@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.metrics import event_age_at_ingest_seconds
 from zerg.models.agents import AgentSession
 from zerg.services.session_messages import deliver_queued_session_messages
 from zerg.services.session_messages import is_session_message_deliverable_state
@@ -39,6 +40,26 @@ async def ingest_runtime_event_batch(
     try:
         ws = get_write_serializer()
         events = payload.events
+
+        # Event age at ingest: occurred_at (engine) -> now (server receive).
+        # Runtime events come from codex_bridge, always managed.
+        now_utc = datetime.now(timezone.utc)
+        for ev in events:
+            ev_ts = ev.occurred_at
+            if ev_ts is None:
+                continue
+            if ev_ts.tzinfo is None:
+                ev_ts = ev_ts.replace(tzinfo=timezone.utc)
+            age_s = (now_utc - ev_ts).total_seconds()
+            if age_s < 0:
+                age_s = 0.0
+            elif age_s > 3600:
+                continue
+            event_age_at_ingest_seconds.labels(
+                surface="runtime",
+                provider=ev.provider or "unknown",
+                managed="true",
+            ).observe(age_s)
 
         def _do(wdb: Session) -> RuntimeEventBatchResult:
             return ingest_runtime_events(wdb, events)

@@ -184,6 +184,30 @@ try:
         labelnames=("provider", "kind"),
     )
 
+    # Event age at ingest: emitted_at (provider/engine) -> server receive.
+    # Upper bound on engine→server hop; drives the SLA budget for realtime UI.
+    event_age_at_ingest_seconds = Histogram(
+        "event_age_at_ingest_seconds",
+        "Age of an event when the server first sees it (emitted_at → ingest receive) in seconds",
+        labelnames=("surface", "provider", "managed"),
+        buckets=(0.01, 0.025, 0.05, 0.1, 0.15, 0.25, 0.5, 1, 2, 5, 15, 60),
+    )
+
+    # Total end-to-end latency: provider emitted_at -> UI rendered (beacon from client).
+    # The user-facing SLA metric. Labels let us track web vs ios, managed vs unmanaged.
+    event_end_to_end_latency_seconds = Histogram(
+        "event_end_to_end_latency_seconds",
+        "Total provider-emit to client-render latency (seconds)",
+        labelnames=("surface", "managed"),
+        buckets=(0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.75, 1, 2, 5, 15),
+    )
+
+    event_render_beacons_total = Counter(
+        "event_render_beacons_total",
+        "Client render beacons received (for end-to-end latency tracking)",
+        labelnames=("surface", "outcome"),
+    )
+
     agents_heartbeat_requests_total = Counter(
         "agents_heartbeat_requests_total",
         "Agent heartbeat requests by auth kind and status",
@@ -296,3 +320,6 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
     agents_ingest_payload_bytes = _NoopHistogram()  # type: ignore[assignment]
     agents_heartbeat_write_seconds = _NoopHistogram()  # type: ignore[assignment]
     agents_heartbeat_payload_bytes = _NoopHistogram()  # type: ignore[assignment]
+    event_age_at_ingest_seconds = _NoopHistogram()  # type: ignore[assignment]
+    event_end_to_end_latency_seconds = _NoopHistogram()  # type: ignore[assignment]
+    event_render_beacons_total = _NoopCounter()  # type: ignore[assignment]
