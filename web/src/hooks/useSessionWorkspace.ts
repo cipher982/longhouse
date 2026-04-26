@@ -86,8 +86,12 @@ export function useSessionWorkspace(
 
   // SSE stream subscription — invalidates queries on server-side change detection
   useEffect(() => {
+    // Always reset connection state at effect entry; the replacement stream
+    // hasn't confirmed yet, so the fallback poll should stay armed until the
+    // fresh onConnected fires.
+    setStreamConnected(false);
+
     if (!sessionId || !documentVisible) {
-      setStreamConnected(false);
       return;
     }
 
