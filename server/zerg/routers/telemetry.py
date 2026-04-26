@@ -212,6 +212,37 @@ class CanaryObservation(BaseModel):
 _canary_last_obs_monotonic: dict[str, float] = {}
 
 
+@canary_router.get("/canary-session", include_in_schema=False)
+async def canary_session_lookup() -> dict:
+    """Return the most-recently-active canary session_id.
+
+    Used by the Playwright render-canary test in CI to discover which
+    session to open without having to plumb a session_id through env.
+    Gated by canary token (same shared secret as observation posts).
+    """
+    from zerg.database import get_db
+    from zerg.models.agents import AgentSession
+
+    db_gen = get_db()
+    try:
+        db = next(db_gen)
+    except StopIteration:
+        return {"session_id": None}
+    try:
+        row = (
+            db.query(AgentSession)
+            .filter(AgentSession.provider == "canary")
+            .order_by(AgentSession.last_activity_at.desc().nullslast(), AgentSession.started_at.desc())
+            .first()
+        )
+        return {"session_id": str(row.id) if row else None}
+    finally:
+        try:
+            next(db_gen, None)
+        except Exception:
+            pass
+
+
 @canary_router.post("/canary-observation", include_in_schema=False)
 async def canary_observation(obs: CanaryObservation) -> dict:
     """Record a canary latency observation.
