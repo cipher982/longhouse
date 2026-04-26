@@ -69,38 +69,54 @@ function SeamRow({ seam }: { seam: TimelineSeam }) {
   );
 }
 
-const MESSAGE_COLLAPSE_CHARS = 40_000;
+const MESSAGE_COLLAPSE_LINE_LIMIT = 600;
+const MESSAGE_PREVIEW_HEAD_LINES = 220;
+const MESSAGE_PREVIEW_TAIL_LINES = 80;
 
-/** Truncate preview to at most `maxChars` without leaving an unclosed fenced
- *  code block — ReactMarkdown would otherwise treat the rest of the document
- *  as "inside a code block" and render everything as code. */
-function truncateMarkdown(text: string, maxChars: number): string {
-  if (text.length <= maxChars) return text;
+function messageLineCount(text: string): number {
+  return text === "" ? 0 : text.split("\n").length;
+}
+
+function hiddenLineMarker(hiddenLines: number): string {
+  return `... ${hiddenLines.toLocaleString()} line${hiddenLines === 1 ? "" : "s"} hidden ...`;
+}
+
+/** Build a line-count based sandwich preview. This keeps the start and end of
+ *  dump-sized messages visible, so final conclusions and error lines are not
+ *  hidden behind expansion. */
+function truncateMarkdown(text: string): string {
   const lines = text.split("\n");
-  let cut = 0;
-  let chars = 0;
-  while (cut < lines.length) {
-    const nextLength = lines[cut].length + (cut === 0 ? 0 : 1);
-    if (chars + nextLength > maxChars) break;
-    chars += nextLength;
-    cut += 1;
-  }
-  if (cut === 0) {
-    return text.slice(0, maxChars);
-  }
+  if (lines.length <= MESSAGE_COLLAPSE_LINE_LIMIT) return text;
 
-  // Count fences (``` or ~~~) up to the cut; if odd, we're inside a fence —
-  // drop lines back until the last open fence, then chop that opener too.
-  const isFence = (l: string) => /^\s*(```|~~~)/.test(l);
+  const tailCount = Math.min(MESSAGE_PREVIEW_TAIL_LINES, Math.max(0, lines.length - MESSAGE_PREVIEW_HEAD_LINES));
+  let headCut = Math.min(MESSAGE_PREVIEW_HEAD_LINES, lines.length - tailCount);
+  const tailStart = lines.length - tailCount;
+
+  // Count fences (``` or ~~~) in the head; if odd, we're inside a fence.
+  // Drop back to before the opening fence so the omitted marker and tail
+  // remain prose instead of being rendered as part of a code block.
+  const isFence = (line: string) => /^\s*(```|~~~)/.test(line);
   let fences = 0;
-  for (let i = 0; i < cut; i++) if (isFence(lines[i])) fences++;
+  for (let i = 0; i < headCut; i++) {
+    if (isFence(lines[i])) fences++;
+  }
   if (fences % 2 === 1) {
-    // Walk back to the last opening fence and cut just before it.
-    for (let i = cut - 1; i >= 0; i--) {
-      if (isFence(lines[i])) { cut = i; break; }
+    for (let i = headCut - 1; i >= 0; i--) {
+      if (isFence(lines[i])) {
+        headCut = i;
+        break;
+      }
     }
   }
-  return lines.slice(0, cut).join("\n");
+
+  const hiddenLines = Math.max(0, tailStart - headCut);
+  return [
+    ...lines.slice(0, headCut),
+    "",
+    hiddenLineMarker(hiddenLines),
+    "",
+    ...lines.slice(tailStart),
+  ].join("\n");
 }
 
 function MessageRow({
@@ -112,10 +128,10 @@ function MessageRow({
   const outside = isOutsideActiveContext(event);
   const isUser = event.role === "user";
   const isAssistant = event.role === "assistant";
-  const isLong = preview.length > MESSAGE_COLLAPSE_CHARS;
+  const isLong = messageLineCount(preview) > MESSAGE_COLLAPSE_LINE_LIMIT;
   const [expanded, setExpanded] = useState(false);
   const visible = isLong && !expanded
-    ? truncateMarkdown(preview, MESSAGE_COLLAPSE_CHARS)
+    ? truncateMarkdown(preview)
     : preview;
 
   return (
