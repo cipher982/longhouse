@@ -77,7 +77,9 @@ export function SessionContextPane({
       : interaction.liveControlAvailable
         ? session.loop_mode === "autopilot"
           ? "Continues this session automatically within turn limits."
-          : "Suggests next steps. You approve what gets sent."
+          : session.loop_mode === "assist"
+            ? "Suggests next steps. You approve what gets sent."
+            : "No automation. You drive this session yourself."
         : "Saved. Active when live control connects.";
   const attachDebugCopy = `Run this on ${attachRunnerLabel} to open this existing managed ${interaction.providerLabel} session in a terminal UI. This does not restart the session.`;
   const shouldShowNotice =

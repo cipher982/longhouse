@@ -4,6 +4,7 @@ import { PresenceBadge } from "../PresenceBadge";
 import {
   getRuntimeDisplayCopy,
   getRuntimeMetaLabel,
+  getRuntimeOutcomeLabel,
 } from "../../lib/sessionUtils";
 import { resolveSessionRuntimeState } from "../../lib/sessionRuntime";
 
@@ -41,19 +42,6 @@ function getCapabilityMeta({
   return "Search only";
 }
 
-function getSearchOnlyRuntimePhase(
-  runtime: ReturnType<typeof resolveSessionRuntimeState>,
-  session: AgentSession,
-): string {
-  if (runtime.status === "completed" || session.ended_at) {
-    return "Completed";
-  }
-  if (runtime.isExecuting || runtime.needsAttention || runtime.heuristicActive) {
-    return "Active";
-  }
-  return "Inactive";
-}
-
 export function SessionRuntimeStrip({
   session,
   interaction,
@@ -69,7 +57,7 @@ export function SessionRuntimeStrip({
   });
   const runtimePhase = interaction.isManagedLocalSession
     ? runtimeDisplay.headline
-    : getSearchOnlyRuntimePhase(runtime, session);
+    : getRuntimeOutcomeLabel(runtime, { endedAt: session.ended_at });
   const runtimeDetail = interaction.isManagedLocalSession
     ? (detailOverride ?? runtimeDisplay.detail)
     : null;

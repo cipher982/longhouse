@@ -51,7 +51,7 @@ export function LoopModeSelector({
         })}
       </div>
       <div className="session-loop-mode__caption">
-        {manualActive ? "Assistance is off." : caption}
+        {caption}
       </div>
       <details className="session-loop-mode__advanced">
         <summary className="session-loop-mode__advanced-summary">

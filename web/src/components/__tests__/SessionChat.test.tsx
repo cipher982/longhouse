@@ -162,6 +162,23 @@ describe("SessionChat", () => {
     expect(screen.getByText("Unavailable")).toBeInTheDocument();
   });
 
+  it("replaces disabled full-panel composer controls with status copy", () => {
+    renderSessionChat({
+      layout: "panel",
+      composerDisabledReason: "Longhouse can see this session, but cannot send prompts until the engine reconnects.",
+    });
+
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send" })).not.toBeInTheDocument();
+    expect(screen.getByTestId("session-chat-disabled-reason")).toHaveTextContent(
+      "Control offline",
+    );
+    expect(screen.getByTestId("session-chat-disabled-reason")).toHaveTextContent(
+      "cannot send prompts until the engine reconnects",
+    );
+    expect(screen.getByText("Unavailable")).toBeInTheDocument();
+  });
+
   it("shows a managed-launch hint card for unmanaged sessions", () => {
     renderSessionChat({
       composerDisabledReason: "Live control is unavailable for this unmanaged Codex session.",

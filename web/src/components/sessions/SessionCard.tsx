@@ -13,7 +13,7 @@ import { normalizeSessionOriginLabel } from "../../lib/sessionWorkspace";
 import {
   formatRelativeTime,
   getRuntimeMetaLabel,
-  getCardRuntimePhaseLabel,
+  getRuntimeOutcomeLabel,
   getRuntimeDisplayCopy,
   getProjectLabel,
   getSessionTitle,
@@ -115,7 +115,7 @@ export function SessionCard({
   });
   const runtimePhaseLabel = interaction.isManagedLocalSession
     ? runtimeDisplay.headline
-    : getCardRuntimePhaseLabel(runtime);
+    : getRuntimeOutcomeLabel(runtime, { endedAt: session.ended_at });
 
   const projectLabel = getProjectLabel(session);
   const title = getSessionTitle(session);

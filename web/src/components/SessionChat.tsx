@@ -122,7 +122,7 @@ export function SessionChat({
   const isDock = layout === "dock";
   const isManagedLocal = chatMode === "managed_local";
   const isComposerDisabled = Boolean(composerDisabledReason);
-  const showDockUnavailableState = isDock && isComposerDisabled;
+  const showComposerUnavailableState = isComposerDisabled;
   const queryClient = useQueryClient();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
@@ -541,7 +541,7 @@ export function SessionChat({
         onSubmit={handleSend}
         title={composerDisabledReason ?? undefined}
       >
-        {showDockUnavailableState ? (
+        {showComposerUnavailableState ? (
           managedLaunchSuggestion ? (
             <ManagedLaunchHintCard
               suggestion={managedLaunchSuggestion}
@@ -637,19 +637,6 @@ export function SessionChat({
                 </div>
               </>
             )}
-            {!isDock && managedLaunchSuggestion ? (
-              <ManagedLaunchHintCard
-                suggestion={managedLaunchSuggestion}
-                testId="session-chat-managed-launch-hint"
-              />
-            ) : !isDock && composerDisabledReason ? (
-              <div
-                className="session-chat-disabled-reason"
-                data-testid="session-chat-disabled-reason"
-              >
-                {composerDisabledReason}
-              </div>
-            ) : null}
           </>
         )}
       </form>
