@@ -28,8 +28,18 @@
 
 import { test, expect } from "./fixtures";
 
-const SLA_P95_MS = parseInt(process.env.RENDER_CANARY_SLA_P95_MS || "500", 10);
+// Tripwire threshold, not an SLA percentile. With only a handful of
+// samples per run (30s producer tick × 90s window ≈ 3 frames) we can
+// only detect outright brokenness, not distributional drift. 200ms is
+// comfortably above a healthy rAF tick (~16ms typical, ~50ms under
+// moderate load) but well under the 500ms perceptual-realtime ceiling.
+const SLA_P95_MS = parseInt(process.env.RENDER_CANARY_SLA_P95_MS || "200", 10);
 const OBSERVE_WINDOW_MS = parseInt(process.env.RENDER_CANARY_WINDOW_MS || "90000", 10);
+// With the default 30s producer tick we see ~3 frames in 90s, which
+// means "p95" is effectively max-of-3 — a smoke signal, not a real
+// percentile. Set RENDER_CANARY_MIN_SAMPLES=10 and a larger window
+// (or drop producer interval to 5s) if you want a statistically
+// meaningful p95.
 const MIN_SAMPLES = parseInt(process.env.RENDER_CANARY_MIN_SAMPLES || "2", 10);
 
 interface FrameSample {
@@ -212,5 +222,8 @@ test("render canary: SSE frame arrival → browser paint under SLA", async ({
     console.warn(`[render-canary] observation post threw: ${err}`);
   }
 
-  expect(p95, `render paint p95 ${p95.toFixed(1)}ms exceeds SLA ${SLA_P95_MS}ms`).toBeLessThan(SLA_P95_MS);
+  // Called "p95" by convention, but with a small N this is effectively
+  // the max sample. Treat the threshold as a tripwire: if paint-delta is
+  // ever > SLA_P95_MS, something is actually broken (not noise).
+  expect(p95, `render paint ${p95.toFixed(1)}ms exceeds tripwire ${SLA_P95_MS}ms`).toBeLessThan(SLA_P95_MS);
 });
