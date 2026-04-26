@@ -31,6 +31,7 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.metrics import agents_heartbeat_payload_bytes
 from zerg.metrics import agents_heartbeat_requests_total
 from zerg.metrics import agents_heartbeat_write_seconds
+from zerg.metrics import managed_session_heartbeat_lease_rows_total
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionRuntimeState
@@ -41,6 +42,8 @@ from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_runtime import runtime_key_for_session
 from zerg.services.write_serializer import get_write_serializer
+from zerg.session_execution_home import ManagedSessionTransport
+from zerg.session_execution_home import SessionExecutionHome
 from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)
@@ -50,6 +53,9 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 MANAGED_SESSION_LEASE_SOURCE = "engine_attached_lease"
 DEFAULT_MANAGED_SESSION_LEASE_TTL_MS = 15 * 60 * 1000
 MAX_MANAGED_SESSION_LEASE_TTL_MS = 60 * 60 * 1000
+MANAGED_SESSION_LEASE_STATES = {"attached", "detached", "degraded"}
+MANAGED_SESSION_LEASE_PHASES = {"idle", "thinking", "running", "blocked", "needs_user", "none"}
+MANAGED_SESSION_LEASE_PROVIDERS = {"codex", "claude", "gemini"}
 
 
 class ManagedSessionLeaseIn(UTCBaseModel):
@@ -102,6 +108,31 @@ def _managed_session_phase(lease: ManagedSessionLeaseIn) -> str:
     return "idle"
 
 
+def _managed_lease_provider_label(lease: ManagedSessionLeaseIn) -> str:
+    provider = (lease.provider or "").strip().lower()
+    return provider if provider in MANAGED_SESSION_LEASE_PROVIDERS else "other"
+
+
+def _managed_lease_state_label(lease: ManagedSessionLeaseIn) -> str:
+    state = (lease.state or "").strip().lower()
+    return state if state in MANAGED_SESSION_LEASE_STATES else "other"
+
+
+def _managed_lease_phase_label(lease: ManagedSessionLeaseIn) -> str:
+    if lease.phase is None or not str(lease.phase).strip():
+        return "none"
+    phase = str(lease.phase).strip().lower()
+    return phase if phase in MANAGED_SESSION_LEASE_PHASES else "other"
+
+
+def _record_managed_session_lease(lease: ManagedSessionLeaseIn) -> None:
+    managed_session_heartbeat_lease_rows_total.labels(
+        provider=_managed_lease_provider_label(lease),
+        state=_managed_lease_state_label(lease),
+        phase=_managed_lease_phase_label(lease),
+    ).inc()
+
+
 def _dedupe_key_for_lease(lease: ManagedSessionLeaseIn) -> str:
     machine_id = (lease.machine_id or "unknown").strip() or "unknown"
     return f"engine-attached-lease:{machine_id}:{lease.session_id}:{lease.sequence}"
@@ -113,7 +144,8 @@ def _is_managed_codex_session(session: AgentSession | None) -> bool:
     if str(session.provider or "").strip().lower() != "codex":
         return False
     execution_home = str(getattr(session, "execution_home", "") or "").strip()
-    return execution_home == "managed_local" or bool(getattr(session, "managed_transport", None))
+    managed_transport = str(getattr(session, "managed_transport", "") or "").strip()
+    return execution_home == SessionExecutionHome.MANAGED_LOCAL.value or managed_transport == ManagedSessionTransport.CODEX_APP_SERVER.value
 
 
 def _runtime_events_for_managed_leases(
@@ -124,6 +156,7 @@ def _runtime_events_for_managed_leases(
 ) -> list[RuntimeEventIngest]:
     events: list[RuntimeEventIngest] = []
     for lease in leases:
+        _record_managed_session_lease(lease)
         provider = (lease.provider or "").strip().lower() or "unknown"
         state = (lease.state or "").strip().lower()
         runtime_key = runtime_key_for_session(provider, str(lease.session_id))

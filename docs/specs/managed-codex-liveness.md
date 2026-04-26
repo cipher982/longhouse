@@ -71,7 +71,7 @@ or shorten hosted liveness.
 The authoritative reducer boundary is the session row:
 
 - `execution_home = managed_local`, or
-- `managed_transport IS NOT NULL`, or
+- `managed_transport = codex_app_server`, or
 - managed capabilities already attached to the session row
 
 If a Codex session transitions from imported/unmanaged to managed, transcript
@@ -197,6 +197,38 @@ Minimum scenario matrix:
 - orphan bridge or missing TUI reports degraded, not attached
 - explicit final `session_ended` control truth is the only managed Codex path
   that writes `sessions.ended_at`
+
+## Telemetry
+
+Managed liveness telemetry must be reconstructable from SQL and low-cardinality.
+Do not label metrics with `session_id`, `workspace`, `tool_name`, bridge path,
+or machine-specific free text.
+
+Runtime Host emits:
+
+- `managed_session_heartbeat_lease_rows_total{provider,state,phase}` for each
+  managed-session lease row observed in heartbeat payloads before runtime-event
+  dedupe
+- `managed_codex_runtime_events_total{source,kind,outcome}` for reducer flow
+  through managed Codex sources
+- `managed_codex_bridge_freshness_total{outcome}` when Codex bridge phase
+  signals receive the managed freshness budget
+- `managed_codex_liveness_invariant_sessions{invariant}` as SQL-backed gauges
+  for currently violated invariants
+
+The initial invariants are:
+
+- `ended_without_session_ended`: managed Codex session rows with
+  `sessions.ended_at` but no runtime terminal state of `session_ended`
+- `short_freshness`: managed Codex runtime rows whose current freshness window
+  is shorter than the managed liveness budget and whose latest phase signal
+  came from a managed Codex source
+
+The gauges are diagnostic overlays, not a second truth store. They refresh from
+`sessions`, `session_runtime_state`, and `session_runtime_events` during
+Prometheus scrape, so they can be rebuilt after a process restart or queried
+directly when debugging a customer report. They must not run in the heartbeat
+write lane.
 
 ## Rollout
 

@@ -20,12 +20,18 @@ from pydantic import Field
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
+from zerg.metrics import managed_codex_bridge_freshness_total
+from zerg.metrics import managed_codex_liveness_invariant_sessions
+from zerg.metrics import managed_codex_runtime_events_total
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionRuntimeEvent
 from zerg.models.agents import SessionRuntimeState
+from zerg.session_execution_home import ManagedSessionTransport
+from zerg.session_execution_home import SessionExecutionHome
 from zerg.utils.time import normalize_utc
 
 RuntimeEventKind = Literal["phase_signal", "progress_signal", "terminal_signal", "binding_signal"]
+RuntimeEventApplyOutcome = Literal["applied", "ignored", "protected_session_ended"]
 
 PHASE_FRESHNESS = {
     "thinking": timedelta(seconds=90),
@@ -39,6 +45,8 @@ INFERRED_PROGRESS_WINDOW = timedelta(minutes=5)
 LIVE_EXECUTION_PHASES = {"thinking", "running"}
 ATTENTION_PHASES = {"blocked", "needs_user"}
 KNOWN_PHASES = {"thinking", "running", "blocked", "needs_user", "idle", "finished"}
+MANAGED_CODEX_RUNTIME_SOURCES = {"engine_attached_lease", "codex_bridge"}
+MANAGED_CODEX_INVARIANTS = ("ended_without_session_ended", "short_freshness")
 
 
 def _latest_timestamp(*values: datetime | None) -> datetime | None:
@@ -69,12 +77,36 @@ def phase_freshness_ms(phase: str | None) -> int | None:
     return int(window.total_seconds() * 1000)
 
 
-def _phase_signal_freshness_ms(event: RuntimeEventIngest, phase: str) -> int | None:
-    if event.freshness_ms is not None:
-        return event.freshness_ms
+def _is_managed_codex_runtime_event(event: RuntimeEventIngest) -> bool:
     provider = (event.provider or "").strip().lower()
     source = (event.source or "").strip().lower()
+    return provider == "codex" and source in MANAGED_CODEX_RUNTIME_SOURCES
+
+
+def _managed_codex_source_label(source: str | None) -> str:
+    normalized = (source or "").strip().lower()
+    return normalized if normalized in MANAGED_CODEX_RUNTIME_SOURCES else "other"
+
+
+def _record_managed_codex_runtime_event(event: RuntimeEventIngest, outcome: str) -> None:
+    if not _is_managed_codex_runtime_event(event):
+        return
+    managed_codex_runtime_events_total.labels(
+        source=_managed_codex_source_label(event.source),
+        kind=event.kind,
+        outcome=outcome,
+    ).inc()
+
+
+def _phase_signal_freshness_ms(event: RuntimeEventIngest, phase: str) -> int | None:
+    provider = (event.provider or "").strip().lower()
+    source = (event.source or "").strip().lower()
+    if event.freshness_ms is not None:
+        if provider == "codex" and source == "codex_bridge":
+            managed_codex_bridge_freshness_total.labels(outcome="explicit_override").inc()
+        return event.freshness_ms
     if provider == "codex" and source == "codex_bridge":
+        managed_codex_bridge_freshness_total.labels(outcome="managed_budget").inc()
         return int(MANAGED_CODEX_FRESHNESS.total_seconds() * 1000)
     return phase_freshness_ms(phase)
 
@@ -372,6 +404,97 @@ def load_runtime_state_map(db: Session, session_ids: list[UUID]) -> dict[str, Se
     return state_by_session
 
 
+def _managed_codex_session_ids(db: Session) -> list[UUID]:
+    rows = (
+        db.query(AgentSession.id)
+        .filter(AgentSession.provider == "codex")
+        .filter(
+            (AgentSession.execution_home == SessionExecutionHome.MANAGED_LOCAL.value)
+            | (AgentSession.managed_transport == ManagedSessionTransport.CODEX_APP_SERVER.value)
+        )
+        .all()
+    )
+    return [row[0] for row in rows]
+
+
+def managed_codex_liveness_invariant_counts(db: Session) -> dict[str, int]:
+    """Return SQL-reconstructable managed Codex liveness invariant counts."""
+    managed_session_ids = _managed_codex_session_ids(db)
+    if not managed_session_ids:
+        return {invariant: 0 for invariant in MANAGED_CODEX_INVARIANTS}
+
+    final_session_ids = {
+        row[0]
+        for row in db.query(SessionRuntimeState.session_id)
+        .filter(SessionRuntimeState.session_id.in_(managed_session_ids))
+        .filter(SessionRuntimeState.terminal_state == "session_ended")
+        .all()
+        if row[0] is not None
+    }
+    parser_ended_ids = {
+        row[0]
+        for row in db.query(AgentSession.id)
+        .filter(AgentSession.id.in_(managed_session_ids))
+        .filter(AgentSession.ended_at.isnot(None))
+        .all()
+    }
+    ended_without_session_ended = len(parser_ended_ids - final_session_ids)
+
+    short_freshness = 0
+    states = (
+        db.query(SessionRuntimeState)
+        .filter(SessionRuntimeState.session_id.in_(managed_session_ids))
+        .filter(SessionRuntimeState.terminal_state.is_(None))
+        .filter(SessionRuntimeState.freshness_expires_at.isnot(None))
+        .filter(SessionRuntimeState.last_runtime_signal_at.isnot(None))
+        .all()
+    )
+    latest_managed_event_by_runtime_key: dict[str, SessionRuntimeEvent] = {}
+    runtime_keys = [state.runtime_key for state in states]
+    if runtime_keys:
+        latest_managed_events = (
+            db.query(SessionRuntimeEvent)
+            .filter(SessionRuntimeEvent.runtime_key.in_(runtime_keys))
+            .filter(SessionRuntimeEvent.provider == "codex")
+            .filter(SessionRuntimeEvent.source.in_(MANAGED_CODEX_RUNTIME_SOURCES))
+            .filter(SessionRuntimeEvent.kind == "phase_signal")
+            .order_by(
+                SessionRuntimeEvent.runtime_key.asc(),
+                SessionRuntimeEvent.occurred_at.desc(),
+                SessionRuntimeEvent.id.desc(),
+            )
+            .all()
+        )
+        for event in latest_managed_events:
+            latest_managed_event_by_runtime_key.setdefault(event.runtime_key, event)
+
+    for state in states:
+        last_signal_at = normalize_utc(state.last_runtime_signal_at)
+        freshness_expires_at = normalize_utc(state.freshness_expires_at)
+        if last_signal_at is None or freshness_expires_at is None:
+            continue
+        latest_managed_event = latest_managed_event_by_runtime_key.get(state.runtime_key)
+        if latest_managed_event is None:
+            continue
+        latest_managed_event_at = normalize_utc(latest_managed_event.occurred_at)
+        if latest_managed_event_at is None or latest_managed_event_at != last_signal_at:
+            continue
+        if freshness_expires_at - last_signal_at < MANAGED_CODEX_FRESHNESS:
+            short_freshness += 1
+
+    return {
+        "ended_without_session_ended": ended_without_session_ended,
+        "short_freshness": short_freshness,
+    }
+
+
+def refresh_managed_codex_liveness_metrics(db: Session) -> dict[str, int]:
+    counts = managed_codex_liveness_invariant_counts(db)
+    for invariant in MANAGED_CODEX_INVARIANTS:
+        managed_codex_liveness_invariant_sessions.labels(invariant=invariant).set(counts.get(invariant, 0))
+    return counts
+
+
 def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> RuntimeEventBatchResult:
     accepted = 0
     duplicates = 0
@@ -400,10 +523,13 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
         result = db.execute(insert_stmt)
         if not result.rowcount:
             duplicates += 1
+            _record_managed_codex_runtime_event(event, "duplicate")
             continue
 
         accepted += 1
-        if _apply_runtime_event(db, event) and event.runtime_key not in updated_runtime_keys:
+        outcome = _apply_runtime_event(db, event)
+        _record_managed_codex_runtime_event(event, outcome)
+        if outcome == "applied" and event.runtime_key not in updated_runtime_keys:
             updated_runtime_keys.append(event.runtime_key)
 
     return RuntimeEventBatchResult(
@@ -471,7 +597,7 @@ def _phase_reanchors(prev_phase: str | None, next_phase: str) -> bool:
     return prev_phase not in LIVE_EXECUTION_PHASES and next_phase in LIVE_EXECUTION_PHASES
 
 
-def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> bool:
+def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEventApplyOutcome:
     state = _ensure_state(db, event)
     before = _state_snapshot(state)
     occurred_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
@@ -479,7 +605,7 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> bool:
     if state.terminal_state == "session_ended":
         incoming_terminal_state = str((event.payload or {}).get("terminal_state") or "").strip()
         if event.kind != "terminal_signal" or incoming_terminal_state != "session_ended":
-            return False
+            return "protected_session_ended"
 
     if event.session_id is not None and state.session_id != event.session_id:
         state.session_id = event.session_id
@@ -495,7 +621,7 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> bool:
             state.terminal_at,
         )
         if latest_phase_signal_at is not None and occurred_at < latest_phase_signal_at:
-            return False
+            return "ignored"
         next_phase = (event.phase or state.phase or "idle").strip() or "idle"
         if next_phase not in KNOWN_PHASES:
             next_phase = "idle"
@@ -526,7 +652,7 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> bool:
             state.terminal_at,
         )
         if latest_progress_related_at is not None and occurred_at < latest_progress_related_at:
-            return False
+            return "ignored"
         state.last_progress_at = occurred_at
         state.last_live_at = occurred_at
         state.timeline_anchor_at = occurred_at
@@ -550,7 +676,7 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> bool:
             state.terminal_at,
         )
         if latest_terminal_related_at is not None and occurred_at < latest_terminal_related_at:
-            return False
+            return "ignored"
         terminal_state = str((event.payload or {}).get("terminal_state") or "finished").strip() or "finished"
         state.phase = "finished"
         state.phase_source = "semantic"
@@ -577,5 +703,5 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> bool:
     if after != before:
         state.runtime_version = int(state.runtime_version or 0) + 1
         db.flush()
-        return True
-    return False
+        return "applied"
+    return "ignored"

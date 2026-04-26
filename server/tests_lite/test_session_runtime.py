@@ -25,6 +25,7 @@ from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import build_runtime_view
 from zerg.services.session_runtime import current_presence_state_for_session
 from zerg.services.session_runtime import ingest_runtime_events
+from zerg.services.session_runtime import managed_codex_liveness_invariant_counts
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
 
@@ -206,6 +207,96 @@ def test_managed_codex_bridge_signal_does_not_shorten_attached_lease_freshness(t
         assert state.last_runtime_signal_at.replace(tzinfo=timezone.utc) == now + timedelta(seconds=30)
         assert state.freshness_expires_at is not None
         assert state.freshness_expires_at.replace(tzinfo=timezone.utc) == now + timedelta(seconds=30, minutes=15)
+        assert managed_codex_liveness_invariant_counts(db) == {
+            "ended_without_session_ended": 0,
+            "short_freshness": 0,
+        }
+
+    engine.dispose()
+
+
+def test_managed_codex_liveness_invariant_counts_surface_parser_end_and_short_freshness(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_managed_codex_liveness_invariants.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        parser_ended = _seed_session(db, provider="codex", started_at=now - timedelta(hours=2))
+        parser_ended.execution_home = "managed_local"
+        parser_ended.managed_transport = "codex_app_server"
+        parser_ended.ended_at = now - timedelta(hours=1)
+
+        non_managed_ended = _seed_session(db, provider="codex", started_at=now - timedelta(hours=2))
+        non_managed_ended.ended_at = now - timedelta(hours=1)
+
+        short_freshness = _seed_session(db, provider="codex", started_at=now - timedelta(hours=2))
+        short_freshness.execution_home = "managed_local"
+        short_freshness.managed_transport = "codex_app_server"
+        short_runtime_key = runtime_key_for_session("codex", str(short_freshness.id))
+        generic_short_freshness = _seed_session(db, provider="codex", started_at=now - timedelta(hours=2))
+        generic_short_freshness.execution_home = "managed_local"
+        generic_short_freshness.managed_transport = "codex_app_server"
+        generic_runtime_key = runtime_key_for_session("codex", str(generic_short_freshness.id))
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=short_runtime_key,
+                    session_id=short_freshness.id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="codex_bridge",
+                    kind="phase_signal",
+                    phase="thinking",
+                    occurred_at=now,
+                    freshness_ms=90 * 1000,
+                    dedupe_key="short-managed-freshness",
+                    payload={},
+                ),
+                RuntimeEventIngest(
+                    runtime_key=generic_runtime_key,
+                    session_id=generic_short_freshness.id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="generic_codex_hint",
+                    kind="phase_signal",
+                    phase="thinking",
+                    occurred_at=now,
+                    freshness_ms=90 * 1000,
+                    dedupe_key="short-generic-freshness",
+                    payload={},
+                ),
+            ],
+        )
+        db.commit()
+
+        assert managed_codex_liveness_invariant_counts(db) == {
+            "ended_without_session_ended": 1,
+            "short_freshness": 1,
+        }
+
+        runtime_key = runtime_key_for_session("codex", str(parser_ended.id))
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=parser_ended.id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="codex_bridge",
+                    kind="terminal_signal",
+                    occurred_at=now,
+                    dedupe_key="explicit-session-ended",
+                    payload={"terminal_state": "session_ended"},
+                )
+            ],
+        )
+        db.commit()
+
+        assert managed_codex_liveness_invariant_counts(db) == {
+            "ended_without_session_ended": 0,
+            "short_freshness": 1,
+        }
 
     engine.dispose()
 
