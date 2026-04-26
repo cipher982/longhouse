@@ -35,17 +35,14 @@ else
   export INSTANCE_SUBDOMAIN="$INSTANCE_SUBDOMAIN"
 fi
 
-if [[ -z "${LONGHOUSE_CANARY_SESSION_ID:-}" ]]; then
-  echo "LONGHOUSE_CANARY_SESSION_ID not set; canary producer must have bootstrapped a session first." >&2
-  exit 2
-fi
-
 if [[ -z "${LONGHOUSE_CANARY_TOKEN:-}" ]]; then
   echo "LONGHOUSE_CANARY_TOKEN not set; required to post hop=render observations." >&2
   exit 2
 fi
 
-export LONGHOUSE_CANARY_SESSION_ID
+# LONGHOUSE_CANARY_SESSION_ID is optional — the spec falls back to
+# GET /api/telemetry/canary-session (canary-token auth) when unset.
 export LONGHOUSE_CANARY_TOKEN
+[[ -n "${LONGHOUSE_CANARY_SESSION_ID:-}" ]] && export LONGHOUSE_CANARY_SESSION_ID
 
 exec "$RUNNER" tests/live/render-canary.spec.ts --timeout=180000 --reporter=line "$@"
