@@ -72,9 +72,11 @@ export function SessionContextPane({
     "this machine";
   const loopModeCaption = config.demoMode
     ? "Preview only in the demo."
-    : interaction.liveControlAvailable
-      ? "Review posture only."
-      : "Stored here. Applies when Longhouse regains control.";
+    : !interaction.isManagedLocalSession
+      ? "Stored preference only."
+      : interaction.liveControlAvailable
+        ? "Review posture only."
+        : "Stored here. Applies when Longhouse regains control.";
   const attachDebugCopy = `Run this on ${attachRunnerLabel} to open this existing managed ${interaction.providerLabel} session in a terminal UI. This does not restart the session.`;
   const shouldShowNotice =
     continuationNotice && !interaction.managedLaunchSuggestion;
