@@ -11,9 +11,14 @@ probes aggregate into one session on the server.
 
 Usage:
     LONGHOUSE_CANARY_URL=https://david010.longhouse.ai \
-    LONGHOUSE_CANARY_TOKEN=<device-token> \
-    LONGHOUSE_CANARY_ADMIN_COOKIE='longhouse_session=...' \
+    LONGHOUSE_AGENTS_TOKEN=<agents-device-token> \
+    LONGHOUSE_CANARY_TOKEN=<shared-secret-set-on-server> \
     python3 scripts/canary/producer.py
+
+The AGENTS token authenticates /api/agents/runtime/events/batch (ingest).
+The CANARY token authenticates /api/telemetry/canary-observation (metrics
+observation). They're separate secrets because they guard separate
+concerns — ingest is per-machine, canary is pipeline-internal.
 """
 
 from __future__ import annotations
@@ -103,7 +108,7 @@ def _binding_event(session_id: str, machine_name: str, now: datetime) -> dict:
 def _post_observation(
     client: httpx.Client,
     base_url: str,
-    admin_cookie: str,
+    canary_token: str,
     *,
     canary_seq: int,
     hop: str,
@@ -113,7 +118,7 @@ def _post_observation(
     try:
         resp = client.post(
             f"{base_url}/api/telemetry/canary-observation",
-            headers={"Cookie": admin_cookie, "Content-Type": "application/json"},
+            headers={"X-Canary-Token": canary_token, "Content-Type": "application/json"},
             json={
                 "canary_seq": canary_seq,
                 "hop": hop,
@@ -130,8 +135,8 @@ def _post_observation(
 
 def main() -> int:
     base_url = _require_env("LONGHOUSE_CANARY_URL").rstrip("/")
-    token = _require_env("LONGHOUSE_CANARY_TOKEN")
-    admin_cookie = os.environ.get("LONGHOUSE_CANARY_ADMIN_COOKIE", "")
+    agents_token = _require_env("LONGHOUSE_AGENTS_TOKEN")
+    canary_token = os.environ.get("LONGHOUSE_CANARY_TOKEN", "")
     machine_name = os.environ.get("LONGHOUSE_CANARY_MACHINE", socket.gethostname())
     session_id = _session_uuid()
 
@@ -153,7 +158,7 @@ def main() -> int:
         try:
             resp = client.post(
                 f"{base_url}/api/agents/runtime/events/batch",
-                headers={"X-Agents-Token": token, "Content-Type": "application/json"},
+                headers={"X-Agents-Token": agents_token, "Content-Type": "application/json"},
                 json=bootstrap,
                 timeout=15.0,
             )
@@ -172,7 +177,7 @@ def main() -> int:
             try:
                 resp = client.post(
                     f"{base_url}/api/agents/runtime/events/batch",
-                    headers={"X-Agents-Token": token, "Content-Type": "application/json"},
+                    headers={"X-Agents-Token": agents_token, "Content-Type": "application/json"},
                     json=payload,
                     timeout=15.0,
                 )
@@ -185,11 +190,11 @@ def main() -> int:
                     # server echoing our emitted_at; server's event_age_at_ingest
                     # already measures that properly. The `hop=ingest` canary
                     # observation is a liveness signal, not an SLA source.
-                    if admin_cookie:
+                    if canary_token:
                         _post_observation(
                             client,
                             base_url,
-                            admin_cookie,
+                            canary_token,
                             canary_seq=seq,
                             hop="ingest",
                             surface="producer",

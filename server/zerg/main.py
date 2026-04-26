@@ -151,7 +151,9 @@ from zerg.routers.sync import router as sync_router
 from zerg.routers.system import router as system_router
 from zerg.routers.telemetry import admin_router as telemetry_admin_router
 from zerg.routers.telemetry import beacon_router as telemetry_beacon_router
+from zerg.routers.telemetry import canary_router as telemetry_canary_router
 from zerg.routers.threads import router as threads_router
+from zerg.routers.timeline import canary_stream_router as timeline_canary_stream_router
 from zerg.routers.timeline import router as timeline_router
 from zerg.routers.traces import router as traces_router
 from zerg.routers.triggers import router as triggers_router
@@ -273,6 +275,7 @@ api_app.include_router(ops_router)
 api_app.include_router(ops_beacon_router)
 api_app.include_router(telemetry_beacon_router)
 api_app.include_router(telemetry_admin_router)
+api_app.include_router(telemetry_canary_router)
 api_app.include_router(observability_router)
 api_app.include_router(fiche_config_router)
 api_app.include_router(automation_connectors_router)
@@ -283,6 +286,7 @@ api_app.include_router(skills_router)
 api_app.include_router(session_chat_router)
 api_app.include_router(agents_session_chat_router)
 api_app.include_router(timeline_router)
+api_app.include_router(timeline_canary_stream_router)
 api_app.include_router(agents_ingest_router)
 api_app.include_router(agents_machines_router)
 api_app.include_router(agents_search_router)
