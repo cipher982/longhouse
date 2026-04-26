@@ -894,6 +894,7 @@ final class SessionViewModel: ObservableObject {
             self.items = TimelineBuilder.build(events: events)
             self.errorMessage = nil
             self.loopModeErrorMessage = nil
+            await reportRenderBeacon(api: api, sessionId: sessionId, events: events)
         } catch LonghouseAPIError.notAuthenticated {
             errorMessage = "Session expired."
         } catch {
@@ -971,6 +972,26 @@ final class SessionViewModel: ObservableObject {
         }
         if let events = try? await eventsTask {
             self.items = TimelineBuilder.build(events: events)
+            await reportRenderBeacon(api: api, sessionId: sessionId, events: events)
+        }
+    }
+
+    private func reportRenderBeacon(api: LonghouseAPI, sessionId: String, events: [SessionEvent]) async {
+        guard let latest = events.last else { return }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let isoFallback = ISO8601DateFormatter()
+        isoFallback.formatOptions = [.withInternetDateTime]
+        guard let emittedAt = iso.date(from: latest.timestamp) ?? isoFallback.date(from: latest.timestamp) else { return }
+        let caps = detail?.capabilities
+        let managed = (caps?.liveControlAvailable == true) || (caps?.hostReattachAvailable == true)
+        if let payload = await RenderBeaconReporter.shared.payload(
+            sessionId: sessionId,
+            latestEventId: String(latest.id),
+            emittedAt: emittedAt,
+            managed: managed
+        ) {
+            await api.postRenderBeacon(payload)
         }
     }
 
