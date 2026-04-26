@@ -990,6 +990,46 @@ mod tests {
     }
 
     #[test]
+    fn test_active_phase_does_not_grow_pending_catchups() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        let mut catchups = Vec::new();
+
+        for _ in 0..20 {
+            schedule_transcript_catchup(&mut catchups, path.clone(), "claude", "thinking");
+        }
+
+        assert_eq!(catchups.len(), 1);
+    }
+
+    #[test]
+    fn test_drain_transcript_catchups_leaves_future_entries() {
+        let ready = tempfile::NamedTempFile::new().unwrap();
+        let later = tempfile::NamedTempFile::new().unwrap();
+        let now = Instant::now();
+        let mut catchups = vec![
+            TranscriptCatchup {
+                due_at: now - Duration::from_secs(1),
+                path: ready.path().to_path_buf(),
+                provider: "claude",
+            },
+            TranscriptCatchup {
+                due_at: now + Duration::from_secs(30),
+                path: later.path().to_path_buf(),
+                provider: "claude",
+            },
+        ];
+
+        let mut scheduler = PathScheduler::new(4);
+        drain_due_transcript_catchups(&mut scheduler, &mut catchups);
+
+        let job = scheduler.pop_launchable().expect("ready catch-up queued");
+        assert_eq!(job.path, ready.path());
+        assert_eq!(catchups.len(), 1);
+        assert_eq!(catchups[0].path, later.path());
+    }
+
+    #[test]
     fn test_resolves_transcript_path_from_file_state() {
         let db = tempfile::NamedTempFile::new().unwrap();
         let transcript = tempfile::NamedTempFile::new().unwrap();
@@ -1024,6 +1064,35 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_transcript_path_falls_back_from_stale_file_state_to_binding() {
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let binding_transcript = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(db.path())).unwrap();
+
+        FileState::new(&conn)
+            .set_offset(
+                "/tmp/longhouse-stale-transcript-does-not-exist.jsonl",
+                100,
+                "sess-fallback",
+                "sess-fallback",
+                "claude",
+            )
+            .unwrap();
+        crate::state::session_binding::SessionBinding::new(&conn)
+            .bind(
+                &binding_transcript.path().to_string_lossy(),
+                "sess-fallback",
+                "claude",
+            )
+            .unwrap();
+
+        assert_eq!(
+            resolve_transcript_path_for_session(&conn, "sess-fallback", "claude"),
+            Some(binding_transcript.path().to_path_buf())
+        );
+    }
+
+    #[test]
     fn test_presence_signal_schedules_bound_terminal_transcript() {
         let db = tempfile::NamedTempFile::new().unwrap();
         let transcript = tempfile::NamedTempFile::new().unwrap();
@@ -1050,6 +1119,196 @@ mod tests {
         assert!(catchups
             .iter()
             .all(|catchup| catchup.path == transcript.path()));
+    }
+
+    #[test]
+    fn test_unknown_provider_signal_does_not_schedule_catchup() {
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let transcript = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(db.path())).unwrap();
+        let path = transcript.path().to_string_lossy().to_string();
+
+        FileState::new(&conn)
+            .set_offset(&path, 100, "sess-unknown", "sess-unknown", "claude")
+            .unwrap();
+
+        let mut catchups = Vec::new();
+        schedule_transcript_catchups_for_signals(
+            &conn,
+            &mut catchups,
+            vec![outbox::DrainedPresenceSignal {
+                session_id: "sess-unknown".to_string(),
+                provider: "unknown-provider".to_string(),
+                phase: "idle".to_string(),
+                observed_at: chrono::Utc::now(),
+            }],
+        );
+
+        assert!(catchups.is_empty());
+    }
+
+    async fn spawn_ingest_server() -> (
+        std::net::SocketAddr,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use std::sync::{Arc, Mutex};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let paths: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let paths_clone = paths.clone();
+
+        let handle = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+
+                let mut buf = vec![0u8; 4096];
+                let mut total = 0usize;
+                loop {
+                    let n = socket.read(&mut buf[total..]).await.unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    total += n;
+                    if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                    if total == buf.len() {
+                        buf.resize(buf.len() * 2, 0);
+                    }
+                }
+
+                let head = String::from_utf8_lossy(&buf[..total]).into_owned();
+                let path = head
+                    .lines()
+                    .next()
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .unwrap_or("/")
+                    .to_string();
+                paths_clone.lock().unwrap().push(path);
+
+                let content_len = head
+                    .lines()
+                    .find(|line| line.to_ascii_lowercase().starts_with("content-length:"))
+                    .and_then(|line| line.split(':').nth(1))
+                    .and_then(|value| value.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                let header_end = buf[..total]
+                    .windows(4)
+                    .position(|window| window == b"\r\n\r\n")
+                    .unwrap()
+                    + 4;
+                let mut body_read = total - header_end;
+                while body_read < content_len {
+                    let n = socket.read(&mut buf).await.unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    body_read += n;
+                }
+
+                let _ = socket
+                    .write_all(b"HTTP/1.1 204\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .await;
+                let _ = socket.shutdown().await;
+            }
+        });
+
+        (addr, paths, handle)
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_presence_catchup_ships_bound_transcript_tail_and_advances_offset() {
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir
+            .path()
+            .join("11111111-1111-4111-8111-111111111111.jsonl");
+        std::fs::write(
+            &transcript,
+            concat!(
+                r#"{"type":"assistant","uuid":"a1","timestamp":"2026-01-01T00:00:01Z","message":{"content":[{"type":"text","text":"done"}]}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+
+        let managed_session_id = "22222222-2222-4222-8222-222222222222";
+        let conn = open_db(Some(db.path())).unwrap();
+        let canonical = std::fs::canonicalize(&transcript)
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        crate::state::session_binding::SessionBinding::new(&conn)
+            .bind(&canonical, managed_session_id, "claude")
+            .unwrap();
+
+        let mut catchups = Vec::new();
+        schedule_transcript_catchups_for_signals(
+            &conn,
+            &mut catchups,
+            vec![outbox::DrainedPresenceSignal {
+                session_id: managed_session_id.to_string(),
+                provider: "claude".to_string(),
+                phase: "needs_user".to_string(),
+                observed_at: chrono::Utc::now(),
+            }],
+        );
+        assert_eq!(catchups.len(), 3);
+
+        let mut scheduler = PathScheduler::new(4);
+        drain_due_transcript_catchups(&mut scheduler, &mut catchups);
+        let job = scheduler
+            .pop_launchable()
+            .expect("presence-driven catch-up queued");
+
+        let (addr, logged_paths, server) = spawn_ingest_server().await;
+        let api_url = format!("http://{}", addr);
+        let shipper_config = ShipperConfig::default().with_overrides(
+            Some(&api_url),
+            None,
+            Some(db.path()),
+            None,
+            None,
+            None,
+        );
+        let client =
+            ShipperClient::with_compression(&shipper_config, CompressionAlgo::Gzip).unwrap();
+        let task_context = PathTaskContext {
+            shipper_config,
+            client,
+            algo: CompressionAlgo::Gzip,
+            tracker: ConsecutiveErrorTracker::new(),
+            parse_tracker: RecentIssueTracker::new(),
+            ship_stats: RecentShipStatsTracker::new(),
+        };
+
+        let result = run_path_job(job, task_context).await;
+        assert_eq!(result.events_shipped, 1);
+
+        let expected_offset = std::fs::metadata(&transcript).unwrap().len();
+        assert_eq!(
+            FileState::new(&conn).get_offset(&canonical).unwrap(),
+            expected_offset
+        );
+        assert_eq!(
+            FileState::new(&conn)
+                .get_session(&canonical)
+                .unwrap()
+                .and_then(|tracked| tracked.session_id),
+            Some(managed_session_id.to_string())
+        );
+
+        server.abort();
+        assert_eq!(
+            logged_paths.lock().unwrap().as_slice(),
+            ["/api/agents/ingest"]
+        );
     }
 
     #[test]
