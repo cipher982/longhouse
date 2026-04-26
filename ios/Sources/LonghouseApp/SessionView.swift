@@ -11,6 +11,10 @@ struct SessionView: View {
     @State private var composerText: String = ""
     @FocusState private var composerFocused: Bool
 
+    private var composerHasText: Bool {
+        !composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             transcript
@@ -104,7 +108,21 @@ struct SessionView: View {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 10) {
                             if let detail = viewModel.detail {
-                                SessionHeader(detail: detail)
+                                SessionCockpit(
+                                    detail: detail,
+                                    isDrafting: viewModel.isDrafting,
+                                    isUpdatingLoopMode: viewModel.isUpdatingLoopMode,
+                                    loopModeErrorMessage: viewModel.loopModeErrorMessage,
+                                    draftDisabled: composerHasText || viewModel.isSending || viewModel.isDrafting || !detail.canSendLive,
+                                    onDraft: {
+                                        Task { await draft() }
+                                    },
+                                    onLoopModeChange: { mode in
+                                        Task {
+                                            await viewModel.setLoopMode(sessionId: sessionId, mode: mode, appState: appState)
+                                        }
+                                    }
+                                )
                             }
                             ForEach(viewModel.items, id: \.id) { item in
                                 TimelineItemView(
@@ -148,8 +166,6 @@ struct SessionView: View {
     }
 
     private func composerField(enabled: Bool) -> some View {
-        let composerHasText = !composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-
         return VStack(alignment: .leading, spacing: 6) {
             if let draftError = viewModel.draftErrorMessage {
                 Text(draftError)
@@ -232,29 +248,157 @@ struct SessionView: View {
     }
 }
 
-// MARK: - Header
+// MARK: - Cockpit
 
-private struct SessionHeader: View {
+private struct SessionCockpit: View {
     let detail: SessionDetail
+    let isDrafting: Bool
+    let isUpdatingLoopMode: Bool
+    let loopModeErrorMessage: String?
+    let draftDisabled: Bool
+    let onDraft: () -> Void
+    let onLoopModeChange: (SessionLoopMode) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                PresenceBadge(state: detail.presenceState ?? detail.status ?? "idle")
-                if let home = detail.homeLabel {
-                    Text(home).font(.caption).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    PresenceBadge(state: detail.cockpitPhaseState)
+                    Text(detail.cockpitPhaseLabel)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Spacer(minLength: 0)
+                    if isUpdatingLoopMode {
+                        ProgressView()
+                            .controlSize(.mini)
+                    }
+                }
+                Text(detail.displayTitle)
+                    .font(.headline)
+                    .lineLimit(2)
+                metadataLine
+            }
+
+            if let controlHealthMessage = detail.controlHealthMessage {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: detail.isControlOffline ? "wifi.slash" : "lock")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(controlHealthMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
-            if let project = detail.project {
-                Text(project).font(.caption).foregroundStyle(.secondary)
+
+            if detail.canSendLive {
+                HStack(spacing: 8) {
+                    Button(action: onDraft) {
+                        Label(isDrafting ? "Drafting" : "Draft reply", systemImage: "sparkles")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(draftDisabled)
+                    .accessibilityHint("Prefills the reply field without sending")
+
+                    LoopModeButtons(
+                        currentMode: detail.effectiveLoopMode,
+                        disabled: isUpdatingLoopMode,
+                        onChange: onLoopModeChange
+                    )
+                }
             }
-            if let cwd = detail.cwd {
-                Text(cwd).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+
+            modeCaption
+
+            if let loopModeErrorMessage {
+                Text(loopModeErrorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    @ViewBuilder
+    private var metadataLine: some View {
+        let parts = [
+            detail.project,
+            detail.homeLabel,
+            detail.gitBranch.map { "Branch \($0)" },
+        ].compactMap { value -> String? in
+            guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+                return nil
+            }
+            return trimmed
+        }
+        if !parts.isEmpty {
+            Text(parts.joined(separator: " • "))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        } else if let cwd = detail.cwd {
+            Text(cwd)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+        }
+    }
+
+    @ViewBuilder
+    private var modeCaption: some View {
+        switch detail.effectiveLoopMode {
+        case .manual:
+            Text("Manual mode. You drive this session.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .assist:
+            Text("Assist drafts replies when you ask. You approve what gets sent.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .autopilot:
+            Text("Autopilot preview saves the policy only. Automatic turns are not active yet.")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        }
+    }
+}
+
+private struct LoopModeButtons: View {
+    let currentMode: SessionLoopMode
+    let disabled: Bool
+    let onChange: (SessionLoopMode) -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            modeButton(.assist, title: "Assist", systemImage: "wand.and.stars")
+            modeButton(.autopilot, title: "Autopilot", systemImage: "bolt.circle")
+            Menu {
+                Button {
+                    onChange(.manual)
+                } label: {
+                    Label("Turn off assistance", systemImage: "pause.circle")
+                }
+            } label: {
+                Image(systemName: currentMode == .manual ? "ellipsis.circle.fill" : "ellipsis.circle")
+                    .font(.title3)
+                    .accessibilityLabel("More control modes")
+            }
+            .disabled(disabled || currentMode == .manual)
+        }
+    }
+
+    private func modeButton(_ mode: SessionLoopMode, title: String, systemImage: String) -> some View {
+        Button {
+            onChange(mode)
+        } label: {
+            Label(title, systemImage: systemImage)
+        }
+        .buttonStyle(.bordered)
+        .tint(currentMode == mode ? Color.accentColor : Color.secondary)
+        .controlSize(.small)
+        .disabled(disabled || currentMode == mode)
     }
 }
 
@@ -707,7 +851,9 @@ final class SessionViewModel: ObservableObject {
     @Published var isInitialLoading = true
     @Published var isSending = false
     @Published var isDrafting = false
+    @Published var isUpdatingLoopMode = false
     @Published var draftErrorMessage: String?
+    @Published var loopModeErrorMessage: String?
 
     private var expandedIds: Set<String> = []
     private var pollTask: Task<Void, Never>?
@@ -744,6 +890,7 @@ final class SessionViewModel: ObservableObject {
             self.detail = detail
             self.items = TimelineBuilder.build(events: events)
             self.errorMessage = nil
+            self.loopModeErrorMessage = nil
         } catch LonghouseAPIError.notAuthenticated {
             errorMessage = "Session expired."
         } catch {
@@ -781,6 +928,19 @@ final class SessionViewModel: ObservableObject {
         } catch {
             draftErrorMessage = "Draft unavailable: \(error.localizedDescription)"
             return nil
+        }
+    }
+
+    func setLoopMode(sessionId: String, mode: SessionLoopMode, appState: AppState) async {
+        guard let api = LonghouseAPI(host: appState.serverURL) else { return }
+        isUpdatingLoopMode = true
+        loopModeErrorMessage = nil
+        defer { isUpdatingLoopMode = false }
+        do {
+            _ = try await api.setSessionLoopMode(id: sessionId, loopMode: mode)
+            detail = try await api.sessionDetail(id: sessionId)
+        } catch {
+            loopModeErrorMessage = "Mode unavailable: \(error.localizedDescription)"
         }
     }
 

@@ -168,12 +168,27 @@ struct TimelineSession: Codable, Sendable {
     let userMessages: Int?
     let toolCalls: Int?
     let capabilities: SessionCapabilities?
+    let loopMode: SessionLoopMode?
 }
 
 struct SessionCapabilities: Codable, Sendable {
     let liveControlAvailable: Bool
     let hostReattachAvailable: Bool
     let replyToLiveSessionAvailable: Bool
+}
+
+enum SessionLoopMode: String, Codable, Sendable, CaseIterable, Hashable {
+    case manual
+    case assist
+    case autopilot
+
+    var label: String {
+        switch self {
+        case .manual: return "Manual"
+        case .assist: return "Assist"
+        case .autopilot: return "Autopilot"
+        }
+    }
 }
 
 struct SessionDetail: Codable, Identifiable, Sendable {
@@ -189,12 +204,70 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     let userState: String
     let status: String?
     let lastActivityAt: String?
+    let displayPhase: String?
+    let activeTool: String?
     let homeLabel: String?
     let originLabel: String?
     let capabilities: SessionCapabilities
+    let loopMode: SessionLoopMode?
 
     var displayTitle: String {
         summaryTitle ?? summary ?? provider
+    }
+
+    var effectiveLoopMode: SessionLoopMode {
+        loopMode ?? .manual
+    }
+
+    var canSendLive: Bool {
+        capabilities.liveControlAvailable || capabilities.replyToLiveSessionAvailable
+    }
+
+    var isControlOffline: Bool {
+        !canSendLive && capabilities.hostReattachAvailable
+    }
+
+    var isReadOnly: Bool {
+        !canSendLive && !capabilities.hostReattachAvailable
+    }
+
+    var cockpitPhaseState: String {
+        presenceState ?? status ?? "idle"
+    }
+
+    var cockpitPhaseLabel: String {
+        if let displayPhase = displayPhase?.trimmingCharacters(in: .whitespacesAndNewlines), !displayPhase.isEmpty {
+            return displayPhase
+        }
+        let tool = activeTool ?? presenceTool
+        switch cockpitPhaseState {
+        case "running":
+            return tool.map { "Running \($0)" } ?? "Running"
+        case "thinking":
+            return "Thinking"
+        case "needs_user":
+            return "Needs you"
+        case "blocked":
+            return tool.map { "Blocked on \($0)" } ?? "Needs permission"
+        case "working", "active":
+            return "Working"
+        case "completed":
+            return "Completed"
+        case "idle":
+            return "Idle"
+        default:
+            return cockpitPhaseState.capitalized
+        }
+    }
+
+    var controlHealthMessage: String? {
+        if isControlOffline {
+            return "Control is offline until the host reconnects."
+        }
+        if isReadOnly {
+            return "Read-only imported session."
+        }
+        return nil
     }
 }
 
@@ -297,4 +370,9 @@ struct DraftReplyResponse: Codable, Sendable {
     let model: String
     let generatedAt: String
     let basedOnEventIds: [Int]
+}
+
+struct LoopModeResponse: Codable, Sendable {
+    let sessionId: String
+    let loopMode: SessionLoopMode
 }
