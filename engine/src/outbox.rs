@@ -33,6 +33,8 @@ struct PresenceOutboxPayload {
     #[serde(default)]
     cwd: Option<String>,
     #[serde(default)]
+    transcript_path: Option<String>,
+    #[serde(default)]
     provider: Option<String>,
     #[serde(default)]
     occurred_at: Option<String>,
@@ -52,6 +54,7 @@ pub struct DrainedPresenceSignal {
     pub provider: String,
     pub phase: String,
     pub observed_at: DateTime<Utc>,
+    pub transcript_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Default)]
@@ -262,6 +265,7 @@ async fn drain_outbox_impl(
                     provider: normalize_provider(payload.provider.as_deref()).to_string(),
                     phase: payload.state.trim().to_string(),
                     observed_at,
+                    transcript_path: normalize_transcript_path(payload.transcript_path.as_deref()),
                 });
             }
             Err(_) => {
@@ -305,6 +309,12 @@ fn normalize_provider(provider: Option<&str>) -> &str {
         .unwrap_or("claude")
 }
 
+fn normalize_transcript_path(path: Option<&str>) -> Option<PathBuf> {
+    path.map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,7 +331,8 @@ mod tests {
             "session_id": session_id,
             "state": state,
             "tool_name": "",
-            "cwd": "/tmp"
+            "cwd": "/tmp",
+            "transcript_path": "/tmp/transcript.jsonl"
         });
         fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
         path
@@ -419,7 +430,8 @@ mod tests {
             "session_id": session_id,
             "state": state,
             "tool_name": "",
-            "cwd": "/tmp"
+            "cwd": "/tmp",
+            "transcript_path": "/tmp/transcript.jsonl"
         });
         fs::write(&tmp, serde_json::to_vec(&json).unwrap()).unwrap();
         fs::rename(&tmp, &final_path).unwrap();
@@ -569,6 +581,10 @@ mod tests {
         assert_eq!(result.signals[0].session_id, "sess-signal");
         assert_eq!(result.signals[0].provider, "claude");
         assert_eq!(result.signals[0].phase, "needs_user");
+        assert_eq!(
+            result.signals[0].transcript_path,
+            Some(PathBuf::from("/tmp/transcript.jsonl"))
+        );
 
         server.abort();
     }

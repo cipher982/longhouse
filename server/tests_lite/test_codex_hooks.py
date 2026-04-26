@@ -24,6 +24,7 @@ def test_codex_hook_script_template_has_required_markers():
     # use the placeholder so install_codex_hooks can bake in the real path.
     assert 'ENGINE="__ENGINE_PATH__"' in CODEX_HOOK_SCRIPT, "must use placeholder in the command variable"
     assert "provider: $provider" in CODEX_HOOK_SCRIPT, "must include provider in presence payload"
+    assert "transcript_path: $transcript" in CODEX_HOOK_SCRIPT, "must include transcript path in presence payload"
 
 
 def test_codex_hook_script_has_managed_session_id_support():
