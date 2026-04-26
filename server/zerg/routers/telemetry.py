@@ -1,11 +1,17 @@
 """Client-side realtime latency telemetry.
 
-Accepts render beacons from web/iOS after they display an event, and exposes
-a small summary endpoint for quick SLA tracking without a TSDB scrape.
+Accepts render beacons from web/iOS after they display an event. The
+authoritative SLA view is the Prometheus `event_end_to_end_latency_seconds`
+histogram (scrape-based); this module also keeps a small in-process deque
+for unit tests and dev inspection.
 
 The beacon carries client-stamped timestamps. We correct for clock skew using
-a server_now exchange on SSE connect (see sse routers). Beacons with excessive
-skew or suspicious ages are dropped.
+a server_now exchange on SSE connect. Beacons with excessive skew or
+suspicious ages are dropped.
+
+Security: the POST endpoint is publicly reachable (clients may beacon before
+auth resolves) but rate-limited per IP via a simple token bucket. Summary
+endpoint stays internal/admin-only.
 """
 
 from __future__ import annotations
@@ -16,15 +22,41 @@ from dataclasses import dataclass
 from typing import Literal
 
 from fastapi import APIRouter
+from fastapi import Depends
+from fastapi import HTTPException
 from fastapi import Request
+from fastapi import status
 from pydantic import BaseModel
 from pydantic import Field
 
+from zerg.dependencies.auth import require_admin
 from zerg.metrics import event_end_to_end_latency_seconds
 from zerg.metrics import event_render_beacons_total
 
 beacon_router = APIRouter(prefix="/telemetry", tags=["telemetry"])
-admin_router = APIRouter(prefix="/telemetry", tags=["telemetry"])
+admin_router = APIRouter(prefix="/telemetry", tags=["telemetry"], dependencies=[Depends(require_admin)])
+
+
+# Simple per-IP token bucket: 20 beacons/sec, burst 60. This is plenty for
+# a real user (one per event) but kills obvious flooding.
+_BUCKET_CAPACITY = 60.0
+_BUCKET_REFILL_PER_SEC = 20.0
+_buckets: dict[str, tuple[float, float]] = {}  # ip -> (tokens, last_refill_mono)
+_buckets_max_size = 10_000  # Cap memory; evict LRU-ish by clearing when full.
+
+
+def _take_token(ip: str, now: float) -> bool:
+    tokens, last = _buckets.get(ip, (_BUCKET_CAPACITY, now))
+    elapsed = max(0.0, now - last)
+    tokens = min(_BUCKET_CAPACITY, tokens + elapsed * _BUCKET_REFILL_PER_SEC)
+    if tokens < 1.0:
+        _buckets[ip] = (tokens, now)
+        return False
+    tokens -= 1.0
+    if len(_buckets) >= _buckets_max_size:
+        _buckets.clear()
+    _buckets[ip] = (tokens, now)
+    return True
 
 
 class RenderBeacon(BaseModel):
@@ -54,11 +86,20 @@ _MAX_LATENCY_S = 60.0
 
 @beacon_router.post("/client-render", include_in_schema=False)
 async def client_render_beacon(beacons: list[RenderBeacon] | RenderBeacon, request: Request) -> dict:
-    """Accept one or a batch of render beacons. Public, no auth: clients post as they render."""
+    """Accept one or a batch of render beacons.
+
+    Publicly reachable so clients can beacon before auth resolves, but
+    rate-limited per source IP to defang obvious flooding.
+    """
+    now_mono = time.monotonic()
+    client_ip = request.client.host if request.client else "unknown"
+    if not _take_token(client_ip, now_mono):
+        event_render_beacons_total.labels(surface="web", outcome="rate_limited").inc()
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many beacons")
+
     if isinstance(beacons, RenderBeacon):
         beacons = [beacons]
 
-    now_mono = time.monotonic()
     accepted = 0
     dropped_skew = 0
     dropped_range = 0
