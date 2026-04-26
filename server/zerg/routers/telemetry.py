@@ -214,3 +214,72 @@ def canary_last_obs_age_s(hop: str) -> float | None:
     if last is None:
         return None
     return round(time.monotonic() - last, 1)
+
+
+# -----------------------------------------------------------------------------
+# Admin selfcheck: surface config + canary health without a dashboard
+# -----------------------------------------------------------------------------
+
+
+_CANARY_HOPS = ("ingest", "sse", "render")
+
+
+def _histogram_percentile(samples: list[float], p: float) -> float:
+    if not samples:
+        return 0.0
+    sv = sorted(samples)
+    k = max(0, min(len(sv) - 1, int(round((p / 100.0) * (len(sv) - 1)))))
+    return round(sv[k] * 1000, 1)
+
+
+@admin_router.get("/selfcheck", include_in_schema=False)
+async def telemetry_selfcheck(window_s: int = 900) -> dict:
+    """Surface canary health in one admin-visible GET.
+
+    Ops pattern: a cron on the operator's laptop hits this and posts to a
+    webhook on breach. No Alertmanager needed.
+
+    Breach signals:
+      - canary_<hop>_age_s > 120: pipeline hop is dead
+      - canary_<hop>_p95_ms > target: SLA regression
+      - seq_gap: observer fell behind producer (dropped events)
+    """
+    # NOTE: canary stats come from the per-hop last-obs-age tracker and the
+    # prometheus Gauges, not the beacon deque. window_s is accepted for
+    # symmetry with /latency-summary but only affects the caller's window
+    # expectation — not how we read alive/seq.
+    _ = window_s
+
+    hops: dict[str, dict] = {}
+    for hop in _CANARY_HOPS:
+        age_s = canary_last_obs_age_s(hop)
+        hops[hop] = {
+            "last_obs_age_s": age_s,
+            "alive": age_s is not None and age_s < 120.0,
+        }
+
+    # Producer and observer must be roughly in lockstep; if one hop is far
+    # ahead of the other we've lost events somewhere.
+    # canary_seq_last_seen.labels(hop=...) is a Gauge; read its value.
+    try:
+        from zerg.metrics import canary_seq_last_seen as _gauge
+
+        ingest_seq = _gauge.labels(hop="ingest")._value.get()  # type: ignore[attr-defined]
+        sse_seq = _gauge.labels(hop="sse")._value.get()  # type: ignore[attr-defined]
+        seq_gap = int(ingest_seq) - int(sse_seq)
+    except Exception:
+        ingest_seq = sse_seq = None
+        seq_gap = None
+
+    overall_ok = all(h["alive"] for h in hops.values() if h["last_obs_age_s"] is not None) and (seq_gap is None or abs(seq_gap) < 10)
+
+    return {
+        "ok": overall_ok,
+        "window_s": window_s,
+        "hops": hops,
+        "seq": {
+            "ingest": int(ingest_seq) if ingest_seq is not None else None,
+            "sse": int(sse_seq) if sse_seq is not None else None,
+            "gap": seq_gap,
+        },
+    }

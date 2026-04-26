@@ -14,6 +14,15 @@ from zerg.routers.telemetry import beacon_router
 def _client() -> TestClient:
     telemetry_mod._samples.clear()
     telemetry_mod._buckets.clear()
+    telemetry_mod._canary_last_obs_monotonic.clear()
+    # Also reset the canary seq gauge — it's process-global in prometheus_client.
+    try:
+        from zerg.metrics import canary_seq_last_seen as _gauge
+
+        for hop in ("ingest", "sse", "render"):
+            _gauge.labels(hop=hop).set(0)
+    except Exception:
+        pass
     app = FastAPI()
     app.dependency_overrides[require_admin] = lambda: None
     app.include_router(beacon_router)
@@ -133,6 +142,53 @@ def test_canary_observation_rejects_negative_latency():
         json={"canary_seq": 1, "hop": "sse", "latency_ms": -5},
     )
     assert resp.status_code == 422
+
+
+def test_selfcheck_reports_all_hops_dead_when_no_observations():
+    c = _client()
+    resp = c.get("/telemetry/selfcheck")
+    assert resp.status_code == 200
+    body = resp.json()
+    for hop in ("ingest", "sse", "render"):
+        assert hop in body["hops"]
+        assert body["hops"][hop]["last_obs_age_s"] is None
+        assert body["hops"][hop]["alive"] is False
+
+
+def test_selfcheck_reports_recent_hops_alive():
+    c = _client()
+    c.post(
+        "/telemetry/canary-observation",
+        json={"canary_seq": 1, "hop": "ingest", "latency_ms": 25},
+    )
+    c.post(
+        "/telemetry/canary-observation",
+        json={"canary_seq": 1, "hop": "sse", "latency_ms": 150},
+    )
+    body = c.get("/telemetry/selfcheck").json()
+    assert body["hops"]["ingest"]["alive"] is True
+    assert body["hops"]["sse"]["alive"] is True
+    assert body["hops"]["render"]["alive"] is False
+    assert body["seq"]["ingest"] == 1
+    assert body["seq"]["sse"] == 1
+    assert body["seq"]["gap"] == 0
+
+
+def test_selfcheck_flags_seq_gap():
+    c = _client()
+    # Producer way ahead of observer
+    c.post(
+        "/telemetry/canary-observation",
+        json={"canary_seq": 100, "hop": "ingest", "latency_ms": 25},
+    )
+    c.post(
+        "/telemetry/canary-observation",
+        json={"canary_seq": 10, "hop": "sse", "latency_ms": 150},
+    )
+    body = c.get("/telemetry/selfcheck").json()
+    assert body["seq"]["gap"] == 90
+    # gap >= 10 trips overall ok=False
+    assert body["ok"] is False
 
 
 def test_latency_summary_groups_by_surface_and_managed():
