@@ -69,15 +69,26 @@ function SeamRow({ seam }: { seam: TimelineSeam }) {
   );
 }
 
-const MESSAGE_COLLAPSE_LINES = 24;
+const MESSAGE_COLLAPSE_CHARS = 40_000;
 
-/** Truncate preview to at most `maxLines` without leaving an unclosed fenced
+/** Truncate preview to at most `maxChars` without leaving an unclosed fenced
  *  code block — ReactMarkdown would otherwise treat the rest of the document
  *  as "inside a code block" and render everything as code. */
-function truncateMarkdown(text: string, maxLines: number): string {
+function truncateMarkdown(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
   const lines = text.split("\n");
-  if (lines.length <= maxLines) return text;
-  let cut = maxLines;
+  let cut = 0;
+  let chars = 0;
+  while (cut < lines.length) {
+    const nextLength = lines[cut].length + (cut === 0 ? 0 : 1);
+    if (chars + nextLength > maxChars) break;
+    chars += nextLength;
+    cut += 1;
+  }
+  if (cut === 0) {
+    return text.slice(0, maxChars);
+  }
+
   // Count fences (``` or ~~~) up to the cut; if odd, we're inside a fence —
   // drop lines back until the last open fence, then chop that opener too.
   const isFence = (l: string) => /^\s*(```|~~~)/.test(l);
@@ -101,13 +112,11 @@ function MessageRow({
   const outside = isOutsideActiveContext(event);
   const isUser = event.role === "user";
   const isAssistant = event.role === "assistant";
-  const lineCount = preview.split("\n").length;
-  const isLong = lineCount > MESSAGE_COLLAPSE_LINES;
+  const isLong = preview.length > MESSAGE_COLLAPSE_CHARS;
   const [expanded, setExpanded] = useState(false);
   const visible = isLong && !expanded
-    ? truncateMarkdown(preview, MESSAGE_COLLAPSE_LINES)
+    ? truncateMarkdown(preview, MESSAGE_COLLAPSE_CHARS)
     : preview;
-  const hiddenLines = lineCount - visible.split("\n").length;
 
   return (
     <div
@@ -151,7 +160,7 @@ function MessageRow({
               setExpanded((v) => !v);
             }}
           >
-            {expanded ? "Show less" : `Show ${hiddenLines} more line${hiddenLines === 1 ? "" : "s"}`}
+            {expanded ? "Collapse message" : "Show full message"}
           </button>
         ) : null}
       </div>

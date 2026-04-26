@@ -576,28 +576,69 @@ private struct TimelineItemView: View {
 
 private struct UserBubble: View {
     let event: SessionEvent
+    @State private var expanded = false
+
+    private var text: String { event.contentText ?? "" }
+    private var shouldCollapse: Bool { TranscriptTextPolicy.shouldCollapseMessage(text) }
+    private var visibleText: String { TranscriptTextPolicy.visibleMessage(text, expanded: expanded) }
 
     var body: some View {
         HStack {
             Spacer(minLength: 40)
-            Text(event.contentText ?? "")
-                .font(.callout)
-                .textSelection(.enabled)
-                .padding(10)
-                .background(Color.blue.opacity(0.15), in: RoundedRectangle(cornerRadius: 12))
-                .frame(alignment: .trailing)
+            VStack(alignment: .trailing, spacing: 6) {
+                Text(visibleText)
+                    .font(.callout)
+                    .textSelection(.enabled)
+                    .padding(10)
+                    .background(Color.blue.opacity(0.15), in: RoundedRectangle(cornerRadius: 12))
+                    .frame(alignment: .trailing)
+
+                if shouldCollapse {
+                    TranscriptExpandButton(expanded: expanded) {
+                        expanded.toggle()
+                    }
+                }
+            }
         }
     }
 }
 
 private struct AssistantBubble: View {
     let event: SessionEvent
+    @State private var expanded = false
+
+    private var text: String { event.contentText ?? "" }
+    private var shouldCollapse: Bool { TranscriptTextPolicy.shouldCollapseMessage(text) }
+    private var visibleText: String { TranscriptTextPolicy.visibleMessage(text, expanded: expanded) }
 
     var body: some View {
-        MarkdownText(event.contentText ?? "")
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(10)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+        VStack(alignment: .leading, spacing: 8) {
+            MarkdownText(visibleText)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if shouldCollapse {
+                TranscriptExpandButton(expanded: expanded) {
+                    expanded.toggle()
+                }
+            }
+        }
+        .padding(10)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+private struct TranscriptExpandButton: View {
+    let expanded: Bool
+    let onToggle: () -> Void
+
+    var body: some View {
+        Button(action: onToggle) {
+            Text(expanded ? "Collapse message" : "Show full message")
+                .font(.caption.weight(.semibold))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.blue)
+        .accessibilityLabel(expanded ? "Collapse message" : "Show full message")
     }
 }
 
