@@ -112,28 +112,29 @@ The Runtime Host converts fresh `attached` rows into runtime phase events:
 - `freshness_expires_at = server_received_at + lease_ttl`
 - `dedupe_key = engine-attached-lease:{machine_id}:{session_id}:{sequence}`
 
-The Runtime Host converts explicit `detached` rows into terminal/control-path
-events:
+The Runtime Host converts explicit `detached` rows into recoverable
+control-path-loss events:
 
 - `source = engine_attached_lease`
-- `kind = terminal_signal`
-- `terminal_state = bridge_detached`
+- `kind = phase_signal`
+- `phase = blocked`
+- `tool_name = control path`
 
-`bridge_detached` is recoverable control-path loss. It does not write
-`sessions.ended_at`.
+Detached is not completed. It does not write `sessions.ended_at`, and it does
+not set runtime `terminal_state`.
 
 The only managed Codex control event that writes `sessions.ended_at` is an
 explicit final session termination from the managed owner, such as
 `terminal_state = session_ended`. That event means the local owner intentionally
 ended the provider session rather than merely losing or detaching the bridge.
 
-Ordering is per `(machine_id, session_id)`. The reducer ignores older
-sequence-numbered terminal/control events once a newer lease is applied. If the
-same managed session appears from two machines, the newest attached lease wins;
-cross-machine ordering is decided by server receive time because machine-local
-sequences are not comparable. Later product work can expose multi-attach as a
-richer state, but launch should not let stale machine state hide the currently
-attached owner.
+Lease ordering uses Runtime Host receive time. `sequence` is used for heartbeat
+dedupe and audit, not cross-machine ordering, because machine-local sequences
+are not comparable. If the same managed session appears from two machines, the
+newest attached lease wins. Once the reducer sees explicit
+`terminal_state = session_ended`, later heartbeat leases cannot resurrect the
+session. Later product work can expose multi-attach as a richer state, but
+launch should not let stale machine state hide the currently attached owner.
 
 For managed Codex, `attached` requires the bridge/control socket to be healthy
 and the Codex TUI attachment to be present. If either side is missing while the

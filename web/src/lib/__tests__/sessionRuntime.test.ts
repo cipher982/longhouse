@@ -58,6 +58,33 @@ describe("resolveSessionRuntimeState", () => {
     expect(runtime.displayPhase).toBe("Needs you");
   });
 
+  it("treats a fresh managed-local idle lease as ready even when ended_at is old", () => {
+    const runtime = resolveSessionRuntimeState(
+      makeSession({
+        ended_at: "2026-03-21T10:00:00Z",
+        capabilities: {
+          live_control_available: true,
+          host_reattach_available: true,
+          reply_to_live_session_available: true,
+        },
+        status: "idle",
+        confidence: "live",
+        runtime_source: "semantic",
+        presence_state: "idle",
+        display_phase: "Idle",
+      }),
+    );
+
+    expect(runtime.truthTier).toBe("managed-local");
+    expect(runtime.heuristicActive).toBe(false);
+    expect(runtime.isIdle).toBe(true);
+    expect(runtime.tone).toBe("idle");
+    expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
+      headline: "Ready",
+      detail: "Ready for next prompt",
+    });
+  });
+
   it("collapses managed-local execution into Working with a richer detail label", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({
