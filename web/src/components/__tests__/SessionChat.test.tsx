@@ -482,7 +482,7 @@ describe("SessionChat", () => {
 
     // Lock notice adapts to the queue-next affordance.
     expect(
-      screen.getByText(/queue and auto-send at the next turn boundary/i),
+      screen.getByText(/click queue next to auto-send/i),
     ).toBeInTheDocument();
 
     await user.type(screen.getByRole("textbox"), "wait for it");

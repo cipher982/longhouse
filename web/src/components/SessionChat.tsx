@@ -628,7 +628,7 @@ export function SessionChat({
         <div className="session-chat-turn-notice">
           <span>
             {canQueueNextInput
-              ? "Agent is working. Your next message will queue and auto-send at the next turn boundary."
+              ? "Agent is working. Click Queue next to auto-send at the next turn boundary — Enter will not queue."
               : "Agent is working. You can draft the next message; sending will be available when it is ready."}
           </span>
         </div>
