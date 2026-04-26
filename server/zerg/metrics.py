@@ -202,6 +202,30 @@ try:
         buckets=(128, 256, 512, 768, 1_024, 2_048, 4_096, 8_192, 16_384),
     )
 
+    managed_session_heartbeat_lease_rows_total = Counter(
+        "managed_session_heartbeat_lease_rows_total",
+        "Managed session lease rows observed in agent heartbeat payloads before runtime-event dedupe",
+        labelnames=("provider", "state", "phase"),
+    )
+
+    managed_codex_runtime_events_total = Counter(
+        "managed_codex_runtime_events_total",
+        "Managed Codex runtime events by source, kind, and reducer outcome",
+        labelnames=("source", "kind", "outcome"),
+    )
+
+    managed_codex_bridge_freshness_total = Counter(
+        "managed_codex_bridge_freshness_total",
+        "Managed Codex bridge phase freshness budget choices",
+        labelnames=("outcome",),
+    )
+
+    managed_codex_liveness_invariant_sessions = Gauge(
+        "managed_codex_liveness_invariant_sessions",
+        "Managed Codex sessions currently violating liveness invariants",
+        labelnames=("invariant",),
+    )
+
 except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib absent
 
     class _NoopCounter:  # noqa: D401 – tiny helper
@@ -223,6 +247,9 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
     agents_ingest_requests_total = _NoopCounter()  # type: ignore[assignment]
     agents_ingest_events_total = _NoopCounter()  # type: ignore[assignment]
     agents_heartbeat_requests_total = _NoopCounter()  # type: ignore[assignment]
+    managed_session_heartbeat_lease_rows_total = _NoopCounter()  # type: ignore[assignment]
+    managed_codex_runtime_events_total = _NoopCounter()  # type: ignore[assignment]
+    managed_codex_bridge_freshness_total = _NoopCounter()  # type: ignore[assignment]
 
     # Provide *noop* Gauge so code can call ``set`` without importing
     # the optional dependency in minimal CI images.
@@ -243,6 +270,7 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
     gmail_connector_history_id = _NoopGauge()  # type: ignore[assignment]
     gmail_connector_watch_expiry = _NoopGauge()  # type: ignore[assignment]
     pubsub_webhook_processing = _NoopGauge()  # type: ignore[assignment]
+    managed_codex_liveness_invariant_sessions = _NoopGauge()  # type: ignore[assignment]
 
     # Provide *noop* Histogram so code can call ``observe`` without importing
     # the optional dependency in minimal CI images.

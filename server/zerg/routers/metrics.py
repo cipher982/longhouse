@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter
 from fastapi import Response
 
@@ -11,6 +13,19 @@ from fastapi import Response
 
 
 router = APIRouter(tags=["metrics"], include_in_schema=False)
+logger = logging.getLogger(__name__)
+
+
+def _refresh_dynamic_gauges() -> None:
+    try:
+        from zerg.database import get_session_factory
+        from zerg.services.session_runtime import refresh_managed_codex_liveness_metrics
+
+        session_factory = get_session_factory()
+        with session_factory() as db:
+            refresh_managed_codex_liveness_metrics(db)
+    except Exception:
+        logger.exception("Failed to refresh dynamic metrics gauges")
 
 
 try:
@@ -19,6 +34,7 @@ try:
 
     @router.get("/metrics")
     def metrics() -> Response:  # noqa: D401 – external signature
+        _refresh_dynamic_gauges()
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 except ModuleNotFoundError:  # pragma: no cover – metrics disabled
