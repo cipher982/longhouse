@@ -13,7 +13,7 @@ cases:
       provider: claude
       status: completed
       resumable: true
-      loop_mode: manual
+      loop_mode: assist
       project: zerg
       last_user_message: Please add the telemetry hook and report back.
       last_ai_message: Done. I added the hook, ran the targeted tests, and there is nothing else pending.
@@ -54,7 +54,7 @@ cases:
         provider: claude
         status: working
         resumable: true
-        loop_mode: manual
+        loop_mode: assist
         project: zerg
         summary: Separate refactor still in progress.
         presence_state: thinking
@@ -123,7 +123,7 @@ cases:
       provider: claude
       status: idle
       resumable: true
-      loop_mode: manual
+      loop_mode: assist
       project: zerg
       last_user_message: Please continue later if something obvious remains.
       last_ai_message: Waiting for the next meaningful task.
@@ -134,7 +134,7 @@ cases:
         provider: codex
         status: idle
         resumable: false
-        loop_mode: manual
+        loop_mode: assist
         project: zerg
         summary: Historical session, no current work.
         presence_state: idle
@@ -337,7 +337,7 @@ cases:
       provider: claude
       status: completed
       resumable: true
-      loop_mode: manual
+      loop_mode: assist
       project: zerg
       last_user_message: Work on this, but stay fully manual.
       last_ai_message: I fixed the hook, but the targeted tests were not run yet. Next step is to run the session-detail tests.
@@ -369,7 +369,7 @@ cases:
       provider: claude
       status: blocked
       resumable: true
-      loop_mode: manual
+      loop_mode: assist
       project: zerg
       last_user_message: Keep this one manual unless I explicitly change the mode.
       last_ai_message: I can continue, but I need to know whether to optimize for nonstop loops or event-driven wakeups first.

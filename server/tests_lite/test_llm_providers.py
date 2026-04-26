@@ -14,12 +14,13 @@ import os
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import pytest
 from fastapi.testclient import TestClient
 
-from zerg.database import Base, get_db, make_engine, make_sessionmaker
-from zerg.models.models import LlmProviderConfig, User
-
+from zerg.database import Base
+from zerg.database import get_db
+from zerg.database import make_engine
+from zerg.database import make_sessionmaker
+from zerg.models.models import User
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -50,7 +51,7 @@ def _get_client(session_factory):
     from zerg.main import api_app
 
     db = session_factory()
-    user = _seed_user(db)
+    _seed_user(db)
     db.close()
 
     def _override_db():
@@ -446,7 +447,7 @@ class TestProviderConnection:
             assert captured["client_kwargs"]["api_key"] == "xai-test-key"
             assert captured["client_kwargs"]["base_url"] == "https://api.x.ai/v1"
             assert captured["request_kwargs"]["model"] == "grok-4-1-fast-non-reasoning"
-            assert captured["request_kwargs"]["max_tokens"] == 3
+            assert "max_tokens" not in captured["request_kwargs"]
             assert captured["closed"] is True
 
     def test_test_endpoint_uses_stored_key_when_api_key_omitted(self, tmp_path):
@@ -521,3 +522,8 @@ class TestProviderConnection:
             assert resp.status_code == 200
             assert resp.json() == {"success": True, "message": "Connection successful"}
             assert captured["client_kwargs"]["api_key"] == "sk-or-test-123"
+            assert captured["client_kwargs"]["base_url"] == "https://openrouter.ai/api/v1"
+            assert captured["client_kwargs"]["default_headers"] == {
+                "HTTP-Referer": "https://longhouse.ai",
+                "X-OpenRouter-Title": "Longhouse",
+            }

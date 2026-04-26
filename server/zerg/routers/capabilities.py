@@ -32,6 +32,8 @@ from zerg.models.models import LlmProviderConfig
 from zerg.models.models import User
 from zerg.models_config import _DB_PROVIDER_DEFAULT_MODELS
 from zerg.models_config import EMBEDDING_MODEL
+from zerg.models_config import build_openai_compatible_client_kwargs
+from zerg.models_config import get_provider_default_base_url
 from zerg.utils.crypto import decrypt
 from zerg.utils.crypto import encrypt
 
@@ -44,9 +46,9 @@ _settings = get_settings()
 # Known provider base URLs (frontend also has these, but backend needs them for test)
 _KNOWN_PROVIDERS = {
     "openai": None,  # SDK default
-    "openrouter": "https://openrouter.ai/api/v1",
-    "groq": "https://api.groq.com/openai/v1",
-    "xai": "https://api.x.ai/v1",
+    "openrouter": get_provider_default_base_url("openrouter"),
+    "groq": get_provider_default_base_url("groq"),
+    "xai": get_provider_default_base_url("xai"),
     "ollama": "http://localhost:11434/v1",
 }
 
@@ -505,12 +507,12 @@ async def test_llm_provider(
         if not api_key:
             return LlmProviderTestResponse(success=False, message="API key is required to test this connection")
 
-        kwargs: dict[str, Any] = {
-            "api_key": api_key,
-            "timeout": httpx.Timeout(10.0, connect=5.0),
-        }
-        if base_url:
-            kwargs["base_url"] = base_url
+        kwargs: dict[str, Any] = build_openai_compatible_client_kwargs(
+            provider=request.provider_name,
+            api_key=api_key,
+            base_url=base_url,
+        )
+        kwargs["timeout"] = httpx.Timeout(10.0, connect=5.0)
 
         client = AsyncOpenAI(**kwargs)
 
@@ -520,7 +522,6 @@ async def test_llm_provider(
                 resp = await client.chat.completions.create(
                     model=test_model,
                     messages=[{"role": "user", "content": "Say 'ok'"}],
-                    max_tokens=3,
                 )
                 if resp.choices:
                     return LlmProviderTestResponse(success=True, message="Connection successful")

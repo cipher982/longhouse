@@ -77,9 +77,7 @@ export function SessionContextPane({
       : interaction.liveControlAvailable
         ? session.loop_mode === "autopilot"
           ? "Saved as an autopilot preference. Automatic turns are not active until a runner is connected."
-          : session.loop_mode === "assist"
-            ? "Drafts replies for review. You choose what gets sent."
-            : "No automation. You drive this session yourself."
+          : "Drafts replies for review. You choose what gets sent."
         : "Saved as a preference. Active controls return when live control connects.";
   const attachDebugCopy = `Run this on ${attachRunnerLabel} to open this existing managed ${interaction.providerLabel} session in a terminal UI. This does not restart the session.`;
   const shouldShowNotice =
