@@ -508,9 +508,23 @@ export function connectTimelineSessionsStream(
 // Session workspace SSE stream
 // ---------------------------------------------------------------------------
 
+export interface SessionWorkspaceStreamConnected {
+  session_id: string;
+  server_now_ms?: number;
+}
+
+export interface SessionWorkspaceStreamChange {
+  session_id: string;
+  latest_event_id: number;
+  thread_session_count: number;
+  detect_ms?: number;
+  latest_event_emitted_at_ms?: number | null;
+  server_now_ms?: number;
+}
+
 export interface SessionWorkspaceStreamHandlers {
-  onConnected?: () => void;
-  onWorkspaceChanged?: (data: { session_id: string; latest_event_id: number; thread_session_count: number }) => void;
+  onConnected?: (data: SessionWorkspaceStreamConnected) => void;
+  onWorkspaceChanged?: (data: SessionWorkspaceStreamChange) => void;
   onHeartbeat?: (timestamp: string) => void;
   onError?: (error: Event) => void;
 }
@@ -535,16 +549,13 @@ export function connectSessionWorkspaceStream(
   );
   const eventSource = new EventSource(url, { withCredentials: true });
 
-  eventSource.addEventListener("connected", () => {
-    handlers.onConnected?.();
+  eventSource.addEventListener("connected", (event: MessageEvent) => {
+    const data = parseStreamEventData<SessionWorkspaceStreamConnected>(event);
+    handlers.onConnected?.(data ?? { session_id: sessionId });
   });
 
   eventSource.addEventListener("workspace_changed", (event: MessageEvent) => {
-    const data = parseStreamEventData<{
-      session_id: string;
-      latest_event_id: number;
-      thread_session_count: number;
-    }>(event);
+    const data = parseStreamEventData<SessionWorkspaceStreamChange>(event);
     if (data) {
       handlers.onWorkspaceChanged?.(data);
     }
