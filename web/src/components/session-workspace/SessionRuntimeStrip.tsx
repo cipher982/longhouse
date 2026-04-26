@@ -2,7 +2,6 @@ import type { AgentSession } from "../../services/api/agents";
 import type { SessionInteractionCapabilities } from "../../lib/sessionWorkspace";
 import { PresenceBadge } from "../PresenceBadge";
 import {
-  getCardRuntimePhaseLabel,
   getRuntimeDisplayCopy,
   getRuntimeMetaLabel,
 } from "../../lib/sessionUtils";
@@ -37,9 +36,22 @@ function getCapabilityMeta({
     return `Live on ${hostLabel}`;
   }
   if (hostReattachAvailable) {
-    return "Browser control offline";
+    return "Control offline";
   }
   return "Search only";
+}
+
+function getSearchOnlyRuntimePhase(
+  runtime: ReturnType<typeof resolveSessionRuntimeState>,
+  session: AgentSession,
+): string {
+  if (runtime.status === "completed" || session.ended_at) {
+    return "Completed";
+  }
+  if (runtime.isExecuting || runtime.needsAttention || runtime.heuristicActive) {
+    return "Active";
+  }
+  return "Inactive";
 }
 
 export function SessionRuntimeStrip({
@@ -57,12 +69,7 @@ export function SessionRuntimeStrip({
   });
   const runtimePhase = interaction.isManagedLocalSession
     ? runtimeDisplay.headline
-    : runtime.presenceState == null &&
-        (runtime.truthTier === "stale" || runtime.truthTier === "inferred")
-      ? runtime.status === "completed" || session.ended_at
-        ? "Completed"
-        : "Recent progress"
-      : getCardRuntimePhaseLabel(runtime);
+    : getSearchOnlyRuntimePhase(runtime, session);
   const runtimeDetail = interaction.isManagedLocalSession
     ? (detailOverride ?? runtimeDisplay.detail)
     : null;

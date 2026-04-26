@@ -395,6 +395,28 @@
   color: rgba(181, 164, 142, 0.78);
 }
 
+.session-chat-composer-unavailable {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid rgba(201, 166, 107, 0.22);
+  border-radius: var(--radius-md);
+  background: rgba(26, 20, 16, 0.72);
+}
+
+.session-chat-composer-unavailable__title {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: rgba(243, 234, 217, 0.9);
+}
+
+.session-chat-composer-unavailable__copy {
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+  color: rgba(181, 164, 142, 0.78);
+}
+
 /* Pending message pill — shows while managed-local POST is in flight */
 .session-chat-pending-message {
   display: flex;

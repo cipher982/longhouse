@@ -75,8 +75,10 @@ export function SessionContextPane({
     : !interaction.isManagedLocalSession
       ? "Stored preference only."
       : interaction.liveControlAvailable
-        ? "Review posture only."
-        : "Stored here. Applies when Longhouse regains control.";
+        ? session.loop_mode === "autopilot"
+          ? "Continues this session automatically within turn limits."
+          : "Suggests next steps. You approve what gets sent."
+        : "Saved. Active when live control connects.";
   const attachDebugCopy = `Run this on ${attachRunnerLabel} to open this existing managed ${interaction.providerLabel} session in a terminal UI. This does not restart the session.`;
   const shouldShowNotice =
     continuationNotice && !interaction.managedLaunchSuggestion;
@@ -84,11 +86,14 @@ export function SessionContextPane({
     shouldShowNotice || interaction.managedLaunchSuggestion;
 
   const durationStr = formatDuration(session.started_at, session.ended_at);
+  const toolCallLabel =
+    session.tool_calls === 1 ? "1 tool call" : `${session.tool_calls} tool calls`;
   const statsLine = [
     `${turnCount} turns`,
-    `${session.tool_calls} tools`,
+    toolCallLabel,
     durationStr,
   ].join(" \u00b7 ");
+  const metadataMeta = session.git_branch || session.project || null;
 
   return (
     <div className="session-context-pane">
@@ -185,9 +190,11 @@ export function SessionContextPane({
       <details className="session-pane-disclosure session-pane-disclosure--tertiary">
         <summary className="session-pane-disclosure__summary">
           <span className="session-pane-disclosure__title">Metadata</span>
-          <span className="session-pane-disclosure__meta">
-            {session.git_branch || session.project || ""}
-          </span>
+          {metadataMeta ? (
+            <span className="session-pane-disclosure__meta">
+              {metadataMeta}
+            </span>
+          ) : null}
         </summary>
         <div className="session-pane-disclosure__body">
           <div className="session-context-meta">
@@ -225,9 +232,9 @@ export function SessionContextPane({
           data-testid="session-debug-attach"
         >
           <summary className="session-pane-disclosure__summary">
-            <span className="session-pane-disclosure__title">Debug</span>
+            <span className="session-pane-disclosure__title">Terminal</span>
             <span className="session-pane-disclosure__meta">
-              Terminal UI command
+              Attach command
             </span>
           </summary>
           <div className="session-pane-disclosure__body">

@@ -189,10 +189,11 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.canChatFromBrowser).toBe(false);
     expect(capabilities.managementLabel).toBe("Managed");
     expect(capabilities.managedLaunchSuggestion).toBeNull();
-    expect(capabilities.capabilityLabel).toBe("Browser control offline");
+    expect(capabilities.capabilityLabel).toBe("Control offline");
     expect(capabilities.composerDisabledReason).toMatch(/cannot send prompts/i);
+    expect(capabilities.composerDisabledReason).toMatch(/engine reconnects/i);
     expect(capabilities.primaryActionLabel).toBe("Unavailable");
-    expect(capabilities.notice?.title).toBe("Browser control is offline");
+    expect(capabilities.notice?.title).toBe("Control is offline");
   });
 
   it("shows reattach when a managed-local Claude session loses its live control channel", () => {
@@ -216,7 +217,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.canChatFromBrowser).toBe(false);
     expect(capabilities.managementLabel).toBe("Managed");
     expect(capabilities.managedLaunchSuggestion).toBeNull();
-    expect(capabilities.capabilityLabel).toBe("Browser control offline");
+    expect(capabilities.capabilityLabel).toBe("Control offline");
   });
 
   it("treats a synced Claude transcript as search-only", () => {

@@ -303,7 +303,7 @@ describe("SessionDetailPage", () => {
     const loopModeTitle = screen.getByText("Loop Mode");
     const summaryTitle = screen.getByText("Summary");
     const metadataTitle = screen.getByText("Metadata");
-    const debugTitle = screen.getByText("Debug");
+    const terminalTitle = screen.getByText("Terminal");
     expect(
       loopModeTitle.compareDocumentPosition(summaryTitle) &
         Node.DOCUMENT_POSITION_FOLLOWING,
@@ -313,17 +313,17 @@ describe("SessionDetailPage", () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
-      metadataTitle.compareDocumentPosition(debugTitle) &
+      metadataTitle.compareDocumentPosition(terminalTitle) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
       screen.queryByTestId("session-attach-callout"),
     ).not.toBeInTheDocument();
     expect(screen.getByTestId("session-debug-attach")).toHaveTextContent(
-      "Debug",
+      "Terminal",
     );
     expect(screen.getByTestId("session-debug-attach")).toHaveTextContent(
-      "Terminal UI command",
+      "Attach command",
     );
     expect(screen.getByTestId("session-debug-attach-command")).toHaveTextContent(
       "codex-bridge attach --session-id session-codex",
@@ -356,7 +356,7 @@ describe("SessionDetailPage", () => {
     expect(screen.getByText("output")).toBeInTheDocument();
   });
 
-  it("keeps terminal attach in debug when browser control is unavailable", () => {
+  it("keeps terminal attach in the terminal section when control is offline", () => {
     const session = makeSession({
       ended_at: null,
       status: "working",
@@ -399,10 +399,10 @@ describe("SessionDetailPage", () => {
       screen.queryByTestId("session-attach-callout"),
     ).not.toBeInTheDocument();
     expect(screen.getByTestId("session-debug-attach")).toHaveTextContent(
-      "Debug",
+      "Terminal",
     );
     expect(screen.getByTestId("session-debug-attach")).toHaveTextContent(
-      "Terminal UI command",
+      "Attach command",
     );
     expect(screen.getByTestId("session-debug-attach-command")).toHaveTextContent(
       "codex-bridge attach --session-id session-codex",
@@ -410,18 +410,18 @@ describe("SessionDetailPage", () => {
     const continuationNotice = screen.getByTestId(
       "session-continuation-unavailable",
     );
-    expect(continuationNotice).toHaveTextContent("Browser control is offline");
+    expect(continuationNotice).toHaveTextContent("Control is offline");
     const loopModeTitle = screen.getByText("Loop Mode");
     expect(
       continuationNotice.compareDocumentPosition(loopModeTitle) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
-      screen.getByText("Stored here. Applies when Longhouse regains control."),
+      screen.getByText("Saved. Active when live control connects."),
     ).toBeInTheDocument();
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
       "data-disabled-reason",
-      "Longhouse can still see this live Codex session, but it cannot send prompts from the browser right now.",
+      "Longhouse can see this live Codex session, but cannot send prompts until the engine reconnects.",
     );
   });
 
@@ -791,7 +791,7 @@ describe("SessionDetailPage", () => {
       "Search only",
     );
     expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
-      "Recent progress",
+      "Active",
     );
   });
 
