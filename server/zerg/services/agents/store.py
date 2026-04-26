@@ -63,6 +63,22 @@ from .models import SourceRewindHintIngest
 logger = logging.getLogger(__name__)
 
 
+def _is_managed_codex_ingest(
+    session: AgentSession | None,
+    data: SessionIngest,
+    incoming_execution_home: SessionExecutionHome,
+) -> bool:
+    provider = str((session.provider if session is not None else data.provider) or "").strip().lower()
+    if provider != "codex":
+        return False
+    session_execution_home = coerce_execution_home(getattr(session, "execution_home", None)) if session is not None else None
+    return (
+        incoming_execution_home == SessionExecutionHome.MANAGED_LOCAL
+        or session_execution_home == SessionExecutionHome.MANAGED_LOCAL
+        or bool(getattr(session, "managed_transport", None))
+    )
+
+
 class AgentsStore:
     """Service for storing and querying agent sessions."""
 
@@ -85,6 +101,15 @@ class AgentsStore:
             session.execution_home = _infer_execution_home_from_session(session).value
         if session.is_writable_head is None:
             session.is_writable_head = 1
+
+    def _has_final_managed_codex_terminal(self, session: AgentSession) -> bool:
+        return (
+            self.db.query(SessionRuntimeState.runtime_key)
+            .filter(SessionRuntimeState.session_id == session.id)
+            .filter(SessionRuntimeState.terminal_state == "session_ended")
+            .first()
+            is not None
+        )
 
     def batch_thread_meta(self, sessions: list[AgentSession]) -> dict[str, tuple[str, int]]:
         """Batch-load thread head ID and continuation count for multiple sessions.
@@ -424,7 +449,11 @@ class AgentsStore:
 
         incoming_ended_at = _normalize_utc_naive(data.ended_at)
         existing_ended_at = _normalize_utc_naive(session.ended_at)
-        if incoming_ended_at and (existing_ended_at is None or incoming_ended_at > existing_ended_at):
+        managed_codex_ingest = _is_managed_codex_ingest(session, data, incoming_execution_home)
+        if managed_codex_ingest:
+            if not self._has_final_managed_codex_terminal(session):
+                session.ended_at = None
+        elif incoming_ended_at and (existing_ended_at is None or incoming_ended_at > existing_ended_at):
             session.ended_at = data.ended_at
             current_activity = _normalize_utc_naive(session.last_activity_at)
             if current_activity is None or incoming_ended_at > current_activity:
@@ -1314,6 +1343,7 @@ class AgentsStore:
             if not device_name and data.device_id:
                 device_name = data.device_id.replace("shipper-", "")
 
+            managed_codex_ingest = _is_managed_codex_ingest(None, data, incoming_execution_home)
             session = AgentSession(
                 id=session_id,
                 provider=data.provider,
@@ -1325,7 +1355,7 @@ class AgentsStore:
                 git_repo=data.git_repo,
                 git_branch=data.git_branch,
                 started_at=data.started_at,
-                ended_at=data.ended_at,
+                ended_at=(None if managed_codex_ingest else data.ended_at),
                 last_activity_at=_normalize_utc_naive(data.started_at),
                 provider_session_id=data.provider_session_id,
                 thread_root_session_id=root_id,

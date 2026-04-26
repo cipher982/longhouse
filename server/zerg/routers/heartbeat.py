@@ -15,6 +15,7 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from typing import Optional
+from uuid import UUID
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -22,6 +23,7 @@ from fastapi import Request
 from fastapi import Response
 from fastapi import status
 from pydantic import BaseModel
+from pydantic import Field
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
@@ -30,14 +32,38 @@ from zerg.metrics import agents_heartbeat_payload_bytes
 from zerg.metrics import agents_heartbeat_requests_total
 from zerg.metrics import agents_heartbeat_write_seconds
 from zerg.models.agents import AgentHeartbeat
+from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionRuntimeState
 from zerg.models.device_token import DeviceToken
 from zerg.observability import get_tracer
 from zerg.observability import set_span_attributes
+from zerg.services.session_runtime import RuntimeEventIngest
+from zerg.services.session_runtime import ingest_runtime_events
+from zerg.services.session_runtime import runtime_key_for_session
 from zerg.services.write_serializer import get_write_serializer
+from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agents", tags=["agents"])
+
+MANAGED_SESSION_LEASE_SOURCE = "engine_attached_lease"
+DEFAULT_MANAGED_SESSION_LEASE_TTL_MS = 15 * 60 * 1000
+MAX_MANAGED_SESSION_LEASE_TTL_MS = 60 * 60 * 1000
+
+
+class ManagedSessionLeaseIn(UTCBaseModel):
+    session_id: UUID
+    provider: str = Field(..., max_length=64)
+    machine_id: str | None = Field(None, max_length=255)
+    sequence: int = Field(..., ge=0)
+    state: str = Field(..., max_length=32)
+    phase: str | None = Field(None, max_length=32)
+    tool_name: str | None = Field(None, max_length=128)
+    bridge_status: str | None = Field(None, max_length=64)
+    thread_subscription_status: str | None = Field(None, max_length=64)
+    observed_at: datetime | None = None
+    lease_ttl_ms: int = Field(DEFAULT_MANAGED_SESSION_LEASE_TTL_MS, ge=1, le=MAX_MANAGED_SESSION_LEASE_TTL_MS)
 
 
 class HeartbeatIn(BaseModel):
@@ -66,6 +92,106 @@ class HeartbeatIn(BaseModel):
     ship_latency_p95_ms_1h: Optional[int] = None
     disk_free_bytes: int = 0
     is_offline: bool = False
+    managed_sessions: list[ManagedSessionLeaseIn] = Field(default_factory=list)
+
+
+def _managed_session_phase(lease: ManagedSessionLeaseIn) -> str:
+    phase = (lease.phase or "").strip()
+    if phase in {"idle", "thinking", "running", "blocked", "needs_user"}:
+        return phase
+    return "idle"
+
+
+def _dedupe_key_for_lease(lease: ManagedSessionLeaseIn) -> str:
+    machine_id = (lease.machine_id or "unknown").strip() or "unknown"
+    return f"engine-attached-lease:{machine_id}:{lease.session_id}:{lease.sequence}"
+
+
+def _is_managed_codex_session(session: AgentSession | None) -> bool:
+    if session is None:
+        return False
+    if str(session.provider or "").strip().lower() != "codex":
+        return False
+    execution_home = str(getattr(session, "execution_home", "") or "").strip()
+    return execution_home == "managed_local" or bool(getattr(session, "managed_transport", None))
+
+
+def _runtime_events_for_managed_leases(
+    leases: list[ManagedSessionLeaseIn],
+    *,
+    device_id: str,
+    received_at: datetime,
+) -> list[RuntimeEventIngest]:
+    events: list[RuntimeEventIngest] = []
+    for lease in leases:
+        provider = (lease.provider or "").strip().lower() or "unknown"
+        state = (lease.state or "").strip().lower()
+        runtime_key = runtime_key_for_session(provider, str(lease.session_id))
+        payload = lease.model_dump(mode="json")
+
+        if state == "attached":
+            events.append(
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=lease.session_id,
+                    provider=provider,
+                    device_id=device_id,
+                    source=MANAGED_SESSION_LEASE_SOURCE,
+                    kind="phase_signal",
+                    phase=_managed_session_phase(lease),
+                    tool_name=lease.tool_name,
+                    occurred_at=received_at,
+                    freshness_ms=lease.lease_ttl_ms,
+                    dedupe_key=_dedupe_key_for_lease(lease),
+                    payload=payload,
+                )
+            )
+        elif state == "degraded":
+            events.append(
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=lease.session_id,
+                    provider=provider,
+                    device_id=device_id,
+                    source=MANAGED_SESSION_LEASE_SOURCE,
+                    kind="phase_signal",
+                    phase="blocked",
+                    tool_name=lease.tool_name or "control path",
+                    occurred_at=received_at,
+                    freshness_ms=lease.lease_ttl_ms,
+                    dedupe_key=_dedupe_key_for_lease(lease),
+                    payload=payload,
+                )
+            )
+        elif state == "detached":
+            events.append(
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=lease.session_id,
+                    provider=provider,
+                    device_id=device_id,
+                    source=MANAGED_SESSION_LEASE_SOURCE,
+                    kind="phase_signal",
+                    phase="blocked",
+                    tool_name=lease.tool_name or "control path",
+                    occurred_at=received_at,
+                    freshness_ms=lease.lease_ttl_ms,
+                    dedupe_key=_dedupe_key_for_lease(lease),
+                    payload=payload,
+                )
+            )
+
+    return events
+
+
+def _has_final_managed_codex_terminal(db: Session, session_id: UUID) -> bool:
+    return (
+        db.query(SessionRuntimeState.runtime_key)
+        .filter(SessionRuntimeState.session_id == session_id)
+        .filter(SessionRuntimeState.terminal_state == "session_ended")
+        .first()
+        is not None
+    )
 
 
 @router.post("/heartbeat", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
@@ -116,7 +242,7 @@ async def ingest_heartbeat(
                         pass
 
                 wire_bytes = len(await request.body())
-                payload_json = json.dumps(payload.model_dump())
+                payload_json = json.dumps(payload.model_dump(mode="json"))
                 agents_heartbeat_payload_bytes.observe(wire_bytes)
                 set_span_attributes(
                     validate_span,
@@ -166,6 +292,7 @@ async def ingest_heartbeat(
             _ship_latency_p95 = payload.ship_latency_p95_ms_1h
             _disk = payload.disk_free_bytes
             _offline = 1 if payload.is_offline else 0
+            _managed_leases = payload.managed_sessions
 
             def _do_heartbeat(write_db: Session) -> None:
                 hb = AgentHeartbeat(
@@ -201,6 +328,23 @@ async def ingest_heartbeat(
                     AgentHeartbeat.device_id == _device_id,
                     AgentHeartbeat.received_at < cutoff,
                 ).delete()
+                runtime_events = _runtime_events_for_managed_leases(
+                    _managed_leases,
+                    device_id=_device_id,
+                    received_at=_now,
+                )
+                if runtime_events:
+                    ingest_runtime_events(write_db, runtime_events)
+                    for lease in _managed_leases:
+                        if (lease.state or "").strip().lower() != "attached":
+                            continue
+                        session = write_db.query(AgentSession).filter(AgentSession.id == lease.session_id).first()
+                        if (
+                            _is_managed_codex_session(session)
+                            and session.ended_at is not None
+                            and not _has_final_managed_codex_terminal(write_db, lease.session_id)
+                        ):
+                            session.ended_at = None
 
             ws = get_write_serializer()
             with tracer.start_as_current_span("longhouse.heartbeat.write") as write_span:

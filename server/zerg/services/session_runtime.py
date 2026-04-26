@@ -465,6 +465,11 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> bool:
     before = _state_snapshot(state)
     occurred_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
 
+    if state.terminal_state == "session_ended":
+        incoming_terminal_state = str((event.payload or {}).get("terminal_state") or "").strip()
+        if event.kind != "terminal_signal" or incoming_terminal_state != "session_ended":
+            return False
+
     if event.session_id is not None and state.session_id != event.session_id:
         state.session_id = event.session_id
     if event.provider and state.provider != event.provider:
@@ -548,6 +553,10 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> bool:
         phase_started_at = normalize_utc(state.phase_started_at)
         if phase_started_at is None or phase_started_at < occurred_at:
             state.phase_started_at = occurred_at
+        if terminal_state == "session_ended" and event.session_id is not None:
+            session = db.query(AgentSession).filter(AgentSession.id == event.session_id).first()
+            if session is not None:
+                session.ended_at = occurred_at
 
     elif event.kind == "binding_signal":
         if event.session_id is not None:

@@ -409,6 +409,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &ship_stats,
                     offline.is_offline,
                     &last_ship_at,
+                    &config.shipper_config.machine_name,
                     &status_path,
                 );
             }
@@ -422,6 +423,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &ship_stats,
                     offline.is_offline,
                     &last_ship_at,
+                    &config.shipper_config.machine_name,
                     &status_path,
                 );
                 if !offline.is_offline {
@@ -444,6 +446,7 @@ fn write_local_status_snapshot(
     ship_stats: &RecentShipStatsTracker,
     is_offline: bool,
     last_ship_at: &Option<String>,
+    machine_id: &str,
     status_path: &Path,
 ) -> heartbeat::HeartbeatPayload {
     let spool = Spool::new(conn);
@@ -455,7 +458,8 @@ fn write_local_status_snapshot(
         is_offline,
         last_ship_at: last_ship_at.clone(),
     };
-    let payload = heartbeat::HeartbeatPayload::build(&stats);
+    let mut payload = heartbeat::HeartbeatPayload::build(&stats);
+    payload.managed_sessions = heartbeat::collect_managed_session_leases(conn, machine_id);
     // Compute the fresh ledger view up front so a read failure is both
     // logged and encoded in the status file as `phase_ledger_status`.
     // Downstream readers (verify-runtime-truth, local-health) can then

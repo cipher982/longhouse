@@ -77,7 +77,8 @@ def _client(factory):
     api_app.dependency_overrides[get_db] = override
     api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
     try:
-        yield TestClient(api_app)
+        with TestClient(api_app) as client:
+            yield client
     finally:
         api_app.dependency_overrides.clear()
 
@@ -277,6 +278,204 @@ def test_current_presence_state_for_session_uses_runtime_overlay(tmp_path):
     engine.dispose()
 
 
+def test_heartbeat_attached_managed_codex_lease_materializes_live_idle_state(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_managed_codex_lease.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(
+            db,
+            provider="codex",
+            started_at=now - timedelta(hours=3),
+        )
+        session.execution_home = "managed_local"
+        session.managed_transport = "codex_app_server"
+        session.ended_at = now - timedelta(hours=2)
+        db.commit()
+        session_id = session.id
+        runtime_key = runtime_key_for_session("codex", str(session_id))
+
+    before_request = datetime.now(timezone.utc)
+    observed_at = now - timedelta(days=1)
+    for client in _client(SessionLocal):
+        response = client.post(
+            "/agents/heartbeat",
+            json={
+                "version": "test",
+                "daemon_pid": 123,
+                "managed_sessions": [
+                    {
+                        "session_id": str(session_id),
+                        "provider": "codex",
+                        "machine_id": "cinder",
+                        "sequence": 42,
+                        "state": "attached",
+                        "phase": "idle",
+                        "tool_name": None,
+                        "bridge_status": "ready",
+                        "thread_subscription_status": "subscribed",
+                        "observed_at": observed_at.isoformat(),
+                        "lease_ttl_ms": 15 * 60 * 1000,
+                    }
+                ],
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert response.status_code == 204, response.text
+    after_request = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        stored_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        view = build_runtime_view(state=state, session=stored_session, now=after_request)
+
+        assert state.phase == "idle"
+        assert state.last_runtime_signal_at is not None
+        last_signal = state.last_runtime_signal_at.replace(tzinfo=timezone.utc)
+        assert before_request <= last_signal <= after_request
+        assert last_signal != observed_at
+        assert state.freshness_expires_at is not None
+        lease_expiry = state.freshness_expires_at.replace(tzinfo=timezone.utc)
+        assert lease_expiry >= before_request + timedelta(minutes=15)
+        assert view.status == "idle"
+        assert view.presence_state == "idle"
+        assert view.display_phase == "Idle"
+        assert view.confidence == "live"
+        assert stored_session.ended_at is None
+
+    engine.dispose()
+
+
+def test_heartbeat_lease_does_not_resurrect_session_ended_managed_codex_session(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_managed_codex_session_ended.db")
+    now = datetime.now(timezone.utc)
+    ended_at = now - timedelta(minutes=5)
+
+    with SessionLocal() as db:
+        session = _seed_session(
+            db,
+            provider="codex",
+            started_at=now - timedelta(hours=1),
+        )
+        session.execution_home = "managed_local"
+        session.managed_transport = "codex_app_server"
+        session_id = session.id
+        runtime_key = runtime_key_for_session("codex", str(session_id))
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session_id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="codex_bridge",
+                    kind="terminal_signal",
+                    occurred_at=ended_at,
+                    dedupe_key="session-ended-before-lease",
+                    payload={"terminal_state": "session_ended"},
+                )
+            ],
+        )
+        db.commit()
+
+    for client in _client(SessionLocal):
+        response = client.post(
+            "/agents/heartbeat",
+            json={
+                "version": "test",
+                "daemon_pid": 123,
+                "managed_sessions": [
+                    {
+                        "session_id": str(session_id),
+                        "provider": "codex",
+                        "machine_id": "cinder",
+                        "sequence": 44,
+                        "state": "attached",
+                        "phase": "idle",
+                        "bridge_status": "ready",
+                        "thread_subscription_status": "subscribed",
+                        "observed_at": now.isoformat(),
+                        "lease_ttl_ms": 15 * 60 * 1000,
+                    }
+                ],
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert response.status_code == 204, response.text
+
+    with SessionLocal() as db:
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        stored_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        view = build_runtime_view(state=state, session=stored_session, now=datetime.now(timezone.utc))
+
+        assert state.phase == "finished"
+        assert state.terminal_state == "session_ended"
+        assert state.freshness_expires_at == state.terminal_at
+        assert stored_session.ended_at is not None
+        assert stored_session.ended_at.replace(tzinfo=timezone.utc) == ended_at
+        assert view.status == "completed"
+        assert view.display_phase == "Completed"
+
+    engine.dispose()
+
+
+def test_heartbeat_detached_managed_codex_lease_is_recoverable_control_loss(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_managed_codex_detached.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(
+            db,
+            provider="codex",
+            started_at=now - timedelta(hours=3),
+        )
+        session.execution_home = "managed_local"
+        session.managed_transport = "codex_app_server"
+        db.commit()
+        session_id = session.id
+        runtime_key = runtime_key_for_session("codex", str(session_id))
+
+    for client in _client(SessionLocal):
+        response = client.post(
+            "/agents/heartbeat",
+            json={
+                "version": "test",
+                "daemon_pid": 123,
+                "managed_sessions": [
+                    {
+                        "session_id": str(session_id),
+                        "provider": "codex",
+                        "machine_id": "cinder",
+                        "sequence": 43,
+                        "state": "detached",
+                        "phase": None,
+                        "bridge_status": "ready",
+                        "thread_subscription_status": "subscribed",
+                        "observed_at": now.isoformat(),
+                        "lease_ttl_ms": 15 * 60 * 1000,
+                    }
+                ],
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert response.status_code == 204, response.text
+
+    with SessionLocal() as db:
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        stored_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        view = build_runtime_view(state=state, session=stored_session, now=datetime.now(timezone.utc))
+
+        assert state.phase == "blocked"
+        assert state.active_tool == "control path"
+        assert state.terminal_state is None
+        assert view.status == "active"
+        assert view.presence_state == "blocked"
+        assert view.display_phase == "Blocked on control path"
+
+    engine.dispose()
+
+
 def test_agents_store_ingest_mirrors_binding_and_progress_runtime_signals(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "runtime_store_mirror.db")
     now = datetime.now(timezone.utc)
@@ -328,6 +527,137 @@ def test_agents_store_ingest_mirrors_binding_and_progress_runtime_signals(tmp_pa
             .all()
         }
         assert event_kinds == {"binding_signal", "progress_signal"}
+
+    engine.dispose()
+
+
+def test_managed_codex_ingest_does_not_write_parser_derived_ended_at(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_managed_codex_ignores_transcript_ended_at.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session_id = uuid4()
+        session = AgentSession(
+            id=session_id,
+            provider="codex",
+            environment="test",
+            project="runtime",
+            started_at=now - timedelta(hours=1),
+            ended_at=None,
+            last_activity_at=now - timedelta(hours=1),
+            user_messages=0,
+            assistant_messages=0,
+            tool_calls=0,
+            summary="runtime",
+            summary_title="runtime",
+            execution_home="managed_local",
+            managed_transport="codex_app_server",
+        )
+        db.add(session)
+        db.commit()
+
+        store = AgentsStore(db)
+        store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="codex",
+                environment="test",
+                project="runtime",
+                device_id="cinder",
+                execution_home="managed_local",
+                started_at=now - timedelta(hours=1),
+                ended_at=now,
+                events=[
+                    {
+                        "role": "assistant",
+                        "content_text": "latest transcript line",
+                        "timestamp": now,
+                        "source_path": "/tmp/codex.jsonl",
+                        "source_offset": 2,
+                        "raw_json": '{"type":"assistant","message":"latest transcript line"}',
+                    }
+                ],
+            )
+        )
+
+        db.refresh(session)
+        assert session.ended_at is None
+        assert session.last_activity_at == now.replace(tzinfo=None)
+
+    engine.dispose()
+
+
+def test_managed_codex_ingest_preserves_explicit_session_ended_terminal(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_managed_codex_preserves_session_ended.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session_id = uuid4()
+        session = AgentSession(
+            id=session_id,
+            provider="codex",
+            environment="test",
+            project="runtime",
+            started_at=now - timedelta(hours=1),
+            ended_at=now - timedelta(minutes=10),
+            last_activity_at=now - timedelta(minutes=10),
+            user_messages=0,
+            assistant_messages=0,
+            tool_calls=0,
+            summary="runtime",
+            summary_title="runtime",
+            execution_home="managed_local",
+            managed_transport="codex_app_server",
+        )
+        db.add(session)
+        db.commit()
+
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key_for_session("codex", str(session_id)),
+                    session_id=session_id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="codex_bridge",
+                    kind="terminal_signal",
+                    occurred_at=now - timedelta(minutes=10),
+                    dedupe_key="session-ended",
+                    payload={"terminal_state": "session_ended"},
+                )
+            ],
+        )
+        db.commit()
+        db.refresh(session)
+
+        original_ended_at = session.ended_at
+        store = AgentsStore(db)
+        store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="codex",
+                environment="test",
+                project="runtime",
+                device_id="cinder",
+                execution_home="managed_local",
+                started_at=now - timedelta(hours=1),
+                ended_at=now,
+                events=[
+                    {
+                        "role": "assistant",
+                        "content_text": "replayed transcript line",
+                        "timestamp": now,
+                        "source_path": "/tmp/codex-ended.jsonl",
+                        "source_offset": 2,
+                        "raw_json": '{"type":"assistant","message":"replayed transcript line"}',
+                    }
+                ],
+            )
+        )
+
+        db.refresh(session)
+        assert session.ended_at == original_ended_at
 
     engine.dispose()
 
