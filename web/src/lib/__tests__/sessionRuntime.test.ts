@@ -14,6 +14,44 @@ function makeSession(overrides: Partial<TimelineRuntimeSession> = {}): TimelineR
 }
 
 describe("resolveSessionRuntimeState", () => {
+  it("prefers server-derived runtime_display when present", () => {
+    const runtime = resolveSessionRuntimeState(
+      makeSession({
+        status: "working",
+        confidence: "live",
+        runtime_source: "semantic",
+        presence_state: "running",
+        presence_tool: "bash",
+        display_phase: "Running bash",
+        runtime_display: {
+          truth_tier: "managed-local",
+          state: "running",
+          tone: "running",
+          headline: "Working",
+          detail: "Running Shell",
+          phase_label: "Running Shell",
+          compact_tool_label: "Shell",
+          is_live: true,
+          is_executing: true,
+          needs_attention: false,
+          is_idle: false,
+          heuristic_active: false,
+          is_managed_local_truth: true,
+          has_signal: true,
+        },
+      }),
+    );
+
+    expect(runtime.truthTier).toBe("managed-local");
+    expect(runtime.displayPhase).toBe("Running Shell");
+    expect(runtime.tone).toBe("running");
+    expect(runtime.isManagedLocalTruth).toBe(true);
+    expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
+      headline: "Working",
+      detail: "Running Shell",
+    });
+  });
+
   it("treats legacy working-without-presence as inferred progress", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({

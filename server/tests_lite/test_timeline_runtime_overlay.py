@@ -17,8 +17,8 @@ from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentsBase
+from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionRuntimeState
 from zerg.session_execution_home import SessionExecutionHome
 
@@ -82,11 +82,7 @@ def _upsert_runtime_state(
     freshness_window: timedelta = timedelta(minutes=5),
 ):
     runtime_key = f"{provider}:{session_id}"
-    row = (
-        db.query(SessionRuntimeState)
-        .filter(SessionRuntimeState.runtime_key == runtime_key)
-        .first()
-    )
+    row = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).first()
     if row is None:
         row = SessionRuntimeState(
             runtime_key=runtime_key,
@@ -180,6 +176,22 @@ def test_sessions_list_uses_recent_activity_anchor_for_old_live_session(tmp_path
         assert top["active_tool"] == "bash"
         assert top["display_phase"] == "Running bash"
         assert top["confidence"] == "live"
+        assert top["runtime_display"] == {
+            "truth_tier": "fresh",
+            "state": "running",
+            "tone": "running",
+            "headline": "Active",
+            "detail": None,
+            "phase_label": "Running Shell",
+            "compact_tool_label": "Shell",
+            "is_live": True,
+            "is_executing": True,
+            "needs_attention": False,
+            "is_idle": False,
+            "heuristic_active": False,
+            "is_managed_local_truth": False,
+            "has_signal": True,
+        }
         assert top["timeline_anchor_at"] is not None
         assert top["timeline_anchor_at"] >= recent_idle.started_at.isoformat().replace("+00:00", "Z")
 
@@ -495,6 +507,10 @@ def test_sessions_list_marks_materialized_needs_user_as_active_attention(tmp_pat
             started_at=now - timedelta(hours=6),
             ended_at=None,
             project="runtime-needs-user",
+            execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
+            managed_transport="claude_channel_bridge",
+            source_runner_id=1,
+            managed_session_name="claude",
         )
         db.add(
             SessionRuntimeState(
@@ -531,6 +547,11 @@ def test_sessions_list_marks_materialized_needs_user_as_active_attention(tmp_pat
         assert row["runtime_phase"] == "needs_user"
         assert row["runtime_source"] == "managed_local_transport"
         assert row["confidence"] == "live"
+        assert row["runtime_display"]["truth_tier"] == "managed-local"
+        assert row["runtime_display"]["headline"] == "Waiting for you"
+        assert row["runtime_display"]["detail"] == "Reply needed"
+        assert row["runtime_display"]["tone"] == "needs-user"
+        assert row["runtime_display"]["needs_attention"] is True
 
 
 def test_active_sessions_recent_progress_fallback_is_non_executing(tmp_path):
@@ -558,6 +579,10 @@ def test_active_sessions_recent_progress_fallback_is_non_executing(tmp_path):
         assert row["display_phase"] == "Recent progress"
         assert row["runtime_phase"] == "idle"
         assert row["confidence"] == "inferred"
+        assert row["runtime_display"]["truth_tier"] == "inferred"
+        assert row["runtime_display"]["headline"] == "Active"
+        assert row["runtime_display"]["phase_label"] == "Recent progress"
+        assert row["runtime_display"]["heuristic_active"] is True
 
 
 def test_sessions_surfaces_ignore_stale_presence_payload_after_newer_blocked_signal(tmp_path):

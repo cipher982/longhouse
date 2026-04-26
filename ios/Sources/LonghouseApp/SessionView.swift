@@ -20,6 +20,7 @@ struct SessionView: View {
         VStack(spacing: 0) {
             transcript
             liveActivityMessage
+            runtimeDock
             composer
         }
         .navigationTitle(viewModel.detail?.displayTitle ?? fallbackTitle)
@@ -77,6 +78,13 @@ struct SessionView: View {
             }
             .disabled(liveActivityManager.isBusy)
             .accessibilityHint("Opens Lock Screen update options")
+        }
+    }
+
+    @ViewBuilder
+    private var runtimeDock: some View {
+        if let detail = viewModel.detail, detail.shouldShowRuntimeDock {
+            SessionRuntimeDock(detail: detail)
         }
     }
 
@@ -262,6 +270,91 @@ struct SessionView: View {
         guard let draft = await viewModel.draftReply(sessionId: sessionId, appState: appState) else { return }
         composerText = draft
         composerFocused = true
+    }
+}
+
+private struct SessionRuntimeDock: View {
+    let detail: SessionDetail
+
+    var body: some View {
+        HStack(spacing: 10) {
+            indicator
+                .frame(width: 22, height: 22)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(detail.runtimeHeadline)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                if let runtimeDetail = detail.runtimeDetail {
+                    Text(runtimeDetail)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: 8)
+
+            Text(capabilityLabel)
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.bar)
+        .overlay(alignment: .top) {
+            Divider()
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    @ViewBuilder
+    private var indicator: some View {
+        if detail.isSessionExecuting {
+            ProgressView()
+                .controlSize(.small)
+                .tint(toneColor)
+        } else {
+            Image(systemName: iconName)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(toneColor)
+        }
+    }
+
+    private var capabilityLabel: String {
+        if detail.canSendLive { return "Live control" }
+        if detail.capabilities.hostReattachAvailable { return "Reattach" }
+        return "Read-only"
+    }
+
+    private var accessibilityLabel: String {
+        [detail.runtimeHeadline, detail.runtimeDetail, capabilityLabel]
+            .compactMap { $0 }
+            .joined(separator: ", ")
+    }
+
+    private var iconName: String {
+        switch detail.runtimeTone {
+        case "needs-user": return "exclamationmark.circle"
+        case "blocked": return "lock.circle"
+        case "idle": return "checkmark.circle"
+        case "inferred": return "waveform.path"
+        default: return "circle"
+        }
+    }
+
+    private var toneColor: Color {
+        switch detail.runtimeTone {
+        case "running", "thinking": return .green
+        case "needs-user": return .yellow
+        case "blocked": return .orange
+        case "idle": return .gray
+        case "inferred": return .blue
+        default: return .gray
+        }
     }
 }
 

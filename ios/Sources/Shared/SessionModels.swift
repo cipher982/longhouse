@@ -22,6 +22,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     let liveControlAvailable: Bool?
     let hostReattachAvailable: Bool?
     let replyToLiveSessionAvailable: Bool?
+    let runtimeDisplay: SessionRuntimeDisplay?
 
     init(
         id: String,
@@ -44,7 +45,8 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         toolCalls: Int? = nil,
         liveControlAvailable: Bool? = nil,
         hostReattachAvailable: Bool? = nil,
-        replyToLiveSessionAvailable: Bool? = nil
+        replyToLiveSessionAvailable: Bool? = nil,
+        runtimeDisplay: SessionRuntimeDisplay? = nil
     ) {
         self.id = id
         self.title = title
@@ -67,16 +69,17 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         self.liveControlAvailable = liveControlAvailable
         self.hostReattachAvailable = hostReattachAvailable
         self.replyToLiveSessionAvailable = replyToLiveSessionAvailable
+        self.runtimeDisplay = runtimeDisplay
     }
 
-    var isBlocked: Bool { presenceState == "blocked" }
-    var isNeedsUser: Bool { presenceState == "needs_user" }
+    var isBlocked: Bool { runtimeDisplay?.state == "blocked" || presenceState == "blocked" }
+    var isNeedsUser: Bool { runtimeDisplay?.state == "needs_user" || presenceState == "needs_user" }
     var isUserActive: Bool { userState == nil || userState == "active" }
-    var needsAttention: Bool { (isBlocked || isNeedsUser) && isUserActive }
+    var needsAttention: Bool { (runtimeDisplay?.needsAttention == true || isBlocked || isNeedsUser) && isUserActive }
     var isExecuting: Bool {
-        presenceState == "thinking" || presenceState == "running" || status == "working" || status == "active"
+        runtimeDisplay?.isExecuting == true || presenceState == "thinking" || presenceState == "running" || status == "working" || status == "active"
     }
-    var isIdle: Bool { presenceState == "idle" || status == "idle" }
+    var isIdle: Bool { runtimeDisplay?.isIdle == true || presenceState == "idle" || status == "idle" }
     var attentionLabel: String { isBlocked ? "Needs permission" : "Waiting on you" }
     var timelineAnchor: String? { timelineAnchorAt ?? lastActivityAt }
     var turnCount: Int { userMessages ?? 0 }
@@ -103,6 +106,9 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     }
 
     var displayPhaseLabel: String {
+        if let phaseLabel = runtimeDisplay?.phaseLabel.trimmingCharacters(in: .whitespacesAndNewlines), !phaseLabel.isEmpty {
+            return phaseLabel
+        }
         if let displayPhase = displayPhase?.trimmingCharacters(in: .whitespacesAndNewlines), !displayPhase.isEmpty {
             return displayPhase
         }
@@ -169,12 +175,31 @@ struct TimelineSession: Codable, Sendable {
     let toolCalls: Int?
     let capabilities: SessionCapabilities?
     let loopMode: SessionLoopMode?
+    let runtimeDisplay: SessionRuntimeDisplay?
 }
 
 struct SessionCapabilities: Codable, Sendable {
     let liveControlAvailable: Bool
     let hostReattachAvailable: Bool
     let replyToLiveSessionAvailable: Bool
+    let canQueueNextInput: Bool?
+}
+
+struct SessionRuntimeDisplay: Codable, Hashable, Sendable {
+    let truthTier: String
+    let state: String?
+    let tone: String
+    let headline: String
+    let detail: String?
+    let phaseLabel: String
+    let compactToolLabel: String?
+    let isLive: Bool
+    let isExecuting: Bool
+    let needsAttention: Bool
+    let isIdle: Bool
+    let heuristicActive: Bool
+    let isManagedLocalTruth: Bool
+    let hasSignal: Bool
 }
 
 enum SessionLoopMode: String, Codable, Sendable, CaseIterable, Hashable {
@@ -209,6 +234,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     let homeLabel: String?
     let originLabel: String?
     let capabilities: SessionCapabilities
+    let runtimeDisplay: SessionRuntimeDisplay?
     let loopMode: SessionLoopMode?
 
     var displayTitle: String {
@@ -232,10 +258,13 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     }
 
     var cockpitPhaseState: String {
-        presenceState ?? status ?? "idle"
+        runtimeDisplay?.state ?? presenceState ?? status ?? "idle"
     }
 
     var cockpitPhaseLabel: String {
+        if let phaseLabel = runtimeDisplay?.phaseLabel.trimmingCharacters(in: .whitespacesAndNewlines), !phaseLabel.isEmpty {
+            return phaseLabel
+        }
         if let displayPhase = displayPhase?.trimmingCharacters(in: .whitespacesAndNewlines), !displayPhase.isEmpty {
             return displayPhase
         }
@@ -268,6 +297,48 @@ struct SessionDetail: Codable, Identifiable, Sendable {
             return "Read-only imported session."
         }
         return nil
+    }
+
+    var runtimeHeadline: String {
+        if let headline = runtimeDisplay?.headline.trimmingCharacters(in: .whitespacesAndNewlines), !headline.isEmpty {
+            return headline
+        }
+        if isControlOffline { return "Control offline" }
+        if isReadOnly { return "Read-only" }
+        if isSessionExecuting { return "Working" }
+        if cockpitPhaseState == "idle" { return "Ready" }
+        return cockpitPhaseLabel
+    }
+
+    var runtimeDetail: String? {
+        if let detail = runtimeDisplay?.detail?.trimmingCharacters(in: .whitespacesAndNewlines), !detail.isEmpty {
+            return detail
+        }
+        if runtimeHeadline != cockpitPhaseLabel {
+            return cockpitPhaseLabel
+        }
+        return controlHealthMessage
+    }
+
+    var runtimeTone: String {
+        if let tone = runtimeDisplay?.tone { return tone }
+        switch cockpitPhaseState {
+        case "running": return "running"
+        case "thinking": return "thinking"
+        case "needs_user": return "needs-user"
+        case "blocked": return "blocked"
+        case "idle", "completed": return "idle"
+        case "working", "active": return "inferred"
+        default: return "inactive"
+        }
+    }
+
+    var shouldShowRuntimeDock: Bool {
+        canSendLive || capabilities.hostReattachAvailable || runtimeDisplay?.hasSignal == true
+    }
+
+    var isSessionExecuting: Bool {
+        runtimeDisplay?.isExecuting == true || cockpitPhaseState == "running" || cockpitPhaseState == "thinking"
     }
 }
 

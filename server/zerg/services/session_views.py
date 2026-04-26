@@ -26,6 +26,7 @@ from zerg.services.managed_local_transport import build_managed_local_attach_com
 from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_runtime import should_include_runtime_view
+from zerg.services.session_runtime_display import build_session_runtime_display
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_loop_mode import SessionLoopMode
 from zerg.session_loop_mode import coerce_session_loop_mode
@@ -58,6 +59,37 @@ def build_session_capabilities_response(
         host_reattach_available=capability_flags.host_reattach_available,
         reply_to_live_session_available=capability_flags.reply_to_live_session_available,
         can_queue_next_input=capability_flags.can_queue_next_input,
+    )
+
+
+def build_session_runtime_display_response(
+    *,
+    runtime_overlay: SessionRuntimeView | None,
+    capability_flags,
+    ended_at: datetime | None,
+) -> SessionRuntimeDisplayResponse | None:
+    if runtime_overlay is None:
+        return None
+    display = build_session_runtime_display(
+        runtime_view=runtime_overlay,
+        capabilities=capability_flags,
+        ended_at=ended_at,
+    )
+    return SessionRuntimeDisplayResponse(
+        truth_tier=display.truth_tier,
+        state=display.state,
+        tone=display.tone,
+        headline=display.headline,
+        detail=display.detail,
+        phase_label=display.phase_label,
+        compact_tool_label=display.compact_tool_label,
+        is_live=display.is_live,
+        is_executing=display.is_executing,
+        needs_attention=display.needs_attention,
+        is_idle=display.is_idle,
+        heuristic_active=display.heuristic_active,
+        is_managed_local_truth=display.is_managed_local_truth,
+        has_signal=display.has_signal,
     )
 
 
@@ -114,6 +146,23 @@ class SessionCapabilitiesResponse(BaseModel):
     )
 
 
+class SessionRuntimeDisplayResponse(BaseModel):
+    truth_tier: str = Field(..., description="Runtime truth tier: none|stale|inferred|fresh|managed-local")
+    state: Optional[str] = Field(None, description="Canonical presence state when known")
+    tone: str = Field(..., description="Stable visual tone for clients")
+    headline: str = Field(..., description="Primary user-facing runtime label")
+    detail: Optional[str] = Field(None, description="Secondary user-facing runtime label")
+    phase_label: str = Field(..., description="Compact phase label for cards and strips")
+    compact_tool_label: Optional[str] = Field(None, description="Normalized tool label for display")
+    is_live: bool = Field(False, description="True when the session is actively executing")
+    is_executing: bool = Field(False, description="True when the agent is thinking or running a tool")
+    needs_attention: bool = Field(False, description="True when the user should respond or approve")
+    is_idle: bool = Field(False, description="True when the runtime is ready for the next prompt")
+    heuristic_active: bool = Field(False, description="True when activity is inferred from recent progress")
+    is_managed_local_truth: bool = Field(False, description="True when runtime truth is from a managed-local control path")
+    has_signal: bool = Field(False, description="True when clients should render runtime state")
+
+
 class SessionResponse(UTCBaseModel):
     """Response for a single session."""
 
@@ -165,6 +214,7 @@ class SessionResponse(UTCBaseModel):
     is_sidechain: bool = Field(False, description="True when session is a Task sub-agent (not human-initiated)")
     control: Optional[SessionControlResponse] = Field(None, description="Host-control and managed-launch debugging detail")
     capabilities: SessionCapabilitiesResponse = Field(..., description="Canonical session capability flags")
+    runtime_display: Optional[SessionRuntimeDisplayResponse] = Field(None, description="Server-derived display state for clients")
     loop_mode: SessionLoopMode = Field(SessionLoopMode.ASSIST, description="Session loop mode: assist|autopilot")
     user_state: str = Field("active", description="User classification: active|parked|snoozed|archived")
 
@@ -284,6 +334,7 @@ class ActiveSessionResponse(UTCBaseModel):
     home_label: Optional[str] = Field(None, description="User-facing home label, e.g. On this Mac|Hosted|Moved to cloud")
     control: Optional[SessionControlResponse] = Field(None, description="Host-control and managed-launch debugging detail")
     capabilities: SessionCapabilitiesResponse = Field(..., description="Canonical session capability flags")
+    runtime_display: Optional[SessionRuntimeDisplayResponse] = Field(None, description="Server-derived display state for clients")
     loop_mode: SessionLoopMode = Field(SessionLoopMode.ASSIST, description="Session loop mode: assist|autopilot")
 
 
@@ -376,7 +427,7 @@ class SessionTurnResponse(UTCBaseModel):
     session_id: str = Field(..., description="Owning session UUID")
     request_id: Optional[str] = Field(
         None,
-        description="Transport request id when available, otherwise a synthetic canonical id for reconstructed native turns",
+        description=("Transport request id when available, otherwise a synthetic canonical id " "for reconstructed native turns"),
     )
     state: str = Field(..., description="created|send_accepted|active|terminal|durable|failed")
     terminal_phase: Optional[str] = Field(None, description="Observed terminal phase when known")
@@ -636,6 +687,15 @@ def build_session_response(
     thread_head_session_id, thread_continuation_count = get_thread_meta(store, session, cache)
     include_runtime = should_include_runtime_view(session=session, runtime_view=runtime_overlay)
     capability_flags = build_session_capabilities(session)
+    runtime_display = (
+        build_session_runtime_display_response(
+            runtime_overlay=runtime_overlay,
+            capability_flags=capability_flags,
+            ended_at=session.ended_at,
+        )
+        if include_runtime
+        else None
+    )
     return SessionResponse(
         id=str(session.id),
         provider=session.provider,
@@ -685,6 +745,7 @@ def build_session_response(
         is_sidechain=bool(session.is_sidechain or False),
         control=build_session_control_response(session, capability_flags=capability_flags),
         capabilities=build_session_capabilities_response(capability_flags=capability_flags),
+        runtime_display=runtime_display,
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
         user_state=session.user_state or "active",
     )
@@ -708,6 +769,11 @@ def build_active_session_response(
     end_time = _ended or now
     duration_minutes = int((end_time - _started).total_seconds() / 60) if _started else 0
     message_count = (session.user_messages or 0) + (session.assistant_messages or 0)
+    runtime_display = build_session_runtime_display_response(
+        runtime_overlay=runtime_overlay,
+        capability_flags=capability_flags,
+        ended_at=session.ended_at,
+    )
 
     return ActiveSessionResponse(
         id=str(session.id),
@@ -743,6 +809,7 @@ def build_active_session_response(
         home_label=capability_flags.home_label,
         control=build_session_control_response(session, capability_flags=capability_flags),
         capabilities=build_session_capabilities_response(capability_flags=capability_flags),
+        runtime_display=runtime_display,
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
     )
 
