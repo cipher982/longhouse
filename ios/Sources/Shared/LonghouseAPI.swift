@@ -294,9 +294,40 @@ struct LonghouseAPI: Sendable {
 enum LonghouseAPIError: Error {
     case requestFailed
     case notAuthenticated
+    case conflict
+    case serviceUnavailable
+    case upstreamFailed
 
     static func from(statusCode: Int) -> LonghouseAPIError {
-        statusCode == 401 ? .notAuthenticated : .requestFailed
+        switch statusCode {
+        case 401:
+            return .notAuthenticated
+        case 409:
+            return .conflict
+        case 502:
+            return .upstreamFailed
+        case 503:
+            return .serviceUnavailable
+        default:
+            return .requestFailed
+        }
+    }
+}
+
+extension LonghouseAPIError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .requestFailed:
+            return "Request failed."
+        case .notAuthenticated:
+            return "Session expired."
+        case .conflict:
+            return "Session is busy. Try again in a moment."
+        case .serviceUnavailable:
+            return "Service is not configured yet."
+        case .upstreamFailed:
+            return "Generation failed. Try again."
+        }
     }
 }
 

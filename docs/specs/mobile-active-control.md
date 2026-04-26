@@ -16,7 +16,7 @@ The existing `loop_mode` value is intent metadata. It must not be treated as an 
 - Add `POST /api/sessions/{session_id}/draft-reply` for browser/mobile clients.
 - Add `POST /api/agents/sessions/{session_id}/draft-reply` for machine/API parity.
 - Gate drafting to sessions that already support live send.
-- Reuse the session lock so draft generation does not race a live send.
+- Keep drafting read-only; it must not take the live send lock or block the user from pre-staging a reply while the agent is working.
 - Return a draft only. The endpoint never sends to the provider session.
 - Add an iOS composer control that requests a draft and fills the text field.
 

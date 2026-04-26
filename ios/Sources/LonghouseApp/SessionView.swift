@@ -148,7 +148,9 @@ struct SessionView: View {
     }
 
     private func composerField(enabled: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        let composerHasText = !composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
+        return VStack(alignment: .leading, spacing: 6) {
             if let draftError = viewModel.draftErrorMessage {
                 Text(draftError)
                     .font(.caption)
@@ -168,8 +170,9 @@ struct SessionView: View {
                     }
                 }
                 .frame(width: 32, height: 32)
-                .disabled(viewModel.isSending || viewModel.isDrafting || !enabled)
+                .disabled(composerHasText || viewModel.isSending || viewModel.isDrafting || !enabled)
                 .accessibilityLabel("Draft reply")
+                .accessibilityHint("Available when the reply field is empty")
 
                 TextField("Reply", text: $composerText, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
@@ -188,7 +191,7 @@ struct SessionView: View {
                     }
                 }
                 .disabled(
-                    composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                    !composerHasText ||
                     viewModel.isSending ||
                     viewModel.isDrafting
                 )
@@ -720,7 +723,7 @@ final class SessionViewModel: ObservableObject {
         if isInitialLoading {
             await reload(sessionId: sessionId, appState: appState)
         }
-        startPollingIfActive(sessionId: sessionId, appState: appState)
+        startVisiblePolling(sessionId: sessionId, appState: appState)
     }
 
     func stop() {
@@ -747,7 +750,6 @@ final class SessionViewModel: ObservableObject {
             errorMessage = "Couldn't load session: \(error.localizedDescription)"
         }
         isInitialLoading = false
-        startPollingIfActive(sessionId: sessionId, appState: appState)
     }
 
     func send(text: String, sessionId: String, appState: AppState) async -> Bool {
@@ -782,9 +784,8 @@ final class SessionViewModel: ObservableObject {
         }
     }
 
-    private func startPollingIfActive(sessionId: String, appState: AppState) {
+    private func startVisiblePolling(sessionId: String, appState: AppState) {
         pollTask?.cancel()
-        guard shouldPoll else { return }
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 2_500_000_000)
@@ -804,13 +805,7 @@ final class SessionViewModel: ObservableObject {
         if let events = try? await eventsTask {
             self.items = TimelineBuilder.build(events: events)
         }
-        if !shouldPoll {
-            pollTask?.cancel()
-            pollTask = nil
-        }
     }
-
-    private var shouldPoll: Bool { isSessionActive }
 
     var isSessionActive: Bool {
         guard let detail else { return false }

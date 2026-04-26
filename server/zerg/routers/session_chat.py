@@ -148,7 +148,6 @@ async def draft_reply_for_live_session(
     request_id = str(uuid.uuid4())[:8]
     source_session = _load_session_for_continuation(db, session_id)
     _assert_live_session_send_available(source_session)
-    lock_scope_id = await _acquire_session_lock_or_raise(source_session=source_session, request_id=request_id)
     try:
         max_chars = (body or SessionDraftReplyRequest()).max_chars
         return await _build_managed_local_draft_reply_response(
@@ -165,8 +164,6 @@ async def draft_reply_for_live_session(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Internal error: {str(exc)[:200]}",
         ) from exc
-    finally:
-        await session_lock_manager.release(lock_scope_id, request_id)
 
 
 @agents_router.post("/{session_id}/send-live")
@@ -235,7 +232,6 @@ async def draft_reply_for_live_session_agents(
         auth_disabled=settings.auth_disabled,
     )
     _assert_live_session_send_available(source_session)
-    lock_scope_id = await _acquire_session_lock_or_raise(source_session=source_session, request_id=request_id)
 
     try:
         max_chars = (body or SessionDraftReplyRequest()).max_chars
@@ -253,8 +249,6 @@ async def draft_reply_for_live_session_agents(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Internal error: {str(exc)[:200]}",
         ) from exc
-    finally:
-        await session_lock_manager.release(lock_scope_id, request_id)
 
 
 @router.post("/managed-local/this-device", response_model=ManagedLocalSessionLaunchResponse)
