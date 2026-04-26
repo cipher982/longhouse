@@ -142,7 +142,11 @@ def main() -> int:
                             data = json.loads(payload)
                         except json.JSONDecodeError:
                             continue
-                        emitted_ms = data.get("latest_event_emitted_at_ms")
+                        # Prefer provider emitted_at when available (real user
+                        # surface). Canary sessions don't write AgentEvent rows,
+                        # so emitted_at is null; fall back to server_now_ms which
+                        # still captures the SSE-send + network path.
+                        emitted_ms = data.get("latest_event_emitted_at_ms") or data.get("server_now_ms")
                         if not emitted_ms:
                             continue
                         canary_seq = data.get("pubsub_seq") or 0
