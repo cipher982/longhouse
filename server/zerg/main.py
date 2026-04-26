@@ -149,6 +149,8 @@ from zerg.routers.skills import router as skills_router
 from zerg.routers.stream import router as stream_router
 from zerg.routers.sync import router as sync_router
 from zerg.routers.system import router as system_router
+from zerg.routers.telemetry import admin_router as telemetry_admin_router
+from zerg.routers.telemetry import beacon_router as telemetry_beacon_router
 from zerg.routers.threads import router as threads_router
 from zerg.routers.timeline import router as timeline_router
 from zerg.routers.traces import router as traces_router
@@ -269,6 +271,8 @@ api_app.include_router(email_config_router)
 api_app.include_router(capabilities_router)
 api_app.include_router(ops_router)
 api_app.include_router(ops_beacon_router)
+api_app.include_router(telemetry_beacon_router)
+api_app.include_router(telemetry_admin_router)
 api_app.include_router(observability_router)
 api_app.include_router(fiche_config_router)
 api_app.include_router(automation_connectors_router)
