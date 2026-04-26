@@ -11,13 +11,15 @@ use std::path::{Path, PathBuf};
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum WorkPriority {
     Watch,
+    Catchup,
     Retry,
     Scan,
 }
 
-const FAIR_SEQUENCE: [WorkPriority; 4] = [
+const FAIR_SEQUENCE: [WorkPriority; 5] = [
     WorkPriority::Watch,
     WorkPriority::Watch,
+    WorkPriority::Catchup,
     WorkPriority::Retry,
     WorkPriority::Scan,
 ];
@@ -47,6 +49,7 @@ pub struct PathScheduler {
     max_in_flight: usize,
     fairness_cursor: usize,
     ready_watch: VecDeque<PathBuf>,
+    ready_catchup: VecDeque<PathBuf>,
     ready_retry: VecDeque<PathBuf>,
     ready_scan: VecDeque<PathBuf>,
     ready_jobs: HashMap<PathBuf, ReadyJob>,
@@ -59,6 +62,7 @@ impl PathScheduler {
             max_in_flight: max_in_flight.max(1),
             fairness_cursor: 0,
             ready_watch: VecDeque::new(),
+            ready_catchup: VecDeque::new(),
             ready_retry: VecDeque::new(),
             ready_scan: VecDeque::new(),
             ready_jobs: HashMap::new(),
@@ -136,6 +140,7 @@ impl PathScheduler {
     fn pop_ready_queue(&mut self, expected_priority: WorkPriority) -> Option<PathJob> {
         let queue = match expected_priority {
             WorkPriority::Watch => &mut self.ready_watch,
+            WorkPriority::Catchup => &mut self.ready_catchup,
             WorkPriority::Retry => &mut self.ready_retry,
             WorkPriority::Scan => &mut self.ready_scan,
         };
@@ -171,6 +176,7 @@ impl PathScheduler {
     fn push_ready_path(&mut self, path: PathBuf, priority: WorkPriority) {
         match priority {
             WorkPriority::Watch => self.ready_watch.push_back(path),
+            WorkPriority::Catchup => self.ready_catchup.push_back(path),
             WorkPriority::Retry => self.ready_retry.push_back(path),
             WorkPriority::Scan => self.ready_scan.push_back(path),
         }
@@ -284,6 +290,11 @@ mod tests {
             WorkPriority::Watch,
         );
         scheduler.enqueue(
+            PathBuf::from("/tmp/catchup.jsonl"),
+            "claude",
+            WorkPriority::Catchup,
+        );
+        scheduler.enqueue(
             PathBuf::from("/tmp/retry.jsonl"),
             "claude",
             WorkPriority::Retry,
@@ -301,6 +312,10 @@ mod tests {
         assert_eq!(
             scheduler.pop_launchable().unwrap().priority,
             WorkPriority::Watch
+        );
+        assert_eq!(
+            scheduler.pop_launchable().unwrap().priority,
+            WorkPriority::Catchup
         );
         assert_eq!(
             scheduler.pop_launchable().unwrap().priority,

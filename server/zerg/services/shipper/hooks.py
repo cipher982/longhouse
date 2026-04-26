@@ -115,8 +115,8 @@ esac
 
 if [[ -n "$STATE" ]] && [[ -n "$SESSION_ID" ]]; then
   PAYLOAD=$(jq -n --arg sid "$SESSION_ID" --arg st "$STATE" \\
-        --arg tool "$TOOL" --arg cwd "$CWD" \\
-    '{session_id: $sid, state: $st, tool_name: $tool, cwd: $cwd}')
+        --arg tool "$TOOL" --arg cwd "$CWD" --arg transcript "$TRANSCRIPT" \\
+    '{session_id: $sid, state: $st, tool_name: $tool, cwd: $cwd, transcript_path: $transcript}')
 
   # Seed session binding so the daemon ships with the correct managed session ID.
   # The daemon (longhouse-engine connect) handles all transcript shipping via its
@@ -185,7 +185,8 @@ esac
 if [[ -n "$STATE" ]] && [[ -n "$SID" ]]; then
   PAYLOAD=$(jq -n --arg sid "$SID" --arg st "$STATE" \\
         --arg tool "" --arg cwd "$CWD" --arg provider "codex" \\
-    '{session_id: $sid, state: $st, tool_name: $tool, cwd: $cwd, provider: $provider}')
+        --arg transcript "$TRANSCRIPT" \\
+    '{session_id: $sid, state: $st, tool_name: $tool, cwd: $cwd, provider: $provider, transcript_path: $transcript}')
   write_presence_outbox "$PAYLOAD" >/dev/null 2>&1 || true
 
   # Seed session binding so the daemon ships with the correct managed session ID.

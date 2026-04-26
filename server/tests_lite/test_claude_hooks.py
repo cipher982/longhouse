@@ -16,6 +16,7 @@ def test_claude_hook_seeds_session_binding_on_stop():
 def test_claude_hook_writes_presence_to_outbox():
     assert 'LONGHOUSE_HOME="${LONGHOUSE_HOME:-__LONGHOUSE_HOME__}"' in HOOK_SCRIPT
     assert 'OUTBOX="$LONGHOUSE_HOME/agent/outbox"' in HOOK_SCRIPT
+    assert "transcript_path: $transcript" in HOOK_SCRIPT
     assert 'write_presence_outbox "$PAYLOAD" >/dev/null 2>&1 || true' in HOOK_SCRIPT
 
 
