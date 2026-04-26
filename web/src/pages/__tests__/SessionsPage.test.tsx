@@ -472,7 +472,7 @@ describe("SessionsPage", () => {
     expect(screen.queryByTestId("session-card-capability")).not.toBeInTheDocument();
   });
 
-  it("shows a browser-control-offline badge when a managed session cannot accept browser prompts", async () => {
+  it("shows a control-offline badge when a managed session cannot accept browser prompts", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
@@ -500,10 +500,10 @@ describe("SessionsPage", () => {
     renderSessionsPage("/timeline");
 
     const capability = await screen.findByTestId("session-card-capability");
-    expect(capability).toHaveTextContent("Browser control offline");
+    expect(capability).toHaveTextContent("Control offline");
     expect(capability).toHaveAttribute(
       "title",
-      "This live Codex session is visible here, but the browser cannot send prompts right now.",
+      "Longhouse can see this live Codex session, but cannot send prompts until the engine reconnects.",
     );
     expect(screen.queryByTestId("session-card-management")).not.toBeInTheDocument();
   });

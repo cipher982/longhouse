@@ -122,6 +122,7 @@ export function SessionChat({
   const isDock = layout === "dock";
   const isManagedLocal = chatMode === "managed_local";
   const isComposerDisabled = Boolean(composerDisabledReason);
+  const showDockUnavailableState = isDock && isComposerDisabled;
   const queryClient = useQueryClient();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
@@ -540,96 +541,117 @@ export function SessionChat({
         onSubmit={handleSend}
         title={composerDisabledReason ?? undefined}
       >
-        {blockedKeyboardSubmit ? (
-          <div className="session-chat-confirmation" data-testid="session-chat-explicit-submit-hint">
-            {keyboardHintText || `Click "${submitLabel}" to confirm.`}
-          </div>
-        ) : isDock ? null : (
-          <div className="session-chat-confirmation session-chat-confirmation--spacer" aria-hidden="true" />
-        )}
-        {isManagedLocal && pendingManagedLocalMessage ? (
-          <div className="session-chat-pending-message">
-            <span className="session-chat-pending-message__text">{pendingManagedLocalMessage}</span>
-            <span className="session-chat-pending-message__spinner" aria-label="Sending" />
-          </div>
-        ) : null}
-        {isDock ? (
-          <div className="session-chat-composer-row">
-            <textarea
-              ref={dockTextareaRef}
-              value={draft}
-              onChange={(e) => {
-                handleDraftChange(e.target.value);
-                autoResizeDockTextarea(e.target);
-              }}
-              onKeyDown={handleKeyDown}
-              placeholder={composerPlaceholder || "Type a message..."}
-              disabled={isComposerDisabled || isSubmitting || lockInfo?.locked}
-              rows={1}
-              title={composerDisabledReason ?? undefined}
+        {showDockUnavailableState ? (
+          managedLaunchSuggestion ? (
+            <ManagedLaunchHintCard
+              suggestion={managedLaunchSuggestion}
+              testId="session-chat-managed-launch-hint"
             />
-            {isManagedLocal && sentConfirmation ? (
-              <span className="session-chat-sent-notice">Sent</span>
-            ) : null}
-            {isStreaming ? (
-              <Button type="button" variant="secondary" size="sm" onClick={handleCancel}>
-                Cancel
-              </Button>
-            ) : (
-              <Button
-                type="submit"
-                variant="primary"
-                size="sm"
-                disabled={isComposerDisabled || !draft.trim() || isSubmitting || lockInfo?.locked}
-                title={composerDisabledReason ?? undefined}
-              >
-                {submitLabel}
-              </Button>
-            )}
-          </div>
+          ) : (
+            <div
+              className="session-chat-composer-unavailable"
+              data-testid="session-chat-disabled-reason"
+            >
+              <span className="session-chat-composer-unavailable__title">
+                Control offline
+              </span>
+              <span className="session-chat-composer-unavailable__copy">
+                {composerDisabledReason}
+              </span>
+            </div>
+          )
         ) : (
           <>
-            <textarea
-              value={draft}
-              onChange={(e) => handleDraftChange(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder={composerPlaceholder || "Type a message..."}
-              disabled={isComposerDisabled || isSubmitting || lockInfo?.locked}
-              rows={2}
-              title={composerDisabledReason ?? undefined}
-            />
-            <div className="session-chat-actions">
-              {isStreaming ? (
-                <Button type="button" variant="secondary" size="sm" onClick={handleCancel}>
-                  Cancel
-                </Button>
-              ) : (
-                <Button
-                  type="submit"
-                  variant="primary"
-                  size="sm"
-                  disabled={isComposerDisabled || !draft.trim() || isSubmitting || lockInfo?.locked}
+            {blockedKeyboardSubmit ? (
+              <div className="session-chat-confirmation" data-testid="session-chat-explicit-submit-hint">
+                {keyboardHintText || `Click "${submitLabel}" to confirm.`}
+              </div>
+            ) : isDock ? null : (
+              <div className="session-chat-confirmation session-chat-confirmation--spacer" aria-hidden="true" />
+            )}
+            {isManagedLocal && pendingManagedLocalMessage ? (
+              <div className="session-chat-pending-message">
+                <span className="session-chat-pending-message__text">{pendingManagedLocalMessage}</span>
+                <span className="session-chat-pending-message__spinner" aria-label="Sending" />
+              </div>
+            ) : null}
+            {isDock ? (
+              <div className="session-chat-composer-row">
+                <textarea
+                  ref={dockTextareaRef}
+                  value={draft}
+                  onChange={(e) => {
+                    handleDraftChange(e.target.value);
+                    autoResizeDockTextarea(e.target);
+                  }}
+                  onKeyDown={handleKeyDown}
+                  placeholder={composerPlaceholder || "Type a message..."}
+                  disabled={isSubmitting || lockInfo?.locked}
+                  rows={1}
+                />
+                {isManagedLocal && sentConfirmation ? (
+                  <span className="session-chat-sent-notice">Sent</span>
+                ) : null}
+                {isStreaming ? (
+                  <Button type="button" variant="secondary" size="sm" onClick={handleCancel}>
+                    Cancel
+                  </Button>
+                ) : (
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    size="sm"
+                    disabled={!draft.trim() || isSubmitting || lockInfo?.locked}
+                  >
+                    {submitLabel}
+                  </Button>
+                )}
+              </div>
+            ) : (
+              <>
+                <textarea
+                  value={draft}
+                  onChange={(e) => handleDraftChange(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder={composerPlaceholder || "Type a message..."}
+                  disabled={isComposerDisabled || isSubmitting || lockInfo?.locked}
+                  rows={2}
                   title={composerDisabledReason ?? undefined}
-                >
-                  {submitLabel}
-                </Button>
-              )}
-            </div>
+                />
+                <div className="session-chat-actions">
+                  {isStreaming ? (
+                    <Button type="button" variant="secondary" size="sm" onClick={handleCancel}>
+                      Cancel
+                    </Button>
+                  ) : (
+                    <Button
+                      type="submit"
+                      variant="primary"
+                      size="sm"
+                      disabled={isComposerDisabled || !draft.trim() || isSubmitting || lockInfo?.locked}
+                      title={composerDisabledReason ?? undefined}
+                    >
+                      {submitLabel}
+                    </Button>
+                  )}
+                </div>
+              </>
+            )}
+            {!isDock && managedLaunchSuggestion ? (
+              <ManagedLaunchHintCard
+                suggestion={managedLaunchSuggestion}
+                testId="session-chat-managed-launch-hint"
+              />
+            ) : !isDock && composerDisabledReason ? (
+              <div
+                className="session-chat-disabled-reason"
+                data-testid="session-chat-disabled-reason"
+              >
+                {composerDisabledReason}
+              </div>
+            ) : null}
           </>
         )}
-        {managedLaunchSuggestion ? (
-          <ManagedLaunchHintCard
-            suggestion={managedLaunchSuggestion}
-            testId="session-chat-managed-launch-hint"
-          />
-        ) : composerDisabledReason ? (
-          <div
-            className="session-chat-disabled-reason"
-            data-testid="session-chat-disabled-reason"
-          >
-            {composerDisabledReason}
-          </div>
-        ) : null}
       </form>
     </div>
   );

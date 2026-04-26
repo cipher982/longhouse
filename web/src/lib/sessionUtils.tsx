@@ -277,13 +277,13 @@ export function getRuntimeDisplayCopy(
   if (runtime.presenceState == null && runtime.truthTier !== "managed-local") {
     if (runtime.heuristicActive) {
       return {
-        headline: "State unavailable",
+        headline: "Active",
         detail: "Last known activity",
       };
     }
     return {
-      headline: "State unavailable",
-      detail: "Waiting for live signal",
+      headline: "Not connected",
+      detail: null,
     };
   }
   if (runtime.presenceState == null && runtime.heuristicActive) {
@@ -294,8 +294,8 @@ export function getRuntimeDisplayCopy(
   }
   if (runtime.presenceState == null && runtime.truthTier === "managed-local") {
     return {
-      headline: "State unavailable",
-      detail: "Waiting for live signal",
+      headline: "Not connected",
+      detail: null,
     };
   }
   if (runtime.presenceState === "idle" || runtime.isIdle) {

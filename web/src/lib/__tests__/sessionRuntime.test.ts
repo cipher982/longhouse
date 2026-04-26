@@ -130,7 +130,7 @@ describe("resolveSessionRuntimeState", () => {
     });
   });
 
-  it("shows state unavailable for managed-local with no presence and no heuristic signal", () => {
+  it("shows not connected for managed-local with no presence and no heuristic signal", () => {
     // truthTier=managed-local but heuristicActive=false:
     // host_reattach_available + live confidence + managed_local_transport → managed-local tier
     // status=null avoids legacy progress status trigger, so heuristicActive stays false
@@ -153,8 +153,8 @@ describe("resolveSessionRuntimeState", () => {
     expect(runtime.truthTier).toBe("managed-local");
     expect(runtime.heuristicActive).toBe(false);
     expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
-      headline: "State unavailable",
-      detail: "Waiting for live signal",
+      headline: "Not connected",
+      detail: null,
     });
   });
 
@@ -175,8 +175,8 @@ describe("resolveSessionRuntimeState", () => {
     );
 
     expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
-      headline: "State unavailable",
-      detail: "Waiting for live signal",
+      headline: "Not connected",
+      detail: null,
     });
   });
 });

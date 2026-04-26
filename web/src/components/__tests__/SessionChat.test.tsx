@@ -146,15 +146,18 @@ describe("SessionChat", () => {
     expect(container.querySelector(".session-chat-callout")).toBeNull();
   });
 
-  it("keeps the dock visible but disables the composer when browser control is unavailable", () => {
+  it("keeps the dock visible but replaces disabled composer controls when control is offline", () => {
     renderSessionChat({
-      composerDisabledReason: "This session is visible here, but Longhouse cannot continue it from the browser yet.",
+      composerDisabledReason: "Longhouse can see this session, but cannot send prompts until the engine reconnects.",
     });
 
-    expect(screen.getByRole("textbox")).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send" })).not.toBeInTheDocument();
     expect(screen.getByTestId("session-chat-disabled-reason")).toHaveTextContent(
-      "Longhouse cannot continue it from the browser yet.",
+      "Control offline",
+    );
+    expect(screen.getByTestId("session-chat-disabled-reason")).toHaveTextContent(
+      "cannot send prompts until the engine reconnects",
     );
     expect(screen.getByText("Unavailable")).toBeInTheDocument();
   });
@@ -169,8 +172,8 @@ describe("SessionChat", () => {
       },
     });
 
-    expect(screen.getByRole("textbox")).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send" })).not.toBeInTheDocument();
     expect(screen.getByTestId("session-chat-managed-launch-hint")).toHaveTextContent(
       "Start the next Codex session through Longhouse",
     );
