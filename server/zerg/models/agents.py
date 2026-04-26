@@ -603,6 +603,7 @@ class SessionInput(AgentsBase):
     id = Column(Integer, primary_key=True, autoincrement=True)
     session_id = Column(GUID(), nullable=False, index=True)
     body = Column("text", Text, nullable=False)
+    owner_id = Column(Integer, nullable=True, index=True)  # authoring user, null on legacy rows
     intent = Column(String(16), nullable=False)  # auto | queue | steer
     status = Column(String(16), nullable=False, server_default=text("'queued'"))
     # queued | delivering | delivered | cancelled | failed

@@ -592,8 +592,6 @@ async def _drain_next_queued_input(
             logger.info("Drain aborted: session %s no longer supports live control", session_id)
             return
 
-        owner_id = _resolve_session_owner_id(db)
-
         drain_request_id = f"drain-{str(session_id)[:8]}-{int(time.time())}"
         lock = await session_lock_manager.acquire(
             session_id=lock_scope_id,
@@ -614,8 +612,13 @@ async def _drain_next_queued_input(
             await session_lock_manager.release(lock_scope_id, drain_request_id)
             return
 
+        # Use the row's recorded author if present; fall back to single-tenant
+        # first-user resolution for legacy rows that predate owner_id.
+        recorded_owner = getattr(claimed, "owner_id", None)
+        owner_id = int(recorded_owner) if recorded_owner else _resolve_session_owner_id(db)
+
         try:
-            await _dispatch_managed_local_text(
+            dispatch_response = await _dispatch_managed_local_text(
                 source_session=source_session,
                 owner_id=owner_id,
                 message=claimed.body,
@@ -627,6 +630,22 @@ async def _drain_next_queued_input(
             mark_failed(db, int(claimed.id), error=str(exc)[:200])
             await session_lock_manager.release(lock_scope_id, drain_request_id)
             logger.exception("Drain dispatch failed for SessionInput %s", claimed.id)
+            return
+
+        # Dispatch path returns a 502 JSONResponse on send failure (it releases
+        # the lock itself). Treat that as failed, not delivered.
+        dispatch_status = int(getattr(dispatch_response, "status_code", 200) or 200)
+        if dispatch_status >= 400:
+            mark_failed(
+                db,
+                int(claimed.id),
+                error=f"drain dispatch returned {dispatch_status}",
+            )
+            logger.warning(
+                "Drain dispatch returned %s for SessionInput %s",
+                dispatch_status,
+                claimed.id,
+            )
             return
 
         mark_delivered(db, int(claimed.id))

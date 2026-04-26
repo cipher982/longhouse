@@ -315,6 +315,114 @@ def test_capability_includes_can_queue_next_input():
     assert caps2.can_queue_next_input is False
 
 
+def test_intent_auto_stores_owner_id(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    _stub_dispatch(monkeypatch)
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        resp = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={"text": "hi", "intent": "queue"},
+        )
+        assert resp.status_code == 200
+        with session_local() as db:
+            row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
+            assert row.owner_id == user_id
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_queue_cap_rejects_over_limit(monkeypatch, tmp_path):
+    from zerg.services.session_inputs import MAX_QUEUED_PER_SESSION
+
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    _stub_dispatch(monkeypatch)
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        for i in range(MAX_QUEUED_PER_SESSION):
+            r = client.post(
+                f"/api/sessions/{session_id}/input",
+                json={"text": f"msg {i}", "intent": "queue"},
+            )
+            assert r.status_code == 200, r.text
+        over = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={"text": "one too many", "intent": "queue"},
+        )
+        assert over.status_code == 409, over.text
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_cancel_rejects_wrong_session(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    session_id_a, user_id = _seed_live_session(session_local)
+    session_id_b, _ = _seed_live_session(session_local)
+    _stub_dispatch(monkeypatch)
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        post = client.post(
+            f"/api/sessions/{session_id_a}/input",
+            json={"text": "hi", "intent": "queue"},
+        )
+        input_id = post.json()["input_id"]
+
+        # Cancel via the wrong session id should 404, not leak cancellation.
+        wrong = client.delete(f"/api/sessions/{session_id_b}/inputs/{input_id}")
+        assert wrong.status_code == 404
+
+        with session_local() as db:
+            row = db.query(SessionInput).filter(SessionInput.id == input_id).one()
+            assert row.status == INPUT_STATUS_QUEUED
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_recent_list_surfaces_failed_rows(monkeypatch, tmp_path):
+    from zerg.services.session_inputs import mark_failed
+
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    _stub_dispatch(monkeypatch)
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        r = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={"text": "will fail", "intent": "queue"},
+        )
+        input_id = r.json()["input_id"]
+        # Simulate a drain failure.
+        with session_local() as db:
+            mark_failed(db, input_id, error="provider down")
+
+        listed = client.get(f"/api/sessions/{session_id}/inputs")
+        assert listed.status_code == 200
+        rows = listed.json()
+        assert len(rows) == 1
+        assert rows[0]["status"] == "failed"
+        assert rows[0]["last_error"] == "provider down"
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
 def test_startup_reconciliation_rewinds_stuck_delivering(tmp_path):
     from datetime import timedelta
 
