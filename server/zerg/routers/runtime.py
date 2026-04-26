@@ -66,6 +66,30 @@ async def ingest_runtime_event_batch(
 
         result = await ws.execute_or_direct(_do, db, label="runtime-events")
 
+        # Publish per-session after a successful write; SSE subscribers wake directly.
+        if events:
+            from zerg.services.session_pubsub import TOPIC_TIMELINE
+            from zerg.services.session_pubsub import get_pubsub
+            from zerg.services.session_pubsub import topic_session
+
+            bus = get_pubsub()
+            session_ids_published: set[str] = set()
+            for ev in events:
+                if ev.session_id is None:
+                    continue
+                sid = str(ev.session_id)
+                if sid in session_ids_published:
+                    continue
+                session_ids_published.add(sid)
+                payload = {
+                    "kind": "runtime",
+                    "session_id": sid,
+                    "provider": ev.provider,
+                    "source": ev.source,
+                }
+                bus.publish(topic_session(sid), payload)
+                bus.publish(TOPIC_TIMELINE, payload)
+
         session_ids = sorted({event.session_id for event in events if event.session_id is not None}, key=str)
         if session_ids:
             sessions = db.query(AgentSession).filter(AgentSession.id.in_(session_ids)).all()

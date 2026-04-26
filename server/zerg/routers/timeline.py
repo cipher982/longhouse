@@ -925,7 +925,16 @@ async def _session_workspace_stream(
     session_id: UUID,
     skip_initial: bool,
 ):
-    """SSE generator that emits workspace_changed when a session's data mutates."""
+    """SSE generator that emits workspace_changed when a session's data mutates.
+
+    Subscribes to the per-session pubsub topic so wake is O(1) on publish
+    instead of waking every SSE subscriber on every write. DB signature is
+    still consulted as the source of truth for what changed, avoiding false
+    positives from publishes that don't touch workspace-visible state.
+    """
+    from zerg.services.session_pubsub import get_pubsub
+    from zerg.services.session_pubsub import topic_session
+
     previous_sig: tuple | None = None
     last_heartbeat = monotonic()
 
@@ -940,66 +949,72 @@ async def _session_workspace_stream(
     }
 
     wait_start: float | None = None
+    bus = get_pubsub()
+    with bus.subscribe(topic_session(str(session_id))) as subscription:
+        while True:
+            if await request.is_disconnected():
+                break
 
-    while True:
-        if await request.is_disconnected():
-            break
+            if skip_initial:
+                skip_initial = False
+                wait_start = monotonic()
+                await _wait_for_session_change(subscription)
+                continue
 
-        if skip_initial:
-            skip_initial = False
-            wait_start = monotonic()
-            await _wait_for_timeline_change()
-            continue
+            with session_factory() as db:
+                current_sig = _load_workspace_signature(db, session_id)
 
-        with session_factory() as db:
-            current_sig = _load_workspace_signature(db, session_id)
-
-        if not current_sig:
-            yield {
-                "event": "error",
-                "data": json.dumps({"error": "session_not_found"}),
-            }
-            break
-
-        if previous_sig is not None and current_sig == previous_sig:
-            now = monotonic()
-            if now - last_heartbeat >= WORKSPACE_STREAM_HEARTBEAT_SECONDS:
+            if not current_sig:
                 yield {
-                    "event": "heartbeat",
-                    "data": json.dumps({"timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}),
+                    "event": "error",
+                    "data": json.dumps({"error": "session_not_found"}),
                 }
-                last_heartbeat = now
+                break
+
+            if previous_sig is not None and current_sig == previous_sig:
+                now = monotonic()
+                if now - last_heartbeat >= WORKSPACE_STREAM_HEARTBEAT_SECONDS:
+                    yield {
+                        "event": "heartbeat",
+                        "data": json.dumps({"timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}),
+                    }
+                    last_heartbeat = now
+                wait_start = monotonic()
+                await _wait_for_session_change(subscription)
+                continue
+
+            previous_sig = current_sig
+
+            detect_ms = round((monotonic() - wait_start) * 1000, 1) if wait_start else 0
+            latest_event_ts = current_sig[6] if len(current_sig) > 6 else None
+            latest_event_ts_ms: int | None = None
+            if latest_event_ts is not None:
+                ts = latest_event_ts if latest_event_ts.tzinfo else latest_event_ts.replace(tzinfo=timezone.utc)
+                latest_event_ts_ms = int(ts.timestamp() * 1000)
+            yield {
+                "event": "workspace_changed",
+                "data": json.dumps(
+                    {
+                        "session_id": str(session_id),
+                        "latest_event_id": current_sig[2],
+                        "thread_session_count": current_sig[5],
+                        "detect_ms": detect_ms,
+                        "latest_event_emitted_at_ms": latest_event_ts_ms,
+                        "server_now_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
+                    }
+                ),
+            }
+
+            now = monotonic()
+            last_heartbeat = now
+
             wait_start = monotonic()
-            await _wait_for_timeline_change()
-            continue
+            await _wait_for_session_change(subscription)
 
-        previous_sig = current_sig
 
-        detect_ms = round((monotonic() - wait_start) * 1000, 1) if wait_start else 0
-        latest_event_ts = current_sig[6] if len(current_sig) > 6 else None
-        latest_event_ts_ms: int | None = None
-        if latest_event_ts is not None:
-            ts = latest_event_ts if latest_event_ts.tzinfo else latest_event_ts.replace(tzinfo=timezone.utc)
-            latest_event_ts_ms = int(ts.timestamp() * 1000)
-        yield {
-            "event": "workspace_changed",
-            "data": json.dumps(
-                {
-                    "session_id": str(session_id),
-                    "latest_event_id": current_sig[2],
-                    "thread_session_count": current_sig[5],
-                    "detect_ms": detect_ms,
-                    "latest_event_emitted_at_ms": latest_event_ts_ms,
-                    "server_now_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
-                }
-            ),
-        }
-
-        now = monotonic()
-        last_heartbeat = now
-
-        wait_start = monotonic()
-        await _wait_for_timeline_change()
+async def _wait_for_session_change(subscription) -> None:
+    """Wait for a publish or a short tick for disconnect checks."""
+    await subscription.next_message(timeout=TIMELINE_STREAM_CHANGE_WAIT_SECONDS)
 
 
 @router.get("/sessions/{session_id}/workspace/stream")

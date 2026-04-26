@@ -14,7 +14,7 @@ from zerg.models.agents import AgentEvent, AgentSession, AgentsBase, SessionRunt
 
 
 async def _noop_coro() -> None:
-    """No-op replacement for _wait_for_timeline_change in tests."""
+    """No-op replacement for wait helpers in tests."""
 
 
 def _make_db(tmp_path, name="workspace_stream.db"):
@@ -53,7 +53,7 @@ async def _run_stream(sf, session_id, *, cycles: int = 2, skip_initial: bool = F
     return events
 
 
-@patch.object(timeline_mod, "_wait_for_timeline_change", _noop_coro)
+@patch.object(timeline_mod, "_wait_for_session_change", lambda _sub: _noop_coro())
 def test_workspace_stream_emits_connected_and_changed(tmp_path):
     """Stream should emit connected + workspace_changed on first cycle."""
     sf = _make_db(tmp_path)
@@ -85,7 +85,7 @@ def test_workspace_stream_emits_connected_and_changed(tmp_path):
     assert "thread_session_count" in changed
 
 
-@patch.object(timeline_mod, "_wait_for_timeline_change", _noop_coro)
+@patch.object(timeline_mod, "_wait_for_session_change", lambda _sub: _noop_coro())
 def test_workspace_stream_skips_when_unchanged(tmp_path):
     """Stream should not re-emit workspace_changed when signature is stable."""
     sf = _make_db(tmp_path)
@@ -111,7 +111,7 @@ def test_workspace_stream_skips_when_unchanged(tmp_path):
     assert len(grouped.get("workspace_changed", [])) == 1, "Should only emit once when unchanged"
 
 
-@patch.object(timeline_mod, "_wait_for_timeline_change", _noop_coro)
+@patch.object(timeline_mod, "_wait_for_session_change", lambda _sub: _noop_coro())
 def test_workspace_stream_detects_new_event(tmp_path):
     """Stream should emit workspace_changed when new events are ingested."""
     sf = _make_db(tmp_path)
@@ -167,7 +167,7 @@ def test_workspace_stream_detects_new_event(tmp_path):
     )
 
 
-@patch.object(timeline_mod, "_wait_for_timeline_change", _noop_coro)
+@patch.object(timeline_mod, "_wait_for_session_change", lambda _sub: _noop_coro())
 def test_workspace_stream_detects_presence_change(tmp_path):
     """Stream should detect presence mutations."""
     sf = _make_db(tmp_path)
@@ -226,7 +226,7 @@ def test_workspace_stream_detects_presence_change(tmp_path):
     assert len(grouped.get("workspace_changed", [])) == 2
 
 
-@patch.object(timeline_mod, "_wait_for_timeline_change", _noop_coro)
+@patch.object(timeline_mod, "_wait_for_session_change", lambda _sub: _noop_coro())
 def test_workspace_stream_missing_session(tmp_path):
     """Stream should emit error for nonexistent session."""
     sf = _make_db(tmp_path)
@@ -240,7 +240,7 @@ def test_workspace_stream_missing_session(tmp_path):
     assert grouped["error"][0]["error"] == "session_not_found"
 
 
-@patch.object(timeline_mod, "_wait_for_timeline_change", _noop_coro)
+@patch.object(timeline_mod, "_wait_for_session_change", lambda _sub: _noop_coro())
 def test_workspace_stream_skip_initial(tmp_path):
     """skip_initial=True should delay first workspace_changed by one cycle."""
     sf = _make_db(tmp_path)
