@@ -1,0 +1,54 @@
+{
+  "_note": "Frozen shape of runtime events emitted by engine/src/codex_bridge.rs. If this fixture fails to deserialize against server RuntimeEventIngest, engine and server protocols have drifted. Update both sides together.",
+  "_source": "engine/src/codex_bridge.rs::BridgeRuntimeSink (post_phase + post_progress + post_runtime_events)",
+  "events": [
+    {
+      "runtime_key": "codex:a776f692-7fb8-44a7-9574-e347fa29b88e",
+      "session_id": "a776f692-7fb8-44a7-9574-e347fa29b88e",
+      "provider": "codex",
+      "device_id": "olive.local",
+      "source": "codex_bridge",
+      "kind": "phase_signal",
+      "phase": "thinking",
+      "tool_name": null,
+      "occurred_at": "2026-04-26T18:14:49.123456+00:00",
+      "dedupe_key": "codex:a776f692-7fb8-44a7-9574-e347fa29b88e:thinking:1",
+      "payload": {
+        "managed_transport": "codex_app_server",
+        "thread_id": "thread-abc-123"
+      }
+    },
+    {
+      "runtime_key": "codex:a776f692-7fb8-44a7-9574-e347fa29b88e",
+      "session_id": "a776f692-7fb8-44a7-9574-e347fa29b88e",
+      "provider": "codex",
+      "device_id": "olive.local",
+      "source": "codex_bridge",
+      "kind": "progress_signal",
+      "phase": null,
+      "tool_name": null,
+      "occurred_at": "2026-04-26T18:14:50.234567+00:00",
+      "dedupe_key": "codex:a776f692-7fb8-44a7-9574-e347fa29b88e:progress:2",
+      "payload": {
+        "managed_transport": "codex_app_server",
+        "thread_id": "thread-abc-123"
+      }
+    },
+    {
+      "runtime_key": "codex:a776f692-7fb8-44a7-9574-e347fa29b88e",
+      "session_id": "a776f692-7fb8-44a7-9574-e347fa29b88e",
+      "provider": "codex",
+      "device_id": "olive.local",
+      "source": "codex_bridge",
+      "kind": "phase_signal",
+      "phase": "running",
+      "tool_name": "shell.exec",
+      "occurred_at": "2026-04-26T18:14:51.345678+00:00",
+      "dedupe_key": "codex:a776f692-7fb8-44a7-9574-e347fa29b88e:running:3",
+      "payload": {
+        "managed_transport": "codex_app_server",
+        "thread_id": "thread-abc-123"
+      }
+    }
+  ]
+}

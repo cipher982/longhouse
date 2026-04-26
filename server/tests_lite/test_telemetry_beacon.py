@@ -99,6 +99,42 @@ def test_beacon_rate_limit_refills_over_time(monkeypatch):
     assert c.post("/telemetry/client-render", json=_beacon()).status_code == 429
 
 
+def test_canary_observation_endpoint_records():
+    c = _client()
+    resp = c.post(
+        "/telemetry/canary-observation",
+        json={"canary_seq": 42, "hop": "sse", "surface": "observer", "latency_ms": 125},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["hop"] == "sse"
+    assert body["seq"] == 42
+    # canary_last_obs_age_s helper should report a very fresh age
+    from zerg.routers.telemetry import canary_last_obs_age_s
+
+    age = canary_last_obs_age_s("sse")
+    assert age is not None and age < 5.0
+
+
+def test_canary_observation_rejects_invalid_hop():
+    c = _client()
+    resp = c.post(
+        "/telemetry/canary-observation",
+        json={"canary_seq": 1, "hop": "bogus", "latency_ms": 10},
+    )
+    assert resp.status_code == 422
+
+
+def test_canary_observation_rejects_negative_latency():
+    c = _client()
+    resp = c.post(
+        "/telemetry/canary-observation",
+        json={"canary_seq": 1, "hop": "sse", "latency_ms": -5},
+    )
+    assert resp.status_code == 422
+
+
 def test_latency_summary_groups_by_surface_and_managed():
     c = _client()
     now = int(time.time() * 1000)
