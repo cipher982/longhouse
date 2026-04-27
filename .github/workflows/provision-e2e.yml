@@ -17,6 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       provision_e2e: ${{ steps.decide.outputs.provision_e2e }}
+      runtime_image: ${{ steps.decide.outputs.runtime_image }}
     steps:
       - uses: actions/checkout@v6
         if: ${{ github.event_name != 'workflow_dispatch' }}
@@ -32,8 +33,10 @@ jobs:
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "provision_e2e=true" >> "$GITHUB_OUTPUT"
+            echo "runtime_image=false" >> "$GITHUB_OUTPUT"
           else
             echo "provision_e2e=${{ steps.filter.outputs.provision_e2e }}" >> "$GITHUB_OUTPUT"
+            echo "runtime_image=${{ steps.filter.outputs.runtime_image }}" >> "$GITHUB_OUTPUT"
           fi
 
   wait-for-image:
@@ -42,11 +45,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        if: ${{ needs.changes.outputs.runtime_image == 'true' }}
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: false
 
+      - name: Skip runtime image wait
+        if: ${{ needs.changes.outputs.runtime_image != 'true' }}
+        run: echo "No runtime image changes detected; provisioning will build the current checkout."
+
       - name: Wait for runtime image
+        if: ${{ needs.changes.outputs.runtime_image == 'true' }}
         uses: ./.github/actions/wait-for-ci
         with:
           head_sha: ${{ github.sha }}
@@ -94,7 +103,7 @@ jobs:
         run: |
           set -euo pipefail
           image=""
-          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${{ needs.changes.outputs.runtime_image }}" == "true" ]]; then
             image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/longhouse-runtime:${GITHUB_SHA}"
           fi
 
@@ -149,7 +158,7 @@ jobs:
         run: |
           set -euo pipefail
           image=""
-          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${{ needs.changes.outputs.runtime_image }}" == "true" ]]; then
             image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/longhouse-runtime:${GITHUB_SHA}"
           fi
 
