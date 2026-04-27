@@ -131,4 +131,73 @@ struct SessionModelsTests {
         #expect(detail.controlHealthMessage == "Read-only imported session.")
         #expect(detail.cockpitPhaseLabel == "Idle")
     }
+
+    @Test
+    func sessionInputResponseDecodesSentOutcome() throws {
+        let json = """
+        {
+          "outcome": "sent",
+          "input_id": 42,
+          "intent": "auto",
+          "queued": []
+        }
+        """.data(using: .utf8)!
+
+        let response = try JSONDecoder.snakeCase.decode(SessionInputResponse.self, from: json)
+        #expect(response.outcome == .sent)
+        #expect(response.inputId == 42)
+        #expect(response.queued.isEmpty)
+    }
+
+    @Test
+    func sessionInputResponseDecodesQueuedOutcome() throws {
+        let json = """
+        {
+          "outcome": "queued",
+          "input_id": 7,
+          "intent": "auto",
+          "queued": [
+            {
+              "id": 7,
+              "text": "hold this thought",
+              "intent": "auto",
+              "status": "queued",
+              "last_error": null,
+              "created_at": "2026-04-26T23:00:00Z"
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let response = try JSONDecoder.snakeCase.decode(SessionInputResponse.self, from: json)
+        #expect(response.outcome == .queued)
+        #expect(response.queued.count == 1)
+        #expect(response.queued.first?.status == "queued")
+        #expect(response.queued.first?.text == "hold this thought")
+    }
+
+    @Test
+    func sessionInputResponseSurfacesFailedRow() throws {
+        let json = """
+        {
+          "outcome": "queued",
+          "input_id": 9,
+          "intent": "auto",
+          "queued": [
+            {
+              "id": 9,
+              "text": "retry me",
+              "intent": "auto",
+              "status": "failed",
+              "last_error": "provider unavailable",
+              "created_at": "2026-04-26T23:10:00Z"
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let response = try JSONDecoder.snakeCase.decode(SessionInputResponse.self, from: json)
+        #expect(response.queued.first?.status == "failed")
+        #expect(response.queued.first?.lastError == "provider unavailable")
+    }
 }

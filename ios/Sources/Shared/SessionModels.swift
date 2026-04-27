@@ -185,6 +185,32 @@ struct SessionCapabilities: Codable, Sendable {
     let canQueueNextInput: Bool?
 }
 
+/// Outcome returned from POST /api/sessions/{id}/input.
+///
+/// - `sent`: Longhouse dispatched the message to the live session immediately.
+/// - `queued`: The session was working; the message is durably queued and
+///   will auto-send at the next safe turn boundary.
+enum SessionInputOutcome: String, Codable, Sendable {
+    case sent
+    case queued
+}
+
+struct QueuedInputSummary: Codable, Sendable, Identifiable {
+    let id: Int
+    let text: String
+    let intent: String
+    let status: String
+    let lastError: String?
+    let createdAt: String?
+}
+
+struct SessionInputResponse: Codable, Sendable {
+    let outcome: SessionInputOutcome
+    let inputId: Int
+    let intent: String
+    let queued: [QueuedInputSummary]
+}
+
 struct SessionRuntimeDisplay: Codable, Hashable, Sendable {
     let truthTier: String
     let state: String?

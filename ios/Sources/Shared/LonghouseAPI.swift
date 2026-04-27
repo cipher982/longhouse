@@ -164,6 +164,24 @@ struct LonghouseAPI: Sendable {
         }
     }
 
+    /// Posts user input with server-decided outcome. When the session is idle
+    /// the input dispatches immediately (`outcome == .sent`). When it's
+    /// working, the row is durably queued and auto-drains at the next safe
+    /// turn boundary (`outcome == .queued`).
+    func sendInput(id: String, text: String, intent: String = "auto") async throws -> SessionInputResponse {
+        var request = URLRequest(url: baseURL.appendingPathComponent("/api/sessions/\(id)/input"))
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["text": text, "intent": intent])
+
+        let (data, httpResponse) = try await data(for: request)
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
+        return try JSONDecoder.snakeCase.decode(SessionInputResponse.self, from: data)
+    }
+
     func draftReply(id: String, maxChars: Int = 1200) async throws -> DraftReplyResponse {
         var request = URLRequest(url: baseURL.appendingPathComponent("/api/sessions/\(id)/draft-reply"))
         request.httpMethod = "POST"
