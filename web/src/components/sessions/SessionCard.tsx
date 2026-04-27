@@ -33,6 +33,40 @@ function normalizeCapabilityTone(value: string | null | undefined): "neutral" | 
   return null;
 }
 
+/**
+ * Phase 3 of session-liveness-honesty: honest runtime-pill label for
+ * unmanaged sessions. Returns null when the legacy outcome label ("Active"
+ * / "Completed" / "Inactive") is still the right thing to show — notably
+ * when there is a progress heuristic firing or when no new axes are on
+ * the payload yet.
+ */
+function resolveUnmanagedPhaseLabel(
+  runtime: ReturnType<typeof resolveSessionRuntimeState>,
+): string | null {
+  const display = runtime.runtimeDisplay;
+  if (!display || display.control_path !== "unmanaged") {
+    return null;
+  }
+  if (display.lifecycle === "closed") {
+    // Card renders the explicit CLOSED pill; skip the runtime label.
+    return null;
+  }
+  if (runtime.isExecuting || runtime.needsAttention || runtime.heuristicActive) {
+    return "Active";
+  }
+  switch (display.activity_recency) {
+    case "live":
+      return "Active";
+    case "recent":
+      return "Recent activity";
+    case "stale":
+      return "Stale";
+    case "none":
+    default:
+      return "Unknown";
+  }
+}
+
 // ---------------------------------------------------------------------------
 // SessionCard
 // ---------------------------------------------------------------------------
@@ -82,7 +116,7 @@ export function SessionCard({
   });
   const runtimePhaseLabel = interaction.isManagedLocalSession
     ? runtimeDisplay.headline
-    : getRuntimeOutcomeLabel(runtime);
+    : resolveUnmanagedPhaseLabel(runtime) ?? getRuntimeOutcomeLabel(runtime);
 
   const projectLabel = getProjectLabel(session);
   const title = getSessionTitle(session);
@@ -117,15 +151,19 @@ export function SessionCard({
   const showGenerating = !showKeywordSnippet && !showSemanticSnippet && !session.summary && !session.summary_title;
   const cardActionLabel = compatibilityMode ? "Open match" : "Open session";
   const hasControlPath = interaction.liveControlAvailable || interaction.hostReattachAvailable;
-  // Phase 1 of session-liveness-honesty: `ended_at` is just the timestamp of
-  // the last event we ingested — it is NOT a closure signal for unmanaged
-  // sessions. Only an explicit `terminal_state` on the session counts as
-  // "we know the process is closed." The backend fallback runtime now also
-  // stops promoting to status==="completed" from ended_at alone.
-  const hasKnownClosedProcess = !!session.terminal_state;
+  // Phase 3 of session-liveness-honesty: lifecycle=="closed" is the new
+  // ground-truth signal. The backend only emits it when we have an
+  // explicit terminal_signal (Phase 6 will also emit it on confirmed
+  // process-gone via machine-agent bindings). Legacy fallback: accept
+  // explicit terminal_state for older payloads that predate the axis.
+  const lifecycle = runtime.runtimeDisplay?.lifecycle ?? null;
+  const hasKnownClosedProcess = lifecycle === "closed" || !!session.terminal_state;
   const hasCurrentControlledPresence = hasControlPath && runtime.presenceState != null;
   const isClosedSession = hasKnownClosedProcess && !hasCurrentControlledPresence;
-  const showRuntimePill = !isClosedSession && runtime.hasSignal;
+  // Phase 3: always render the runtime pill for unmanaged sessions so the
+  // card states "Stale" / "Unknown" honestly instead of hiding them.
+  const isUnmanagedWithAxes = runtime.runtimeDisplay?.control_path === "unmanaged";
+  const showRuntimePill = !isClosedSession && (runtime.hasSignal || isUnmanagedWithAxes);
   const showCapabilityPill = !isClosedSession && !!cardCapabilityLabel;
   const showStatusRow = isClosedSession || showRuntimePill || showCapabilityPill;
   // "Active" is an outcome label; keep its pill neutral across runtime sources.

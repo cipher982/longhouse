@@ -1205,10 +1205,17 @@ final class SessionViewModel: ObservableObject {
         ].joined(separator: "|")
     }
 
-    /// Treat "completed" presence or status as terminal. This is a hint for
-    /// the UI to mark result-less calls as dropped rather than still running.
+    /// Phase 3 of session-liveness-honesty: trust only the backend's
+    /// three-axis lifecycle truth when present. Legacy fallback reads
+    /// presence/status — historically both were set off parser-derived
+    /// ended_at, so they've lied about closure for unmanaged sessions.
+    /// The backend now only emits status="completed" when there's a real
+    /// terminal signal, so this fallback is safe going forward.
     var isSessionEnded: Bool {
         guard let detail else { return false }
+        if let lifecycle = detail.runtimeDisplay?.lifecycle {
+            return lifecycle == "closed"
+        }
         let terminal: Set<String> = ["completed", "closed", "ended", "terminated"]
         if let presence = detail.presenceState, terminal.contains(presence) { return true }
         if let status = detail.status, terminal.contains(status) { return true }
