@@ -199,6 +199,11 @@ def _status_for_state(
     terminal_state: str | None,
     ended_at: datetime | None,
 ) -> str:
+    # Phase 1 of session-liveness-honesty: do NOT return "completed" just
+    # because the session has a non-null `ended_at`. For unmanaged ingest
+    # sources, `ended_at` is just the last event timestamp, not a terminal
+    # signal. Only `terminal_state` (or phase=="finished", which the reducer
+    # only sets alongside a real terminal_state) counts as closed.
     if terminal_state is not None or phase == "finished":
         return "completed"
     if confidence == "inferred":
@@ -209,9 +214,7 @@ def _status_for_state(
         if phase in ATTENTION_PHASES:
             return "active"
         return "idle"
-    if ended_at is None:
-        return "idle"
-    return "completed"
+    return "idle"
 
 
 def build_runtime_view(

@@ -85,7 +85,12 @@ export function SessionContextPane({
   const showStateSection =
     shouldShowNotice || interaction.managedLaunchSuggestion;
 
-  const durationStr = formatDuration(session.started_at, session.ended_at);
+  // Phase 1 of session-liveness-honesty: only treat the session as ended
+  // when terminal_state is set; ended_at alone is just last-activity time.
+  const durationStr = formatDuration(
+    session.started_at,
+    session.terminal_state ? session.ended_at : null,
+  );
   const toolCallLabel =
     session.tool_calls === 1 ? "1 tool call" : `${session.tool_calls} tool calls`;
   const statsLine = [
