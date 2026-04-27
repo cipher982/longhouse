@@ -133,6 +133,12 @@ pub struct BridgeStateFile {
     pub thread_id: Option<String>,
     pub thread_path: Option<String>,
     pub pid: u32,
+    #[serde(default)]
+    pub app_server_pid: Option<u32>,
+    #[serde(default)]
+    pub app_server_pgid: Option<i32>,
+    #[serde(default)]
+    pub app_server_ws_url: Option<String>,
     pub status: String,
     pub log_file: String,
     pub active_turn_id: Option<String>,
@@ -182,6 +188,9 @@ enum RpcOutbound {
 #[derive(Debug)]
 struct RpcClient {
     child: Option<Child>,
+    child_pid: Option<u32>,
+    child_pgid: Option<i32>,
+    child_ws_url: Option<String>,
     outbound: RpcOutbound,
     events_rx: mpsc::UnboundedReceiver<StreamEvent>,
     pending_methods: BTreeMap<u64, String>,
@@ -474,6 +483,9 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
         thread_id: None,
         thread_path: None,
         pid: 0,
+        app_server_pid: None,
+        app_server_pgid: None,
+        app_server_ws_url: None,
         status: "starting".to_string(),
         log_file: paths.log_file.display().to_string(),
         active_turn_id: None,
@@ -618,6 +630,9 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         thread_id: None,
         thread_path: None,
         pid,
+        app_server_pid: None,
+        app_server_pgid: None,
+        app_server_ws_url: None,
         status: "starting".to_string(),
         log_file: config.log_file.display().to_string(),
         active_turn_id: None,
@@ -644,6 +659,12 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
 
     let mut client = spawn_app_server_client(&config).await?;
     let ws_url = client.ws_url.clone();
+    let mut starting_state = initial_state.clone();
+    starting_state.ws_url = Some(ws_url.clone());
+    starting_state.app_server_pid = client.child_pid;
+    starting_state.app_server_pgid = client.child_pgid;
+    starting_state.app_server_ws_url = client.child_ws_url.clone();
+    write_state_file(&config.state_file, &starting_state)?;
 
     // Initialize the protocol handshake but do NOT call thread/start.
     // The TUI (codex --enable tui_app_server --remote <ws_url>) will create
@@ -661,6 +682,9 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
             thread_id: None,
             thread_path: None,
             pid,
+            app_server_pid: client.child_pid,
+            app_server_pgid: client.child_pgid,
+            app_server_ws_url: client.child_ws_url.clone(),
             status: "ready".to_string(),
             log_file: config.log_file.display().to_string(),
             active_turn_id: None,
@@ -1067,7 +1091,8 @@ async fn send_via_ipc_steer_inner(
 
     let mut response_buf = Vec::new();
     stream.read_to_end(&mut response_buf).await?;
-    let response: Value = serde_json::from_slice(&response_buf).context("parsing IPC steer response")?;
+    let response: Value =
+        serde_json::from_slice(&response_buf).context("parsing IPC steer response")?;
 
     if response.get("ok").and_then(Value::as_bool) != Some(true) {
         let error = response
@@ -1156,18 +1181,26 @@ pub async fn cmd_codex_bridge_stop(config: BridgeStopConfig) -> Result<()> {
             return stop_via_ipc(&sock_path).await;
         }
         eprintln!(
-            "bridge state file is missing for session {}; nothing to stop",
+            "bridge state file is missing for session {}; no recorded child process to stop",
             config.session_id
         );
         return Ok(());
     }
-    if !sock_path.exists() {
-        bail!(
-            "bridge IPC socket is unavailable for session {}; manual cleanup may be required",
-            config.session_id
-        );
+    if sock_path.exists() {
+        match stop_via_ipc(&sock_path).await {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                eprintln!(
+                    "bridge IPC stop failed for session {}; falling back to recorded child cleanup: {err:#}",
+                    config.session_id
+                );
+            }
+        }
     }
-    stop_via_ipc(&sock_path).await
+    let state = read_state_file(&paths.state_file)?;
+    terminate_recorded_app_server(&state).await;
+    remove_bridge_state_sidecars(&paths.state_file);
+    Ok(())
 }
 
 #[cfg(not(unix))]
@@ -1222,14 +1255,15 @@ pub async fn cmd_codex_bridge_steer(
                 // daemon itself; otherwise we'd risk a double-dispatch if
                 // the daemon accepted the steer but the reply was lost.
                 let is_connect_failure =
-                    err.downcast_ref::<std::io::Error>().map_or(false, |io_err| {
-                        matches!(
-                            io_err.kind(),
-                            std::io::ErrorKind::ConnectionRefused
-                                | std::io::ErrorKind::NotFound
-                                | std::io::ErrorKind::BrokenPipe
-                        )
-                    });
+                    err.downcast_ref::<std::io::Error>()
+                        .map_or(false, |io_err| {
+                            matches!(
+                                io_err.kind(),
+                                std::io::ErrorKind::ConnectionRefused
+                                    | std::io::ErrorKind::NotFound
+                                    | std::io::ErrorKind::BrokenPipe
+                            )
+                        });
                 if !is_connect_failure {
                     return Err(BridgeSteerError::Protocol(err.context(
                         "IPC steer may have been accepted by daemon; not retrying direct WS to avoid duplicate steer",
@@ -1533,6 +1567,20 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
     let mut child = command
         .spawn()
         .with_context(|| format!("spawning `{}` app-server", config.codex_bin))?;
+    let child_pid = child.id();
+    #[cfg(unix)]
+    let child_pgid = child_pid
+        .and_then(|pid| i32::try_from(pid).ok())
+        .and_then(|pid| {
+            let pgid = unsafe { libc::getpgid(pid) };
+            if pgid > 0 {
+                Some(pgid)
+            } else {
+                None
+            }
+        });
+    #[cfg(not(unix))]
+    let child_pgid = None;
     let stdout = child.stdout.take().context("missing app-server stdout")?;
     let stderr = child.stderr.take().context("missing app-server stderr")?;
     let (events_tx, events_rx) = mpsc::unbounded_channel();
@@ -1616,6 +1664,9 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
 
     Ok(RpcClient {
         child: Some(child),
+        child_pid,
+        child_pgid,
+        child_ws_url: Some(upstream_ws_url),
         outbound: RpcOutbound::WebSocket(outbound_tx),
         events_rx,
         pending_methods: BTreeMap::new(),
@@ -1665,6 +1716,9 @@ async fn connect_remote_client(ws_url: &str) -> Result<RpcClient> {
 
     Ok(RpcClient {
         child: None,
+        child_pid: None,
+        child_pgid: None,
+        child_ws_url: None,
         outbound: RpcOutbound::WebSocket(outbound_tx),
         events_rx,
         pending_methods: BTreeMap::new(),
@@ -2662,6 +2716,58 @@ async fn shutdown_child(client: &mut RpcClient) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+async fn terminate_recorded_app_server(state: &BridgeStateFile) {
+    let recorded_pid = state
+        .app_server_pid
+        .and_then(|pid| i32::try_from(pid).ok())
+        .filter(|pid| *pid > 0);
+    if let (Some(pid), Some(process_group_id)) =
+        (recorded_pid, state.app_server_pgid.filter(|pgid| *pgid > 0))
+    {
+        let current_process_group_id = unsafe { libc::getpgid(pid) };
+        if current_process_group_id == process_group_id {
+            unsafe {
+                let _ = libc::killpg(process_group_id, libc::SIGTERM);
+            }
+            tokio::time::sleep(CHILD_SHUTDOWN_GRACE_PERIOD).await;
+            let process_group_still_alive = unsafe { libc::killpg(process_group_id, 0) == 0 };
+            if process_group_still_alive {
+                unsafe {
+                    let _ = libc::killpg(process_group_id, libc::SIGKILL);
+                }
+            }
+            return;
+        }
+    }
+
+    let Some(pid) = recorded_pid else {
+        return;
+    };
+    unsafe {
+        let _ = libc::kill(pid, libc::SIGTERM);
+    }
+    tokio::time::sleep(CHILD_SHUTDOWN_GRACE_PERIOD).await;
+    let process_still_alive = unsafe { libc::kill(pid, 0) == 0 };
+    if process_still_alive {
+        unsafe {
+            let _ = libc::kill(pid, libc::SIGKILL);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn remove_bridge_state_sidecars(state_file: &Path) {
+    for suffix in ["json", "json.tmp", "lock", "sock"] {
+        let candidate = if suffix == "json.tmp" {
+            state_file.with_extension("json.tmp")
+        } else {
+            state_file.with_extension(suffix)
+        };
+        let _ = fs::remove_file(candidate);
+    }
+}
+
 async fn handle_bridge_followup(
     config: &BridgeRunConfig,
     client: &mut RpcClient,
@@ -2822,6 +2928,9 @@ mod tests {
                 thread_id: None,
                 thread_path: None,
                 pid: 42,
+                app_server_pid: None,
+                app_server_pgid: None,
+                app_server_ws_url: None,
                 status: "ready".to_string(),
                 log_file: log_file.display().to_string(),
                 active_turn_id: None,
@@ -2849,6 +2958,61 @@ mod tests {
             last_progress_emit: None,
             runtime_tracker: CodexRuntimeTracker::default(),
             subscribed_thread_id: None,
+        }
+    }
+
+    #[test]
+    fn bridge_state_file_keeps_legacy_state_compatible() {
+        let temp = tempfile::tempdir().unwrap();
+        let state_file = temp.path().join("legacy-state.json");
+        fs::write(
+            &state_file,
+            json!({
+                "session_id": "session-legacy",
+                "cwd": temp.path().display().to_string(),
+                "codex_bin": "codex",
+                "ws_url": "ws://127.0.0.1:51234",
+                "thread_id": null,
+                "thread_path": null,
+                "pid": 42,
+                "status": "ready",
+                "log_file": temp.path().join("bridge.log").display().to_string(),
+                "active_turn_id": null,
+                "last_turn_status": null,
+                "last_error": null,
+                "thread_subscription_status": "waiting_for_thread",
+                "thread_subscription_attempts": 0,
+                "thread_subscription_last_error": null,
+                "updated_at": "2026-04-27T00:00:00Z"
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let state = read_state_file(&state_file).unwrap();
+
+        assert_eq!(state.session_id, "session-legacy");
+        assert_eq!(state.app_server_pid, None);
+        assert_eq!(state.app_server_pgid, None);
+        assert_eq!(state.app_server_ws_url, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remove_bridge_state_sidecars_removes_json_tmp_lock_and_sock() {
+        let temp = tempfile::tempdir().unwrap();
+        let state_file = temp.path().join("session-1.json");
+        let tmp_file = temp.path().join("session-1.json.tmp");
+        let lock_file = temp.path().join("session-1.lock");
+        let sock_file = temp.path().join("session-1.sock");
+        for path in [&state_file, &tmp_file, &lock_file, &sock_file] {
+            fs::write(path, "x").unwrap();
+        }
+
+        remove_bridge_state_sidecars(&state_file);
+
+        for path in [&state_file, &tmp_file, &lock_file, &sock_file] {
+            assert!(!path.exists(), "expected {} to be removed", path.display());
         }
     }
 
@@ -3012,6 +3176,9 @@ mod tests {
 
         let client = RpcClient {
             child: None,
+            child_pid: None,
+            child_pgid: None,
+            child_ws_url: None,
             outbound: RpcOutbound::WebSocket(outbound_tx),
             events_rx,
             pending_methods: BTreeMap::new(),
@@ -3064,6 +3231,9 @@ mod tests {
             thread_id: Some("thread-123".to_string()),
             thread_path: None,
             pid: 42,
+            app_server_pid: None,
+            app_server_pgid: None,
+            app_server_ws_url: None,
             status: "ready".to_string(),
             log_file: temp.path().join("bridge.log").display().to_string(),
             active_turn_id: None,
@@ -3789,6 +3959,9 @@ mod tests {
 
         let mut client = RpcClient {
             child: None,
+            child_pid: None,
+            child_pgid: None,
+            child_ws_url: None,
             outbound: RpcOutbound::WebSocket(outbound_tx),
             events_rx,
             pending_methods: BTreeMap::new(),
@@ -3894,19 +4067,25 @@ mod tests {
         let server = tokio::spawn(async move {
             let (mut stream, _addr) = listener.accept().await.unwrap();
             let mut buf = Vec::new();
-            tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut buf).await.unwrap();
+            tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut buf)
+                .await
+                .unwrap();
             let request: Value = serde_json::from_slice(&buf).unwrap();
             assert_eq!(request["kind"], "steer");
             assert_eq!(request["text"], "ipc steer");
             assert_eq!(request["thread_id"], "thr-1");
             assert_eq!(request["expected_turn_id"], "turn-1");
             let response = b"{\"ok\": true}\n";
-            tokio::io::AsyncWriteExt::write_all(&mut stream, response).await.unwrap();
+            tokio::io::AsyncWriteExt::write_all(&mut stream, response)
+                .await
+                .unwrap();
             drop(stream);
             let _ = sock_clone;
         });
 
-        send_via_ipc_steer(&sock, "ipc steer", "thr-1", "turn-1").await.unwrap();
+        send_via_ipc_steer(&sock, "ipc steer", "thr-1", "turn-1")
+            .await
+            .unwrap();
         server.await.unwrap();
     }
 
@@ -3919,13 +4098,18 @@ mod tests {
         tokio::spawn(async move {
             let (mut stream, _addr) = listener.accept().await.unwrap();
             let mut buf = Vec::new();
-            tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut buf).await.unwrap();
-            let response =
-                b"{\"ok\": false, \"error\": \"turn/steer failed: no active turn\"}\n";
-            tokio::io::AsyncWriteExt::write_all(&mut stream, response).await.unwrap();
+            tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut buf)
+                .await
+                .unwrap();
+            let response = b"{\"ok\": false, \"error\": \"turn/steer failed: no active turn\"}\n";
+            tokio::io::AsyncWriteExt::write_all(&mut stream, response)
+                .await
+                .unwrap();
         });
 
-        let err = send_via_ipc_steer(&sock, "x", "thr", "turn").await.unwrap_err();
+        let err = send_via_ipc_steer(&sock, "x", "thr", "turn")
+            .await
+            .unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("no active turn"), "unexpected error: {msg}");
     }

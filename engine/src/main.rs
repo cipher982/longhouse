@@ -34,9 +34,8 @@ use codex_app_server_canary::{
 use codex_bridge::{
     cmd_codex_bridge_attach, cmd_codex_bridge_interrupt, cmd_codex_bridge_run,
     cmd_codex_bridge_send, cmd_codex_bridge_start, cmd_codex_bridge_steer, cmd_codex_bridge_stop,
-    BridgeAttachConfig,
-    BridgeInterruptConfig, BridgeRunConfig, BridgeSendConfig, BridgeStartConfig, BridgeSteerConfig,
-    BridgeSteerError, BridgeStopConfig,
+    BridgeAttachConfig, BridgeInterruptConfig, BridgeRunConfig, BridgeSendConfig,
+    BridgeStartConfig, BridgeSteerConfig, BridgeSteerError, BridgeStopConfig,
 };
 use config::ShipperConfig;
 use pipeline::compressor::CompressionAlgo;
