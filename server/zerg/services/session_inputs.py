@@ -122,14 +122,30 @@ def get_session_input(db: Session, input_id: int) -> SessionInput | None:
 
 
 def cancel_queued_input(db: Session, input_id: int) -> SessionInput | None:
-    """Transition a queued input to cancelled. Returns None if not queued."""
-    row = get_session_input(db, input_id)
-    if row is None or row.status != INPUT_STATUS_QUEUED:
-        return None
-    row.status = INPUT_STATUS_CANCELLED
-    row.updated_at = datetime.now(timezone.utc)
+    """Atomically transition a queued input to cancelled.
+
+    Uses a status-gated UPDATE so concurrent cancels do not both succeed.
+    SQLite's single-writer lock was already serializing this, but the SQL
+    is portable: one of N concurrent callers sees rowcount==1, the rest
+    see rowcount==0 and report the row as no longer cancellable.
+    """
+    now = datetime.now(timezone.utc)
+    updated = (
+        db.query(SessionInput)
+        .filter(
+            SessionInput.id == input_id,
+            SessionInput.status == INPUT_STATUS_QUEUED,
+        )
+        .update(
+            {"status": INPUT_STATUS_CANCELLED, "updated_at": now},
+            synchronize_session=False,
+        )
+    )
     db.commit()
-    return row
+    if updated != 1:
+        return None
+    # Return the refreshed row so the caller can report id/status.
+    return get_session_input(db, input_id)
 
 
 def claim_next_queued(db: Session, session_id: UUID, *, request_id: str) -> SessionInput | None:
