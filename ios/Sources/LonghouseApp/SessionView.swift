@@ -1041,13 +1041,8 @@ final class SessionViewModel: ObservableObject {
             let response = try await api.sendInput(id: sessionId, text: text, intent: intent)
             sendCounter &+= 1
             lastSendOutcome = response.outcome
-            queuedInputCount = response.queued.filter { $0.status == "queued" || $0.status == "delivering" }.count
-            // Suppress steer+turn_ended rows from the failed-count so the
-            // user doesn't see two UIs screaming about the same race — the
-            // turnEndedDraft prompt is the actionable surface for that case.
-            failedInputCount = response.queued.filter { row in
-                row.status == "failed" && !(row.intent == "steer" && row.lastError == "turn_ended")
-            }.count
+            queuedInputCount = response.pendingInputCount
+            failedInputCount = response.visibleFailedInputCount
             turnEndedDraft = nil
             if response.outcome == .sent, let events = try? await api.sessionEvents(id: sessionId) {
                 self.items = TimelineBuilder.build(events: events)
