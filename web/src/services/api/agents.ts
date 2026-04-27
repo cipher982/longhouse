@@ -90,6 +90,13 @@ export interface SessionRuntimeDisplay {
   heuristic_active: boolean;
   is_managed_local_truth: boolean;
   has_signal: boolean;
+  // Phase 2/3 of session-liveness-honesty: three orthogonal axes.
+  // Older payloads may omit these — treat as optional for forward compat.
+  control_path?: "managed" | "unmanaged" | (string & {});
+  activity_recency?: "live" | "recent" | "stale" | "none" | (string & {});
+  lifecycle?: "open" | "closed" | "unknown" | (string & {});
+  host_state?: "online" | "stale" | "offline" | "unknown" | (string & {});
+  terminal_reason?: "provider_signal" | "process_gone" | "host_reported" | null | (string & {});
 }
 
 export interface SessionControl {

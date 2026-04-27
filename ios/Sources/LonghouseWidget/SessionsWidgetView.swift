@@ -186,7 +186,12 @@ private func widgetRuntimeColor(_ session: SessionSummary) -> Color {
     if session.presenceState == "running" { return .green }
     if session.presenceState == "thinking" { return .orange }
     if session.isExecuting { return .orange }
-    if session.isIdle || session.status == "completed" { return .secondary }
+    // Phase 3 of session-liveness-honesty: lifecycle=="closed" (when
+    // present) is the only trustworthy closed signal. Fall back to status
+    // only when the new axis is missing (older payloads).
+    let lifecycle = session.runtimeDisplay?.lifecycle
+    if session.isIdle || lifecycle == "closed" { return .secondary }
+    if lifecycle == nil && session.status == "completed" { return .secondary }
     return .blue
 }
 

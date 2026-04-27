@@ -178,7 +178,11 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         case "idle":
             return "Idle"
         default:
-            if status == "completed" { return "Completed" }
+            // Phase 3 of session-liveness-honesty: prefer backend lifecycle
+            // when available; fall back to status for older payloads only.
+            let lifecycle = runtimeDisplay?.lifecycle
+            if lifecycle == "closed" { return "Completed" }
+            if lifecycle == nil && status == "completed" { return "Completed" }
             if status == "working" || status == "active" { return "Recent progress" }
             return "Recent"
         }
@@ -293,6 +297,13 @@ struct SessionRuntimeDisplay: Codable, Hashable, Sendable {
     let heuristicActive: Bool
     let isManagedLocalTruth: Bool
     let hasSignal: Bool
+    // Phase 2/3 of session-liveness-honesty: three orthogonal axes.
+    // Optional so older backend payloads still decode cleanly.
+    let controlPath: String?
+    let activityRecency: String?
+    let lifecycle: String?
+    let hostState: String?
+    let terminalReason: String?
 }
 
 enum SessionLoopMode: String, Codable, Sendable, CaseIterable, Hashable {
