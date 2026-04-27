@@ -476,6 +476,7 @@ describe("SessionsPage", () => {
     expect(card).toHaveAttribute("data-card-state", "closed");
     expect(card).toHaveClass("session-card--closed");
     expect(card.style.borderLeftColor).toBe("");
+    expect(screen.getByTestId("session-card-closed-state")).toHaveTextContent("Closed");
   });
 
   it("treats stale status-only activity on an ended import as closed", async () => {
@@ -565,6 +566,7 @@ describe("SessionsPage", () => {
     const card = await screen.findByTestId("session-card");
     expect(card).toHaveAttribute("data-card-state", "actionable");
     expect(card).not.toHaveClass("session-card--closed");
+    expect(screen.queryByTestId("session-card-closed-state")).not.toBeInTheDocument();
 
     const capability = await screen.findByTestId("session-card-capability");
     expect(capability).toHaveTextContent("Reconnect required");
@@ -610,6 +612,7 @@ describe("SessionsPage", () => {
     const card = await screen.findByTestId("session-card");
     expect(card).toHaveAttribute("data-card-state", "closed");
     expect(card).toHaveClass("session-card--closed");
+    expect(screen.getByTestId("session-card-closed-state")).toHaveTextContent("Closed");
   });
 
   it("keeps ended sessions with current controlled presence actionable", async () => {
@@ -650,6 +653,7 @@ describe("SessionsPage", () => {
     const card = await screen.findByTestId("session-card");
     expect(card).toHaveAttribute("data-card-state", "actionable");
     expect(card).not.toHaveClass("session-card--closed");
+    expect(screen.queryByTestId("session-card-closed-state")).not.toBeInTheDocument();
   });
 
   it("keeps the timeline card action semantically honest", async () => {

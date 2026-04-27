@@ -725,6 +725,20 @@
     border: 1px solid var(--border-glass-1);
   }
 
+  .session-card-closed-pill {
+    font-size: 10px;
+    font-weight: var(--font-weight-semibold);
+    line-height: 1;
+    padding: 4px 7px;
+    border-radius: var(--radius-full);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+    background: color-mix(in srgb, var(--color-text-secondary) 16%, transparent);
+    color: var(--color-text-primary);
+    border: 1px solid color-mix(in srgb, var(--color-text-secondary) 36%, transparent);
+  }
+
   .session-card-capability-pill--success {
     background: color-mix(in srgb, var(--color-intent-success) 15%, transparent);
     color: var(--color-intent-success);
@@ -939,7 +953,8 @@
       text-overflow: ellipsis;
     }
 
-    .session-card-capability-pill {
+    .session-card-capability-pill,
+    .session-card-closed-pill {
       font-size: 9px;
       padding: 2px 5px;
     }
@@ -1929,9 +1944,9 @@
    * ---------------------------------------------------------------------------*/
 
   /* Working: agent is actively thinking or making tool calls */
-  .session-card--thinking,
-  .session-card--running,
-  .session-card--live {
+  .session-card--thinking:not(.session-card--closed),
+  .session-card--running:not(.session-card--closed),
+  .session-card--live:not(.session-card--closed) {
     animation: card-working-pulse 2.5s ease-in-out infinite;
   }
 

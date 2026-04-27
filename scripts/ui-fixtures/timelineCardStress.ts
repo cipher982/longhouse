@@ -308,6 +308,42 @@ export function buildTimelineCardStressFixture(): {
     },
   );
 
+  const closedCodex = makeTimelineCard(
+    {
+      id: "closed-codex",
+      thread_root_session_id: "thread-closed-codex",
+      thread_head_session_id: "thread-closed-codex",
+      provider: "codex",
+      project: "zerg",
+      git_branch: "main",
+      started_at: "2026-04-15T13:30:00Z",
+      ended_at: "2026-04-15T15:20:00Z",
+      last_activity_at: "2026-04-15T15:20:00Z",
+      timeline_anchor_at: "2026-04-15T15:20:00Z",
+      user_messages: 6,
+      assistant_messages: 6,
+      tool_calls: 22,
+      summary_title: "Closed Historical Session",
+      summary:
+        "Finalized archive import cleanup and closed the terminal process after verifying session history, summaries, and tool counts were durable.",
+      status: "completed",
+      presence_state: null,
+      presence_updated_at: null,
+      last_live_at: null,
+      runtime_source: null,
+      confidence: null,
+      display_phase: null,
+      origin_label: "cinder",
+      home_label: null,
+      capabilities: makeCapabilities(),
+      control: null,
+    },
+    {
+      head_origin_label: "cinder",
+      started_origin_label: "cinder",
+    },
+  );
+
   const continuationDetail = makeSession({
     id: "continuation-detail",
     provider: "codex",
@@ -453,6 +489,7 @@ export function buildTimelineCardStressFixture(): {
 
   const sessions = [
     liveClaude,
+    closedCodex,
     idleClaude,
     unmanagedCodex,
     continuationCard,
