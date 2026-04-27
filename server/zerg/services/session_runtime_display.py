@@ -193,11 +193,20 @@ def _tone(
 
 
 def _outcome_label(
-    *, is_executing: bool, needs_attention: bool, heuristic_active: bool, status: str | None, ended_at: datetime | None
+    *,
+    is_executing: bool,
+    needs_attention: bool,
+    heuristic_active: bool,
+    status: str | None,
+    terminal_state: str | None,
 ) -> str:
+    # Phase 1 of session-liveness-honesty: do not collapse on `ended_at`
+    # alone. Only explicit terminal_state (from real terminal_signal ingest)
+    # or runtime-view status=="completed" (which in fallback now requires
+    # terminal_state too) means Completed.
     if is_executing or needs_attention or heuristic_active:
         return "Active"
-    if status == "completed" or ended_at is not None:
+    if terminal_state or status == "completed":
         return "Completed"
     return "Inactive"
 
@@ -283,7 +292,7 @@ def build_session_runtime_display(
             needs_attention=needs_attention,
             heuristic_active=heuristic_active,
             status=status,
-            ended_at=ended_at,
+            terminal_state=runtime_view.terminal_state,
         )
         detail = None
 

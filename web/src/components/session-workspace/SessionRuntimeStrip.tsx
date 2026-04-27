@@ -57,7 +57,7 @@ export function SessionRuntimeStrip({
   });
   const runtimePhase = interaction.isManagedLocalSession
     ? runtimeDisplay.headline
-    : getRuntimeOutcomeLabel(runtime, { endedAt: session.ended_at });
+    : getRuntimeOutcomeLabel(runtime);
   const runtimeDetail = interaction.isManagedLocalSession
     ? (detailOverride ?? runtimeDisplay.detail)
     : null;

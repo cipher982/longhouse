@@ -159,7 +159,11 @@ function getDisplayPhase(
 
   if (isLegacyProgressStatus(status)) return "Recent progress";
   if (status === "idle") return "Idle";
-  if (status === "completed" || fallbackEndedAt != null) return "Completed";
+  // Phase 1 of session-liveness-honesty: do not treat fallbackEndedAt as
+  // Completed — that field is just the last-activity timestamp for unmanaged
+  // sessions. Only an explicit "completed" status (which the backend now
+  // gates on terminal_state) means the process is actually closed.
+  if (status === "completed") return "Completed";
   return "Recent";
 }
 
@@ -227,7 +231,8 @@ export function resolveSessionRuntimeState(
       presenceState,
       presenceTool,
       status,
-      session.ended_at ?? null,
+      // Phase 1: do not feed ended_at as a terminal hint. See getDisplayPhase.
+      null,
       session.display_phase ?? null,
     );
   const tone = normalizeRuntimeTone(serverDisplay?.tone) ?? getTone(presenceState, { heuristicActive, isIdle });

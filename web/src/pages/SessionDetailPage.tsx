@@ -99,7 +99,10 @@ function SessionDetailWorkspaceRoute({
     handleVisibleSelectionChange,
     registerTimelineList,
   } = workspace;
-  const nowMs = useSecondClock(Boolean(session && session.ended_at == null));
+  // Phase 1 of session-liveness-honesty: keep the live clock running unless
+  // we have explicit terminal truth. `ended_at` alone is just a
+  // last-activity timestamp for unmanaged sessions.
+  const nowMs = useSecondClock(Boolean(session && !session.terminal_state));
   const runtimeElapsedLabel = useMemo(
     () => getRuntimeElapsedLabel(session, turns, nowMs),
     [session, turns, nowMs],
@@ -242,7 +245,7 @@ function SessionDetailWorkspaceRoute({
             selectedKey={selectedKey}
             onSelectKey={selectKey}
             onVisibleSelectionChange={handleVisibleSelectionChange}
-            sessionEnded={Boolean(session?.ended_at)}
+            sessionEnded={Boolean(session?.terminal_state)}
             headerLeft={
               <div className="session-workspace-header__left">
                 <Button variant="ghost" size="sm" onClick={handleBack}>

@@ -470,6 +470,19 @@ describe("SessionsPage", () => {
   });
 
   it("marks closed imported sessions as closed without provider-colored card styling", async () => {
+    // Phase 1 of session-liveness-honesty: CLOSED requires an explicit
+    // terminal_state, not just a non-null ended_at.
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [makeTimelineCard({ terminal_state: "session_ended" })],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
     renderSessionsPage("/timeline");
 
     const card = await screen.findByTestId("session-card");
@@ -489,6 +502,7 @@ describe("SessionsPage", () => {
           makeTimelineCard({
             provider: "claude",
             ended_at: "2026-03-21T12:10:00Z",
+            terminal_state: "session_ended",
             status: "active",
             confidence: "live",
             runtime_source: "semantic",
@@ -569,7 +583,10 @@ describe("SessionsPage", () => {
     expect((within(cards[1]).getByText("claude") as HTMLElement).style.color).toBe("");
   });
 
-  it("treats stale status-only activity on an ended import as closed", async () => {
+  it("does not mark ended imports closed without an explicit terminal_state", async () => {
+    // Phase 1 of session-liveness-honesty: `ended_at` is a last-activity
+    // timestamp for unmanaged sessions, not a closure signal. Without an
+    // explicit terminal_state, the card must remain actionable.
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
@@ -592,11 +609,14 @@ describe("SessionsPage", () => {
     renderSessionsPage("/timeline");
 
     const card = await screen.findByTestId("session-card");
-    expect(card).toHaveAttribute("data-card-state", "closed");
-    expect(card).toHaveClass("session-card--closed");
+    expect(card).toHaveAttribute("data-card-state", "actionable");
+    expect(card).not.toHaveClass("session-card--closed");
+    expect(screen.queryByTestId("session-card-closed-state")).not.toBeInTheDocument();
   });
 
-  it("treats stale presence on an ended import as closed", async () => {
+  it("keeps stale unmanaged cards actionable when only ended_at is set", async () => {
+    // Phase 1 of session-liveness-honesty: even a stale presence + non-null
+    // ended_at is not a closure signal without terminal_state.
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
@@ -619,8 +639,8 @@ describe("SessionsPage", () => {
     renderSessionsPage("/timeline");
 
     const card = await screen.findByTestId("session-card");
-    expect(card).toHaveAttribute("data-card-state", "closed");
-    expect(card).toHaveClass("session-card--closed");
+    expect(card).toHaveAttribute("data-card-state", "actionable");
+    expect(card).not.toHaveClass("session-card--closed");
   });
 
   it("shows a control-offline badge when a managed session cannot accept browser prompts", async () => {
@@ -674,6 +694,7 @@ describe("SessionsPage", () => {
         sessions: [
           makeTimelineCard({
             ended_at: "2026-03-21T12:10:00Z",
+            terminal_state: "session_ended",
             runtime_source: "managed_local_transport",
             status: "idle",
             confidence: "live",

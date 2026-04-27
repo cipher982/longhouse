@@ -233,11 +233,6 @@ export function getCardRuntimePhaseLabel(runtime: ReturnType<typeof resolveSessi
 
 export function getRuntimeOutcomeLabel(
   runtime: ReturnType<typeof resolveSessionRuntimeState>,
-  {
-    endedAt = null,
-  }: {
-    endedAt?: string | null;
-  } = {},
 ): string {
   if (
     runtime.runtimeDisplay?.headline === "Active" ||
@@ -249,7 +244,10 @@ export function getRuntimeOutcomeLabel(
   if (runtime.isExecuting || runtime.needsAttention || runtime.heuristicActive) {
     return "Active";
   }
-  if (runtime.status === "completed" || endedAt != null) {
+  // Phase 1 of session-liveness-honesty: `ended_at` is a last-activity
+  // timestamp for unmanaged sessions, not a closure signal. Only
+  // status==="completed" (backend-gated on terminal_state) means Completed.
+  if (runtime.status === "completed") {
     return "Completed";
   }
   return "Inactive";

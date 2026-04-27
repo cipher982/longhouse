@@ -65,13 +65,15 @@ function shouldRefreshWorkspaceSession(
     return false;
   }
 
+  // Phase 1 of session-liveness-honesty: do not stop polling on
+  // `ended_at` alone. `ended_at` is a last-activity timestamp for unmanaged
+  // sessions, not a closure signal. Only an explicit `terminal_state`
+  // (combined with no live signal) means the session is actually done.
   const runtime = resolveSessionRuntimeState(session);
-  return (
-    session.ended_at == null ||
-    runtime.isLive ||
-    runtime.needsAttention ||
-    runtime.heuristicActive
-  );
+  if (!session.terminal_state) {
+    return true;
+  }
+  return runtime.isLive || runtime.needsAttention || runtime.heuristicActive;
 }
 
 export function useSessionWorkspace(
@@ -167,7 +169,8 @@ export function useSessionWorkspace(
   } = useAgentSessionTurns(sessionId, {
     limit: 10,
     order: "desc",
-    enabled: Boolean(sessionId) && session?.ended_at == null,
+    // Phase 1: terminal_state, not ended_at, gates whether the session is done.
+    enabled: Boolean(sessionId) && !session?.terminal_state,
     refetchInterval:
       streamConnected || !documentVisible || !shouldRefreshWorkspaceSession(session)
         ? false
