@@ -70,7 +70,8 @@ def _stdio_ttys() -> bool:
 def _warp_cli_agent_available() -> bool:
     is_warp = os.environ.get("TERM_PROGRAM") == "WarpTerminal"
     has_protocol = bool(os.environ.get("WARP_CLI_AGENT_PROTOCOL_VERSION"))
-    return is_warp and has_protocol and sys.stdout.isatty()
+    has_client_version = bool(os.environ.get("WARP_CLIENT_VERSION"))
+    return is_warp and has_protocol and has_client_version
 
 
 def _emit_warp_cli_agent_event(
@@ -93,8 +94,15 @@ def _emit_warp_cli_agent_event(
     }
     payload.update({key: value for key, value in extra.items() if value is not None})
     body = json.dumps(payload, separators=(",", ":"))
-    sys.stdout.write(f"\033]777;{_WARP_CLI_AGENT_OSC_TITLE};{body}\a")
-    sys.stdout.flush()
+    marker = f"\033]777;notify;{_WARP_CLI_AGENT_OSC_TITLE};{body}\a"
+    try:
+        with Path("/dev/tty").open("w", encoding="utf-8") as tty:
+            tty.write(marker)
+            tty.flush()
+    except OSError:
+        if sys.stdout.isatty():
+            sys.stdout.write(marker)
+            sys.stdout.flush()
 
 
 def _resolve_explicit_codex_binary(candidate: str, *, source: str) -> str:
