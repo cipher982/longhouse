@@ -440,10 +440,8 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
-    border-left: 3px solid transparent;
     padding: var(--space-4);
     cursor: pointer;
-    opacity: 0.55;
     transition:
       border-color var(--motion-duration-fast) var(--motion-easing-standard),
       box-shadow var(--motion-duration-fast) var(--motion-easing-standard),
@@ -469,19 +467,21 @@
     }
   }
 
-  .session-card--thinking,
-  .session-card--running,
-  .session-card--live,
-  .session-card--needs-user,
-  .session-card--blocked,
-  .session-card--idle,
-  .session-card--inferred {
+  .session-card:not(.session-card--closed):hover,
+  .session-card:not(.session-card--closed):focus-within {
     opacity: 1;
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-lg);
+    border-color: var(--color-border-primary);
   }
 
-  .session-card:hover,
-  .session-card:focus-within {
-    opacity: 1;
+  .session-card--closed {
+    opacity: 0.56;
+  }
+
+  .session-card--closed:hover,
+  .session-card--closed:focus-within {
+    opacity: 0.72;
     transform: translateY(-2px);
     box-shadow: var(--shadow-lg);
     border-color: var(--color-border-primary);
@@ -1946,17 +1946,6 @@
     animation: none;
   }
 
-  /* Connected: process alive but idle or waiting on user */
-  .session-card--needs-user,
-  .session-card--blocked,
-  .session-card--idle {
-    border-left-color: color-mix(in srgb, var(--color-intent-success) 50%, transparent);
-  }
-
-  .session-card--inferred {
-    border-left-color: color-mix(in srgb, var(--color-text-muted) 40%, transparent);
-  }
-
   .session-card-summary {
     display: -webkit-box;
     -webkit-line-clamp: 3;
@@ -1965,7 +1954,6 @@
     font-size: var(--font-size-sm);
     color: var(--color-text-secondary);
     line-height: var(--font-line-height-relaxed);
-    position: relative;
   }
 
   .session-card-score {
@@ -1991,18 +1979,6 @@
   .session-card-dots::after {
     content: ".";
     animation: dots 1.2s steps(1, end) infinite;
-  }
-
-  /* Gradient fade hint for truncated text */
-  .session-card-summary::after {
-    content: "";
-    position: absolute;
-    bottom: 0;
-    right: 0;
-    width: 40%;
-    height: 1.5em;
-    background: linear-gradient(to right, transparent, var(--color-surface-card, #1a1410));
-    pointer-events: none;
   }
 
   /* ---------------------------------------------------------------------------

@@ -469,6 +469,15 @@ describe("SessionsPage", () => {
     expect(screen.queryByTestId("session-card-capability")).not.toBeInTheDocument();
   });
 
+  it("marks closed imported sessions as closed without provider-colored card styling", async () => {
+    renderSessionsPage("/timeline");
+
+    const card = await screen.findByTestId("session-card");
+    expect(card).toHaveAttribute("data-card-state", "closed");
+    expect(card).toHaveClass("session-card--closed");
+    expect(card.style.borderLeftColor).toBe("");
+  });
+
   it("shows a control-offline badge when a managed session cannot accept browser prompts", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
@@ -497,6 +506,10 @@ describe("SessionsPage", () => {
     });
 
     renderSessionsPage("/timeline");
+
+    const card = await screen.findByTestId("session-card");
+    expect(card).toHaveAttribute("data-card-state", "actionable");
+    expect(card).not.toHaveClass("session-card--closed");
 
     const capability = await screen.findByTestId("session-card-capability");
     expect(capability).toHaveTextContent("Reconnect required");
@@ -1029,6 +1042,8 @@ describe("SessionsPage", () => {
 
     const card = container.querySelector(".session-card");
     expect(card).toHaveClass("session-card--inferred");
+    expect(card).toHaveAttribute("data-card-state", "actionable");
+    expect(card).not.toHaveClass("session-card--closed");
     expect(card).not.toHaveClass("session-card--live");
     expect(card).not.toHaveClass("session-card--running");
     expect(card).not.toHaveClass("session-card--thinking");
@@ -1071,6 +1086,8 @@ describe("SessionsPage", () => {
 
     const card = container.querySelector(".session-card");
     expect(card).toHaveClass("session-card--needs-user");
+    expect(card).toHaveAttribute("data-card-state", "actionable");
+    expect(card).not.toHaveClass("session-card--closed");
     expect(card).not.toHaveClass("session-card--live");
     expect(card).not.toHaveClass("session-card--running");
     expect(card).not.toHaveClass("session-card--thinking");
