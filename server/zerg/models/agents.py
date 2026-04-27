@@ -524,6 +524,69 @@ class SessionRuntimeEvent(AgentsBase):
     )
 
 
+class UnmanagedSessionBinding(AgentsBase):
+    """Machine-agent observed binding of an unmanaged provider CLI process to
+    its JSONL transcript.
+
+    Phase 5 of docs/specs/session-liveness-honesty.md. Populated by the
+    Rust engine's heartbeat. Lets the Runtime Host verify whether an
+    unmanaged session's underlying process is still alive so Phase 6 can
+    honestly promote lifecycle=closed on confirmed process death.
+
+    Identity is (machine_id, provider, provider_session_id). When the
+    provider_session_id is unstable or absent, (machine_id, provider,
+    source_inode, source_device) is the fallback identity.
+
+    Liveness is (pid, process_start_time) — pid alone is not trusted
+    because of reuse. A change in process_start_time for the same pid
+    closes the previous binding as stale.
+
+    Auto-created via AgentsBase.metadata.create_all() — no Alembic required.
+    """
+
+    __tablename__ = "unmanaged_session_bindings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    machine_id = Column(String(255), nullable=False, index=True)
+    device_id = Column(String(255), nullable=True)
+    provider = Column(String(64), nullable=False)
+    provider_session_id = Column(String(255), nullable=False)
+    session_id = Column(GUID(), nullable=True, index=True)
+    source_path = Column(String(1024), nullable=True)
+    source_inode = Column(Integer, nullable=True)
+    source_device = Column(Integer, nullable=True)
+    pid = Column(Integer, nullable=True)
+    process_start_time = Column(DateTime(timezone=True), nullable=True)
+    cwd = Column(String(1024), nullable=True)
+    # Latest JSONL progress the agent saw for this session
+    source_offset = Column(Integer, nullable=True)
+    source_mtime = Column(DateTime(timezone=True), nullable=True)
+    # Liveness bookkeeping
+    observed_at = Column(DateTime(timezone=True), nullable=False)
+    last_seen_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    # 'observed': pid+start_time confirm alive; 'missing': process not in latest
+    # scan but still within stale window; 'stale': confirmed gone / superseded.
+    binding_state = Column(String(32), nullable=False, server_default=text("'observed'"))
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "machine_id",
+            "provider",
+            "provider_session_id",
+            name="uq_unmanaged_binding_identity",
+        ),
+        Index("ix_unmanaged_binding_session", "session_id"),
+        Index("ix_unmanaged_binding_last_seen", "last_seen_at"),
+    )
+
+
 class SessionTask(AgentsBase):
     """Durable task queue for post-ingest background work.
 

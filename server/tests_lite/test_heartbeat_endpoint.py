@@ -255,3 +255,121 @@ def test_heartbeat_endpoint_persists_transport_summary_fields(tmp_path):
             assert raw["ship_latency_p95_ms_1h"] == 260
     finally:
         api_app_ref.dependency_overrides = {}
+
+
+def test_heartbeat_accepts_unmanaged_session_bindings(tmp_path):
+    """Phase 5 of session-liveness-honesty: machine agent may ship a list of
+    unmanaged session bindings alongside the heartbeat. Upsert stores one
+    row per (machine_id, provider, provider_session_id), and re-posting
+    the same identity updates the existing row rather than duplicating.
+    """
+    from zerg.models.agents import UnmanagedSessionBinding
+
+    SessionLocal = _make_db(tmp_path)
+    client, api_app_ref = _make_client(SessionLocal)
+
+    try:
+        # First heartbeat: one binding, pid=1234, offset=100
+        first = client.post(
+            "/api/agents/heartbeat",
+            json={
+                "version": "0.6.0",
+                "daemon_pid": 1,
+                "spool_pending_count": 0,
+                "parse_error_count_1h": 0,
+                "consecutive_ship_failures": 0,
+                "disk_free_bytes": 0,
+                "is_offline": False,
+                "unmanaged_session_bindings": [
+                    {
+                        "machine_id": "cinder",
+                        "provider": "codex",
+                        "provider_session_id": "sess-abc",
+                        "source_path": "/Users/x/.codex/sessions/sess-abc.jsonl",
+                        "source_inode": 42,
+                        "source_device": 99,
+                        "pid": 1234,
+                        "process_start_time": "2026-04-27T10:00:00Z",
+                        "cwd": "/Users/x/repo",
+                        "source_offset": 100,
+                        "source_mtime": "2026-04-27T10:05:00Z",
+                        "observed_at": "2026-04-27T10:05:00Z",
+                    }
+                ],
+            },
+        )
+        assert first.status_code == 204, first.text
+
+        with SessionLocal() as db:
+            rows = db.query(UnmanagedSessionBinding).all()
+            assert len(rows) == 1
+            row = rows[0]
+            assert row.machine_id == "cinder"
+            assert row.provider == "codex"
+            assert row.provider_session_id == "sess-abc"
+            assert row.pid == 1234
+            assert row.source_offset == 100
+            assert row.binding_state == "observed"
+
+        # Second heartbeat: same identity, newer pid (process restarted) and offset.
+        second = client.post(
+            "/api/agents/heartbeat",
+            json={
+                "version": "0.6.0",
+                "daemon_pid": 1,
+                "spool_pending_count": 0,
+                "parse_error_count_1h": 0,
+                "consecutive_ship_failures": 0,
+                "disk_free_bytes": 0,
+                "is_offline": False,
+                "unmanaged_session_bindings": [
+                    {
+                        "machine_id": "cinder",
+                        "provider": "codex",
+                        "provider_session_id": "sess-abc",
+                        "pid": 5678,
+                        "process_start_time": "2026-04-27T11:00:00Z",
+                        "source_offset": 250,
+                        "observed_at": "2026-04-27T11:00:01Z",
+                    }
+                ],
+            },
+        )
+        assert second.status_code == 204, second.text
+
+        with SessionLocal() as db:
+            rows = db.query(UnmanagedSessionBinding).all()
+            assert len(rows) == 1, "Re-posted identity must upsert, not duplicate"
+            row = rows[0]
+            assert row.pid == 5678
+            assert row.source_offset == 250
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_heartbeat_omitting_unmanaged_bindings_is_fine(tmp_path):
+    """Older engines don't send the new field — heartbeat must still accept."""
+    from zerg.models.agents import UnmanagedSessionBinding
+
+    SessionLocal = _make_db(tmp_path)
+    client, api_app_ref = _make_client(SessionLocal)
+
+    try:
+        response = client.post(
+            "/api/agents/heartbeat",
+            json={
+                "version": "0.5.0",
+                "daemon_pid": 1,
+                "spool_pending_count": 0,
+                "parse_error_count_1h": 0,
+                "consecutive_ship_failures": 0,
+                "disk_free_bytes": 0,
+                "is_offline": False,
+            },
+        )
+        assert response.status_code == 204
+
+        with SessionLocal() as db:
+            assert db.query(UnmanagedSessionBinding).count() == 0
+    finally:
+        api_app_ref.dependency_overrides = {}
