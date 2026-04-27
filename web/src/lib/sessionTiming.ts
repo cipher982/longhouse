@@ -52,9 +52,14 @@ export function getRuntimeElapsedLabel(
     return turnCounter ? `Turn ${turnCounter}` : null;
   }
 
+  // Phase 1 of session-liveness-honesty: `ended_at` is a last-activity
+  // timestamp for unmanaged sessions, not a closure signal. Freezing the
+  // elapsed timer on ended_at makes a live session look frozen. Only stop
+  // the counter when the session has an explicit terminal_state.
+  const endedAt = session.terminal_state ? session.ended_at : null;
   const sessionCounter = formatElapsedCounter(
     session.started_at,
-    session.ended_at,
+    endedAt,
     nowMs,
   );
   return sessionCounter ? `Session ${sessionCounter}` : null;
