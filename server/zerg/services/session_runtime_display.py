@@ -355,6 +355,13 @@ def build_session_runtime_display(
     )
 
 
+_MANAGED_EXECUTION_HOMES = {
+    SessionExecutionHome.MANAGED_LOCAL,
+    SessionExecutionHome.MANAGED_HOSTED,
+    SessionExecutionHome.CLOUD_TAKEOVER,  # legacy managed shape; no new sessions
+}
+
+
 def _derive_control_path(capabilities: SessionCapabilityFlags) -> str:
     """Durable: does Longhouse own a control path for this session?
 
@@ -362,7 +369,7 @@ def _derive_control_path(capabilities: SessionCapabilityFlags) -> str:
     currently live. A managed session whose bridge is offline is still
     `managed`, with `host_state=offline` telling the story separately.
     """
-    if capabilities.execution_home == SessionExecutionHome.MANAGED_LOCAL:
+    if capabilities.execution_home in _MANAGED_EXECUTION_HOMES:
         return "managed"
     if capabilities.managed_transport is not None:
         return "managed"
@@ -388,8 +395,14 @@ def _derive_activity_recency(
         return "live"
     if heuristic_active or confidence == "inferred":
         return "recent"
-    if confidence == "stale" or runtime_source == "fallback":
-        return "stale" if has_signal else "none"
+    if has_signal:
+        return "stale"
+    if confidence == "stale":
+        return "stale"
+    # "Had signal once" means we have a real progress timestamp. The
+    # fallback view sets last_progress_at to a session's started_at when no
+    # activity was ever observed, so require something renderable alongside
+    # the timestamp before promoting to "stale".
     return "none"
 
 
