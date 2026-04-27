@@ -198,6 +198,28 @@ struct SessionView: View {
                     .foregroundStyle(.orange)
             }
 
+            if viewModel.failedInputCount > 0 {
+                Text(viewModel.failedInputCount == 1
+                     ? "1 queued message failed to send."
+                     : "\(viewModel.failedInputCount) queued messages failed to send.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("session-chat-queued-failed")
+            }
+
+            if viewModel.queuedInputCount > 0 {
+                Text(viewModel.queuedInputCount == 1
+                     ? "1 message queued — will send at next turn boundary."
+                     : "\(viewModel.queuedInputCount) messages queued — will send at next turn boundary.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("session-chat-queued-indicator")
+            } else if viewModel.lastSendOutcome == .sent {
+                Text("Sent.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             HStack(alignment: .bottom, spacing: 8) {
                 Button {
                     Task { await draft() }
@@ -263,6 +285,19 @@ struct SessionView: View {
         if sent {
             composerText = ""
             composerFocused = false
+            // Auto-dismiss the transient Sent indicator after ~2s, scoped to
+            // the send counter we just incremented so a later send doesn't
+            // have its label clobbered by our dismissal.
+            let token = viewModel.sendCounter
+            Task { [weak viewModel] in
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                await MainActor.run {
+                    guard let vm = viewModel else { return }
+                    if vm.sendCounter == token, vm.lastSendOutcome == .sent {
+                        vm.lastSendOutcome = nil
+                    }
+                }
+            }
         }
     }
 
@@ -1005,6 +1040,14 @@ final class SessionViewModel: ObservableObject {
     @Published var isUpdatingLoopMode = false
     @Published var draftErrorMessage: String?
     @Published var loopModeErrorMessage: String?
+    /// Most recent send outcome so the UI can distinguish an immediate
+    /// dispatch from a queued input without pretending the latter was sent.
+    @Published var lastSendOutcome: SessionInputOutcome?
+    @Published var queuedInputCount: Int = 0
+    @Published var failedInputCount: Int = 0
+    /// Monotonic counter; each send increments it. Used so a delayed "Sent."
+    /// auto-dismiss task only clears the label it owns.
+    private(set) var sendCounter: UInt64 = 0
 
     private var expandedIds: Set<String> = []
     private var pollTask: Task<Void, Never>?
@@ -1066,8 +1109,12 @@ final class SessionViewModel: ObservableObject {
         draftErrorMessage = nil
         defer { isSending = false }
         do {
-            try await api.sendLive(id: sessionId, text: text)
-            if let events = try? await api.sessionEvents(id: sessionId) {
+            let response = try await api.sendInput(id: sessionId, text: text, intent: "auto")
+            sendCounter &+= 1
+            lastSendOutcome = response.outcome
+            queuedInputCount = response.queued.filter { $0.status == "queued" || $0.status == "delivering" }.count
+            failedInputCount = response.queued.filter { $0.status == "failed" }.count
+            if response.outcome == .sent, let events = try? await api.sessionEvents(id: sessionId) {
                 self.items = TimelineBuilder.build(events: events)
             }
             return true
