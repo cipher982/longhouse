@@ -876,47 +876,50 @@ test.describe("Session Detail Page", () => {
     };
 
     try {
-      await page.route(`**/api/timeline/sessions/${sessionId}/workspace*`, async (route) => {
-        const response = await route.fetch();
-        const payload = await response.json();
-        const managedSessionFields = {
-          execution_home: "managed_local",
-          managed_transport: "codex_app_server",
-          source_runner_id: 77,
-          source_runner_name: "Cinder",
-          managed_session_name: "lh-codex-managed-local-e2e",
-          continuation_kind: "local",
-          origin_label: "Cinder",
-        };
-        const managedCapabilities = {
-          live_control_available: true,
-          cloud_branch_available: false,
-          host_reattach_available: true,
-          reply_to_live_session_available: true,
-        };
+      await page.route(
+        new RegExp(String.raw`/api/timeline/sessions/${sessionId}/workspace(?:\?.*)?$`),
+        async (route) => {
+          const response = await route.fetch();
+          const payload = await response.json();
+          const managedSessionFields = {
+            execution_home: "managed_local",
+            managed_transport: "codex_app_server",
+            source_runner_id: 77,
+            source_runner_name: "Cinder",
+            managed_session_name: "lh-codex-managed-local-e2e",
+            continuation_kind: "local",
+            origin_label: "Cinder",
+          };
+          const managedCapabilities = {
+            live_control_available: true,
+            cloud_branch_available: false,
+            host_reattach_available: true,
+            reply_to_live_session_available: true,
+          };
 
-        payload.session = {
-          ...payload.session,
-          ...managedSessionFields,
-          capabilities: managedCapabilities,
-        };
-        payload.thread = {
-          ...payload.thread,
-          head_session_id: sessionId,
-          sessions: Array.isArray(payload.thread?.sessions)
-            ? payload.thread.sessions.map((item: Record<string, unknown>) =>
-                item.id === sessionId
-                  ? { ...item, ...managedSessionFields, capabilities: managedCapabilities }
-                  : item,
-              )
-            : payload.thread?.sessions,
-        };
+          payload.session = {
+            ...payload.session,
+            ...managedSessionFields,
+            capabilities: managedCapabilities,
+          };
+          payload.thread = {
+            ...payload.thread,
+            head_session_id: sessionId,
+            sessions: Array.isArray(payload.thread?.sessions)
+              ? payload.thread.sessions.map((item: Record<string, unknown>) =>
+                  item.id === sessionId
+                    ? { ...item, ...managedSessionFields, capabilities: managedCapabilities }
+                    : item,
+                )
+              : payload.thread?.sessions,
+          };
 
-        await route.fulfill({
-          response,
-          json: payload,
-        });
-      });
+          await route.fulfill({
+            response,
+            json: payload,
+          });
+        },
+      );
 
       await page.route(`**/api/sessions/${sessionId}/lock`, async (route) => {
         lockRequests += 1;
@@ -927,31 +930,34 @@ test.describe("Session Detail Page", () => {
         });
       });
 
-      await page.route(`**/sessions/${sessionId}/input*`, async (route) => {
-        chatRequests += 1;
-        expect(route.request().method()).toBe("POST");
-        expect(route.request().postDataJSON()).toMatchObject({
-          text: "Continue locally",
-          intent: "auto",
-        });
-        await new Promise((resolve) => setTimeout(resolve, 1500));
-        lockState = {
-          locked: true,
-          holder: "req-e2e",
-          time_remaining_seconds: 295,
-          fork_available: true,
-        };
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify({
-            outcome: "sent",
-            input_id: 1,
+      await page.route(
+        new RegExp(String.raw`/api/sessions/${sessionId}/input(?:\?.*)?$`),
+        async (route) => {
+          chatRequests += 1;
+          expect(route.request().method()).toBe("POST");
+          expect(route.request().postDataJSON()).toMatchObject({
+            text: "Continue locally",
             intent: "auto",
-            queued: [],
-          }),
-        });
-      });
+          });
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+          lockState = {
+            locked: true,
+            holder: "req-e2e",
+            time_remaining_seconds: 295,
+            fork_available: true,
+          };
+          await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({
+              outcome: "sent",
+              input_id: 1,
+              intent: "auto",
+              queued: [],
+            }),
+          });
+        },
+      );
 
       // The inputs-poll query also fires when the queue chip is gated on;
       // stub it so we don't surface noisy network errors during the test.
