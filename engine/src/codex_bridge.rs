@@ -281,6 +281,16 @@ enum IpcCommand {
         thread_id: String,
         reply: oneshot::Sender<Result<Value>>,
     },
+    /// Mid-turn steer routed through the daemon's persistent app-server
+    /// connection. Lets the backend avoid a per-call WS connect +
+    /// initialize_client handshake that we measured at tens of ms on
+    /// localhost (much worse over network).
+    Steer {
+        text: String,
+        thread_id: String,
+        expected_turn_id: String,
+        reply: oneshot::Sender<Result<Value>>,
+    },
     Stop {
         reply: oneshot::Sender<Result<Value>>,
     },
@@ -359,6 +369,29 @@ async fn handle_ipc_connection(
     let (reply_tx, reply_rx) = oneshot::channel();
     let command = match request.get("kind").and_then(Value::as_str) {
         Some("stop") => IpcCommand::Stop { reply: reply_tx },
+        Some("steer") => {
+            let text = request
+                .get("text")
+                .and_then(Value::as_str)
+                .context("IPC steer request missing 'text'")?
+                .to_string();
+            let thread_id = request
+                .get("thread_id")
+                .and_then(Value::as_str)
+                .context("IPC steer request missing 'thread_id'")?
+                .to_string();
+            let expected_turn_id = request
+                .get("expected_turn_id")
+                .and_then(Value::as_str)
+                .context("IPC steer request missing 'expected_turn_id'")?
+                .to_string();
+            IpcCommand::Steer {
+                text,
+                thread_id,
+                expected_turn_id,
+                reply: reply_tx,
+            }
+        }
         _ => {
             let text = request
                 .get("text")
@@ -744,6 +777,19 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                         .and_then(|summary| serde_json::to_value(summary).map_err(Into::into));
                         let _ = reply.send(result);
                     }
+                    IpcCommand::Steer { text, thread_id, expected_turn_id, reply } => {
+                        let result = handle_ipc_steer(
+                            &config,
+                            &mut client,
+                            &mut context,
+                            &text,
+                            &thread_id,
+                            &expected_turn_id,
+                        )
+                        .await
+                        .map(|_| json!({}));
+                        let _ = reply.send(result);
+                    }
                     IpcCommand::Stop { reply } => {
                         let _ = reply.send(Ok(json!({})));
                         context.state.status = "stopped".to_string();
@@ -762,6 +808,32 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Fire `turn/steer` through the daemon's persistent app-server connection.
+/// Avoids the per-call WS connect + initialize handshake that direct-WS steer
+/// would incur on every dispatch.
+async fn handle_ipc_steer(
+    config: &BridgeRunConfig,
+    client: &mut RpcClient,
+    context: &mut BridgeContext,
+    text: &str,
+    thread_id: &str,
+    expected_turn_id: &str,
+) -> Result<()> {
+    send_request_with_runtime(
+        client,
+        "turn/steer",
+        json!({
+            "threadId": thread_id,
+            "expectedTurnId": expected_turn_id,
+            "input": [{"type": "text", "text": text}],
+        }),
+        config,
+        context,
+    )
+    .await
+    .map(|_| ())
 }
 
 async fn handle_ipc_turn_start(
@@ -958,6 +1030,57 @@ async fn send_via_ipc_inner(
 }
 
 #[cfg(unix)]
+async fn send_via_ipc_steer(
+    sock_path: &Path,
+    text: &str,
+    thread_id: &str,
+    expected_turn_id: &str,
+) -> Result<()> {
+    tokio::time::timeout(
+        IPC_SEND_TIMEOUT,
+        send_via_ipc_steer_inner(sock_path, text, thread_id, expected_turn_id),
+    )
+    .await
+    .map_err(|_| anyhow!("IPC steer timed out after {}s", IPC_SEND_TIMEOUT.as_secs()))?
+}
+
+#[cfg(unix)]
+async fn send_via_ipc_steer_inner(
+    sock_path: &Path,
+    text: &str,
+    thread_id: &str,
+    expected_turn_id: &str,
+) -> Result<()> {
+    let mut stream = tokio::net::UnixStream::connect(sock_path)
+        .await
+        .with_context(|| format!("connecting to IPC socket {}", sock_path.display()))?;
+
+    let mut request = serde_json::to_vec(&json!({
+        "kind": "steer",
+        "text": text,
+        "thread_id": thread_id,
+        "expected_turn_id": expected_turn_id,
+    }))?;
+    request.push(b'\n');
+    stream.write_all(&request).await?;
+    stream.shutdown().await?;
+
+    let mut response_buf = Vec::new();
+    stream.read_to_end(&mut response_buf).await?;
+    let response: Value = serde_json::from_slice(&response_buf).context("parsing IPC steer response")?;
+
+    if response.get("ok").and_then(Value::as_bool) != Some(true) {
+        let error = response
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown IPC steer error");
+        bail!("daemon IPC steer error: {error}");
+    }
+
+    Ok(())
+}
+
+#[cfg(unix)]
 async fn stop_via_ipc(sock_path: &Path) -> Result<()> {
     tokio::time::timeout(IPC_STOP_TIMEOUT, stop_via_ipc_inner(sock_path))
         .await
@@ -1076,6 +1199,51 @@ pub async fn cmd_codex_bridge_steer(
         .active_turn_id
         .clone()
         .ok_or(BridgeSteerError::NoActiveTurn)?;
+
+    // Preferred path: route through the daemon's persistent app-server
+    // connection via the IPC socket. Avoids per-call WS connect +
+    // initialize_client on the hot path; keeps the app-server's per-thread
+    // state consistent with the daemon's ongoing subscriptions.
+    let paths = resolve_bridge_paths(config.state_root.as_deref(), &config.session_id, None)
+        .map_err(BridgeSteerError::Protocol)?;
+    let sock_path = ipc_socket_path(&paths.state_file);
+    #[cfg(unix)]
+    if sock_path.exists() {
+        match send_via_ipc_steer(&sock_path, &config.text, &thread_id, &turn_id).await {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                let msg = format!("{err}");
+                // IPC reported a protocol-shaped error from the app-server —
+                // classify turn-state races the same way the direct path does.
+                if classify_steer_error_as_turn_ended(&msg) {
+                    return Err(BridgeSteerError::TurnEnded(msg));
+                }
+                // Only fall back to direct WS on connection failures to the
+                // daemon itself; otherwise we'd risk a double-dispatch if
+                // the daemon accepted the steer but the reply was lost.
+                let is_connect_failure =
+                    err.downcast_ref::<std::io::Error>().map_or(false, |io_err| {
+                        matches!(
+                            io_err.kind(),
+                            std::io::ErrorKind::ConnectionRefused
+                                | std::io::ErrorKind::NotFound
+                                | std::io::ErrorKind::BrokenPipe
+                        )
+                    });
+                if !is_connect_failure {
+                    return Err(BridgeSteerError::Protocol(err.context(
+                        "IPC steer may have been accepted by daemon; not retrying direct WS to avoid duplicate steer",
+                    )));
+                }
+                eprintln!(
+                    "[codex-bridge] IPC steer socket connect failed; falling back to direct WebSocket: {err}"
+                );
+            }
+        }
+    }
+
+    // Fallback: direct WS (used when the daemon socket is missing or the
+    // connect itself failed). Slower — full handshake per call.
     let ws_url = state
         .ws_url
         .clone()
@@ -3714,6 +3882,52 @@ mod tests {
                 "expected {sample:?} to classify as turn_ended",
             );
         }
+    }
+
+    #[tokio::test]
+    async fn send_via_ipc_steer_roundtrips_ok_response() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sock = tmp.path().join("steer.sock");
+        let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+
+        let sock_clone = sock.clone();
+        let server = tokio::spawn(async move {
+            let (mut stream, _addr) = listener.accept().await.unwrap();
+            let mut buf = Vec::new();
+            tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut buf).await.unwrap();
+            let request: Value = serde_json::from_slice(&buf).unwrap();
+            assert_eq!(request["kind"], "steer");
+            assert_eq!(request["text"], "ipc steer");
+            assert_eq!(request["thread_id"], "thr-1");
+            assert_eq!(request["expected_turn_id"], "turn-1");
+            let response = b"{\"ok\": true}\n";
+            tokio::io::AsyncWriteExt::write_all(&mut stream, response).await.unwrap();
+            drop(stream);
+            let _ = sock_clone;
+        });
+
+        send_via_ipc_steer(&sock, "ipc steer", "thr-1", "turn-1").await.unwrap();
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn send_via_ipc_steer_surfaces_daemon_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sock = tmp.path().join("steer-err.sock");
+        let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+
+        tokio::spawn(async move {
+            let (mut stream, _addr) = listener.accept().await.unwrap();
+            let mut buf = Vec::new();
+            tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut buf).await.unwrap();
+            let response =
+                b"{\"ok\": false, \"error\": \"turn/steer failed: no active turn\"}\n";
+            tokio::io::AsyncWriteExt::write_all(&mut stream, response).await.unwrap();
+        });
+
+        let err = send_via_ipc_steer(&sock, "x", "thr", "turn").await.unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("no active turn"), "unexpected error: {msg}");
     }
 
     #[test]
