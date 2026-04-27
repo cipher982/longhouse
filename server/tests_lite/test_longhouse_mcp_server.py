@@ -9,7 +9,7 @@ import pytest
 from zerg.mcp_server.server import create_server
 
 
-def test_create_server_exposes_only_continuity_and_oikos_tools():
+def test_create_server_exposes_only_continuity_tools():
     server = create_server("http://example.com", None)
 
     tool_names = set(server._tool_manager._tools.keys())
@@ -18,7 +18,7 @@ def test_create_server_exposes_only_continuity_and_oikos_tools():
         "search_sessions",
         "get_session_detail",
         "get_session_events",
-        "notify_oikos",
+        "notify_longhouse",
         "recall",
         "check_wall",
         "session_tail",

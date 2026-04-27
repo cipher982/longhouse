@@ -212,26 +212,4 @@ export const test = base.extend<TestFixtures>({
   // context.
 });
 
-// ---------------------------------------------------------------------------
-// Oikos chat thread isolation:
-// The Oikos thread is long-lived in normal usage, and per-commis DBs mean
-// it can persist across tests within the same Playwright commis. Clearing it
-// here keeps tests and perf assertions deterministic without requiring every
-// spec to remember to do it.
-// ---------------------------------------------------------------------------
-
-test.beforeEach(async ({ request }, testInfo) => {
-  try {
-    const response = await request.delete('/api/oikos/thread');
-    if (!response.ok()) {
-      // Avoid failing the entire suite if Oikos endpoints are temporarily
-      // unavailable; individual chat specs should still assert correctness.
-      // Note: Suppress this warning by default - it's noisy during parallel tests
-    }
-  } catch {
-    // Silently ignore - Oikos history cleanup is best-effort, not critical
-    // Individual chat specs should still assert correctness
-  }
-});
-
 export { expect } from '@playwright/test';

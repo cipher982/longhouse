@@ -335,12 +335,4 @@ export const test = base.extend<LiveFixtures>({
   },
 });
 
-test.beforeEach(async ({ request }) => {
-  try {
-    await request.delete('/api/oikos/thread');
-  } catch {
-    // Best-effort cleanup only
-  }
-});
-
 export { expect } from '@playwright/test';

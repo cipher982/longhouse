@@ -17,7 +17,7 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.database import reset_test_commis_id
 from zerg.database import set_test_commis_id
-from zerg.dependencies.oikos_auth import get_current_oikos_user
+from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.events import EventType
 from zerg.events.event_bus import EventBus
 from zerg.events.event_bus import event_bus
@@ -647,8 +647,8 @@ def test_stream_run_replay_last_event_id_header_overrides_query_param(monkeypatc
         def override_current_user():
             return SimpleNamespace(id=owner_id)
 
-        original_override = api_app.dependency_overrides.get(get_current_oikos_user)
-        api_app.dependency_overrides[get_current_oikos_user] = override_current_user
+        original_override = api_app.dependency_overrides.get(get_current_browser_route_user)
+        api_app.dependency_overrides[get_current_browser_route_user] = override_current_user
         client = TestClient(api_app)
 
         try:
@@ -665,9 +665,9 @@ def test_stream_run_replay_last_event_id_header_overrides_query_param(monkeypatc
             assert "event: oikos_complete" in body
         finally:
             if original_override is None:
-                api_app.dependency_overrides.pop(get_current_oikos_user, None)
+                api_app.dependency_overrides.pop(get_current_browser_route_user, None)
             else:
-                api_app.dependency_overrides[get_current_oikos_user] = original_override
+                api_app.dependency_overrides[get_current_browser_route_user] = original_override
 
 
 def test_stream_run_replay_invalid_last_event_id_falls_back_to_query_param(monkeypatch, tmp_path):
@@ -682,8 +682,8 @@ def test_stream_run_replay_invalid_last_event_id_falls_back_to_query_param(monke
         def override_current_user():
             return SimpleNamespace(id=owner_id)
 
-        original_override = api_app.dependency_overrides.get(get_current_oikos_user)
-        api_app.dependency_overrides[get_current_oikos_user] = override_current_user
+        original_override = api_app.dependency_overrides.get(get_current_browser_route_user)
+        api_app.dependency_overrides[get_current_browser_route_user] = override_current_user
         client = TestClient(api_app)
 
         try:
@@ -700,9 +700,9 @@ def test_stream_run_replay_invalid_last_event_id_falls_back_to_query_param(monke
             assert "event: oikos_complete" in body
         finally:
             if original_override is None:
-                api_app.dependency_overrides.pop(get_current_oikos_user, None)
+                api_app.dependency_overrides.pop(get_current_browser_route_user, None)
             else:
-                api_app.dependency_overrides[get_current_oikos_user] = original_override
+                api_app.dependency_overrides[get_current_browser_route_user] = original_override
 
 
 def test_stream_run_replay_returns_404_for_unowned_run(monkeypatch, tmp_path):
@@ -715,8 +715,8 @@ def test_stream_run_replay_returns_404_for_unowned_run(monkeypatch, tmp_path):
         def override_current_user():
             return SimpleNamespace(id=999)
 
-        original_override = api_app.dependency_overrides.get(get_current_oikos_user)
-        api_app.dependency_overrides[get_current_oikos_user] = override_current_user
+        original_override = api_app.dependency_overrides.get(get_current_browser_route_user)
+        api_app.dependency_overrides[get_current_browser_route_user] = override_current_user
         client = TestClient(api_app)
 
         try:
@@ -726,9 +726,9 @@ def test_stream_run_replay_returns_404_for_unowned_run(monkeypatch, tmp_path):
             assert response.json()["detail"] == "Run not found"
         finally:
             if original_override is None:
-                api_app.dependency_overrides.pop(get_current_oikos_user, None)
+                api_app.dependency_overrides.pop(get_current_browser_route_user, None)
             else:
-                api_app.dependency_overrides[get_current_oikos_user] = original_override
+                api_app.dependency_overrides[get_current_browser_route_user] = original_override
 
 
 @pytest.mark.asyncio

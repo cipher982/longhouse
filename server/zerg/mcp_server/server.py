@@ -271,23 +271,23 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             return _format_error(exc, api_url)
 
     # ------------------------------------------------------------------
-    # Tool: notify_oikos
+    # Tool: notify_longhouse
     # ------------------------------------------------------------------
     @server.tool()
-    async def notify_oikos(
+    async def notify_longhouse(
         message: str,
         status: str = "info",
     ) -> str:
-        """Send a notification to the Oikos coordinator.
+        """Send a notification to the Longhouse coordinator.
 
         Currently logs the notification locally. Full WebSocket
-        delivery to the Oikos UI will be added in a future release.
+        delivery to the UI will be added in a future release.
 
         Args:
             message: The notification message.
             status: Severity level: info, warning, or error (default info).
         """
-        logger.info("Oikos notification [%s]: %s", status, message)
+        logger.info("Longhouse notification [%s]: %s", status, message)
         return json.dumps(
             {
                 "status": status,

@@ -25,7 +25,7 @@ from zerg.config import get_settings
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.dependencies.oikos_auth import get_current_oikos_user
+from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
 from zerg.services.managed_local_launcher import ManagedLocalLaunchError
@@ -148,7 +148,7 @@ async def send_to_live_session(
     session_id: str,
     body: SessionMessageRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_oikos_user),
+    current_user: User = Depends(get_current_browser_route_user),
 ):
     """Send text into the live managed-local session and return a fast JSON ack."""
     request_id = str(uuid.uuid4())[:8]
@@ -182,7 +182,7 @@ async def draft_reply_for_live_session(
     session_id: str,
     body: SessionDraftReplyRequest | None = None,
     db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_oikos_user),
+    _current_user: User = Depends(get_current_browser_route_user),
 ):
     """Generate a suggested next user message for a live managed-local session."""
     request_id = str(uuid.uuid4())[:8]
@@ -344,7 +344,7 @@ async def launch_managed_local_this_device(
 async def get_session_lock_status(
     session_id: str,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_oikos_user),
+    _current_user=Depends(get_current_browser_route_user),
 ) -> SessionLockInfo:
     """Check if a session is currently locked.
 
@@ -604,7 +604,7 @@ async def create_session_input_endpoint(
     session_id: str,
     body: SessionInputRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_oikos_user),
+    current_user: User = Depends(get_current_browser_route_user),
 ) -> SessionInputResponse:
     source_session = _load_session_for_continuation(db, session_id)
     return await _create_session_input_response(
@@ -621,7 +621,7 @@ async def list_session_inputs_endpoint(
     request: Request,
     response: Response,
     db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_oikos_user),
+    _current_user: User = Depends(get_current_browser_route_user),
 ):
     """List queued + recently-failed inputs for the chip UI.
 
@@ -653,7 +653,7 @@ async def cancel_session_input_endpoint(
     session_id: str,
     input_id: int,
     db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_oikos_user),
+    _current_user: User = Depends(get_current_browser_route_user),
 ) -> dict:
     source_session = _load_session_for_continuation(db, session_id)
     existing = get_session_input(db, input_id)
@@ -675,7 +675,7 @@ async def cancel_session_input_endpoint(
 async def force_release_lock(
     session_id: str,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_oikos_user),
+    _current_user=Depends(get_current_browser_route_user),
 ) -> dict:
     """Force release a session lock (admin operation).
 

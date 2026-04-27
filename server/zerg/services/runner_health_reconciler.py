@@ -1,4 +1,4 @@
-"""Runner health reconciliation, incidents, alerts, and Oikos wakeups."""
+"""Runner health reconciliation, incidents, alerts, and wakeups."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from zerg.services.runner_connection_manager import get_runner_connection_manage
 from zerg.services.runner_health import RunnerHealthAssessment
 from zerg.services.runner_health import assess_runner_health
 from zerg.services.runner_health import runner_requires_proactive_attention
-from zerg.services.telegram_bridge import _format_for_telegram
+from zerg.services.telegram_format import format_for_telegram
 from zerg.shared.email import send_email
 from zerg.utils.time import utc_now_naive
 
@@ -186,7 +186,7 @@ async def _send_telegram_alert(user: User, text: str) -> bool:
         ChannelMessage(
             channel_id="telegram",
             to=chat_id,
-            text=_format_for_telegram(text),
+            text=format_for_telegram(text),
             parse_mode="html",
         )
     )

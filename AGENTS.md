@@ -160,7 +160,7 @@ Run the tier that matches the change. Do not over-test.
 - **Generated code:** do not edit `server/zerg/generated/`, `server/zerg/tools/generated/`, or `web/src/generated/` directly.
 - **Tool contracts:** edit `schemas/tools.yml`, then run `scripts/generate_tool_types.py`.
 - **Backend tests:** add new backend tests in `server/tests_lite/`.
-- **Oikos tools:** registration is centralized in `server/zerg/tools/builtin/oikos_tools.py`.
+- **Agent tools:** registration is centralized in `server/zerg/tools/builtin/oikos_tools.py` until that module is renamed.
 - **Machine surface:** if a capability matters to agents or CLI workflows, it should exist on `/api/agents/*`.
 - **Agent history ownership:** Longhouse owns raw session history. Other systems should call `/api/agents/*` or store narrow references, not build second ingest/query stacks.
 - **High-frequency writes:** presence, heartbeat, ingest, runtime, and runner WebSocket writes must go through `WriteSerializer`.
@@ -174,12 +174,12 @@ Treat these as the launch-critical surfaces:
 - timeline, session detail, search, and recall
 - machine-facing coordination primitives
 - managed-local remote execution and control
-- Oikos only where it helps users drive that same loop faster
+- assistant surfaces only where they help users drive that same loop faster
 
 Treat these as support tier (functional but not launch-critical):
 
 - runner-backed execution on user-owned machines
-- Oikos proactive operator behavior
+- proactive operator behavior
 
 Treat these as frozen or removed for launch:
 

@@ -5,8 +5,8 @@
 # Usage:
 #   ./scripts/smoke-prod.sh           # default: public demo + auth + basic LLM
 #   ./scripts/smoke-prod.sh --quick   # public health only
-#   ./scripts/smoke-prod.sh --full    # default + CRUD + email + infra
-#   ./scripts/smoke-prod.sh --no-llm  # skip LLM chat test
+#   ./scripts/smoke-prod.sh --full    # default + CRUD + infra
+#   ./scripts/smoke-prod.sh --no-llm  # skip LLM capability check
 #   ./scripts/smoke-prod.sh --wait    # wait 90s then test (post-deploy)
 #
 # Environment:
@@ -14,7 +14,6 @@
 #   CONTROL_PLANE_URL         - Control-plane base URL for hosted instance resolution
 #   CONTROL_PLANE_ADMIN_TOKEN - Admin token for hosted control-plane resolution (or set direct FRONTEND_URL/API_URL instead)
 #   FRONTEND_URL / API_URL    - Optional direct URL overrides when not resolving via control plane
-#   SMOKE_TEST_EMAIL          - Email target for email tool test (default: david010@gmail.com)
 
 set -e
 
@@ -55,7 +54,6 @@ PUBLIC_DEMO_URL="${PUBLIC_DEMO_URL:-${MARKETING_URL:-https://longhouse.ai}}"
 CONTROL_PLANE_URL="${CONTROL_PLANE_URL:-${CP_URL:-https://control.longhouse.ai}}"
 CP_URL="${CP_URL:-$CONTROL_PLANE_URL}"
 WAIT_SECS="${WAIT_SECS:-90}"
-SMOKE_TEST_EMAIL="${SMOKE_TEST_EMAIL:-david010@gmail.com}"
 INSTANCE_AUTH_ENABLED="unknown"
 
 # Counters
@@ -405,106 +403,6 @@ run_contacts_crud() {
     fi
 }
 
-run_email_tool_test() {
-    local cookie_jar="$1"
-    local timestamp
-    timestamp=$(date +%s)
-
-    # Ensure the target email is an approved contact
-    curl -s -X POST "$API_URL/api/user/contacts/email" \
-        -b "$cookie_jar" \
-        -H "Content-Type: application/json" \
-        -d '{"name": "Smoke Test Email", "email": "'$SMOKE_TEST_EMAIL'"}' > /dev/null 2>&1 || true
-
-    local payload
-    payload="{\"message\": \"send_email to $SMOKE_TEST_EMAIL subject SmokeTest-$timestamp text Automated smoke test\", \"message_id\": \"smoke-email-$timestamp\"}"
-
-    local response
-    if [[ -n "$TIMEOUT_CMD" ]]; then
-        response=$($TIMEOUT_CMD 60 curl -s -N -X POST "$API_URL/api/oikos/chat" \
-            -b "$cookie_jar" \
-            -H "Content-Type: application/json" \
-            -d "$payload" 2>/dev/null) || true
-    else
-        warn "timeout command not found - email test may hang (install: brew install coreutils)"
-        response=$(curl -s -N -X POST "$API_URL/api/oikos/chat" \
-            -b "$cookie_jar" \
-            -H "Content-Type: application/json" \
-            -d "$payload" 2>/dev/null) || true
-    fi
-
-    if echo "$response" | grep -q "supervisor_tool_completed"; then
-        if echo "$response" | grep -q "Message ID:"; then
-            pass "Email tool sent successfully"
-        else
-            fail "Email tool completed but no message ID"
-        fi
-    elif echo "$response" | grep -q "supervisor_tool_failed"; then
-        local error
-        error=$(echo "$response" | grep -o '"error": "[^"]*"' | head -1)
-        fail "Email tool failed: $error"
-    else
-        warn "Email tool test inconclusive"
-    fi
-}
-
-run_gmail_canary() {
-    local cookie_jar="$1"
-    local canary_marker="LH-Canary-$(date +%s)-$$"
-    local timeout_secs="${CANARY_TIMEOUT:-45}"
-
-    # Step 1: Check Gmail connector exists
-    local connectors
-    connectors=$(curl -s -b "$cookie_jar" "$API_URL/api/connectors" 2>/dev/null) || true
-    local gmail_id
-    gmail_id=$(echo "$connectors" | jq -r '.[] | select(.provider=="gmail") | .id' 2>/dev/null | head -1)
-    if [[ -z "$gmail_id" ]]; then
-        warn "Gmail canary: no Gmail connector found (skipped)"
-        return 0
-    fi
-
-    # Step 2: Send canary email via Oikos send_email tool
-    local send_payload
-    send_payload=$(jq -nc \
-        --arg msg "send_email to ${SMOKE_TEST_EMAIL} subject '$canary_marker' text 'Automated canary test. Safe to ignore.'" \
-        --arg id "canary-$canary_marker" \
-        '{message: $msg, message_id: $id}')
-
-    local send_response
-    if [[ -n "$TIMEOUT_CMD" ]]; then
-        send_response=$($TIMEOUT_CMD 60 curl -s -N -X POST "$API_URL/api/oikos/chat" \
-            -b "$cookie_jar" -H "Content-Type: application/json" -d "$send_payload" 2>/dev/null) || true
-    else
-        send_response=$(curl -s -N -X POST "$API_URL/api/oikos/chat" \
-            -b "$cookie_jar" -H "Content-Type: application/json" -d "$send_payload" 2>/dev/null) || true
-    fi
-
-    if ! echo "$send_response" | grep -q "supervisor_tool_completed\|oikos_complete"; then
-        fail "Gmail canary: email send did not complete"
-        return 1
-    fi
-    info "Gmail canary: email sent ($canary_marker), polling for ingest..."
-
-    # Step 3: Poll for ingested conversation
-    local elapsed=0
-    local interval=3
-    while [[ $elapsed -lt $timeout_secs ]]; do
-        local convs
-        convs=$(curl -s -b "$cookie_jar" "$API_URL/api/conversations?kind=email&limit=10" 2>/dev/null) || true
-        if echo "$convs" | jq -e ".[] | select(.title | test(\"$canary_marker\"))" > /dev/null 2>&1; then
-            local conv_id
-            conv_id=$(echo "$convs" | jq -r ".[] | select(.title | test(\"$canary_marker\")) | .id")
-            pass "Gmail canary: conversation $conv_id ingested in ${elapsed}s"
-            return 0
-        fi
-        sleep "$interval"
-        elapsed=$((elapsed + interval))
-    done
-
-    fail "Gmail canary: conversation with '$canary_marker' not found after ${timeout_secs}s"
-    return 1
-}
-
 # Parse args
 MODE="default" # quick | default | full
 QUICK=0
@@ -596,7 +494,7 @@ if [[ "$INSTANCE_AUTH_ENABLED" == "true" ]]; then
                 if [[ "$llm_available" != "true" ]]; then
                     warn "LLM unavailable (llm_available=$llm_available) - skipping LLM tests"
                 else
-                    info "LLM available but Oikos chat removed — no chat smoke tests"
+                    info "LLM available but legacy chat smoke path removed; no LLM smoke tests"
                 fi
             else
                 info "LLM test skipped (--no-llm)"
@@ -606,13 +504,9 @@ if [[ "$INSTANCE_AUTH_ENABLED" == "true" ]]; then
                 section "Contacts CRUD"
                 run_contacts_crud "$COOKIE_JAR"
 
-                section "Email tool"
-                run_email_tool_test "$COOKIE_JAR"
-
-                section "Gmail canary (end-to-end ingest)"
-                run_test run_gmail_canary "$COOKIE_JAR"
+                info "Email/Gmail canaries removed with the legacy chat path"
             else
-                info "Full tests skipped (pass --full to enable CRUD/email/infra)"
+                info "Full tests skipped (pass --full to enable CRUD/infra)"
             fi
         else
             fail "Hosted login token auth failed"
