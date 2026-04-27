@@ -338,6 +338,15 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         return "Search only"
     }
 
+    var runtimeCapabilityTone: String {
+        if let tone = capabilities.displayTone?.trimmingCharacters(in: .whitespacesAndNewlines), !tone.isEmpty {
+            return tone
+        }
+        if canSendLive { return "success" }
+        if capabilities.hostReattachAvailable { return "warning" }
+        return "neutral"
+    }
+
     var runtimeHeadline: String {
         if let headline = runtimeDisplay?.headline.trimmingCharacters(in: .whitespacesAndNewlines), !headline.isEmpty {
             return headline
