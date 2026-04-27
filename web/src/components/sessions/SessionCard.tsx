@@ -6,7 +6,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { Card } from "../ui";
 import { PresenceBadge } from "../PresenceBadge";
 import { type TimelineSessionCard, getTimelineCardAnchor } from "../../services/api/agents";
-import { resolveSessionRuntimeState } from "../../lib/sessionRuntime";
+import { isSessionClosed, resolveSessionRuntimeState } from "../../lib/sessionRuntime";
 import { getSessionInteractionCapabilities } from "../../lib/sessionWorkspace";
 import { normalizeExecutionVenueLabel } from "../../lib/sessionExecutionHome";
 import {
@@ -156,10 +156,17 @@ export function SessionCard({
   // explicit terminal_signal (Phase 6 will also emit it on confirmed
   // process-gone via machine-agent bindings). Legacy fallback: accept
   // explicit terminal_state for older payloads that predate the axis.
+  // Phase 3: lifecycle is the closure axis. When the backend tells us it
+  // is "closed" that wins unconditionally (the reducer only closes on
+  // ground truth). Legacy payloads without the axis fall back via
+  // isSessionClosed's terminal_state path, plus a presence guard so an
+  // actively-controlled session is not misreported.
   const lifecycle = runtime.runtimeDisplay?.lifecycle ?? null;
-  const hasKnownClosedProcess = lifecycle === "closed" || !!session.terminal_state;
   const hasCurrentControlledPresence = hasControlPath && runtime.presenceState != null;
-  const isClosedSession = hasKnownClosedProcess && !hasCurrentControlledPresence;
+  const isClosedSession =
+    lifecycle != null
+      ? lifecycle === "closed"
+      : isSessionClosed(session) && !hasCurrentControlledPresence;
   // Phase 3: always render the runtime pill for unmanaged sessions so the
   // card states "Stale" / "Unknown" honestly instead of hiding them.
   const isUnmanagedWithAxes = runtime.runtimeDisplay?.control_path === "unmanaged";
