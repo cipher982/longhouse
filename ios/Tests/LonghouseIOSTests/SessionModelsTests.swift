@@ -143,6 +143,15 @@ struct SessionModelsTests {
     }
 
     @Test
+    func runtimeDisplayTextCanonicalizesOnlyBareShellAliases() {
+        #expect(RuntimeDisplayText.canonicalDisplayText("Running bash") == "Running Shell")
+        #expect(RuntimeDisplayText.canonicalDisplayText("Blocked on terminal") == "Blocked on Shell")
+        #expect(RuntimeDisplayText.canonicalDisplayText("Approval needed \u{2022} shell") == "Approval needed \u{2022} Shell")
+        #expect(RuntimeDisplayText.canonicalDisplayText("Running bash-runner") == "Running bash-runner")
+        #expect(RuntimeDisplayText.canonicalDisplayText("Running bash script") == "Running bash script")
+    }
+
+    @Test
     func sessionSummaryCanonicalizesLegacyShellLabels() {
         let summary = SessionSummary(
             id: "session-shell",

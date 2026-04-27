@@ -46,16 +46,8 @@ enum RuntimeDisplayText {
 
     private static func canonicalToolPhrase(_ value: String) -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        let lower = trimmed.lowercased()
-        for alias in shellAliases where lower == alias {
+        if shellAliases.contains(trimmed.lowercased()) {
             return "Shell"
-        }
-        for alias in shellAliases where lower.hasPrefix(alias) {
-            let suffix = String(trimmed.dropFirst(alias.count))
-            guard suffix.first.map({ $0.isWhitespace || $0 == "\u{00B7}" || $0 == ":" || $0 == "-" }) == true else {
-                continue
-            }
-            return "Shell\(suffix)"
         }
         return nil
     }
