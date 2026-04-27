@@ -460,15 +460,12 @@ describe("SessionsPage", () => {
     expect(prefetchSpy).not.toHaveBeenCalled();
   });
 
-  it("shows the unmanaged badge as the exception state on session cards", async () => {
+  it("keeps imported session cards free of always-on management chrome", async () => {
     renderSessionsPage("/timeline");
 
-    const management = await screen.findByTestId("session-card-management");
-    expect(management).toHaveTextContent("Unmanaged");
-    expect(management).toHaveAttribute(
-      "title",
-      "Longhouse imported this Codex session.",
-    );
+    expect(await screen.findByText("Cleanup sessions page")).toBeInTheDocument();
+    expect(screen.queryByText("Unmanaged")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("session-card-management")).not.toBeInTheDocument();
     expect(screen.queryByTestId("session-card-capability")).not.toBeInTheDocument();
   });
 
@@ -939,13 +936,14 @@ describe("SessionsPage", () => {
     expect(screen.queryByText("In progress")).not.toBeInTheDocument();
   });
 
-  it("shows home badges directly on the main timeline cards", async () => {
+  it("hides origin badges on main timeline cards and keeps continuations quiet", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
           makeTimelineCard({
             home_label: "On this Mac",
             origin_label: "cinder",
+            thread_continuation_count: 3,
             capabilities: makeCapabilities({
               live_control_available: true,
               host_reattach_available: true,
@@ -972,13 +970,12 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
-    expect(screen.getAllByTestId("session-card-management")).toHaveLength(1);
-    expect(screen.getByTestId("session-card-management")).toHaveTextContent("Unmanaged");
+    expect(screen.queryByTestId("session-card-management")).not.toBeInTheDocument();
     expect(screen.queryByTestId("session-card-capability")).not.toBeInTheDocument();
-    expect(screen.getByText("This machine")).toBeInTheDocument();
-    expect(screen.getByText("Cloud")).toBeInTheDocument();
-    expect(screen.getByText("Head: cinder")).toBeInTheDocument();
+    expect(screen.queryByText("This machine")).not.toBeInTheDocument();
+    expect(screen.queryByText("Head: cinder")).not.toBeInTheDocument();
     expect(screen.queryByText("Head: Cloud")).not.toBeInTheDocument();
+    expect(screen.getByText(/Started .* 3 continuations/)).toBeInTheDocument();
   });
 
   it("marks recent-progress sessions without semantic live signals honestly", async () => {
