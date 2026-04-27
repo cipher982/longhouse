@@ -537,6 +537,7 @@ describe("SessionsPage", () => {
       data: {
         sessions: [
           makeTimelineCard({
+            ended_at: null,
             provider: "codex",
             control: {
               managed_transport: "codex_app_server",
@@ -573,6 +574,82 @@ describe("SessionsPage", () => {
       "Longhouse can see this live Codex session, but cannot send prompts until the engine reconnects.",
     );
     expect(screen.queryByTestId("session-card-management")).not.toBeInTheDocument();
+  });
+
+  it("treats ended managed sessions with stale reattach metadata as closed", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            ended_at: "2026-03-21T12:10:00Z",
+            runtime_source: "managed_local_transport",
+            status: "idle",
+            confidence: "live",
+            presence_state: null,
+            control: {
+              managed_transport: "codex_app_server",
+              source_runner_id: null,
+              source_runner_name: null,
+              attach_command: "longhouse codex --attach",
+            },
+            capabilities: makeCapabilities({
+              host_reattach_available: true,
+            }),
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline");
+
+    const card = await screen.findByTestId("session-card");
+    expect(card).toHaveAttribute("data-card-state", "closed");
+    expect(card).toHaveClass("session-card--closed");
+  });
+
+  it("keeps ended sessions with current controlled presence actionable", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            ended_at: "2026-03-21T12:10:00Z",
+            runtime_source: "semantic",
+            status: "idle",
+            confidence: "live",
+            presence_state: "idle",
+            presence_updated_at: "2026-03-21T12:11:00Z",
+            last_live_at: "2026-03-21T12:11:00Z",
+            control: {
+              managed_transport: "codex_app_server",
+              source_runner_id: "runner-1",
+              source_runner_name: "Laptop",
+              attach_command: "longhouse codex --attach",
+            },
+            capabilities: makeCapabilities({
+              live_control_available: true,
+              host_reattach_available: true,
+              reply_to_live_session_available: true,
+            }),
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline");
+
+    const card = await screen.findByTestId("session-card");
+    expect(card).toHaveAttribute("data-card-state", "actionable");
+    expect(card).not.toHaveClass("session-card--closed");
   });
 
   it("keeps the timeline card action semantically honest", async () => {

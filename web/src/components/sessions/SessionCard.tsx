@@ -163,7 +163,8 @@ export function SessionCard({
   const hasControlPath = interaction.liveControlAvailable || interaction.hostReattachAvailable;
   const hasKnownClosedProcess =
     !!session.ended_at || runtime.status === "completed" || !!session.terminal_state;
-  const isClosedSession = !hasControlPath && hasKnownClosedProcess;
+  const hasCurrentControlledPresence = hasControlPath && runtime.presenceState != null;
+  const isClosedSession = hasKnownClosedProcess && !hasCurrentControlledPresence;
   const cardClassName = [
     "session-card",
     confirming ? "session-card--confirming" : "",
