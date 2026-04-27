@@ -59,7 +59,7 @@ async function ingestSession(
     origin_label: string;
     branched_from_event_id: number;
     started_at: string;
-    ended_at: string;
+    ended_at: string | null;
     events: Array<{
       role: string;
       content_text: string;
@@ -90,7 +90,7 @@ async function ingestSession(
       origin_label: overrides.origin_label,
       branched_from_event_id: overrides.branched_from_event_id,
       started_at: timestamp,
-      ended_at: overrides.ended_at || timestamp,
+      ended_at: overrides.ended_at === undefined ? timestamp : overrides.ended_at,
       events: overrides.events || [
         {
           role: "user",
@@ -385,7 +385,7 @@ test.describe("Sessions Page", () => {
     const matchedId = await ingestSession(request, {
       project,
       started_at: matchedTimestamp,
-      ended_at: matchedTimestamp,
+      ended_at: null,
       thread_root_session_id: rootId,
       continued_from_session_id: rootId,
       events: [
@@ -506,7 +506,7 @@ test.describe("Sessions Page", () => {
     const runningId = await ingestSession(request, {
       project,
       started_at: runningTimestamp,
-      ended_at: runningTimestamp,
+      ended_at: null,
       events: [
         {
           role: "user",
@@ -521,7 +521,7 @@ test.describe("Sessions Page", () => {
     const needsUserId = await ingestSession(request, {
       project,
       started_at: needsUserTimestamp,
-      ended_at: needsUserTimestamp,
+      ended_at: null,
       events: [
         {
           role: "user",
@@ -536,7 +536,7 @@ test.describe("Sessions Page", () => {
     const inferredId = await ingestSession(request, {
       project,
       started_at: inferredTimestamp,
-      ended_at: inferredTimestamp,
+      ended_at: null,
       events: [
         {
           role: "user",
@@ -587,7 +587,7 @@ test.describe("Sessions Page", () => {
     await expect(runningCard).toBeVisible();
     await expect(runningCard).toContainText("Active");
     await expect(runningCard).not.toContainText("Running Shell");
-    await expect(runningCard).toHaveAttribute("data-runtime-tone", "running");
+    await expect(runningCard).toHaveAttribute("data-runtime-tone", "active");
     await expect(runningCard).toHaveClass(/session-card--live/);
     await expect(runningCard).toHaveClass(/session-card--running/);
 
@@ -597,7 +597,7 @@ test.describe("Sessions Page", () => {
     await expect(needsUserCard).toBeVisible();
     await expect(needsUserCard).toContainText("Active");
     await expect(needsUserCard).not.toContainText("Needs you");
-    await expect(needsUserCard).toHaveAttribute("data-runtime-tone", "needs-user");
+    await expect(needsUserCard).toHaveAttribute("data-runtime-tone", "active");
     await expect(needsUserCard).not.toHaveClass(/session-card--live/);
     await expect(needsUserCard).toHaveClass(/session-card--needs-user/);
 
@@ -607,7 +607,7 @@ test.describe("Sessions Page", () => {
     await expect(inferredCard).toBeVisible();
     await expect(inferredCard).toContainText("Active");
     await expect(inferredCard).not.toContainText("Recent progress");
-    await expect(inferredCard).toHaveAttribute("data-runtime-tone", "inferred");
+    await expect(inferredCard).toHaveAttribute("data-runtime-tone", "active");
     await expect(inferredCard).not.toHaveClass(/session-card--live/);
     await expect(inferredCard).toHaveClass(/session-card--inferred/);
   });
@@ -626,7 +626,7 @@ test.describe("Sessions Page", () => {
     const olderId = await ingestSession(request, {
       project,
       started_at: olderTimestamp,
-      ended_at: olderTimestamp,
+      ended_at: null,
       events: [
         {
           role: "user",
@@ -687,12 +687,13 @@ test.describe("Sessions Page", () => {
       },
     ]);
 
-    await expect(olderCard).toHaveAttribute("data-runtime-tone", "running", {
+    await expect(olderCard).toHaveAttribute("data-runtime-tone", "active", {
       timeout: 15000,
     });
     await expect(olderCard).toContainText("Active");
     await expect(olderCard).not.toContainText("Running Shell");
-    await expect(olderCard).toHaveClass(/session-card--live/);
+    await expect(olderCard).toHaveAttribute("data-card-state", "actionable");
+    await expect(olderCard).not.toHaveClass(/session-card--closed/);
     await expect(cards.first()).toHaveAttribute("data-session-id", recentId);
     await expect(olderCard).toHaveCount(1);
     await expect(recentCard).toHaveCount(1);
