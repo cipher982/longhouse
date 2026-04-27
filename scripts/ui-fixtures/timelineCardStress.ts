@@ -308,6 +308,39 @@ export function buildTimelineCardStressFixture(): {
     },
   );
 
+  const unmanagedClaude = makeTimelineCard(
+    {
+      id: "audit-claude-progress",
+      thread_root_session_id: "thread-audit-claude-progress",
+      thread_head_session_id: "thread-audit-claude-progress",
+      provider: "claude",
+      project: "athena-horizon",
+      git_branch: "main",
+      started_at: "2026-04-15T15:08:00Z",
+      last_activity_at: "2026-04-15T16:08:00Z",
+      timeline_anchor_at: "2026-04-15T16:08:00Z",
+      user_messages: 16,
+      assistant_messages: 16,
+      tool_calls: 41,
+      summary_title: "Provider-Neutral Active Runtime Fixture",
+      summary:
+        "Keeps the same Active state visible on a Claude card so timeline QA catches provider-specific color or icon regressions.",
+      status: "active",
+      runtime_source: "progress",
+      confidence: "inferred",
+      last_progress_at: "2026-04-15T16:08:00Z",
+      display_phase: "Recent progress",
+      origin_label: "cinder",
+      home_label: null,
+      capabilities: makeCapabilities(),
+      control: null,
+    },
+    {
+      head_origin_label: "cinder",
+      started_origin_label: "cinder",
+    },
+  );
+
   const closedCodex = makeTimelineCard(
     {
       id: "closed-codex",
@@ -492,6 +525,7 @@ export function buildTimelineCardStressFixture(): {
     closedCodex,
     idleClaude,
     unmanagedCodex,
+    unmanagedClaude,
     continuationCard,
     blockedGemini,
   ];
@@ -503,7 +537,7 @@ export function buildTimelineCardStressFixture(): {
       has_real_sessions: true,
     },
     filters: {
-      projects: ["zerg", "zeta-vpn", "longhouse-mobile", "photo-restore-lab"],
+      projects: ["zerg", "zeta-vpn", "athena-horizon", "longhouse-mobile", "photo-restore-lab"],
       providers: ["claude", "codex", "gemini"],
       machines: ["cinder", "studio", "This machine", "Cloud"],
     },
