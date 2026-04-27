@@ -261,7 +261,11 @@ def test_duplicate_ingest_upgrades_generic_environment_to_machine_label(tmp_path
         assert stored.cwd == "/workspace/sample-project"
         assert stored.git_repo == "git@github.com:example/sample-project.git"
         assert stored.git_branch == "main"
-        assert stored.ended_at == later_time.replace(tzinfo=None)
+        # Phase 4 of session-liveness-honesty: ingest-supplied `ended_at`
+        # is routed into last_activity_at, not session.ended_at. Only an
+        # explicit terminal_signal (or Phase 6 process-gone) sets ended_at.
+        assert stored.ended_at is None
+        assert stored.last_activity_at == later_time.replace(tzinfo=None)
 
 
 def test_duplicate_ingest_replaces_managed_local_codex_placeholder_provider_session_id(tmp_path):
