@@ -32,13 +32,6 @@ def get_current_browser_route_user(
     return get_current_browser_user(request, db)
 
 
-def _is_tool_enabled(ctx: dict, tool_key: str) -> bool:
-    """Check if a tool is enabled in user context."""
-    tool_config = (ctx or {}).get("tools", {}) or {}
-    return bool(tool_config.get(tool_key, True))
-
-
 __all__ = [
-    "_is_tool_enabled",
     "get_current_browser_route_user",
 ]
