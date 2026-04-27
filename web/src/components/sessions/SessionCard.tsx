@@ -161,10 +161,16 @@ export function SessionCard({
   const showGenerating = !showKeywordSnippet && !showSemanticSnippet && !session.summary && !session.summary_title;
   const cardActionLabel = compatibilityMode ? "Open match" : "Open session";
   const hasControlPath = interaction.liveControlAvailable || interaction.hostReattachAvailable;
-  const hasCurrentRuntimeSignal =
-    runtime.isExecuting || runtime.needsAttention || runtime.isIdle || runtime.heuristicActive;
   const hasKnownClosedProcess =
     !!session.ended_at || runtime.status === "completed" || !!session.terminal_state;
+  const hasCurrentRuntimeSignal =
+    runtime.presenceState != null ||
+    (!hasKnownClosedProcess && (
+      runtime.isExecuting ||
+      runtime.needsAttention ||
+      runtime.isIdle ||
+      runtime.heuristicActive
+    ));
   const isClosedSession = !hasControlPath && hasKnownClosedProcess && !hasCurrentRuntimeSignal;
   const cardClassName = [
     "session-card",

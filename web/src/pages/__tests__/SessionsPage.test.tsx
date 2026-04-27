@@ -478,6 +478,33 @@ describe("SessionsPage", () => {
     expect(card.style.borderLeftColor).toBe("");
   });
 
+  it("treats stale status-only activity on an ended import as closed", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            ended_at: "2026-03-21T12:10:00Z",
+            status: "active",
+            confidence: "inferred",
+            runtime_source: "progress",
+            presence_state: null,
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline");
+
+    const card = await screen.findByTestId("session-card");
+    expect(card).toHaveAttribute("data-card-state", "closed");
+    expect(card).toHaveClass("session-card--closed");
+  });
+
   it("shows a control-offline badge when a managed session cannot accept browser prompts", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
