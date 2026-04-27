@@ -68,8 +68,11 @@ pub struct IngestPayload<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git_branch: Option<&'a str>,
     pub started_at: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ended_at: Option<String>,
+    // Phase 4 of session-liveness-honesty: the engine no longer ships
+    // ended_at. The server treats it as last-activity, not closure, and
+    // routes it through last_activity_at — which is derived from event
+    // timestamps on the server. Keep the field out of the wire payload
+    // so nothing can ever misinterpret it as a terminal signal.
     pub provider_session_id: &'a str,
     pub is_sidechain: bool,
     pub events: Vec<EventIngest<'a>>,
@@ -161,14 +164,9 @@ pub fn build_payload_with_source_lines<'a>(
         })
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
 
-    let ended_at = metadata.ended_at.map(|t| t.to_rfc3339()).or_else(|| {
-        events
-            .iter()
-            .map(|e| e.timestamp)
-            .max()
-            .map(|t| t.to_rfc3339())
-    });
-
+    // Phase 4 of session-liveness-honesty: do not ship ended_at. The
+    // server derives last_activity_at from event timestamps on write,
+    // and terminal state comes from an explicit terminal_signal ingest.
     let event_ingests: Vec<EventIngest<'a>> = events
         .iter()
         .map(|e| {
@@ -235,7 +233,6 @@ pub fn build_payload_with_source_lines<'a>(
         git_repo: metadata.git_repo.as_deref(),
         git_branch: metadata.git_branch.as_deref(),
         started_at,
-        ended_at,
         provider_session_id: &metadata.session_id,
         // Allow env var override: agent-mesh sets LONGHOUSE_IS_SIDECHAIN=1 before
         // running sub-agents; the Stop hook inherits it, marking the session as automated.
