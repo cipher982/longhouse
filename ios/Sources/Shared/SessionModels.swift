@@ -279,6 +279,14 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         capabilities.liveControlAvailable || capabilities.replyToLiveSessionAvailable
     }
 
+    var canQueueNextInput: Bool {
+        capabilities.canQueueNextInput ?? false
+    }
+
+    var canSteerActiveTurn: Bool {
+        capabilities.canSteerActiveTurn ?? false
+    }
+
     var isControlOffline: Bool {
         !canSendLive && capabilities.hostReattachAvailable
     }
@@ -287,11 +295,11 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         !canSendLive && !capabilities.hostReattachAvailable
     }
 
-    var cockpitPhaseState: String {
+    var runtimePhaseState: String {
         runtimeDisplay?.state ?? presenceState ?? status ?? "idle"
     }
 
-    var cockpitPhaseLabel: String {
+    var runtimePhaseLabel: String {
         if let phaseLabel = runtimeDisplay?.phaseLabel.trimmingCharacters(in: .whitespacesAndNewlines), !phaseLabel.isEmpty {
             return phaseLabel
         }
@@ -299,7 +307,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
             return displayPhase
         }
         let tool = activeTool ?? presenceTool
-        switch cockpitPhaseState {
+        switch runtimePhaseState {
         case "running":
             return tool.map { "Running \($0)" } ?? "Running"
         case "thinking":
@@ -315,7 +323,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         case "idle":
             return "Idle"
         default:
-            return cockpitPhaseState.capitalized
+            return runtimePhaseState.capitalized
         }
     }
 
@@ -351,26 +359,28 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         if let headline = runtimeDisplay?.headline.trimmingCharacters(in: .whitespacesAndNewlines), !headline.isEmpty {
             return headline
         }
-        if isControlOffline { return "Control offline" }
-        if isReadOnly { return "Read-only" }
+        if isControlOffline || isReadOnly { return runtimeCapabilityLabel }
         if isSessionExecuting { return "Working" }
-        if cockpitPhaseState == "idle" { return "Ready" }
-        return cockpitPhaseLabel
+        if runtimePhaseState == "idle" { return "Ready" }
+        return runtimePhaseLabel
     }
 
     var runtimeDetail: String? {
         if let detail = runtimeDisplay?.detail?.trimmingCharacters(in: .whitespacesAndNewlines), !detail.isEmpty {
             return detail
         }
-        if runtimeHeadline != cockpitPhaseLabel {
-            return cockpitPhaseLabel
+        if isControlOffline || isReadOnly {
+            return controlHealthMessage
+        }
+        if runtimeHeadline != runtimePhaseLabel {
+            return runtimePhaseLabel
         }
         return controlHealthMessage
     }
 
     var runtimeTone: String {
         if let tone = runtimeDisplay?.tone { return tone }
-        switch cockpitPhaseState {
+        switch runtimePhaseState {
         case "running": return "running"
         case "thinking": return "thinking"
         case "needs_user": return "needs-user"
@@ -381,12 +391,8 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         }
     }
 
-    var shouldShowRuntimeDock: Bool {
-        canSendLive || capabilities.hostReattachAvailable || runtimeDisplay?.hasSignal == true
-    }
-
     var isSessionExecuting: Bool {
-        runtimeDisplay?.isExecuting == true || cockpitPhaseState == "running" || cockpitPhaseState == "thinking"
+        runtimeDisplay?.isExecuting == true || runtimePhaseState == "running" || runtimePhaseState == "thinking"
     }
 }
 
