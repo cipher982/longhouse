@@ -1,5 +1,66 @@
 import Foundation
 
+enum RuntimeDisplayText {
+    private static let shellAliases: Set<String> = ["bash", "shell", "terminal"]
+
+    static func canonicalToolLabel(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+        if shellAliases.contains(value.lowercased()) {
+            return "Shell"
+        }
+        return value
+    }
+
+    static func canonicalDisplayText(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let running = canonicalPrefixedTool(in: trimmed, prefix: "Running ") {
+            return running
+        }
+        if let blocked = canonicalPrefixedTool(in: trimmed, prefix: "Blocked on ") {
+            return blocked
+        }
+        if let approval = canonicalPrefixedTool(in: trimmed, prefix: "Approval needed \u{2022} ") {
+            return approval
+        }
+        return trimmed
+    }
+
+    static func canonicalDisplayText(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let normalized = canonicalDisplayText(value)
+        return normalized.isEmpty ? nil : normalized
+    }
+
+    private static func canonicalPrefixedTool(in value: String, prefix: String) -> String? {
+        guard value.lowercased().hasPrefix(prefix.lowercased()) else {
+            return nil
+        }
+        let tail = String(value.dropFirst(prefix.count))
+        guard let canonicalTail = canonicalToolPhrase(tail) else {
+            return value
+        }
+        return "\(prefix)\(canonicalTail)"
+    }
+
+    private static func canonicalToolPhrase(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
+        for alias in shellAliases where lower == alias {
+            return "Shell"
+        }
+        for alias in shellAliases where lower.hasPrefix(alias) {
+            let suffix = String(trimmed.dropFirst(alias.count))
+            guard suffix.first.map({ $0.isWhitespace || $0 == "\u{00B7}" || $0 == ":" || $0 == "-" }) == true else {
+                continue
+            }
+            return "Shell\(suffix)"
+        }
+        return nil
+    }
+}
+
 struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     let id: String
     let title: String
@@ -107,12 +168,12 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
 
     var displayPhaseLabel: String {
         if let phaseLabel = runtimeDisplay?.phaseLabel.trimmingCharacters(in: .whitespacesAndNewlines), !phaseLabel.isEmpty {
-            return phaseLabel
+            return RuntimeDisplayText.canonicalDisplayText(phaseLabel)
         }
         if let displayPhase = displayPhase?.trimmingCharacters(in: .whitespacesAndNewlines), !displayPhase.isEmpty {
-            return displayPhase
+            return RuntimeDisplayText.canonicalDisplayText(displayPhase)
         }
-        let tool = activeTool ?? presenceTool
+        let tool = RuntimeDisplayText.canonicalToolLabel(activeTool ?? presenceTool)
         switch presenceState {
         case "running":
             return tool.map { "Running \($0)" } ?? "Running"
@@ -311,12 +372,12 @@ struct SessionDetail: Codable, Identifiable, Sendable {
 
     var runtimePhaseLabel: String {
         if let phaseLabel = runtimeDisplay?.phaseLabel.trimmingCharacters(in: .whitespacesAndNewlines), !phaseLabel.isEmpty {
-            return phaseLabel
+            return RuntimeDisplayText.canonicalDisplayText(phaseLabel)
         }
         if let displayPhase = displayPhase?.trimmingCharacters(in: .whitespacesAndNewlines), !displayPhase.isEmpty {
-            return displayPhase
+            return RuntimeDisplayText.canonicalDisplayText(displayPhase)
         }
-        let tool = activeTool ?? presenceTool
+        let tool = RuntimeDisplayText.canonicalToolLabel(activeTool ?? presenceTool)
         switch runtimePhaseState {
         case "running":
             return tool.map { "Running \($0)" } ?? "Running"
@@ -367,7 +428,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
 
     var runtimeHeadline: String {
         if let headline = runtimeDisplay?.headline.trimmingCharacters(in: .whitespacesAndNewlines), !headline.isEmpty {
-            return headline
+            return RuntimeDisplayText.canonicalDisplayText(headline)
         }
         if isControlOffline || isReadOnly { return runtimeCapabilityLabel }
         if isSessionExecuting { return "Working" }
@@ -377,7 +438,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
 
     var runtimeDetail: String? {
         if let detail = runtimeDisplay?.detail?.trimmingCharacters(in: .whitespacesAndNewlines), !detail.isEmpty {
-            return detail
+            return RuntimeDisplayText.canonicalDisplayText(detail)
         }
         if isControlOffline || isReadOnly {
             return controlHealthMessage
