@@ -191,6 +191,11 @@ def test_sessions_list_uses_recent_activity_anchor_for_old_live_session(tmp_path
             "heuristic_active": False,
             "is_managed_local_truth": False,
             "has_signal": True,
+            "control_path": "unmanaged",
+            "activity_recency": "live",
+            "lifecycle": "open",
+            "host_state": "unknown",
+            "terminal_reason": None,
         }
         assert top["timeline_anchor_at"] is not None
         assert top["timeline_anchor_at"] >= recent_idle.started_at.isoformat().replace("+00:00", "Z")
