@@ -867,6 +867,7 @@ test.describe("Session Detail Page", () => {
     });
 
     let chatRequests = 0;
+    let workspaceRequests = 0;
     let lockRequests = 0;
     let lockState = {
       locked: false,
@@ -879,6 +880,7 @@ test.describe("Session Detail Page", () => {
       await page.route(
         new RegExp(String.raw`/api/timeline/sessions/${sessionId}/workspace(?:\?.*)?$`),
         async (route) => {
+          workspaceRequests += 1;
           const response = await route.fetch();
           const payload = await response.json();
           const managedSessionFields = {
@@ -961,16 +963,20 @@ test.describe("Session Detail Page", () => {
 
       // The inputs-poll query also fires when the queue chip is gated on;
       // stub it so we don't surface noisy network errors during the test.
-      await page.route(`**/api/sessions/${sessionId}/inputs*`, async (route) => {
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify([]),
-        });
-      });
+      await page.route(
+        new RegExp(String.raw`/api/sessions/${sessionId}/inputs(?:\?.*)?$`),
+        async (route) => {
+          await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify([]),
+          });
+        },
+      );
 
-      await page.goto(`/timeline/${sessionId}`);
+      await page.goto(`/timeline/${sessionId}`, { waitUntil: "domcontentloaded" });
       await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
+      await expect.poll(() => workspaceRequests, { timeout: 10000 }).toBeGreaterThan(0);
 
       await expect(page.getByTestId("session-continuation-panel")).toBeVisible();
 
@@ -985,7 +991,7 @@ test.describe("Session Detail Page", () => {
       // After the send completes, the lock poll kicks in and keeps the composer locked
       await expect.poll(() => chatRequests, { timeout: 10000 }).toBe(1);
       await expect(composer).toBeDisabled();
-      await expect.poll(() => lockRequests).toBeGreaterThan(1);
+      await expect.poll(() => lockRequests, { timeout: 10000 }).toBeGreaterThan(1);
     } finally {
       await page.unrouteAll({ behavior: "ignoreErrors" });
     }
