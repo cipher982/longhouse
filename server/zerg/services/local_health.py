@@ -1163,15 +1163,12 @@ def _bridge_is_alive(state_file: Path) -> bool:
     PID reuse.
 
     Returns True if the lock is held (bridge is alive). Returns False if the
-    lock can be acquired (bridge is gone) and cleans up stale bridge files.
+    lock can be acquired or is missing (bridge is gone).
     """
     import fcntl
 
     lock_path = state_file.with_suffix(".lock")
     if not lock_path.exists():
-        # No lock file: legacy bridges (pre-flock) or truly orphaned state.
-        # Treat as dead and clean up.
-        _purge_stale_bridge_files(state_file)
         return False
 
     try:
@@ -1185,12 +1182,11 @@ def _bridge_is_alive(state_file: Path) -> bool:
         except BlockingIOError:
             # Lock held by live bridge.
             return True
-        # We acquired the lock — bridge is gone. Release immediately and purge.
+        # We acquired the lock — bridge is gone. Release immediately.
         fcntl.flock(fd, fcntl.LOCK_UN)
     finally:
         os.close(fd)
 
-    _purge_stale_bridge_files(state_file)
     return False
 
 
@@ -1239,6 +1235,28 @@ def _find_bridge_child_process(
     return None
 
 
+def _process_row_by_pid(process_rows: list[dict[str, Any]], pid: object) -> dict[str, Any] | None:
+    pid_int = _normalize_optional_int(pid)
+    if not pid_int:
+        return None
+    for row in process_rows:
+        if int(row.get("pid") or 0) == pid_int:
+            return row
+    return None
+
+
+def _find_codex_app_server_process(
+    process_rows: list[dict[str, Any]],
+    *,
+    bridge_pid: int,
+    state: dict[str, Any],
+) -> dict[str, Any] | None:
+    by_recorded_pid = _process_row_by_pid(process_rows, state.get("app_server_pid"))
+    if by_recorded_pid is not None and " app-server " in str(by_recorded_pid.get("command") or ""):
+        return by_recorded_pid
+    return _find_bridge_child_process(process_rows, bridge_pid=bridge_pid, needle=" app-server ")
+
+
 def _binding_by_session_id(base_dir: Path) -> dict[str, dict[str, str | None]]:
     rows = _load_session_binding_rows(base_dir)
     latest: dict[str, dict[str, str | None]] = {}
@@ -1271,7 +1289,30 @@ def _collect_managed_codex_sessions(
             continue
 
         bridge_pid = int(state.get("pid") or 0)
-        if not _bridge_is_alive(path):
+        bridge_alive = _bridge_is_alive(path)
+        app_server = _find_codex_app_server_process(process_rows, bridge_pid=bridge_pid, state=state)
+        if not bridge_alive:
+            if app_server is not None:
+                bridge_updated_at = _normalize_optional_string(state.get("updated_at"))
+                codex_bin = _normalize_optional_string(state.get("codex_bin"))
+                orphan_bridges.append(
+                    {
+                        "session_id": _normalize_optional_string(state.get("session_id")),
+                        "provider": "codex",
+                        "control_path": CONTROL_PATH_MANAGED,
+                        "liveness_model": LIVENESS_MODEL_CODEX_BRIDGE,
+                        "provider_cli": _provider_cli_reference(codex_bin, source=PROVIDER_CLI_SOURCE_BRIDGE_STATE),
+                        "pid": bridge_pid,
+                        "app_server_pid": app_server.get("pid"),
+                        "workspace_label": Path(str(state.get("cwd") or "")).name or None,
+                        "status": "orphan",
+                        "started_at": bridge_updated_at,
+                        "heartbeat_at": bridge_updated_at,
+                        "reason_codes": ["bridge_process_missing", "provider_child_alive"],
+                    }
+                )
+                continue
+            _purge_stale_bridge_files(path)
             continue
 
         ws_url = _normalize_optional_string(state.get("ws_url"))
@@ -1287,7 +1328,6 @@ def _collect_managed_codex_sessions(
         thread_subscription_status = _normalize_optional_string(state.get("thread_subscription_status"))
         thread_subscription_attempts = _normalize_optional_int(state.get("thread_subscription_attempts")) or 0
         thread_subscription_last_error = _normalize_optional_string(state.get("thread_subscription_last_error"))
-        app_server = _find_bridge_child_process(process_rows, bridge_pid=bridge_pid, needle=" app-server ")
         codex_bin = _normalize_optional_string(state.get("codex_bin"))
         bridge_heartbeat_at = bridge_updated_at
         has_turn_activity = bool(

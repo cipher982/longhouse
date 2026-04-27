@@ -605,6 +605,49 @@ def test_collect_local_health_flags_orphaned_managed_bridge(monkeypatch, tmp_pat
     ]
 
 
+def test_collect_local_health_flags_dead_codex_bridge_with_orphan_app_server(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(tmp_path, age_seconds=5)
+
+    state_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
+    state_file = _write_codex_bridge_state(
+        state_dir,
+        "sess-dead-bridge",
+        {
+            "session_id": "sess-dead-bridge",
+            "pid": 8881,
+            "app_server_pid": 8882,
+            "app_server_pgid": 8882,
+            "codex_bin": "/opt/homebrew/bin/codex",
+            "ws_url": "ws://127.0.0.1:49888",
+            "app_server_ws_url": "ws://127.0.0.1:49887",
+            "cwd": "/Users/test/git/zerg",
+            "status": "ready",
+            "updated_at": "2026-04-17T18:02:00Z",
+        },
+    )
+    monkeypatch.setattr(local_health_service, "_codex_bridge_state_dir", lambda base_dir: state_dir)
+    _stub_bridge_alive(monkeypatch, alive=False)
+    monkeypatch.setattr(
+        local_health_service,
+        "_collect_process_rows",
+        lambda: [
+            {"pid": 8882, "ppid": 1, "command": "/opt/homebrew/bin/codex app-server --listen ws://127.0.0.1:0"},
+        ],
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "broken"
+    assert snapshot["headline"] == "Longhouse has orphaned managed sessions"
+    assert snapshot["managed_summary"]["orphan_bridge_count"] == 1
+    assert snapshot["orphan_bridges"][0]["session_id"] == "sess-dead-bridge"
+    assert snapshot["orphan_bridges"][0]["app_server_pid"] == 8882
+    assert snapshot["orphan_bridges"][0]["reason_codes"] == ["bridge_process_missing", "provider_child_alive"]
+    assert state_file.exists()
+
+
 def test_collect_local_health_uses_managed_session_phase_state_for_codex_bridge_session(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
@@ -2685,8 +2728,8 @@ def test_bridge_is_alive_detects_held_flock(tmp_path: Path) -> None:
         os.close(fd)
 
 
-def test_bridge_is_alive_purges_stale_files_when_lock_acquirable(tmp_path: Path) -> None:
-    """A free flock means the bridge is gone; probe cleans up all sidecars."""
+def test_bridge_is_alive_keeps_state_when_lock_acquirable(tmp_path: Path) -> None:
+    """A free flock means dead; caller keeps state until child cleanup is known."""
     state_file = tmp_path / "sess-dead.json"
     state_file.write_text("{}")
     lock_path = state_file.with_suffix(".lock")
@@ -2695,12 +2738,12 @@ def test_bridge_is_alive_purges_stale_files_when_lock_acquirable(tmp_path: Path)
     sock_path.touch()
 
     assert local_health_service._bridge_is_alive(state_file) is False
-    assert not state_file.exists()
-    assert not lock_path.exists()
-    assert not sock_path.exists()
+    assert state_file.exists()
+    assert lock_path.exists()
+    assert sock_path.exists()
 
 
-def test_bridge_is_alive_purges_when_lock_missing(tmp_path: Path) -> None:
+def test_bridge_is_alive_reports_dead_when_lock_missing(tmp_path: Path) -> None:
     """Legacy bridges (pre-flock) have no lock sidecar — treat as stale."""
     state_file = tmp_path / "sess-legacy.json"
     state_file.write_text("{}")

@@ -171,6 +171,10 @@ def _read_codex_bridge_states(state_root: Path, *, check_readyz: bool = False) -
                 "status": str(state.get("status") or ""),
                 "pid": state.get("pid"),
                 "pid_alive": _pid_alive(state.get("pid")),
+                "app_server_pid": state.get("app_server_pid"),
+                "app_server_pid_alive": _pid_alive(state.get("app_server_pid")),
+                "app_server_pgid": state.get("app_server_pgid"),
+                "app_server_ws_url": str(state.get("app_server_ws_url") or ""),
                 "lock_file": str(lock_path),
                 "lock_file_exists": lock_path.exists(),
                 "lock_held": _lock_file_held(lock_path),
@@ -266,9 +270,15 @@ def _render_codex_doctor(payload: dict[str, object], *, json_output: bool) -> No
         typer.echo(f"  - {state.get('session_id')}")
         typer.echo(f"      status: {state.get('status') or '-'}")
         typer.echo(f"      pid: {state.get('pid') or '-'} alive={state.get('pid_alive')}")
+        typer.echo(
+            f"      app-server: pid={state.get('app_server_pid') or '-'} "
+            f"alive={state.get('app_server_pid_alive')} pgid={state.get('app_server_pgid') or '-'}"
+        )
         typer.echo(f"      lock: exists={state.get('lock_file_exists')} held={state.get('lock_held')}")
         typer.echo(f"      codex: {state.get('codex_bin') or '-'}")
         typer.echo(f"      ws: {state.get('ws_url') or '-'} readyz={state.get('readyz_healthy')}")
+        if state.get("app_server_ws_url"):
+            typer.echo(f"      app-server ws: {state.get('app_server_ws_url')}")
         if state.get("thread_id"):
             typer.echo(f"      thread: {state['thread_id']}")
 
@@ -574,7 +584,7 @@ def codex(
     codex_bin: str | None = typer.Option(
         None,
         "--codex-bin",
-        help=("Debug override for the Codex executable used by managed sessions " f"(defaults to {CODEX_BIN_ENV}, then `codex` on PATH)."),
+        help=(f"Debug override for the Codex executable used by managed sessions (defaults to {CODEX_BIN_ENV}, then `codex` on PATH)."),
     ),
     bypass_approvals: bool = typer.Option(
         False,
