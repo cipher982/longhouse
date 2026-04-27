@@ -99,6 +99,11 @@ def build_session_runtime_display_response(
         heuristic_active=display.heuristic_active,
         is_managed_local_truth=display.is_managed_local_truth,
         has_signal=display.has_signal,
+        control_path=display.control_path,
+        activity_recency=display.activity_recency,
+        lifecycle=display.lifecycle,
+        host_state=display.host_state,
+        terminal_reason=display.terminal_reason,
     )
 
 
@@ -180,6 +185,27 @@ class SessionRuntimeDisplayResponse(BaseModel):
     heuristic_active: bool = Field(False, description="True when activity is inferred from recent progress")
     is_managed_local_truth: bool = Field(False, description="True when runtime truth is from a managed-local control path")
     has_signal: bool = Field(False, description="True when clients should render runtime state")
+    # Phase 2 of session-liveness-honesty: three orthogonal axes.
+    control_path: str = Field(
+        "unmanaged",
+        description="Does Longhouse own a control path? 'managed' or 'unmanaged'",
+    )
+    activity_recency: str = Field(
+        "none",
+        description="How recently we heard from this session: 'live' | 'recent' | 'stale' | 'none'",
+    )
+    lifecycle: str = Field(
+        "open",
+        description="Session lifecycle: 'open' | 'closed' | 'unknown'. Closed only with ground truth.",
+    )
+    host_state: str = Field(
+        "unknown",
+        description="Host/machine verifiability: 'online' | 'stale' | 'offline' | 'unknown'",
+    )
+    terminal_reason: Optional[str] = Field(
+        None,
+        description="Why the session is closed, when lifecycle=='closed'",
+    )
 
 
 class SessionResponse(UTCBaseModel):

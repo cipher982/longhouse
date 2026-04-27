@@ -96,6 +96,75 @@ def test_managed_running_has_renderable_runtime_signal():
     assert display.has_signal is True
 
 
+def test_three_axis_fields_unmanaged_idle():
+    display = build_session_runtime_display(
+        runtime_view=_runtime_view(),
+        capabilities=_capabilities(),
+        ended_at=None,
+    )
+
+    assert display.control_path == "unmanaged"
+    assert display.activity_recency == "none"
+    assert display.lifecycle == "open"
+    assert display.host_state == "unknown"
+    assert display.terminal_reason is None
+
+
+def test_three_axis_fields_managed_live_running():
+    display = build_session_runtime_display(
+        runtime_view=_runtime_view(
+            runtime_phase="running",
+            runtime_source="managed_local_transport",
+            status="working",
+            presence_state="running",
+            presence_tool="bash",
+            active_tool="bash",
+            confidence="live",
+            display_phase="Running bash",
+        ),
+        capabilities=_capabilities(managed=True),
+        ended_at=None,
+    )
+
+    assert display.control_path == "managed"
+    assert display.activity_recency == "live"
+    assert display.lifecycle == "open"
+
+
+def test_three_axis_fields_closed_with_explicit_terminal():
+    display = build_session_runtime_display(
+        runtime_view=_runtime_view(
+            runtime_phase="finished",
+            terminal_state="session_ended",
+            status="completed",
+            display_phase="Completed",
+        ),
+        capabilities=_capabilities(),
+        ended_at=None,
+    )
+
+    assert display.lifecycle == "closed"
+    assert display.terminal_reason == "provider_signal"
+
+
+def test_three_axis_fields_ended_at_without_terminal_stays_open():
+    # Phase 1 contract: ended_at alone no longer implies closure. Phase 2
+    # three-axis projection must agree.
+    display = build_session_runtime_display(
+        runtime_view=_runtime_view(
+            runtime_source="progress",
+            status="active",
+            confidence="inferred",
+            display_phase="Recent progress",
+        ),
+        capabilities=_capabilities(),
+        ended_at=datetime(2026, 4, 26, 11, 30, tzinfo=timezone.utc),
+    )
+
+    assert display.lifecycle == "open"
+    assert display.terminal_reason is None
+
+
 def test_capability_display_names_live_control_host():
     display = build_session_capability_display(
         _capabilities(managed=True),

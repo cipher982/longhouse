@@ -13,6 +13,7 @@ from datetime import datetime
 
 from zerg.services.session_capabilities import SessionCapabilityFlags
 from zerg.services.session_runtime import SessionRuntimeView
+from zerg.session_execution_home import SessionExecutionHome
 
 KNOWN_PRESENCE_STATES = {"thinking", "running", "idle", "needs_user", "blocked"}
 LIVE_EXECUTION_STATES = {"thinking", "running"}
@@ -36,6 +37,13 @@ class SessionRuntimeDisplay:
     heuristic_active: bool
     is_managed_local_truth: bool
     has_signal: bool
+    # Phase 2 of session-liveness-honesty: three orthogonal axes that
+    # clients render verbatim. See docs/specs/session-liveness-honesty.md.
+    control_path: str  # "managed" | "unmanaged"
+    activity_recency: str  # "live" | "recent" | "stale" | "none"
+    lifecycle: str  # "open" | "closed" | "unknown"
+    host_state: str  # "online" | "stale" | "offline" | "unknown"
+    terminal_reason: str | None  # populated when lifecycle == "closed"
 
 
 def _normalize_presence_state(state: str | None) -> str | None:
@@ -304,6 +312,22 @@ def build_session_runtime_display(
         last_live_at=runtime_view.last_live_at,
     )
 
+    # Phase 2 of session-liveness-honesty: three-axis projection.
+    terminal_state = runtime_view.terminal_state
+    control_path = _derive_control_path(capabilities)
+    activity_recency = _derive_activity_recency(
+        presence_state=presence_state,
+        confidence=confidence,
+        runtime_source=runtime_source,
+        heuristic_active=heuristic_active,
+        has_signal=has_signal,
+    )
+    lifecycle = "closed" if terminal_state else "open"
+    terminal_reason = _derive_terminal_reason(terminal_state)
+    # host_state wiring lands with machine-agent heartbeat (Phase 5+). Until
+    # then we emit "unknown" so clients can already render the axis honestly.
+    host_state = "unknown"
+
     return SessionRuntimeDisplay(
         truth_tier=truth_tier,
         state=presence_state,
@@ -323,4 +347,60 @@ def build_session_runtime_display(
         heuristic_active=heuristic_active,
         is_managed_local_truth=truth_tier == "managed-local",
         has_signal=has_signal,
+        control_path=control_path,
+        activity_recency=activity_recency,
+        lifecycle=lifecycle,
+        host_state=host_state,
+        terminal_reason=terminal_reason,
     )
+
+
+def _derive_control_path(capabilities: SessionCapabilityFlags) -> str:
+    """Durable: does Longhouse own a control path for this session?
+
+    Based on execution_home / managed_transport, NOT on whether control is
+    currently live. A managed session whose bridge is offline is still
+    `managed`, with `host_state=offline` telling the story separately.
+    """
+    if capabilities.execution_home == SessionExecutionHome.MANAGED_LOCAL:
+        return "managed"
+    if capabilities.managed_transport is not None:
+        return "managed"
+    return "unmanaged"
+
+
+def _derive_activity_recency(
+    *,
+    presence_state: str | None,
+    confidence: str | None,
+    runtime_source: str | None,
+    heuristic_active: bool,
+    has_signal: bool,
+) -> str:
+    """How recently did we hear something real from this session?
+
+    - `live`: presence signal within its phase freshness window
+    - `recent`: inferred/progress within ~5 min
+    - `stale`: had signal once, nothing fresh
+    - `none`: never observed activity
+    """
+    if presence_state is not None and confidence == "live":
+        return "live"
+    if heuristic_active or confidence == "inferred":
+        return "recent"
+    if confidence == "stale" or runtime_source == "fallback":
+        return "stale" if has_signal else "none"
+    return "none"
+
+
+def _derive_terminal_reason(terminal_state: str | None) -> str | None:
+    """Normalize the runtime-state terminal_state into a user-facing reason."""
+    if not terminal_state:
+        return None
+    normalized = terminal_state.strip().lower()
+    if not normalized:
+        return None
+    # The reducer stores values like "session_ended", "finished", etc. Today
+    # every closure comes from an explicit terminal_signal — classify all of
+    # them as provider_signal until process-gone detection lands (Phase 6).
+    return "provider_signal"
