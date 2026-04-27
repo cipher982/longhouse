@@ -35,6 +35,7 @@ from zerg.metrics import managed_session_heartbeat_lease_rows_total
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionRuntimeState
+from zerg.models.agents import UnmanagedSessionBinding
 from zerg.models.device_token import DeviceToken
 from zerg.observability import get_tracer
 from zerg.observability import set_span_attributes
@@ -56,6 +57,29 @@ MAX_MANAGED_SESSION_LEASE_TTL_MS = 60 * 60 * 1000
 MANAGED_SESSION_LEASE_STATES = {"attached", "detached", "degraded"}
 MANAGED_SESSION_LEASE_PHASES = {"idle", "thinking", "running", "blocked", "needs_user", "none"}
 MANAGED_SESSION_LEASE_PROVIDERS = {"codex", "claude", "gemini"}
+
+
+class UnmanagedSessionBindingIn(UTCBaseModel):
+    """One row of Rust engine's unmanaged-session pid/cwd scan.
+
+    Phase 5 of docs/specs/session-liveness-honesty.md. All fields except
+    machine_id, provider, provider_session_id, and observed_at are
+    tolerant of absence so the engine can ship partial observations
+    (e.g. file-only, no process yet) without breaking heartbeat ingest.
+    """
+
+    machine_id: str = Field(..., max_length=255)
+    provider: str = Field(..., max_length=64)
+    provider_session_id: str = Field(..., max_length=255)
+    source_path: str | None = Field(None, max_length=1024)
+    source_inode: int | None = None
+    source_device: int | None = None
+    pid: int | None = None
+    process_start_time: datetime | None = None
+    cwd: str | None = Field(None, max_length=1024)
+    source_offset: int | None = None
+    source_mtime: datetime | None = None
+    observed_at: datetime
 
 
 class ManagedSessionLeaseIn(UTCBaseModel):
@@ -99,6 +123,9 @@ class HeartbeatIn(BaseModel):
     disk_free_bytes: int = 0
     is_offline: bool = False
     managed_sessions: list[ManagedSessionLeaseIn] = Field(default_factory=list)
+    # Phase 5 of session-liveness-honesty: unmanaged pid/cwd/source bindings.
+    # Optional — older engines don't send this. See UnmanagedSessionBindingIn.
+    unmanaged_session_bindings: list[UnmanagedSessionBindingIn] = Field(default_factory=list)
 
 
 def _managed_session_phase(lease: ManagedSessionLeaseIn) -> str:
@@ -227,6 +254,79 @@ def _has_final_managed_codex_terminal(db: Session, session_id: UUID) -> bool:
     )
 
 
+def _upsert_unmanaged_session_bindings(
+    db: Session,
+    bindings: list[UnmanagedSessionBindingIn],
+    *,
+    device_id: str,
+    received_at: datetime,
+) -> None:
+    """Upsert unmanaged session bindings reported by the machine agent.
+
+    Identity: (machine_id, provider, provider_session_id).
+
+    PID-reuse defense: if the existing row's process_start_time differs
+    from the incoming value, the old pid/start pair is stale — overwrite
+    with the new observation and leave binding_state='observed'. Phase 6
+    will consume binding_state to drive lifecycle=closed.
+    """
+    for binding in bindings:
+        machine = (binding.machine_id or "").strip()
+        provider = (binding.provider or "").strip().lower()
+        session_key = (binding.provider_session_id or "").strip()
+        if not machine or not provider or not session_key:
+            continue
+
+        existing = (
+            db.query(UnmanagedSessionBinding)
+            .filter(
+                UnmanagedSessionBinding.machine_id == machine,
+                UnmanagedSessionBinding.provider == provider,
+                UnmanagedSessionBinding.provider_session_id == session_key,
+            )
+            .first()
+        )
+
+        # Soft-link to agent_sessions by (provider, provider_session_id).
+        linked_session_id = None
+        if session_key:
+            linked = (
+                db.query(AgentSession.id)
+                .filter(
+                    AgentSession.provider == provider,
+                    AgentSession.provider_session_id == session_key,
+                )
+                .first()
+            )
+            if linked is not None:
+                linked_session_id = linked[0]
+
+        fields = dict(
+            machine_id=machine,
+            device_id=device_id,
+            provider=provider,
+            provider_session_id=session_key,
+            session_id=linked_session_id,
+            source_path=binding.source_path,
+            source_inode=binding.source_inode,
+            source_device=binding.source_device,
+            pid=binding.pid,
+            process_start_time=binding.process_start_time,
+            cwd=binding.cwd,
+            source_offset=binding.source_offset,
+            source_mtime=binding.source_mtime,
+            observed_at=binding.observed_at or received_at,
+            last_seen_at=received_at,
+            binding_state="observed",
+        )
+
+        if existing is None:
+            db.add(UnmanagedSessionBinding(**fields))
+        else:
+            for key, value in fields.items():
+                setattr(existing, key, value)
+
+
 @router.post("/heartbeat", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
 async def ingest_heartbeat(
     payload: HeartbeatIn,
@@ -326,6 +426,7 @@ async def ingest_heartbeat(
             _disk = payload.disk_free_bytes
             _offline = 1 if payload.is_offline else 0
             _managed_leases = payload.managed_sessions
+            _unmanaged_bindings = payload.unmanaged_session_bindings
 
             def _do_heartbeat(write_db: Session) -> None:
                 hb = AgentHeartbeat(
@@ -361,6 +462,13 @@ async def ingest_heartbeat(
                     AgentHeartbeat.device_id == _device_id,
                     AgentHeartbeat.received_at < cutoff,
                 ).delete()
+                if _unmanaged_bindings:
+                    _upsert_unmanaged_session_bindings(
+                        write_db,
+                        _unmanaged_bindings,
+                        device_id=_device_id,
+                        received_at=_now,
+                    )
                 runtime_events = _runtime_events_for_managed_leases(
                     _managed_leases,
                     device_id=_device_id,
