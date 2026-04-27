@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from io import StringIO
 from types import SimpleNamespace
 
 from cryptography.fernet import Fernet
@@ -91,6 +92,53 @@ def test_codex_version_uses_operator_timeout(monkeypatch):
     monkeypatch.setattr(codex_cli.subprocess, "run", fake_run)
 
     assert codex_cli._codex_version("/tmp/codex") == {"ok": True, "value": "codex-cli 9.9.9", "error": None}
+
+
+def test_emit_warp_cli_agent_event_writes_osc777(monkeypatch, tmp_path):
+    output = StringIO()
+
+    monkeypatch.setenv("TERM_PROGRAM", "WarpTerminal")
+    monkeypatch.setenv("WARP_CLI_AGENT_PROTOCOL_VERSION", "1")
+    monkeypatch.setattr(output, "isatty", lambda: True)
+    monkeypatch.setattr(codex_cli.sys, "stdout", output)
+
+    codex_cli._emit_warp_cli_agent_event(
+        event="session_start",
+        session_id="session-123",
+        cwd=tmp_path,
+        project="demo",
+    )
+
+    marker = output.getvalue()
+    assert marker.startswith("\033]777;warp://cli-agent;")
+    assert marker.endswith("\a")
+    payload = json.loads(marker.removeprefix("\033]777;warp://cli-agent;").removesuffix("\a"))
+    assert payload == {
+        "v": 1,
+        "agent": "codex",
+        "event": "session_start",
+        "session_id": "session-123",
+        "cwd": str(tmp_path),
+        "project": "demo",
+    }
+
+
+def test_emit_warp_cli_agent_event_skips_non_warp_terminal(monkeypatch, tmp_path):
+    output = StringIO()
+
+    monkeypatch.delenv("TERM_PROGRAM", raising=False)
+    monkeypatch.setenv("WARP_CLI_AGENT_PROTOCOL_VERSION", "1")
+    monkeypatch.setattr(output, "isatty", lambda: True)
+    monkeypatch.setattr(codex_cli.sys, "stdout", output)
+
+    codex_cli._emit_warp_cli_agent_event(
+        event="session_start",
+        session_id="session-123",
+        cwd=tmp_path,
+        project=None,
+    )
+
+    assert output.getvalue() == ""
 
 
 def test_codex_doctor_reports_binary_legacy_artifacts_and_bridge_state(monkeypatch, tmp_path):
