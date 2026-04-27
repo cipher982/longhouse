@@ -1,6 +1,6 @@
 ---
 name: zerg-hosted-debug
-description: Debug hosted Longhouse instances on zerg. Use when investigating david010/live prod behavior, control-plane-managed tenants, loop inbox cards, turn reviews, hosted auth, or tenant SQLite state.
+description: Debug hosted Longhouse instances on zerg. Use when investigating david010/live prod behavior, control-plane-managed tenants, managed session state, hosted auth, or tenant SQLite state.
 ---
 
 # Zerg Hosted Debug
@@ -12,17 +12,16 @@ Use this when the question is about a live hosted tenant, not local `make dev`.
 Start with the repo helper:
 
 ```bash
-bash scripts/ops/hosted-loop-debug.sh david010
-bash scripts/ops/hosted-loop-debug.sh --subdomain david010 --session <session-id> --limit 5
-bash scripts/ops/hosted-loop-debug.sh --subdomain david010 --logs
-bash scripts/ops/hosted-loop-debug.sh --subdomain david010 --session <session-id> --json
+bash scripts/ops/hosted-session-debug.sh --subdomain david010 --session <session-id> --limit 20
+bash scripts/ops/hosted-session-debug.sh --subdomain david010 --session <session-id> --logs
+bash scripts/ops/hosted-session-debug.sh --subdomain david010 --session <session-id> --json
 ```
 
 It does the right order automatically:
 - resolve the tenant via the control plane
-- mint a hosted browser session cookie
-- fetch `/api/oikos/loop-inbox` and `/api/oikos/turn-reviews`
-- query `/data/longhouse.db` inside the running tenant container
+- query the tenant SQLite DB on the host data path
+- summarize `sessions`, `events`, `session_runtime_events`, `session_runtime_state`, and `session_turns`
+- summarize recent WriteSerializer pressure and request counts from tenant logs
 
 Prefer this over ad hoc `ssh` + guessed DB paths + nested heredoc quoting.
 
@@ -45,14 +44,11 @@ It uses the existing repo helper in `scripts/lib/hosted-instance.sh`, which alre
 
 ## Debug Order
 
-1. Check the API view first.
-2. If the card is missing, inspect `/api/oikos/turn-reviews` for the same session.
-3. If the API and UI disagree, inspect live SQLite inside the tenant container.
-4. Only then read logs.
-
-For loop cards specifically, the inbox only shows the latest review per session when:
-- `execution_state` is `awaiting_user_approval` or `needs_human`
-- `status` is `recorded` or `enqueued`
+1. Check `sessions` for execution ownership, managed transport, revisions, and misleading `ended_at`.
+2. Check `session_runtime_state` for current phase, active tool, terminal state, and live timestamps.
+3. Check recent `events` and `session_runtime_events` to see what ingested and when.
+4. Check WriteSerializer/request-count summaries to distinguish hosted ingest lag from provider-loop latency.
+5. Only then tail full logs.
 
 ## Host Notes
 

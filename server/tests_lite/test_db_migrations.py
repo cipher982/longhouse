@@ -310,51 +310,6 @@ def test_startup_migration_adds_session_loop_mode_and_backfills_assist(tmp_path)
     assert rows == [("00000000-0000-0000-0000-000000000123", "assist", None)]
 
 
-def test_startup_migration_adds_turn_review_follow_up_prompt_and_timing_columns(tmp_path):
-    db_path = tmp_path / "legacy_session_turn_reviews_follow_up.db"
-    engine = make_engine(f"sqlite:///{db_path}")
-
-    with engine.begin() as conn:
-        conn.exec_driver_sql(
-            """
-            CREATE TABLE session_turn_reviews (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id VARCHAR(36) NOT NULL,
-                owner_id INTEGER,
-                assistant_event_id INTEGER NOT NULL,
-                turn_index INTEGER NOT NULL,
-                trigger_type VARCHAR(64) DEFAULT 'turn.completed',
-                loop_mode VARCHAR(20) NOT NULL,
-                decision VARCHAR(32) NOT NULL,
-                summary TEXT NOT NULL,
-                rationale TEXT,
-                turn_excerpt TEXT,
-                mode_capability VARCHAR(32),
-                mode_summary TEXT,
-                execution_state VARCHAR(32),
-                recommended_action VARCHAR(64),
-                blocked_reasons JSON,
-                status VARCHAR(32) DEFAULT 'recorded',
-                reason VARCHAR(100),
-                run_id INTEGER,
-                actual_outcome VARCHAR(32),
-                shadow_alignment VARCHAR(32),
-                created_at DATETIME
-            )
-            """
-        )
-
-    _migrate_agents_columns(engine)
-
-    with engine.connect() as conn:
-        columns = {row[1] for row in conn.execute(text("PRAGMA table_info(session_turn_reviews)"))}
-
-    assert "follow_up_prompt" in columns
-    assert "turn_loop_claimed_at" in columns
-    assert "controller_started_at" in columns
-    assert "controller_completed_at" in columns
-
-
 def test_heavy_migration_plan_detects_legacy_pending(tmp_path):
     db_path = tmp_path / "legacy_pending.db"
     engine = make_engine(f"sqlite:///{db_path}")

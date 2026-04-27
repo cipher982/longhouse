@@ -735,29 +735,6 @@ def _migrate_agents_columns(engine: Engine) -> None:
     except Exception:
         logger.debug("agent_heartbeats table migration skipped (table may not exist yet)", exc_info=True)
 
-    # session_turn_reviews table migrations (legacy — turn-review pipeline removed)
-    try:
-        with engine.connect() as conn:
-            columns = {row[1] for row in conn.execute(text("PRAGMA table_info(session_turn_reviews)"))}
-            if columns:
-                if "follow_up_prompt" not in columns:
-                    conn.execute(text("ALTER TABLE session_turn_reviews ADD COLUMN follow_up_prompt TEXT"))
-                if "assistant_turn_finished_at" not in columns:
-                    conn.execute(text("ALTER TABLE session_turn_reviews ADD COLUMN assistant_turn_finished_at DATETIME"))
-                if "turn_loop_enqueued_at" not in columns:
-                    conn.execute(text("ALTER TABLE session_turn_reviews ADD COLUMN turn_loop_enqueued_at DATETIME"))
-                if "turn_loop_claimed_at" not in columns:
-                    conn.execute(text("ALTER TABLE session_turn_reviews ADD COLUMN turn_loop_claimed_at DATETIME"))
-                if "controller_started_at" not in columns:
-                    conn.execute(text("ALTER TABLE session_turn_reviews ADD COLUMN controller_started_at DATETIME"))
-                if "controller_completed_at" not in columns:
-                    conn.execute(text("ALTER TABLE session_turn_reviews ADD COLUMN controller_completed_at DATETIME"))
-                if "turn_loop_completed_at" not in columns:
-                    conn.execute(text("ALTER TABLE session_turn_reviews ADD COLUMN turn_loop_completed_at DATETIME"))
-            conn.commit()
-    except Exception:
-        logger.debug("session_turn_reviews table migration skipped (table may not exist yet)", exc_info=True)
-
     # session_turns table migrations
     try:
         with engine.connect() as conn:

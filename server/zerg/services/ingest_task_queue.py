@@ -376,7 +376,7 @@ async def _execute_task(task_id: str, session_id: str, task_type: str) -> bool:
         logger.info("Ingest task %s (%s/%s) re-queued: %s", task_id, task_type, session_id, e)
         # RetryTaskLater means "not yet" (session still active), not a real failure.
         # Reset to pending WITHOUT consuming the retry budget so we never drop a
-        # turn review just because the session was actively running for >6 seconds.
+        # deferred ingest task just because the session was actively running.
         await ws.execute(lambda db, _e=str(e): _reset_for_retry_later(db, task_id, _e), label="task-retry")
         return True
     except asyncio.TimeoutError:

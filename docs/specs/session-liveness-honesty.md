@@ -122,7 +122,7 @@ Managed-local truth tier keeps its existing rich labels (`runtime_display.detail
 
 - We do not attempt per-turn phase accuracy for unmanaged sessions. No hook injection into bare CLI.
 - We do not chase managed-quality truth for unmanaged. "Unknown" is an acceptable honest answer.
-- We do not touch loop inbox, turn reviews, briefings, or insights.
+- We do not touch briefings or insights in this slice. Loop inbox and turn reviews are already removed from the launch surface.
 
 ## Part 4 — Phased plan
 
