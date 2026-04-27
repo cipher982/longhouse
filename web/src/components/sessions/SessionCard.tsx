@@ -153,7 +153,6 @@ export function SessionCard({
         `Started ${formatRelativeTime(thread.root.started_at, relativeNowMs)}`,
         showContinuationCount ? `${thread.continuation_count} continuations` : null,
       ].filter(Boolean).join(" • ");
-  const showStatusRow = runtime.hasSignal || !!cardCapabilityLabel;
 
   const showKeywordSnippet = !isSemanticResult && !!highlightQuery && !!detailSession.match_snippet;
   const showSemanticSnippet = isSemanticResult && !!detailSession.match_snippet;
@@ -165,6 +164,7 @@ export function SessionCard({
     !!session.ended_at || runtime.status === "completed" || !!session.terminal_state;
   const hasCurrentControlledPresence = hasControlPath && runtime.presenceState != null;
   const isClosedSession = hasKnownClosedProcess && !hasCurrentControlledPresence;
+  const showStatusRow = isClosedSession || runtime.hasSignal || !!cardCapabilityLabel;
   const cardClassName = [
     "session-card",
     confirming ? "session-card--confirming" : "",
@@ -261,6 +261,15 @@ export function SessionCard({
 
           {showStatusRow && (
             <div className="session-card-status">
+              {isClosedSession ? (
+                <span
+                  className="session-card-closed-pill"
+                  data-testid="session-card-closed-state"
+                  title="This process is closed."
+                >
+                  Closed
+                </span>
+              ) : null}
               {runtime.hasSignal && (
                 <div className={`session-card-runtime session-card-runtime--${runtime.tone}`}>
                   <PresenceBadge
