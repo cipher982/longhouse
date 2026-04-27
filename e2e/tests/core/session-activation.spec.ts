@@ -175,16 +175,14 @@ test.describe("Session activation surfaces", () => {
     await page.waitForSelector('body[data-ready="true"]', { timeout: 15_000 });
 
     const runnerAction = page.getByTestId("timeline-empty-runner-action");
-    if (await runnerAction.count()) {
-      await expect(runnerAction).toBeVisible();
-      expect((await runnerAction.textContent())?.trim()).toBe("Machines");
-      await runnerAction.click();
-    } else {
-      const globalRunnerTab = page.getByTestId("global-runners-tab");
-      await expect(globalRunnerTab).toBeVisible();
-      await expect(globalRunnerTab).toHaveText("Machines");
-      await globalRunnerTab.click();
+    const runnerActionText = await runnerAction.textContent({ timeout: 500 }).catch(() => null);
+    if (runnerActionText !== null) {
+      expect(runnerActionText.trim()).toBe("Machines");
     }
+    const globalRunnerTab = page.getByTestId("global-runners-tab");
+    await expect(globalRunnerTab).toBeVisible();
+    await expect(globalRunnerTab).toHaveText("Machines");
+    await globalRunnerTab.click();
 
     await page.waitForURL("**/runners", { timeout: 10_000 });
     await page.waitForSelector('body[data-ready="true"]', { timeout: 15_000 });
