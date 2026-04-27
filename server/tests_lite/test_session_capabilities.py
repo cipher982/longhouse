@@ -14,6 +14,7 @@ os.environ.setdefault("JWT_SECRET", "test-jwt-secret-value")
 os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-value")
 
 from zerg.services.session_capabilities import build_session_capabilities
+from zerg.services.session_views import build_session_capabilities_response
 
 
 def _make_session(**overrides):
@@ -63,3 +64,18 @@ def test_build_session_capabilities_drops_legacy_tmux_sessions_out_of_live_contr
     assert capabilities.live_control_available is False
     assert capabilities.host_reattach_available is False
     assert capabilities.reply_to_live_session_available is False
+
+
+def test_capability_response_prefers_source_runner_name_for_display_label():
+    session = _make_session(
+        execution_home="managed_local",
+        managed_transport="claude_channel_bridge",
+        source_runner_id=17,
+        source_runner_name="David MacBook",
+    )
+    capabilities = build_session_capabilities(session)
+
+    response = build_session_capabilities_response(session=session, capability_flags=capabilities)
+
+    assert response.display_label == "Live on David MacBook"
+    assert response.display_tone == "success"

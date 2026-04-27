@@ -486,6 +486,8 @@ describe("SessionsPage", () => {
             },
             capabilities: makeCapabilities({
               host_reattach_available: true,
+              display_label: "Reconnect required",
+              display_tone: "warning",
             }),
           }),
         ],
@@ -500,7 +502,8 @@ describe("SessionsPage", () => {
     renderSessionsPage("/timeline");
 
     const capability = await screen.findByTestId("session-card-capability");
-    expect(capability).toHaveTextContent("Control offline");
+    expect(capability).toHaveTextContent("Reconnect required");
+    expect(capability).toHaveClass("session-card-capability-pill--warning");
     expect(capability).toHaveAttribute(
       "title",
       "Longhouse can see this live Codex session, but cannot send prompts until the engine reconnects.",

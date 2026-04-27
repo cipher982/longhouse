@@ -27,6 +27,13 @@ import {
 
 const SESSION_CARD_HOVER_PREFETCH_DELAY_MS = 180;
 
+function normalizeCapabilityTone(value: string | null | undefined): "neutral" | "success" | "warning" | null {
+  if (value === "neutral" || value === "success" || value === "warning") {
+    return value;
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // ProviderIcon
 // ---------------------------------------------------------------------------
@@ -103,6 +110,9 @@ export function SessionCard({
   const session = compatibilityMode ? detailSession : thread.head;
   const interaction = getSessionInteractionCapabilities({ session });
   const capabilityDisplayLabel = session.capabilities?.display_label?.trim() || null;
+  const capabilityDisplayTone =
+    normalizeCapabilityTone(session.capabilities?.display_tone) ??
+    interaction.capabilityVariant;
   const cardCapabilityLabel =
     interaction.mode === "managed_local_unavailable"
       ? capabilityDisplayLabel ?? interaction.capabilityLabel
@@ -311,7 +321,7 @@ export function SessionCard({
               ) : null}
               {cardCapabilityLabel ? (
                 <span
-                  className={`session-card-capability-pill session-card-capability-pill--${interaction.capabilityVariant}`}
+                  className={`session-card-capability-pill session-card-capability-pill--${capabilityDisplayTone}`}
                   data-testid="session-card-capability"
                   title={interaction.capabilityDescription ?? undefined}
                 >

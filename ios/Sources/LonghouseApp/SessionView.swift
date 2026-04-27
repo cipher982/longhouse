@@ -333,7 +333,7 @@ private struct SessionRuntimeDock: View {
 
             Text(capabilityLabel)
                 .font(.caption2.weight(.medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(capabilityColor)
                 .lineLimit(1)
         }
         .padding(.horizontal, 12)
@@ -361,6 +361,14 @@ private struct SessionRuntimeDock: View {
 
     private var capabilityLabel: String {
         detail.runtimeCapabilityLabel
+    }
+
+    private var capabilityColor: Color {
+        switch detail.runtimeCapabilityTone {
+        case "success": return .green
+        case "warning": return .orange
+        default: return .secondary
+        }
     }
 
     private var accessibilityLabel: String {

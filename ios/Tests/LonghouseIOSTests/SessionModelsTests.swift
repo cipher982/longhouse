@@ -40,6 +40,7 @@ struct SessionModelsTests {
         #expect(detail.effectiveLoopMode == .assist)
         #expect(detail.canSendLive)
         #expect(detail.runtimeCapabilityLabel == "Live on this Mac")
+        #expect(detail.runtimeCapabilityTone == "success")
         #expect(detail.cockpitPhaseLabel == "Waiting on you")
         #expect(detail.controlHealthMessage == nil)
     }
@@ -140,6 +141,7 @@ struct SessionModelsTests {
 
         #expect(detail.isReadOnly)
         #expect(detail.runtimeCapabilityLabel == "Search only")
+        #expect(detail.runtimeCapabilityTone == "neutral")
         #expect(detail.controlHealthMessage == "This imported session is searchable, but Longhouse cannot steer it.")
         #expect(detail.cockpitPhaseLabel == "Idle")
     }
