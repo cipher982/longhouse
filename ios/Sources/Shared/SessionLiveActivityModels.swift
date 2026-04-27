@@ -18,12 +18,17 @@ struct SessionWatchAttributes: ActivityAttributes {
 
 extension SessionDetail {
     func liveActivityContentState(updatedAt: Date = Date()) -> SessionWatchAttributes.ContentState {
-        let state = presenceState ?? status ?? "unknown"
-        let tool = presenceTool?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let state = runtimeDisplay?.state ?? presenceState ?? status ?? "unknown"
+        let tool = RuntimeDisplayText.canonicalToolLabel(
+            runtimeDisplay?.compactToolLabel ?? activeTool ?? presenceTool
+        )
+        let phase = RuntimeDisplayText.canonicalDisplayText(runtimeDisplay?.phaseLabel)
+            ?? RuntimeDisplayText.canonicalDisplayText(displayPhase)
+            ?? liveActivityPhaseLabel(state: state, tool: tool)
         return SessionWatchAttributes.ContentState(
             presenceState: state,
-            displayPhase: liveActivityPhaseLabel(state: state, tool: tool?.isEmpty == false ? tool : nil),
-            activeTool: tool?.isEmpty == false ? tool : nil,
+            displayPhase: phase,
+            activeTool: tool,
             updatedAt: Int(updatedAt.timeIntervalSince1970),
             isAttention: state == "needs_user" || state == "blocked"
         )
