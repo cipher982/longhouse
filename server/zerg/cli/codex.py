@@ -6,7 +6,9 @@ import json
 import os
 import shlex
 import shutil
+import signal
 import subprocess
+import sys
 from collections import deque
 from pathlib import Path
 from urllib.error import HTTPError
@@ -46,6 +48,22 @@ _ROLLOUT_TURN_EVENT_TYPES = {"task_started", "task_complete", "turn_aborted"}
 _ROLLOUT_TERMINAL_EVENT_TYPES = {"task_complete", "turn_aborted"}
 _ROLLOUT_TAIL_LINES = 256
 _CODEX_VERSION_TIMEOUT_SECONDS = 5
+_CODEX_BIN_OPTION_HELP = " ".join(
+    [
+        "Debug override for the Codex executable used by managed sessions",
+        f"(defaults to {CODEX_BIN_ENV}, then `codex` on PATH).",
+    ]
+)
+_CODEX_DOCTOR_BIN_OPTION_HELP = " ".join(
+    [
+        "Debug override for the Codex executable to inspect",
+        f"(defaults to {CODEX_BIN_ENV}, then `codex` on PATH).",
+    ]
+)
+
+
+def _stdio_ttys() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
 
 
 def _resolve_explicit_codex_binary(candidate: str, *, source: str) -> str:
@@ -191,7 +209,12 @@ def _read_codex_bridge_states(state_root: Path, *, check_readyz: bool = False) -
     return states
 
 
-def _collect_codex_doctor(*, codex_bin: str | None, state_root: Path | None, check_readyz: bool = False) -> dict[str, object]:
+def _collect_codex_doctor(
+    *,
+    codex_bin: str | None,
+    state_root: Path | None,
+    check_readyz: bool = False,
+) -> dict[str, object]:
     resolution = _resolve_codex_binary_with_source(codex_bin)
     resolved_codex_bin = resolution["path"]
     home = Path.home()
@@ -502,13 +525,53 @@ def _run_native_codex_tui(
     cmd += ["--enable", "tui_app_server", "--remote", ws_url]
     env = os.environ.copy()
     env["LONGHOUSE_MANAGED_SESSION_ID"] = session_id
-    completed = subprocess.run(
+    if os.name == "posix" and _stdio_ttys():
+        return _run_foreground_process_group(cmd=cmd, cwd=cwd, env=env)
+    completed = subprocess.run(cmd, check=False, cwd=str(cwd), env=env)
+    return int(completed.returncode)
+
+
+def _run_foreground_process_group(*, cmd: list[str], cwd: Path, env: dict[str, str]) -> int:
+    """Run an interactive child as the terminal foreground job.
+
+    Warp keys Codex session affordances off the foreground process group. If
+    `longhouse codex` keeps the Python wrapper as that group leader, Warp sees
+    Longhouse instead of Codex even though a Codex TUI child is running.
+    """
+
+    stdin_fd = sys.stdin.fileno()
+    parent_pgrp = os.getpgrp()
+
+    def make_child_group() -> None:
+        os.setpgrp()
+
+    child = subprocess.Popen(
         cmd,
-        check=False,
         cwd=str(cwd),
         env=env,
+        preexec_fn=make_child_group,
     )
-    return int(completed.returncode)
+    child_pgrp = child.pid
+    try:
+        os.setpgid(child.pid, child_pgrp)
+    except OSError:
+        # The child may already have completed setpgrp+exec by the time the
+        # parent resumes. In that normal race, the desired process group exists.
+        pass
+
+    old_sigttou = signal.signal(signal.SIGTTOU, signal.SIG_IGN)
+    foreground_handed_off = False
+    try:
+        os.tcsetpgrp(stdin_fd, child_pgrp)
+        foreground_handed_off = True
+        return int(child.wait())
+    finally:
+        if foreground_handed_off:
+            try:
+                os.tcsetpgrp(stdin_fd, parent_pgrp)
+            except OSError:
+                pass
+        signal.signal(signal.SIGTTOU, old_sigttou)
 
 
 def _launch_managed_local_from_api(
@@ -584,7 +647,7 @@ def codex(
     codex_bin: str | None = typer.Option(
         None,
         "--codex-bin",
-        help=(f"Debug override for the Codex executable used by managed sessions (defaults to {CODEX_BIN_ENV}, then `codex` on PATH)."),
+        help=_CODEX_BIN_OPTION_HELP,
     ),
     bypass_approvals: bool = typer.Option(
         False,
@@ -714,7 +777,7 @@ def codex_doctor(
     codex_bin: str | None = typer.Option(
         None,
         "--codex-bin",
-        help=(f"Debug override for the Codex executable to inspect (defaults to {CODEX_BIN_ENV}, then `codex` on PATH)."),
+        help=_CODEX_DOCTOR_BIN_OPTION_HELP,
     ),
     state_root: Path | None = typer.Option(
         None,
