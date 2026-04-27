@@ -137,9 +137,28 @@ def build_managed_local_send_text_command(*, session: AgentSession, text: str) -
     )
 
 
+def build_managed_local_steer_text_command(*, session: AgentSession, text: str) -> str:
+    """Build a mid-turn steer command. Codex-only this batch; Claude channel
+    has no equivalent first-class primitive yet."""
+    transport = _resolve_transport(getattr(session, "managed_transport", None))
+    if transport != ManagedSessionTransport.CODEX_APP_SERVER:
+        raise ManagedLocalTransportError(
+            "Mid-turn steer is only supported on codex_app_server transports",
+        )
+    session_id = str(getattr(session, "id", "") or "").strip()
+    if not session_id:
+        raise ManagedLocalTransportError("Managed local session is missing session ID")
+    return _build_engine_bridge_shell_command(
+        session_id=session_id,
+        subcommand="steer",
+        args=("--text", shlex.quote(text)),
+    )
+
+
 __all__ = [
     "ManagedLocalTransportError",
     "build_managed_local_attach_command",
     "build_managed_local_interrupt_command",
     "build_managed_local_send_text_command",
+    "build_managed_local_steer_text_command",
 ]

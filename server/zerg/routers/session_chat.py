@@ -376,6 +376,89 @@ def _queued_summary(row) -> QueuedInputSummary:
     )
 
 
+async def _dispatch_steer_input(
+    *,
+    source_session,
+    owner_id: int,
+    body: SessionInputRequest,
+    request_id: str,
+    db: Session,
+) -> SessionInputResponse:
+    """Send a mid-turn steer, surfacing turn-ended races as a structured 409.
+
+    Codex's own guidance: do not silently fall back to queue when the user
+    chose intent=steer — the intent is corrective, and a silent queue could
+    cause the message to land later than desired without the user noticing.
+    """
+    from zerg.services.managed_local_control import MANAGED_LOCAL_STEER_TURN_ENDED
+    from zerg.services.managed_local_control import steer_text_to_managed_local_session
+    from zerg.services.session_capabilities import build_session_capabilities
+
+    capabilities = build_session_capabilities(source_session)
+    if not capabilities.can_steer_active_turn:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error_code": "steer_unsupported",
+                "message": "This session does not support mid-turn steer on the current transport.",
+            },
+        )
+
+    # Record a delivering row so the steer attempt is audit-visible even on
+    # failure (for drain-failure UX parity with intent=auto).
+    row = create_session_input(
+        db,
+        session_id=source_session.id,
+        text=body.text,
+        owner_id=owner_id,
+        intent=INPUT_INTENT_STEER,
+        status="delivering",
+        request_id=request_id,
+    )
+
+    result = await steer_text_to_managed_local_session(
+        db=db,
+        owner_id=owner_id,
+        session=source_session,
+        text=body.text,
+        commis_id=request_id,
+    )
+
+    if result.ok:
+        from zerg.services.session_inputs import mark_delivered as _mark_input_delivered
+
+        _mark_input_delivered(db, int(row.id))
+        recent = list_recent_inputs(db, source_session.id)
+        return SessionInputResponse(
+            outcome="sent",
+            input_id=int(row.id),
+            intent=INPUT_INTENT_STEER,
+            queued=[_queued_summary(r) for r in recent],
+        )
+
+    # Turn-ended race: explicit code so the UI can prompt the user to
+    # queue-next instead of silently deciding for them.
+    if result.error == MANAGED_LOCAL_STEER_TURN_ENDED:
+        _mark_input_failed(db, int(row.id), error="turn_ended")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error_code": "turn_ended",
+                "message": "The active turn already ended. Queue this as the next message instead?",
+            },
+        )
+
+    # Generic failure — still mark failed and bubble up.
+    _mark_input_failed(db, int(row.id), error=str(result.error or "steer failed")[:200])
+    raise HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail={
+            "error_code": "steer_failed",
+            "message": str(result.error or "Managed local steer failed"),
+        },
+    )
+
+
 async def _create_session_input_response(
     *,
     source_session,
@@ -383,14 +466,7 @@ async def _create_session_input_response(
     body: SessionInputRequest,
     db: Session,
 ) -> SessionInputResponse:
-    # Validate intent. Steer is reserved for Phase 3; reject for now so callers
-    # don't accidentally depend on silent fallback behavior.
-    if body.intent == INPUT_INTENT_STEER:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="intent=steer not yet supported",
-        )
-    if body.intent not in (INPUT_INTENT_AUTO, INPUT_INTENT_QUEUE):
+    if body.intent not in (INPUT_INTENT_AUTO, INPUT_INTENT_QUEUE, INPUT_INTENT_STEER):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"unknown intent: {body.intent}",
@@ -407,6 +483,15 @@ async def _create_session_input_response(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=(f"Too many queued inputs for this session ({current}); " "cancel one before queuing another"),
             )
+
+    if body.intent == INPUT_INTENT_STEER:
+        return await _dispatch_steer_input(
+            source_session=source_session,
+            owner_id=owner_id,
+            body=body,
+            request_id=request_id,
+            db=db,
+        )
 
     # Queue intent always persists and returns without attempting dispatch.
     if body.intent == INPUT_INTENT_QUEUE:

@@ -198,29 +198,59 @@ def mark_failed(db: Session, input_id: int, *, error: str) -> None:
 
 
 def requeue_stuck_delivering(db: Session, *, stale_after_secs: float = DELIVERING_STALE_AFTER_SECS) -> int:
-    """Rewind `delivering` rows older than threshold back to `queued`.
+    """Resolve `delivering` rows older than the threshold.
 
     Called once at runtime startup; wedged rows usually mean the process died
-    mid-dispatch. A short threshold is fine because a real dispatch finishes in
-    well under a second.
+    mid-dispatch.
+
+    - `intent=auto` / `intent=queue` rows: rewind to `queued` so the next
+      terminal-phase drain picks them up. Safe because the user asked for
+      either "best-effort dispatch" or "wait for the next boundary" — both
+      are compatible with a later retry.
+    - `intent=steer` rows: transition to `failed`, never requeue. Steer is
+      a corrective, time-sensitive intent; converting it into a queued
+      message after a crash would be a silent fallback that violates the
+      no-silent-fallback contract.
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_after_secs)
-    updated = (
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(seconds=stale_after_secs)
+
+    # Intent-aware split.
+    requeued = (
         db.query(SessionInput)
         .filter(
             SessionInput.status == INPUT_STATUS_DELIVERING,
             SessionInput.updated_at < cutoff,
+            SessionInput.intent != INPUT_INTENT_STEER,
         )
         .update(
             {
                 "status": INPUT_STATUS_QUEUED,
                 "request_id": None,
-                "updated_at": datetime.now(timezone.utc),
+                "updated_at": now,
+            },
+            synchronize_session=False,
+        )
+    )
+    failed = (
+        db.query(SessionInput)
+        .filter(
+            SessionInput.status == INPUT_STATUS_DELIVERING,
+            SessionInput.updated_at < cutoff,
+            SessionInput.intent == INPUT_INTENT_STEER,
+        )
+        .update(
+            {
+                "status": INPUT_STATUS_FAILED,
+                "last_error": "steer interrupted by restart",
+                "updated_at": now,
             },
             synchronize_session=False,
         )
     )
     db.commit()
-    if updated:
-        logger.info("Requeued %d stuck SessionInput rows from delivering -> queued", updated)
-    return int(updated)
+    if requeued:
+        logger.info("Requeued %d stuck SessionInput rows from delivering -> queued", requeued)
+    if failed:
+        logger.info("Marked %d stuck steer SessionInput rows as failed (no silent requeue)", failed)
+    return int(requeued)

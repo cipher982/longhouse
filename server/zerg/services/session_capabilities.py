@@ -16,6 +16,11 @@ class SessionCapabilityFlags:
     host_reattach_available: bool
     reply_to_live_session_available: bool
     can_queue_next_input: bool
+    # True when mid-turn steer is likely to land. Gated on transport being
+    # codex_app_server (the only transport with a turn/steer primitive
+    # today). The bridge may still reject a steer if the active turn ended
+    # between UI check and dispatch — callers must handle that race.
+    can_steer_active_turn: bool
     home_label: str | None
 
 
@@ -73,6 +78,7 @@ def build_session_capabilities(session: AgentSession | None) -> SessionCapabilit
     execution_home = resolve_execution_home(session) if session is not None else SessionExecutionHome.LEGACY
     managed_transport = resolve_managed_transport(session)
     live_control_available = supports_live_control(session)
+    can_steer = live_control_available and managed_transport == ManagedSessionTransport.CODEX_APP_SERVER
     return SessionCapabilityFlags(
         execution_home=execution_home,
         managed_transport=managed_transport,
@@ -83,5 +89,6 @@ def build_session_capabilities(session: AgentSession | None) -> SessionCapabilit
         # on live_control_available so the UI only shows the queued affordance
         # on sessions Longhouse can actually deliver into.
         can_queue_next_input=live_control_available,
+        can_steer_active_turn=can_steer,
         home_label=_execution_home_label(execution_home),
     )

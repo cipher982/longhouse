@@ -329,6 +329,9 @@ function SessionDetailWorkspaceRoute({
                   canQueueNextInput={Boolean(
                     displaySession.capabilities?.can_queue_next_input,
                   )}
+                  canSteerActiveTurn={Boolean(
+                    displaySession.capabilities?.can_steer_active_turn,
+                  )}
                   onSessionChanged={(nextSessionId) => {
                     if (!nextSessionId || nextSessionId === session.id) return;
                     navigate(`/timeline/${nextSessionId}`, {

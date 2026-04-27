@@ -59,6 +59,7 @@ def build_session_capabilities_response(
         host_reattach_available=capability_flags.host_reattach_available,
         reply_to_live_session_available=capability_flags.reply_to_live_session_available,
         can_queue_next_input=capability_flags.can_queue_next_input,
+        can_steer_active_turn=capability_flags.can_steer_active_turn,
     )
 
 
@@ -143,6 +144,10 @@ class SessionCapabilitiesResponse(BaseModel):
     can_queue_next_input: bool = Field(
         False,
         description="True when the user can queue input to auto-send at the next safe turn boundary",
+    )
+    can_steer_active_turn: bool = Field(
+        False,
+        description="True when mid-turn steer is likely to land; the active turn may still end before the call arrives",
     )
 
 

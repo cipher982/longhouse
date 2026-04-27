@@ -23,6 +23,7 @@ from zerg.services.agents_store import AgentsStore
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.managed_local_transport import ManagedLocalTransportError
 from zerg.services.managed_local_transport import build_managed_local_send_text_command
+from zerg.services.managed_local_transport import build_managed_local_steer_text_command
 from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
@@ -507,3 +508,77 @@ async def send_text_to_managed_local_session(
         baseline_event_id=baseline_event_id,
         verified_turn_started=effective_verify,
     )
+
+
+# Sentinel returned in `ManagedLocalSendResult.error` when the codex-bridge
+# CLI reports `error_code: turn_ended` on stderr. Backend dispatch turns this
+# into a 409 with a stable error code so the UI can prompt the user to queue
+# instead.
+MANAGED_LOCAL_STEER_TURN_ENDED = "turn_ended"
+
+
+async def steer_text_to_managed_local_session(
+    *,
+    db: Session,
+    owner_id: int,
+    session: AgentSession,
+    text: str,
+    commis_id: str | None = None,
+    timeout_secs: int = 15,
+) -> ManagedLocalSendResult:
+    """Inject mid-turn steer text into the currently active Codex turn.
+
+    Claude channel has no steer primitive today — the transport helper will
+    raise if called on a non-codex transport. Callers should gate on
+    `can_steer_active_turn`.
+
+    Turn-ended races (active turn ended between the UI's capability check
+    and this dispatch) surface as `ManagedLocalSendResult(ok=False,
+    error=MANAGED_LOCAL_STEER_TURN_ENDED)` so the router can map to a
+    structured 409.
+    """
+
+    if str(getattr(session, "execution_home", "") or "").strip() != SessionExecutionHome.MANAGED_LOCAL.value:
+        return ManagedLocalSendResult(ok=False, error="Session is not managed_local")
+    runner_id = getattr(session, "source_runner_id", None)
+    if runner_id is None:
+        return ManagedLocalSendResult(ok=False, error="Managed local session is missing source runner metadata")
+
+    try:
+        command = build_managed_local_steer_text_command(session=session, text=text)
+    except ManagedLocalTransportError as exc:
+        return ManagedLocalSendResult(ok=False, error=str(exc))
+
+    dispatcher = get_runner_job_dispatcher()
+    result = await dispatcher.dispatch_job(
+        db=db,
+        owner_id=owner_id,
+        runner_id=int(runner_id),
+        command=command,
+        timeout_secs=timeout_secs,
+        commis_id=commis_id,
+        run_id=None,
+    )
+    if not result.get("ok"):
+        return ManagedLocalSendResult(
+            ok=False,
+            error=str(result.get("error", {}).get("message", "Failed to dispatch steer command")),
+        )
+
+    data = result.get("data", {})
+    exit_code = int(data.get("exit_code", 1))
+    stderr = data.get("stderr") or ""
+    if exit_code == 2 and "error_code: turn_ended" in stderr:
+        return ManagedLocalSendResult(
+            ok=False,
+            exit_code=exit_code,
+            error=MANAGED_LOCAL_STEER_TURN_ENDED,
+        )
+    if exit_code != 0:
+        detail = stderr.strip() or (data.get("stdout") or "").strip()
+        return ManagedLocalSendResult(
+            ok=False,
+            exit_code=exit_code,
+            error=detail or "Managed local steer command failed",
+        )
+    return ManagedLocalSendResult(ok=True, exit_code=0)

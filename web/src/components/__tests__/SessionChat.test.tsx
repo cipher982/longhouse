@@ -21,10 +21,25 @@ vi.mock("../../lib/auth-refresh", () => ({
   fetchWithRefresh: fetchWithRefreshMock,
 }));
 
-vi.mock("../../services/api/base", () => ({
-  buildUrl: (path: string) => path,
-  request: requestMock,
-}));
+vi.mock("../../services/api/base", () => {
+  class ApiError extends Error {
+    readonly status: number;
+    readonly url: string;
+    readonly body: unknown;
+    constructor({ url, status, body }: { url: string; status: number; body: unknown }) {
+      super(`Request failed (${status})`);
+      this.name = "ApiError";
+      this.status = status;
+      this.url = url;
+      this.body = body;
+    }
+  }
+  return {
+    buildUrl: (path: string) => path,
+    request: requestMock,
+    ApiError,
+  };
+});
 
 function makeSession(overrides: Partial<SessionChatTarget> = {}): SessionChatTarget {
   return {
@@ -496,6 +511,139 @@ describe("SessionChat", () => {
     expect(chip).toHaveTextContent("wait for it");
     expect(chip).toHaveTextContent(/queued/i);
     expect(screen.getByRole("button", { name: /cancel queued message/i })).toBeEnabled();
+  });
+
+  it("shows Send update primary + Queue next secondary when steer capability is on", async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData<SessionLockInfo | null>(["session-lock", "sess-1"], {
+      locked: true,
+      holder: null,
+      time_remaining_seconds: null,
+      fork_available: true,
+    });
+
+    let steerCalls = 0;
+    let queueCalls = 0;
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: true, fork_available: true });
+      }
+      if (String(path).endsWith("/inputs") && !init) {
+        return Promise.resolve([]);
+      }
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        const payload = JSON.parse(String(init.body ?? "{}"));
+        if (payload.intent === "steer") {
+          steerCalls += 1;
+          return Promise.resolve({
+            outcome: "sent",
+            input_id: steerCalls,
+            intent: "steer",
+            queued: [],
+          });
+        }
+        if (payload.intent === "queue") {
+          queueCalls += 1;
+          return Promise.resolve({
+            outcome: "queued",
+            input_id: 100 + queueCalls,
+            intent: "queue",
+            queued: [],
+          });
+        }
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat(
+      {
+        chatMode: "managed_local",
+        canQueueNextInput: true,
+        canSteerActiveTurn: true,
+      },
+      { queryClient },
+    );
+
+    await user.type(screen.getByRole("textbox"), "redirect the test");
+    expect(screen.getByRole("button", { name: /send update/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /queue next/i })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: /send update/i }));
+    await waitFor(() => expect(steerCalls).toBe(1));
+    expect(queueCalls).toBe(0);
+  });
+
+  it("offers Queue instead after a steer fails with turn_ended", async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData<SessionLockInfo | null>(["session-lock", "sess-1"], {
+      locked: true,
+      holder: null,
+      time_remaining_seconds: null,
+      fork_available: true,
+    });
+
+    const { ApiError } = await import("../../services/api/base");
+
+    let queueCalls = 0;
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: true, fork_available: true });
+      }
+      if (String(path).endsWith("/inputs") && !init) {
+        return Promise.resolve([]);
+      }
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        const payload = JSON.parse(String(init.body ?? "{}"));
+        if (payload.intent === "steer") {
+          return Promise.reject(
+            new ApiError({
+              url: String(path),
+              status: 409,
+              body: {
+                detail: {
+                  error_code: "turn_ended",
+                  message: "The active turn already ended.",
+                },
+              },
+            }),
+          );
+        }
+        if (payload.intent === "queue") {
+          queueCalls += 1;
+          return Promise.resolve({
+            outcome: "queued",
+            input_id: 200 + queueCalls,
+            intent: "queue",
+            queued: [],
+          });
+        }
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat(
+      {
+        chatMode: "managed_local",
+        canQueueNextInput: true,
+        canSteerActiveTurn: true,
+      },
+      { queryClient },
+    );
+
+    await user.type(screen.getByRole("textbox"), "too late");
+    await user.click(screen.getByRole("button", { name: /send update/i }));
+
+    // Turn-ended prompt appears with the original text + a Queue instead action.
+    const prompt = await screen.findByTestId("session-chat-turn-ended");
+    expect(prompt).toHaveTextContent("too late");
+    await user.click(screen.getByRole("button", { name: /queue instead/i }));
+    await waitFor(() => expect(queueCalls).toBe(1));
   });
 
   it("does not silently queue when Enter is pressed while working", async () => {

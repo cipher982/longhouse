@@ -15,6 +15,7 @@ def _capabilities(*, managed: bool = False) -> SessionCapabilityFlags:
         host_reattach_available=managed,
         reply_to_live_session_available=managed,
         can_queue_next_input=managed,
+        can_steer_active_turn=False,
         home_label="On this Mac" if managed else None,
     )
 
