@@ -85,10 +85,11 @@ test("render canary: SSE frame arrival → browser paint under SLA", async ({
     }
     const body = (await lookup.json()) as { session_id?: string | null };
     if (!body.session_id) {
-      throw new Error(
-        "No canary session available on server. Ensure the always-on " +
-          "canary producer has ingested at least one session.",
+      test.skip(
+        true,
+        "No canary session available on server; skipping render SLA check until the always-on canary producer ingests a session.",
       );
+      return;
     }
     canarySessionId = body.session_id;
   }
