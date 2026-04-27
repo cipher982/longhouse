@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from io import StringIO
+from pathlib import Path
 from types import SimpleNamespace
 
 from cryptography.fernet import Fernet
@@ -99,8 +100,23 @@ def test_emit_warp_cli_agent_event_writes_osc777(monkeypatch, tmp_path):
 
     monkeypatch.setenv("TERM_PROGRAM", "WarpTerminal")
     monkeypatch.setenv("WARP_CLI_AGENT_PROTOCOL_VERSION", "1")
+    monkeypatch.setenv("WARP_CLIENT_VERSION", "v0.2026.04.15.08.45.stable_02")
     monkeypatch.setattr(output, "isatty", lambda: True)
-    monkeypatch.setattr(codex_cli.sys, "stdout", output)
+    original_open = Path.open
+
+    class FakeTty:
+        def __enter__(self):
+            return output
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_open(self, *args, **kwargs):
+        if str(self) == "/dev/tty":
+            return FakeTty()
+        return original_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", fake_open)
 
     codex_cli._emit_warp_cli_agent_event(
         event="session_start",
@@ -110,9 +126,9 @@ def test_emit_warp_cli_agent_event_writes_osc777(monkeypatch, tmp_path):
     )
 
     marker = output.getvalue()
-    assert marker.startswith("\033]777;warp://cli-agent;")
+    assert marker.startswith("\033]777;notify;warp://cli-agent;")
     assert marker.endswith("\a")
-    payload = json.loads(marker.removeprefix("\033]777;warp://cli-agent;").removesuffix("\a"))
+    payload = json.loads(marker.removeprefix("\033]777;notify;warp://cli-agent;").removesuffix("\a"))
     assert payload == {
         "v": 1,
         "agent": "codex",
@@ -128,6 +144,7 @@ def test_emit_warp_cli_agent_event_skips_non_warp_terminal(monkeypatch, tmp_path
 
     monkeypatch.delenv("TERM_PROGRAM", raising=False)
     monkeypatch.setenv("WARP_CLI_AGENT_PROTOCOL_VERSION", "1")
+    monkeypatch.setenv("WARP_CLIENT_VERSION", "v0.2026.04.15.08.45.stable_02")
     monkeypatch.setattr(output, "isatty", lambda: True)
     monkeypatch.setattr(codex_cli.sys, "stdout", output)
 
