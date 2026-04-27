@@ -9,7 +9,6 @@ import { type TimelineSessionCard, getTimelineCardAnchor } from "../../services/
 import { resolveSessionRuntimeState } from "../../lib/sessionRuntime";
 import { getProviderColor, getSessionInteractionCapabilities } from "../../lib/sessionWorkspace";
 import { normalizeExecutionVenueLabel } from "../../lib/sessionExecutionHome";
-import { normalizeSessionOriginLabel } from "../../lib/sessionWorkspace";
 import {
   formatRelativeTime,
   getRuntimeMetaLabel,
@@ -147,21 +146,14 @@ export function SessionCard({
           : null,
       ].filter(Boolean)
     : [runtimeMetaLabel].filter(Boolean);
-  const headOriginLabel = normalizeSessionOriginLabel(thread.head_origin_label);
-  const startedOriginLabel = normalizeSessionOriginLabel(thread.started_origin_label);
-  const showHeadOriginLabel =
-    !compatibilityMode && !!headOriginLabel && headOriginLabel !== homeLabel;
-  const showStartedOriginLabel =
-    !compatibilityMode &&
-    thread.continuation_count > 1 &&
-    !!startedOriginLabel &&
-    startedOriginLabel !== headOriginLabel;
   const showContinuationCount = !compatibilityMode && thread.continuation_count > 1;
-  const inlineHeadOriginLabel = showHeadOriginLabel && !showStartedOriginLabel && !showContinuationCount;
-  const showIdentitySecondary =
-    !inlineHeadOriginLabel && (showHeadOriginLabel || showStartedOriginLabel || showContinuationCount);
-  const showManagementPill = !interaction.isManagedLocalSession;
-  const showStatusRow = runtime.hasSignal || showManagementPill || !!cardCapabilityLabel;
+  const secondaryStatsLabel = compatibilityMode
+    ? `Matched ${formatRelativeTime(detailSession.started_at, relativeNowMs)}`
+    : [
+        `Started ${formatRelativeTime(thread.root.started_at, relativeNowMs)}`,
+        showContinuationCount ? `${thread.continuation_count} continuations` : null,
+      ].filter(Boolean).join(" • ");
+  const showStatusRow = runtime.hasSignal || !!cardCapabilityLabel;
 
   const showKeywordSnippet = !isSemanticResult && !!highlightQuery && !!detailSession.match_snippet;
   const showSemanticSnippet = isSemanticResult && !!detailSession.match_snippet;
@@ -258,37 +250,7 @@ export function SessionCard({
                 <ProviderIcon provider={session.provider} />
                 <span className="provider-name" style={{ color: getProviderColor(session.provider) }}>{session.provider}</span>
               </span>
-              {session.git_branch && (
-                <span className="session-card-branch-badge">
-                  <span className="branch-icon">&#x2387;</span>
-                  {session.git_branch}
-                </span>
-              )}
-              {homeLabel && (
-                <span className="environment-badge">
-                  {homeLabel}
-                </span>
-              )}
-              {inlineHeadOriginLabel && (
-                <span className="environment-badge environment-badge--secondary">Head: {headOriginLabel}</span>
-              )}
             </div>
-
-            {showIdentitySecondary && (
-              <div className="session-card-identity-secondary">
-                {showHeadOriginLabel && (
-                  <span className="environment-badge environment-badge--secondary">Head: {headOriginLabel}</span>
-                )}
-                {showStartedOriginLabel && (
-                  <span className="environment-badge environment-badge--secondary">Started: {startedOriginLabel}</span>
-                )}
-                {showContinuationCount && (
-                  <span className="environment-badge environment-badge--secondary">
-                    {thread.continuation_count} continuations
-                  </span>
-                )}
-              </div>
-            )}
           </div>
 
           {showStatusRow && (
@@ -310,15 +272,6 @@ export function SessionCard({
                   )}
                 </div>
               )}
-              {showManagementPill ? (
-                <span
-                  className={`session-card-management-pill session-card-management-pill--${interaction.managementVariant}`}
-                  data-testid="session-card-management"
-                  title={interaction.managementDescription}
-                >
-                  {interaction.managementLabel}
-                </span>
-              ) : null}
               {cardCapabilityLabel ? (
                 <span
                   className={`session-card-capability-pill session-card-capability-pill--${capabilityDisplayTone}`}
@@ -369,9 +322,7 @@ export function SessionCard({
               </div>
               <div className="session-card-stats-secondary">
                 <span className="session-stat session-stat--secondary">
-                  {compatibilityMode
-                    ? `Matched ${formatRelativeTime(detailSession.started_at, relativeNowMs)}`
-                    : `Started ${formatRelativeTime(thread.root.started_at, relativeNowMs)}`}
+                  {secondaryStatsLabel}
                 </span>
               </div>
             </div>
