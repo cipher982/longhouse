@@ -448,13 +448,16 @@ class AgentsStore:
                 session.started_at = data.started_at
 
         incoming_ended_at = _normalize_utc_naive(data.ended_at)
-        existing_ended_at = _normalize_utc_naive(session.ended_at)
         managed_codex_ingest = _is_managed_codex_ingest(session, data, incoming_execution_home)
-        if managed_codex_ingest:
-            if not self._has_final_managed_codex_terminal(session):
-                session.ended_at = None
-        elif incoming_ended_at and (existing_ended_at is None or incoming_ended_at > existing_ended_at):
-            session.ended_at = data.ended_at
+        # Phase 4 of session-liveness-honesty: the engine's `ended_at` is
+        # max(event.timestamp), which is last-activity — NOT a closure
+        # signal. Route it into last_activity_at and leave ended_at alone.
+        # Real terminal state comes from SessionRuntimeState via explicit
+        # terminal_signal ingest. Managed-Codex continues to reset ended_at
+        # to null unless a real terminal has landed.
+        if managed_codex_ingest and not self._has_final_managed_codex_terminal(session):
+            session.ended_at = None
+        if incoming_ended_at:
             current_activity = _normalize_utc_naive(session.last_activity_at)
             if current_activity is None or incoming_ended_at > current_activity:
                 session.last_activity_at = data.ended_at
@@ -1343,7 +1346,11 @@ class AgentsStore:
             if not device_name and data.device_id:
                 device_name = data.device_id.replace("shipper-", "")
 
-            managed_codex_ingest = _is_managed_codex_ingest(None, data, incoming_execution_home)
+            # Phase 4 of session-liveness-honesty: `data.ended_at` from
+            # the engine is max(event.timestamp) — it is last-activity,
+            # not a closure signal. Never seed session.ended_at from it.
+            # Real terminal state comes from an explicit terminal_signal
+            # ingest into SessionRuntimeState (or Phase 6 process-gone).
             session = AgentSession(
                 id=session_id,
                 provider=data.provider,
@@ -1355,8 +1362,8 @@ class AgentsStore:
                 git_repo=data.git_repo,
                 git_branch=data.git_branch,
                 started_at=data.started_at,
-                ended_at=(None if managed_codex_ingest else data.ended_at),
-                last_activity_at=_normalize_utc_naive(data.started_at),
+                ended_at=None,
+                last_activity_at=(_normalize_utc_naive(data.ended_at) or _normalize_utc_naive(data.started_at)),
                 provider_session_id=data.provider_session_id,
                 thread_root_session_id=root_id,
                 continued_from_session_id=data.continued_from_session_id,
