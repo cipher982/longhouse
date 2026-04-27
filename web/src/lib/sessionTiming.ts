@@ -1,5 +1,6 @@
 import type { AgentSession, AgentSessionTurn } from "../services/api/agents";
 import { parseUTC } from "./dateUtils";
+import { isSessionClosed } from "./sessionRuntime";
 
 const LIVE_TURN_STATES = new Set(["created", "send_accepted", "active"]);
 
@@ -52,11 +53,10 @@ export function getRuntimeElapsedLabel(
     return turnCounter ? `Turn ${turnCounter}` : null;
   }
 
-  // Phase 1 of session-liveness-honesty: `ended_at` is a last-activity
-  // timestamp for unmanaged sessions, not a closure signal. Freezing the
-  // elapsed timer on ended_at makes a live session look frozen. Only stop
-  // the counter when the session has an explicit terminal_state.
-  const endedAt = session.terminal_state ? session.ended_at : null;
+  // Phase 3 of session-liveness-honesty: freeze the elapsed counter only
+  // when the session is actually closed. lifecycle==='closed' is the
+  // ground-truth axis; older payloads fall back to terminal_state.
+  const endedAt = isSessionClosed(session) ? session.ended_at : null;
   const sessionCounter = formatElapsedCounter(
     session.started_at,
     endedAt,

@@ -1591,4 +1591,120 @@ describe("SessionsPage", () => {
     expect(projects[1]).toBe("alpha");
   });
 
+  // ------------------------------------------------------------------
+  // Phase 3 of session-liveness-honesty: three-axis runtime_display.
+  // ------------------------------------------------------------------
+
+  function makeRuntimeDisplay(overrides: Partial<agentsApi.SessionRuntimeDisplay> = {}): agentsApi.SessionRuntimeDisplay {
+    return {
+      truth_tier: "none",
+      state: null,
+      tone: "inactive",
+      headline: "Inactive",
+      detail: null,
+      phase_label: "Recent",
+      compact_tool_label: null,
+      is_live: false,
+      is_executing: false,
+      needs_attention: false,
+      is_idle: false,
+      heuristic_active: false,
+      is_managed_local_truth: false,
+      has_signal: false,
+      control_path: "unmanaged",
+      activity_recency: "none",
+      lifecycle: "open",
+      host_state: "unknown",
+      terminal_reason: null,
+      ...overrides,
+    } as agentsApi.SessionRuntimeDisplay;
+  }
+
+  it("renders Unknown for unmanaged cards with no activity signal", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            ended_at: "2026-03-21T12:10:00Z",
+            runtime_display: makeRuntimeDisplay({ activity_recency: "none" }),
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline");
+
+    const card = await screen.findByTestId("session-card");
+    expect(card).toHaveAttribute("data-card-state", "actionable");
+    const runtime = await within(card).findByTestId("session-card-runtime");
+    expect(runtime).toHaveTextContent("Unknown");
+    expect(screen.queryByTestId("session-card-closed-state")).not.toBeInTheDocument();
+  });
+
+  it("renders Stale for unmanaged cards whose last signal aged out", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            ended_at: "2026-03-21T12:10:00Z",
+            runtime_display: makeRuntimeDisplay({ activity_recency: "stale" }),
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline");
+
+    const card = await screen.findByTestId("session-card");
+    expect(card).toHaveAttribute("data-card-state", "actionable");
+    expect(await within(card).findByTestId("session-card-runtime")).toHaveTextContent("Stale");
+  });
+
+  it("prefers lifecycle=='closed' over stale managed presence", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            ended_at: "2026-03-21T12:10:00Z",
+            presence_state: "idle",
+            control: {
+              managed_transport: "codex_app_server",
+              source_runner_id: null,
+              source_runner_name: null,
+              attach_command: "longhouse codex --attach",
+            },
+            capabilities: makeCapabilities({ host_reattach_available: true }),
+            runtime_display: makeRuntimeDisplay({
+              control_path: "managed",
+              activity_recency: "stale",
+              lifecycle: "closed",
+              terminal_reason: "provider_signal",
+            }),
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline");
+
+    const card = await screen.findByTestId("session-card");
+    expect(card).toHaveAttribute("data-card-state", "closed");
+    expect(screen.getByTestId("session-card-closed-state")).toHaveTextContent("Closed");
+  });
+
 });

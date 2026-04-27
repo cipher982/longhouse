@@ -29,6 +29,29 @@ export type TimelineRuntimeSession = Pick<
 > &
   Partial<TimelineRuntimeOverlay>;
 
+/**
+ * Phase 3 of session-liveness-honesty: a single place for deciding whether
+ * a session is closed. Callers that previously gated on `session.ended_at`
+ * or `session.terminal_state` should use this instead.
+ *
+ * Contract:
+ * - When `runtime_display.lifecycle` is present, it is the ground truth.
+ *   Backend only emits `closed` on explicit terminal signals (Phase 6 adds
+ *   process-gone).
+ * - Older payloads without the axis fall back to `terminal_state`.
+ */
+export function isSessionClosed(
+  session: Pick<AgentSession, "terminal_state"> & {
+    runtime_display?: SessionRuntimeDisplay | null;
+  },
+): boolean {
+  const lifecycle = session.runtime_display?.lifecycle;
+  if (lifecycle != null) {
+    return lifecycle === "closed";
+  }
+  return !!session.terminal_state;
+}
+
 export interface SessionRuntimeState {
   status: string | null;
   presenceState: KnownPresenceState | null;

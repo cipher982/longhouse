@@ -22,6 +22,7 @@ import { TrashIcon } from "../components/icons";
 import { SessionChat, type SessionChatTarget } from "../components/SessionChat";
 import { SessionContextPane } from "../components/session-workspace/SessionContextPane";
 import { SessionRuntimeStrip } from "../components/session-workspace/SessionRuntimeStrip";
+import { isSessionClosed } from "../lib/sessionRuntime";
 import { TimelinePane } from "../components/session-workspace/TimelinePane";
 import { WorkspaceShell } from "../components/workspace/WorkspaceShell";
 import { useLoopModeChange } from "../hooks/useLoopModeChange";
@@ -99,10 +100,9 @@ function SessionDetailWorkspaceRoute({
     handleVisibleSelectionChange,
     registerTimelineList,
   } = workspace;
-  // Phase 1 of session-liveness-honesty: keep the live clock running unless
-  // we have explicit terminal truth. `ended_at` alone is just a
-  // last-activity timestamp for unmanaged sessions.
-  const nowMs = useSecondClock(Boolean(session && !session.terminal_state));
+  // Phase 3 of session-liveness-honesty: close the clock on lifecycle==='closed'
+  // when the axis is present; fall back to terminal_state for older payloads.
+  const nowMs = useSecondClock(Boolean(session && !isSessionClosed(session)));
   const runtimeElapsedLabel = useMemo(
     () => getRuntimeElapsedLabel(session, turns, nowMs),
     [session, turns, nowMs],
@@ -245,7 +245,7 @@ function SessionDetailWorkspaceRoute({
             selectedKey={selectedKey}
             onSelectKey={selectKey}
             onVisibleSelectionChange={handleVisibleSelectionChange}
-            sessionEnded={Boolean(session?.terminal_state)}
+            sessionEnded={Boolean(session && isSessionClosed(session))}
             headerLeft={
               <div className="session-workspace-header__left">
                 <Button variant="ghost" size="sm" onClick={handleBack}>

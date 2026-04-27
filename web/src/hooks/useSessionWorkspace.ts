@@ -8,7 +8,7 @@ import {
 import { useDocumentVisible } from "./useDocumentVisible";
 import { useOnlineEpoch } from "./useOnlineEpoch";
 import { emitRenderBeacon, recordServerClockSkew } from "../lib/renderBeacon";
-import { resolveSessionRuntimeState } from "../lib/sessionRuntime";
+import { isSessionClosed, resolveSessionRuntimeState } from "../lib/sessionRuntime";
 import {
   buildTimelineModel,
   getPreferredSelectionKey,
@@ -65,12 +65,12 @@ function shouldRefreshWorkspaceSession(
     return false;
   }
 
-  // Phase 1 of session-liveness-honesty: do not stop polling on
-  // `ended_at` alone. `ended_at` is a last-activity timestamp for unmanaged
-  // sessions, not a closure signal. Only an explicit `terminal_state`
-  // (combined with no live signal) means the session is actually done.
+  // Phase 3 of session-liveness-honesty: lifecycle==='closed' is the
+  // ground-truth closure signal. Older payloads fall back to terminal_state.
+  // Keep polling while the session is open, or when there's live/inferred
+  // activity even on a closed card (rare, but tolerated).
   const runtime = resolveSessionRuntimeState(session);
-  if (!session.terminal_state) {
+  if (!isSessionClosed(session)) {
     return true;
   }
   return runtime.isLive || runtime.needsAttention || runtime.heuristicActive;
@@ -169,8 +169,8 @@ export function useSessionWorkspace(
   } = useAgentSessionTurns(sessionId, {
     limit: 10,
     order: "desc",
-    // Phase 1: terminal_state, not ended_at, gates whether the session is done.
-    enabled: Boolean(sessionId) && !session?.terminal_state,
+    // Phase 3: lifecycle (with terminal_state fallback) gates done-ness.
+    enabled: Boolean(sessionId && session && !isSessionClosed(session)),
     refetchInterval:
       streamConnected || !documentVisible || !shouldRefreshWorkspaceSession(session)
         ? false
