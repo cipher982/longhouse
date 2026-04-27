@@ -160,9 +160,16 @@ export function SessionCard({
   const showSummary = !showKeywordSnippet && !showSemanticSnippet && !!session.summary;
   const showGenerating = !showKeywordSnippet && !showSemanticSnippet && !session.summary && !session.summary_title;
   const cardActionLabel = compatibilityMode ? "Open match" : "Open session";
+  const hasControlPath = interaction.liveControlAvailable || interaction.hostReattachAvailable;
+  const hasCurrentRuntimeSignal =
+    runtime.isExecuting || runtime.needsAttention || runtime.isIdle || runtime.heuristicActive;
+  const hasKnownClosedProcess =
+    !!session.ended_at || runtime.status === "completed" || !!session.terminal_state;
+  const isClosedSession = !hasControlPath && hasKnownClosedProcess && !hasCurrentRuntimeSignal;
   const cardClassName = [
     "session-card",
     confirming ? "session-card--confirming" : "",
+    isClosedSession ? "session-card--closed" : "",
     runtime.isExecuting ? "session-card--live" : "",
     runtime.isIdle ? "session-card--idle" : "",
     runtime.tone === "inferred" ? "session-card--inferred" : "",
@@ -214,11 +221,11 @@ export function SessionCard({
           onPrefetch?.();
         }
       }}
-      style={{ borderLeftColor: getProviderColor(session.provider) }}
       data-testid="session-card"
       data-session-id={detailSession.id}
       data-thread-id={thread.thread_id}
       data-runtime-tone={runtime.tone}
+      data-card-state={isClosedSession ? "closed" : "actionable"}
     >
       {!confirming && (
         <button
