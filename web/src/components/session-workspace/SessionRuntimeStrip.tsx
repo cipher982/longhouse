@@ -24,7 +24,7 @@ interface SessionRuntimeStripProps {
   testId?: string;
 }
 
-function getCapabilityMeta({
+function getFallbackCapabilityLabel({
   liveControlAvailable,
   hostReattachAvailable,
   hostLabel,
@@ -67,14 +67,17 @@ export function SessionRuntimeStrip({
     session.control?.source_runner_name?.trim() ||
     interaction.sourceOriginLabel ||
     "host";
+  const capabilityLabel =
+    session.capabilities?.display_label?.trim() ||
+    getFallbackCapabilityLabel({
+      liveControlAvailable: interaction.liveControlAvailable,
+      hostReattachAvailable: interaction.hostReattachAvailable,
+      hostLabel: resolvedHostLabel,
+    });
   const metaParts = [
     {
       key: "capability",
-      label: getCapabilityMeta({
-        liveControlAvailable: interaction.liveControlAvailable,
-        hostReattachAvailable: interaction.hostReattachAvailable,
-        hostLabel: resolvedHostLabel,
-      }),
+      label: capabilityLabel,
       className: null,
     },
     runtimeMeta && runtimeMeta !== "Live on host"

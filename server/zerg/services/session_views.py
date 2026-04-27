@@ -24,6 +24,7 @@ from zerg.models.agents import SessionTurn
 from zerg.services.agents_store import AgentsStore
 from zerg.services.managed_local_transport import build_managed_local_attach_command
 from zerg.services.session_capabilities import build_session_capabilities
+from zerg.services.session_capabilities import build_session_capability_display
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_runtime import should_include_runtime_view
 from zerg.services.session_runtime_display import build_session_runtime_display
@@ -54,12 +55,19 @@ def build_session_capabilities_response(
     capability_flags=None,
 ) -> SessionCapabilitiesResponse:
     capability_flags = capability_flags or build_session_capabilities(session)
+    host_label = None
+    if session is not None:
+        host_label = str(getattr(session, "source_runner_name", "") or "").strip() or None
+    capability_display = build_session_capability_display(capability_flags, host_label=host_label)
     return SessionCapabilitiesResponse(
         live_control_available=capability_flags.live_control_available,
         host_reattach_available=capability_flags.host_reattach_available,
         reply_to_live_session_available=capability_flags.reply_to_live_session_available,
         can_queue_next_input=capability_flags.can_queue_next_input,
         can_steer_active_turn=capability_flags.can_steer_active_turn,
+        display_label=capability_display.label,
+        display_detail=capability_display.detail,
+        display_tone=capability_display.tone,
     )
 
 
@@ -149,6 +157,12 @@ class SessionCapabilitiesResponse(BaseModel):
         False,
         description="True when mid-turn steer is likely to land; the active turn may still end before the call arrives",
     )
+    display_label: str = Field("Search only", description="User-facing capability label")
+    display_detail: str = Field(
+        "This imported session is searchable, but Longhouse cannot steer it.",
+        description="User-facing capability explanation",
+    )
+    display_tone: str = Field("neutral", description="Stable capability tone for clients")
 
 
 class SessionRuntimeDisplayResponse(BaseModel):
@@ -749,7 +763,7 @@ def build_session_response(
         is_writable_head=bool(session.is_writable_head),
         is_sidechain=bool(session.is_sidechain or False),
         control=build_session_control_response(session, capability_flags=capability_flags),
-        capabilities=build_session_capabilities_response(capability_flags=capability_flags),
+        capabilities=build_session_capabilities_response(session=session, capability_flags=capability_flags),
         runtime_display=runtime_display,
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
         user_state=session.user_state or "active",
@@ -813,7 +827,7 @@ def build_active_session_response(
         user_state=session.user_state or "active",
         home_label=capability_flags.home_label,
         control=build_session_control_response(session, capability_flags=capability_flags),
-        capabilities=build_session_capabilities_response(capability_flags=capability_flags),
+        capabilities=build_session_capabilities_response(session=session, capability_flags=capability_flags),
         runtime_display=runtime_display,
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
     )

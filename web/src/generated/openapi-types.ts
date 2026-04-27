@@ -7744,6 +7744,24 @@ export interface components {
              * @default false
              */
             can_steer_active_turn: boolean;
+            /**
+             * Display Label
+             * @description User-facing capability label
+             * @default Search only
+             */
+            display_label: string;
+            /**
+             * Display Detail
+             * @description User-facing capability explanation
+             * @default This imported session is searchable, but Longhouse cannot steer it.
+             */
+            display_detail: string;
+            /**
+             * Display Tone
+             * @description Stable capability tone for clients
+             * @default neutral
+             */
+            display_tone: string;
         };
         /** SessionControlResponse */
         SessionControlResponse: {

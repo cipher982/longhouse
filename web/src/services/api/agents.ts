@@ -105,6 +105,9 @@ export interface SessionCapabilities {
   reply_to_live_session_available: boolean;
   can_queue_next_input?: boolean;
   can_steer_active_turn?: boolean;
+  display_label?: string;
+  display_detail?: string;
+  display_tone?: "success" | "warning" | "neutral" | (string & {});
 }
 
 export interface AgentSessionsListResponse {

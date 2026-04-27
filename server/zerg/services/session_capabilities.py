@@ -24,6 +24,13 @@ class SessionCapabilityFlags:
     home_label: str | None
 
 
+@dataclass(frozen=True)
+class SessionCapabilityDisplay:
+    label: str
+    detail: str
+    tone: str
+
+
 def _coerce_managed_transport(value: str | None) -> ManagedSessionTransport | None:
     if value is None or not str(value).strip():
         return None
@@ -37,6 +44,40 @@ def _execution_home_label(execution_home: SessionExecutionHome) -> str | None:
     if execution_home == SessionExecutionHome.MANAGED_LOCAL:
         return "On this Mac"
     return None
+
+
+def _normalize_host_label(host_label: str | None) -> str | None:
+    value = (host_label or "").strip()
+    if not value:
+        return None
+    if value.lower().startswith("on "):
+        value = value[3:].strip()
+    return value or None
+
+
+def build_session_capability_display(
+    capability_flags: SessionCapabilityFlags,
+    *,
+    host_label: str | None = None,
+) -> SessionCapabilityDisplay:
+    normalized_host = _normalize_host_label(host_label or capability_flags.home_label)
+    if capability_flags.live_control_available or capability_flags.reply_to_live_session_available:
+        return SessionCapabilityDisplay(
+            label=f"Live on {normalized_host}" if normalized_host else "Live control",
+            detail="Longhouse can send prompts into this live session.",
+            tone="success",
+        )
+    if capability_flags.host_reattach_available:
+        return SessionCapabilityDisplay(
+            label="Control offline",
+            detail="Reattach on the host to resume control.",
+            tone="warning",
+        )
+    return SessionCapabilityDisplay(
+        label="Search only",
+        detail="This imported session is searchable, but Longhouse cannot steer it.",
+        tone="neutral",
+    )
 
 
 def resolve_execution_home(session: AgentSession) -> SessionExecutionHome:
