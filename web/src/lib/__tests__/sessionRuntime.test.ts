@@ -159,9 +159,7 @@ describe("resolveSessionRuntimeState", () => {
       }),
     );
 
-    expect(getRuntimeOutcomeLabel(runtime, { endedAt: "2026-03-21T12:00:00Z" })).toBe(
-      "Active",
-    );
+    expect(getRuntimeOutcomeLabel(runtime)).toBe("Active");
   });
 
   it("collapses managed-local blocked state into Waiting for you with approval detail", () => {

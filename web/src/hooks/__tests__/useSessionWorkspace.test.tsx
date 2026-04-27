@@ -249,6 +249,7 @@ describe("useSessionWorkspace", () => {
         session: {
           ...baseSession,
           ended_at: "2026-03-14T12:10:00.000Z",
+          terminal_state: "session_ended",
           status: "completed",
         },
         thread: {
@@ -256,6 +257,7 @@ describe("useSessionWorkspace", () => {
             {
               ...baseSession,
               ended_at: "2026-03-14T12:10:00.000Z",
+              terminal_state: "session_ended",
               status: "completed",
             },
           ],
@@ -286,6 +288,7 @@ describe("useSessionWorkspace", () => {
             session: {
               ...baseSession,
               ended_at: "2026-03-14T12:10:00.000Z",
+              terminal_state: "session_ended",
               status: "completed",
             },
           },

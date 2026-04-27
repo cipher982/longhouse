@@ -276,32 +276,41 @@ def build_fallback_runtime_view(
     last_activity_at: datetime | None,
     now: datetime,
 ) -> SessionRuntimeView:
+    # Phase 1 of session-liveness-honesty: parser-derived `ended_at` is a
+    # last-activity timestamp for unmanaged sessions, not a terminal signal.
+    # Only promote to terminal when we have explicit truth in
+    # `session.terminal_state` (from a real terminal_signal ingest).
     normalized_now = normalize_utc(now) or datetime.now(timezone.utc)
     started_at = normalize_utc(session.started_at) or normalized_now
-    ended_at = normalize_utc(session.ended_at)
-    progress_at = normalize_utc(last_activity_at) or ended_at or started_at
+    last_activity = normalize_utc(last_activity_at) or normalize_utc(session.ended_at)
+    progress_at = last_activity or started_at
+
+    explicit_terminal = (getattr(session, "terminal_state", None) or "").strip() or None
 
     timeline_anchor_at = _latest_timestamp(progress_at, started_at) or normalized_now
     last_live_at: datetime | None = None
     confidence: str | None = None
 
-    if ended_at is None:
+    if explicit_terminal is not None:
+        status = "completed"
+        runtime_phase = "finished"
+        terminal_state: str | None = explicit_terminal
+    else:
         if (normalized_now - progress_at) <= INFERRED_PROGRESS_WINDOW:
             status = "active"
             confidence = "inferred"
             last_live_at = progress_at
         else:
             status = "idle"
-    else:
-        status = "completed"
+        runtime_phase = "idle"
+        terminal_state = None
 
-    runtime_phase = "finished" if ended_at is not None else "idle"
     return SessionRuntimeView(
         runtime_phase=runtime_phase,
         phase_started_at=progress_at,
         last_progress_at=progress_at,
         runtime_source=("progress" if confidence == "inferred" else "fallback"),
-        terminal_state=("finished" if ended_at is not None and status == "completed" else None),
+        terminal_state=terminal_state,
         runtime_version=0,
         status=status,
         presence_state=None,
@@ -312,7 +321,7 @@ def build_fallback_runtime_view(
             phase=runtime_phase,
             active_tool=None,
             confidence=confidence or "stale",
-            terminal_state=("finished" if ended_at is not None and status == "completed" else None),
+            terminal_state=terminal_state,
             status=status,
         ),
         active_tool=None,
@@ -326,9 +335,17 @@ def should_include_runtime_view(
     session: AgentSession,
     runtime_view: SessionRuntimeView | None,
 ) -> bool:
-    return runtime_view is not None and (
-        session.ended_at is None
-        or runtime_view.presence_updated_at is not None
+    # Phase 1: `ended_at` alone is not a closure signal for unmanaged sessions.
+    # Only an explicit terminal_state suppresses the runtime view's activity
+    # hints; otherwise keep the view so the client can render "Active
+    # (inferred)" rather than falling back to a silent card.
+    if runtime_view is None:
+        return False
+    has_explicit_terminal = bool((getattr(session, "terminal_state", None) or "").strip())
+    if not has_explicit_terminal:
+        return True
+    return (
+        runtime_view.presence_updated_at is not None
         or runtime_view.last_live_at is not None
         or runtime_view.runtime_source not in {None, "fallback"}
     )

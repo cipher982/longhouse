@@ -82,7 +82,7 @@ export function SessionCard({
   });
   const runtimePhaseLabel = interaction.isManagedLocalSession
     ? runtimeDisplay.headline
-    : getRuntimeOutcomeLabel(runtime, { endedAt: session.ended_at });
+    : getRuntimeOutcomeLabel(runtime);
 
   const projectLabel = getProjectLabel(session);
   const title = getSessionTitle(session);
@@ -117,8 +117,12 @@ export function SessionCard({
   const showGenerating = !showKeywordSnippet && !showSemanticSnippet && !session.summary && !session.summary_title;
   const cardActionLabel = compatibilityMode ? "Open match" : "Open session";
   const hasControlPath = interaction.liveControlAvailable || interaction.hostReattachAvailable;
-  const hasKnownClosedProcess =
-    !!session.ended_at || runtime.status === "completed" || !!session.terminal_state;
+  // Phase 1 of session-liveness-honesty: `ended_at` is just the timestamp of
+  // the last event we ingested — it is NOT a closure signal for unmanaged
+  // sessions. Only an explicit `terminal_state` on the session counts as
+  // "we know the process is closed." The backend fallback runtime now also
+  // stops promoting to status==="completed" from ended_at alone.
+  const hasKnownClosedProcess = !!session.terminal_state;
   const hasCurrentControlledPresence = hasControlPath && runtime.presenceState != null;
   const isClosedSession = hasKnownClosedProcess && !hasCurrentControlledPresence;
   const showRuntimePill = !isClosedSession && runtime.hasSignal;
