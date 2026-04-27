@@ -181,10 +181,10 @@ Treat these as support tier (functional but not launch-critical):
 - runner-backed execution on user-owned machines
 - Oikos proactive operator behavior
 
-Treat these as frozen for launch:
+Treat these as frozen or removed for launch:
 
 - cloud-branch / cloud-takeover product stories (capability gate is off)
-- loop inbox, turn reviews, and email surfaces (hidden from nav)
+- loop inbox and turn reviews (removed); email surfaces (hidden from nav)
 - jobs as a user-facing product surface
 - briefings and insights as standalone pages
 
@@ -219,7 +219,7 @@ If you touch a secondary area, either simplify it toward the core story or expla
 - Do not add `extra_body={\"metadata\": ...}` to provider LLM calls. Providers reject it.
 - `get_llm_client_with_db_fallback()` checks DB provider config before env vars. Stale DB rows can silently override env keys.
 - `~/.claude/longhouse-machine-name` is read at engine startup, not live.
-- Use `scripts/hosted-loop-debug.sh <subdomain>` before improvising hosted loop debugging.
+- Use `scripts/ops/hosted-session-debug.sh --subdomain <subdomain> --session <session-id>` before improvising hosted session/runtime debugging.
 - If a tool or workflow already provides a completion signal, do not turn it into a polling loop.
 - `/api/timeline/sessions` caps `limit` at 100. Frontend URL parsing needs to clamp to that or the timeline can self-422 on oversized `limit` params.
 - Warp-style CLI agent detection appears to key off the final spawned executable basename in the PTY. For managed Codex, debug the attached stock `codex --enable tui_app_server --remote ...` process, not just the shell wrapper or alias that started it.
@@ -292,6 +292,7 @@ If asked about Sauron, private cron packs, or job failures outside the core prod
 - Managed Codex TUI exits with `Connection reset without closing handshake` are not necessarily bridge crashes. Check `~/.codex/log/codex-tui.log`, the bridge `.json` state, rollout JSONL, and app-server `readyz` before assuming root cause; the relay should prevent the backpressure-induced variant of this, so if you see one, look at whether the relay spawned (`engine/src/codex_bridge.rs` logs the relay URL) and whether the connection is actually routing through it.
 - If a managed Codex session has no bridge `.sock`/`.json` but its `codex app-server` process still listens on the old port, the bridge parent died and left a provider child orphaned; treat it as a cleanup/control-path failure, not proof that the model turn was lost.
 - Managed Codex bridge state can be stale after startup `thread/resume failed: no rollout found`; if that happens, trust the thread rollout JSONL plus `~/.codex/log/codex-tui.log` over bridge `last_turn_status` for whether the turn actually completed.
+- For slow or inconsistent managed sessions, use `.agents/skills/managed-session-debug/SKILL.md`; compare local transcript timing, local-health, hosted runtime state, and WriteSerializer pressure before blaming telemetry.
 - macOS menu bar work is latency-sensitive: open from cached/loading state, refresh off the main thread, keep `local-health` internal-only, and require PNG harness plus live installed-app capture QA before ship.
 - Longhouse icon source assets are zero-padding contracts unless the file is explicitly a padded surface asset. Add inset per derivative/surface, and verify exported PNG alpha bounds instead of trusting SVG viewBox geometry.
 - For menu bar pill regressions, prefer fixed-time `SnapshotRenderer` PNG baselines over macOS XCUITest accessibility assertions; the window-host AX tree can omit chip text even when the pill is visibly rendered.

@@ -140,10 +140,10 @@ Longhouse is not:
 - demo data and local onboarding that get users to value fast
 - runner-backed execution on user-owned machines
 
-### Frozen for launch
+### Frozen or removed for launch
 
 - cloud-branch / cloud-takeover (capability gate is off, code remains)
-- loop inbox, turn reviews, and email surfaces (hidden from nav)
+- loop inbox and turn reviews (removed); email surfaces (hidden from nav)
 - jobs as a user-facing product surface
 - briefings and insights as standalone pages
 - proactive operator mode
