@@ -83,7 +83,7 @@ struct SessionView: View {
 
     @ViewBuilder
     private var runtimeDock: some View {
-        if let detail = viewModel.detail, detail.shouldShowRuntimeDock {
+        if let detail = viewModel.detail {
             SessionRuntimeDock(detail: detail)
         }
     }
@@ -124,23 +124,6 @@ struct SessionView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 10) {
-                            if let detail = viewModel.detail {
-                                SessionCockpit(
-                                    detail: detail,
-                                    isDrafting: viewModel.isDrafting,
-                                    isUpdatingLoopMode: viewModel.isUpdatingLoopMode,
-                                    loopModeErrorMessage: viewModel.loopModeErrorMessage,
-                                    draftDisabled: composerHasText || viewModel.isSending || viewModel.isDrafting || !detail.canSendLive,
-                                    onDraft: {
-                                        Task { await draft() }
-                                    },
-                                    onLoopModeChange: { mode in
-                                        Task {
-                                            await viewModel.setLoopMode(sessionId: sessionId, mode: mode, appState: appState)
-                                        }
-                                    }
-                                )
-                            }
                             if viewModel.items.isEmpty {
                                 ContentUnavailableView(
                                     "No messages yet",
@@ -183,14 +166,14 @@ struct SessionView: View {
     private var composer: some View {
         if let detail = viewModel.detail {
             if detail.capabilities.liveControlAvailable || detail.capabilities.replyToLiveSessionAvailable {
-                composerField(enabled: true)
+                composerField(detail: detail)
             } else {
-                unmanagedFooter()
+                unavailableComposerFooter(detail: detail)
             }
         }
     }
 
-    private func composerField(enabled: Bool) -> some View {
+    private func composerField(detail: SessionDetail) -> some View {
         return VStack(alignment: .leading, spacing: 6) {
             if let draftError = viewModel.draftErrorMessage {
                 Text(draftError)
@@ -220,6 +203,59 @@ struct SessionView: View {
                     .foregroundStyle(.secondary)
             }
 
+            if let draft = viewModel.turnEndedDraft {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Active turn ended")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.orange)
+                    Text(draft)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                    HStack(spacing: 8) {
+                        Button("Queue instead") {
+                            Task { _ = await viewModel.queueInsteadOfSteer(sessionId: sessionId, appState: appState) }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        Button("Dismiss") {
+                            viewModel.turnEndedDraft = nil
+                            viewModel.errorMessage = nil
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
+                .padding(8)
+                .background(Color.orange.opacity(0.08))
+                .cornerRadius(8)
+                .accessibilityIdentifier("session-chat-turn-ended")
+            }
+
+            HStack(spacing: 8) {
+                LoopModeButtons(
+                    currentMode: detail.effectiveLoopMode,
+                    disabled: viewModel.isUpdatingLoopMode,
+                    onChange: { mode in
+                        Task {
+                            await viewModel.setLoopMode(sessionId: sessionId, mode: mode, appState: appState)
+                        }
+                    }
+                )
+                if viewModel.isUpdatingLoopMode {
+                    ProgressView()
+                        .controlSize(.mini)
+                }
+                Spacer(minLength: 0)
+            }
+            .accessibilityIdentifier("session-loop-mode-controls")
+
+            if let loopModeErrorMessage = viewModel.loopModeErrorMessage {
+                Text(loopModeErrorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+
             HStack(alignment: .bottom, spacing: 8) {
                 Button {
                     Task { await draft() }
@@ -233,7 +269,7 @@ struct SessionView: View {
                     }
                 }
                 .frame(width: 32, height: 32)
-                .disabled(composerHasText || viewModel.isSending || viewModel.isDrafting || !enabled)
+                .disabled(composerHasText || viewModel.isSending || viewModel.isDrafting)
                 .accessibilityLabel("Draft reply")
                 .accessibilityHint("Available when the reply field is empty")
 
@@ -241,53 +277,91 @@ struct SessionView: View {
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...6)
                     .focused($composerFocused)
-                    .disabled(viewModel.isSending || viewModel.isDrafting || !enabled)
+                    .disabled(viewModel.isSending || viewModel.isDrafting)
 
-                Button {
-                    Task { await send() }
-                } label: {
-                    if viewModel.isSending {
-                        ProgressView()
-                    } else {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.title2)
+                if showSecondaryQueueAction {
+                    Button("Queue next") {
+                        Task { await send(intent: "queue") }
                     }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(!composerHasText || viewModel.isSending || viewModel.isDrafting)
+                    .accessibilityLabel("Queue next message")
                 }
-                .disabled(
-                    !composerHasText ||
-                    viewModel.isSending ||
-                    viewModel.isDrafting
-                )
-                .accessibilityLabel("Send reply")
+
+                if primaryIntent == "auto" {
+                    Button {
+                        Task { await send() }
+                    } label: {
+                        if viewModel.isSending {
+                            ProgressView()
+                        } else {
+                            Image(systemName: "arrow.up.circle.fill")
+                                .font(.title2)
+                        }
+                    }
+                    .disabled(!composerHasText || viewModel.isSending || viewModel.isDrafting)
+                    .accessibilityLabel("Send reply")
+                } else {
+                    Button(primaryIntent == "steer" ? "Send update" : "Queue next") {
+                        Task { await send() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(!composerHasText || viewModel.isSending || viewModel.isDrafting)
+                    .accessibilityLabel(primaryIntent == "steer" ? "Send update mid-turn" : "Queue next message")
+                }
             }
         }
         .padding(12)
         .background(.bar)
     }
 
-    private func unmanagedFooter() -> some View {
-        HStack {
-            Image(systemName: "info.circle")
-                .foregroundStyle(.secondary)
-            Text("Unmanaged session — read-only on mobile.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Spacer()
+    private func unavailableComposerFooter(detail: SessionDetail) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: detail.isControlOffline ? "wifi.slash" : "magnifyingglass")
+                .foregroundStyle(detail.isControlOffline ? .orange : .secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(detail.runtimeCapabilityLabel)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.primary)
+                if let message = detail.controlHealthMessage {
+                    Text(message)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: 0)
         }
         .padding(12)
         .background(.bar)
     }
 
-    private func send() async {
+    private var primaryIntent: String {
+        guard let detail = viewModel.detail, detail.isSessionExecuting else { return "auto" }
+        if detail.canSteerActiveTurn { return "steer" }
+        if detail.canQueueNextInput { return "queue" }
+        return "auto"
+    }
+
+    private var showSecondaryQueueAction: Bool {
+        guard let detail = viewModel.detail else { return false }
+        return detail.isSessionExecuting && detail.canSteerActiveTurn && detail.canQueueNextInput
+    }
+
+    private func send(intent: String? = nil) async {
         let trimmed = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        let sent = await viewModel.send(text: trimmed, sessionId: sessionId, appState: appState)
+        let resolvedIntent = intent ?? primaryIntent
+        let sent = await viewModel.send(
+            text: trimmed,
+            sessionId: sessionId,
+            appState: appState,
+            intent: resolvedIntent,
+        )
         if sent {
             composerText = ""
             composerFocused = false
-            // Auto-dismiss the transient Sent indicator after ~2s, scoped to
-            // the send counter we just incremented so a later send doesn't
-            // have its label clobbered by our dismissal.
             let token = viewModel.sendCounter
             Task { [weak viewModel] in
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
@@ -399,123 +473,6 @@ private struct SessionRuntimeDock: View {
     }
 }
 
-// MARK: - Cockpit
-
-private struct SessionCockpit: View {
-    let detail: SessionDetail
-    let isDrafting: Bool
-    let isUpdatingLoopMode: Bool
-    let loopModeErrorMessage: String?
-    let draftDisabled: Bool
-    let onDraft: () -> Void
-    let onLoopModeChange: (SessionLoopMode) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    PresenceBadge(state: detail.cockpitPhaseState)
-                    Text(detail.cockpitPhaseLabel)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.primary)
-                    Spacer(minLength: 0)
-                    if isUpdatingLoopMode {
-                        ProgressView()
-                            .controlSize(.mini)
-                    }
-                }
-                Text(detail.displayTitle)
-                    .font(.headline)
-                    .lineLimit(2)
-                metadataLine
-            }
-
-            if let controlHealthMessage = detail.controlHealthMessage {
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: detail.isControlOffline ? "wifi.slash" : "lock")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text(controlHealthMessage)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            if detail.canSendLive {
-                HStack(spacing: 8) {
-                    Button(action: onDraft) {
-                        Label(isDrafting ? "Drafting" : "Draft reply", systemImage: "sparkles")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(draftDisabled)
-                    .accessibilityHint("Prefills the reply field without sending")
-
-                    LoopModeButtons(
-                        currentMode: detail.effectiveLoopMode,
-                        disabled: isUpdatingLoopMode,
-                        onChange: onLoopModeChange
-                    )
-                }
-            }
-
-            modeCaption
-
-            if let loopModeErrorMessage {
-                Text(loopModeErrorMessage)
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
-    }
-
-    @ViewBuilder
-    private var metadataLine: some View {
-        let parts = [
-            detail.project,
-            detail.homeLabel,
-            detail.gitBranch.map { "Branch \($0)" },
-        ].compactMap { value -> String? in
-            guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
-                return nil
-            }
-            return trimmed
-        }
-        if !parts.isEmpty {
-            Text(parts.joined(separator: " • "))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-        } else if let cwd = detail.cwd {
-            Text(cwd)
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-        }
-    }
-
-    @ViewBuilder
-    private var modeCaption: some View {
-        switch detail.effectiveLoopMode {
-        case .manual:
-            Text("Manual mode. You drive this session.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        case .assist:
-            Text("Assist drafts replies when you ask. You approve what gets sent.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        case .autopilot:
-            Text("Autopilot preview saves the policy only. Automatic turns are not active yet.")
-                .font(.caption)
-                .foregroundStyle(.orange)
-        }
-    }
-}
-
 private struct LoopModeButtons: View {
     let currentMode: SessionLoopMode
     let disabled: Bool
@@ -550,44 +507,6 @@ private struct LoopModeButtons: View {
         .tint(currentMode == mode ? Color.accentColor : Color.secondary)
         .controlSize(.small)
         .disabled(disabled || currentMode == mode)
-    }
-}
-
-private struct PresenceBadge: View {
-    let state: String
-
-    var body: some View {
-        HStack(spacing: 4) {
-            Circle().fill(color).frame(width: 8, height: 8)
-            Text(label).font(.caption.weight(.medium))
-        }
-        .padding(.horizontal, 8).padding(.vertical, 4)
-        .background(color.opacity(0.15), in: Capsule())
-        .foregroundStyle(color)
-    }
-
-    private var color: Color {
-        switch state {
-        case "running", "thinking", "working", "active": return .green
-        case "needs_user": return .yellow
-        case "blocked": return .orange
-        case "idle", "completed": return .gray
-        default: return .gray
-        }
-    }
-
-    private var label: String {
-        switch state {
-        case "running": return "Running"
-        case "thinking": return "Thinking"
-        case "needs_user": return "Needs you"
-        case "blocked": return "Blocked"
-        case "idle": return "Idle"
-        case "completed": return "Completed"
-        case "working": return "Working"
-        case "active": return "Active"
-        default: return state.capitalized
-        }
     }
 }
 
@@ -1051,6 +970,10 @@ final class SessionViewModel: ObservableObject {
     @Published var lastSendOutcome: SessionInputOutcome?
     @Published var queuedInputCount: Int = 0
     @Published var failedInputCount: Int = 0
+    /// Text preserved from a steer attempt that the server rejected with
+    /// error_code: "turn_ended". The UI offers an explicit "Queue instead"
+    /// action; we do not silently convert the intent for the user.
+    @Published var turnEndedDraft: String?
     /// Monotonic counter; each send increments it. Used so a delayed "Sent."
     /// auto-dismiss task only clears the label it owns.
     private(set) var sendCounter: UInt64 = 0
@@ -1109,25 +1032,45 @@ final class SessionViewModel: ObservableObject {
         isInitialLoading = false
     }
 
-    func send(text: String, sessionId: String, appState: AppState) async -> Bool {
+    func send(text: String, sessionId: String, appState: AppState, intent: String = "auto") async -> Bool {
         guard let api = LonghouseAPI(host: appState.serverURL) else { return false }
         isSending = true
         draftErrorMessage = nil
         defer { isSending = false }
         do {
-            let response = try await api.sendInput(id: sessionId, text: text, intent: "auto")
+            let response = try await api.sendInput(id: sessionId, text: text, intent: intent)
             sendCounter &+= 1
             lastSendOutcome = response.outcome
             queuedInputCount = response.queued.filter { $0.status == "queued" || $0.status == "delivering" }.count
-            failedInputCount = response.queued.filter { $0.status == "failed" }.count
+            // Suppress steer+turn_ended rows from the failed-count so the
+            // user doesn't see two UIs screaming about the same race — the
+            // turnEndedDraft prompt is the actionable surface for that case.
+            failedInputCount = response.queued.filter { row in
+                row.status == "failed" && !(row.intent == "steer" && row.lastError == "turn_ended")
+            }.count
+            turnEndedDraft = nil
             if response.outcome == .sent, let events = try? await api.sessionEvents(id: sessionId) {
                 self.items = TimelineBuilder.build(events: events)
             }
             return true
+        } catch let LonghouseAPIError.structured(_, code, message) where intent == "steer" && code == "turn_ended" {
+            // Preserve the original text; the UI offers an explicit
+            // "Queue instead" action. Intent is never silently mapped.
+            turnEndedDraft = text
+            errorMessage = message.isEmpty ? "Active turn ended before your update arrived." : message
+            return false
         } catch {
             errorMessage = "Send failed: \(error.localizedDescription)"
             return false
         }
+    }
+
+    /// Explicit user acceptance of the "Queue instead" prompt after a
+    /// steer failed with turn_ended. Always maps to intent=queue.
+    func queueInsteadOfSteer(sessionId: String, appState: AppState) async -> Bool {
+        guard let text = turnEndedDraft else { return false }
+        turnEndedDraft = nil
+        return await send(text: text, sessionId: sessionId, appState: appState, intent: "queue")
     }
 
     func draftReply(sessionId: String, appState: AppState) async -> String? {

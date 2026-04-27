@@ -4,7 +4,7 @@ import Testing
 
 struct SessionModelsTests {
     @Test
-    func sessionDetailDecodesLoopModeAndCockpitState() throws {
+    func sessionDetailDecodesLoopModeAndRuntimeState() throws {
         let json = """
         {
           "id": "session-1",
@@ -41,7 +41,7 @@ struct SessionModelsTests {
         #expect(detail.canSendLive)
         #expect(detail.runtimeCapabilityLabel == "Live on this Mac")
         #expect(detail.runtimeCapabilityTone == "success")
-        #expect(detail.cockpitPhaseLabel == "Waiting on you")
+        #expect(detail.runtimePhaseLabel == "Waiting on you")
         #expect(detail.controlHealthMessage == nil)
     }
 
@@ -99,9 +99,8 @@ struct SessionModelsTests {
         #expect(detail.runtimeHeadline == "Working")
         #expect(detail.runtimeDetail == "Running Shell")
         #expect(detail.runtimeCapabilityLabel == "Live on this Mac")
-        #expect(detail.cockpitPhaseLabel == "Running Shell")
+        #expect(detail.runtimePhaseLabel == "Running Shell")
         #expect(detail.runtimeTone == "running")
-        #expect(detail.shouldShowRuntimeDock)
         #expect(detail.isSessionExecuting)
     }
 
@@ -142,8 +141,10 @@ struct SessionModelsTests {
         #expect(detail.isReadOnly)
         #expect(detail.runtimeCapabilityLabel == "Search only")
         #expect(detail.runtimeCapabilityTone == "neutral")
+        #expect(detail.runtimeHeadline == "Search only")
+        #expect(detail.runtimeDetail == "This imported session is searchable, but Longhouse cannot steer it.")
         #expect(detail.controlHealthMessage == "This imported session is searchable, but Longhouse cannot steer it.")
-        #expect(detail.cockpitPhaseLabel == "Idle")
+        #expect(detail.runtimePhaseLabel == "Idle")
     }
 
     @Test
@@ -188,6 +189,26 @@ struct SessionModelsTests {
         #expect(response.queued.count == 1)
         #expect(response.queued.first?.status == "queued")
         #expect(response.queued.first?.text == "hold this thought")
+    }
+
+    @Test
+    func sessionCapabilitiesDecodesSteerAndQueueFlags() throws {
+        let json = """
+        {
+          "live_control_available": true,
+          "host_reattach_available": true,
+          "reply_to_live_session_available": true,
+          "can_queue_next_input": true,
+          "can_steer_active_turn": true,
+          "display_label": "Live on this Mac",
+          "display_detail": "Longhouse can send prompts into this live session.",
+          "display_tone": "success"
+        }
+        """.data(using: .utf8)!
+
+        let caps = try JSONDecoder.snakeCase.decode(SessionCapabilities.self, from: json)
+        #expect(caps.canQueueNextInput == true)
+        #expect(caps.canSteerActiveTurn == true)
     }
 
     @Test

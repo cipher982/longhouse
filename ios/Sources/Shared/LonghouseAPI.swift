@@ -168,6 +168,12 @@ struct LonghouseAPI: Sendable {
     /// the input dispatches immediately (`outcome == .sent`). When it's
     /// working, the row is durably queued and auto-drains at the next safe
     /// turn boundary (`outcome == .queued`).
+    ///
+    /// For `intent == "steer"` the server may return a structured 409 with
+    /// `error_code: "turn_ended"` when the active turn ended between the
+    /// UI's capability check and dispatch. That surfaces as
+    /// `LonghouseAPIError.structured(...)` so the caller can offer a
+    /// "Queue instead" action instead of silently converting the intent.
     func sendInput(id: String, text: String, intent: String = "auto") async throws -> SessionInputResponse {
         var request = URLRequest(url: baseURL.appendingPathComponent("/api/sessions/\(id)/input"))
         request.httpMethod = "POST"
@@ -177,9 +183,27 @@ struct LonghouseAPI: Sendable {
 
         let (data, httpResponse) = try await data(for: request)
         guard (200..<300).contains(httpResponse.statusCode) else {
+            if let structured = Self.parseStructuredError(statusCode: httpResponse.statusCode, data: data) {
+                throw structured
+            }
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
         return try JSONDecoder.snakeCase.decode(SessionInputResponse.self, from: data)
+    }
+
+    /// Extract `{"detail": {"error_code": ..., "message": ...}}` from an
+    /// HTTPException body. Returns nil when the body isn't structured,
+    /// letting callers fall back to the generic `LonghouseAPIError.from(...)`.
+    private static func parseStructuredError(statusCode: Int, data: Data) -> LonghouseAPIError? {
+        guard
+            let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+            let detail = obj["detail"] as? [String: Any],
+            let code = detail["error_code"] as? String
+        else {
+            return nil
+        }
+        let message = (detail["message"] as? String) ?? ""
+        return .structured(status: statusCode, errorCode: code, message: message)
     }
 
     func draftReply(id: String, maxChars: Int = 1200) async throws -> DraftReplyResponse {
@@ -379,6 +403,10 @@ enum LonghouseAPIError: Error {
     case conflict
     case serviceUnavailable
     case upstreamFailed
+    /// Server returned a structured error payload (e.g. `{"detail": {"error_code": "turn_ended"}}`).
+    /// Carries status + code + message so the caller can branch on the
+    /// semantic outcome instead of parsing ad-hoc strings.
+    case structured(status: Int, errorCode: String, message: String)
 
     static func from(statusCode: Int) -> LonghouseAPIError {
         switch statusCode {
@@ -409,6 +437,8 @@ extension LonghouseAPIError: LocalizedError {
             return "Service is not configured yet."
         case .upstreamFailed:
             return "Generation failed. Try again."
+        case .structured(_, _, let message):
+            return message.isEmpty ? "Request was rejected." : message
         }
     }
 }
