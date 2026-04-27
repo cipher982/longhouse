@@ -360,9 +360,7 @@ private struct SessionRuntimeDock: View {
     }
 
     private var capabilityLabel: String {
-        if detail.canSendLive { return "Live control" }
-        if detail.capabilities.hostReattachAvailable { return "Reattach" }
-        return "Read-only"
+        detail.runtimeCapabilityLabel
     }
 
     private var accessibilityLabel: String {

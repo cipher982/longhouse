@@ -183,6 +183,10 @@ struct SessionCapabilities: Codable, Sendable {
     let hostReattachAvailable: Bool
     let replyToLiveSessionAvailable: Bool
     let canQueueNextInput: Bool?
+    let canSteerActiveTurn: Bool?
+    let displayLabel: String?
+    let displayDetail: String?
+    let displayTone: String?
 }
 
 /// Outcome returned from POST /api/sessions/{id}/input.
@@ -317,12 +321,21 @@ struct SessionDetail: Codable, Identifiable, Sendable {
 
     var controlHealthMessage: String? {
         if isControlOffline {
-            return "Control is offline until the host reconnects."
+            return capabilities.displayDetail ?? "Control is offline until the host reconnects."
         }
         if isReadOnly {
-            return "Read-only imported session."
+            return capabilities.displayDetail ?? "Search-only imported session."
         }
         return nil
+    }
+
+    var runtimeCapabilityLabel: String {
+        if let label = capabilities.displayLabel?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
+            return label
+        }
+        if canSendLive { return "Live control" }
+        if capabilities.hostReattachAvailable { return "Reattach" }
+        return "Search only"
     }
 
     var runtimeHeadline: String {

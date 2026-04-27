@@ -102,9 +102,10 @@ export function SessionCard({
   const detailSession = thread.detail;
   const session = compatibilityMode ? detailSession : thread.head;
   const interaction = getSessionInteractionCapabilities({ session });
+  const capabilityDisplayLabel = session.capabilities?.display_label?.trim() || null;
   const cardCapabilityLabel =
     interaction.mode === "managed_local_unavailable"
-      ? "Control offline"
+      ? capabilityDisplayLabel ?? interaction.capabilityLabel
       : null;
   const turnCount = session.user_messages;
   const toolCount = session.tool_calls;
@@ -129,8 +130,8 @@ export function SessionCard({
     ? [
         runtimeDisplay.detail,
         interaction.liveControlAvailable
-          ? `Live on ${runtimeHostLabel}`
-          : "Control offline",
+          ? capabilityDisplayLabel ?? `Live on ${runtimeHostLabel}`
+          : capabilityDisplayLabel ?? interaction.capabilityLabel,
         runtimeMetaLabel && runtimeMetaLabel !== "Live on host"
           ? runtimeMetaLabel
           : null,

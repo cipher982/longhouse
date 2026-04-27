@@ -2,6 +2,7 @@ from datetime import datetime
 from datetime import timezone
 
 from zerg.services.session_capabilities import SessionCapabilityFlags
+from zerg.services.session_capabilities import build_session_capability_display
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_runtime_display import build_session_runtime_display
 from zerg.session_execution_home import SessionExecutionHome
@@ -93,3 +94,38 @@ def test_managed_running_has_renderable_runtime_signal():
     assert display.headline == "Working"
     assert display.detail == "Running Shell"
     assert display.has_signal is True
+
+
+def test_capability_display_names_live_control_host():
+    display = build_session_capability_display(
+        _capabilities(managed=True),
+        host_label="On this Mac",
+    )
+
+    assert display.label == "Live on this Mac"
+    assert display.tone == "success"
+
+
+def test_capability_display_names_control_offline():
+    flags = SessionCapabilityFlags(
+        execution_home=SessionExecutionHome.MANAGED_LOCAL,
+        managed_transport=None,
+        live_control_available=False,
+        host_reattach_available=True,
+        reply_to_live_session_available=False,
+        can_queue_next_input=False,
+        can_steer_active_turn=False,
+        home_label="On this Mac",
+    )
+
+    display = build_session_capability_display(flags)
+
+    assert display.label == "Control offline"
+    assert display.tone == "warning"
+
+
+def test_capability_display_names_imported_sessions_search_only():
+    display = build_session_capability_display(_capabilities())
+
+    assert display.label == "Search only"
+    assert display.tone == "neutral"

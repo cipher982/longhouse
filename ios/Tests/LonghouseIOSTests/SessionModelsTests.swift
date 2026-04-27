@@ -26,7 +26,10 @@ struct SessionModelsTests {
           "capabilities": {
             "live_control_available": true,
             "host_reattach_available": true,
-            "reply_to_live_session_available": true
+            "reply_to_live_session_available": true,
+            "display_label": "Live on this Mac",
+            "display_detail": "Longhouse can send prompts into this live session.",
+            "display_tone": "success"
           },
           "loop_mode": "assist"
         }
@@ -36,6 +39,7 @@ struct SessionModelsTests {
 
         #expect(detail.effectiveLoopMode == .assist)
         #expect(detail.canSendLive)
+        #expect(detail.runtimeCapabilityLabel == "Live on this Mac")
         #expect(detail.cockpitPhaseLabel == "Waiting on you")
         #expect(detail.controlHealthMessage == nil)
     }
@@ -64,7 +68,10 @@ struct SessionModelsTests {
             "live_control_available": true,
             "host_reattach_available": true,
             "reply_to_live_session_available": true,
-            "can_queue_next_input": true
+            "can_queue_next_input": true,
+            "display_label": "Live on this Mac",
+            "display_detail": "Longhouse can send prompts into this live session.",
+            "display_tone": "success"
           },
           "runtime_display": {
             "truth_tier": "managed-local",
@@ -90,6 +97,7 @@ struct SessionModelsTests {
 
         #expect(detail.runtimeHeadline == "Working")
         #expect(detail.runtimeDetail == "Running Shell")
+        #expect(detail.runtimeCapabilityLabel == "Live on this Mac")
         #expect(detail.cockpitPhaseLabel == "Running Shell")
         #expect(detail.runtimeTone == "running")
         #expect(detail.shouldShowRuntimeDock)
@@ -119,7 +127,10 @@ struct SessionModelsTests {
           "capabilities": {
             "live_control_available": false,
             "host_reattach_available": false,
-            "reply_to_live_session_available": false
+            "reply_to_live_session_available": false,
+            "display_label": "Search only",
+            "display_detail": "This imported session is searchable, but Longhouse cannot steer it.",
+            "display_tone": "neutral"
           },
           "loop_mode": "manual"
         }
@@ -128,7 +139,8 @@ struct SessionModelsTests {
         let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
 
         #expect(detail.isReadOnly)
-        #expect(detail.controlHealthMessage == "Read-only imported session.")
+        #expect(detail.runtimeCapabilityLabel == "Search only")
+        #expect(detail.controlHealthMessage == "This imported session is searchable, but Longhouse cannot steer it.")
         #expect(detail.cockpitPhaseLabel == "Idle")
     }
 
