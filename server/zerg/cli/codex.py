@@ -60,10 +60,41 @@ _CODEX_DOCTOR_BIN_OPTION_HELP = " ".join(
         f"(defaults to {CODEX_BIN_ENV}, then `codex` on PATH).",
     ]
 )
+_WARP_CLI_AGENT_OSC_TITLE = "warp://cli-agent"
 
 
 def _stdio_ttys() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _warp_cli_agent_available() -> bool:
+    is_warp = os.environ.get("TERM_PROGRAM") == "WarpTerminal"
+    has_protocol = bool(os.environ.get("WARP_CLI_AGENT_PROTOCOL_VERSION"))
+    return is_warp and has_protocol and sys.stdout.isatty()
+
+
+def _emit_warp_cli_agent_event(
+    *,
+    event: str,
+    session_id: str,
+    cwd: Path,
+    project: str | None,
+    **extra: object,
+) -> None:
+    if not _warp_cli_agent_available():
+        return
+    payload = {
+        "v": 1,
+        "agent": "codex",
+        "event": event,
+        "session_id": session_id,
+        "cwd": str(cwd),
+        "project": project or cwd.name,
+    }
+    payload.update({key: value for key, value in extra.items() if value is not None})
+    body = json.dumps(payload, separators=(",", ":"))
+    sys.stdout.write(f"\033]777;{_WARP_CLI_AGENT_OSC_TITLE};{body}\a")
+    sys.stdout.flush()
 
 
 def _resolve_explicit_codex_binary(candidate: str, *, source: str) -> str:
@@ -696,6 +727,12 @@ def codex(
     typer.secho("Longhouse Codex session launched on this machine.", fg=typer.colors.GREEN)
     typer.echo(f"Session ID: {result.session_id}")
     typer.echo(f"Session URL: {session_url}")
+    _emit_warp_cli_agent_event(
+        event="session_start",
+        session_id=result.session_id,
+        cwd=cwd,
+        project=project,
+    )
     typer.echo("Starting native Codex bridge...")
     try:
         thread_id, ws_url, state_file = _start_native_codex_bridge(
@@ -760,15 +797,40 @@ def codex(
             )
             typer.echo(f"Resume: {resume_cmd}")
             return
+        _emit_warp_cli_agent_event(
+            event="stop",
+            session_id=result.session_id,
+            cwd=cwd,
+            project=project,
+            response=(
+                f"Managed Codex auto-attach exited with code {exit_code}; "
+                + ("bridge cleanup completed." if stop_error is None else f"bridge cleanup failed: {stop_error}")
+            ),
+        )
         typer.secho(
             f"Auto-attach exited with code {exit_code}. Managed bridge cleanup was "
             + ("successful." if stop_error is None else f"not successful: {stop_error}"),
             fg=typer.colors.YELLOW,
         )
     elif stop_error is not None:
+        _emit_warp_cli_agent_event(
+            event="stop",
+            session_id=result.session_id,
+            cwd=cwd,
+            project=project,
+            response=f"Managed Codex bridge cleanup failed after TUI exit: {stop_error}",
+        )
         typer.secho(
             f"Managed bridge cleanup failed after TUI exit: {stop_error}",
             fg=typer.colors.YELLOW,
+        )
+    else:
+        _emit_warp_cli_agent_event(
+            event="stop",
+            session_id=result.session_id,
+            cwd=cwd,
+            project=project,
+            response="Managed Codex session ended.",
         )
 
 
