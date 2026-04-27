@@ -456,6 +456,96 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
     assert native_tui_calls == [("session-123", "/tmp/codex", "ws://127.0.0.1:4800", str(tmp_path), False)]
 
 
+def test_run_native_codex_tui_uses_foreground_process_group_when_interactive(monkeypatch, tmp_path):
+    foreground_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(codex_cli, "_stdio_ttys", lambda: True)
+    monkeypatch.setattr(
+        codex_cli,
+        "_run_foreground_process_group",
+        lambda **kwargs: foreground_calls.append(kwargs) or 7,
+    )
+
+    exit_code = codex_cli._run_native_codex_tui(
+        session_id="session-123",
+        codex_bin="/tmp/codex",
+        ws_url="ws://127.0.0.1:4800",
+        cwd=tmp_path,
+        bypass_approvals=True,
+    )
+
+    assert exit_code == 7
+    assert foreground_calls[0]["cmd"] == [
+        "/tmp/codex",
+        "-c",
+        "check_for_update_on_startup=false",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--enable",
+        "tui_app_server",
+        "--remote",
+        "ws://127.0.0.1:4800",
+    ]
+    assert foreground_calls[0]["cwd"] == tmp_path
+    assert foreground_calls[0]["env"]["LONGHOUSE_MANAGED_SESSION_ID"] == "session-123"
+
+
+def test_run_foreground_process_group_hands_terminal_to_child(monkeypatch, tmp_path):
+    tcsetpgrp_calls: list[tuple[int, int]] = []
+    signal_calls: list[tuple[int, object]] = []
+    popen_calls: list[dict[str, object]] = []
+    setpgrp_calls: list[bool] = []
+    setpgid_calls: list[tuple[int, int]] = []
+
+    class FakeStdin:
+        def fileno(self):
+            return 10
+
+    class FakeChild:
+        pid = 222
+
+        def wait(self):
+            return 0
+
+    class FakePopen:
+        def __init__(self, cmd, **kwargs):
+            popen_calls.append({"cmd": cmd, **kwargs})
+            kwargs["preexec_fn"]()
+            self.pid = FakeChild.pid
+
+        def wait(self):
+            return FakeChild().wait()
+
+    monkeypatch.setattr(codex_cli.sys, "stdin", FakeStdin())
+    monkeypatch.setattr(codex_cli.os, "getpgrp", lambda: 111)
+    monkeypatch.setattr(codex_cli.os, "setpgrp", lambda: setpgrp_calls.append(True))
+    monkeypatch.setattr(codex_cli.os, "setpgid", lambda pid, pgrp: setpgid_calls.append((pid, pgrp)))
+    monkeypatch.setattr(codex_cli.os, "tcsetpgrp", lambda fd, pgrp: tcsetpgrp_calls.append((fd, pgrp)))
+    monkeypatch.setattr(
+        codex_cli.signal,
+        "signal",
+        lambda sig, handler: signal_calls.append((sig, handler)) or "old-handler",
+    )
+    monkeypatch.setattr(codex_cli.subprocess, "Popen", FakePopen)
+
+    exit_code = codex_cli._run_foreground_process_group(
+        cmd=["/tmp/codex"],
+        cwd=tmp_path,
+        env={"LONGHOUSE_MANAGED_SESSION_ID": "session-123"},
+    )
+
+    assert exit_code == 0
+    assert popen_calls[0]["cmd"] == ["/tmp/codex"]
+    assert popen_calls[0]["cwd"] == str(tmp_path)
+    assert popen_calls[0]["env"] == {"LONGHOUSE_MANAGED_SESSION_ID": "session-123"}
+    assert setpgrp_calls == [True]
+    assert setpgid_calls == [(222, 222)]
+    assert tcsetpgrp_calls == [(10, 222), (10, 111)]
+    assert signal_calls == [
+        (codex_cli.signal.SIGTTOU, codex_cli.signal.SIG_IGN),
+        (codex_cli.signal.SIGTTOU, "old-handler"),
+    ]
+
+
 def test_codex_command_stops_before_api_launch_when_preflight_fails(monkeypatch, tmp_path):
     runner = CliRunner()
     launch_calls: list[dict] = []
