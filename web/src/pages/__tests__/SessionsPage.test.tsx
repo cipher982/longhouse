@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Route, Routes, useLocation } from "react-router-dom";
@@ -474,9 +474,99 @@ describe("SessionsPage", () => {
 
     const card = await screen.findByTestId("session-card");
     expect(card).toHaveAttribute("data-card-state", "closed");
+    expect(card).toHaveAttribute("data-runtime-tone", "closed");
     expect(card).toHaveClass("session-card--closed");
     expect(card.style.borderLeftColor).toBe("");
+    expect((within(card).getByText("codex") as HTMLElement).style.color).toBe("");
+    expect(screen.queryByTestId("session-card-runtime")).not.toBeInTheDocument();
     expect(screen.getByTestId("session-card-closed-state")).toHaveTextContent("Closed");
+  });
+
+  it("suppresses stale runtime pills on closed timeline cards", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            provider: "claude",
+            ended_at: "2026-03-21T12:10:00Z",
+            status: "active",
+            confidence: "live",
+            runtime_source: "semantic",
+            presence_state: "running",
+            presence_tool: "bash",
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline");
+
+    const card = await screen.findByTestId("session-card");
+    expect(card).toHaveAttribute("data-card-state", "closed");
+    expect(card).toHaveAttribute("data-runtime-tone", "closed");
+    expect(card).toHaveClass("session-card--closed");
+    expect(screen.getByTestId("session-card-closed-state")).toHaveTextContent("Closed");
+    expect(screen.queryByTestId("session-card-runtime")).not.toBeInTheDocument();
+    expect(screen.queryByText("Active")).not.toBeInTheDocument();
+  });
+
+  it("uses the same neutral timeline treatment for active sessions across providers", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            id: "active-codex",
+            provider: "codex",
+            project: "codex-work",
+            summary_title: "Codex active",
+            ended_at: null,
+            status: "working",
+            presence_state: "running",
+            presence_tool: "bash",
+            presence_updated_at: "2026-03-21T12:04:00Z",
+            last_live_at: "2026-03-21T12:04:00Z",
+            thread_root_session_id: "thread-active-codex",
+            thread_head_session_id: "thread-active-codex",
+          }),
+          makeTimelineCard({
+            id: "active-claude",
+            provider: "claude",
+            project: "claude-work",
+            summary_title: "Claude active",
+            ended_at: null,
+            status: "active",
+            confidence: "inferred",
+            runtime_source: "progress",
+            display_phase: "Recent progress",
+            thread_root_session_id: "thread-active-claude",
+            thread_head_session_id: "thread-active-claude",
+          }),
+        ],
+        total: 2,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    const { container } = renderSessionsPage("/timeline");
+
+    expect(await screen.findAllByText("Active")).toHaveLength(2);
+
+    const runtimePills = screen.getAllByTestId("session-card-runtime");
+    expect(runtimePills).toHaveLength(2);
+    expect(runtimePills.every((pill) => pill.classList.contains("session-card-runtime--active"))).toBe(true);
+    expect(container.querySelectorAll(".session-card-runtime-dot")).toHaveLength(2);
+
+    const cards = screen.getAllByTestId("session-card");
+    expect((within(cards[0]).getByText("codex") as HTMLElement).style.color).toBe("");
+    expect((within(cards[1]).getByText("claude") as HTMLElement).style.color).toBe("");
   });
 
   it("treats stale status-only activity on an ended import as closed", async () => {

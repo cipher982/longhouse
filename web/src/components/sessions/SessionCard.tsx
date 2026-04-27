@@ -7,7 +7,7 @@ import { Card } from "../ui";
 import { PresenceBadge } from "../PresenceBadge";
 import { type TimelineSessionCard, getTimelineCardAnchor } from "../../services/api/agents";
 import { resolveSessionRuntimeState } from "../../lib/sessionRuntime";
-import { getProviderColor, getSessionInteractionCapabilities } from "../../lib/sessionWorkspace";
+import { getSessionInteractionCapabilities } from "../../lib/sessionWorkspace";
 import { normalizeExecutionVenueLabel } from "../../lib/sessionExecutionHome";
 import {
   formatRelativeTime,
@@ -31,49 +31,6 @@ function normalizeCapabilityTone(value: string | null | undefined): "neutral" | 
     return value;
   }
   return null;
-}
-
-// ---------------------------------------------------------------------------
-// ProviderIcon
-// ---------------------------------------------------------------------------
-
-function ProviderIcon({ provider }: { provider: string }) {
-  const color = getProviderColor(provider);
-  const svgProps = { width: 14, height: 14, viewBox: "0 0 24 24", fill: "none", "aria-hidden": true as const, style: { color, flexShrink: 0 } };
-
-  switch (provider) {
-    case "claude":
-      return (
-        <svg {...svgProps}>
-          <path d="M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8z" fill="currentColor" />
-        </svg>
-      );
-    case "codex":
-      return (
-        <svg {...svgProps}>
-          <path d="M12 2a2.5 2.5 0 010 5 2.5 2.5 0 01-4.33 2.5A2.5 2.5 0 012 12a2.5 2.5 0 015.67 2.5A2.5 2.5 0 0112 17a2.5 2.5 0 014.33 2.5A2.5 2.5 0 0122 12a2.5 2.5 0 01-5.67-2.5A2.5 2.5 0 0112 7a2.5 2.5 0 010-5z" fill="currentColor" opacity="0.9" />
-        </svg>
-      );
-    case "gemini":
-      return (
-        <svg {...svgProps}>
-          <path d="M12 2C12 10 14 12 22 12C14 12 12 14 12 22C12 14 10 12 2 12C10 12 12 10 12 2Z" fill="currentColor" />
-        </svg>
-      );
-    case "zai":
-      return (
-        <svg {...svgProps}>
-          <path d="M6 6h12v2.5L8.5 18H18v2H6v-2.5L15.5 8H6z" fill="currentColor" />
-        </svg>
-      );
-    default:
-      return (
-        <svg {...svgProps} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <polyline points="4 17 10 11 4 5" />
-          <line x1="12" y1="19" x2="20" y2="19" />
-        </svg>
-      );
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -164,18 +121,22 @@ export function SessionCard({
     !!session.ended_at || runtime.status === "completed" || !!session.terminal_state;
   const hasCurrentControlledPresence = hasControlPath && runtime.presenceState != null;
   const isClosedSession = hasKnownClosedProcess && !hasCurrentControlledPresence;
-  const showStatusRow = isClosedSession || runtime.hasSignal || !!cardCapabilityLabel;
+  const showRuntimePill = !isClosedSession && runtime.hasSignal;
+  const showCapabilityPill = !isClosedSession && !!cardCapabilityLabel;
+  const showStatusRow = isClosedSession || showRuntimePill || showCapabilityPill;
+  // "Active" is an outcome label; keep its pill neutral across runtime sources.
+  const runtimePillTone = runtimePhaseLabel === "Active" ? "active" : runtime.tone;
   const cardClassName = [
     "session-card",
     confirming ? "session-card--confirming" : "",
     isClosedSession ? "session-card--closed" : "",
-    runtime.isExecuting ? "session-card--live" : "",
-    runtime.isIdle ? "session-card--idle" : "",
-    runtime.tone === "inferred" ? "session-card--inferred" : "",
-    runtime.tone === "thinking" ? "session-card--thinking" : "",
-    runtime.tone === "running" ? "session-card--running" : "",
-    runtime.tone === "needs-user" ? "session-card--needs-user" : "",
-    runtime.tone === "blocked" ? "session-card--blocked" : "",
+    !isClosedSession && runtime.isExecuting ? "session-card--live" : "",
+    !isClosedSession && runtime.isIdle ? "session-card--idle" : "",
+    !isClosedSession && runtime.tone === "inferred" ? "session-card--inferred" : "",
+    !isClosedSession && runtime.tone === "thinking" ? "session-card--thinking" : "",
+    !isClosedSession && runtime.tone === "running" ? "session-card--running" : "",
+    !isClosedSession && runtime.tone === "needs-user" ? "session-card--needs-user" : "",
+    !isClosedSession && runtime.tone === "blocked" ? "session-card--blocked" : "",
   ].filter(Boolean).join(" ");
 
   const clearHoverPrefetchTimer = useCallback(() => {
@@ -223,7 +184,7 @@ export function SessionCard({
       data-testid="session-card"
       data-session-id={detailSession.id}
       data-thread-id={thread.thread_id}
-      data-runtime-tone={runtime.tone}
+      data-runtime-tone={isClosedSession ? "closed" : runtimePillTone}
       data-card-state={isClosedSession ? "closed" : "actionable"}
     >
       {!confirming && (
@@ -253,8 +214,7 @@ export function SessionCard({
           <div className="session-card-identity">
             <div className="session-card-identity-primary">
               <span className="session-card-provider-badge">
-                <ProviderIcon provider={session.provider} />
-                <span className="provider-name" style={{ color: getProviderColor(session.provider) }}>{session.provider}</span>
+                <span className="provider-name">{session.provider}</span>
               </span>
             </div>
           </div>
@@ -270,15 +230,22 @@ export function SessionCard({
                   Closed
                 </span>
               ) : null}
-              {runtime.hasSignal && (
-                <div className={`session-card-runtime session-card-runtime--${runtime.tone}`}>
-                  <PresenceBadge
-                    state={runtime.presenceState}
-                    tool={runtime.presenceTool}
-                    compact
-                    heuristicActive={runtime.heuristicActive}
-                    showUnknown={runtime.truthTier === "stale"}
-                  />
+              {showRuntimePill && (
+                <div
+                  className={`session-card-runtime session-card-runtime--${runtimePillTone}`}
+                  data-testid="session-card-runtime"
+                >
+                  {runtimePhaseLabel === "Active" ? (
+                    <span className="session-card-runtime-dot" aria-hidden="true" />
+                  ) : (
+                    <PresenceBadge
+                      state={runtime.presenceState}
+                      tool={runtime.presenceTool}
+                      compact
+                      heuristicActive={runtime.heuristicActive}
+                      showUnknown={runtime.truthTier === "stale"}
+                    />
+                  )}
                   <span className="session-card-runtime-phase">{runtimePhaseLabel}</span>
                   {cardRuntimeMetaParts.length > 0 && (
                     <span className="session-card-runtime-meta">
@@ -287,7 +254,7 @@ export function SessionCard({
                   )}
                 </div>
               )}
-              {cardCapabilityLabel ? (
+              {showCapabilityPill ? (
                 <span
                   className={`session-card-capability-pill session-card-capability-pill--${capabilityDisplayTone}`}
                   data-testid="session-card-capability"
