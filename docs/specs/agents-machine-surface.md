@@ -219,4 +219,4 @@ longhouse messages ack "$MESSAGE_ID" --json
 
 - This does not promise cross-org federation, AGNTCY-style discovery, or A2A compatibility yet.
 - This does not collapse every browser route into `/api/agents/*`.
-- This does not make Oikos the machine boundary. Oikos should consume this surface like any other agent-capable client.
+- This does not make any assistant surface the machine boundary. Browser, MCP, and native clients should consume this surface like any other agent-capable client.

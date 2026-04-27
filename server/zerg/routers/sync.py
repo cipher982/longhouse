@@ -21,7 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
-from zerg.dependencies.oikos_auth import get_current_oikos_user
+from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.models.models import User
 from zerg.models.sync import SyncOperation
 
@@ -80,7 +80,7 @@ class PullResponse(BaseModel):
 def push_sync_operations(
     request: PushRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_oikos_user),
+    current_user: User = Depends(get_current_browser_route_user),
 ) -> PushResponse:
     """Push sync operations from client.
 
@@ -160,7 +160,7 @@ def push_sync_operations(
 def pull_sync_operations(
     cursor: int = Query(0, description="Cursor position to pull from"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_oikos_user),
+    current_user: User = Depends(get_current_browser_route_user),
 ) -> PullResponse:
     """Pull sync operations from server.
 
@@ -183,13 +183,7 @@ def pull_sync_operations(
         )
 
     # Query operations for this user after cursor
-    operations = (
-        db.query(SyncOperation)
-        .filter(SyncOperation.user_id == current_user.id)
-        .order_by(SyncOperation.id)
-        .offset(cursor)
-        .all()
-    )
+    operations = db.query(SyncOperation).filter(SyncOperation.user_id == current_user.id).order_by(SyncOperation.id).offset(cursor).all()
 
     # Format operations for response
     ops = []

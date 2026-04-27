@@ -645,7 +645,7 @@ def inject_agents_md(
         [
             "",
             "This workspace was provisioned by Longhouse for commis (background agent) execution.",
-            "Longhouse MCP tools (session search/detail, recall, wall/peers/tail, Oikos callbacks) are auto-configured in .claude/settings.json.",
+            "Longhouse MCP tools (session search/detail, recall, wall/peers/tail, notifications) are auto-configured in .claude/settings.json.",
         ]
     )
     sections.append("\n".join(longhouse_lines))
@@ -689,7 +689,7 @@ def inject_mcp_settings(workspace_path: Path, api_url: str | None = None) -> Pat
     """Inject Longhouse MCP server config into workspace .claude/settings.json.
 
     This allows commis (Claude Code subprocesses) to access Longhouse's
-    session search, recall, insight, and Oikos callback tools mid-task.
+    session search, recall, insight, and notification tools mid-task.
 
     Parameters
     ----------
@@ -747,7 +747,7 @@ def inject_codex_mcp_settings(workspace_path: Path, api_url: str | None = None) 
     """Inject Longhouse MCP server config into workspace .codex/config.toml.
 
     This allows Codex-backend commis (Codex CLI subprocesses) to access
-    Longhouse's session search, recall, insight, and Oikos callback tools mid-task.
+    Longhouse's session search, recall, insight, and notification tools mid-task.
 
     Delegates to the shared ``upsert_codex_mcp_toml`` in ``shipper.hooks``
     with ``strict=False`` (best-effort for workspace provisioning).
@@ -789,8 +789,7 @@ def inject_commis_hooks(
     before Claude Code finishes its session.  A non-zero exit code from the
     hook prevents the session from stopping, forcing the agent to fix the issue.
 
-    A second ``Stop`` hook notifies Oikos via the MCP ``notify_oikos`` tool
-    so that completion status is visible in the UI.
+    A second ``Stop`` hook logs a Longhouse completion notification.
 
     The function merges with any existing settings.json content (MCP config,
     permissions, etc.) — it never overwrites unrelated keys.
@@ -876,16 +875,14 @@ def inject_commis_hooks(
             }
         )
 
-    # Notification hook — always added so Oikos knows the commis finished.
-    # PLACEHOLDER: Currently just prints to stderr.  Will be replaced with an
-    # actual MCP ``notify_oikos`` call once the Claude Code hook protocol
-    # supports MCP tool invocation from hooks.
+    # Notification hook — currently just prints to stderr. It can be replaced
+    # with a real Longhouse notification once hooks can invoke MCP tools.
     stop_hooks.append(
         {
             "hooks": [
                 {
                     "type": "command",
-                    "command": "echo 'Commis completed — notifying Oikos' >&2",
+                    "command": "echo 'Commis completed - notifying Longhouse' >&2",
                     "timeout": 10,
                     "async": True,
                 }

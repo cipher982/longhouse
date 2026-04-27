@@ -3005,7 +3005,16 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Session Inputs Endpoint */
+        /**
+         * List Session Inputs Endpoint
+         * @description List queued + recently-failed inputs for the chip UI.
+         *
+         *     The web composer polls this every 2s while any row is queued or
+         *     delivering. Most polls return the same shape, so we emit a weak
+         *     ETag derived from the row state tuple and honor If-None-Match →
+         *     304. A 304 is ~1ms vs ~9ms for the full response, which matters
+         *     at the aggregate QPS of many active session-detail pages.
+         */
         get: operations["list_session_inputs_endpoint_sessions__session_id__inputs_get"];
         put?: never;
         post?: never;
@@ -8387,6 +8396,35 @@ export interface components {
              * @default false
              */
             has_signal: boolean;
+            /**
+             * Control Path
+             * @description Does Longhouse own a control path? 'managed' or 'unmanaged'
+             * @default unmanaged
+             */
+            control_path: string;
+            /**
+             * Activity Recency
+             * @description How recently we heard from this session: 'live' | 'recent' | 'stale' | 'none'
+             * @default none
+             */
+            activity_recency: string;
+            /**
+             * Lifecycle
+             * @description Session lifecycle: 'open' | 'closed' | 'unknown'. Closed only with ground truth.
+             * @default open
+             */
+            lifecycle: string;
+            /**
+             * Host State
+             * @description Host/machine verifiability: 'online' | 'stale' | 'offline' | 'unknown'
+             * @default unknown
+             */
+            host_state: string;
+            /**
+             * Terminal Reason
+             * @description Why the session is closed, when lifecycle=='closed'
+             */
+            terminal_reason?: string | null;
         };
         /**
          * SessionSummaryResponse
@@ -14686,7 +14724,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["QueuedInputSummary"][];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

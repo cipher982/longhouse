@@ -449,7 +449,6 @@ async def lifespan(app: FastAPI):
             try:
                 from zerg.channels.plugins.telegram import TelegramChannel
                 from zerg.channels.registry import register_channel
-                from zerg.services.telegram_bridge import TelegramBridge
 
                 _tg_channel = TelegramChannel()
                 await _tg_channel.configure(
@@ -464,10 +463,7 @@ async def lifespan(app: FastAPI):
                 )
                 await _tg_channel.start()
                 register_channel(_tg_channel, replace=True)
-                _tg_bridge = TelegramBridge(_tg_channel)
-                _tg_bridge.start()
                 app.state.telegram_channel = _tg_channel
-                app.state.telegram_bridge = _tg_bridge
                 logger.info("Telegram channel started (@%s)", _tg_channel._bot_info.get("username", "unknown"))
             except Exception:
                 logger.exception("Telegram startup failed (non-fatal) — bot will be unavailable")
@@ -517,8 +513,6 @@ async def lifespan(app: FastAPI):
                 logger.exception("Failed to stop ops_events_bridge")
 
             try:
-                if hasattr(app.state, "telegram_bridge"):
-                    app.state.telegram_bridge.stop()
                 if hasattr(app.state, "telegram_channel"):
                     await app.state.telegram_channel.stop()
             except Exception:  # noqa: BLE001

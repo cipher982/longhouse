@@ -22,7 +22,6 @@ This is the north-star document. It is intentionally short. If a proposal confli
 ## Naming
 
 - **Longhouse** = product and brand
-- **Oikos** = the assistant UI inside Longhouse
 - **Zerg** = repo/internal codename
 
 Use Longhouse in product copy. Keep Zerg internal.
@@ -88,8 +87,8 @@ The product should never make users understand shell bootstrap, launchd, or help
 5. **MCP is an adapter, not the platform boundary.**
    Useful capabilities must make sense without requiring MCP.
 
-6. **Oikos is a convenience layer, not a middleman.**
-   Oikos helps the user move faster. It does not own the session model.
+6. **Assistant surfaces are clients, not middlemen.**
+   Browser, native, MCP, and future assistants consume the same session model.
 
 7. **SQLite is the only core database requirement.**
    Postgres is control-plane only.
@@ -98,7 +97,7 @@ The product should never make users understand shell bootstrap, launchd, or help
    The product must be understandable and useful before hosted provisioning exists.
 
 9. **Keep behavior explicit.**
-   No hidden fallbacks, silent mode switches, or duplicated capability logic across frontend, backend, and Oikos.
+   No hidden fallbacks, silent mode switches, or duplicated capability logic across frontend, backend, and clients.
 
 ## What Longhouse Is
 
@@ -136,7 +135,6 @@ Longhouse is not:
 
 ### Support
 
-- Oikos as a lightweight receptionist and coordinator
 - demo data and local onboarding that get users to value fast
 - runner-backed execution on user-owned machines
 
@@ -156,7 +154,7 @@ Longhouse is not:
 - **Prefer obvious seams over overloaded ones.** Different behaviors should be different contracts.
 - **Prefer deletion over half-supported surfaces.** A smaller honest product is better than a broader confusing one.
 - **Design for cold restarts.** Durable artifacts beat clever in-memory state.
-- **Keep one source of truth per capability.** Frontend, backend, and Oikos should not each infer different meanings from the same raw fields.
+- **Keep one source of truth per capability.** Frontend, backend, and clients should not each infer different meanings from the same raw fields.
 
 ## Prelaunch Priorities
 
@@ -171,7 +169,6 @@ Longhouse is not:
 Later features are allowed only if they strengthen the same core loop:
 
 - hosted as another explicit launch target
-- richer Oikos operator behavior
 - stronger provider parity
 - email, inbox, or conversation surfaces
 - higher-level workflow layers on top of the session kernel

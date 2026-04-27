@@ -1,4 +1,4 @@
-"""Telegram notification tool — lets Oikos proactively message the user on Telegram."""
+"""Telegram notification tool for reaching the user on Telegram."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Dict
 from zerg.context import get_commis_context
 from zerg.crud import get_user
 from zerg.database import db_session
-from zerg.services.telegram_bridge import _format_for_telegram
+from zerg.services.telegram_format import format_for_telegram
 from zerg.tools.error_envelope import ErrorType
 from zerg.tools.error_envelope import tool_error
 from zerg.tools.error_envelope import tool_success
@@ -57,7 +57,7 @@ def _build_message(chat_id: str, text: str) -> Any:
     return ChannelMessage(
         channel_id="telegram",
         to=chat_id,
-        text=_format_for_telegram(text),
+        text=format_for_telegram(text),
         parse_mode="html",
     )
 

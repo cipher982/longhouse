@@ -8,7 +8,7 @@ COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/dock
 E2E_BACKEND_PORT ?=
 E2E_FRONTEND_PORT ?=
 
-.PHONY: help dev dev-demo stop test test-ios test-ios-helper test-frontend test-engine test-runner test-control-plane test-e2e test-e2e-core test-e2e-a11y test-e2e-cp test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-sse validate-sdk validate-makefile validate-build-identity validate-managed-codex-contract regen-ws regen-sse generate-sdk qa-live render-canary reprovision deploy-status ship-watch ship release ui-capture test-shipper-e2e test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-e2e-continuation-provider test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest eval dogfood dogfood-refresh dogfood-check
+.PHONY: help dev dev-demo stop test test-ios test-ios-helper test-frontend test-engine test-runner test-control-plane test-e2e test-e2e-core test-e2e-a11y test-e2e-cp test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-sdk validate-makefile validate-build-identity validate-managed-codex-contract regen-ws generate-sdk qa-live render-canary reprovision deploy-status ship-watch ship release ui-capture test-shipper-e2e test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-e2e-continuation-provider test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest eval dogfood dogfood-refresh dogfood-check
 
 # ---------------------------------------------------------------------------
 # Help
@@ -207,7 +207,6 @@ dogfood-check: ## Show installed local runtime status + local health
 # ---------------------------------------------------------------------------
 validate: ## Run all contract checks
 	@$(MAKE) validate-ws
-	@$(MAKE) validate-sse
 	@$(MAKE) validate-sdk
 	@$(MAKE) validate-makefile
 	@$(MAKE) validate-build-identity
@@ -228,16 +227,6 @@ validate-ws: ## @internal WebSocket contract check
 		uv run --no-project --with pyyaml python ../scripts/generate/generate-ws-types-modern.py schemas/ws-protocol-asyncapi.yml >/dev/null 2>&1
 	@if ! git diff --quiet server/zerg/generated/ws_messages.py web/src/generated/ws-messages.ts schemas/ws-protocol.schema.json schemas/ws-protocol-v1.json; then \
 		echo "WebSocket code out of sync — run 'make regen-ws'"; \
-		exit 1; \
-	fi
-
-validate-sse: ## @internal SSE contract check
-	@cd server && \
-		export XDG_CACHE_HOME="$$PWD/.uv_cache" TMPDIR="$$PWD/.uv_tmp"; \
-		mkdir -p "$$XDG_CACHE_HOME" "$$TMPDIR"; \
-		uv run --no-project --with pyyaml python ../scripts/generate/generate-sse-types.py schemas/sse-events.asyncapi.yml >/dev/null 2>&1
-	@if ! git diff --quiet server/zerg/generated/sse_events.py web/src/generated/sse-events.ts schemas/sse-events.asyncapi.yml; then \
-		echo "SSE code out of sync — run 'make regen-sse'"; \
 		exit 1; \
 	fi
 
@@ -267,12 +256,6 @@ regen-ws: ## Regenerate WebSocket contract code
 		export XDG_CACHE_HOME="$$PWD/.uv_cache" TMPDIR="$$PWD/.uv_tmp"; \
 		mkdir -p "$$XDG_CACHE_HOME" "$$TMPDIR"; \
 		uv run --no-project --with pyyaml python ../scripts/generate/generate-ws-types-modern.py schemas/ws-protocol-asyncapi.yml
-
-regen-sse: ## Regenerate SSE contract code
-	@cd server && \
-		export XDG_CACHE_HOME="$$PWD/.uv_cache" TMPDIR="$$PWD/.uv_tmp"; \
-		mkdir -p "$$XDG_CACHE_HOME" "$$TMPDIR"; \
-		uv run --no-project --with pyyaml python ../scripts/generate/generate-sse-types.py schemas/sse-events.asyncapi.yml
 
 generate-sdk: ## Regenerate OpenAPI types
 	@$(MAKE) ensure-js-deps

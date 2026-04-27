@@ -5,7 +5,6 @@ export * from "./types";
 export * from "./models";
 export * from "./connectors";
 export * from "./runners";
-export * from "./voice";
 export * from "./agents";
 export * from "./system";
 export * from "./sessionChat";

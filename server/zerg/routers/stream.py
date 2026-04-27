@@ -18,10 +18,10 @@ from sse_starlette.sse import EventSourceResponse
 
 from zerg.database import db_session
 from zerg.database import get_test_commis_id
+from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.models.enums import RunStatus
 from zerg.models.models import Fiche
 from zerg.models.models import Run
-from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.services.run_stream import encode_connected_sse
 from zerg.services.run_stream import stream_run_events
 
@@ -66,19 +66,19 @@ async def stream_run_events_live(
     *,
     test_commis_id: str | None = None,
 ):
-    """Stream run events for Oikos chat with a replay-first bootstrap.
+    """Stream run events with a replay-first bootstrap.
 
-    This is a convenience wrapper around _replay_and_stream for the Oikos chat
-    use case. It:
+    This is a convenience wrapper around _replay_and_stream for session chat.
+    It:
     - Emits an initial ``connected`` event so the client knows the stream is open
     - Replays durable lifecycle events already persisted for the run
-    - Supports continuation run aliasing (follow-up oikos runs)
+    - Supports continuation run aliasing
     - Continues with live events after replay
 
-    Replay matters here because ``invoke_oikos()`` can persist ``oikos_started``
-    before the browser finishes subscribing to SSE. Without replay the first
-    lifecycle event races the connection and disappears, which breaks the
-    frontend's stable ``message_id`` contract.
+    Replay matters here because lifecycle events can persist before the browser
+    finishes subscribing to SSE. Without replay the first lifecycle event races
+    the connection and disappears, which breaks the frontend's stable
+    ``message_id`` contract.
 
     Args:
         run_id: Run identifier
@@ -112,7 +112,7 @@ async def stream_run_replay(
     request: Request,
     after_event_id: int = 0,
     include_tokens: bool = True,
-    current_user=Depends(get_current_oikos_user),
+    current_user=Depends(get_current_browser_route_user),
 ):
     """Stream run events with replay support (Resumable SSE v1).
 
@@ -159,13 +159,7 @@ async def stream_run_replay(
     # CRITICAL: Don't use Depends(get_db) here - it holds the session open
     # for the entire SSE stream duration, blocking TRUNCATE during E2E resets.
     with db_session() as db:
-        run = (
-            db.query(Run)
-            .join(Fiche, Fiche.id == Run.fiche_id)
-            .filter(Run.id == run_id)
-            .filter(Fiche.owner_id == current_user.id)
-            .first()
-        )
+        run = db.query(Run).join(Fiche, Fiche.id == Run.fiche_id).filter(Run.id == run_id).filter(Fiche.owner_id == current_user.id).first()
 
         if not run:
             raise HTTPException(status_code=404, detail="Run not found")
@@ -185,9 +179,7 @@ async def stream_run_replay(
             logger.warning(f"Invalid Last-Event-ID header: {last_event_id_header}")
 
     logger.info(
-        f"Streaming run {run_id} (status={run_status.value}, "
-        f"after_event_id={after_event_id}, "
-        f"include_tokens={include_tokens})"
+        f"Streaming run {run_id} (status={run_status.value}, " f"after_event_id={after_event_id}, " f"include_tokens={include_tokens})"
     )
 
     return EventSourceResponse(

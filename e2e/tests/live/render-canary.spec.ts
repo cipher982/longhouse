@@ -164,7 +164,10 @@ test("render canary: SSE frame arrival → browser paint under SLA", async ({
   );
 
   console.log(`[render-canary] collecting for ${OBSERVE_WINDOW_MS}ms`);
-  await page.waitForTimeout(OBSERVE_WINDOW_MS);
+  const observeUntil = Date.now() + OBSERVE_WINDOW_MS;
+  await page.waitForFunction((deadlineMs) => Date.now() >= deadlineMs, observeUntil, {
+    timeout: OBSERVE_WINDOW_MS + 1_000,
+  });
 
   const samples = await page.evaluate(() => {
     const win = window as unknown as { __canaryFrames__?: FrameSample[] };

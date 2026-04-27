@@ -22,7 +22,7 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.dependencies.oikos_auth import get_current_oikos_user
+from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.models.device_token import DeviceToken
 from zerg.models.enums import UserRole
 from zerg.models.user import User
@@ -54,7 +54,7 @@ def _make_client(session_local, current_user):
         return current_user
 
     api_app.dependency_overrides[get_db] = override_get_db
-    api_app.dependency_overrides[get_current_oikos_user] = override_current_user
+    api_app.dependency_overrides[get_current_browser_route_user] = override_current_user
     return TestClient(app, backend="asyncio"), api_app
 
 

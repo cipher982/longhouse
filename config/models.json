@@ -1,5 +1,5 @@
 {
-  "$comment": "Single source of truth for all LLM model configuration across Zerg and Oikos",
+  "$comment": "Single source of truth for all LLM model configuration across Longhouse",
 
   "text": {
     "$comment": "Text/chat completion models (Zerg agent orchestration)",
@@ -134,7 +134,7 @@
   },
 
   "realtime": {
-    "$comment": "Realtime/voice models (Oikos voice interface)",
+    "$comment": "Realtime/voice models",
     "tiers": {
       "TIER_1": "gpt-4o-realtime-preview",
       "TIER_2": "gpt-4o-mini-realtime-preview"

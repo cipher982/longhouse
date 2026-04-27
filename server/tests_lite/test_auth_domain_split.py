@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 from fastapi import HTTPException
 
-from zerg.dependencies.oikos_auth import get_current_oikos_user
+from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.routers import auth as auth_router
 from zerg.routers import auth_browser
 from zerg.routers import auth_gmail
@@ -57,30 +57,30 @@ def test_timeline_router_exposes_browser_archive_routes():
 
 
 
-def test_get_current_oikos_user_accepts_query_token_for_sse():
+def test_get_current_browser_route_user_accepts_query_token_for_sse():
     request = SimpleNamespace(cookies={}, headers={})
     db = object()
     user = object()
     strategy = SimpleNamespace(validate_ws_token=lambda token, current_db: user)
 
     with (
-        patch("zerg.dependencies.oikos_auth._get_strategy", return_value=strategy),
-        patch("zerg.dependencies.oikos_auth.get_current_browser_user") as browser_user,
+        patch("zerg.dependencies.browser_route_auth._get_strategy", return_value=strategy),
+        patch("zerg.dependencies.browser_route_auth.get_current_browser_user") as browser_user,
     ):
-        result = get_current_oikos_user(request, db=db, token="sse-token")
+        result = get_current_browser_route_user(request, db=db, token="sse-token")
 
     assert result is user
     browser_user.assert_not_called()
 
 
-def test_get_current_oikos_user_rejects_bad_query_token():
+def test_get_current_browser_route_user_rejects_bad_query_token():
     request = SimpleNamespace(cookies={}, headers={})
     db = object()
     strategy = SimpleNamespace(validate_ws_token=lambda token, current_db: None)
 
-    with patch("zerg.dependencies.oikos_auth._get_strategy", return_value=strategy):
+    with patch("zerg.dependencies.browser_route_auth._get_strategy", return_value=strategy):
         with pytest.raises(HTTPException) as exc_info:
-            get_current_oikos_user(request, db=db, token="bad-token")
+            get_current_browser_route_user(request, db=db, token="bad-token")
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.detail == "Invalid or expired token"
