@@ -96,7 +96,12 @@ def test_managed_running_has_renderable_runtime_signal():
     assert display.has_signal is True
 
 
-def test_three_axis_fields_unmanaged_idle():
+def test_three_axis_fields_unmanaged_no_renderable_signal():
+    # Fallback view with no presence and no last_live_at produces no
+    # renderable signal. Without a distinct "last activity" timestamp we
+    # cannot tell "never observed" apart from "observed long ago", so the
+    # honest answer is "none" for recency. (Phase 4 introduces
+    # last_activity_at as a first-class field to separate the two.)
     display = build_session_runtime_display(
         runtime_view=_runtime_view(),
         capabilities=_capabilities(),
@@ -108,6 +113,46 @@ def test_three_axis_fields_unmanaged_idle():
     assert display.lifecycle == "open"
     assert display.host_state == "unknown"
     assert display.terminal_reason is None
+
+
+def test_three_axis_fields_managed_stale_after_live():
+    # Managed session whose freshness window has elapsed should surface
+    # as "stale" recency rather than "none".
+    display = build_session_runtime_display(
+        runtime_view=_runtime_view(
+            runtime_source="managed_local_transport",
+            presence_state="idle",
+            display_phase="Idle",
+            confidence="stale",
+            last_live_at=datetime(2026, 4, 26, 11, 0, tzinfo=timezone.utc),
+        ),
+        capabilities=_capabilities(managed=True),
+        ended_at=None,
+    )
+
+    assert display.activity_recency == "stale"
+
+
+def test_three_axis_fields_managed_hosted_without_transport():
+    # MANAGED_HOSTED sessions whose transport is None must still be
+    # classified as "managed" on the control_path axis.
+    capabilities = SessionCapabilityFlags(
+        execution_home=SessionExecutionHome.MANAGED_HOSTED,
+        managed_transport=None,
+        live_control_available=False,
+        host_reattach_available=False,
+        reply_to_live_session_available=False,
+        can_queue_next_input=False,
+        can_steer_active_turn=False,
+        home_label=None,
+    )
+    display = build_session_runtime_display(
+        runtime_view=_runtime_view(),
+        capabilities=capabilities,
+        ended_at=None,
+    )
+
+    assert display.control_path == "managed"
 
 
 def test_three_axis_fields_managed_live_running():
