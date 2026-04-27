@@ -9,11 +9,13 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime
+from hashlib import blake2b
 
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Request
+from fastapi import Response
 from fastapi import status
 from pydantic import BaseModel
 from pydantic import Field
@@ -613,14 +615,37 @@ async def create_session_input_endpoint(
     )
 
 
-@router.get("/{session_id}/inputs", response_model=list[QueuedInputSummary])
+@router.get("/{session_id}/inputs")
 async def list_session_inputs_endpoint(
     session_id: str,
+    request: Request,
+    response: Response,
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_oikos_user),
-) -> list[QueuedInputSummary]:
+):
+    """List queued + recently-failed inputs for the chip UI.
+
+    The web composer polls this every 2s while any row is queued or
+    delivering. Most polls return the same shape, so we emit a weak
+    ETag derived from the row state tuple and honor If-None-Match →
+    304. A 304 is ~1ms vs ~9ms for the full response, which matters
+    at the aggregate QPS of many active session-detail pages.
+    """
     source_session = _load_session_for_continuation(db, session_id)
-    return [_queued_summary(r) for r in list_recent_inputs(db, source_session.id)]
+    rows = list_recent_inputs(db, source_session.id)
+
+    # Cheap stable hash of the state that matters to the client. If none of
+    # id/status/updated_at/last_error changed, neither did the chip.
+    hasher = blake2b(digest_size=12)
+    for r in rows:
+        hasher.update(f"{r.id}:{r.status}:{r.updated_at}:{r.last_error or ''}|".encode())
+    etag = f'W/"inputs-{hasher.hexdigest()}"'
+
+    if request.headers.get("If-None-Match") == etag:
+        return Response(status_code=304, headers={"ETag": etag})
+
+    response.headers["ETag"] = etag
+    return [_queued_summary(r) for r in rows]
 
 
 @router.delete("/{session_id}/inputs/{input_id}")
