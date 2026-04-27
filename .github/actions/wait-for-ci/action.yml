@@ -75,8 +75,9 @@ runs:
               repo: context.repo.repo,
               workflow_id: workflowId,
               branch,
-              head_sha: sha,
-              per_page: 10,
+              // GitHub's workflow-runs API can return an empty set when
+              // combining workflow filename + head_sha, so filter SHA below.
+              per_page: 50,
             };
 
             if (workflowEvent) {
