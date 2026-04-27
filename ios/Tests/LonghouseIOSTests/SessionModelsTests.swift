@@ -148,6 +148,45 @@ struct SessionModelsTests {
     }
 
     @Test
+    func sessionDetailOmitsRedundantIdleRuntimeDetail() throws {
+        let json = """
+        {
+          "id": "session-idle",
+          "provider": "codex",
+          "project": "zerg",
+          "cwd": "/Users/davidrose/git/zerg",
+          "git_branch": "main",
+          "summary": "Idle session",
+          "summary_title": "Idle session",
+          "presence_state": "idle",
+          "presence_tool": null,
+          "user_state": "active",
+          "status": "idle",
+          "last_activity_at": null,
+          "display_phase": null,
+          "active_tool": null,
+          "home_label": "On this Mac",
+          "origin_label": "On this Mac",
+          "capabilities": {
+            "live_control_available": true,
+            "host_reattach_available": true,
+            "reply_to_live_session_available": true,
+            "display_label": "Live on this Mac",
+            "display_detail": "Longhouse can send prompts into this live session.",
+            "display_tone": "success"
+          },
+          "loop_mode": "manual"
+        }
+        """.data(using: .utf8)!
+
+        let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
+
+        #expect(detail.runtimeHeadline == "Ready")
+        #expect(detail.runtimeDetail == nil)
+        #expect(detail.runtimePhaseLabel == "Idle")
+    }
+
+    @Test
     func sessionInputResponseDecodesSentOutcome() throws {
         let json = """
         {
@@ -189,6 +228,8 @@ struct SessionModelsTests {
         #expect(response.queued.count == 1)
         #expect(response.queued.first?.status == "queued")
         #expect(response.queued.first?.text == "hold this thought")
+        #expect(response.pendingInputCount == 1)
+        #expect(response.visibleFailedInputCount == 0)
     }
 
     @Test
@@ -234,5 +275,32 @@ struct SessionModelsTests {
         let response = try JSONDecoder.snakeCase.decode(SessionInputResponse.self, from: json)
         #expect(response.queued.first?.status == "failed")
         #expect(response.queued.first?.lastError == "provider unavailable")
+        #expect(response.pendingInputCount == 0)
+        #expect(response.visibleFailedInputCount == 1)
+    }
+
+    @Test
+    func sessionInputResponseHidesTurnEndedSteerFailureFromFailedCount() throws {
+        let json = """
+        {
+          "outcome": "queued",
+          "input_id": 10,
+          "intent": "steer",
+          "queued": [
+            {
+              "id": 10,
+              "text": "update this turn",
+              "intent": "steer",
+              "status": "failed",
+              "last_error": "turn_ended",
+              "created_at": "2026-04-26T23:12:00Z"
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let response = try JSONDecoder.snakeCase.decode(SessionInputResponse.self, from: json)
+        #expect(response.pendingInputCount == 0)
+        #expect(response.visibleFailedInputCount == 0)
     }
 }

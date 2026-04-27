@@ -194,7 +194,7 @@ struct LonghouseAPI: Sendable {
     /// Extract `{"detail": {"error_code": ..., "message": ...}}` from an
     /// HTTPException body. Returns nil when the body isn't structured,
     /// letting callers fall back to the generic `LonghouseAPIError.from(...)`.
-    private static func parseStructuredError(statusCode: Int, data: Data) -> LonghouseAPIError? {
+    static func parseStructuredError(statusCode: Int, data: Data) -> LonghouseAPIError? {
         guard
             let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
             let detail = obj["detail"] as? [String: Any],

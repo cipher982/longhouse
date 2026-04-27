@@ -213,6 +213,16 @@ struct SessionInputResponse: Codable, Sendable {
     let inputId: Int
     let intent: String
     let queued: [QueuedInputSummary]
+
+    var pendingInputCount: Int {
+        queued.filter { $0.status == "queued" || $0.status == "delivering" }.count
+    }
+
+    var visibleFailedInputCount: Int {
+        queued.filter { row in
+            row.status == "failed" && !(row.intent == "steer" && row.lastError == "turn_ended")
+        }.count
+    }
 }
 
 struct SessionRuntimeDisplay: Codable, Hashable, Sendable {
@@ -370,6 +380,9 @@ struct SessionDetail: Codable, Identifiable, Sendable {
             return detail
         }
         if isControlOffline || isReadOnly {
+            return controlHealthMessage
+        }
+        if runtimePhaseState == "idle" {
             return controlHealthMessage
         }
         if runtimeHeadline != runtimePhaseLabel {
