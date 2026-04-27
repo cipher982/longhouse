@@ -975,7 +975,7 @@ describe("SessionsPage", () => {
     expect(screen.queryByText("This machine")).not.toBeInTheDocument();
     expect(screen.queryByText("Head: cinder")).not.toBeInTheDocument();
     expect(screen.queryByText("Head: Cloud")).not.toBeInTheDocument();
-    expect(screen.getByText(/Started .* 3 continuations/)).toBeInTheDocument();
+    expect(screen.getByText(/Started .+ \u2022 3 continuations/)).toBeInTheDocument();
   });
 
   it("marks recent-progress sessions without semantic live signals honestly", async () => {
