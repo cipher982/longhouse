@@ -70,6 +70,57 @@ pub struct HeartbeatPayload {
     pub is_offline: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub managed_sessions: Vec<ManagedSessionLease>,
+    /// Phase 5 of session-liveness-honesty: machine-observed pid/cwd
+    /// bindings for unmanaged provider-CLI sessions. Populated by
+    /// `collect_unmanaged_session_bindings()` — currently a stub that
+    /// returns no observations. The full process/fd scanner will
+    /// populate this and Phase 6 will consume it to drive
+    /// `lifecycle=closed` when processes are confirmed gone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unmanaged_session_bindings: Vec<UnmanagedSessionBinding>,
+}
+
+/// One machine-observed binding of an unmanaged provider CLI process to
+/// its JSONL transcript. See `server/zerg/routers/heartbeat.py` and
+/// `docs/specs/session-liveness-honesty.md` Phase 5.
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+pub struct UnmanagedSessionBinding {
+    pub machine_id: String,
+    pub provider: String,
+    pub provider_session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_inode: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_device: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub process_start_time: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_offset: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_mtime: Option<String>,
+    pub observed_at: String,
+}
+
+/// Discover machine-local unmanaged session bindings for heartbeat.
+///
+/// Phase 5b stub: returns no bindings. The real scanner will:
+///   1. enumerate recent transcript files under provider roots
+///      (~/.claude/projects, ~/.codex/sessions, ~/.gemini/sessions)
+///   2. scan for provider CLI processes (`claude`, `codex`, `gemini`)
+///   3. correlate open file descriptors to transcript paths via
+///      `lsof -F pcn -p <pid>` on macOS or `/proc/<pid>/fd/*` on Linux
+///   4. emit one binding per (machine_id, provider, provider_session_id)
+///      with pid + process_start_time composite identity.
+pub fn collect_unmanaged_session_bindings(
+    _machine_id: &str,
+) -> Vec<UnmanagedSessionBinding> {
+    Vec::new()
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
@@ -166,6 +217,7 @@ impl HeartbeatPayload {
             disk_free_bytes,
             is_offline: stats.is_offline,
             managed_sessions: Vec::new(),
+            unmanaged_session_bindings: Vec::new(),
         }
     }
 }
@@ -593,6 +645,7 @@ mod tests {
             disk_free_bytes: 1_000_000_000,
             is_offline: false,
             managed_sessions: Vec::new(),
+            unmanaged_session_bindings: Vec::new(),
         };
 
         // Must serialize correctly
@@ -651,6 +704,7 @@ mod tests {
                 observed_at: "2026-04-26T00:00:00Z".to_string(),
                 lease_ttl_ms: 900_000,
             }],
+            unmanaged_session_bindings: Vec::new(),
         };
 
         let json = serde_json::to_string(&payload).unwrap();
@@ -818,6 +872,7 @@ mod tests {
             disk_free_bytes: 0,
             is_offline: true,
             managed_sessions: Vec::new(),
+            unmanaged_session_bindings: Vec::new(),
         };
 
         let json = serde_json::to_string(&payload).unwrap();
@@ -861,6 +916,7 @@ mod tests {
             disk_free_bytes: 10,
             is_offline: false,
             managed_sessions: Vec::new(),
+            unmanaged_session_bindings: Vec::new(),
         };
 
         spool
@@ -966,6 +1022,7 @@ mod tests {
             disk_free_bytes: 0,
             is_offline: false,
             managed_sessions: Vec::new(),
+            unmanaged_session_bindings: Vec::new(),
         };
         let stats = HeartbeatStats {
             spool: &spool,
@@ -1032,6 +1089,7 @@ mod tests {
             disk_free_bytes: 0,
             is_offline: false,
             managed_sessions: Vec::new(),
+            unmanaged_session_bindings: Vec::new(),
         };
         let stats = HeartbeatStats {
             spool: &spool,
