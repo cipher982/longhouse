@@ -927,11 +927,12 @@ test.describe("Session Detail Page", () => {
         });
       });
 
-      await page.route(`**/sessions/${sessionId}/send-live*`, async (route) => {
+      await page.route(`**/sessions/${sessionId}/input*`, async (route) => {
         chatRequests += 1;
         expect(route.request().method()).toBe("POST");
         expect(route.request().postDataJSON()).toMatchObject({
-          message: "Continue locally",
+          text: "Continue locally",
+          intent: "auto",
         });
         await new Promise((resolve) => setTimeout(resolve, 1500));
         lockState = {
@@ -944,11 +945,21 @@ test.describe("Session Detail Page", () => {
           status: 200,
           contentType: "application/json",
           body: JSON.stringify({
-            accepted: true,
-            session_id: sessionId,
-            request_id: "req-e2e",
-            dispatch_ms: 11.4,
+            outcome: "sent",
+            input_id: 1,
+            intent: "auto",
+            queued: [],
           }),
+        });
+      });
+
+      // The inputs-poll query also fires when the queue chip is gated on;
+      // stub it so we don't surface noisy network errors during the test.
+      await page.route(`**/api/sessions/${sessionId}/inputs*`, async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([]),
         });
       });
 
