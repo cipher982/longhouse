@@ -208,6 +208,7 @@ If you touch a secondary area, either simplify it toward the core story or expla
 - `make dev` is interactive.
 - After local runtime changes (engine, hooks, `connect`, desktop app/menu bar), run `make dogfood-refresh` to reinstall the real local runtime from current repo source. DMG drag-install is release transport, not the daily dogfood loop.
 - Python-CLI-only changes under `server/zerg/cli/` skip the Rust rebuild — `cd server && uv tool install -e .` is ~5s vs ~60s for `make dogfood-refresh`. This is a narrow shortcut; it does not apply to engine, hooks, connect, desktop app, or iOS.
+- Warp's Codex sidebar/rich status comes from OSC 777 `warp://cli-agent` terminal markers; command regexes and foreground process groups alone are not enough for managed `longhouse codex`.
 - **iOS app changes** (`ios/`) are pure Swift — no `make` target, no dogfood-refresh, no install step. An Xcode rebuild/run is the whole loop. The iOS app has no runtime or engine to reinstall.
 - Heavy local validation can saturate the laptop. Prefer GitHub ARC for `make test-ci`, `make test-e2e`, `make test-full`, long `cargo` builds, and heavy installer/menu bar paths unless local debugging is the point.
 - Local SQLite dev DB is `~/.longhouse/dev.db` unless `DATABASE_URL` overrides it.
