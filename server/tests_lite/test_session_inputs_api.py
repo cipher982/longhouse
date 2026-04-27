@@ -475,6 +475,52 @@ def test_cancel_rejects_wrong_session(monkeypatch, tmp_path):
         api_app_ref.dependency_overrides = {}
 
 
+def test_inputs_etag_returns_304_when_unchanged(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    _stub_dispatch(monkeypatch)
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        # Seed one queued row so the list is non-trivial.
+        r = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={"text": "etag test", "intent": "queue"},
+        )
+        assert r.status_code == 200
+
+        # First list call: full response + ETag header.
+        first = client.get(f"/api/sessions/{session_id}/inputs")
+        assert first.status_code == 200
+        etag = first.headers.get("etag")
+        assert etag, "expected ETag header on /inputs response"
+
+        # Second call with If-None-Match presents the same etag → 304.
+        second = client.get(
+            f"/api/sessions/{session_id}/inputs",
+            headers={"If-None-Match": etag},
+        )
+        assert second.status_code == 304, second.text
+        assert second.headers.get("etag") == etag
+
+        # Mutating state (cancel) invalidates the ETag.
+        input_id = first.json()[0]["id"]
+        cancel = client.delete(f"/api/sessions/{session_id}/inputs/{input_id}")
+        assert cancel.status_code == 200
+
+        third = client.get(
+            f"/api/sessions/{session_id}/inputs",
+            headers={"If-None-Match": etag},
+        )
+        assert third.status_code == 200, "cancel should bust the ETag"
+        assert third.headers.get("etag") != etag
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
 def test_recent_list_surfaces_failed_rows(monkeypatch, tmp_path):
     from zerg.services.session_inputs import mark_failed
 
