@@ -7738,6 +7738,12 @@ export interface components {
              * @default false
              */
             can_queue_next_input: boolean;
+            /**
+             * Can Steer Active Turn
+             * @description True when mid-turn steer is likely to land; the active turn may still end before the call arrives
+             * @default false
+             */
+            can_steer_active_turn: boolean;
         };
         /** SessionControlResponse */
         SessionControlResponse: {

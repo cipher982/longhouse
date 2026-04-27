@@ -90,6 +90,28 @@ pub struct BridgeInterruptConfig {
 }
 
 #[derive(Debug, Clone)]
+pub struct BridgeSteerConfig {
+    pub session_id: String,
+    pub text: String,
+    pub state_root: Option<PathBuf>,
+}
+
+/// Failure modes specific to the steer IPC path. Distinguishes "the turn
+/// we would have steered into has already ended" (a product concept the
+/// backend must surface) from generic protocol errors.
+#[derive(Debug, thiserror::Error)]
+pub enum BridgeSteerError {
+    #[error("bridge state does not have an active turn to steer")]
+    NoActiveTurn,
+    #[error("bridge state is missing required field: {0}")]
+    MissingState(&'static str),
+    #[error("codex app-server rejected turn/steer: {0}")]
+    TurnEnded(String),
+    #[error(transparent)]
+    Protocol(#[from] anyhow::Error),
+}
+
+#[derive(Debug, Clone)]
 pub struct BridgeStopConfig {
     pub session_id: String,
     pub state_root: Option<PathBuf>,
@@ -1028,6 +1050,97 @@ pub async fn cmd_codex_bridge_stop(config: BridgeStopConfig) -> Result<()> {
 #[cfg(not(unix))]
 pub async fn cmd_codex_bridge_stop(_config: BridgeStopConfig) -> Result<()> {
     bail!("codex-bridge stop is only supported on unix platforms");
+}
+
+/// Send a mid-turn steer message to the Codex app-server.
+///
+/// On success: the app-server accepted the steer; Codex will weave the text
+/// into the active turn. Transcript ingest happens via the usual hook
+/// outbox path; callers should not block waiting for a reply here.
+///
+/// On failure: returns `BridgeSteerError::NoActiveTurn` if the bridge state
+/// file reports no active turn id (the capability gate on the server side
+/// can race with a natural turn completion). Returns `TurnEnded` when the
+/// app-server error payload mentions turn-state issues. Otherwise wraps
+/// the protocol error.
+pub async fn cmd_codex_bridge_steer(
+    config: BridgeSteerConfig,
+) -> std::result::Result<(), BridgeSteerError> {
+    let state = load_ready_state(&config.session_id, config.state_root.as_deref())
+        .map_err(BridgeSteerError::Protocol)?;
+    let thread_id = state
+        .thread_id
+        .clone()
+        .ok_or(BridgeSteerError::MissingState("thread_id"))?;
+    let turn_id = state
+        .active_turn_id
+        .clone()
+        .ok_or(BridgeSteerError::NoActiveTurn)?;
+    let ws_url = state
+        .ws_url
+        .clone()
+        .ok_or(BridgeSteerError::MissingState("ws_url"))?;
+
+    let mut client = connect_remote_client(&ws_url)
+        .await
+        .map_err(BridgeSteerError::Protocol)?;
+    initialize_client(&mut client)
+        .await
+        .map_err(BridgeSteerError::Protocol)?;
+
+    let send_result = send_request(
+        &mut client,
+        "turn/steer",
+        json!({
+            "threadId": thread_id,
+            "expectedTurnId": turn_id,
+            "input": [{"type": "text", "text": config.text}],
+        }),
+    )
+    .await;
+
+    // Best-effort shutdown regardless of outcome.
+    let _ = shutdown_child(&mut client).await;
+
+    match send_result {
+        Ok(_) => Ok(()),
+        Err(err) => {
+            let msg = format!("{err}");
+            if classify_steer_error_as_turn_ended(&msg) {
+                Err(BridgeSteerError::TurnEnded(msg))
+            } else {
+                Err(BridgeSteerError::Protocol(err))
+            }
+        }
+    }
+}
+
+/// Decide whether a raw `turn/steer` error message from the Codex app-server
+/// represents a turn-state race (the caller expected an active turn that had
+/// already ended, been interrupted, or completed). Surfaced as a separate
+/// signal so the backend can return a stable 409 without protocol coupling.
+///
+/// The classifier is deliberately specific — bare keywords like `expected`
+/// would match generic protocol errors ("expected turn/steer response to
+/// include X"), which would silently downgrade real bugs into a user-facing
+/// "queue instead" prompt.
+fn classify_steer_error_as_turn_ended(raw_error: &str) -> bool {
+    let lower = raw_error.to_ascii_lowercase();
+    if !lower.contains("turn") {
+        return false;
+    }
+    // Phrases we've observed or can reasonably expect from the app-server
+    // when the expected turn id is stale, interrupted, or already finished.
+    lower.contains("expected turn id")
+        || lower.contains("expectedturnid")
+        || lower.contains("does not match active turn")
+        || lower.contains("not active")
+        || lower.contains("no active")
+        || lower.contains("turn ended")
+        || lower.contains("turn has already completed")
+        || lower.contains("turn has already ended")
+        || lower.contains("turn interrupted")
+        || lower.contains("turn completed")
 }
 
 pub async fn cmd_codex_bridge_interrupt(config: BridgeInterruptConfig) -> Result<()> {
@@ -3583,5 +3696,42 @@ mod tests {
             approval_payload["result"]["answers"]["color"]["answers"][0],
             "blue"
         );
+    }
+
+    #[test]
+    fn classify_steer_error_recognizes_turn_state_races() {
+        for sample in [
+            "turn/steer failed: { code: -32602, message: \"turn is not active\" }",
+            "turn/steer failed: expected turn id does not match active turn",
+            "turn/steer failed: expectedTurnId mismatch",
+            "turn/steer failed: turn has already completed",
+            "turn/steer failed: turn interrupted before steer",
+            "turn/steer failed: no active turn",
+            "turn/steer failed: turn ended",
+        ] {
+            assert!(
+                classify_steer_error_as_turn_ended(sample),
+                "expected {sample:?} to classify as turn_ended",
+            );
+        }
+    }
+
+    #[test]
+    fn classify_steer_error_does_not_flag_generic_protocol_errors() {
+        for sample in [
+            "turn/steer failed: connection reset",
+            "turn/steer failed: protocol parse error",
+            "turn/steer failed: thread not found",
+            "turn/steer failed: unauthorized",
+            // Bare `expected` should no longer be enough to trip the
+            // classifier — a real protocol-shape bug would otherwise
+            // silently convert to a user-actionable turn-ended prompt.
+            "turn/steer failed: expected turn/steer response to include result",
+        ] {
+            assert!(
+                !classify_steer_error_as_turn_ended(sample),
+                "expected {sample:?} NOT to be mis-classified as turn_ended",
+            );
+        }
     }
 }

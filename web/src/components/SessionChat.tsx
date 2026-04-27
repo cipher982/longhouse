@@ -96,6 +96,13 @@ interface SessionChatProps {
    * `can_queue_next_input` capability on managed-local sessions.
    */
   canQueueNextInput?: boolean;
+  /**
+   * When true, the managed transport supports mid-turn steer. Shows a
+   * primary "Send update" action while the session is working; queue-next
+   * becomes a secondary action. Turn-ended races surface as an inline
+   * error with a "Queue instead" affordance.
+   */
+  canSteerActiveTurn?: boolean;
 }
 
 export type SessionChatTarget = Pick<AgentSession, "id" | "project" | "provider">;
@@ -136,6 +143,7 @@ export function SessionChat({
   composerDisabledReason = null,
   managedLaunchSuggestion = null,
   canQueueNextInput = false,
+  canSteerActiveTurn = false,
 }: SessionChatProps) {
   const isDock = layout === "dock";
   const isManagedLocal = chatMode === "managed_local";
@@ -341,7 +349,13 @@ export function SessionChat({
   const activeQueuedInputs = queuedInputs.filter(
     (row) => row.status === "queued" || row.status === "delivering",
   );
-  const failedInputs = queuedInputs.filter((row) => row.status === "failed");
+  // Exclude `steer && turn_ended` rows from the failed-chip list: the user
+  // already saw the actionable "Queue instead" prompt on the POST; showing a
+  // duplicate red "failed" chip afterward reads like a second unrelated
+  // system failure.
+  const failedInputs = queuedInputs.filter(
+    (row) => row.status === "failed" && !(row.intent === "steer" && row.last_error === "turn_ended"),
+  );
   const queueFull = activeQueuedInputs.length >= 5;
 
   const handleCancel = useCallback(() => {
@@ -352,14 +366,19 @@ export function SessionChat({
     setIsStreaming(false);
   }, []);
 
+  // Set when the most recent send failed with turn_ended; lets the UI
+  // offer a one-click "Queue instead" fallback instead of silently re-mapping
+  // the user's intent.
+  const [turnEndedDraft, setTurnEndedDraft] = useState<string | null>(null);
+
   const handleManagedLocalSend = useCallback(
-    async (message: string) => {
+    async (message: string, intent: "auto" | "queue" | "steer" = "auto") => {
       setPendingManagedLocalMessage(message);
       setIsSubmitting(true);
       try {
         const result = await postSessionInput(session.id, {
           text: message,
-          intent: "auto",
+          intent,
         });
 
         // Seed the queued-inputs cache immediately so the chip appears
@@ -369,6 +388,8 @@ export function SessionChat({
           result.queued,
         );
 
+        setTurnEndedDraft(null);
+
         if (result.outcome === "sent") {
           queryClient.setQueryData<SessionLockInfo | null>(["session-lock", session.id], {
             locked: true,
@@ -377,19 +398,25 @@ export function SessionChat({
             fork_available: true,
           });
 
-          // Show brief "Sent" confirmation near the compose button.
           if (sentConfirmationTimerRef.current) clearTimeout(sentConfirmationTimerRef.current);
           setSentConfirmation(true);
           sentConfirmationTimerRef.current = setTimeout(() => setSentConfirmation(false), 2000);
 
           void refreshCurrentSessionWorkspace().finally(() => setPendingManagedLocalMessage(null));
         } else {
-          // Queued: keep the lock query fresh (it may still show locked=true
-          // because the agent is working) and clear the pending ghost.
           setPendingManagedLocalMessage(null);
         }
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Unknown error");
+        // Parse structured backend errors so turn_ended on steer surfaces
+        // as an actionable prompt, not a mystery failure.
+        const errorBody = (e as { body?: { detail?: { error_code?: string; message?: string } } })?.body;
+        const errorCode = errorBody?.detail?.error_code;
+        if (intent === "steer" && errorCode === "turn_ended") {
+          setTurnEndedDraft(message);
+          setError(errorBody?.detail?.message ?? "Active turn ended before your update arrived.");
+        } else {
+          setError(e instanceof Error ? e.message : "Unknown error");
+        }
         setPendingManagedLocalMessage(null);
       } finally {
         setIsSubmitting(false);
@@ -415,9 +442,19 @@ export function SessionChat({
     [queryClient, queuedInputsQuery, session.id],
   );
 
+  const canSteerNow = isSendLocked && canSteerActiveTurn;
   const canQueueNow = isSendLocked && canQueueNextInput && !queueFull;
-  // Primary send is blocked only when we can neither send nor queue.
-  const isSendBlocked = isSendLocked && !canQueueNow;
+  // When steer is available, the primary action is steer. Queue-next becomes
+  // a secondary escape hatch. If only queue is available, primary = queue.
+  const primaryIntent: "auto" | "queue" | "steer" = !isSendLocked
+    ? "auto"
+    : canSteerNow
+    ? "steer"
+    : canQueueNow
+    ? "queue"
+    : "auto";
+  // Primary send is blocked when there's no available action.
+  const isSendBlocked = isSendLocked && !canSteerNow && !canQueueNow;
 
   const handleSend = useCallback(
     async (e: FormEvent) => {
@@ -430,10 +467,26 @@ export function SessionChat({
       setError(null);
       setBlockedKeyboardSubmit(false);
 
-      await handleManagedLocalSend(message);
+      await handleManagedLocalSend(message, primaryIntent);
     },
-    [draft, isSubmitting, handleManagedLocalSend, isComposerDisabled, isSendBlocked],
+    [draft, isSubmitting, handleManagedLocalSend, isComposerDisabled, isSendBlocked, primaryIntent],
   );
+
+  const handleSecondaryQueue = useCallback(async () => {
+    const message = draft.trim();
+    if (!message || isSubmitting || !canQueueNow) return;
+    setDraft("");
+    setError(null);
+    await handleManagedLocalSend(message, "queue");
+  }, [draft, isSubmitting, canQueueNow, handleManagedLocalSend]);
+
+  const handleQueueInsteadAfterTurnEnded = useCallback(async () => {
+    if (!turnEndedDraft) return;
+    setError(null);
+    const text = turnEndedDraft;
+    setTurnEndedDraft(null);
+    await handleManagedLocalSend(text, "queue");
+  }, [turnEndedDraft, handleManagedLocalSend]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -522,6 +575,8 @@ export function SessionChat({
       : { variant: "neutral" as const, label: "Ready" };
   const submitButtonLabel = !isSendLocked
     ? submitLabel
+    : canSteerNow
+    ? "Send update"
     : canQueueNow
     ? "Queue next"
     : queueFull
@@ -627,12 +682,40 @@ export function SessionChat({
       {isSendLocked && !isStreaming && (
         <div className="session-chat-turn-notice">
           <span>
-            {canQueueNextInput
+            {canSteerNow
+              ? "Agent is working. Click Send update to inject mid-turn, or Queue next to wait — Enter will not send while working."
+              : canQueueNextInput
               ? "Agent is working. Click Queue next to auto-send at the next turn boundary — Enter will not queue."
               : "Agent is working. You can draft the next message; sending will be available when it is ready."}
           </span>
         </div>
       )}
+
+      {turnEndedDraft ? (
+        <div
+          className="session-chat-queued session-chat-queued--failed"
+          data-testid="session-chat-turn-ended"
+        >
+          <div className="session-chat-queued__label">Active turn ended</div>
+          <div className="session-chat-queued__item">
+            <span className="session-chat-queued__text">{turnEndedDraft}</span>
+            <button
+              type="button"
+              className="session-chat-queued__cancel"
+              onClick={() => void handleQueueInsteadAfterTurnEnded()}
+            >
+              Queue instead
+            </button>
+            <button
+              type="button"
+              className="session-chat-queued__cancel"
+              onClick={() => setTurnEndedDraft(null)}
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {isManagedLocal && activeQueuedInputs.length > 0 ? (
         <div className="session-chat-queued" data-testid="session-chat-queued">
@@ -787,14 +870,27 @@ export function SessionChat({
                     Cancel
                   </Button>
                 ) : (
-                  <Button
-                    type="submit"
-                    variant="primary"
-                    size="sm"
-                    disabled={!draft.trim() || isSubmitting || isDraftingReply || isSendBlocked}
-                  >
-                    {submitButtonLabel}
-                  </Button>
+                  <>
+                    {canSteerNow && canQueueNow ? (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => void handleSecondaryQueue()}
+                        disabled={!draft.trim() || isSubmitting || isDraftingReply}
+                      >
+                        Queue next
+                      </Button>
+                    ) : null}
+                    <Button
+                      type="submit"
+                      variant="primary"
+                      size="sm"
+                      disabled={!draft.trim() || isSubmitting || isDraftingReply || isSendBlocked}
+                    >
+                      {submitButtonLabel}
+                    </Button>
+                  </>
                 )}
               </div>
             ) : (
@@ -815,15 +911,28 @@ export function SessionChat({
                       Cancel
                     </Button>
                   ) : (
-                    <Button
-                      type="submit"
-                      variant="primary"
-                      size="sm"
-                      disabled={isComposerDisabled || !draft.trim() || isSubmitting || isDraftingReply || isSendBlocked}
-                      title={composerDisabledReason ?? undefined}
-                    >
-                      {submitButtonLabel}
-                    </Button>
+                    <>
+                      {canSteerNow && canQueueNow ? (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => void handleSecondaryQueue()}
+                          disabled={isComposerDisabled || !draft.trim() || isSubmitting || isDraftingReply}
+                        >
+                          Queue next
+                        </Button>
+                      ) : null}
+                      <Button
+                        type="submit"
+                        variant="primary"
+                        size="sm"
+                        disabled={isComposerDisabled || !draft.trim() || isSubmitting || isDraftingReply || isSendBlocked}
+                        title={composerDisabledReason ?? undefined}
+                      >
+                        {submitButtonLabel}
+                      </Button>
+                    </>
                   )}
                 </div>
               </>

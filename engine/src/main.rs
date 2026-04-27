@@ -33,8 +33,10 @@ use codex_app_server_canary::{
 };
 use codex_bridge::{
     cmd_codex_bridge_attach, cmd_codex_bridge_interrupt, cmd_codex_bridge_run,
-    cmd_codex_bridge_send, cmd_codex_bridge_start, cmd_codex_bridge_stop, BridgeAttachConfig,
-    BridgeInterruptConfig, BridgeRunConfig, BridgeSendConfig, BridgeStartConfig, BridgeStopConfig,
+    cmd_codex_bridge_send, cmd_codex_bridge_start, cmd_codex_bridge_steer, cmd_codex_bridge_stop,
+    BridgeAttachConfig,
+    BridgeInterruptConfig, BridgeRunConfig, BridgeSendConfig, BridgeStartConfig, BridgeSteerConfig,
+    BridgeSteerError, BridgeStopConfig,
 };
 use config::ShipperConfig;
 use pipeline::compressor::CompressionAlgo;
@@ -522,6 +524,23 @@ enum CodexBridgeCommands {
         state_root: Option<PathBuf>,
     },
 
+    /// Send a mid-turn steer into the currently active turn.
+    ///
+    /// Exits 2 and prints `error_code: turn_ended` when the app-server
+    /// reports the expected turn id is no longer active — callers should
+    /// treat that as a product-level "too late" signal rather than a
+    /// generic failure.
+    Steer {
+        #[arg(long)]
+        session_id: String,
+
+        #[arg(long)]
+        text: String,
+
+        #[arg(long)]
+        state_root: Option<PathBuf>,
+    },
+
     /// Stop a running managed bridge and its local Codex app-server child
     Stop {
         #[arg(long)]
@@ -590,6 +609,7 @@ fn command_name(command: &Commands) -> &'static str {
             CodexBridgeCommands::Attach { .. } => "codex-bridge-attach",
             CodexBridgeCommands::Send { .. } => "codex-bridge-send",
             CodexBridgeCommands::Interrupt { .. } => "codex-bridge-interrupt",
+            CodexBridgeCommands::Steer { .. } => "codex-bridge-steer",
             CodexBridgeCommands::Stop { .. } => "codex-bridge-stop",
         },
     }
@@ -1030,6 +1050,35 @@ fn main() -> anyhow::Result<()> {
                         session_id,
                         state_root,
                     }))?;
+                }
+                CodexBridgeCommands::Steer {
+                    session_id,
+                    text,
+                    state_root,
+                } => {
+                    let res = rt.block_on(cmd_codex_bridge_steer(BridgeSteerConfig {
+                        session_id,
+                        text,
+                        state_root,
+                    }));
+                    match res {
+                        Ok(()) => {}
+                        Err(BridgeSteerError::NoActiveTurn) => {
+                            // Structured product-level signal: the turn
+                            // the caller expected has already ended. Use
+                            // exit code 2 so the backend can distinguish
+                            // this from a generic failure without parsing
+                            // stderr.
+                            eprintln!("error_code: turn_ended");
+                            std::process::exit(2);
+                        }
+                        Err(BridgeSteerError::TurnEnded(msg)) => {
+                            eprintln!("error_code: turn_ended");
+                            eprintln!("error_detail: {msg}");
+                            std::process::exit(2);
+                        }
+                        Err(err) => return Err(anyhow::anyhow!(err)),
+                    }
                 }
                 CodexBridgeCommands::Stop {
                     session_id,

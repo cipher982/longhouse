@@ -104,6 +104,7 @@ export interface SessionCapabilities {
   host_reattach_available: boolean;
   reply_to_live_session_available: boolean;
   can_queue_next_input?: boolean;
+  can_steer_active_turn?: boolean;
 }
 
 export interface AgentSessionsListResponse {

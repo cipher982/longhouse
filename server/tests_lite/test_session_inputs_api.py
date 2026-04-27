@@ -30,6 +30,7 @@ from zerg.services.agents_store import SessionIngest
 from zerg.services.session_continuity import session_lock_manager
 from zerg.services.session_inputs import INPUT_STATUS_CANCELLED
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
+from zerg.services.session_inputs import INPUT_STATUS_FAILED
 from zerg.services.session_inputs import INPUT_STATUS_QUEUED
 
 
@@ -269,9 +270,22 @@ def test_list_and_cancel_queued(monkeypatch, tmp_path):
         api_app_ref.dependency_overrides = {}
 
 
-def test_intent_steer_is_not_implemented(tmp_path):
-    session_local = _make_db(tmp_path)
+def _seed_codex_session(session_local):
+    """Seed a managed-local session on codex_app_server transport so the
+    capability gate for steer is satisfied."""
     session_id, user_id = _seed_live_session(session_local)
+    with session_local() as db:
+        session = db.query(__import__("zerg.models.agents", fromlist=["AgentSession"]).AgentSession).filter_by(id=session_id).one()
+        session.managed_transport = "codex_app_server"
+        db.commit()
+    return session_id, user_id
+
+
+def test_intent_steer_requires_codex_capability(monkeypatch, tmp_path):
+    """Claude-channel sessions cannot steer; must return 409 steer_unsupported."""
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)  # defaults to claude_channel_bridge
+    _stub_dispatch(monkeypatch)
 
     client, api_app_ref = _make_client(
         session_local,
@@ -280,9 +294,78 @@ def test_intent_steer_is_not_implemented(tmp_path):
     try:
         resp = client.post(
             f"/api/sessions/{session_id}/input",
-            json={"text": "steer please", "intent": "steer"},
+            json={"text": "steer now", "intent": "steer"},
         )
-        assert resp.status_code == 501, resp.text
+        assert resp.status_code == 409, resp.text
+        detail = resp.json()["detail"]
+        assert detail["error_code"] == "steer_unsupported"
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_intent_steer_success_returns_sent(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_codex_session(session_local)
+
+    async def fake_steer(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+        from zerg.services.managed_local_control import ManagedLocalSendResult
+
+        return ManagedLocalSendResult(ok=True, exit_code=0)
+
+    monkeypatch.setattr(
+        "zerg.services.managed_local_control.steer_text_to_managed_local_session",
+        fake_steer,
+    )
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        resp = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={"text": "redirect to failing test", "intent": "steer"},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["outcome"] == "sent"
+        assert body["intent"] == "steer"
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_intent_steer_turn_ended_returns_structured_409(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_codex_session(session_local)
+
+    async def fake_steer(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+        from zerg.services.managed_local_control import MANAGED_LOCAL_STEER_TURN_ENDED
+        from zerg.services.managed_local_control import ManagedLocalSendResult
+
+        return ManagedLocalSendResult(ok=False, exit_code=2, error=MANAGED_LOCAL_STEER_TURN_ENDED)
+
+    monkeypatch.setattr(
+        "zerg.services.managed_local_control.steer_text_to_managed_local_session",
+        fake_steer,
+    )
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        resp = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={"text": "too late", "intent": "steer"},
+        )
+        assert resp.status_code == 409, resp.text
+        detail = resp.json()["detail"]
+        assert detail["error_code"] == "turn_ended"
+        # The row persists as failed for audit — no silent recovery.
+        with session_local() as db:
+            row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
+            assert row.status == "failed"
+            assert row.last_error == "turn_ended"
     finally:
         api_app_ref.dependency_overrides = {}
 
@@ -421,6 +504,48 @@ def test_recent_list_surfaces_failed_rows(monkeypatch, tmp_path):
         assert rows[0]["last_error"] == "provider down"
     finally:
         api_app_ref.dependency_overrides = {}
+
+
+def test_startup_reconciliation_fails_stuck_steer_rows_instead_of_requeuing(tmp_path):
+    from datetime import timedelta
+
+    from zerg.services.session_inputs import create_session_input
+    from zerg.services.session_inputs import requeue_stuck_delivering
+
+    session_local = _make_db(tmp_path)
+    session_id, _ = _seed_live_session(session_local)
+
+    with session_local() as db:
+        steer_row = create_session_input(
+            db,
+            session_id=session_id,
+            text="redirect now",
+            intent="steer",
+            status="delivering",
+            request_id="crash-steer",
+        )
+        steer_row.updated_at = datetime.now(timezone.utc) - timedelta(seconds=300)
+        auto_row = create_session_input(
+            db,
+            session_id=session_id,
+            text="retryable",
+            intent="auto",
+            status="delivering",
+            request_id="crash-auto",
+        )
+        auto_row.updated_at = datetime.now(timezone.utc) - timedelta(seconds=300)
+        db.commit()
+
+        requeued = requeue_stuck_delivering(db)
+        # Only the auto row requeues; the steer row is failed so we do not
+        # silently turn a corrective intent into a queued message.
+        assert requeued == 1
+        db.expire_all()
+        steer_refreshed = db.query(SessionInput).filter(SessionInput.id == steer_row.id).one()
+        auto_refreshed = db.query(SessionInput).filter(SessionInput.id == auto_row.id).one()
+        assert steer_refreshed.status == INPUT_STATUS_FAILED
+        assert steer_refreshed.last_error == "steer interrupted by restart"
+        assert auto_refreshed.status == INPUT_STATUS_QUEUED
 
 
 def test_startup_reconciliation_rewinds_stuck_delivering(tmp_path):
