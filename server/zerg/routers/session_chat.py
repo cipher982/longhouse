@@ -138,6 +138,14 @@ class SessionInputResponse(BaseModel):
     queued: list[QueuedInputSummary] = Field(default_factory=list)
 
 
+class SessionInterruptResponse(BaseModel):
+    interrupted: bool
+    session_id: str
+    exit_code: int | None = None
+    error: str | None = None
+    released_lock: bool = False
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -289,6 +297,55 @@ async def draft_reply_for_live_session_agents(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Internal error: {str(exc)[:200]}",
         ) from exc
+
+
+@agents_router.post("/{session_id}/interrupt-live", response_model=SessionInterruptResponse)
+async def interrupt_live_session_agents(
+    session_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    device_token: DeviceToken | None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> SessionInterruptResponse:
+    """Machine-facing explicit interrupt for managed-local sessions."""
+    from zerg.services.managed_local_control import interrupt_managed_local_session
+
+    settings = get_settings()
+    resolved_device_token = device_token if isinstance(device_token, DeviceToken) else None
+
+    request_id = str(uuid.uuid4())[:8]
+    source_session = _load_session_for_continuation(db, session_id)
+    _authorize_live_send(
+        request=request,
+        device_token=resolved_device_token,
+        auth_disabled=settings.auth_disabled,
+    )
+    _assert_live_session_send_available(source_session)
+    owner_id = _resolve_agents_owner_id(db, resolved_device_token)
+
+    result = await interrupt_managed_local_session(
+        db=db,
+        owner_id=owner_id,
+        session=source_session,
+        commis_id=request_id,
+    )
+    if not result.ok:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "error_code": "interrupt_failed",
+                "message": str(result.error or "Managed local interrupt failed"),
+                "exit_code": result.exit_code,
+            },
+        )
+
+    released_lock = await session_lock_manager.release(str(source_session.thread_root_session_id or source_session.id))
+    return SessionInterruptResponse(
+        interrupted=True,
+        session_id=str(source_session.id),
+        exit_code=result.exit_code,
+        released_lock=released_lock,
+    )
 
 
 @router.post("/managed-local/this-device", response_model=ManagedLocalSessionLaunchResponse)

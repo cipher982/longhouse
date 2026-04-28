@@ -451,3 +451,76 @@ def continue_session(
     except httpx.TimeoutException:
         typer.secho(f"Request timed out connecting to {base_url}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
+
+
+@app.command()
+def interrupt(
+    session_id: str = typer.Argument(..., help="Managed-local session UUID to interrupt."),
+    current_session_id: str | None = typer.Option(
+        None,
+        "--current-session",
+        help="Current session UUID. Defaults to the current managed session when available.",
+    ),
+    url: str | None = typer.Option(
+        None,
+        "--url",
+        "-u",
+        help="Longhouse API URL (uses stored URL if not specified).",
+    ),
+    token: str | None = typer.Option(
+        None,
+        "--token",
+        "-t",
+        help="Device token (uses stored token if not specified).",
+    ),
+    claude_dir: str | None = typer.Option(
+        None,
+        "--claude-dir",
+        help="Claude config directory (default: ~/.claude).",
+    ),
+) -> None:
+    """Interrupt the active turn in a managed-local session."""
+    config_dir = Path(claude_dir) if claude_dir else None
+    base_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
+    resolved_session_id = parse_uuid_or_exit(session_id, label="session_id")
+
+    headers = {"X-Agents-Token": resolved_token}
+    resolved_current_session_id = (current_session_id or get_managed_session_id() or "").strip()
+    if resolved_current_session_id:
+        headers[CURRENT_SESSION_HEADER] = parse_uuid_or_exit(
+            resolved_current_session_id,
+            label="current_session_id",
+        )
+
+    try:
+        with httpx.Client(timeout=30) as client:
+            response = client.post(
+                f"{base_url.rstrip('/')}/api/agents/sessions/{resolved_session_id}/interrupt-live",
+                headers=headers,
+            )
+    except httpx.ConnectError:
+        typer.secho(f"Could not connect to {base_url}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    except httpx.TimeoutException:
+        typer.secho(f"Request timed out connecting to {base_url}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    if response.status_code == 401:
+        typer.secho("Authentication failed. Run 'longhouse auth' to re-authenticate.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    if response.status_code == 404:
+        typer.secho(f"Session not found: {resolved_session_id}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    if response.status_code != 200:
+        typer.secho(f"API error: {response.status_code} {response.text[:300]}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    payload = response.json()
+    if payload.get("interrupted"):
+        typer.secho(f"Interrupted session {payload.get('session_id') or resolved_session_id}", fg=typer.colors.CYAN)
+        if payload.get("released_lock"):
+            typer.echo("released_lock: true")
+        return
+
+    typer.secho(json.dumps(payload, indent=2), fg=typer.colors.RED)
+    raise typer.Exit(code=1)

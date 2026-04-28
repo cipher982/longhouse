@@ -22,6 +22,7 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents_store import AgentsStore
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.managed_local_transport import ManagedLocalTransportError
+from zerg.services.managed_local_transport import build_managed_local_interrupt_command
 from zerg.services.managed_local_transport import build_managed_local_send_text_command
 from zerg.services.managed_local_transport import build_managed_local_steer_text_command
 from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
@@ -58,6 +59,15 @@ class ManagedLocalSendResult:
     baseline_event_id: int | None = None
     verified_turn_started: bool = False
     verified_user_event_id: int | None = None
+
+
+@dataclass(frozen=True)
+class ManagedLocalInterruptResult:
+    ok: bool
+    exit_code: int | None = None
+    error: str | None = None
+    stdout: str | None = None
+    stderr: str | None = None
 
 
 @dataclass(frozen=True)
@@ -186,7 +196,9 @@ def _hook_runtime_event_matches_canonical_state(
         return False
     if str(getattr(state, "phase", "") or "").strip() != str(getattr(event, "phase", "") or "").strip():
         return False
-    return normalize_utc(getattr(state, "last_runtime_signal_at", None)) == normalize_utc(getattr(event, "occurred_at", None))
+    state_signal_at = normalize_utc(getattr(state, "last_runtime_signal_at", None))
+    event_occurred_at = normalize_utc(getattr(event, "occurred_at", None))
+    return state_signal_at == event_occurred_at
 
 
 async def await_managed_local_hook_phase_update(
@@ -391,6 +403,64 @@ async def await_managed_local_persisted_user_prompt(
         await asyncio.sleep(poll_interval_secs)
 
     return None
+
+
+async def interrupt_managed_local_session(
+    *,
+    db: Session,
+    owner_id: int,
+    session: AgentSession,
+    commis_id: str | None = None,
+    timeout_secs: int = 15,
+) -> ManagedLocalInterruptResult:
+    """Interrupt the active turn on a managed-local session.
+
+    This is an explicit operator recovery primitive. It dispatches through the
+    same runner/transport seam as live-send so callers do not need to know
+    whether the session is backed by Codex app-server or Claude channels.
+    """
+
+    if str(getattr(session, "execution_home", "") or "").strip() != SessionExecutionHome.MANAGED_LOCAL.value:
+        return ManagedLocalInterruptResult(ok=False, error="Session is not managed_local")
+    runner_id = getattr(session, "source_runner_id", None)
+    if runner_id is None:
+        return ManagedLocalInterruptResult(ok=False, error="Managed local session is missing source runner metadata")
+
+    try:
+        command = build_managed_local_interrupt_command(session=session)
+    except ManagedLocalTransportError as exc:
+        return ManagedLocalInterruptResult(ok=False, error=str(exc))
+
+    dispatcher = get_runner_job_dispatcher()
+    result = await dispatcher.dispatch_job(
+        db=db,
+        owner_id=owner_id,
+        runner_id=int(runner_id),
+        command=command,
+        timeout_secs=timeout_secs,
+        commis_id=commis_id,
+        run_id=None,
+    )
+    if not result.get("ok"):
+        return ManagedLocalInterruptResult(
+            ok=False,
+            error=str(result.get("error", {}).get("message", "Failed to dispatch interrupt command")),
+        )
+
+    data = result.get("data", {})
+    exit_code = int(data.get("exit_code", 1))
+    stdout = data.get("stdout") or ""
+    stderr = data.get("stderr") or ""
+    if exit_code != 0:
+        detail = stderr.strip() or stdout.strip()
+        return ManagedLocalInterruptResult(
+            ok=False,
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
+            error=detail or "Managed local interrupt command failed",
+        )
+    return ManagedLocalInterruptResult(ok=True, exit_code=0, stdout=stdout, stderr=stderr)
 
 
 async def send_text_to_managed_local_session(
