@@ -81,7 +81,10 @@ impl ProcessScanner for SystemScanner {
 }
 
 fn run_ps() -> Vec<ProcessInfo> {
-    let Ok(output) = Command::new("ps").args(["-axo", "pid=,lstart=,command="]).output() else {
+    let Ok(output) = Command::new("ps")
+        .args(["-axo", "pid=,lstart=,command="])
+        .output()
+    else {
         return Vec::new();
     };
     if !output.status.success() {
@@ -145,7 +148,10 @@ fn parse_lstart(value: &str) -> Option<DateTime<Utc>> {
     use chrono::NaiveDateTime;
     use chrono::TimeZone;
     let naive = NaiveDateTime::parse_from_str(value, "%a %b %e %H:%M:%S %Y").ok()?;
-    Local.from_local_datetime(&naive).single().map(|dt| dt.with_timezone(&Utc))
+    Local
+        .from_local_datetime(&naive)
+        .single()
+        .map(|dt| dt.with_timezone(&Utc))
 }
 
 /// Parse `lsof -F n -p <pid>` output. `-F n` only prints `n<path>` records
@@ -187,14 +193,41 @@ fn is_provider_process(command: &str) -> Option<&'static str> {
 
 fn provider_session_id_from_path(path: &Path, provider: &str) -> Option<String> {
     let stem = path.file_stem()?.to_str()?.to_string();
-    // All three providers name transcripts after the session UUID.
-    // Gemini uses `<uuid>.json` under `~/.gemini/tmp/<cwd>/`; the stem
-    // still works as an identifier.
+    // Claude/Gemini name transcripts after the session UUID. Codex
+    // rollout files are named `rollout-YYYY-MM-DDTHH-MM-SS-<uuid>.jsonl`;
+    // the runtime session stores only `<uuid>` as provider_session_id.
     if stem.is_empty() {
         return None;
     }
-    let _ = provider; // accepted for future provider-specific normalization.
-    Some(stem)
+    Some(normalize_provider_session_id(provider, &stem))
+}
+
+fn normalize_provider_session_id(provider: &str, value: &str) -> String {
+    let value = value.trim();
+    if provider == "codex" && is_codex_rollout_stem(value) {
+        return value[CODEX_ROLLOUT_PREFIX_LEN..].to_string();
+    }
+    value.to_string()
+}
+
+const CODEX_ROLLOUT_PREFIX_LEN: usize = "rollout-YYYY-MM-DDTHH-MM-SS-".len();
+
+fn is_codex_rollout_stem(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    value.len() > CODEX_ROLLOUT_PREFIX_LEN
+        && value.starts_with("rollout-")
+        && bytes.get(12) == Some(&b'-')
+        && bytes.get(15) == Some(&b'-')
+        && bytes.get(18) == Some(&b'T')
+        && bytes.get(21) == Some(&b'-')
+        && bytes.get(24) == Some(&b'-')
+        && bytes.get(27) == Some(&b'-')
+        && bytes[8..12].iter().all(u8::is_ascii_digit)
+        && bytes[13..15].iter().all(u8::is_ascii_digit)
+        && bytes[16..18].iter().all(u8::is_ascii_digit)
+        && bytes[19..21].iter().all(u8::is_ascii_digit)
+        && bytes[22..24].iter().all(u8::is_ascii_digit)
+        && bytes[25..27].iter().all(u8::is_ascii_digit)
 }
 
 fn canonicalize(path: &Path) -> PathBuf {
@@ -341,7 +374,6 @@ fn device_of(_: &std::fs::Metadata) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
     use std::cell::RefCell;
 
     struct FakeScanner {
@@ -383,7 +415,8 @@ mod tests {
 
     #[test]
     fn parses_lsof_output() {
-        let input = "p1234\nn/Users/x/.codex/sessions/abc.jsonl\nnpipe:[something]\nn/Users/x/.zshrc\n";
+        let input =
+            "p1234\nn/Users/x/.codex/sessions/abc.jsonl\nnpipe:[something]\nn/Users/x/.zshrc\n";
         let paths = parse_lsof(input);
         assert_eq!(paths.len(), 2);
         assert!(paths[0].ends_with("abc.jsonl"));
@@ -392,12 +425,37 @@ mod tests {
 
     #[test]
     fn provider_filter_accepts_bare_clis_and_rejects_wrappers() {
-        assert_eq!(is_provider_process("/usr/local/bin/codex --tui"), Some("codex"));
+        assert_eq!(
+            is_provider_process("/usr/local/bin/codex --tui"),
+            Some("codex")
+        );
         assert_eq!(is_provider_process("claude"), Some("claude"));
         assert_eq!(is_provider_process("gemini chat"), Some("gemini"));
         assert_eq!(is_provider_process("longhouse-codex --attach"), None);
         assert_eq!(is_provider_process("/usr/local/bin/longhouse-claude"), None);
         assert_eq!(is_provider_process("node server.js"), None);
+    }
+
+    #[test]
+    fn codex_rollout_paths_emit_provider_session_uuid() {
+        let path = Path::new(
+            "/Users/x/.codex/sessions/2026/04/24/rollout-2026-04-24T16-25-08-019dc0f3-fb30-71e3-b0fd-2085e7d045a8.jsonl",
+        );
+
+        assert_eq!(
+            provider_session_id_from_path(path, "codex").as_deref(),
+            Some("019dc0f3-fb30-71e3-b0fd-2085e7d045a8"),
+        );
+    }
+
+    #[test]
+    fn codex_non_rollout_paths_keep_stem() {
+        let path = Path::new("/Users/x/.codex/sessions/manual-session.jsonl");
+
+        assert_eq!(
+            provider_session_id_from_path(path, "codex").as_deref(),
+            Some("manual-session"),
+        );
     }
 
     #[test]
@@ -421,8 +479,7 @@ mod tests {
         };
 
         let transcripts = vec![(transcript.clone(), "codex")];
-        let bindings =
-            collect_from_transcripts("mac", &transcripts, &scanner, now);
+        let bindings = collect_from_transcripts("mac", &transcripts, &scanner, now);
 
         assert_eq!(bindings.len(), 1);
         let b = &bindings[0];
@@ -430,9 +487,44 @@ mod tests {
         assert_eq!(b.provider, "codex");
         assert_eq!(b.provider_session_id, "abc");
         assert_eq!(b.pid, Some(1234));
-        assert_eq!(b.process_start_time.as_deref(), Some("2026-04-27T10:00:00+00:00"));
+        assert_eq!(
+            b.process_start_time.as_deref(),
+            Some("2026-04-27T10:00:00+00:00")
+        );
         assert!(b.source_inode.is_some());
         assert_eq!(b.source_offset, Some(3));
+    }
+
+    #[test]
+    fn scanner_normalizes_codex_rollout_transcript_ids() {
+        let now = t("2026-04-27T12:00:00Z");
+        let tmp = tempfile::tempdir().unwrap();
+        let transcript = tmp
+            .path()
+            .join("rollout-2026-04-24T16-25-08-019dc0f3-fb30-71e3-b0fd-2085e7d045a8.jsonl");
+        std::fs::write(&transcript, "{}\n").unwrap();
+
+        let scanner = FakeScanner {
+            processes: vec![ProcessInfo {
+                pid: 1234,
+                start_time: t("2026-04-27T10:00:00Z"),
+                command: "/usr/local/bin/codex --tui".into(),
+            }],
+            open_files: RefCell::new({
+                let mut m = HashMap::new();
+                m.insert(1234u32, vec![transcript.clone()]);
+                m
+            }),
+        };
+
+        let bindings =
+            collect_from_transcripts("mac", &[(transcript.clone(), "codex")], &scanner, now);
+
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(
+            bindings[0].provider_session_id,
+            "019dc0f3-fb30-71e3-b0fd-2085e7d045a8",
+        );
     }
 
     #[test]
@@ -462,12 +554,8 @@ mod tests {
             open_files: RefCell::new(open_files),
         };
 
-        let bindings = collect_from_transcripts(
-            "mac",
-            &[(transcript.clone(), "codex")],
-            &scanner,
-            now,
-        );
+        let bindings =
+            collect_from_transcripts("mac", &[(transcript.clone(), "codex")], &scanner, now);
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].pid, Some(newer.pid));
     }
@@ -488,12 +576,7 @@ mod tests {
             open_files: RefCell::new(HashMap::new()),
         };
 
-        let bindings = collect_from_transcripts(
-            "mac",
-            &[(transcript, "codex")],
-            &scanner,
-            now,
-        );
+        let bindings = collect_from_transcripts("mac", &[(transcript, "codex")], &scanner, now);
         assert!(bindings.is_empty());
     }
 
