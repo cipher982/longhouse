@@ -64,6 +64,7 @@ from zerg.services.session_views import SessionTurnsListResponse
 from zerg.services.session_views import SessionWorkspaceResponse
 from zerg.services.session_views import build_session_response
 from zerg.services.session_views import normalize_utc_datetime
+from zerg.services.unmanaged_bindings import load_binding_overlay
 from zerg.utils.server_timing import ServerTimingRecorder
 from zerg.utils.time import UTCBaseModel
 
@@ -140,6 +141,10 @@ def _build_session_response_map(
     first_user_map = store.get_first_message_map([session.id for session in sessions], role="user", max_len=80)
     thread_cache: dict[str, tuple[str, int]] = store.batch_thread_meta(sessions)
     now = datetime.now(timezone.utc)
+    # Phase 5c/6: batch-load machine-agent binding overlay once so each
+    # card gets host_state + (potential) process_gone lifecycle from a
+    # single query rather than per-session.
+    binding_overlay_map = load_binding_overlay(db, [session.id for session in sessions], now=now)
 
     response_map: dict[str, SessionResponse] = {}
     for session in sessions:
@@ -155,6 +160,7 @@ def _build_session_response_map(
                 now=now,
             ),
             first_user_message=first_user_map.get(session.id),
+            binding_overlay=binding_overlay_map.get(session.id),
         )
         response_map[response.id] = response
     return response_map

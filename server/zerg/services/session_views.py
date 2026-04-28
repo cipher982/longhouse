@@ -76,6 +76,8 @@ def build_session_runtime_display_response(
     runtime_overlay: SessionRuntimeView | None,
     capability_flags,
     ended_at: datetime | None,
+    binding_host_state: str | None = None,
+    binding_terminal_reason: str | None = None,
 ) -> SessionRuntimeDisplayResponse | None:
     if runtime_overlay is None:
         return None
@@ -83,6 +85,8 @@ def build_session_runtime_display_response(
         runtime_view=runtime_overlay,
         capabilities=capability_flags,
         ended_at=ended_at,
+        binding_host_state=binding_host_state,
+        binding_terminal_reason=binding_terminal_reason,
     )
     return SessionRuntimeDisplayResponse(
         truth_tier=display.truth_tier,
@@ -727,16 +731,27 @@ def build_session_response(
     match_snippet: str | None = None,
     match_role: str | None = None,
     match_score: float | None = None,
+    binding_overlay=None,
 ) -> SessionResponse:
     cache = thread_cache if thread_cache is not None else {}
     thread_head_session_id, thread_continuation_count = get_thread_meta(store, session, cache)
     include_runtime = should_include_runtime_view(session=session, runtime_view=runtime_overlay)
     capability_flags = build_session_capabilities(session)
+    # Phase 5c/6: pass machine-agent binding overlay through to the
+    # display builder so host_state reflects real heartbeat freshness
+    # and lifecycle=closed can promote on confirmed process-gone.
+    binding_host_state = None
+    binding_terminal_reason = None
+    if binding_overlay is not None:
+        binding_host_state = binding_overlay.host_state
+        binding_terminal_reason = binding_overlay.terminal_reason
     runtime_display = (
         build_session_runtime_display_response(
             runtime_overlay=runtime_overlay,
             capability_flags=capability_flags,
             ended_at=session.ended_at,
+            binding_host_state=binding_host_state,
+            binding_terminal_reason=binding_terminal_reason,
         )
         if include_runtime
         else None
