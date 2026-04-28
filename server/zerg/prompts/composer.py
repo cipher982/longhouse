@@ -7,8 +7,6 @@ context (servers, integrations, preferences) to create complete system prompts.
 from zerg.crud import runner_crud
 from zerg.database import get_db
 from zerg.prompts.templates import BASE_COMMIS_PROMPT
-from zerg.prompts.templates import BASE_OIKOS_ASSISTANT_PROMPT
-from zerg.prompts.templates import BASE_OIKOS_PROMPT
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.runner_health import assess_runner_health
 
@@ -155,12 +153,6 @@ If runner_exec fails, report the error with details."""
 then use runner_exec for command execution."""
 
 
-def format_operator_mode(ctx: dict) -> str:
-    """Format effective proactive-operator policy for prompt injection."""
-    # Oikos operator mode removed
-    return "- Operator mode is disabled."
-
-
 def build_commis_prompt(user) -> str:
     """Build complete commis prompt with user context.
 
@@ -176,52 +168,4 @@ def build_commis_prompt(user) -> str:
         servers=format_servers(ctx.get("servers", [])),
         user_context=format_user_context(ctx),
         online_runners=format_online_runners(user.id),
-    )
-
-
-def build_oikos_prompt(user, enabled_tools: list[dict] | None = None) -> str:
-    """Build complete Oikos prompt with optional tool context.
-
-    Args:
-        user: SQLAlchemy User model instance
-        enabled_tools: List of tool dicts with 'name' and 'description' keys
-            When None, uses the orchestrator prompt with servers/integrations.
-
-    Returns:
-        Complete system prompt for Oikos
-    """
-    ctx = user.context or {}
-
-    if enabled_tools is None:
-        return BASE_OIKOS_PROMPT.format(
-            user_context=format_user_context(ctx),
-            servers=format_servers(ctx.get("servers", [])),
-            integrations=format_integrations(ctx.get("integrations", {})),
-            operator_mode=format_operator_mode(ctx),
-        )
-
-    enabled_tools = enabled_tools or []
-
-    # Format direct tools
-    if enabled_tools:
-        tool_lines = [f"- **{t['name']}** - {t.get('description', '')}" for t in enabled_tools]
-        direct_tools = "\n".join(tool_lines)
-    else:
-        direct_tools = "(No direct tools currently enabled)"
-
-    # Format limitations based on what's NOT available
-    limitations = []
-    tool_names = [t["name"] for t in enabled_tools]
-    if "calendar" not in tool_names:
-        limitations.append("- Calendar/reminders (no tool configured)")
-    if "smart_home" not in tool_names:
-        limitations.append("- Smart home control (no tool configured)")
-    limitations_str = "\n".join(limitations) if limitations else "None currently"
-
-    return BASE_OIKOS_ASSISTANT_PROMPT.format(
-        user_context=format_user_context(ctx),
-        direct_tools=direct_tools,
-        server_names=format_server_names(ctx.get("servers", [])),
-        limitations=limitations_str,
-        operator_mode=format_operator_mode(ctx),
     )

@@ -121,7 +121,7 @@ def send_telegram(message: str) -> Dict[str, Any]:
 
 
 async def send_telegram_async(message: str) -> Dict[str, Any]:
-    """Async version — used by Oikos ainvoke path (avoids thread/loop bridging entirely)."""
+    """Async version for runtime paths that avoid thread/loop bridging."""
     if not message or not message.strip():
         return tool_error(error_type=ErrorType.VALIDATION_ERROR, user_message="message is required")
 

@@ -149,9 +149,8 @@ class Settings:  # noqa: D401 – simple data container
     # Database reset security
     db_reset_password: str | None
 
-    # Oikos integration ------------------------------------------------
-    oikos_device_secret: str | None
-    oikos_workspace_path: str  # Base path for cloud workspaces
+    # Managed workspace integration ------------------------------------
+    longhouse_workspace_path: str  # Base path for managed workspaces
 
     # Completion notifications ------------------------------------------
     notification_webhook: str | None  # Discord/Slack webhook for run completion
@@ -192,9 +191,9 @@ class Settings:  # noqa: D401 – simple data container
     # OSS first-run UX ------------------------------------------------
     skip_demo_seed: bool  # Legacy flag; normal first run no longer auto-seeds demo data
 
-    # Oikos tool output storage -----------------------------------
-    oikos_tool_output_max_chars: int  # Max tool output chars before storing (0 = disabled)
-    oikos_tool_output_preview_chars: int  # Preview size for stored tool outputs
+    # Tool output storage --------------------------------------------
+    tool_output_max_chars: int  # Max tool output chars before storing (0 = disabled)
+    tool_output_preview_chars: int  # Preview size for stored tool outputs
 
     # Frontend analytics --------------------------------------------
     umami_website_id: str | None = None
@@ -502,9 +501,8 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         discord_enable_alerts=_truthy(os.getenv("DISCORD_ENABLE_ALERTS")),
         discord_daily_digest_cron=os.getenv("DISCORD_DAILY_DIGEST_CRON", "0 8 * * *"),
         db_reset_password=os.getenv("DB_RESET_PASSWORD"),
-        oikos_device_secret=os.getenv("OIKOS_DEVICE_SECRET"),
-        oikos_workspace_path=os.getenv(
-            "OIKOS_WORKSPACE_PATH",
+        longhouse_workspace_path=os.getenv(
+            "LONGHOUSE_WORKSPACE_PATH",
             str(Path.home() / ".longhouse" / "workspaces"),
         ),
         memory_files_enabled=_truthy(os.getenv("MEMORY_FILES_ENABLED")),
@@ -536,9 +534,9 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         bootstrap_token=os.getenv("BOOTSTRAP_TOKEN"),
         # OSS first-run UX
         skip_demo_seed=_truthy(os.getenv("SKIP_DEMO_SEED")),
-        # Oikos tool output storage
-        oikos_tool_output_max_chars=int(os.getenv("OIKOS_TOOL_OUTPUT_MAX_CHARS", "8000")),
-        oikos_tool_output_preview_chars=int(os.getenv("OIKOS_TOOL_OUTPUT_PREVIEW_CHARS", "1200")),
+        # Tool output storage
+        tool_output_max_chars=int(os.getenv("LONGHOUSE_TOOL_OUTPUT_MAX_CHARS", "8000")),
+        tool_output_preview_chars=int(os.getenv("LONGHOUSE_TOOL_OUTPUT_PREVIEW_CHARS", "1200")),
         # Telegram channel
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN"),
         telegram_webhook_url=os.getenv("TELEGRAM_WEBHOOK_URL"),

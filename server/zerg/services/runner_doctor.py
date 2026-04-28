@@ -1,4 +1,4 @@
-"""Reason-coded runner diagnostics for UI/Oikos doctor flows."""
+"""Reason-coded runner diagnostics for UI and doctor flows."""
 
 from __future__ import annotations
 

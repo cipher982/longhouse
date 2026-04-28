@@ -74,7 +74,6 @@ test.describe('Visual smoke: console error check', () => {
         !e.includes('fonts.gstatic.com') &&
         !e.includes('fontshare.com') &&
         !e.includes('Failed to load resource') &&
-        !e.includes('useOikosApp') &&
         !e.includes('Failed to fetch bootstrap') &&
         !e.includes('Failed to check for active run') &&
         !e.includes('WebSocket connection') &&

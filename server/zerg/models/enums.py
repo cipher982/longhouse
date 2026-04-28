@@ -29,7 +29,7 @@ class FicheStatus(str, Enum):
 class RunStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
-    WAITING = "waiting"  # Interrupted waiting for commis completion (oikos resume)
+    WAITING = "waiting"  # Interrupted waiting for commis completion
     DEFERRED = "deferred"  # Timeout migration: still executing, but caller stopped waiting
     SUCCESS = "success"
     FAILED = "failed"
@@ -49,7 +49,7 @@ class ThreadType(str, Enum):
     CHAT = "chat"
     SCHEDULED = "scheduled"
     MANUAL = "manual"
-    SUPER = "super"  # Oikos thread (Super Siri architecture)
+    SUPER = "super"  # Legacy thread type
 
 
 class RunnerStatus(str, Enum):

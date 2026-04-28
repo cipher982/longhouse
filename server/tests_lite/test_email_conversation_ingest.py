@@ -64,7 +64,7 @@ def test_email_conversation_ingest_creates_conversation_and_archive(tmp_path):
                 subject="Dinner plans",
                 body_text="Can you book dinner for 7?",
                 from_email="david@drose.io",
-                to_emails=("oikos@agents.drose.io",),
+                to_emails=("longhouse@agents.drose.io",),
                 raw_bytes=b"raw-email-payload",
                 sent_at=datetime(2026, 3, 12, 18, 30, tzinfo=timezone.utc),
             )

@@ -116,12 +116,12 @@ class ReplayService:
     ) -> None:
         """Emit SSE events for a golden conversation.
 
-        This simulates the real oikos flow by emitting events
+        This simulates the real assistant flow by emitting events
         with the correct timing and data.
 
         Args:
             conversation_id: ID of the golden conversation
-            run_id: The oikos run ID
+            run_id: The run ID
             thread_id: The thread ID
             owner_id: User ID
             message_id: Client message ID
@@ -135,11 +135,11 @@ class ReplayService:
             logger.error(f"Conversation not found: {conversation_id}")
             return
 
-        # Emit oikos_started
+        # Emit assistant_started
         await event_bus.publish(
-            EventType.OIKOS_STARTED,
+            EventType.ASSISTANT_STARTED,
             {
-                "event_type": "oikos_started",
+                "event_type": "assistant_started",
                 "run_id": run_id,
                 "thread_id": thread_id,
                 "owner_id": owner_id,
@@ -151,9 +151,9 @@ class ReplayService:
 
         # Emit thinking
         await event_bus.publish(
-            EventType.OIKOS_THINKING,
+            EventType.ASSISTANT_THINKING,
             {
-                "event_type": "oikos_thinking",
+                "event_type": "assistant_thinking",
                 "run_id": run_id,
                 "owner_id": owner_id,
                 "message": "Analyzing your request...",
@@ -233,9 +233,9 @@ class ReplayService:
 
         # Emit completion
         await event_bus.publish(
-            EventType.OIKOS_COMPLETE,
+            EventType.ASSISTANT_COMPLETE,
             {
-                "event_type": "oikos_complete",
+                "event_type": "assistant_complete",
                 "run_id": run_id,
                 "thread_id": thread_id,
                 "owner_id": owner_id,
@@ -277,9 +277,9 @@ class ReplayService:
 
         for chunk in chunks:
             await event_bus.publish(
-                EventType.OIKOS_TOKEN,
+                EventType.ASSISTANT_TOKEN,
                 {
-                    "event_type": "oikos_token",
+                    "event_type": "assistant_token",
                     "run_id": run_id,
                     "owner_id": owner_id,
                     "message_id": message_id,

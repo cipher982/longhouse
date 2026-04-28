@@ -1,4 +1,4 @@
-"""Session discovery tools for Oikos.
+"""Session discovery tools for runtime agents.
 
 Provide FTS-backed search, regex grep, and session detail retrieval.
 """

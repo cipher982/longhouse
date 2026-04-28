@@ -1,7 +1,7 @@
 """Agent session models for cross-provider session tracking.
 
-These models store sessions from all AI coding assistants (Claude Code, Codex,
-Gemini, Cursor, Oikos) in a provider-agnostic format.
+These models store sessions from AI coding assistants (Claude Code, Codex,
+Gemini, Cursor) in a provider-agnostic format.
 
 For SQLite-only mode, these tables live in the main database.
 """
@@ -56,7 +56,7 @@ class AgentSession(AgentsBase):
     id = Column(GUID(), primary_key=True, default=uuid4)
 
     # Provider identification
-    provider = Column(String(50), nullable=False, index=True)  # claude, codex, gemini, cursor, oikos
+    provider = Column(String(50), nullable=False, index=True)  # claude, codex, gemini, cursor
 
     # Environment classification (required - no default, caller must specify)
     environment = Column(String(20), nullable=False, index=True)  # production, development, test, e2e

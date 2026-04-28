@@ -5,17 +5,17 @@ call stack. Unlike the old pattern where contextvars determined event *type*,
 here the contextvar only *transports* an emitter whose identity is already fixed.
 
 Usage:
-    # At entry point (oikos_service.py):
-    from zerg.events import OikosEmitter, set_emitter, reset_emitter
+    # At entry point:
+    from zerg.events import set_emitter, reset_emitter
 
-    emitter = OikosEmitter(run_id=..., ...)
+    emitter = RuntimeEmitter(run_id=..., ...)
     token = set_emitter(emitter)
     try:
         await runner.run()
     finally:
         reset_emitter(token)
 
-    # In tool execution (oikos_react_engine.py):
+    # In tool execution:
     from zerg.events import get_emitter
 
     emitter = get_emitter()
@@ -32,10 +32,10 @@ from typing import Optional
 from typing import Union
 
 if TYPE_CHECKING:
+    from zerg.events.emitter_protocol import EventEmitter
     from zerg.events.null_emitter import NullEmitter
-    from zerg.events.oikos_emitter import OikosEmitter
 
-    EmitterType = Union[OikosEmitter, NullEmitter]
+    EmitterType = Union[EventEmitter, NullEmitter]
 
 # Single contextvar for emitter transport
 # The emitter's identity is baked in at construction time
@@ -46,7 +46,7 @@ def get_emitter() -> Optional["EmitterType"]:
     """Get the current emitter, if any.
 
     Returns:
-        The current emitter (CommisEmitter, OikosEmitter, or NullEmitter),
+        The current emitter or None if not in an emitter context.
         or None if not in an emitter context.
 
     Usage:
@@ -63,7 +63,7 @@ def set_emitter(emitter: "EmitterType") -> Token[Optional["EmitterType"]]:
     Must be paired with reset_emitter() in a finally block.
 
     Args:
-        emitter: The emitter to set (CommisEmitter, OikosEmitter, or NullEmitter)
+        emitter: The emitter to set
 
     Returns:
         Token for resetting via reset_emitter()

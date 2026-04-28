@@ -6,9 +6,8 @@ This is the live execution path behind ``RuntimeRunner``. It owns:
 - usage aggregation
 - tool-result persistence helpers like truncation/out-of-band storage
 
-The loop stays runtime-focused. It does not restore the deleted Oikos
-operator surfaces; it only preserves the execution harness still needed by
-chat threads, task runs, and commis continuations.
+The loop stays runtime-focused. It only preserves the execution harness still
+needed by chat threads, task runs, and commis continuations.
 """
 
 from __future__ import annotations
@@ -168,9 +167,9 @@ async def _emit_heartbeats(cancelled: asyncio.Event, run_id: int | None, owner_i
                 break
             if run_id is not None:
                 await event_bus.publish(
-                    EventType.OIKOS_HEARTBEAT,
+                    EventType.ASSISTANT_HEARTBEAT,
                     {
-                        "event_type": EventType.OIKOS_HEARTBEAT,
+                        "event_type": EventType.ASSISTANT_HEARTBEAT,
                         "run_id": run_id,
                         "owner_id": owner_id,
                         "activity": "llm_reasoning",
@@ -423,11 +422,11 @@ def _maybe_truncate_result(
     from zerg.services.tool_output_store import ToolOutputStore
 
     settings = get_settings()
-    max_chars = max(0, int(settings.oikos_tool_output_max_chars or 0))
+    max_chars = max(0, int(settings.tool_output_max_chars or 0))
     if max_chars <= 0 or len(raw) <= max_chars or tool_name == "get_tool_output":
         return raw
 
-    preview_chars = max(0, int(settings.oikos_tool_output_preview_chars or 0))
+    preview_chars = max(0, int(settings.tool_output_preview_chars or 0))
     preview_chars = min(preview_chars, max_chars) if preview_chars > 0 else min(200, max_chars)
     preview = raw[:preview_chars]
 

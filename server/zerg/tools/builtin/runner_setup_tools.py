@@ -1,7 +1,7 @@
-"""Runner setup tools (Oikos-facing).
+"""Runner setup tools for runtime onboarding.
 
-These tools are meant for the Oikos path, not for commis.
-They enable a chat-first onboarding flow where Oikos can:
+These tools are meant for the runtime path, not for commis.
+They enable a chat-first onboarding flow that can:
 - list existing runners
 - generate a short-lived enrollment token and show install commands
 

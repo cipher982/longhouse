@@ -36,7 +36,6 @@ from .run_event import RunEvent
 from .surface_ingress import SurfaceIngressClaim
 
 # Re-export from other modules
-from .sync import SyncOperation
 from .thread import Thread
 from .thread import ThreadMessage
 from .trigger import Trigger
@@ -82,7 +81,6 @@ __all__ = [
     "Runner",
     "RunnerEnrollToken",
     "RunnerJob",
-    "SyncOperation",
     "TriggerConfig",
     "UserTask",
     "UserSkill",

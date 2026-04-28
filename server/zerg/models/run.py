@@ -57,7 +57,7 @@ class Run(Base):
     # Values: none, low, medium, high
     reasoning_effort = Column(String(20), nullable=True)
 
-    # Message ID (UUID) assigned to the assistant message in oikos_started event.
+    # Message ID (UUID) assigned to the assistant message in assistant_started event.
     # Used by continuation runs to look up the original message's ID for
     # continuation_of_message_id (schema requires UUID, not sentinel string).
     # GUID handles UUID↔string conversion for SQLite compatibility
@@ -94,7 +94,7 @@ class Run(Base):
     cancel_reason = Column(Text, nullable=True)
 
     # Summary ------------------------------------------------------------
-    # Brief summary of the run for Oikos Task Inbox (first assistant response or truncated output)
+    # Brief summary of the run (first assistant response or truncated output)
     summary = Column(Text, nullable=True)
 
     # Timestamps ---------------------------------------------------------

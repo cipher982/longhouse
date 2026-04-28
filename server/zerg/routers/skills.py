@@ -51,7 +51,7 @@ DEFAULT_WORKSPACE_PATH = str(Path.home() / ".longhouse" / "workspaces")
 
 def get_workspace_base_path() -> Path:
     """Get the allowed base path for workspaces."""
-    return Path(os.getenv("OIKOS_WORKSPACE_PATH", DEFAULT_WORKSPACE_PATH))
+    return Path(os.getenv("LONGHOUSE_WORKSPACE_PATH", DEFAULT_WORKSPACE_PATH))
 
 
 def validate_workspace_path(workspace_path: Optional[str]) -> Optional[Path]:

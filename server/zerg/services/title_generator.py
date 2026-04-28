@@ -3,7 +3,7 @@
 This module generates short, descriptive titles for conversations
 using OpenAI's responses API with structured output.
 
-Replaces the oikos-server proxy layer.
+Replaces the old chat proxy layer.
 """
 
 from __future__ import annotations
@@ -116,8 +116,8 @@ async def generate_conversation_title(messages: list[dict[str, Any]]) -> str | N
     if not has_user or not has_assistant:
         return None
 
-    model = os.getenv("OIKOS_TITLE_MODEL", "gpt-5-mini")
-    reasoning_effort = os.getenv("OIKOS_TITLE_REASONING_EFFORT", "none")
+    model = os.getenv("LONGHOUSE_TITLE_MODEL", "gpt-5-mini")
+    reasoning_effort = os.getenv("LONGHOUSE_TITLE_REASONING_EFFORT", "none")
 
     # Build transcript
     transcript = "\n".join(f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content']}" for m in normalized)

@@ -2,7 +2,7 @@
 
 These models support agent infrastructure: tracking reusable learnings across
 sessions, storing tenant-local operational incidents, and recording proactive
-Oikos wakeups.
+runner wakeups.
 """
 
 from uuid import uuid4
@@ -151,10 +151,10 @@ class ReflectionRun(AgentsBase):
     error = Column(Text, nullable=True)
 
 
-class OikosWakeup(AgentsBase):
-    """Durable record of a proactive Oikos wakeup opportunity."""
+class RunnerWakeup(AgentsBase):
+    """Durable record of a proactive runner wakeup opportunity."""
 
-    __tablename__ = "oikos_wakeups"
+    __tablename__ = "runner_wakeups"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     owner_id = Column(Integer, nullable=True, index=True)
@@ -170,8 +170,8 @@ class OikosWakeup(AgentsBase):
     created_at = Column(DateTime, server_default=func.now(), index=True)
 
     __table_args__ = (
-        Index("ix_oikos_wakeups_owner_created", "owner_id", "created_at"),
-        Index("ix_oikos_wakeups_trigger_status", "trigger_type", "status"),
+        Index("ix_runner_wakeups_owner_created", "owner_id", "created_at"),
+        Index("ix_runner_wakeups_trigger_status", "trigger_type", "status"),
     )
 
 

@@ -127,7 +127,7 @@ async def stream_run_replay(
         run_id: Run identifier
         request: HTTP request (for Last-Event-ID header)
         after_event_id: Resume from this event ID (0 = from start)
-        include_tokens: Whether to include OIKOS_TOKEN events (default: true)
+        include_tokens: Whether to include assistant token events (default: true)
         current_user: Authenticated user (multi-tenant filtered)
 
     Returns:

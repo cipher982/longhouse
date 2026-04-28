@@ -55,7 +55,7 @@ async def append_run_event(
 
     Args:
         run_id: Run identifier
-        event_type: Event type (oikos_started, commis_complete, etc.)
+        event_type: Event type (assistant_started, commis_complete, etc.)
         payload: Event data (must be JSON-serializable)
 
     Returns:
@@ -95,7 +95,7 @@ async def append_run_event(
     except ValueError:
         logger.warning(f"Event type {event_type} not in EventType enum, skipping event_bus publish")
 
-    if event_type != "oikos_token":
+    if event_type != "assistant_token":
         logger.debug(f"Emitted {event_type} (id={event_id}) for run {run_id}")
 
     return event_id
@@ -112,7 +112,7 @@ async def emit_run_event(
     Args:
         db: Database session (DEPRECATED - will be removed)
         run_id: Run identifier
-        event_type: Event type (oikos_started, commis_complete, etc.)
+        event_type: Event type (assistant_started, commis_complete, etc.)
         payload: Event data (must be JSON-serializable)
 
     Returns:
@@ -153,7 +153,7 @@ async def emit_run_event(
         logger.warning(f"Event type {event_type} not in EventType enum, skipping event_bus publish")
 
     # Only log non-token events to avoid spam
-    if event_type != "oikos_token":
+    if event_type != "assistant_token":
         logger.debug(f"Emitted {event_type} (id={event.id}) for run {run_id}")
 
     return event.id
@@ -175,7 +175,7 @@ class EventStore:
             db: Database session
         run_id: Run identifier
             after_id: Return events with ID > this value (0 = all events)
-            include_tokens: Whether to include OIKOS_TOKEN events
+            include_tokens: Whether to include ASSISTANT_TOKEN events
 
         Returns:
             List of events ordered by id
@@ -186,7 +186,7 @@ class EventStore:
             query = query.filter(RunEvent.id > after_id)
 
         if not include_tokens:
-            query = query.filter(RunEvent.event_type != "oikos_token")
+            query = query.filter(RunEvent.event_type != "assistant_token")
 
         return query.order_by(RunEvent.id).all()
 

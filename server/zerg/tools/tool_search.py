@@ -59,14 +59,14 @@ CATEGORY_PREFIXES = {
     "knowledge_": "knowledge",
     "web_": "web",
     "http_": "web",
-    "spawn_commis": "oikos",
-    "list_commiss": "oikos",
-    "read_commis": "oikos",
-    "get_commis_evidence": "oikos",
-    "get_tool_output": "oikos",
-    "grep_commiss": "oikos",
-    "get_commis": "oikos",
-    "contact_user": "oikos",
+    "spawn_commis": "coordination",
+    "list_commiss": "coordination",
+    "read_commis": "coordination",
+    "get_commis_evidence": "coordination",
+    "get_tool_output": "coordination",
+    "grep_commiss": "coordination",
+    "get_commis": "coordination",
+    "contact_user": "coordination",
     "get_current_": "personal",
     "get_whoop_": "personal",
     "search_notes": "personal",
@@ -200,7 +200,7 @@ def format_catalog_for_prompt(
 
     lines = []
     category_order = [
-        "oikos",
+        "coordination",
         "web",
         "messaging",
         "github",
@@ -248,7 +248,7 @@ def set_search_context(
 
 
 def clear_search_context() -> None:
-    """Clear the search context after oikos completes."""
+    """Clear the search context after a runtime loop completes."""
     _search_allowed_tools.set(None)
     _search_max_results.set(20)
 

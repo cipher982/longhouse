@@ -178,15 +178,15 @@ class AccountConnectorCredential(Base):
 
 
 # ---------------------------------------------------------------------------
-# Commis Jobs – Background task execution for oikos agents
+# Commis Jobs – Background task execution for assistant agents
 # ---------------------------------------------------------------------------
 
 
 class CommisJob(Base):
     """Background job for executing commis agent tasks.
 
-    Commis jobs allow oikos agents to delegate long-running tasks
-    to background commiss without blocking the oikos's execution flow.
+    Commis jobs allow assistant agents to delegate long-running tasks
+    to background commiss without blocking the the assistant's execution flow.
 
     SQLite-safe concurrency:
     - worker_id: Identifies which worker claimed the job
@@ -203,15 +203,15 @@ class CommisJob(Base):
     # Job ownership and security
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
 
-    # Oikos correlation - links commis to oikos run for SSE event streaming
-    # ON DELETE SET NULL: if oikos run is deleted, commis job remains but loses correlation
-    oikos_run_id = Column(Integer, ForeignKey("runs.id", ondelete="SET NULL"), nullable=True, index=True)
+    # Parent run correlation - links commis to parent run for SSE event streaming
+    # ON DELETE SET NULL: if parent run is deleted, commis job remains but loses correlation
+    parent_run_id = Column(Integer, ForeignKey("runs.id", ondelete="SET NULL"), nullable=True, index=True)
 
-    # Tool call idempotency - prevents duplicate commiss from oikos resume replay
+    # Tool call idempotency - prevents duplicate commiss from assistant resume replay
     # The tool_call_id comes from LangChain's ToolCall structure and is unique per LLM response
     tool_call_id = Column(String(64), nullable=True, index=True)
 
-    # Trace ID for end-to-end debugging (inherited from oikos run)
+    # Trace ID for end-to-end debugging (inherited from parent run)
     # GUID handles UUID↔string conversion for SQLite compatibility
     trace_id = Column(GUID(), nullable=True, index=True)
 
@@ -239,7 +239,7 @@ class CommisJob(Base):
     claimed_at = Column(DateTime, nullable=True)  # When worker claimed the job
     heartbeat_at = Column(DateTime, nullable=True)  # Last heartbeat (proves worker is alive)
 
-    # Async inbox model - tracks whether oikos has acknowledged this result
+    # Async inbox model - tracks whether assistant has acknowledged this result
     acknowledged = Column(Boolean, nullable=False, default=False, server_default="false")
 
     # Error handling
@@ -259,10 +259,10 @@ class CommisJob(Base):
     __table_args__ = (
         Index(
             "ix_commis_jobs_idempotency",
-            "oikos_run_id",
+            "parent_run_id",
             "tool_call_id",
             unique=True,
-            postgresql_where=text("oikos_run_id IS NOT NULL AND tool_call_id IS NOT NULL"),
+            postgresql_where=text("parent_run_id IS NOT NULL AND tool_call_id IS NOT NULL"),
         ),
     )
 

@@ -60,7 +60,7 @@ class ShipSessionResult:
 
 def get_managed_workspace_base() -> Path:
     """Return the base path for Longhouse-managed workspaces."""
-    return Path(os.getenv("OIKOS_WORKSPACE_PATH", str(Path.home() / ".longhouse" / "workspaces")))
+    return Path(os.getenv("LONGHOUSE_WORKSPACE_PATH", str(Path.home() / ".longhouse" / "workspaces")))
 
 
 def get_claude_config_dir() -> Path:

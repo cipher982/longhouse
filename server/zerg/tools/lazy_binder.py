@@ -1,13 +1,13 @@
 """Lazy tool binder for on-demand tool loading.
 
 This module provides the LazyToolBinder class which manages tool loading
-for the oikos ReAct loop. It:
+for runtime ReAct loops. It:
 
 1. Pre-loads core tools (spawn_commis, contact_user, etc.)
 2. Lazy-loads other tools on first use
 3. Tracks which tools have been loaded for rebinding
 
-Usage in oikos:
+Usage in a coordinator loop:
     binder = LazyToolBinder(registry, allowed_tools)
 
     # Get currently bound tools for LLM
@@ -23,7 +23,6 @@ Usage in oikos:
         binder.clear_rebind_flag()
 
 Usage for commis:
-    from zerg.tools.builtin.oikos_tools import COMMIS_TOOL_NAMES
     binder = LazyToolBinder(registry, core_tools=COMMIS_CORE_TOOLS)
 """
 
@@ -33,35 +32,63 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
-# Import tool subsets from the single source of truth
-from zerg.tools.builtin.oikos_tools import COMMIS_TOOL_NAMES
-from zerg.tools.builtin.oikos_tools import OIKOS_TOOL_NAMES
-
 if TYPE_CHECKING:
     from zerg.tools import ImmutableToolRegistry
     from zerg.types.tools import Tool as BaseTool
 
 logger = logging.getLogger(__name__)
 
-# Core tools for Oikos - always loaded with full schemas.
-# Includes all oikos tools + common utilities.
+# Core tools for coordinator-style runtime loops - always loaded with full schemas.
 # search_tools/list_tools are NOT in BUILTIN_TOOLS; they are registered
 # dynamically and loaded on demand via the lazy loading mechanism.
-CORE_TOOLS: frozenset[str] = OIKOS_TOOL_NAMES | frozenset(
+CORE_TOOLS: frozenset[str] = frozenset(
     [
         "contact_user",
-        "web_search",
+        "datetime_diff",
+        "get_current_time",
+        "get_session_detail",
+        "get_session_events",
         "http_request",
+        "knowledge_search",
+        "message_session",
+        "peers",
+        "runner_doctor",
+        "runner_exec",
+        "runner_list",
+        "search_sessions",
+        "session_tail",
+        "task_create",
+        "task_list",
+        "web_fetch",
+        "web_search",
     ]
 )
 
 # Core tools for Commis - execution-focused tools, pre-loaded.
-# Commis agents don't get coordinator tools (spawn_commis, etc.)
-COMMIS_CORE_TOOLS: frozenset[str] = COMMIS_TOOL_NAMES
+# Commis agents should not get coordinator-only tools that spawn or steer peers.
+COMMIS_CORE_TOOLS: frozenset[str] = frozenset(
+    [
+        "contact_user",
+        "datetime_diff",
+        "get_current_time",
+        "get_session_detail",
+        "get_session_events",
+        "grep_sessions",
+        "http_request",
+        "knowledge_search",
+        "runner_doctor",
+        "runner_exec",
+        "runner_list",
+        "search_sessions",
+        "session_tail",
+        "web_fetch",
+        "web_search",
+    ]
+)
 
 
 class LazyToolBinder:
-    """Manages lazy loading of tools for oikos execution.
+    """Manages lazy loading of tools for runtime execution.
 
     Core tools are loaded upfront. Other tools are loaded on-demand
     when the LLM tries to use them.

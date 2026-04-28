@@ -1,8 +1,8 @@
-"""Dispatch contract for oikos tool calls.
+"""Dispatch contract for runtime tool calls.
 
 Pure functions that classify and normalize tool dispatch before execution.
-Extracted from oikos_react_engine so the logic outlives any particular
-execution harness.
+Extracted from the runtime loop so the logic outlives any particular execution
+harness.
 
 - _classify_dispatch_lane: categorize a turn as direct / quick-tool / cli delegation
 - _infer_requested_backend: detect explicit backend hints in user text

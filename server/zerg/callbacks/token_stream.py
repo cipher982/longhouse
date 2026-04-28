@@ -78,10 +78,10 @@ class WsTokenCallback(AsyncTokenCallback):
         run_id = ctx.run_id if ctx else None
         message_id = None
 
-        # Publish to event bus for SSE consumers (Oikos chat)
+        # Publish to event bus for SSE consumers.
         # NOTE: Tokens are NOT persisted to DB - only published to live subscribers.
         # Persisting every token caused 3x slowdown (blocking commit per token).
-        # Lifecycle events (oikos_started, oikos_complete) are still persisted
+        # Lifecycle events (assistant_started, assistant_complete) are still persisted
         # for resumability - clients can replay from last lifecycle event.
         if run_id is not None:
             try:
@@ -89,7 +89,7 @@ class WsTokenCallback(AsyncTokenCallback):
                 from zerg.events import event_bus
 
                 payload = {
-                    "event_type": EventType.OIKOS_TOKEN,
+                    "event_type": EventType.ASSISTANT_TOKEN,
                     "run_id": run_id,
                     "thread_id": thread_id,
                     "token": token,
@@ -98,15 +98,15 @@ class WsTokenCallback(AsyncTokenCallback):
                 if message_id:
                     payload["message_id"] = message_id
 
-                await event_bus.publish(EventType.OIKOS_TOKEN, payload)
+                await event_bus.publish(EventType.ASSISTANT_TOKEN, payload)
             except Exception:  # noqa: BLE001 – token streaming is best-effort
                 logger.exception("Error publishing token to event bus for run %s", run_id)
-            # For oikos runs, SSE is the primary delivery path - skip WS broadcast
+            # For run-scoped token streams, SSE is the primary delivery path - skip WS broadcast
             # to avoid redundant Pydantic serialization + lock contention overhead.
             return
 
-        # WebSocket broadcast for non-oikos contexts (dashboard thread view)
-        # Only runs when there's no oikos run_id - keeps this path for legacy compat.
+        # WebSocket broadcast for non-run contexts (dashboard thread view).
+        # Only runs when there's no run_id - keeps this path for legacy compat.
         topic = f"user:{user_id}"
 
         try:

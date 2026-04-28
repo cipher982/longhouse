@@ -180,7 +180,7 @@ const config = {
 
   projects: [
     // Core suite: launch-surface tests only, no retries allowed.
-    // Keep frozen Oikos/cloud-branch coverage out of this project.
+    // Keep frozen cloud-branch coverage out of this project.
     // Run with: make test-e2e (core + a11y) or make test-e2e-core (core-only) or bunx playwright test --project=core
     {
       name: 'core',

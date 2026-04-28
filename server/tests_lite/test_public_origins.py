@@ -53,8 +53,7 @@ def _make_settings(**overrides):
         discord_enable_alerts=False,
         discord_daily_digest_cron="0 8 * * *",
         db_reset_password=None,
-        oikos_device_secret=None,
-        oikos_workspace_path="/tmp",
+        longhouse_workspace_path="/tmp",
         notification_webhook=None,
         control_plane_url=None,
         smoke_test_secret=None,
@@ -76,8 +75,8 @@ def _make_settings(**overrides):
         roundabout_llm_timeout=1.5,
         bootstrap_token=None,
         skip_demo_seed=False,
-        oikos_tool_output_max_chars=8000,
-        oikos_tool_output_preview_chars=1200,
+        tool_output_max_chars=8000,
+        tool_output_preview_chars=1200,
     )
     base.update(overrides)
     return Settings(**base)

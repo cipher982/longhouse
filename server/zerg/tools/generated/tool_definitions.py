@@ -106,7 +106,7 @@ class ServerName(str, Enum):
     RUNNER_SETUP = "runner_setup"
     SLACK = "slack"
     SMS = "sms"
-    OIKOS = "oikos"
+    COORDINATION = "coordination"
     TASK = "task"
     TOOL_DISCOVERY = "tool_discovery"
     UUID = "uuid"
@@ -123,9 +123,9 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.GET_CURRENT_LOCATION: ServerName.PERSONAL,
     ToolName.GET_CURRENT_TIME: ServerName.DATETIME,
     ToolName.GET_WHOOP_DATA: ServerName.PERSONAL,
-    ToolName.GET_COMMIS_EVIDENCE: ServerName.OIKOS,
-    ToolName.GET_TOOL_OUTPUT: ServerName.OIKOS,
-    ToolName.GET_COMMIS_METADATA: ServerName.OIKOS,
+    ToolName.GET_COMMIS_EVIDENCE: ServerName.COORDINATION,
+    ToolName.GET_TOOL_OUTPUT: ServerName.COORDINATION,
+    ToolName.GET_COMMIS_METADATA: ServerName.COORDINATION,
     ToolName.GITHUB_ADD_COMMENT: ServerName.GITHUB,
     ToolName.GITHUB_CREATE_ISSUE: ServerName.GITHUB,
     ToolName.GITHUB_GET_ISSUE: ServerName.GITHUB,
@@ -133,7 +133,7 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.GITHUB_LIST_ISSUES: ServerName.GITHUB,
     ToolName.GITHUB_LIST_PULL_REQUESTS: ServerName.GITHUB,
     ToolName.GITHUB_LIST_REPOSITORIES: ServerName.GITHUB,
-    ToolName.GREP_COMMISS: ServerName.OIKOS,
+    ToolName.GREP_COMMISS: ServerName.COORDINATION,
     ToolName.HTTP_REQUEST: ServerName.HTTP,
     ToolName.JIRA_ADD_COMMENT: ServerName.JIRA,
     ToolName.JIRA_CREATE_ISSUE: ServerName.JIRA,
@@ -149,7 +149,7 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.LINEAR_LIST_TEAMS: ServerName.LINEAR,
     ToolName.LINEAR_UPDATE_ISSUE: ServerName.LINEAR,
     ToolName.LIST_IMESSAGE_MESSAGES: ServerName.IMESSAGE,
-    ToolName.LIST_COMMISS: ServerName.OIKOS,
+    ToolName.LIST_COMMISS: ServerName.COORDINATION,
     ToolName.MATH_EVAL: ServerName.MATH,
     ToolName.MEMORY_DELETE: ServerName.MEMORY,
     ToolName.MEMORY_LS: ServerName.MEMORY,
@@ -162,11 +162,11 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.NOTION_QUERY_DATABASE: ServerName.NOTION,
     ToolName.NOTION_SEARCH: ServerName.NOTION,
     ToolName.NOTION_UPDATE_PAGE: ServerName.NOTION,
-    ToolName.READ_COMMIS_FILE: ServerName.OIKOS,
-    ToolName.READ_COMMIS_RESULT: ServerName.OIKOS,
-    ToolName.PEEK_COMMIS_OUTPUT: ServerName.OIKOS,
+    ToolName.READ_COMMIS_FILE: ServerName.COORDINATION,
+    ToolName.READ_COMMIS_RESULT: ServerName.COORDINATION,
+    ToolName.PEEK_COMMIS_OUTPUT: ServerName.COORDINATION,
     ToolName.REFRESH_CONNECTOR_STATUS: ServerName.CONNECTOR,
-    ToolName.REQUEST_SESSION_SELECTION: ServerName.OIKOS,
+    ToolName.REQUEST_SESSION_SELECTION: ServerName.COORDINATION,
     ToolName.RUNNER_CREATE_ENROLL_TOKEN: ServerName.RUNNER_SETUP,
     ToolName.RUNNER_EXEC: ServerName.RUNNER,
     ToolName.RUNNER_LIST: ServerName.RUNNER_SETUP,
@@ -176,10 +176,10 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.SEND_IMESSAGE: ServerName.IMESSAGE,
     ToolName.SEND_SLACK_WEBHOOK: ServerName.SLACK,
     ToolName.SEND_SMS: ServerName.SMS,
-    ToolName.CANCEL_COMMIS: ServerName.OIKOS,
-    ToolName.CHECK_COMMIS_STATUS: ServerName.OIKOS,
-    ToolName.SPAWN_COMMIS: ServerName.OIKOS,
-    ToolName.WAIT_FOR_COMMIS: ServerName.OIKOS,
+    ToolName.CANCEL_COMMIS: ServerName.COORDINATION,
+    ToolName.CHECK_COMMIS_STATUS: ServerName.COORDINATION,
+    ToolName.SPAWN_COMMIS: ServerName.COORDINATION,
+    ToolName.WAIT_FOR_COMMIS: ServerName.COORDINATION,
     ToolName.TASK_CREATE: ServerName.TASK,
     ToolName.TASK_DELETE: ServerName.TASK,
     ToolName.TASK_LIST: ServerName.TASK,

@@ -14,7 +14,7 @@ Usage:
     finally:
         reset_commis_context(token)
 
-    # In oikos_react_engine._call_tool_async():
+    # In runtime_react._call_tool_async():
     ctx = get_commis_context()
     if ctx:
         await emit_tool_started_event(ctx, tool_name, ...)
@@ -59,11 +59,11 @@ class CommisContext:
     owner_id
         User ID that owns this commis's fiche
     run_id
-        Optional oikos run ID for correlating events
+        Optional parent run ID for correlating events
     job_id
         Optional CommisJob ID for roundabout event correlation
     trace_id
-        Optional trace ID for end-to-end debugging (inherited from oikos)
+        Optional trace ID for end-to-end debugging
     task
         Task description (first 100 chars)
     tool_calls
@@ -128,7 +128,7 @@ _commis_ctx: ContextVar[CommisContext | None] = ContextVar("commis_ctx", default
 def get_commis_context() -> CommisContext | None:
     """Get the current commis context, if running inside a commis.
 
-    Returns None if not in a commis context (e.g., oikos or direct fiche call).
+    Returns None if not in a commis context (e.g., direct fiche call).
     """
     return _commis_ctx.get()
 

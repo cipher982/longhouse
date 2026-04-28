@@ -10,7 +10,7 @@ from enum import Enum
 
 
 class SessionLoopMode(str, Enum):
-    """How much autonomy Oikos may exercise for a coding session."""
+    """How much autonomy Longhouse may exercise for a coding session."""
 
     ASSIST = "assist"
     AUTOPILOT = "autopilot"

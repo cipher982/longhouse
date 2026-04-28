@@ -2,7 +2,7 @@
 
 This emitter does nothing when emit methods are called. Use it for:
 - Unit tests where event emission is not needed
-- Direct fiche calls outside oikos/commis context
+- Direct fiche calls outside managed runtime context
 - Performance testing without event overhead
 """
 
@@ -30,7 +30,7 @@ class NullEmitter:
         return False
 
     @property
-    def is_oikos(self) -> bool:
+    def is_assistant(self) -> bool:
         """Always False - this is a null emitter."""
         return False
 

@@ -349,7 +349,7 @@ async def reconcile_runner_health(
 
                 # Persist status/incident changes before any awaited side effects.
                 # Otherwise a flush from the open incident can hold SQLite's writer
-                # lock across alert delivery or Oikos wakeups.
+                # lock across alert delivery or runner wakeups.
                 db.commit()
 
                 owner = user_cache.get(runner.owner_id)

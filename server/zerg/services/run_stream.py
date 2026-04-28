@@ -24,14 +24,14 @@ from zerg.services.event_store import EventStore
 logger = logging.getLogger(__name__)
 
 STREAM_EVENT_TYPES = (
-    EventType.OIKOS_STARTED,
-    EventType.OIKOS_THINKING,
-    EventType.OIKOS_TOKEN,
-    EventType.OIKOS_COMPLETE,
-    EventType.OIKOS_DEFERRED,
-    EventType.OIKOS_WAITING,
-    EventType.OIKOS_RESUMED,
-    EventType.OIKOS_HEARTBEAT,
+    EventType.ASSISTANT_STARTED,
+    EventType.ASSISTANT_THINKING,
+    EventType.ASSISTANT_TOKEN,
+    EventType.ASSISTANT_COMPLETE,
+    EventType.ASSISTANT_DEFERRED,
+    EventType.ASSISTANT_WAITING,
+    EventType.ASSISTANT_RESUMED,
+    EventType.ASSISTANT_HEARTBEAT,
     EventType.COMMIS_SPAWNED,
     EventType.COMMIS_STARTED,
     EventType.COMMIS_COMPLETE,
@@ -41,9 +41,9 @@ STREAM_EVENT_TYPES = (
     EventType.COMMIS_TOOL_COMPLETED,
     EventType.COMMIS_TOOL_FAILED,
     EventType.COMMIS_OUTPUT_CHUNK,
-    EventType.OIKOS_TOOL_STARTED,
-    EventType.OIKOS_TOOL_COMPLETED,
-    EventType.OIKOS_TOOL_FAILED,
+    EventType.ASSISTANT_TOOL_STARTED,
+    EventType.ASSISTANT_TOOL_COMPLETED,
+    EventType.ASSISTANT_TOOL_FAILED,
     EventType.SHOW_SESSION_PICKER,
     EventType.STREAM_CONTROL,
 )
@@ -67,8 +67,8 @@ class HistoricalRunEvent:
 @dataclass
 class StreamLifecycleState:
     pending_commiss: int = 0
-    oikos_done: bool = False
-    saw_oikos_complete: bool = False
+    assistant_done: bool = False
+    saw_assistant_complete: bool = False
     continuation_active: bool = False
     awaiting_continuation_until: float | None = None
     close_event_id: int | None = None
@@ -109,28 +109,28 @@ class StreamLifecycleState:
         if event_type in ("commis_complete", "commis_summary_ready"):
             if self.pending_commiss > 0:
                 self.pending_commiss -= 1
-            if self.pending_commiss == 0 and self.oikos_done and not self.continuation_active and not from_replay:
+            if self.pending_commiss == 0 and self.assistant_done and not self.continuation_active and not from_replay:
                 if self.awaiting_continuation_until is None:
                     self.awaiting_continuation_until = now_monotonic + self.commis_grace_seconds
             return
 
-        if event_type == "oikos_started":
-            if self.saw_oikos_complete:
+        if event_type == "assistant_started":
+            if self.saw_assistant_complete:
                 self.continuation_active = True
-            self.oikos_done = False
+            self.assistant_done = False
             self.awaiting_continuation_until = None
             return
 
-        if event_type == "oikos_complete":
-            self.saw_oikos_complete = True
-            self.oikos_done = True
+        if event_type == "assistant_complete":
+            self.saw_assistant_complete = True
+            self.assistant_done = True
             if self.continuation_active:
                 self.continuation_active = False
             if self.pending_commiss == 0 and not from_replay:
                 self.close_after_current_event = True
             return
 
-        if event_type == "oikos_deferred":
+        if event_type == "assistant_deferred":
             if event.get("close_stream", True) and not from_replay:
                 self.close_after_current_event = True
             return
@@ -141,7 +141,7 @@ class StreamLifecycleState:
     def should_close_after_replay(self, last_sent_event_id: int, status: RunStatus) -> bool:
         if self.close_event_id is not None and last_sent_event_id >= self.close_event_id:
             return True
-        if self.saw_oikos_complete and self.pending_commiss == 0 and not self.continuation_active and self.close_event_id is None:
+        if self.saw_assistant_complete and self.pending_commiss == 0 and not self.continuation_active and self.close_event_id is None:
             return True
         return status not in (RunStatus.RUNNING, RunStatus.DEFERRED, RunStatus.WAITING)
 
@@ -491,7 +491,7 @@ async def stream_run_events(
                     event = await asyncio.wait_for(queue.get(), timeout=lifecycle.next_timeout(time.monotonic()))
                     event_type = event.get("event_type") or event.get("type") or "event"
 
-                    if not include_tokens and event_type == "oikos_token":
+                    if not include_tokens and event_type == "assistant_token":
                         continue
 
                     event_id = event.get("event_id")

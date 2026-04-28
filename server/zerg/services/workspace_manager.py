@@ -7,7 +7,7 @@ This service manages git workspaces for cloud-based commis execution:
 - Cleanup of workspace directories
 
 The workspace lifecycle:
-1. setup() - Clone/fetch repo, create oikos/<run_id> branch
+1. setup() - Clone/fetch repo, create longhouse/<run_id> branch
 2. Commis runs in workspace (via CloudExecutor)
 3. capture_diff() - Get git diff of changes
 4. cleanup() - Remove workspace directory (optional)
@@ -154,7 +154,7 @@ _VALID_RUN_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 def validate_run_id(run_id: str) -> None:
     """Validate run_id for security.
 
-    The run_id is used in branch names (oikos/{run_id}) and directory paths,
+    The run_id is used in branch names and directory paths,
     so it must be alphanumeric with hyphens/underscores only.
 
     Raises
@@ -169,7 +169,7 @@ def validate_run_id(run_id: str) -> None:
         raise ValueError(f"Invalid run_id: {run_id}. Must contain only alphanumeric characters, hyphens, and underscores.")
 
 
-# Default workspace base path (overridable via OIKOS_WORKSPACE_PATH env var)
+# Default workspace base path (overridable via LONGHOUSE_WORKSPACE_PATH env var)
 DEFAULT_WORKSPACE_PATH = str(Path.home() / ".longhouse" / "workspaces")
 
 
@@ -199,11 +199,11 @@ class WorkspaceManager:
         Parameters
         ----------
         base_path
-            Base directory for workspaces. Defaults to OIKOS_WORKSPACE_PATH env var
+            Base directory for workspaces. Defaults to LONGHOUSE_WORKSPACE_PATH env var
             or ~/.longhouse/workspaces.
         """
         if base_path is None:
-            base_path = os.getenv("OIKOS_WORKSPACE_PATH", DEFAULT_WORKSPACE_PATH)
+            base_path = os.getenv("LONGHOUSE_WORKSPACE_PATH", DEFAULT_WORKSPACE_PATH)
         self.base_path = Path(base_path)
 
     async def setup(
@@ -218,7 +218,7 @@ class WorkspaceManager:
         This method:
         1. Creates a unique workspace directory
         2. Clones the repository (or fetches if already exists)
-        3. Creates a new branch: oikos/<run_id>
+        3. Creates a new branch: longhouse/<run_id>
         4. Returns a Workspace object
 
         Parameters
@@ -245,11 +245,11 @@ class WorkspaceManager:
         # Security: Validate inputs before any git operations
         validate_git_repo_url(repo_url)
         validate_branch_name(base_branch)
-        validate_run_id(run_id)  # Also validates oikos/{run_id} branch name
+        validate_run_id(run_id)  # Also validates longhouse/{run_id} branch name
 
         # Create unique workspace directory
         workspace_dir = self.base_path / run_id
-        branch_name = f"oikos/{run_id}"
+        branch_name = f"longhouse/{run_id}"
 
         logger.info(f"Setting up workspace for run {run_id} at {workspace_dir}")
 
@@ -277,7 +277,7 @@ class WorkspaceManager:
                     logger.debug(f"Detected default branch: {base_branch}")
                 await self._git_checkout(workspace_dir, base_branch)
 
-            # Create the oikos branch
+            # Create the workspace branch
             await self._git_create_branch(workspace_dir, branch_name)
 
             workspace = Workspace(
@@ -363,7 +363,7 @@ class WorkspaceManager:
 
             # Generate commit message if not provided
             if not message:
-                message = f"Oikos run {workspace.run_id}\n\nAutomated changes by cloud commis execution."
+                message = f"Longhouse run {workspace.run_id}\n\nAutomated changes by cloud commis execution."
 
             # Commit
             sha = await self._git_commit(workspace.path, message)
