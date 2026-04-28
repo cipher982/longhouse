@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Button } from "../ui";
 import config from "../../lib/config";
+import { trackAcquisitionEvent } from "../../lib/analytics";
 import { useNavigate } from "react-router-dom";
 
 const INSTALL_COMMAND = "curl -fsSL https://get.longhouse.ai/install.sh | bash";
@@ -21,8 +22,21 @@ export function HeroSection() {
       document.execCommand("copy");
       document.body.removeChild(ta);
     }
+    trackAcquisitionEvent("install_command_copy", {
+      surface: "landing",
+      placement: "hero",
+      method: "curl",
+    });
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleMacDownloadClick = () => {
+    trackAcquisitionEvent("mac_download_click", {
+      surface: "landing",
+      placement: "hero",
+      method: "direct_download",
+    });
   };
 
   return (
@@ -83,6 +97,7 @@ export function HeroSection() {
           <a
             href={MAC_DOWNLOAD_URL}
             className="hero-install-mac"
+            onClick={handleMacDownloadClick}
           >
             <svg
               className="hero-install-mac-icon"
@@ -112,7 +127,13 @@ export function HeroSection() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => navigate("/timeline")}
+              onClick={() => {
+                trackAcquisitionEvent("demo_open_click", {
+                  surface: "landing",
+                  placement: "hero",
+                });
+                navigate("/timeline");
+              }}
             >
               Try Live Demo
             </Button>

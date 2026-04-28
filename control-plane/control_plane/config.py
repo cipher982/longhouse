@@ -66,6 +66,11 @@ class Settings(BaseSettings):
     deploy_max_parallel: int = 5
     deploy_failure_threshold: int = 3
 
+    # Browser analytics for hosted signup/control-plane funnel.
+    umami_website_id: str | None = None
+    umami_script_src: str = "https://analytics.drose.io/script.js"
+    umami_domains: str | None = None
+
     # Email (SES) — injected into instances so email works out of the box
     instance_aws_ses_access_key_id: str | None = None
     instance_aws_ses_secret_access_key: str | None = None

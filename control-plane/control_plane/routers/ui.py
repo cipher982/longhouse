@@ -69,6 +69,17 @@ def _page(title: str, body: str, *, nav: bool = True, extra_styles: str = "", bo
 
     extra_style_tag = f"\n    <style>{extra_styles}</style>" if extra_styles else ""
     body_attr = f' class="{html.escape(body_class)}"' if body_class else ""
+    analytics_script = ""
+    if settings.umami_website_id:
+        domains_attr = f' data-domains="{html.escape(settings.umami_domains)}"' if settings.umami_domains else ""
+        analytics_script = f"""
+    <script defer src="{html.escape(settings.umami_script_src)}" data-website-id="{html.escape(settings.umami_website_id)}"{domains_attr}></script>"""
+    analytics_html = f"""{analytics_script}
+    <script>
+      window.trackLonghouseEvent = function(name, props) {{
+        try {{ window.umami && window.umami.track && window.umami.track(name, props || {{}}); }} catch (e) {{}}
+      }};
+    </script>"""
 
     return f"""<!doctype html>
 <html lang="en">
@@ -85,7 +96,7 @@ def _page(title: str, body: str, *, nav: bool = True, extra_styles: str = "", bo
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://api.fontshare.com/v2/css?f[]=general-sans@500,600,700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="{_static_asset_url('style.css')}">{extra_style_tag}
+    <link rel="stylesheet" href="{_static_asset_url('style.css')}">{extra_style_tag}{analytics_html}
   </head>
   <body{body_attr}>
     {nav_html}
@@ -208,8 +219,10 @@ def signup_page(request: Request, error: str | None = None, return_to: str | Non
     </div>
     <div class="max-w-form">
       {error_html}
-      <a href="{html.escape(google_signup_url)}" class="btn btn-primary google-btn w-full">{_GOOGLE_ICON} Continue with Google</a>
-      <a href="{html.escape(github_signup_url)}" class="btn btn-secondary github-btn w-full" style="margin-top:0.5rem;">{_GITHUB_ICON} Continue with GitHub</a>
+      <a href="{html.escape(google_signup_url)}" class="btn btn-primary google-btn w-full"
+         onclick="trackLonghouseEvent('hosted_signup_oauth_click', {{provider:'google'}})">{_GOOGLE_ICON} Continue with Google</a>
+      <a href="{html.escape(github_signup_url)}" class="btn btn-secondary github-btn w-full" style="margin-top:0.5rem;"
+         onclick="trackLonghouseEvent('hosted_signup_oauth_click', {{provider:'github'}})">{_GITHUB_ICON} Continue with GitHub</a>
       <div class="divider">
         <div class="divider-line"></div>
         <span class="divider-text">or</span>
@@ -217,7 +230,7 @@ def signup_page(request: Request, error: str | None = None, return_to: str | Non
       </div>
     </div>
     <div class="card max-w-form">
-      <form method="post" action="/auth/signup">
+      <form method="post" action="/auth/signup" onsubmit="trackLonghouseEvent('hosted_signup_password_submit', {{surface:'signup'}})">
         <label>Email <input type="email" name="email" required placeholder="you@example.com"></label>
         <label>Password <input type="password" name="password" required minlength="8" placeholder="Min. 8 characters"></label>
         <label>Confirm password <input type="password" name="password_confirm" required minlength="8" placeholder="Repeat password"></label>
@@ -327,7 +340,7 @@ def choose_subdomain_page(request: Request, error: str | None = Query(default=No
     </div>
     <div class="card max-w-form-lg">
       {error_html}
-      <form id="slug-form" method="post" action="/onboarding/set-subdomain">
+      <form id="slug-form" method="post" action="/onboarding/set-subdomain" onsubmit="trackLonghouseEvent('hosted_subdomain_submit', {{surface:'onboarding'}})">
         <input type="hidden" name="csrf_token" value="{html.escape(csrf)}">
         <label style="margin-top:0;">Your address</label>
         <div class="slug-row" id="slug-row">
@@ -660,7 +673,7 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
           </div>
           <h2 class="mt-3">Hosted &mdash; $5/mo</h2>
           <p>Always-on instance, automatic updates, access from any device.</p>
-          <form method="post" action="/dashboard/checkout">
+          <form method="post" action="/dashboard/checkout" onsubmit="trackLonghouseEvent('hosted_checkout_start', {{plan:'hosted_5'}})">
             <button type="submit" class="btn btn-primary mt-3">Subscribe &amp; Launch Instance</button>
           </form>
         </div>

@@ -639,4 +639,10 @@ def record_install_command(
         channel=channel,
         package_ref=package_ref,
     )
+    try:
+        from zerg.cli.acquisition import emit_install_metadata_event
+
+        emit_install_metadata_event(metadata_payload)
+    except Exception:
+        pass
     typer.echo(json.dumps(asdict(metadata_payload), indent=2))

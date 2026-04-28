@@ -24,6 +24,7 @@ from control_plane.db import engine
 from control_plane.db import SessionLocal
 from control_plane.models import Deployment
 from control_plane.models import Instance
+from control_plane.routers import acquisition
 from control_plane.routers import auth
 from control_plane.routers import billing
 from control_plane.routers import deployments
@@ -207,9 +208,11 @@ _static_dir = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
 app.include_router(health.router)
+app.include_router(acquisition.install_router)
 app.include_router(ui.router)
 app.include_router(auth.router)
 app.include_router(billing.router)
 app.include_router(webhooks.router)
 app.include_router(instances.router)
 app.include_router(deployments.router)
+app.include_router(acquisition.router)

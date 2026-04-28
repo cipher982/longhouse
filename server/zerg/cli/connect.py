@@ -951,6 +951,23 @@ def _handle_install(
     # Verify PATH in a fresh shell
     _verify_and_warn_path()
 
+    try:
+        from zerg.cli.acquisition import emit_acquisition_event_once
+
+        emit_acquisition_event_once(
+            "machine_agent_installed",
+            "machine_agent_first_install",
+            command="connect_install",
+            topology="machine_agent",
+            props={
+                "has_token": bool(token),
+                "menubar": bool(menubar),
+                "service": install_result.service_result.get("service"),
+            },
+        )
+    except Exception:
+        pass
+
     typer.echo("")
     typer.echo("To check status: longhouse connect --status")
     typer.echo("To stop machine agent: longhouse connect --uninstall")

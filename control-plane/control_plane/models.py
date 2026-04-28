@@ -88,3 +88,30 @@ class Deployment(Base):
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AcquisitionEvent(Base):
+    __tablename__ = "cp_acquisition_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_name: Mapped[str] = mapped_column(String(80), index=True)
+    install_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    source: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    version: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    os_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    arch: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    command: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    install_method: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    install_source: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    channel: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    topology: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    ci: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+
+    country: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    ip_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
+    referrer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    props_json: Mapped[str | None] = mapped_column(Text, nullable=True)

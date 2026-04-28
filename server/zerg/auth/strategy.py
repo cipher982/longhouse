@@ -173,6 +173,7 @@ class DevAuthStrategy(AuthStrategy):
                     provider="local" if owner_email == OSS_DEFAULT_EMAIL else None,
                     provider_user_id="local-user-1" if owner_email == OSS_DEFAULT_EMAIL else None,
                     role=desired_role,
+                    skip_notification=True,
                 )
             except Exception as e:  # noqa: BLE001 – catch IntegrityError from any DB driver
                 error_str = str(e).lower()
@@ -196,7 +197,7 @@ class DevAuthStrategy(AuthStrategy):
         # get_user_by_email() check and create_user() call. Catch the integrity
         # error and re-fetch.
         try:
-            return create_user(db, email=self.DEV_EMAIL, provider=None, role=desired_role)
+            return create_user(db, email=self.DEV_EMAIL, provider=None, role=desired_role, skip_notification=True)
         except Exception as e:  # noqa: BLE001 – catch IntegrityError from any DB driver
             # Check if it's a duplicate key error (concurrent creation race)
             error_str = str(e).lower()

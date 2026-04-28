@@ -1,13 +1,22 @@
 import { Link } from "react-router-dom";
 import { SwarmLogo } from "../SwarmLogo";
 import { Button } from "../ui";
+import { trackAcquisitionEvent } from "../../lib/analytics";
 
 export function FooterCTA() {
   const handleSelfHost = () => {
+    trackAcquisitionEvent("self_host_cta_click", {
+      surface: "landing",
+      placement: "footer",
+    });
     document.getElementById("landing-install")?.scrollIntoView({ behavior: "smooth" });
   };
 
   const handleDocs = () => {
+    trackAcquisitionEvent("docs_click", {
+      surface: "landing",
+      placement: "footer",
+    });
     window.location.assign("/docs");
   };
 
@@ -28,8 +37,19 @@ export function FooterCTA() {
           </div>
           <p className="landing-footer-subnote">
             Or skip running the box —{" "}
-            <a href="https://control.longhouse.ai/signup">get hosted for $5/mo</a>.{" "}
-            <a href="/docs" className="landing-footer-subnote-docs">Read the docs</a>.
+            <a
+              href="https://control.longhouse.ai/signup"
+              onClick={() =>
+                trackAcquisitionEvent("hosted_signup_click", {
+                  surface: "landing",
+                  placement: "footer",
+                  plan: "hosted_5",
+                })
+              }
+            >
+              get hosted for $5/mo
+            </a>.{" "}
+            <a href="/docs" className="landing-footer-subnote-docs" onClick={handleDocs}>Read the docs</a>.
           </p>
         </div>
 

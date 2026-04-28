@@ -69,7 +69,8 @@ def create_user(
     db.refresh(new_user)
 
     # Send Discord notification for new user signup (background thread, sync httpx)
-    if skip_notification:
+    local_bootstrap_emails = {"local@zerg", "local@longhouse", "dev@local"}
+    if skip_notification or email.lower() in local_bootstrap_emails or provider in {"local", "dev", "service"}:
         return new_user
     try:
         total_users = count_users(db)
