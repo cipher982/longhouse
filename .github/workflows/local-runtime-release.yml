@@ -32,6 +32,9 @@ jobs:
         with:
           ref: ${{ env.RELEASE_TAG }}
 
+      - name: Generate build identity
+        run: python3 scripts/build/generate_build_identity.py
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -66,6 +69,9 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ env.RELEASE_TAG }}
+
+      - name: Generate build identity
+        run: python3 scripts/build/generate_build_identity.py
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -103,6 +109,9 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ env.RELEASE_TAG }}
+
+      - name: Generate build identity
+        run: python3 scripts/build/generate_build_identity.py
 
       - name: Classify release tier
         id: release_tier
