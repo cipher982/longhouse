@@ -1,6 +1,6 @@
 [project]
 name = "longhouse-control-plane"
-version = "0.1.15"
+version = "0.1.16"
 description = "Longhouse control plane (signup, billing, provisioning)"
 requires-python = ">=3.12"
 readme = "README.md"
