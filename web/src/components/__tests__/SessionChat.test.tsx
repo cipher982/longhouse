@@ -162,6 +162,44 @@ describe("SessionChat", () => {
     expect(container.querySelector(".session-chat-callout")).toBeNull();
   });
 
+  it("shows a manual interrupt affordance for stalled managed sessions", async () => {
+    const user = userEvent.setup();
+    let interruptCalls = 0;
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: true, fork_available: true });
+      }
+      if (String(path).endsWith("/inputs") && !init) {
+        return Promise.resolve([]);
+      }
+      if (String(path).endsWith("/interrupt-live") && init?.method === "POST") {
+        interruptCalls += 1;
+        return Promise.resolve({
+          interrupt_dispatched: true,
+          confirmed_stopped: false,
+          session_id: "sess-1",
+          exit_code: 0,
+          error: null,
+          released_lock: true,
+        });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat({
+      chatMode: "managed_local",
+      canQueueNextInput: true,
+      isStalled: true,
+    });
+
+    const recovery = await screen.findByTestId("session-chat-stall-recovery");
+    expect(recovery).toHaveTextContent(/provider appears stalled/i);
+    expect(screen.queryByText(/click queue next to auto-send/i)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /interrupt/i }));
+    await waitFor(() => expect(interruptCalls).toBe(1));
+  });
+
   it("keeps the dock visible but replaces disabled composer controls when control is offline", () => {
     renderSessionChat({
       composerDisabledReason: "Longhouse can see this session, but cannot send prompts until the engine reconnects.",

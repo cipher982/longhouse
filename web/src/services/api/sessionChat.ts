@@ -30,6 +30,15 @@ export interface SessionInputResponse {
   queued: QueuedInputSummary[];
 }
 
+export interface SessionInterruptResponse {
+  interrupt_dispatched: boolean;
+  confirmed_stopped: boolean;
+  session_id: string;
+  exit_code: number | null;
+  error: string | null;
+  released_lock: boolean;
+}
+
 export async function postSessionInput(
   sessionId: string,
   body: { text: string; intent: SessionInputIntent },
@@ -52,5 +61,13 @@ export async function cancelSessionInput(
 ): Promise<{ cancelled: boolean; input_id: number }> {
   return request(`/sessions/${sessionId}/inputs/${inputId}`, {
     method: "DELETE",
+  });
+}
+
+export async function interruptLiveSession(
+  sessionId: string,
+): Promise<SessionInterruptResponse> {
+  return request<SessionInterruptResponse>(`/sessions/${sessionId}/interrupt-live`, {
+    method: "POST",
   });
 }

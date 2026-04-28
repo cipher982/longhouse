@@ -237,6 +237,35 @@
   line-height: 1.4;
 }
 
+.session-chat-stall-recovery {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: rgba(212, 168, 67, 0.13);
+  border: 1px solid rgba(212, 168, 67, 0.28);
+  border-radius: var(--radius-md);
+  color: rgba(243, 234, 217, 0.92);
+}
+
+.session-chat-stall-recovery__copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.session-chat-stall-recovery__title {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.session-chat-stall-recovery__detail {
+  font-size: var(--font-size-xs);
+  color: rgba(212, 184, 122, 0.78);
+}
+
 .session-chat-queued {
   padding: var(--space-2) var(--space-3);
   background: rgba(96, 130, 200, 0.12);

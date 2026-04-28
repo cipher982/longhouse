@@ -17,6 +17,7 @@ import {
   cancelSessionInput,
   fetchSessionInputs,
   fetchSessionLockStatus,
+  interruptLiveSession,
   postSessionInput,
   type QueuedInputSummary,
   type SessionLockInfo,
@@ -103,6 +104,8 @@ interface SessionChatProps {
    * error with a "Queue instead" affordance.
    */
   canSteerActiveTurn?: boolean;
+  /** True when backend detected stale managed execution with no active tool. */
+  isStalled?: boolean;
 }
 
 export type SessionChatTarget = Pick<AgentSession, "id" | "project" | "provider">;
@@ -144,6 +147,7 @@ export function SessionChat({
   managedLaunchSuggestion = null,
   canQueueNextInput = false,
   canSteerActiveTurn = false,
+  isStalled = false,
 }: SessionChatProps) {
   const isDock = layout === "dock";
   const isManagedLocal = chatMode === "managed_local";
@@ -154,6 +158,7 @@ export function SessionChat({
   const [draft, setDraft] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDraftingReply, setIsDraftingReply] = useState(false);
+  const [isInterrupting, setIsInterrupting] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [blockedKeyboardSubmit, setBlockedKeyboardSubmit] = useState(false);
@@ -442,6 +447,26 @@ export function SessionChat({
     [queryClient, queuedInputsQuery, session.id],
   );
 
+  const handleInterruptStalledTurn = useCallback(async () => {
+    if (!isManagedLocal || !isStalled || isInterrupting) return;
+    setIsInterrupting(true);
+    setError(null);
+    try {
+      await interruptLiveSession(session.id);
+      queryClient.setQueryData<SessionLockInfo | null>(["session-lock", session.id], {
+        locked: false,
+        holder: null,
+        time_remaining_seconds: null,
+        fork_available: false,
+      });
+      await refreshCurrentSessionWorkspace();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not interrupt stalled turn");
+    } finally {
+      setIsInterrupting(false);
+    }
+  }, [isInterrupting, isManagedLocal, isStalled, queryClient, refreshCurrentSessionWorkspace, session.id]);
+
   const canSteerNow = isSendLocked && canSteerActiveTurn;
   const canQueueNow = isSendLocked && canQueueNextInput && !queueFull;
   // When steer is available, the primary action is steer. Queue-next becomes
@@ -570,6 +595,8 @@ export function SessionChat({
       ? { variant: "warning" as const, label: "Drafting" }
     : isSubmitting
       ? { variant: "warning" as const, label: "Sending" }
+    : isStalled
+      ? { variant: "warning" as const, label: "Stalled" }
     : isSendLocked
       ? { variant: "warning" as const, label: "Working" }
       : { variant: "neutral" as const, label: "Ready" };
@@ -679,7 +706,27 @@ export function SessionChat({
         </div>
       )}
 
-      {isSendLocked && !isStreaming && (
+      {isManagedLocal && isStalled ? (
+        <div className="session-chat-stall-recovery" data-testid="session-chat-stall-recovery">
+          <div className="session-chat-stall-recovery__copy">
+            <span className="session-chat-stall-recovery__title">Provider appears stalled</span>
+            <span className="session-chat-stall-recovery__detail">
+              No progress has arrived from this managed session. Interrupt releases the current turn.
+            </span>
+          </div>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={() => void handleInterruptStalledTurn()}
+            disabled={isInterrupting}
+          >
+            {isInterrupting ? "Interrupting" : "Interrupt"}
+          </Button>
+        </div>
+      ) : null}
+
+      {isSendLocked && !isStreaming && !isStalled && (
         <div className="session-chat-turn-notice">
           <span>
             {canSteerNow

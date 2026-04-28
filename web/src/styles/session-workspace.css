@@ -232,6 +232,11 @@
     background: rgba(54, 22, 18, 0.56);
   }
 
+  .session-runtime-strip--tone-stalled {
+    border-color: rgba(212, 168, 67, 0.32);
+    background: rgba(58, 39, 16, 0.62);
+  }
+
   .session-runtime-strip__presence {
     display: inline-flex;
     align-items: center;

@@ -147,6 +147,72 @@ class SessionInterruptResponse(BaseModel):
     released_lock: bool = False
 
 
+async def _interrupt_live_session_response(
+    *,
+    db: Session,
+    owner_id: int,
+    source_session,
+    request_id: str,
+) -> SessionInterruptResponse:
+    """Dispatch managed-local interrupt through the single control service."""
+    from zerg.services.managed_local_control import interrupt_managed_local_session
+
+    lock_scope_id = str(source_session.thread_root_session_id or source_session.id)
+
+    try:
+        result = await interrupt_managed_local_session(
+            db=db,
+            owner_id=owner_id,
+            session=source_session,
+            commis_id=request_id,
+        )
+    except Exception as exc:
+        released_lock = await session_lock_manager.release(lock_scope_id)
+        if released_lock:
+            logger.warning(
+                "[%s] Released managed-local session lock after interrupt dispatch error for %s",
+                request_id,
+                source_session.id,
+            )
+        logger.exception("[%s] Error dispatching managed-local interrupt for %s", request_id, source_session.id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error_code": "interrupt_dispatch_error",
+                "message": f"Internal error: {str(exc)[:200]}",
+                "released_lock": released_lock,
+                "confirmed_stopped": False,
+            },
+        ) from exc
+
+    released_lock = await session_lock_manager.release(lock_scope_id)
+    if released_lock:
+        logger.warning(
+            "[%s] Released managed-local session lock during interrupt for %s",
+            request_id,
+            source_session.id,
+        )
+    if not result.ok:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "error_code": "interrupt_failed",
+                "message": str(result.error or "Managed local interrupt failed"),
+                "exit_code": result.exit_code,
+                "released_lock": released_lock,
+                "confirmed_stopped": False,
+            },
+        )
+
+    return SessionInterruptResponse(
+        interrupt_dispatched=True,
+        confirmed_stopped=False,
+        session_id=str(source_session.id),
+        exit_code=result.exit_code,
+        released_lock=released_lock,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -300,6 +366,24 @@ async def draft_reply_for_live_session_agents(
         ) from exc
 
 
+@router.post("/{session_id}/interrupt-live", response_model=SessionInterruptResponse)
+async def interrupt_live_session(
+    session_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_browser_route_user),
+) -> SessionInterruptResponse:
+    """Browser-authenticated explicit interrupt for managed-local sessions."""
+    request_id = str(uuid.uuid4())[:8]
+    source_session = _load_session_for_continuation(db, session_id)
+    _assert_live_session_send_available(source_session)
+    return await _interrupt_live_session_response(
+        db=db,
+        owner_id=current_user.id,
+        source_session=source_session,
+        request_id=request_id,
+    )
+
+
 @agents_router.post("/{session_id}/interrupt-live", response_model=SessionInterruptResponse)
 async def interrupt_live_session_agents(
     session_id: str,
@@ -313,8 +397,6 @@ async def interrupt_live_session_agents(
     A successful response means the interrupt command was dispatched on the
     source runner. It does not confirm that the provider stopped the turn.
     """
-    from zerg.services.managed_local_control import interrupt_managed_local_session
-
     settings = get_settings()
     resolved_device_token = device_token if isinstance(device_token, DeviceToken) else None
 
@@ -327,59 +409,11 @@ async def interrupt_live_session_agents(
     )
     _assert_live_session_send_available(source_session)
     owner_id = _resolve_agents_owner_id(db, resolved_device_token)
-    lock_scope_id = str(source_session.thread_root_session_id or source_session.id)
-
-    try:
-        result = await interrupt_managed_local_session(
-            db=db,
-            owner_id=owner_id,
-            session=source_session,
-            commis_id=request_id,
-        )
-    except Exception as exc:
-        released_lock = await session_lock_manager.release(lock_scope_id)
-        if released_lock:
-            logger.warning(
-                "[%s] Released managed-local session lock after interrupt dispatch error for %s",
-                request_id,
-                source_session.id,
-            )
-        logger.exception("[%s] Error dispatching managed-local interrupt for %s", request_id, source_session.id)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={
-                "error_code": "interrupt_dispatch_error",
-                "message": f"Internal error: {str(exc)[:200]}",
-                "released_lock": released_lock,
-                "confirmed_stopped": False,
-            },
-        ) from exc
-
-    released_lock = await session_lock_manager.release(lock_scope_id)
-    if released_lock:
-        logger.warning(
-            "[%s] Released managed-local session lock during interrupt for %s",
-            request_id,
-            source_session.id,
-        )
-    if not result.ok:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={
-                "error_code": "interrupt_failed",
-                "message": str(result.error or "Managed local interrupt failed"),
-                "exit_code": result.exit_code,
-                "released_lock": released_lock,
-                "confirmed_stopped": False,
-            },
-        )
-
-    return SessionInterruptResponse(
-        interrupt_dispatched=True,
-        confirmed_stopped=False,
-        session_id=str(source_session.id),
-        exit_code=result.exit_code,
-        released_lock=released_lock,
+    return await _interrupt_live_session_response(
+        db=db,
+        owner_id=owner_id,
+        source_session=source_session,
+        request_id=request_id,
     )
 
 

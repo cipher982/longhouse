@@ -412,6 +412,89 @@ def test_agents_interrupt_live_route_dispatches_and_releases_lock(monkeypatch, t
         api_app_ref.dependency_overrides = {}
 
 
+def test_browser_interrupt_live_route_dispatches_and_releases_lock(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    source_session_id = uuid4()
+    provider_session_id = f"browser-managed-interrupt-{uuid4().hex[:8]}"
+    calls: list[dict[str, object]] = []
+
+    with session_local() as db:
+        user = User(email="browser-interrupt-live@test.local", role=UserRole.USER.value)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        store = AgentsStore(db)
+        started_at = datetime.now(timezone.utc)
+        store.ingest_session(
+            SessionIngest(
+                id=source_session_id,
+                provider="claude",
+                environment="Cinder",
+                project="browser-interrupt-live",
+                device_id="agent-device",
+                cwd="/tmp",
+                git_repo=None,
+                git_branch=None,
+                provider_session_id=provider_session_id,
+                started_at=started_at,
+                ended_at=started_at,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="Started on agent-device before browser interrupt",
+                        timestamp=started_at,
+                        source_path="/tmp/session.jsonl",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+        source_session = store.get_session(source_session_id)
+        assert source_session is not None
+        source_session.execution_home = "managed_local"
+        source_session.managed_transport = "claude_channel_bridge"
+        source_session.source_runner_id = 1
+        source_session.source_runner_name = "agent-device"
+        source_session.managed_session_name = "lh-browser-interrupt-live"
+        db.commit()
+        user_id = user.id
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="browser-interrupt-live@test.local", role=UserRole.USER.value),
+    )
+
+    async def fake_interrupt(*, db, owner_id, session, commis_id=None, timeout_secs=15):
+        calls.append(
+            {
+                "owner_id": owner_id,
+                "session_id": str(session.id),
+                "commis_id": commis_id,
+                "timeout_secs": timeout_secs,
+            }
+        )
+        return SimpleNamespace(ok=True, exit_code=0, error=None)
+
+    monkeypatch.setattr("zerg.services.managed_local_control.interrupt_managed_local_session", fake_interrupt)
+    asyncio.run(session_chat.session_lock_manager.acquire(str(source_session_id), holder="stalled-turn"))
+
+    try:
+        response = client.post(f"/api/sessions/{source_session_id}/interrupt-live")
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["interrupt_dispatched"] is True
+        assert payload["confirmed_stopped"] is False
+        assert payload["session_id"] == str(source_session_id)
+        assert payload["released_lock"] is True
+        assert len(calls) == 1
+        assert calls[0]["owner_id"] == user_id
+        assert calls[0]["session_id"] == str(source_session_id)
+    finally:
+        asyncio.run(session_chat.session_lock_manager.release(str(source_session_id)))
+        api_app_ref.dependency_overrides = {}
+
+
 def test_agents_interrupt_live_route_releases_lock_on_dispatch_failure(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     source_session_id = uuid4()

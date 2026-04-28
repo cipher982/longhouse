@@ -5,7 +5,7 @@
  * Injects keyframe animations once via a module-level flag.
  */
 
-export type PresenceState = "thinking" | "running" | "idle" | "needs_user" | "blocked";
+export type PresenceState = "thinking" | "running" | "idle" | "needs_user" | "blocked" | "stalled";
 export type PresenceStateInput = PresenceState | (string & {});
 
 export interface PresenceBadgeProps {
@@ -92,7 +92,8 @@ function isKnownPresenceState(state: PresenceStateInput | null | undefined): sta
     state === "running" ||
     state === "idle" ||
     state === "needs_user" ||
-    state === "blocked"
+    state === "blocked" ||
+    state === "stalled"
   );
 }
 
@@ -178,6 +179,19 @@ function Dot({ state, size, compact = false, animateCompact = false }: DotProps)
           animation: compact ? undefined : "presence-pulse 2.5s ease-in-out infinite",
           opacity: compact ? 0.78 : 1,
           ["--presence-glow" as string]: "rgba(248, 113, 113, 0.5)",
+        }}
+      />
+    );
+  }
+
+  if (state === "stalled") {
+    return (
+      <span
+        style={{
+          ...base,
+          background: compact ? "#b45309" : "radial-gradient(circle, #f59e0b 30%, #b45309 100%)",
+          opacity: compact ? 0.84 : 1,
+          boxShadow: compact ? undefined : "0 0 6px 2px rgba(245, 158, 11, 0.35)",
         }}
       />
     );
@@ -329,9 +343,11 @@ export function PresenceBadge({
         ? `Running: ${tool}`
         : normalizedState === "blocked" && tool
           ? `Blocked: ${tool}`
-          : normalizedState === "needs_user"
-            ? "Waiting for input"
-            : normalizedState;
+            : normalizedState === "needs_user"
+              ? "Waiting for input"
+              : normalizedState === "stalled"
+                ? "Stalled"
+              : normalizedState;
     return (
       <span
         className={className}
@@ -431,6 +447,17 @@ export function PresenceBadge({
     );
   }
 
+  if (normalizedState === "stalled") {
+    return (
+      <span className={className} style={containerStyle}>
+        <Dot state="stalled" size={dotSize} />
+        <span style={{ color: "#f59e0b", fontWeight: 600, letterSpacing: "0.02em" }}>
+          Stalled
+        </span>
+      </span>
+    );
+  }
+
   // idle
   return (
     <span className={className} style={containerStyle}>
@@ -459,6 +486,7 @@ export function PresenceHero({ state, tool, className }: PresenceHeroProps) {
   const isRunning = normalizedState === "running";
   const isNeedsUser = normalizedState === "needs_user";
   const isBlocked = normalizedState === "blocked";
+  const isStalled = normalizedState === "stalled";
 
   const borderColor = isThinking
     ? "rgba(251, 146, 60, 0.4)"
@@ -468,6 +496,8 @@ export function PresenceHero({ state, tool, className }: PresenceHeroProps) {
         ? "rgba(251, 191, 36, 0.4)"
         : isBlocked
           ? "rgba(248, 113, 113, 0.4)"
+          : isStalled
+            ? "rgba(245, 158, 11, 0.36)"
           : "rgba(107, 114, 128, 0.2)";
 
   const bgColor = isThinking
@@ -478,6 +508,8 @@ export function PresenceHero({ state, tool, className }: PresenceHeroProps) {
         ? "rgba(251, 191, 36, 0.06)"
         : isBlocked
           ? "rgba(248, 113, 113, 0.06)"
+          : isStalled
+            ? "rgba(245, 158, 11, 0.08)"
           : "rgba(107, 114, 128, 0.04)";
 
   return (

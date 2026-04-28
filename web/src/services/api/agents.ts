@@ -76,6 +76,7 @@ export interface SessionRuntimeDisplay {
     | "running"
     | "needs-user"
     | "blocked"
+    | "stalled"
     | "idle"
     | "inferred"
     | (string & {});
@@ -87,6 +88,7 @@ export interface SessionRuntimeDisplay {
   is_executing: boolean;
   needs_attention: boolean;
   is_idle: boolean;
+  is_stalled?: boolean;
   heuristic_active: boolean;
   is_managed_local_truth: boolean;
   has_signal: boolean;
@@ -258,6 +260,7 @@ export type PresenceState =
   | "idle"
   | "needs_user"
   | "blocked"
+  | "stalled"
   | (string & {});
 
 export type UserStateAction = "park" | "snooze" | "archive" | "resume";
