@@ -107,21 +107,7 @@ pub struct UnmanagedSessionBinding {
     pub observed_at: String,
 }
 
-/// Discover machine-local unmanaged session bindings for heartbeat.
-///
-/// Phase 5b stub: returns no bindings. The real scanner will:
-///   1. enumerate recent transcript files under provider roots
-///      (~/.claude/projects, ~/.codex/sessions, ~/.gemini/sessions)
-///   2. scan for provider CLI processes (`claude`, `codex`, `gemini`)
-///   3. correlate open file descriptors to transcript paths via
-///      `lsof -F pcn -p <pid>` on macOS or `/proc/<pid>/fd/*` on Linux
-///   4. emit one binding per (machine_id, provider, provider_session_id)
-///      with pid + process_start_time composite identity.
-pub fn collect_unmanaged_session_bindings(
-    _machine_id: &str,
-) -> Vec<UnmanagedSessionBinding> {
-    Vec::new()
-}
+pub use crate::unmanaged_bindings::collect_unmanaged_session_bindings;
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct ManagedSessionLease {
