@@ -2988,6 +2988,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/sessions/{session_id}/interrupt-live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Interrupt Live Session Agents
+         * @description Machine-facing explicit interrupt for managed-local sessions.
+         *
+         *     A successful response means the interrupt command was dispatched on the
+         *     source runner. It does not confirm that the provider stopped the turn.
+         */
+        post: operations["interrupt_live_session_agents_agents_sessions__session_id__interrupt_live_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/timeline/sessions/semantic": {
         parameters: {
             query?: never;
@@ -7700,6 +7723,27 @@ export interface components {
             intent: string;
             /** Queued */
             queued?: components["schemas"]["QueuedInputSummary"][];
+        };
+        /** SessionInterruptResponse */
+        SessionInterruptResponse: {
+            /** Interrupt Dispatched */
+            interrupt_dispatched: boolean;
+            /**
+             * Confirmed Stopped
+             * @default false
+             */
+            confirmed_stopped: boolean;
+            /** Session Id */
+            session_id: string;
+            /** Exit Code */
+            exit_code?: number | null;
+            /** Error */
+            error?: string | null;
+            /**
+             * Released Lock
+             * @default false
+             */
+            released_lock: boolean;
         };
         /**
          * SessionLockInfo
@@ -14577,6 +14621,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionDraftReplyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    interrupt_live_session_agents_agents_sessions__session_id__interrupt_live_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionInterruptResponse"];
                 };
             };
             /** @description Validation Error */
