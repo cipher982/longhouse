@@ -11,6 +11,7 @@ function usage() {
 Analyzes a local Claude JSONL transcript and separates:
   - assistant tool call -> tool result latency
   - tool result -> next assistant latency
+  - incomplete assistant text turns that never reached tool_use/stop
 `);
 }
 
@@ -124,6 +125,8 @@ function summarize(rows, transcriptPath) {
   const modelAfterTool = [];
   const textToTool = [];
   const allGaps = [];
+  const topGaps = [];
+  const incompleteAssistantTurns = [];
   const assistants = [];
   const recent = [];
 
@@ -150,9 +153,36 @@ function summarize(rows, transcriptPath) {
     const nextKind = eventKind(next);
     const delta = (new Date(next.timestamp) - new Date(current.timestamp)) / 1000;
     allGaps.push(delta);
+    topGaps.push({
+      seconds: Number(delta.toFixed(3)),
+      from_line: current._line,
+      from_timestamp: current.timestamp,
+      from_kind: currentKind,
+      to_line: next._line,
+      to_timestamp: next.timestamp,
+      to_kind: nextKind,
+    });
     if (currentKind.startsWith("assistant_tool") && nextKind === "tool_result") toolExecution.push(delta);
     if (currentKind === "tool_result" && nextKind.startsWith("assistant")) modelAfterTool.push(delta);
     if (currentKind === "assistant_text" && nextKind.startsWith("assistant_tool")) textToTool.push(delta);
+  }
+
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    if (eventKind(row) !== "assistant_text") continue;
+    if (row.message?.stop_reason !== null) continue;
+    const next = rows[index + 1] || null;
+    const nextDelta = next ? (new Date(next.timestamp) - new Date(row.timestamp)) / 1000 : null;
+    incompleteAssistantTurns.push({
+      line: row._line,
+      timestamp: row.timestamp,
+      next_line: next?._line || null,
+      next_timestamp: next?.timestamp || null,
+      next_kind: next ? eventKind(next) : null,
+      next_gap_seconds: Number.isFinite(nextDelta) ? Number(nextDelta.toFixed(3)) : null,
+      output_tokens: row.message?.usage?.output_tokens || 0,
+      message_id: row.message?.id || null,
+    });
   }
 
   for (const row of rows.slice(-30)) {
@@ -182,6 +212,8 @@ function summarize(rows, transcriptPath) {
       assistant_text_to_assistant_tool: quantiles(textToTool),
       all_adjacent_events: quantiles(allGaps),
     },
+    largest_adjacent_gaps: topGaps.sort((a, b) => b.seconds - a.seconds).slice(0, 10),
+    incomplete_assistant_text_turns: incompleteAssistantTurns,
     recent_events: recent,
   };
 }
@@ -199,6 +231,21 @@ function printText(summary) {
   console.log("");
   for (const [name, stats] of Object.entries(summary.latency_seconds)) {
     console.log(`${name}: ${JSON.stringify(stats)}`);
+  }
+  if (summary.incomplete_assistant_text_turns.length > 0) {
+    console.log("\nincomplete assistant text turns:");
+    for (const row of summary.incomplete_assistant_text_turns) {
+      const gap = row.next_gap_seconds === null ? "open" : `${row.next_gap_seconds}s`;
+      console.log(
+        `${row.line}\t${row.timestamp}\tnext=${row.next_kind || "none"} line=${row.next_line || ""} gap=${gap} out=${row.output_tokens}`,
+      );
+    }
+  }
+  console.log("\nlargest adjacent gaps:");
+  for (const row of summary.largest_adjacent_gaps.slice(0, 5)) {
+    console.log(
+      `${row.seconds}s\t${row.from_line}:${row.from_kind} ${row.from_timestamp} -> ${row.to_line}:${row.to_kind} ${row.to_timestamp}`,
+    );
   }
   console.log("\nrecent events:");
   for (const row of summary.recent_events) {
