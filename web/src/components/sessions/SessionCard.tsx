@@ -6,14 +6,16 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { Card } from "../ui";
 import { PresenceBadge } from "../PresenceBadge";
 import { type TimelineSessionCard, getTimelineCardAnchor } from "../../services/api/agents";
-import { isSessionClosed, resolveSessionRuntimeState } from "../../lib/sessionRuntime";
+import {
+  isSessionClosed,
+  resolveSessionOwnershipLabel,
+  resolveSessionRuntimeState,
+  resolveSessionStatusLabel,
+} from "../../lib/sessionRuntime";
 import { getSessionInteractionCapabilities } from "../../lib/sessionWorkspace";
-import { normalizeExecutionVenueLabel } from "../../lib/sessionExecutionHome";
 import {
   formatRelativeTime,
   getRuntimeMetaLabel,
-  getRuntimeOutcomeLabel,
-  getRuntimeDisplayCopy,
   getProjectLabel,
   getSessionTitle,
   renderHighlightedText,
@@ -25,47 +27,6 @@ import {
 // ---------------------------------------------------------------------------
 
 const SESSION_CARD_HOVER_PREFETCH_DELAY_MS = 180;
-
-function normalizeCapabilityTone(value: string | null | undefined): "neutral" | "success" | "warning" | null {
-  if (value === "neutral" || value === "success" || value === "warning") {
-    return value;
-  }
-  return null;
-}
-
-/**
- * Phase 3 of session-liveness-honesty: honest runtime-pill label for
- * unmanaged sessions. Returns null when the legacy outcome label ("Active"
- * / "Completed" / "Inactive") is still the right thing to show — notably
- * when there is a progress heuristic firing or when no new axes are on
- * the payload yet.
- */
-function resolveUnmanagedPhaseLabel(
-  runtime: ReturnType<typeof resolveSessionRuntimeState>,
-): string | null {
-  const display = runtime.runtimeDisplay;
-  if (!display || display.control_path !== "unmanaged") {
-    return null;
-  }
-  if (display.lifecycle === "closed") {
-    // Card renders the explicit CLOSED pill; skip the runtime label.
-    return null;
-  }
-  if (runtime.isExecuting || runtime.needsAttention || runtime.heuristicActive) {
-    return "Active";
-  }
-  switch (display.activity_recency) {
-    case "live":
-      return "Active";
-    case "recent":
-      return "Recent activity";
-    case "stale":
-      return "Stale";
-    case "none":
-    default:
-      return "Unknown";
-  }
-}
 
 // ---------------------------------------------------------------------------
 // SessionCard
@@ -99,44 +60,19 @@ export function SessionCard({
   const detailSession = thread.detail;
   const session = compatibilityMode ? detailSession : thread.head;
   const interaction = getSessionInteractionCapabilities({ session });
-  const capabilityDisplayLabel = session.capabilities?.display_label?.trim() || null;
-  const capabilityDisplayTone =
-    normalizeCapabilityTone(session.capabilities?.display_tone) ??
-    interaction.capabilityVariant;
-  const cardCapabilityLabel =
-    interaction.mode === "managed_local_unavailable"
-      ? capabilityDisplayLabel ?? interaction.capabilityLabel
-      : null;
   const turnCount = session.user_messages;
   const toolCount = session.tool_calls;
   const runtime = resolveSessionRuntimeState(session);
   const runtimeMetaLabel = getRuntimeMetaLabel(runtime);
-  const runtimeDisplay = getRuntimeDisplayCopy(runtime, {
-    managedLocal: interaction.isManagedLocalSession,
-  });
-  const runtimePhaseLabel = interaction.isManagedLocalSession
-    ? runtimeDisplay.headline
-    : resolveUnmanagedPhaseLabel(runtime) ?? getRuntimeOutcomeLabel(runtime);
+  const fallbackOwnershipLabel = interaction.isManagedLocalSession ? "Managed" : "Unmanaged";
+  const ownershipLabel = resolveSessionOwnershipLabel(runtime, fallbackOwnershipLabel);
+  const ownershipTone = ownershipLabel === "Managed" ? "success" : "neutral";
+  const fallbackControlPath = ownershipLabel === "Managed" ? "managed" : "unmanaged";
+  const runtimePhaseLabel = resolveSessionStatusLabel(runtime, fallbackControlPath);
 
   const projectLabel = getProjectLabel(session);
   const title = getSessionTitle(session);
-  const homeLabel = normalizeExecutionVenueLabel(session.home_label);
-  const runtimeHostLabel =
-    session.control?.source_runner_name?.trim() ||
-    homeLabel ||
-    interaction.sourceOriginLabel ||
-    "host";
-  const cardRuntimeMetaParts = interaction.isManagedLocalSession
-    ? [
-        runtimeDisplay.detail,
-        interaction.liveControlAvailable
-          ? capabilityDisplayLabel ?? `Live on ${runtimeHostLabel}`
-          : capabilityDisplayLabel ?? interaction.capabilityLabel,
-        runtimeMetaLabel && runtimeMetaLabel !== "Live on host"
-          ? runtimeMetaLabel
-          : null,
-      ].filter(Boolean)
-    : [runtimeMetaLabel].filter(Boolean);
+  const cardRuntimeMetaParts = [runtimeMetaLabel].filter(Boolean);
   const showContinuationCount = !compatibilityMode && thread.continuation_count > 1;
   const secondaryStatsLabel = compatibilityMode
     ? `Matched ${formatRelativeTime(detailSession.started_at, relativeNowMs)}`
@@ -169,12 +105,17 @@ export function SessionCard({
       : isSessionClosed(session) && !hasCurrentControlledPresence;
   // Phase 3: always render the runtime pill for unmanaged sessions so the
   // card states "Stale" / "Unknown" honestly instead of hiding them.
-  const isUnmanagedWithAxes = runtime.runtimeDisplay?.control_path === "unmanaged";
-  const showRuntimePill = !isClosedSession && (runtime.hasSignal || isUnmanagedWithAxes);
-  const showCapabilityPill = !isClosedSession && !!cardCapabilityLabel;
-  const showStatusRow = isClosedSession || showRuntimePill || showCapabilityPill;
-  // "Active" is an outcome label; keep its pill neutral across runtime sources.
-  const runtimePillTone = runtimePhaseLabel === "Active" ? "active" : runtime.tone;
+  const hasRuntimeAxes =
+    runtime.runtimeDisplay?.control_path === "managed" ||
+    runtime.runtimeDisplay?.control_path === "unmanaged";
+  const showRuntimePill = !isClosedSession && (runtime.hasSignal || hasRuntimeAxes);
+  const showOwnershipPill = true;
+  const showStatusRow = showOwnershipPill || isClosedSession || showRuntimePill;
+  // Outcome labels are semantic summaries; keep their chips neutral across runtime sources.
+  const runtimePillTone =
+    runtimePhaseLabel === "Active" || runtimePhaseLabel === "Process seen"
+      ? "active"
+      : runtime.tone;
   const cardClassName = [
     "session-card",
     confirming ? "session-card--confirming" : "",
@@ -270,6 +211,19 @@ export function SessionCard({
 
           {showStatusRow && (
             <div className="session-card-status">
+              {showOwnershipPill ? (
+                <span
+                  className={`session-card-ownership-pill session-card-ownership-pill--${ownershipTone}`}
+                  data-testid="session-card-ownership"
+                  title={
+                    ownershipLabel === "Managed"
+                      ? "Longhouse owns the live control path for this session."
+                      : "Longhouse imported or discovered this session without a live control path."
+                  }
+                >
+                  {ownershipLabel}
+                </span>
+              ) : null}
               {isClosedSession ? (
                 <span
                   className="session-card-closed-pill"
@@ -303,15 +257,6 @@ export function SessionCard({
                   )}
                 </div>
               )}
-              {showCapabilityPill ? (
-                <span
-                  className={`session-card-capability-pill session-card-capability-pill--${capabilityDisplayTone}`}
-                  data-testid="session-card-capability"
-                  title={interaction.capabilityDescription ?? undefined}
-                >
-                  {cardCapabilityLabel}
-                </span>
-              ) : null}
             </div>
           )}
         </div>

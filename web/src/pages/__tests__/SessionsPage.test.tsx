@@ -460,11 +460,11 @@ describe("SessionsPage", () => {
     expect(prefetchSpy).not.toHaveBeenCalled();
   });
 
-  it("keeps imported session cards free of always-on management chrome", async () => {
+  it("labels imported session cards as unmanaged without capability chrome", async () => {
     renderSessionsPage("/timeline");
 
     expect(await screen.findByText("Cleanup sessions page")).toBeInTheDocument();
-    expect(screen.queryByText("Unmanaged")).not.toBeInTheDocument();
+    expect(screen.getByTestId("session-card-ownership")).toHaveTextContent("Unmanaged");
     expect(screen.queryByTestId("session-card-management")).not.toBeInTheDocument();
     expect(screen.queryByTestId("session-card-capability")).not.toBeInTheDocument();
   });
@@ -643,7 +643,7 @@ describe("SessionsPage", () => {
     expect(card).not.toHaveClass("session-card--closed");
   });
 
-  it("shows a control-offline badge when a managed session cannot accept browser prompts", async () => {
+  it("shows managed ownership and disconnected status without mixing in capability copy", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
@@ -660,6 +660,14 @@ describe("SessionsPage", () => {
               host_reattach_available: true,
               display_label: "Reconnect required",
               display_tone: "warning",
+            }),
+            runtime_display: makeRuntimeDisplay({
+              control_path: "managed",
+              activity_recency: "stale",
+              lifecycle: "open",
+              host_state: "unknown",
+              truth_tier: "stale",
+              has_signal: true,
             }),
           }),
         ],
@@ -678,14 +686,10 @@ describe("SessionsPage", () => {
     expect(card).not.toHaveClass("session-card--closed");
     expect(screen.queryByTestId("session-card-closed-state")).not.toBeInTheDocument();
 
-    const capability = await screen.findByTestId("session-card-capability");
-    expect(capability).toHaveTextContent("Reconnect required");
-    expect(capability).toHaveClass("session-card-capability-pill--warning");
-    expect(capability).toHaveAttribute(
-      "title",
-      "Longhouse can see this live Codex session, but cannot send prompts until the engine reconnects.",
-    );
-    expect(screen.queryByTestId("session-card-management")).not.toBeInTheDocument();
+    expect(await within(card).findByTestId("session-card-ownership")).toHaveTextContent("Managed");
+    expect(await within(card).findByTestId("session-card-runtime")).toHaveTextContent("Disconnected");
+    expect(screen.queryByTestId("session-card-capability")).not.toBeInTheDocument();
+    expect(card).not.toHaveTextContent("Reconnect required");
   });
 
   it("treats ended managed sessions with stale reattach metadata as closed", async () => {
@@ -1326,9 +1330,10 @@ describe("SessionsPage", () => {
 
     const { container } = renderSessionsPage();
 
-    expect(await screen.findByText("Waiting for you")).toBeInTheDocument();
-    expect(screen.getByText(/Reply needed/)).toBeInTheDocument();
-    expect(screen.getByText(/Live on laptop/)).toBeInTheDocument();
+    expect(await screen.findByText("Needs you")).toBeInTheDocument();
+    expect(screen.getByTestId("session-card-ownership")).toHaveTextContent("Managed");
+    expect(screen.queryByText(/Reply needed/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Live on laptop/)).not.toBeInTheDocument();
 
     const card = container.querySelector(".session-card");
     expect(card).toHaveClass("session-card--needs-user");
@@ -1371,9 +1376,10 @@ describe("SessionsPage", () => {
 
     const { container } = renderSessionsPage();
 
-    expect(await screen.findByText("Waiting for you")).toBeInTheDocument();
-    expect(screen.getByText(/Approval needed .* Shell/)).toBeInTheDocument();
-    expect(screen.getByText(/Live on laptop/)).toBeInTheDocument();
+    expect(await screen.findByText("Needs you")).toBeInTheDocument();
+    expect(screen.getByTestId("session-card-ownership")).toHaveTextContent("Managed");
+    expect(screen.queryByText(/Approval needed .* Shell/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Live on laptop/)).not.toBeInTheDocument();
 
     const card = container.querySelector(".session-card");
     expect(card).toHaveClass("session-card--blocked");
@@ -1413,8 +1419,9 @@ describe("SessionsPage", () => {
     const { container } = renderSessionsPage();
 
     expect(await screen.findByText("Working")).toBeInTheDocument();
-    expect(await screen.findByText(/Thinking/)).toBeInTheDocument();
-    expect(screen.getByText(/Live on laptop/)).toBeInTheDocument();
+    expect(screen.getByTestId("session-card-ownership")).toHaveTextContent("Managed");
+    expect(screen.queryByText(/Thinking/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Live on laptop/)).not.toBeInTheDocument();
     expect(screen.queryByText("Fresh signal")).not.toBeInTheDocument();
 
     const card = container.querySelector(".session-card");
@@ -1453,8 +1460,9 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
-    expect(await screen.findByText("Working")).toBeInTheDocument();
-    expect(screen.getByText(/Recent progress .* Live on laptop/)).toBeInTheDocument();
+    expect(await screen.findByText("Recent activity")).toBeInTheDocument();
+    expect(screen.getByTestId("session-card-ownership")).toHaveTextContent("Managed");
+    expect(screen.queryByText(/Recent progress .* Live on laptop/)).not.toBeInTheDocument();
     expect(screen.queryByText("Ready")).not.toBeInTheDocument();
   });
 
@@ -1521,7 +1529,8 @@ describe("SessionsPage", () => {
     renderSessionsPage();
 
     expect(await screen.findByText("Working")).toBeInTheDocument();
-    expect(screen.getByText(/Running Codex/)).toBeInTheDocument();
+    expect(screen.getByTestId("session-card-ownership")).toHaveTextContent("Managed");
+    expect(screen.queryByText(/Running Codex/)).not.toBeInTheDocument();
     expect(screen.queryByText("Running mcp__hatch__hatch_codex")).not.toBeInTheDocument();
   });
 
@@ -1641,6 +1650,7 @@ describe("SessionsPage", () => {
 
     const card = await screen.findByTestId("session-card");
     expect(card).toHaveAttribute("data-card-state", "actionable");
+    expect(await within(card).findByTestId("session-card-ownership")).toHaveTextContent("Unmanaged");
     const runtime = await within(card).findByTestId("session-card-runtime");
     expect(runtime).toHaveTextContent("Unknown");
     expect(screen.queryByTestId("session-card-closed-state")).not.toBeInTheDocument();
@@ -1667,6 +1677,7 @@ describe("SessionsPage", () => {
 
     const card = await screen.findByTestId("session-card");
     expect(card).toHaveAttribute("data-card-state", "actionable");
+    expect(await within(card).findByTestId("session-card-ownership")).toHaveTextContent("Unmanaged");
     expect(await within(card).findByTestId("session-card-runtime")).toHaveTextContent("Stale");
   });
 
@@ -1704,6 +1715,7 @@ describe("SessionsPage", () => {
 
     const card = await screen.findByTestId("session-card");
     expect(card).toHaveAttribute("data-card-state", "closed");
+    expect(await within(card).findByTestId("session-card-ownership")).toHaveTextContent("Managed");
     expect(screen.getByTestId("session-card-closed-state")).toHaveTextContent("Closed");
   });
 
