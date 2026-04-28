@@ -26,6 +26,7 @@ from zerg.models.user import User
 from zerg.services.managed_local_control import await_managed_local_hook_phase_update
 from zerg.services.managed_local_control import await_managed_local_turn_events
 from zerg.services.managed_local_control import await_managed_local_turn_terminal
+from zerg.services.managed_local_control import interrupt_managed_local_session
 from zerg.services.managed_local_control import send_text_to_managed_local_session
 from zerg.services.managed_local_control import validate_managed_local_chat_done_payload
 from zerg.session_execution_home import ManagedSessionTransport
@@ -216,6 +217,93 @@ def test_send_text_to_managed_local_session_returns_baseline_event_id_for_claude
         command = str(dispatcher.calls[0]["command"])
         assert "exec longhouse claude-channel send --session-id" in command
         assert "--text continue" in command
+
+
+def test_interrupt_managed_local_session_uses_claude_channel_command(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    dispatcher = _FakeDispatcher()
+    monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)
+
+    with SessionLocal() as db:
+        user, runner, session = _seed_user_runner_and_session(db, provider="claude")
+
+        result = asyncio.run(
+            interrupt_managed_local_session(
+                db=db,
+                owner_id=user.id,
+                session=session,
+                commis_id="managed-local-interrupt-test",
+            )
+        )
+
+        assert result.ok is True
+        assert result.exit_code == 0
+        assert len(dispatcher.calls) == 1
+        assert dispatcher.calls[0]["runner_id"] == runner.id
+        assert dispatcher.calls[0]["commis_id"] == "managed-local-interrupt-test"
+        command = str(dispatcher.calls[0]["command"])
+        assert "exec longhouse claude-channel interrupt --session-id" in command
+        assert str(session.id) in command
+
+
+def test_interrupt_managed_local_session_uses_codex_bridge_command(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    dispatcher = _FakeDispatcher()
+    monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)
+
+    with SessionLocal() as db:
+        user, runner, session = _seed_user_runner_and_session(db, provider="codex")
+
+        result = asyncio.run(
+            interrupt_managed_local_session(
+                db=db,
+                owner_id=user.id,
+                session=session,
+                commis_id="managed-local-interrupt-test",
+            )
+        )
+
+        assert result.ok is True
+        assert result.exit_code == 0
+        assert len(dispatcher.calls) == 1
+        assert dispatcher.calls[0]["runner_id"] == runner.id
+        command = str(dispatcher.calls[0]["command"])
+        assert "codex-bridge interrupt --session-id" in command
+        assert str(session.id) in command
+
+
+def test_interrupt_managed_local_session_reports_nonzero_exit(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    dispatcher = _FakeDispatcher()
+    dispatcher.results = deque(
+        [
+            {
+                "ok": True,
+                "data": {
+                    "exit_code": 7,
+                    "stdout": "",
+                    "stderr": "interrupt failed",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)
+
+    with SessionLocal() as db:
+        user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
+
+        result = asyncio.run(
+            interrupt_managed_local_session(
+                db=db,
+                owner_id=user.id,
+                session=session,
+            )
+        )
+
+        assert result.ok is False
+        assert result.exit_code == 7
+        assert result.error == "interrupt failed"
+        assert result.stderr == "interrupt failed"
 
 
 def test_await_managed_local_turn_events_returns_new_persisted_events(tmp_path):
@@ -829,7 +917,9 @@ def test_send_text_to_managed_local_session_verifies_claude_channel_bridge_via_p
     )
     monkeypatch.setattr(
         "zerg.services.managed_local_control.await_managed_local_hook_phase_update",
-        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("hook phase verification should not run for native Claude")),
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("hook phase verification should not run for native Claude")
+        ),
     )
 
     with SessionLocal() as db:
