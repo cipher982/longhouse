@@ -100,6 +100,7 @@ def build_session_runtime_display_response(
         is_executing=display.is_executing,
         needs_attention=display.needs_attention,
         is_idle=display.is_idle,
+        is_stalled=display.is_stalled,
         heuristic_active=display.heuristic_active,
         is_managed_local_truth=display.is_managed_local_truth,
         has_signal=display.has_signal,
@@ -186,6 +187,7 @@ class SessionRuntimeDisplayResponse(BaseModel):
     is_executing: bool = Field(False, description="True when the agent is thinking or running a tool")
     needs_attention: bool = Field(False, description="True when the user should respond or approve")
     is_idle: bool = Field(False, description="True when the runtime is ready for the next prompt")
+    is_stalled: bool = Field(False, description="True when a managed live phase has gone stale without an active tool")
     heuristic_active: bool = Field(False, description="True when activity is inferred from recent progress")
     is_managed_local_truth: bool = Field(False, description="True when runtime truth is from a managed-local control path")
     has_signal: bool = Field(False, description="True when clients should render runtime state")

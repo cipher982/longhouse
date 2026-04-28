@@ -296,6 +296,46 @@ describe("resolveSessionRuntimeState", () => {
     expect(resolveSessionStatusLabel(runtime)).toBe("Disconnected");
   });
 
+  it("labels server-detected managed stalls without treating them as active work", () => {
+    const runtime = resolveSessionRuntimeState(
+      makeSession({
+        presence_state: "thinking",
+        runtime_display: {
+          truth_tier: "stale",
+          state: "stalled",
+          tone: "stalled",
+          headline: "Stalled",
+          detail: "No provider progress",
+          phase_label: "Stalled",
+          compact_tool_label: null,
+          is_live: false,
+          is_executing: false,
+          needs_attention: true,
+          is_idle: false,
+          is_stalled: true,
+          heuristic_active: false,
+          is_managed_local_truth: false,
+          has_signal: true,
+          control_path: "managed",
+          activity_recency: "stale",
+          lifecycle: "open",
+          host_state: "unknown",
+          terminal_reason: null,
+        },
+      }),
+    );
+
+    expect(runtime.presenceState).toBe("stalled");
+    expect(runtime.isStalled).toBe(true);
+    expect(runtime.isExecuting).toBe(false);
+    expect(runtime.tone).toBe("stalled");
+    expect(resolveSessionStatusLabel(runtime)).toBe("Stalled");
+    expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
+      headline: "Stalled",
+      detail: "No provider progress",
+    });
+  });
+
   it("keeps stale unmanaged sessions stale even when the host is online", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({

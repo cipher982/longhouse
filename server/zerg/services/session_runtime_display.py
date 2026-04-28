@@ -15,7 +15,7 @@ from zerg.services.session_capabilities import SessionCapabilityFlags
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.session_execution_home import SessionExecutionHome
 
-KNOWN_PRESENCE_STATES = {"thinking", "running", "idle", "needs_user", "blocked"}
+KNOWN_PRESENCE_STATES = {"thinking", "running", "idle", "needs_user", "blocked", "stalled"}
 LIVE_EXECUTION_STATES = {"thinking", "running"}
 ATTENTION_STATES = {"needs_user", "blocked"}
 LEGACY_PROGRESS_STATUSES = {"working", "active"}
@@ -34,6 +34,7 @@ class SessionRuntimeDisplay:
     is_executing: bool
     needs_attention: bool
     is_idle: bool
+    is_stalled: bool
     heuristic_active: bool
     is_managed_local_truth: bool
     has_signal: bool
@@ -185,6 +186,8 @@ def _tone(
     heuristic_active: bool,
     is_idle: bool,
 ) -> str:
+    if presence_state == "stalled":
+        return "stalled"
     if presence_state == "blocked":
         return "blocked"
     if presence_state == "needs_user":
@@ -317,6 +320,21 @@ def build_session_runtime_display(
     # Phase 2 of session-liveness-honesty: three-axis projection.
     terminal_state = runtime_view.terminal_state
     control_path = _derive_control_path(capabilities)
+    is_stalled = (
+        control_path == "managed"
+        and terminal_state is None
+        and presence_state in LIVE_EXECUTION_STATES
+        and confidence == "stale"
+        and not (tool_name or "").strip()
+    )
+    if is_stalled:
+        presence_state = "stalled"
+        phase_label = "Stalled"
+        headline = "Stalled"
+        detail = "No provider progress"
+        is_executing = False
+        needs_attention = True
+        is_idle = False
     activity_recency = _derive_activity_recency(
         presence_state=presence_state,
         confidence=confidence,
@@ -359,6 +377,7 @@ def build_session_runtime_display(
         is_executing=is_executing,
         needs_attention=needs_attention,
         is_idle=is_idle,
+        is_stalled=is_stalled,
         heuristic_active=heuristic_active,
         is_managed_local_truth=truth_tier == "managed-local",
         has_signal=has_signal,

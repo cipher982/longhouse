@@ -176,6 +176,97 @@ def test_three_axis_fields_managed_live_running():
     assert display.lifecycle == "open"
 
 
+def test_managed_stale_thinking_without_active_tool_is_stalled():
+    display = build_session_runtime_display(
+        runtime_view=_runtime_view(
+            runtime_phase="thinking",
+            runtime_source="managed_local_transport",
+            status="working",
+            presence_state="thinking",
+            presence_tool=None,
+            active_tool=None,
+            confidence="stale",
+            display_phase="Thinking",
+            last_live_at=datetime(2026, 4, 26, 11, 0, tzinfo=timezone.utc),
+        ),
+        capabilities=_capabilities(managed=True),
+        ended_at=None,
+    )
+
+    assert display.control_path == "managed"
+    assert display.is_stalled is True
+    assert display.state == "stalled"
+    assert display.tone == "stalled"
+    assert display.headline == "Stalled"
+    assert display.detail == "No provider progress"
+    assert display.phase_label == "Stalled"
+    assert display.is_executing is False
+    assert display.needs_attention is True
+    assert display.activity_recency == "stale"
+    assert display.lifecycle == "open"
+
+
+def test_managed_stale_running_with_active_tool_is_not_stalled():
+    display = build_session_runtime_display(
+        runtime_view=_runtime_view(
+            runtime_phase="running",
+            runtime_source="managed_local_transport",
+            status="working",
+            presence_state="running",
+            presence_tool="bash",
+            active_tool="bash",
+            confidence="stale",
+            display_phase="Running bash",
+            last_live_at=datetime(2026, 4, 26, 11, 0, tzinfo=timezone.utc),
+        ),
+        capabilities=_capabilities(managed=True),
+        ended_at=None,
+    )
+
+    assert display.is_stalled is False
+    assert display.state == "running"
+    assert display.compact_tool_label == "Shell"
+    assert display.is_executing is True
+
+
+def test_unmanaged_stale_thinking_without_active_tool_is_not_stalled():
+    display = build_session_runtime_display(
+        runtime_view=_runtime_view(
+            runtime_phase="thinking",
+            runtime_source="managed_local_transport",
+            status="working",
+            presence_state="thinking",
+            confidence="stale",
+            display_phase="Thinking",
+        ),
+        capabilities=_capabilities(managed=False),
+        ended_at=None,
+    )
+
+    assert display.control_path == "unmanaged"
+    assert display.is_stalled is False
+    assert display.state == "thinking"
+
+
+def test_managed_live_thinking_without_active_tool_is_not_stalled():
+    display = build_session_runtime_display(
+        runtime_view=_runtime_view(
+            runtime_phase="thinking",
+            runtime_source="managed_local_transport",
+            status="working",
+            presence_state="thinking",
+            confidence="live",
+            display_phase="Thinking",
+        ),
+        capabilities=_capabilities(managed=True),
+        ended_at=None,
+    )
+
+    assert display.is_stalled is False
+    assert display.state == "thinking"
+    assert display.activity_recency == "live"
+
+
 def test_three_axis_fields_closed_with_explicit_terminal():
     display = build_session_runtime_display(
         runtime_view=_runtime_view(

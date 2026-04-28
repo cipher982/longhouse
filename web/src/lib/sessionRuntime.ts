@@ -4,9 +4,9 @@ import type {
   SessionRuntimeDisplay,
 } from "../services/api/agents";
 
-export type KnownPresenceState = "thinking" | "running" | "idle" | "needs_user" | "blocked";
+export type KnownPresenceState = "thinking" | "running" | "idle" | "needs_user" | "blocked" | "stalled";
 export type RuntimeTruthTier = "none" | "stale" | "inferred" | "fresh" | "managed-local";
-export type RuntimeTone = "inactive" | "thinking" | "running" | "needs-user" | "blocked" | "idle" | "inferred";
+export type RuntimeTone = "inactive" | "thinking" | "running" | "needs-user" | "blocked" | "stalled" | "idle" | "inferred";
 
 type TimelineRuntimeOverlay = {
   timeline_anchor_at?: string | null;
@@ -65,6 +65,7 @@ export interface SessionRuntimeState {
   isExecuting: boolean;
   needsAttention: boolean;
   isIdle: boolean;
+  isStalled: boolean;
   heuristicActive: boolean;
   isManagedLocalTruth: boolean;
   hasSignal: boolean;
@@ -99,6 +100,9 @@ export function resolveSessionStatusLabel(
 
   const controlPath = display?.control_path ?? fallbackControlPath;
   if (controlPath === "managed") {
+    if (runtime.isStalled || runtime.presenceState === "stalled") {
+      return "Stalled";
+    }
     if (runtime.presenceState === "running" || runtime.presenceState === "thinking") {
       return "Working";
     }
@@ -148,7 +152,8 @@ export function normalizePresenceState(state: string | null | undefined): KnownP
     state === "running" ||
     state === "idle" ||
     state === "needs_user" ||
-    state === "blocked"
+    state === "blocked" ||
+    state === "stalled"
   ) {
     return state;
   }
@@ -246,6 +251,9 @@ function getDisplayPhase(
   if (presenceState === "blocked") {
     return presenceTool ? `Blocked on ${presenceTool}` : "Needs permission";
   }
+  if (presenceState === "stalled") {
+    return "Stalled";
+  }
   if (presenceState === "idle") {
     return "Idle";
   }
@@ -270,6 +278,9 @@ function getTone(
     isIdle: boolean;
   },
 ): SessionRuntimeState["tone"] {
+  if (presenceState === "stalled") {
+    return "stalled";
+  }
   if (presenceState === "blocked") {
     return "blocked";
   }
@@ -297,7 +308,7 @@ export function resolveSessionRuntimeState(
   const serverDisplay = session.runtime_display ?? null;
   const sessionTruthTier = getRuntimeTruthTier(session);
   const status = session.status ?? null;
-  const presenceState = normalizePresenceState(session.presence_state ?? null);
+  const presenceState = normalizePresenceState(serverDisplay?.state ?? session.presence_state ?? null);
   const presenceTool =
     session.active_tool ??
     session.presence_tool ??
@@ -312,10 +323,11 @@ export function resolveSessionRuntimeState(
 
   const heuristicActive = serverDisplay?.heuristic_active ?? isProgressFallback({ status, confidence, runtimeSource, presenceState });
   const isExecuting = serverDisplay?.is_executing ?? (presenceState === "thinking" || presenceState === "running");
-  const needsAttention = serverDisplay?.needs_attention ?? (presenceState === "needs_user" || presenceState === "blocked");
+  const needsAttention = serverDisplay?.needs_attention ?? (presenceState === "needs_user" || presenceState === "blocked" || presenceState === "stalled");
 
   const isLive = serverDisplay?.is_live ?? isExecuting;
   const isIdle = serverDisplay?.is_idle ?? (presenceState === "idle" || (!isExecuting && !needsAttention && !heuristicActive && status === "idle"));
+  const isStalled = serverDisplay?.is_stalled ?? presenceState === "stalled";
   const hasSignal = serverDisplay?.has_signal ?? (truthTier !== "none" || presenceState != null || status != null || lastLiveAt != null);
 
   const displayPhase =
@@ -343,6 +355,7 @@ export function resolveSessionRuntimeState(
     isExecuting,
     needsAttention,
     isIdle,
+    isStalled,
     heuristicActive,
     isManagedLocalTruth: serverDisplay?.is_managed_local_truth ?? truthTier === "managed-local",
     hasSignal,
@@ -371,6 +384,7 @@ function normalizeRuntimeTone(value: string | null | undefined): RuntimeTone | n
     value === "running" ||
     value === "needs-user" ||
     value === "blocked" ||
+    value === "stalled" ||
     value === "idle" ||
     value === "inferred"
   ) {
