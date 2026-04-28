@@ -9,22 +9,45 @@ interface CodeBlockProps {
 export function CodeBlock({ children, title }: CodeBlockProps) {
   const [copied, setCopied] = useState(false);
 
-  const handleCopy = async () => {
-    try {
-      const command = children.trim();
-      await navigator.clipboard.writeText(command);
-      if (command.includes("get.longhouse.ai/install.sh") || command.includes("longhouse connect --install")) {
-        trackAcquisitionEvent("docs_command_copy", {
-          surface: "docs",
-          command: command.includes("get.longhouse.ai/install.sh") ? "install_sh" : "connect_install",
-          title: title ?? null,
-        });
+  const copyToClipboard = async (text: string): Promise<boolean> => {
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch {
+        // Fall through to the legacy path for restricted clipboard contexts.
       }
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      /* clipboard not available */
     }
+
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+      return document.execCommand("copy");
+    } finally {
+      document.body.removeChild(textarea);
+    }
+  };
+
+  const handleCopy = async () => {
+    const command = children.trim();
+    const copiedCommand = await copyToClipboard(command);
+    if (!copiedCommand) {
+      return;
+    }
+    if (command.includes("get.longhouse.ai/install.sh") || command.includes("longhouse connect --install")) {
+      trackAcquisitionEvent("docs_command_copy", {
+        surface: "docs",
+        command: command.includes("get.longhouse.ai/install.sh") ? "install_sh" : "connect_install",
+        title: title ?? null,
+      });
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   return (

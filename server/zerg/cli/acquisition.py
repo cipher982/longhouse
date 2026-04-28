@@ -59,19 +59,20 @@ def _installed_version() -> str | None:
         return None
 
 
-def _post(payload: dict[str, Any]) -> None:
+def _post(payload: dict[str, Any]) -> bool:
     endpoint = os.getenv("LONGHOUSE_TELEMETRY_ENDPOINT", DEFAULT_TELEMETRY_ENDPOINT).strip()
     if not endpoint:
-        return
+        return False
     try:
-        httpx.post(
+        response = httpx.post(
             endpoint,
             json=payload,
             timeout=1.5,
             headers={"User-Agent": f"longhouse-cli/{payload.get('version') or 'unknown'}"},
         )
+        return 200 <= response.status_code < 300
     except Exception:
-        return
+        return False
 
 
 def emit_acquisition_event(
@@ -85,9 +86,9 @@ def emit_acquisition_event(
     channel: str | None = None,
     props: dict[str, Any] | None = None,
     background: bool = True,
-) -> None:
+) -> bool:
     if not telemetry_enabled():
-        return
+        return False
 
     payload = {
         "event_name": event_name,
@@ -107,11 +108,15 @@ def emit_acquisition_event(
 
     if background:
         threading.Thread(target=_post, args=(payload,), daemon=True).start()
+        return True
     else:
-        _post(payload)
+        return _post(payload)
 
 
 def emit_acquisition_event_once(event_key: str, event_name: str, **kwargs: Any) -> None:
+    if not telemetry_enabled():
+        return
+
     path = _once_marker_path()
     try:
         if path.exists():
@@ -120,7 +125,8 @@ def emit_acquisition_event_once(event_key: str, event_name: str, **kwargs: Any) 
             seen = set()
         if event_key in seen:
             return
-        emit_acquisition_event(event_name, **kwargs)
+        if not emit_acquisition_event(event_name, **{**kwargs, "background": False}):
+            return
         seen.add(event_key)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(sorted(seen), indent=2) + "\n", encoding="utf-8")

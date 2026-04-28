@@ -693,6 +693,7 @@ jobs:
           wheel="$(ls "$work"/longhouse-*-py3-none-any.whl | head -1)"
           echo "Installing $wheel"
           uv tool install --force --no-cache "$wheel"
+          echo "LONGHOUSE_VERIFY_WHEEL=$wheel" >> "$GITHUB_ENV"
 
       - name: Verify installed CLI version matches release tag
         run: |
@@ -718,7 +719,7 @@ jobs:
           # Drive the wheel's own runtime-artifact fetcher. This proves the
           # engine URL derived from the wheel's version resolves to a real
           # asset on this release.
-          uv tool run --from longhouse python - <<'PY'
+          uv tool run --from "$LONGHOUSE_VERIFY_WHEEL" python - <<'PY'
           from zerg.services.runtime_artifacts import ensure_runtime_binary, RuntimeComponent
           result = ensure_runtime_binary(RuntimeComponent.ENGINE)
           print("engine path:", result.path)
