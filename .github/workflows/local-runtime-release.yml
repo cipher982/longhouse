@@ -33,10 +33,7 @@ jobs:
           ref: ${{ env.RELEASE_TAG }}
 
       - name: Generate build identity
-        env:
-          GITHUB_REF: refs/tags/${{ env.RELEASE_TAG }}
-          GITHUB_SHA: ""
-        run: python3 scripts/build/generate_build_identity.py
+        run: env -u GITHUB_SHA GITHUB_REF="refs/tags/${RELEASE_TAG}" python3 scripts/build/generate_build_identity.py
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -74,10 +71,7 @@ jobs:
           ref: ${{ env.RELEASE_TAG }}
 
       - name: Generate build identity
-        env:
-          GITHUB_REF: refs/tags/${{ env.RELEASE_TAG }}
-          GITHUB_SHA: ""
-        run: python3 scripts/build/generate_build_identity.py
+        run: env -u GITHUB_SHA GITHUB_REF="refs/tags/${RELEASE_TAG}" python3 scripts/build/generate_build_identity.py
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -117,10 +111,7 @@ jobs:
           ref: ${{ env.RELEASE_TAG }}
 
       - name: Generate build identity
-        env:
-          GITHUB_REF: refs/tags/${{ env.RELEASE_TAG }}
-          GITHUB_SHA: ""
-        run: python3 scripts/build/generate_build_identity.py
+        run: env -u GITHUB_SHA GITHUB_REF="refs/tags/${RELEASE_TAG}" python3 scripts/build/generate_build_identity.py
 
       - name: Classify release tier
         id: release_tier
