@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from datetime import datetime
 from datetime import timedelta
@@ -57,6 +58,7 @@ MAX_MANAGED_SESSION_LEASE_TTL_MS = 60 * 60 * 1000
 MANAGED_SESSION_LEASE_STATES = {"attached", "detached", "degraded"}
 MANAGED_SESSION_LEASE_PHASES = {"idle", "thinking", "running", "blocked", "needs_user", "none"}
 MANAGED_SESSION_LEASE_PROVIDERS = {"codex", "claude", "gemini"}
+CODEX_ROLLOUT_ID_RE = re.compile(r"^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-(.+)$")
 
 
 class UnmanagedSessionBindingIn(UTCBaseModel):
@@ -138,6 +140,22 @@ def _managed_session_phase(lease: ManagedSessionLeaseIn) -> str:
 def _managed_lease_provider_label(lease: ManagedSessionLeaseIn) -> str:
     provider = (lease.provider or "").strip().lower()
     return provider if provider in MANAGED_SESSION_LEASE_PROVIDERS else "other"
+
+
+def _normalize_unmanaged_provider_session_id(provider: str, provider_session_id: str) -> str:
+    """Normalize machine-scanner transcript identifiers to runtime session ids.
+
+    Codex rollout filenames include the timestamp prefix
+    ``rollout-YYYY-MM-DDTHH-MM-SS-`` while ingested sessions store only the
+    provider UUID suffix. New engines normalize before sending; the Runtime
+    Host repeats the normalization so older engines still link.
+    """
+    value = (provider_session_id or "").strip()
+    if provider == "codex":
+        match = CODEX_ROLLOUT_ID_RE.match(value)
+        if match:
+            return match.group(1)
+    return value
 
 
 def _managed_lease_state_label(lease: ManagedSessionLeaseIn) -> str:
@@ -273,7 +291,8 @@ def _upsert_unmanaged_session_bindings(
     for binding in bindings:
         machine = (binding.machine_id or "").strip()
         provider = (binding.provider or "").strip().lower()
-        session_key = (binding.provider_session_id or "").strip()
+        raw_session_key = (binding.provider_session_id or "").strip()
+        session_key = _normalize_unmanaged_provider_session_id(provider, raw_session_key)
         if not machine or not provider or not session_key:
             continue
 
@@ -286,6 +305,16 @@ def _upsert_unmanaged_session_bindings(
             )
             .first()
         )
+        if existing is None and raw_session_key and raw_session_key != session_key:
+            existing = (
+                db.query(UnmanagedSessionBinding)
+                .filter(
+                    UnmanagedSessionBinding.machine_id == machine,
+                    UnmanagedSessionBinding.provider == provider,
+                    UnmanagedSessionBinding.provider_session_id == raw_session_key,
+                )
+                .first()
+            )
 
         # Soft-link to agent_sessions by (provider, provider_session_id).
         linked_session_id = None

@@ -17,6 +17,7 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from types import SimpleNamespace
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
@@ -24,6 +25,7 @@ from sqlalchemy.orm import sessionmaker
 from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.models.agents import AgentHeartbeat
+from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentsBase
 
 # ---------------------------------------------------------------------------
@@ -343,6 +345,155 @@ def test_heartbeat_accepts_unmanaged_session_bindings(tmp_path):
             row = rows[0]
             assert row.pid == 5678
             assert row.source_offset == 250
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_heartbeat_normalizes_codex_rollout_binding_ids(tmp_path):
+    """Older engines may send Codex rollout filename stems. The runtime stores
+    only the Codex UUID suffix, so heartbeat ingest must normalize before
+    linking the unmanaged binding to the session row."""
+    from zerg.models.agents import UnmanagedSessionBinding
+
+    SessionLocal = _make_db(tmp_path)
+    client, api_app_ref = _make_client(SessionLocal)
+    provider_session_id = "019dc0f3-fb30-71e3-b0fd-2085e7d045a8"
+    rollout_id = f"rollout-2026-04-24T16-25-08-{provider_session_id}"
+
+    try:
+        with SessionLocal() as db:
+            session = AgentSession(
+                id=uuid4(),
+                provider="codex",
+                environment="laptop",
+                started_at=datetime(2026, 4, 27, 10, 0, tzinfo=timezone.utc),
+                last_activity_at=datetime(2026, 4, 27, 10, 5, tzinfo=timezone.utc),
+                provider_session_id=provider_session_id,
+                thread_root_session_id=None,
+                user_messages=0,
+                assistant_messages=0,
+                tool_calls=0,
+                is_writable_head=1,
+            )
+            db.add(session)
+            db.commit()
+            session_id = session.id
+
+        response = client.post(
+            "/api/agents/heartbeat",
+            json={
+                "version": "0.6.0",
+                "daemon_pid": 1,
+                "spool_pending_count": 0,
+                "parse_error_count_1h": 0,
+                "consecutive_ship_failures": 0,
+                "disk_free_bytes": 0,
+                "is_offline": False,
+                "unmanaged_session_bindings": [
+                    {
+                        "machine_id": "cinder",
+                        "provider": "codex",
+                        "provider_session_id": rollout_id,
+                        "source_path": f"/Users/x/.codex/sessions/{rollout_id}.jsonl",
+                        "pid": 1234,
+                        "process_start_time": "2026-04-27T10:00:00Z",
+                        "source_offset": 100,
+                        "source_mtime": "2026-04-27T10:05:00Z",
+                        "observed_at": "2026-04-27T10:05:00Z",
+                    }
+                ],
+            },
+        )
+        assert response.status_code == 204, response.text
+
+        with SessionLocal() as db:
+            rows = db.query(UnmanagedSessionBinding).all()
+            assert len(rows) == 1
+            row = rows[0]
+            assert row.provider == "codex"
+            assert row.provider_session_id == provider_session_id
+            assert row.session_id == session_id
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_heartbeat_migrates_existing_codex_rollout_binding_row(tmp_path):
+    """If an older runtime already stored the rollout-prefixed identity, the
+    next normalized heartbeat should rewrite that row instead of creating a
+    duplicate."""
+    from zerg.models.agents import UnmanagedSessionBinding
+
+    SessionLocal = _make_db(tmp_path)
+    client, api_app_ref = _make_client(SessionLocal)
+    provider_session_id = "019dc0f3-fb30-71e3-b0fd-2085e7d045a8"
+    rollout_id = f"rollout-2026-04-24T16-25-08-{provider_session_id}"
+    observed_at = datetime(2026, 4, 27, 10, 5, tzinfo=timezone.utc)
+
+    try:
+        with SessionLocal() as db:
+            session = AgentSession(
+                id=uuid4(),
+                provider="codex",
+                environment="laptop",
+                started_at=datetime(2026, 4, 27, 10, 0, tzinfo=timezone.utc),
+                last_activity_at=observed_at,
+                provider_session_id=provider_session_id,
+                thread_root_session_id=None,
+                user_messages=0,
+                assistant_messages=0,
+                tool_calls=0,
+                is_writable_head=1,
+            )
+            db.add(session)
+            db.add(
+                UnmanagedSessionBinding(
+                    machine_id="cinder",
+                    device_id="testclient",
+                    provider="codex",
+                    provider_session_id=rollout_id,
+                    session_id=None,
+                    pid=1000,
+                    observed_at=observed_at,
+                    last_seen_at=observed_at,
+                    binding_state="observed",
+                )
+            )
+            db.commit()
+            session_id = session.id
+
+        response = client.post(
+            "/api/agents/heartbeat",
+            json={
+                "version": "0.6.0",
+                "daemon_pid": 1,
+                "spool_pending_count": 0,
+                "parse_error_count_1h": 0,
+                "consecutive_ship_failures": 0,
+                "disk_free_bytes": 0,
+                "is_offline": False,
+                "unmanaged_session_bindings": [
+                    {
+                        "machine_id": "cinder",
+                        "provider": "codex",
+                        "provider_session_id": rollout_id,
+                        "pid": 1234,
+                        "process_start_time": "2026-04-27T10:00:00Z",
+                        "source_offset": 100,
+                        "source_mtime": "2026-04-27T10:05:00Z",
+                        "observed_at": "2026-04-27T10:05:00Z",
+                    }
+                ],
+            },
+        )
+        assert response.status_code == 204, response.text
+
+        with SessionLocal() as db:
+            rows = db.query(UnmanagedSessionBinding).all()
+            assert len(rows) == 1
+            row = rows[0]
+            assert row.provider_session_id == provider_session_id
+            assert row.session_id == session_id
+            assert row.pid == 1234
     finally:
         api_app_ref.dependency_overrides = {}
 
