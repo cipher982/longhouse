@@ -109,13 +109,8 @@ export function SessionCard({
     runtime.runtimeDisplay?.control_path === "managed" ||
     runtime.runtimeDisplay?.control_path === "unmanaged";
   const showRuntimePill = !isClosedSession && (runtime.hasSignal || hasRuntimeAxes);
-  const showOwnershipPill = true;
-  const showStatusRow = showOwnershipPill || isClosedSession || showRuntimePill;
   // Outcome labels are semantic summaries; keep their chips neutral across runtime sources.
-  const runtimePillTone =
-    runtimePhaseLabel === "Active" || runtimePhaseLabel === "Process seen"
-      ? "active"
-      : runtime.tone;
+  const runtimePillTone = runtimePhaseLabel === "Active" ? "active" : runtime.tone;
   const cardClassName = [
     "session-card",
     confirming ? "session-card--confirming" : "",
@@ -209,56 +204,52 @@ export function SessionCard({
             </div>
           </div>
 
-          {showStatusRow && (
-            <div className="session-card-status">
-              {showOwnershipPill ? (
-                <span
-                  className={`session-card-ownership-pill session-card-ownership-pill--${ownershipTone}`}
-                  data-testid="session-card-ownership"
-                  title={
-                    ownershipLabel === "Managed"
-                      ? "Longhouse owns the live control path for this session."
-                      : "Longhouse imported or discovered this session without a live control path."
-                  }
-                >
-                  {ownershipLabel}
-                </span>
-              ) : null}
-              {isClosedSession ? (
-                <span
-                  className="session-card-closed-pill"
-                  data-testid="session-card-closed-state"
-                  title="This process is closed."
-                >
-                  Closed
-                </span>
-              ) : null}
-              {showRuntimePill && (
-                <div
-                  className={`session-card-runtime session-card-runtime--${runtimePillTone}`}
-                  data-testid="session-card-runtime"
-                >
-                  {runtimePhaseLabel === "Active" ? (
-                    <span className="session-card-runtime-dot" aria-hidden="true" />
-                  ) : (
-                    <PresenceBadge
-                      state={runtime.presenceState}
-                      tool={runtime.presenceTool}
-                      compact
-                      heuristicActive={runtime.heuristicActive}
-                      showUnknown={runtime.truthTier === "stale"}
-                    />
-                  )}
-                  <span className="session-card-runtime-phase">{runtimePhaseLabel}</span>
-                  {cardRuntimeMetaParts.length > 0 && (
-                    <span className="session-card-runtime-meta">
-                      {cardRuntimeMetaParts.join(" • ")}
-                    </span>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
+          <div className="session-card-status">
+            <span
+              className={`session-card-ownership-pill session-card-ownership-pill--${ownershipTone}`}
+              data-testid="session-card-ownership"
+              title={
+                ownershipLabel === "Managed"
+                  ? "Longhouse owns the live control path for this session."
+                  : "Longhouse imported or discovered this session without a live control path."
+              }
+            >
+              {ownershipLabel}
+            </span>
+            {isClosedSession ? (
+              <span
+                className="session-card-closed-pill"
+                data-testid="session-card-closed-state"
+                title="This process is closed."
+              >
+                Closed
+              </span>
+            ) : null}
+            {showRuntimePill && (
+              <div
+                className={`session-card-runtime session-card-runtime--${runtimePillTone}`}
+                data-testid="session-card-runtime"
+              >
+                {runtimePhaseLabel === "Active" ? (
+                  <span className="session-card-runtime-dot" aria-hidden="true" />
+                ) : (
+                  <PresenceBadge
+                    state={runtime.presenceState}
+                    tool={runtime.presenceTool}
+                    compact
+                    heuristicActive={runtime.heuristicActive}
+                    showUnknown={runtime.truthTier === "stale"}
+                  />
+                )}
+                <span className="session-card-runtime-phase">{runtimePhaseLabel}</span>
+                {cardRuntimeMetaParts.length > 0 && (
+                  <span className="session-card-runtime-meta">
+                    {cardRuntimeMetaParts.join(" • ")}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="session-card-body">

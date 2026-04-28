@@ -118,9 +118,6 @@ export function resolveSessionStatusLabel(
   }
 
   if (controlPath === "unmanaged") {
-    if (display?.host_state === "online") {
-      return "Process seen";
-    }
     if (display?.activity_recency === "live" || runtime.isExecuting || runtime.needsAttention || runtime.heuristicActive) {
       return "Active";
     }
@@ -129,6 +126,9 @@ export function resolveSessionStatusLabel(
     }
     if (display?.activity_recency === "stale") {
       return "Stale";
+    }
+    if (display?.host_state === "online") {
+      return "Host online";
     }
     return "Unknown";
   }

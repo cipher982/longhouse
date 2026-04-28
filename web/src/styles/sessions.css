@@ -740,8 +740,7 @@
     text-overflow: ellipsis;
   }
 
-  .session-card-ownership-pill,
-  .session-card-capability-pill {
+  .session-card-ownership-pill {
     font-size: 10px;
     font-weight: var(--font-weight-semibold);
     line-height: 1;
@@ -751,11 +750,6 @@
     background: var(--surface-glass-2);
     color: var(--color-text-muted);
     border: 1px solid var(--border-glass-1);
-  }
-
-  .session-card-capability-pill {
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
   }
 
   .session-card-ownership-pill {
@@ -778,12 +772,6 @@
     box-shadow: inset 0 1px 0 rgba(243, 234, 217, 0.05);
   }
 
-  .session-card-capability-pill--success {
-    background: color-mix(in srgb, var(--color-intent-success) 15%, transparent);
-    color: var(--color-intent-success);
-    border-color: color-mix(in srgb, var(--color-intent-success) 30%, transparent);
-  }
-
   .session-card-ownership-pill--success {
     background: color-mix(in srgb, var(--color-intent-success) 13%, transparent);
     color: color-mix(in srgb, var(--color-intent-success) 88%, var(--color-text-primary));
@@ -794,12 +782,6 @@
     background: color-mix(in srgb, var(--color-text-secondary) 10%, transparent);
     color: color-mix(in srgb, var(--color-text-secondary) 84%, transparent);
     border-color: color-mix(in srgb, var(--color-text-secondary) 24%, transparent);
-  }
-
-  .session-card-capability-pill--warning {
-    background: color-mix(in srgb, #fbbf24 12%, transparent);
-    color: #fbbf24;
-    border-color: color-mix(in srgb, #fbbf24 28%, transparent);
   }
 
   /* Secondary: what was done — summary title or first user message */
@@ -1009,7 +991,6 @@
     }
 
     .session-card-ownership-pill,
-    .session-card-capability-pill,
     .session-card-closed-pill {
       font-size: 9px;
       padding: 2px 5px;

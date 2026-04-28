@@ -296,7 +296,7 @@ describe("resolveSessionRuntimeState", () => {
     expect(resolveSessionStatusLabel(runtime)).toBe("Disconnected");
   });
 
-  it("labels unmanaged process-scanner matches as process seen", () => {
+  it("keeps stale unmanaged sessions stale even when the host is online", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({
         runtime_display: {
@@ -324,6 +324,37 @@ describe("resolveSessionRuntimeState", () => {
     );
 
     expect(resolveSessionOwnershipLabel(runtime)).toBe("Unmanaged");
-    expect(resolveSessionStatusLabel(runtime)).toBe("Process seen");
+    expect(resolveSessionStatusLabel(runtime)).toBe("Stale");
+  });
+
+  it("labels unmanaged online hosts without session activity as host online", () => {
+    const runtime = resolveSessionRuntimeState(
+      makeSession({
+        runtime_display: {
+          truth_tier: "fresh",
+          state: null,
+          tone: "inactive",
+          headline: "Inactive",
+          detail: null,
+          phase_label: "Recent",
+          compact_tool_label: null,
+          is_live: false,
+          is_executing: false,
+          needs_attention: false,
+          is_idle: false,
+          heuristic_active: false,
+          is_managed_local_truth: false,
+          has_signal: true,
+          control_path: "unmanaged",
+          activity_recency: "none",
+          lifecycle: "open",
+          host_state: "online",
+          terminal_reason: null,
+        },
+      }),
+    );
+
+    expect(resolveSessionOwnershipLabel(runtime)).toBe("Unmanaged");
+    expect(resolveSessionStatusLabel(runtime)).toBe("Host online");
   });
 });
