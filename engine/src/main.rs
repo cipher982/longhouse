@@ -18,6 +18,7 @@ mod shipping;
 mod shipping_stats;
 mod state;
 mod text;
+mod unmanaged_bindings;
 mod watcher;
 
 use std::path::PathBuf;
