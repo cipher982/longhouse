@@ -286,9 +286,13 @@ class TestClaudeShipping:
         )
 
     def test_session_metadata(self, server, tmp_path):
+        # Phase 4 of docs/specs/session-liveness-honesty.md: the engine no
+        # longer ships ended_at, and ingest no longer seeds it from the
+        # last-event timestamp. last_activity_at is the canonical recency
+        # field now; ended_at is null until a real terminal_signal lands.
         session = _get_session(server, CLAUDE_SESSION_ID)
         assert session["started_at"] is not None, "started_at must be set"
-        assert session["ended_at"] is not None, "ended_at must be set"
+        assert session["last_activity_at"] is not None, "last_activity_at must be set"
         assert session["user_messages"] >= 1
         assert session["assistant_messages"] >= 1
 
@@ -378,9 +382,11 @@ class TestGeminiShipping:
         assert timestamps == sorted(timestamps)
 
     def test_session_metadata(self, server, tmp_path):
+        # Phase 4: last_activity_at replaces ended_at as the "saw activity"
+        # field; ended_at only gets set on a real terminal_signal.
         session = _get_session(server, GEMINI_SESSION_ID)
         assert session["started_at"] is not None
-        assert session["ended_at"] is not None
+        assert session["last_activity_at"] is not None
 
     def test_reship_is_idempotent(self, server, tmp_path):
         events_before = _get_events(server, GEMINI_SESSION_ID)

@@ -161,7 +161,7 @@ test-install-runner: ## @internal Install-runner script tests
 
 test-hosted-instance: ## @internal Hosted-instance helper tests
 	@bash scripts/tests/hosted-instance-auth.test.sh
-	@bash scripts/tests/hosted-loop-debug.test.sh
+	@bash scripts/tests/hosted-session-debug.test.sh
 
 test-coolify-deploy: ## @internal Coolify deploy helper tests
 	@bash scripts/tests/coolify-deploy.test.sh
