@@ -413,11 +413,13 @@ async def interrupt_managed_local_session(
     commis_id: str | None = None,
     timeout_secs: int = 15,
 ) -> ManagedLocalInterruptResult:
-    """Interrupt the active turn on a managed-local session.
+    """Dispatch an interrupt request for the active managed-local turn.
 
     This is an explicit operator recovery primitive. It dispatches through the
     same runner/transport seam as live-send so callers do not need to know
-    whether the session is backed by Codex app-server or Claude channels.
+    whether the session is backed by Codex app-server or Claude channels. A
+    successful result means the interrupt command ran, not that the provider
+    has confirmed the turn stopped.
     """
 
     if str(getattr(session, "execution_home", "") or "").strip() != SessionExecutionHome.MANAGED_LOCAL.value:
