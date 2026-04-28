@@ -75,6 +75,7 @@ from zerg.services.startup_context import STARTUP_CONTEXT_MAX_DAYS_BACK
 from zerg.services.startup_context import STARTUP_CONTEXT_MAX_LIMIT
 from zerg.services.startup_context import load_startup_context_items
 from zerg.services.startup_context import render_startup_context
+from zerg.services.unmanaged_bindings import load_binding_overlay
 from zerg.utils.server_timing import ServerTimingRecorder
 from zerg.utils.time import UTCBaseModel
 
@@ -346,6 +347,7 @@ async def list_sessions(
             first_user_map = store.get_first_message_map([s.id for s in fused], role="user", max_len=80)
             sem_score_map = {s.id: score for s, score in sem_hits}
             thread_cache = store.batch_thread_meta(fused)
+            binding_overlay_map = load_binding_overlay(db, session_ids, now=now)
 
             response_sessions = [
                 build_session_response(
@@ -364,6 +366,7 @@ async def list_sessions(
                     match_snippet=(match_map.get(s.id) or {}).get("snippet") or semantic_snippet_map.get(str(s.id)),
                     match_role=(match_map.get(s.id) or {}).get("role"),
                     match_score=sem_score_map.get(s.id),
+                    binding_overlay=binding_overlay_map.get(s.id),
                 )
                 for s in fused
             ]
@@ -422,6 +425,7 @@ async def list_sessions(
         thread_cache = store.batch_thread_meta(sessions)
         now = datetime.now(timezone.utc)
         runtime_state_map = load_runtime_state_map(db, [session.id for session in sessions])
+        binding_overlay_map = load_binding_overlay(db, session_ids, now=now)
 
         response_sessions = [
             build_session_response(
@@ -437,6 +441,7 @@ async def list_sessions(
                 ),
                 first_user_message=first_user_map.get(s.id),
                 match_event_id=(match_map.get(s.id) or {}).get("event_id"),
+                binding_overlay=binding_overlay_map.get(s.id),
                 match_snippet=(match_map.get(s.id) or {}).get("snippet"),
                 match_role=(match_map.get(s.id) or {}).get("role"),
             )
@@ -988,6 +993,7 @@ async def get_session(
     now = datetime.now(timezone.utc)
     with timing.span("load_runtime"):
         runtime_state_map = load_runtime_state_map(db, [session.id])
+        binding_overlay_map = load_binding_overlay(db, [session.id], now=now)
     with timing.span("build_response"):
         result = build_session_response(
             store,
@@ -1000,6 +1006,7 @@ async def get_session(
                 now=now,
             ),
             first_user_message=first_user_map.get(session.id),
+            binding_overlay=binding_overlay_map.get(session.id),
         )
     timing.apply(response)
     return result
@@ -1038,6 +1045,7 @@ async def get_session_thread(
     now = datetime.now(timezone.utc)
     with timing.span("load_runtime"):
         runtime_state_map = load_runtime_state_map(db, [item.id for item in thread_sessions])
+        binding_overlay_map = load_binding_overlay(db, [item.id for item in thread_sessions], now=now)
 
     with timing.span("build_response"):
         result = SessionThreadResponse(
@@ -1056,6 +1064,7 @@ async def get_session_thread(
                         now=now,
                     ),
                     first_user_message=first_user_map.get(item.id),
+                    binding_overlay=binding_overlay_map.get(item.id),
                 )
                 for item in thread_sessions
             ],
@@ -1323,6 +1332,7 @@ async def get_session_workspace(
     now = datetime.now(timezone.utc)
     with timing.span("load_runtime"):
         runtime_state_map = load_runtime_state_map(db, [item.id for item in thread_sessions])
+        binding_overlay_map = load_binding_overlay(db, [item.id for item in thread_sessions], now=now)
     with timing.span("build_thread_responses"):
         thread_response_map = {
             str(item.id): build_session_response(
@@ -1337,6 +1347,7 @@ async def get_session_workspace(
                     now=now,
                 ),
                 first_user_message=first_user_map.get(item.id),
+                binding_overlay=binding_overlay_map.get(item.id),
             )
             for item in thread_sessions
         }
@@ -1355,6 +1366,7 @@ async def get_session_workspace(
                 now=now,
             ),
             first_user_message=first_user_map.get(session.id),
+            binding_overlay=binding_overlay_map.get(session.id),
         )
 
     active_context_boundary_cache: dict[UUID, int | None] = {}
