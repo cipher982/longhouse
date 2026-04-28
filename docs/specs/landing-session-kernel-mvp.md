@@ -152,7 +152,7 @@ See `docs/specs/launch-runtime-simplification.md` for the current launch framing
 
 - credit card required for first value
 - email verification required for local demo
-- Oikos is the main product boundary
+- a named assistant layer is the main product boundary
 - Longhouse is a custom agent harness competing with Claude/Codex/Gemini
 - hosted beta is more polished than it is
 - transcript shipping alone equals full remote control
@@ -177,7 +177,7 @@ Say this bluntly in docs and on the page:
 ### Nice to show lower on the page
 
 - recall / insights depth
-- Oikos as operator/deputy
+- proactive operator/deputy behavior
 - hosted convenience layer
 
 ### Roadmap only

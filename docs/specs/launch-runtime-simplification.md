@@ -27,7 +27,7 @@ The product **is**:
 
 **Longhouse turns real Claude/Codex runs into durable, controllable sessions.**
 
-That is the wedge. The important part is not just that the process survives. The important part is that the user, another agent, or Oikos can still **address and steer the session after launch**.
+That is the wedge. The important part is not just that the process survives. The important part is that the user or another agent can still **address and steer the session after launch**.
 
 ## Why This Needs Tightening
 
@@ -308,7 +308,7 @@ The launch story only works if capability truth is blunt.
 For launch, push the following down the page or out of the first impression:
 
 - broad "agent platform" language
-- Oikos as a primary noun
+- a named assistant layer as a primary noun
 - MCP as a setup requirement
 - abstract "agent memory" positioning
 - hosted control-plane complexity
@@ -356,7 +356,7 @@ Hosted should be explained as "we run the box," not as an entirely different ont
 
 ### Should work, but not hero
 
-- Oikos as an operator/deputy layer
+- proactive operator/deputy behavior
 - insights / recall depth
 - jobs / runner / broader orchestration
 - hosted provisioning flow
@@ -447,7 +447,7 @@ That beats both dashboard theater and remote-shell theater.
 3. Reframe `longhouse claude` / `longhouse codex` as "start through Longhouse" rather than implying a different species of session.
 4. Keep explicit Longhouse start commands as the supported control-ready path.
 5. Keep hosted as a convenience layer that can arrive later without changing the product truth.
-6. Keep Oikos out of the hero, but do show browser proof that a session can be messaged or continued after launch.
+6. Keep named assistant layers out of the hero, but do show browser proof that a session can be messaged or continued after launch.
 
 ## Summary
 

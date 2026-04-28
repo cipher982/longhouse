@@ -1,4 +1,4 @@
-"""Auto summarizer for oikos runs -> Memory Files."""
+"""Auto summarizer for run transcripts -> Memory Files."""
 
 from __future__ import annotations
 
@@ -102,8 +102,8 @@ async def _generate_summary(task: str, result_text: str) -> dict[str, Any] | Non
     if settings.testing or settings.llm_disabled or not settings.openai_api_key:
         return None
 
-    model = os.getenv("OIKOS_MEMORY_SUMMARY_MODEL", "gpt-5-mini")
-    reasoning_effort = os.getenv("OIKOS_MEMORY_SUMMARY_REASONING_EFFORT", "minimal")
+    model = os.getenv("LONGHOUSE_MEMORY_SUMMARY_MODEL", "gpt-5-mini")
+    reasoning_effort = os.getenv("LONGHOUSE_MEMORY_SUMMARY_REASONING_EFFORT", "minimal")
     base_url = os.getenv("OPENAI_BASE_URL")
 
     client_kwargs = {"api_key": settings.openai_api_key}

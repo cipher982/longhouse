@@ -95,7 +95,7 @@ class TraceDebugger:
                 events.append(
                     TimelineEvent(
                         timestamp=ts,
-                        event_type="oikos.run.started",
+                        event_type="run.started",
                         source="run",
                         details={
                             "run_id": run.id,
@@ -114,7 +114,7 @@ class TraceDebugger:
                 events.append(
                     TimelineEvent(
                         timestamp=ts,
-                        event_type=f"oikos.run.{run.status.value if run.status else 'finished'}",
+                        event_type=f"run.{run.status.value if run.status else 'finished'}",
                         source="run",
                         details={
                             "run_id": run.id,

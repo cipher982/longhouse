@@ -450,4 +450,4 @@ def test_blocked_notification_then_permission_request_sets_tool_name(client, tmp
     engine.dispose()
 
 
-# Oikos-related tests removed after Oikos subsystem deletion
+# Legacy assistant-subsystem tests removed after subsystem deletion

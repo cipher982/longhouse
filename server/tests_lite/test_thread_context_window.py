@@ -1,6 +1,6 @@
 """Regression tests for thread context window selection.
 
-Ensures Oikos/runtime-runner context loading uses the latest N thread messages
+Ensures runtime-runner context loading uses the latest N thread messages
 in chronological order, not the oldest N.
 """
 

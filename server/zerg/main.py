@@ -147,7 +147,6 @@ from zerg.routers.session_chat import agents_router as agents_session_chat_route
 from zerg.routers.session_chat import router as session_chat_router
 from zerg.routers.skills import router as skills_router
 from zerg.routers.stream import router as stream_router
-from zerg.routers.sync import router as sync_router
 from zerg.routers.system import router as system_router
 from zerg.routers.telemetry import admin_router as telemetry_admin_router
 from zerg.routers.telemetry import beacon_router as telemetry_beacon_router
@@ -266,7 +265,6 @@ api_app.include_router(auth_internal_router)
 api_app.include_router(oauth_router)
 api_app.include_router(users_router)
 api_app.include_router(contacts_router)
-api_app.include_router(sync_router)
 api_app.include_router(stream_router)
 api_app.include_router(system_router)
 api_app.include_router(email_config_router)

@@ -287,7 +287,7 @@ class RuntimeRunner:  # noqa: D401
         run_id: int | None = None,
         trace_id: str | None = None,
     ) -> Sequence[ThreadMessageModel]:
-        """Continue oikos execution after a single commis completion."""
+        """Continue runtime execution after a single commis completion."""
         from zerg.managers.message_builder import MessageArrayBuilder
         from zerg.types.messages import ToolMessage
 
@@ -354,7 +354,7 @@ class RuntimeRunner:  # noqa: D401
         run_id: int | None = None,
         trace_id: str | None = None,
     ) -> Sequence[ThreadMessageModel]:
-        """Continue oikos execution after ALL commiss complete (barrier pattern)."""
+        """Continue runtime execution after all commiss complete (barrier pattern)."""
         from zerg.managers.message_builder import MessageArrayBuilder
         from zerg.types.messages import ToolMessage
 

@@ -18,8 +18,8 @@ class ErrorType(str, Enum):
     PERMISSION_DENIED = "permission_denied"
     VALIDATION_ERROR = "validation_error"
     EXECUTION_ERROR = "execution_error"
-    # Oikos/commis specific
-    MISSING_CONTEXT = "missing_context"  # No credential or oikos context
+    # Runtime/commis specific
+    MISSING_CONTEXT = "missing_context"  # No credential or runtime context
     NOT_FOUND = "not_found"  # Job/file/artifact not found
     INVALID_STATE = "invalid_state"  # Job in wrong state for operation
 

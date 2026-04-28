@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 
 async def run_commis_job(job_id: int, *, session_factory=None) -> None:
-    """Execute a commis job end-to-end: workspace → hatch → ingest → resume Oikos.
+    """Execute a commis job end-to-end: workspace → hatch → ingest → resume the parent run.
 
     Fire-and-forget background task. Opens its own DB sessions to avoid holding
     connections during long-running subprocess execution.
@@ -50,7 +50,7 @@ async def run_commis_job(job_id: int, *, session_factory=None) -> None:
         task = job.task
         model = job.model
         config = job.config or {}
-        oikos_run_id = job.oikos_run_id
+        parent_run_id = job.parent_run_id
         tool_call_id = job.tool_call_id
 
     git_repo = config.get("git_repo")
@@ -122,9 +122,9 @@ async def run_commis_job(job_id: int, *, session_factory=None) -> None:
         if not job:
             return
         if job.status == "cancelled":
-            # Still need to resume Oikos so it doesn't hang
-            if oikos_run_id:
-                await _resume_oikos(oikos_run_id, tool_call_id, "Commis job was cancelled by user.", session_factory=session_factory)
+            # Still need to resume the parent run so it doesn't hang
+            if parent_run_id:
+                await _resume_parent_run(parent_run_id, tool_call_id, "Commis job was cancelled by user.", session_factory=session_factory)
             return
 
         job.finished_at = datetime.now(timezone.utc)
@@ -136,10 +136,10 @@ async def run_commis_job(job_id: int, *, session_factory=None) -> None:
         job.exit_code = result.exit_code if result else -1
         db.commit()
 
-    # 8. Resume Oikos if it was waiting
-    if oikos_run_id:
+    # 8. resume the parent run if it was waiting
+    if parent_run_id:
         result_text = _build_result_text(result)
-        await _resume_oikos(oikos_run_id, tool_call_id, result_text, session_factory=session_factory)
+        await _resume_parent_run(parent_run_id, tool_call_id, result_text, session_factory=session_factory)
 
 
 # ---------------------------------------------------------------------------
@@ -280,12 +280,12 @@ def _ingest_workspace_session(
 
 
 # ---------------------------------------------------------------------------
-# Oikos resume
+# Parent run resume
 # ---------------------------------------------------------------------------
 
 
 def _build_result_text(result: CloudExecutionResult | None) -> str:
-    """Build a human-readable result string for Oikos."""
+    """Build a human-readable result string for the parent run."""
     if not result:
         return "Commis job failed: unknown error"
     if result.status == "success":
@@ -294,8 +294,8 @@ def _build_result_text(result: CloudExecutionResult | None) -> str:
     return f"Commis failed: {result.error or 'unknown error'}"
 
 
-async def _resume_oikos(run_id: int, tool_call_id: str | None, result_text: str, *, session_factory=None) -> None:
-    """Resume an Oikos run that was waiting for this commis.
+async def _resume_parent_run(run_id: int, tool_call_id: str | None, result_text: str, *, session_factory=None) -> None:
+    """Resume a parent run that was waiting for this commis.
 
     Handles serial chaining: if the continuation spawns another commis
     (RunnerInterrupted), we go back to WAITING instead of failing.
@@ -320,7 +320,7 @@ async def _resume_oikos(run_id: int, tool_call_id: str | None, result_text: str,
                 # Fallback: find most recent commis job for this run
                 job = (
                     db.query(CommisJob)
-                    .filter(CommisJob.oikos_run_id == run_id, CommisJob.tool_call_id.isnot(None))
+                    .filter(CommisJob.parent_run_id == run_id, CommisJob.tool_call_id.isnot(None))
                     .order_by(CommisJob.created_at.desc())
                     .first()
                 )
@@ -367,7 +367,7 @@ async def _resume_oikos(run_id: int, tool_call_id: str | None, result_text: str,
                 if runner.usage_total_tokens is not None:
                     run.total_tokens = (run.total_tokens or 0) + runner.usage_total_tokens
                 db.commit()
-                logger.info("Oikos run %s re-interrupted during continuation (serial chain)", run_id)
+                logger.info("Parent run %s re-interrupted during continuation (serial chain)", run_id)
                 return
 
             run.status = RunStatus.SUCCESS
@@ -377,7 +377,7 @@ async def _resume_oikos(run_id: int, tool_call_id: str | None, result_text: str,
             db.commit()
 
     except Exception:
-        logger.exception("Failed to resume oikos run %s", run_id)
+        logger.exception("Failed to resume parent run %s", run_id)
         try:
             with db_session(session_factory) as db:
                 run = db.query(Run).filter(Run.id == run_id).first()

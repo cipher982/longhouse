@@ -45,14 +45,14 @@ class EventType(str, Enum):
     # Ops dashboard events
     BUDGET_DENIED = "budget_denied"
 
-    # Oikos/Commis events (Super Siri architecture)
-    OIKOS_STARTED = "oikos_started"
-    OIKOS_THINKING = "oikos_thinking"
-    OIKOS_TOKEN = "oikos_token"  # Real-time LLM token streaming
-    OIKOS_COMPLETE = "oikos_complete"
-    OIKOS_DEFERRED = "oikos_deferred"  # Timeout migration: still running, caller stopped waiting
-    OIKOS_WAITING = "oikos_waiting"  # Interrupted waiting for commis (oikos resume)
-    OIKOS_RESUMED = "oikos_resumed"  # Resumed from interrupt after commis completed
+    # Assistant/Commis events
+    ASSISTANT_STARTED = "assistant_started"
+    ASSISTANT_THINKING = "assistant_thinking"
+    ASSISTANT_TOKEN = "assistant_token"  # Real-time LLM token streaming
+    ASSISTANT_COMPLETE = "assistant_complete"
+    ASSISTANT_DEFERRED = "assistant_deferred"  # Timeout migration: still running, caller stopped waiting
+    ASSISTANT_WAITING = "assistant_waiting"  # Interrupted waiting for commis resume
+    ASSISTANT_RESUMED = "assistant_resumed"  # Resumed from interrupt after commis completed
     COMMIS_SPAWNED = "commis_spawned"
     COMMIS_STARTED = "commis_started"
     COMMIS_COMPLETE = "commis_complete"
@@ -64,15 +64,15 @@ class EventType(str, Enum):
     COMMIS_TOOL_FAILED = "commis_tool_failed"
     COMMIS_OUTPUT_CHUNK = "commis_output_chunk"
 
-    # Oikos tool events (inline display in conversation)
-    OIKOS_TOOL_STARTED = "oikos_tool_started"
-    OIKOS_TOOL_PROGRESS = "oikos_tool_progress"
-    OIKOS_TOOL_COMPLETED = "oikos_tool_completed"
-    OIKOS_TOOL_FAILED = "oikos_tool_failed"
+    # Assistant tool events (inline display in conversation)
+    ASSISTANT_TOOL_STARTED = "assistant_tool_started"
+    ASSISTANT_TOOL_PROGRESS = "assistant_tool_progress"
+    ASSISTANT_TOOL_COMPLETED = "assistant_tool_completed"
+    ASSISTANT_TOOL_FAILED = "assistant_tool_failed"
     SHOW_SESSION_PICKER = "show_session_picker"
 
     # Heartbeat events (Phase 6: prevent false "no progress" warnings during LLM reasoning)
-    OIKOS_HEARTBEAT = "oikos_heartbeat"
+    ASSISTANT_HEARTBEAT = "assistant_heartbeat"
     COMMIS_HEARTBEAT = "commis_heartbeat"
 
     # Stream lifecycle control (explicit keep_open/close signals)
@@ -100,8 +100,8 @@ class EventBus:
             logger.debug("No subscribers for %s", event_type)
             return
 
-        # OIKOS_TOKEN is emitted per-token and can spam logs when DEBUG is enabled.
-        if event_type != EventType.OIKOS_TOKEN:
+        # ASSISTANT_TOKEN is emitted per-token and can spam logs when DEBUG is enabled.
+        if event_type != EventType.ASSISTANT_TOKEN:
             logger.debug("Publishing event %s to %s subscriber(s)", event_type, subscriber_count)
 
         # ------------------------------------------------------------------

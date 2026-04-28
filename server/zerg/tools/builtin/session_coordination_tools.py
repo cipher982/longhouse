@@ -1,8 +1,8 @@
-"""Session coordination tools for Oikos and operator agents.
+"""Session coordination tools for runtime and operator agents.
 
 These tools expose the same durable session/message primitives that Longhouse
 publishes over the machine-facing `/api/agents/*` surface, but as direct
-in-process tools for Oikos and other internal agents.
+in-process tools for internal agents.
 """
 
 from __future__ import annotations

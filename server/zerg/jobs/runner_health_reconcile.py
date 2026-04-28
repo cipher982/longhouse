@@ -32,6 +32,6 @@ job_registry.register(
         timeout_seconds=120,
         max_attempts=1,
         tags=["runner", "monitoring", "builtin"],
-        description="Reconcile runner liveness, incidents, alerts, and Oikos wakeups",
+        description="Reconcile runner liveness, incidents, alerts, and runner wakeups",
     )
 )

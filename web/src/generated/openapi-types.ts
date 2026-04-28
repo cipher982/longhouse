@@ -487,35 +487,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/admin/configure-test-model": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Configure Test Model
-         * @description Configure the oikos fiche to use a test model.
-         *
-         *     This is a TEST-ONLY endpoint for E2E tests that need deterministic LLM behavior.
-         *     Only available when TESTING=1 is set.
-         *
-         *     Args:
-         *         request: Contains the model to use (default: gpt-scripted)
-         *
-         *     Returns:
-         *         Success message with fiche ID
-         */
-        post: operations["configure_test_model_admin_configure_test_model_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/admin/test/sessions/{session_id}/runtime": {
         parameters: {
             query?: never;
@@ -1847,70 +1818,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/oikos/sync/push": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Push Sync Operations
-         * @description Push sync operations from client.
-         *
-         *     Implements idempotent push semantics - operations with duplicate opId
-         *     values are acknowledged without error. This allows clients to safely
-         *     retry without creating duplicates.
-         *
-         *     Args:
-         *         request: Push request with operations
-         *         db: Database session
-         *         current_user: Authenticated user
-         *
-         *     Returns:
-         *         PushResponse with acknowledged operation IDs and next cursor
-         */
-        post: operations["push_sync_operations_oikos_sync_push_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/oikos/sync/pull": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Pull Sync Operations
-         * @description Pull sync operations from server.
-         *
-         *     Returns all operations for the current user created after the given
-         *     cursor position. Cursor is a simple offset - clients should store the
-         *     nextCursor value and use it for the next pull request.
-         *
-         *     Args:
-         *         cursor: Starting cursor position (offset)
-         *         db: Database session
-         *         current_user: Authenticated user
-         *
-         *     Returns:
-         *         PullResponse with operations and next cursor
-         */
-        get: operations["pull_sync_operations_oikos_sync_pull_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/stream/runs/{run_id}": {
         parameters: {
             query?: never;
@@ -1933,7 +1840,7 @@ export interface paths {
          *         run_id: Run identifier
          *         request: HTTP request (for Last-Event-ID header)
          *         after_event_id: Resume from this event ID (0 = from start)
-         *         include_tokens: Whether to include OIKOS_TOKEN events (default: true)
+         *         include_tokens: Whether to include assistant token events (default: true)
          *         current_user: Authenticated user (multi-tenant filtered)
          *
          *     Returns:
@@ -2620,7 +2527,7 @@ export interface paths {
          * Get Trace
          * @description Get unified trace timeline (admin only).
          *
-         *     Returns a unified timeline of events across oikos runs, commis, and LLM calls.
+         *     Returns a unified timeline of events across runs, commis, and LLM calls.
          *
          *     Levels:
          *     - summary: High-level timeline with key events (default)
@@ -2691,7 +2598,7 @@ export interface paths {
          * Performance Metrics
          * @description P50/P95 latency metrics (admin only).
          *
-         *     Returns latency percentiles for oikos runs.
+         *     Returns latency percentiles for runs.
          *     Limited to 10000 samples to prevent memory issues.
          */
         get: operations["performance_metrics_reliability_performance_get"];
@@ -5177,17 +5084,6 @@ export interface components {
             deleted: number;
         };
         /**
-         * ConfigureTestModelRequest
-         * @description Request model for configuring test model.
-         */
-        ConfigureTestModelRequest: {
-            /**
-             * Model
-             * @default gpt-scripted
-             */
-            model: string;
-        };
-        /**
          * ConfigureTestSessionRuntimeRequest
          * @description Test-only session runtime override for Playwright coverage.
          */
@@ -5936,6 +5832,8 @@ export interface components {
             is_offline: boolean;
             /** Managed Sessions */
             managed_sessions?: components["schemas"]["ManagedSessionLeaseIn"][];
+            /** Unmanaged Session Bindings */
+            unmanaged_session_bindings?: components["schemas"]["UnmanagedSessionBindingIn"][];
         };
         /**
          * HostedGmailConnectHandoffPayload
@@ -6766,61 +6664,6 @@ export interface components {
             occurred_at?: string | null;
             /** Dedupe Key */
             dedupe_key?: string | null;
-        };
-        /**
-         * PullResponse
-         * @description Response from pull operation.
-         */
-        PullResponse: {
-            /**
-             * Ops
-             * @description Operations since cursor
-             */
-            ops: {
-                [key: string]: unknown;
-            }[];
-            /**
-             * Nextcursor
-             * @description Updated cursor position
-             */
-            nextCursor: number;
-        };
-        /**
-         * PushRequest
-         * @description Push sync operations to server.
-         */
-        PushRequest: {
-            /**
-             * Deviceid
-             * @description Device identifier
-             */
-            deviceId: string;
-            /**
-             * Cursor
-             * @description Client's current cursor position
-             */
-            cursor: number;
-            /**
-             * Ops
-             * @description Operations to push
-             */
-            ops: components["schemas"]["SyncOp"][];
-        };
-        /**
-         * PushResponse
-         * @description Response from push operation.
-         */
-        PushResponse: {
-            /**
-             * Acked
-             * @description List of acknowledged operation IDs
-             */
-            acked: string[];
-            /**
-             * Nextcursor
-             * @description Updated cursor position
-             */
-            nextCursor: number;
         };
         /** QueuedInputSummary */
         QueuedInputSummary: {
@@ -7877,7 +7720,7 @@ export interface components {
         };
         /**
          * SessionLoopMode
-         * @description How much autonomy Oikos may exercise for a coding session.
+         * @description How much autonomy Longhouse may exercise for a coding session.
          * @enum {string}
          */
         SessionLoopMode: "assist" | "autopilot";
@@ -8993,39 +8836,6 @@ export interface components {
             /** Requires Password */
             requires_password: boolean;
         };
-        /**
-         * SyncOp
-         * @description A single sync operation.
-         */
-        SyncOp: {
-            /**
-             * Opid
-             * @description Client-generated unique operation ID
-             */
-            opId: string;
-            /**
-             * Type
-             * @description Operation type (e.g., message, conversation)
-             */
-            type: string;
-            /**
-             * Body
-             * @description Operation payload
-             */
-            body: {
-                [key: string]: unknown;
-            };
-            /**
-             * Lamport
-             * @description Lamport timestamp for ordering
-             */
-            lamport: number;
-            /**
-             * Ts
-             * @description Client timestamp (ISO format)
-             */
-            ts: string;
-        };
         /** Thread */
         Thread: {
             /** Title */
@@ -9394,6 +9204,44 @@ export interface components {
             p95?: number | null;
             /** Max */
             max?: number | null;
+        };
+        /**
+         * UnmanagedSessionBindingIn
+         * @description One row of Rust engine's unmanaged-session pid/cwd scan.
+         *
+         *     Phase 5 of docs/specs/session-liveness-honesty.md. All fields except
+         *     machine_id, provider, provider_session_id, and observed_at are
+         *     tolerant of absence so the engine can ship partial observations
+         *     (e.g. file-only, no process yet) without breaking heartbeat ingest.
+         */
+        UnmanagedSessionBindingIn: {
+            /** Machine Id */
+            machine_id: string;
+            /** Provider */
+            provider: string;
+            /** Provider Session Id */
+            provider_session_id: string;
+            /** Source Path */
+            source_path?: string | null;
+            /** Source Inode */
+            source_inode?: number | null;
+            /** Source Device */
+            source_device?: number | null;
+            /** Pid */
+            pid?: number | null;
+            /** Process Start Time */
+            process_start_time?: string | null;
+            /** Cwd */
+            cwd?: string | null;
+            /** Source Offset */
+            source_offset?: number | null;
+            /** Source Mtime */
+            source_mtime?: string | null;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
         };
         /**
          * UsageLimit
@@ -10703,39 +10551,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-        };
-    };
-    configure_test_model_admin_configure_test_model_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ConfigureTestModelRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -12866,76 +12681,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    push_sync_operations_oikos_sync_push_post: {
-        parameters: {
-            query?: {
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PushRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PushResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    pull_sync_operations_oikos_sync_pull_get: {
-        parameters: {
-            query?: {
-                /** @description Cursor position to pull from */
-                cursor?: number;
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PullResponse"];
-                };
             };
             /** @description Validation Error */
             422: {

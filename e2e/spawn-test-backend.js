@@ -128,8 +128,8 @@ const backend = spawn('uv', [
         E2E_DEFAULT_MODEL: process.env.E2E_DEFAULT_MODEL || 'gpt-scripted',
         // LONGHOUSE_API_URL inherited from environment (for session continuity tests)
         LONGHOUSE_API_URL: process.env.LONGHOUSE_API_URL || backendBaseUrl,
-        // Workspace path for workspace agents (use temp dir in E2E, not /var/oikos)
-        OIKOS_WORKSPACE_PATH: process.env.OIKOS_WORKSPACE_PATH || os.tmpdir() + '/zerg-e2e-workspaces',
+        // Workspace path for workspace agents (use temp dir in E2E, not /var/longhouse)
+        LONGHOUSE_WORKSPACE_PATH: process.env.LONGHOUSE_WORKSPACE_PATH || os.tmpdir() + '/zerg-e2e-workspaces',
         // Claude config dir for session files (use temp dir in E2E)
         CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR || os.tmpdir() + '/zerg-e2e-claude',
         // Mock hatch CLI for workspace agents in E2E (can't run real Claude Code fiches)

@@ -153,11 +153,11 @@ def test_lifecycle_close_waits_until_close_marker_is_streamed():
     assert state.should_close_after_live_event(event_id=5, now_monotonic=0.0) is True
 
 
-def test_lifecycle_starts_grace_window_after_oikos_complete_and_last_commis():
+def test_lifecycle_starts_grace_window_after_assistant_complete_and_last_commis():
     state = run_stream_service.StreamLifecycleState()
 
     state.apply("commis_spawned", {}, from_replay=False, now_monotonic=1.0)
-    state.apply("oikos_complete", {}, from_replay=False, now_monotonic=2.0)
+    state.apply("assistant_complete", {}, from_replay=False, now_monotonic=2.0)
 
     assert state.close_after_current_event is False
 
@@ -169,10 +169,10 @@ def test_lifecycle_starts_grace_window_after_oikos_complete_and_last_commis():
     assert state.should_close_on_timeout(8.0) is True
 
 
-def test_lifecycle_oikos_deferred_respects_close_stream_flag():
+def test_lifecycle_assistant_deferred_respects_close_stream_flag():
     keep_open_state = run_stream_service.StreamLifecycleState()
     keep_open_state.apply(
-        "oikos_deferred",
+        "assistant_deferred",
         {"close_stream": False},
         from_replay=False,
         now_monotonic=0.0,
@@ -181,7 +181,7 @@ def test_lifecycle_oikos_deferred_respects_close_stream_flag():
 
     close_state = run_stream_service.StreamLifecycleState()
     close_state.apply(
-        "oikos_deferred",
+        "assistant_deferred",
         {},
         from_replay=False,
         now_monotonic=0.0,
@@ -191,7 +191,7 @@ def test_lifecycle_oikos_deferred_respects_close_stream_flag():
 
 def test_filter_stream_event_drops_wrong_owner():
     filtered = run_stream_service.filter_stream_event(
-        {"owner_id": 99, "run_id": 7, "event_type": "oikos_thinking"},
+        {"owner_id": 99, "run_id": 7, "event_type": "assistant_thinking"},
         owner_id=1,
         run_id=7,
         allow_continuation_runs=False,
@@ -224,7 +224,7 @@ def test_filter_stream_event_aliases_direct_continuation_run_id_to_root(monkeypa
             {
                 "owner_id": owner_id,
                 "run_id": continuation_run_id,
-                "event_type": "oikos_started",
+                "event_type": "assistant_started",
             },
             owner_id=owner_id,
             run_id=root_run_id,
@@ -256,7 +256,7 @@ def test_filter_stream_event_aliases_chained_continuation_via_root_run_id(monkey
             {
                 "owner_id": owner_id,
                 "run_id": chained_continuation_id,
-                "event_type": "oikos_started",
+                "event_type": "assistant_started",
             },
             owner_id=owner_id,
             run_id=root_run_id,
@@ -278,7 +278,7 @@ def test_filter_stream_event_fails_closed_when_continuation_lookup_errors(monkey
     resolver = run_stream_service.ContinuationAliasResolver(root_run_id=7)
 
     filtered = run_stream_service.filter_stream_event(
-        {"owner_id": 1, "run_id": 99, "event_type": "oikos_started"},
+        {"owner_id": 1, "run_id": 99, "event_type": "assistant_started"},
         owner_id=1,
         run_id=7,
         allow_continuation_runs=True,
@@ -350,8 +350,8 @@ async def test_run_event_subscription_sets_overflow_when_queue_is_full():
         allow_continuation_runs=False,
     )
 
-    await subscription._handle_event({"owner_id": 1, "run_id": 7, "event_type": "oikos_started"})
-    await subscription._handle_event({"owner_id": 1, "run_id": 7, "event_type": "oikos_thinking"})
+    await subscription._handle_event({"owner_id": 1, "run_id": 7, "event_type": "assistant_started"})
+    await subscription._handle_event({"owner_id": 1, "run_id": 7, "event_type": "assistant_thinking"})
 
     assert overflow_event.is_set() is True
     assert queue.qsize() == 1
@@ -370,7 +370,7 @@ async def test_run_event_subscription_drops_new_events_after_overflow():
     )
     overflow_event.set()
 
-    await subscription._handle_event({"owner_id": 1, "run_id": 7, "event_type": "oikos_started"})
+    await subscription._handle_event({"owner_id": 1, "run_id": 7, "event_type": "assistant_started"})
 
     assert queue.qsize() == 0
 
@@ -389,9 +389,9 @@ async def test_stream_run_events_emits_overflow_and_returns(monkeypatch, tmp_pat
         await anext(generator)
 
         await event_bus.publish(
-            EventType.OIKOS_THINKING,
+            EventType.ASSISTANT_THINKING,
             {
-                "event_type": "oikos_thinking",
+                "event_type": "assistant_thinking",
                 "owner_id": owner_id,
                 "run_id": run_id,
                 "event_id": 1,
@@ -399,9 +399,9 @@ async def test_stream_run_events_emits_overflow_and_returns(monkeypatch, tmp_pat
             },
         )
         await event_bus.publish(
-            EventType.OIKOS_THINKING,
+            EventType.ASSISTANT_THINKING,
             {
-                "event_type": "oikos_thinking",
+                "event_type": "assistant_thinking",
                 "owner_id": owner_id,
                 "run_id": run_id,
                 "event_id": 2,
@@ -451,7 +451,7 @@ def test_load_historical_run_events_returns_serializable_records_after_session_c
     event_id = _append_run_event(
         session_local,
         run_id=run_id,
-        event_type="oikos_started",
+        event_type="assistant_started",
         payload={"message": "started"},
     )
 
@@ -466,7 +466,7 @@ def test_load_historical_run_events_returns_serializable_records_after_session_c
     assert json.loads(json.dumps(serialized)) == [
         {
             "event_id": event_id,
-            "event_type": "oikos_started",
+            "event_type": "assistant_started",
             "payload": {"message": "started"},
             "timestamp": serialized[0]["timestamp"],
         }
@@ -478,7 +478,7 @@ def test_load_historical_run_events_returns_serializable_records_after_session_c
 def test_encode_replay_sse_normalizes_automation_fields():
     event = run_stream_service.HistoricalRunEvent(
         event_id=9,
-        event_type="oikos_complete",
+        event_type="assistant_complete",
         payload={"fiche_id": 42, "fiche_name": "Nightly sync", "thread_id": 7},
         timestamp="2026-03-17T23:00:00Z",
     )
@@ -495,7 +495,7 @@ def test_encode_replay_sse_normalizes_automation_fields():
 def test_encode_live_sse_normalizes_automation_fields():
     encoded = run_stream_service.encode_live_sse(
         {
-            "event_type": "oikos_waiting",
+            "event_type": "assistant_waiting",
             "fiche_id": 11,
             "fiche_name": "Inbox triage",
             "thread_id": 3,
@@ -540,7 +540,7 @@ async def test_stream_run_events_live_defaults_to_context_test_commis_id(monkeyp
 async def test_stream_run_events_live_emits_connected_then_replay(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     owner_id, run_id = _seed_run(session_local)
-    _append_run_event(session_local, run_id=run_id, event_type="oikos_started", payload={"message": "started"})
+    _append_run_event(session_local, run_id=run_id, event_type="assistant_started", payload={"message": "started"})
     _append_run_event(session_local, run_id=run_id, event_type="stream_control", payload={"action": "close"})
 
     with _patched_stream_db(monkeypatch, session_local):
@@ -552,8 +552,8 @@ async def test_stream_run_events_live_emits_connected_then_replay(monkeypatch, t
 
         assert connected["event"] == "connected"
         assert json.loads(connected["data"])["run_id"] == run_id
-        assert replay_started["event"] == "oikos_started"
-        assert json.loads(replay_started["data"])["type"] == "oikos_started"
+        assert replay_started["event"] == "assistant_started"
+        assert json.loads(replay_started["data"])["type"] == "assistant_started"
         assert replay_close["event"] == "stream_control"
         assert json.loads(replay_close["data"])["payload"]["action"] == "close"
 
@@ -566,7 +566,7 @@ async def test_stream_run_events_replays_before_live_and_skips_duplicate_live_ev
     session_local = _make_db(tmp_path)
     owner_id, run_id = _seed_run(session_local)
     replay_event_id = _append_run_event(
-        session_local, run_id=run_id, event_type="oikos_started", payload={"message": "started"}
+        session_local, run_id=run_id, event_type="assistant_started", payload={"message": "started"}
     )
 
     with _patched_stream_db(monkeypatch, session_local):
@@ -577,9 +577,9 @@ async def test_stream_run_events_replays_before_live_and_skips_duplicate_live_ev
         heartbeat = await anext(generator)
 
         await event_bus.publish(
-            EventType.OIKOS_THINKING,
+            EventType.ASSISTANT_THINKING,
             {
-                "event_type": "oikos_thinking",
+                "event_type": "assistant_thinking",
                 "owner_id": owner_id,
                 "run_id": run_id,
                 "event_id": replay_event_id,
@@ -587,9 +587,9 @@ async def test_stream_run_events_replays_before_live_and_skips_duplicate_live_ev
             },
         )
         await event_bus.publish(
-            EventType.OIKOS_THINKING,
+            EventType.ASSISTANT_THINKING,
             {
-                "event_type": "oikos_thinking",
+                "event_type": "assistant_thinking",
                 "owner_id": owner_id,
                 "run_id": run_id,
                 "event_id": replay_event_id + 1,
@@ -600,9 +600,9 @@ async def test_stream_run_events_replays_before_live_and_skips_duplicate_live_ev
         live_event = await anext(generator)
 
         assert connected["event"] == "connected"
-        assert replay_started["event"] == "oikos_started"
+        assert replay_started["event"] == "assistant_started"
         assert heartbeat["event"] == "heartbeat"
-        assert live_event["event"] == "oikos_thinking"
+        assert live_event["event"] == "assistant_thinking"
         assert live_event["id"] == str(replay_event_id + 1)
         assert json.loads(live_event["data"])["payload"]["message"] == "live"
 
@@ -613,7 +613,7 @@ async def test_stream_run_events_replays_before_live_and_skips_duplicate_live_ev
 async def test_stream_run_events_closes_after_replay_close_marker(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     owner_id, run_id = _seed_run(session_local)
-    _append_run_event(session_local, run_id=run_id, event_type="oikos_started", payload={"message": "started"})
+    _append_run_event(session_local, run_id=run_id, event_type="assistant_started", payload={"message": "started"})
     _append_run_event(session_local, run_id=run_id, event_type="stream_control", payload={"action": "close"})
 
     with _patched_stream_db(monkeypatch, session_local):
@@ -628,17 +628,17 @@ async def test_stream_run_events_closes_after_replay_close_marker(monkeypatch, t
         async for event in generator:
             event_types.append(event["event"])
 
-        assert event_types == ["oikos_started", "stream_control"]
+        assert event_types == ["assistant_started", "stream_control"]
 
 
 def test_stream_run_replay_last_event_id_header_overrides_query_param(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     owner_id, run_id = _seed_run(session_local, status=RunStatus.SUCCESS)
     first_event_id = _append_run_event(
-        session_local, run_id=run_id, event_type="oikos_started", payload={"message": "started"}
+        session_local, run_id=run_id, event_type="assistant_started", payload={"message": "started"}
     )
     second_event_id = _append_run_event(
-        session_local, run_id=run_id, event_type="oikos_complete", payload={"result": "done"}
+        session_local, run_id=run_id, event_type="assistant_complete", payload={"result": "done"}
     )
 
     with _patched_stream_db(monkeypatch, session_local):
@@ -662,7 +662,7 @@ def test_stream_run_replay_last_event_id_header_overrides_query_param(monkeypatc
             assert response.status_code == 200
             assert f"id: {first_event_id}" not in body
             assert f"id: {second_event_id}" in body
-            assert "event: oikos_complete" in body
+            assert "event: assistant_complete" in body
         finally:
             if original_override is None:
                 api_app.dependency_overrides.pop(get_current_browser_route_user, None)
@@ -673,8 +673,8 @@ def test_stream_run_replay_last_event_id_header_overrides_query_param(monkeypatc
 def test_stream_run_replay_invalid_last_event_id_falls_back_to_query_param(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     owner_id, run_id = _seed_run(session_local, status=RunStatus.SUCCESS)
-    first_event_id = _append_run_event(session_local, run_id=run_id, event_type="oikos_started", payload={"message": "started"})
-    second_event_id = _append_run_event(session_local, run_id=run_id, event_type="oikos_complete", payload={"result": "done"})
+    first_event_id = _append_run_event(session_local, run_id=run_id, event_type="assistant_started", payload={"message": "started"})
+    second_event_id = _append_run_event(session_local, run_id=run_id, event_type="assistant_complete", payload={"result": "done"})
 
     with _patched_stream_db(monkeypatch, session_local):
         from zerg.main import api_app
@@ -697,7 +697,7 @@ def test_stream_run_replay_invalid_last_event_id_falls_back_to_query_param(monke
             assert response.status_code == 200
             assert f"id: {first_event_id}" not in body
             assert f"id: {second_event_id}" in body
-            assert "event: oikos_complete" in body
+            assert "event: assistant_complete" in body
         finally:
             if original_override is None:
                 api_app.dependency_overrides.pop(get_current_browser_route_user, None)
@@ -754,9 +754,9 @@ async def test_stream_run_replay_does_not_alias_continuations_by_default(monkeyp
         await anext(generator)
 
         await event_bus.publish(
-            EventType.OIKOS_THINKING,
+            EventType.ASSISTANT_THINKING,
             {
-                "event_type": "oikos_thinking",
+                "event_type": "assistant_thinking",
                 "owner_id": owner_id,
                 "run_id": root_run_id,
                 "event_id": 1,
@@ -764,9 +764,9 @@ async def test_stream_run_replay_does_not_alias_continuations_by_default(monkeyp
             },
         )
         await event_bus.publish(
-            EventType.OIKOS_THINKING,
+            EventType.ASSISTANT_THINKING,
             {
-                "event_type": "oikos_thinking",
+                "event_type": "assistant_thinking",
                 "owner_id": owner_id,
                 "run_id": continuation_run_id,
                 "event_id": 2,
@@ -787,7 +787,7 @@ async def test_stream_run_replay_does_not_alias_continuations_by_default(monkeyp
         first_live_event = await anext(generator)
         second_live_event = await anext(generator)
 
-        assert first_live_event["event"] == "oikos_thinking"
+        assert first_live_event["event"] == "assistant_thinking"
         assert json.loads(first_live_event["data"])["payload"]["message"] == "root"
         assert second_live_event["event"] == "error"
 
@@ -812,9 +812,9 @@ async def test_stream_run_events_live_does_alias_continuations(monkeypatch, tmp_
         await anext(generator)
 
         await event_bus.publish(
-            EventType.OIKOS_THINKING,
+            EventType.ASSISTANT_THINKING,
             {
-                "event_type": "oikos_thinking",
+                "event_type": "assistant_thinking",
                 "owner_id": owner_id,
                 "run_id": continuation_run_id,
                 "event_id": 1,
@@ -835,7 +835,7 @@ async def test_stream_run_events_live_does_alias_continuations(monkeypatch, tmp_
         aliased_event = await anext(generator)
         closing_event = await anext(generator)
 
-        assert aliased_event["event"] == "oikos_thinking"
+        assert aliased_event["event"] == "assistant_thinking"
         assert json.loads(aliased_event["data"])["payload"]["run_id"] == root_run_id
         assert json.loads(aliased_event["data"])["payload"]["message"] == "continuation"
         assert closing_event["event"] == "error"

@@ -1129,6 +1129,28 @@ def _migrate_agents_columns(engine: Engine) -> None:
     except Exception:
         logger.debug("job_runs table migration skipped (table may not exist yet)", exc_info=True)
 
+    # commis_jobs table migrations
+    try:
+        with engine.connect() as conn:
+            columns = {row[1] for row in conn.execute(text("PRAGMA table_info(commis_jobs)"))}
+            if columns:
+                if "parent_run_id" not in columns:
+                    conn.execute(text("ALTER TABLE commis_jobs ADD COLUMN parent_run_id INTEGER"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_commis_jobs_parent_run_id ON commis_jobs(parent_run_id)"))
+                conn.execute(text("DROP INDEX IF EXISTS ix_commis_jobs_idempotency"))
+                conn.execute(
+                    text(
+                        """
+                        CREATE UNIQUE INDEX IF NOT EXISTS ix_commis_jobs_idempotency
+                        ON commis_jobs(parent_run_id, tool_call_id)
+                        WHERE parent_run_id IS NOT NULL AND tool_call_id IS NOT NULL
+                        """
+                    )
+                )
+                conn.commit()
+    except Exception:
+        logger.debug("commis_jobs table migration skipped (table may not exist yet)", exc_info=True)
+
     # runners table migrations
     try:
         with engine.connect() as conn:
@@ -1164,7 +1186,7 @@ def _cleanup_legacy_agents_tables(engine: Engine) -> None:
 
     try:
         with engine.connect() as conn:
-            legacy_tables = ("file_reservations", "memories")
+            legacy_tables = ("file_reservations", "memories", "sync_operations")
             for table_name in legacy_tables:
                 exists = conn.execute(
                     text(

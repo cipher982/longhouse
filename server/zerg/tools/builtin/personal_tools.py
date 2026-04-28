@@ -1,6 +1,6 @@
-"""Personal tools for Oikos integration.
+"""Personal tools for runtime integration.
 
-These tools enable Oikos to access personal data sources:
+These tools enable runtime agents to access personal data sources:
 - Health: Recovery/sleep/strain from WHOOP
 - Notes: Search Obsidian vault via Runner
 
@@ -409,7 +409,7 @@ def search_notes(
     rg_command = f'rg -i -C 1 --max-count 3 --type md "{safe_query}" {expanded_vault} 2>/dev/null | head -n 100'
 
     try:
-        # Execute via runner using oikos-safe method
+        # Execute via runner using the direct dispatcher path.
         # runner_exec requires commis context, so we use the dispatcher directly
         from zerg.crud import runner_crud
         from zerg.database import get_db
@@ -446,7 +446,7 @@ def search_notes(
                     runner_id=runner.id,
                     command=rg_command,
                     timeout_secs=30,
-                    commis_id=None,  # No commis context for Oikos tools
+                    commis_id=None,  # No commis context for direct runtime tools
                     run_id=None,
                 )
             )

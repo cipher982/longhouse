@@ -90,10 +90,10 @@ def _resolve_execution_context() -> tuple[int | None, str | None, int | None]:
     runner_exec needs an authenticated owner for security filtering, but it can
     be called from two execution paths:
     - commis jobs, which provide CommisContext
-    - Oikos runs, which provide CredentialResolver context only
+    - Runtime runs, which provide CredentialResolver context only
 
     Returns:
-        Tuple of (owner_id, commis_id, run_id). For Oikos runs, commis_id and
+        Tuple of (owner_id, commis_id, run_id). For direct runtime runs, commis_id and
         run_id are None because direct runner execution does not flow through a
         commis job.
     """
@@ -113,7 +113,7 @@ def runner_exec(
 ) -> Dict[str, Any]:
     """Execute a command on a user-owned runner.
 
-    This tool enables Oikos or commis fiches to execute commands on
+    This tool enables runtime or commis flows to execute commands on
     user-managed compute infrastructure (laptops, servers, containers)
     without the backend needing SSH keys or direct access.
 
@@ -305,7 +305,7 @@ TOOLS: List[StructuredTool] = [
         name="runner_exec",
         description=(
             "Execute a shell command on a user-owned runner (laptop, server, container). "
-            "Available to Oikos and commiss. Use target name (e.g., 'laptop') "
+            "Available to runtime and commis flows. Use target name (e.g., 'laptop') "
             "or explicit ID (e.g., 'runner:123'). Returns exit code, stdout, stderr, and duration. "
             "Non-zero exit codes are not errors - they indicate the command ran but returned a failure code."
         ),

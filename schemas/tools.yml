@@ -116,7 +116,7 @@ components:
         - runner_setup
         - slack
         - sms
-        - oikos
+        - coordination
         - task
         - tool_discovery
         - uuid
@@ -179,11 +179,11 @@ components:
             get_whoop_data:
               const: personal
             get_commis_evidence:
-              const: oikos
+              const: coordination
             get_tool_output:
-              const: oikos
+              const: coordination
             get_commis_metadata:
-              const: oikos
+              const: coordination
             github_add_comment:
               const: github
             github_create_issue:
@@ -199,7 +199,7 @@ components:
             github_list_repositories:
               const: github
             grep_commiss:
-              const: oikos
+              const: coordination
             http_request:
               const: http
             jira_add_comment:
@@ -231,7 +231,7 @@ components:
             list_imessage_messages:
               const: imessage
             list_commiss:
-              const: oikos
+              const: coordination
             math_eval:
               const: math
             memory_delete:
@@ -257,15 +257,15 @@ components:
             notion_update_page:
               const: notion
             read_commis_file:
-              const: oikos
+              const: coordination
             read_commis_result:
-              const: oikos
+              const: coordination
             peek_commis_output:
-              const: oikos
+              const: coordination
             refresh_connector_status:
               const: connector
             request_session_selection:
-              const: oikos
+              const: coordination
             runner_create_enroll_token:
               const: runner_setup
             runner_exec:
@@ -285,13 +285,13 @@ components:
             send_sms:
               const: sms
             cancel_commis:
-              const: oikos
+              const: coordination
             check_commis_status:
-              const: oikos
+              const: coordination
             spawn_commis:
-              const: oikos
+              const: coordination
             wait_for_commis:
-              const: oikos
+              const: coordination
             task_create:
               const: task
             task_delete:

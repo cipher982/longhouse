@@ -1,7 +1,7 @@
 """Scripted LLM implementation for deterministic unit tests.
 
 This module provides a lightweight, scenario-driven chat model used by tests to
-exercise oikos/commis plumbing without calling real LLM APIs.
+exercise runtime/commis plumbing without calling real LLM APIs.
 
 It is intentionally minimal: only the behaviors required by the runtime test
 paths are implemented. The adapter stays plain on purpose so test-only models do
@@ -45,12 +45,12 @@ def _is_tool_message(msg: Any) -> bool:
 
 def detect_role_from_messages(messages: List[Any]) -> str:
     """Best-effort role detector used by scripted scenarios."""
-    # If we see a spawn_commis call, assume oikos.
+    # If we see a spawn_commis call, assume coordinator.
     for msg in messages:
         if _is_ai_message(msg) and getattr(msg, "tool_calls", None):
             for call in msg.tool_calls:
                 if call.get("name") == "spawn_commis":
-                    return "oikos"
+                    return "coordinator"
 
     # Otherwise, infer from system prompt length (tests use this heuristic).
     first_system = next((m for m in messages if _is_system_message(m)), None)
@@ -58,10 +58,10 @@ def detect_role_from_messages(messages: List[Any]) -> str:
         system_text = str(first_system.content or "").lower()
         if "you are a commis" in system_text:
             return "commis"
-        if "you are oikos" in system_text:
-            return "oikos"
+        if "you are a coordinator" in system_text:
+            return "coordinator"
         if len(system_text) > 1000:
-            return "oikos"
+            return "coordinator"
 
     return "commis"
 
@@ -104,7 +104,7 @@ def find_matching_scenario(prompt: str, role: str) -> Optional[Dict[str, Any]]:
     memory_scenario = _parse_memory_e2e_scenario(prompt or "")
     if memory_scenario:
         return {
-            "role": "oikos",
+            "role": "coordinator",
             **memory_scenario,
         }
 
@@ -134,48 +134,48 @@ def find_matching_scenario(prompt: str, role: str) -> Optional[Dict[str, Any]]:
             }
         return None
 
-    # Oikos: workspace commis scenarios (session continuity, git repos)
-    if role == "oikos" and is_resume and is_targeted_follow_up:
+    # Coordinator: workspace commis scenarios (session continuity, git repos)
+    if role == "coordinator" and is_resume and is_targeted_follow_up:
         return {
-            "role": "oikos",
+            "role": "coordinator",
             "name": "operator_resume_follow_up",
             "evidence_keyword": "targeted tests",
             "resume_session_id": resume_session_id,
         }
 
-    if role == "oikos" and (is_resume or is_workspace):
+    if role == "coordinator" and (is_resume or is_workspace):
         return {
-            "role": "oikos",
-            "name": "workspace_commis_oikos",
+            "role": "coordinator",
+            "name": "workspace_commis_coordinator",
             "evidence_keyword": "workspace",
             "resume_session_id": resume_session_id,
         }
 
-    if role == "oikos" and is_math:
+    if role == "coordinator" and is_math:
         return {
-            "role": "oikos",
+            "role": "coordinator",
             "name": "math_simple",
             "evidence_keyword": None,
         }
 
-    # Oikos: parallel disk checks first, then single-host disk checks.
+    # Coordinator: parallel disk checks first, then single-host disk checks.
     if is_disk and is_parallel:
         return {
-            "role": "oikos",
-            "name": "disk_space_parallel_oikos",
+            "role": "coordinator",
+            "name": "disk_space_parallel_coordinator",
             "evidence_keyword": "45%",
         }
 
-    # Oikos: match disk check and provide a generic fallback for everything else.
+    # Coordinator: match disk check and provide a generic fallback for everything else.
     if is_disk and is_cube:
         return {
-            "role": "oikos",
-            "name": "disk_space_oikos",
+            "role": "coordinator",
+            "name": "disk_space_coordinator",
             "evidence_keyword": "45%",
         }
 
     return {
-        "role": "oikos",
+        "role": "coordinator",
         "name": "generic_fallback",
         "evidence_keyword": None,
     }
@@ -257,7 +257,7 @@ class ScriptedChatLLM:
     """A deterministic chat model driven by simple prompt scenarios.
 
     Supports both static scenarios (default behavior) and sequenced responses
-    for testing oikos replay behavior where the LLM might produce different
+    for testing runtime replay behavior where the LLM might produce different
     outputs on subsequent calls.
 
     Usage with sequences:
@@ -393,8 +393,8 @@ class ScriptedChatLLM:
         # Memory E2E scenarios should also bypass the "tool result" check, but only if
         # the memory tool hasn't already been executed *in this turn* (i.e., after the
         # last HumanMessage). This is needed because the thread persists messages across
-        # multiple run_oikos calls.
-        if role == "oikos" and scenario and scenario.get("name") == "memory_e2e":
+        # multiple runtime calls.
+        if role == "coordinator" and scenario and scenario.get("name") == "memory_e2e":
             # Find messages after the last HumanMessage (the current turn)
             last_human_idx = None
             for i, m in enumerate(messages):
@@ -456,7 +456,7 @@ class ScriptedChatLLM:
                 final_text = f"Task failed due to tool error: {error_msg or content}"
             else:
                 # Determine final text based on scenario type
-                if scenario and scenario.get("name") == "workspace_commis_oikos":
+                if scenario and scenario.get("name") == "workspace_commis_coordinator":
                     # Workspace commis completed - summarize the result
                     final_text = "Workspace commis completed successfully. Repository analyzed and changes captured."
                 elif "45%" in content:
@@ -475,7 +475,7 @@ class ScriptedChatLLM:
             return AIMessage(content=static_reply, tool_calls=[])
 
         # Workspace commis scenario: spawns spawn_commis with git repo and optional resume
-        if role == "oikos" and scenario and scenario.get("name") == "workspace_commis_oikos":
+        if role == "coordinator" and scenario and scenario.get("name") == "workspace_commis_coordinator":
             # Use a public test repo that's small and fast to clone
             args = {
                 "task": "Analyze the repository and list the main files",
@@ -492,7 +492,7 @@ class ScriptedChatLLM:
             }
             return AIMessage(content="", tool_calls=[tool_call])
 
-        if role == "oikos" and scenario and scenario.get("name") == "operator_resume_follow_up":
+        if role == "coordinator" and scenario and scenario.get("name") == "operator_resume_follow_up":
             args = {
                 "task": "Run the pending targeted tests",
             }
@@ -506,7 +506,7 @@ class ScriptedChatLLM:
             }
             return AIMessage(content="", tool_calls=[tool_call])
 
-        if role == "oikos" and scenario and scenario.get("name") == "disk_space_parallel_oikos":
+        if role == "coordinator" and scenario and scenario.get("name") == "disk_space_parallel_coordinator":
             tasks = [
                 "Check disk space on cube and identify what is using space",
                 "Check disk space on clifford and identify what is using space",
@@ -522,7 +522,7 @@ class ScriptedChatLLM:
             ]
             return AIMessage(content="", tool_calls=tool_calls)
 
-        if role == "oikos" and scenario and scenario.get("name") == "disk_space_oikos":
+        if role == "coordinator" and scenario and scenario.get("name") == "disk_space_coordinator":
             tool_call = {
                 "id": f"call_{uuid.uuid4().hex[:8]}",
                 "name": "spawn_commis",

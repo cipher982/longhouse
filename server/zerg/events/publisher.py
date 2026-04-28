@@ -32,7 +32,7 @@ async def publish_event(event_type: EventType, data: Dict[str, Any]) -> None:
         data: Event data dictionary
 
     Usage:
-        await publish_event(EventType.OIKOS_COMPLETE, {"run_id": 123})
+        await publish_event(EventType.ASSISTANT_COMPLETE, {"run_id": 123})
     """
     try:
         await event_bus.publish(event_type, data)
@@ -53,7 +53,7 @@ def publish_event_fire_and_forget(event_type: EventType, data: Dict[str, Any]) -
         data: Event data dictionary
 
     Usage:
-        publish_event_fire_and_forget(EventType.OIKOS_HEARTBEAT, {"run_id": 123})
+        publish_event_fire_and_forget(EventType.ASSISTANT_HEARTBEAT, {"run_id": 123})
     """
     try:
         from zerg.utils.async_runner import run_in_shared_loop

@@ -514,12 +514,6 @@ async def fix_database_schema():
 # ---------------------------------------------------------------------------
 
 
-class ConfigureTestModelRequest(BaseModel):
-    """Request model for configuring test model."""
-
-    model: str = "gpt-scripted"
-
-
 class ConfigureTestSessionRuntimeRequest(BaseModel):
     """Test-only session runtime override for Playwright coverage."""
 
@@ -574,65 +568,6 @@ async def debug_db_schema(
         "db_url": db_url,
         "db_path": db_path,
     }
-
-
-@router.post("/configure-test-model")
-async def configure_test_model(
-    request: ConfigureTestModelRequest,
-    db: Session = Depends(get_db),
-    current_user=Depends(require_admin),
-):
-    """Configure the oikos fiche to use a test model.
-
-    This is a TEST-ONLY endpoint for E2E tests that need deterministic LLM behavior.
-    Only available when TESTING=1 is set.
-
-    Args:
-        request: Contains the model to use (default: gpt-scripted)
-
-    Returns:
-        Success message with fiche ID
-    """
-    settings = get_settings()
-
-    # CRITICAL: Only allow when testing mode is enabled
-    # This ensures test models can never be configured in production
-    if not settings.testing:
-        raise HTTPException(
-            status_code=403,
-            detail="Test model configuration requires TESTING=1. This endpoint is not available in production.",
-        )
-
-    # Valid test models - use single source of truth
-    from zerg.testing.test_models import TEST_ONLY_MODELS
-    from zerg.testing.test_models import is_test_model
-
-    if not is_test_model(request.model):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid test model: {request.model}. Valid options: {TEST_ONLY_MODELS}",
-        )
-
-    try:
-        from zerg.services.oikos_service import OikosService
-
-        oikos_service = OikosService(db)
-        fiche = oikos_service.get_or_create_oikos_fiche(current_user.id)
-
-        # Update fiche model
-        fiche.model = request.model
-        db.commit()
-
-        logger.info(f"Configured oikos fiche {fiche.id} to use model: {request.model}")
-
-        return {
-            "message": f"Chat fiche configured to use {request.model}",
-            "fiche_id": fiche.id,
-            "model": request.model,
-        }
-    except Exception as e:
-        logger.error(f"Error configuring test model: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to configure test model: {str(e)}") from e
 
 
 @router.post("/test/sessions/{session_id}/runtime")

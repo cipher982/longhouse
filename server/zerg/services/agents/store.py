@@ -1,7 +1,7 @@
 """Agents store service for session and event CRUD operations.
 
 Provides a clean interface for ingesting and querying AI coding sessions
-from any provider (Claude Code, Codex, Gemini, Cursor, Oikos).
+from any provider (Claude Code, Codex, Gemini, Cursor).
 """
 
 import hashlib

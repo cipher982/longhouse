@@ -175,7 +175,7 @@ def delete_fiche(db: Session, fiche_id: int):
 
     NOTE: In production (Postgres), an Fiche can be referenced by:
     - threads / thread_messages
-    - runs (and commis_jobs.oikos_run_id)
+    - runs (and commis_jobs.parent_run_id)
     - fiche_messages (legacy)
     - triggers
     Deleting the Fiche row directly can violate FK constraints, especially for
@@ -191,9 +191,9 @@ def delete_fiche(db: Session, fiche_id: int):
     # Runs must be deleted before threads (Run.thread_id FK).
     run_ids = [row[0] for row in db.query(Run.id).filter(Run.fiche_id == fiche_id).all()]
     if run_ids:
-        # Commis jobs may reference oikos runs; preserve jobs but remove correlation.
-        db.query(CommisJob).filter(CommisJob.oikos_run_id.in_(run_ids)).update(
-            {CommisJob.oikos_run_id: None},
+        # Commis jobs may reference parent runs; preserve jobs but remove correlation.
+        db.query(CommisJob).filter(CommisJob.parent_run_id.in_(run_ids)).update(
+            {CommisJob.parent_run_id: None},
             synchronize_session="fetch",
         )
         db.query(Run).filter(Run.id.in_(run_ids)).delete(synchronize_session=False)

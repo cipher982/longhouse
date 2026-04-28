@@ -1,6 +1,6 @@
 """EventEmitter Protocol - defines the interface for tool event emission.
 
-Emitters have their identity (commis vs oikos) baked in at construction.
+Emitters have their identity baked in at construction.
 This eliminates contextvar leakage bugs where events get misclassified.
 """
 
@@ -18,9 +18,8 @@ if TYPE_CHECKING:
 class EventEmitter(Protocol):
     """Protocol for tool event emission.
 
-    Identity is baked at construction time. A CommisEmitter will always
-    emit commis_tool_* events, a OikosEmitter will always emit
-    oikos_tool_* events, regardless of contextvar state.
+    Identity is baked at construction time. An emitter decides its own event
+    family regardless of contextvar state.
 
     Usage:
         emitter = get_emitter()
@@ -36,8 +35,8 @@ class EventEmitter(Protocol):
         ...
 
     @property
-    def is_oikos(self) -> bool:
-        """True if this emitter is for oikos context."""
+    def is_assistant(self) -> bool:
+        """True if this emitter is for assistant context."""
         ...
 
     async def emit_tool_started(

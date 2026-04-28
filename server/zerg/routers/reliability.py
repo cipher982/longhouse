@@ -208,7 +208,7 @@ async def performance_metrics(
 ):
     """P50/P95 latency metrics (admin only).
 
-    Returns latency percentiles for oikos runs.
+    Returns latency percentiles for runs.
     Limited to 10000 samples to prevent memory issues.
     """
     since = datetime.now(timezone.utc) - timedelta(hours=hours)

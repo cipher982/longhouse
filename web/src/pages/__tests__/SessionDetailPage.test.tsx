@@ -32,10 +32,6 @@ vi.mock("../../lib/readiness-contract", () => ({
   useReadinessFlag: vi.fn(),
 }));
 
-vi.mock("../../services/api/oikos", () => ({
-  fetchSessionTurnTelemetry: vi.fn().mockResolvedValue({ latestReview: null }),
-}));
-
 vi.mock("../../components/SessionChat", () => ({
   SessionChat: ({
     composerDisabledReason,
