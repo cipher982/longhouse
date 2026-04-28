@@ -145,6 +145,29 @@ def _resolve_continue_route(
     return "send-live"
 
 
+def _format_api_error(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+    except ValueError:
+        return response.text[:300]
+    if not isinstance(payload, dict):
+        return response.text[:300]
+    detail = payload.get("detail", payload)
+    if isinstance(detail, dict):
+        message = str(detail.get("message") or detail.get("error") or response.text[:300])
+        exit_code = detail.get("exit_code")
+        released_lock = detail.get("released_lock")
+        parts = [message]
+        if exit_code is not None:
+            parts.append(f"exit_code: {exit_code}")
+        if released_lock is not None:
+            parts.append(f"released_lock: {str(bool(released_lock)).lower()}")
+        return "  ".join(parts)
+    if isinstance(detail, str):
+        return detail[:300]
+    return response.text[:300]
+
+
 @app.command()
 def get(
     session_id: str = typer.Argument(..., help="Session UUID."),
@@ -512,12 +535,17 @@ def interrupt(
         typer.secho(f"Session not found: {resolved_session_id}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
     if response.status_code != 200:
-        typer.secho(f"API error: {response.status_code} {response.text[:300]}", fg=typer.colors.RED)
+        typer.secho(f"API error: {response.status_code} {_format_api_error(response)}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
     payload = response.json()
-    if payload.get("interrupted"):
-        typer.secho(f"Interrupted session {payload.get('session_id') or resolved_session_id}", fg=typer.colors.CYAN)
+    if payload.get("interrupt_dispatched"):
+        typer.secho(
+            f"Interrupt request dispatched to session {payload.get('session_id') or resolved_session_id}",
+            fg=typer.colors.CYAN,
+        )
+        if payload.get("confirmed_stopped") is False:
+            typer.echo("confirmed_stopped: false")
         if payload.get("released_lock"):
             typer.echo("released_lock: true")
         return
