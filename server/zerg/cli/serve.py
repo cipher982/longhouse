@@ -523,6 +523,20 @@ def serve(
     if is_public_interface or public_url:
         typer.echo("")
 
+    try:
+        from zerg.cli.acquisition import emit_acquisition_event_once
+
+        topology = "demo" if demo or demo_fresh else ("self_host_runtime" if public_url or is_public_interface else "local_runtime")
+        emit_acquisition_event_once(
+            "serve_started",
+            "runtime_first_start",
+            command="serve",
+            topology=topology,
+            props={"daemon": daemon, "public_bind": is_public_interface},
+        )
+    except Exception:
+        pass
+
     # Daemonize if requested (Unix only)
     if daemon:
         if sys.platform == "win32":

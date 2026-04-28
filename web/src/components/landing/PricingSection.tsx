@@ -1,5 +1,6 @@
 import { CheckCircleIcon } from "../icons";
 import { Button } from "../ui";
+import { trackAcquisitionEvent } from "../../lib/analytics";
 
 interface PricingTier {
   label: string;
@@ -14,10 +15,19 @@ interface PricingTier {
 
 export function PricingSection() {
   const handleStartFree = () => {
+    trackAcquisitionEvent("self_host_cta_click", {
+      surface: "landing",
+      placement: "pricing",
+    });
     document.getElementById("landing-install")?.scrollIntoView({ behavior: "smooth" });
   };
 
   const handleGetHosted = () => {
+    trackAcquisitionEvent("hosted_signup_click", {
+      surface: "landing",
+      placement: "pricing",
+      plan: "hosted_5",
+    });
     window.location.href = "https://control.longhouse.ai/signup";
   };
 

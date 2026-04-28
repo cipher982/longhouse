@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { trackAcquisitionEvent } from "../../lib/analytics";
 
 interface CodeBlockProps {
   children: string;
@@ -10,7 +11,15 @@ export function CodeBlock({ children, title }: CodeBlockProps) {
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(children.trim());
+      const command = children.trim();
+      await navigator.clipboard.writeText(command);
+      if (command.includes("get.longhouse.ai/install.sh") || command.includes("longhouse connect --install")) {
+        trackAcquisitionEvent("docs_command_copy", {
+          surface: "docs",
+          command: command.includes("get.longhouse.ai/install.sh") ? "install_sh" : "connect_install",
+          title: title ?? null,
+        });
+      }
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {

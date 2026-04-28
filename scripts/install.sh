@@ -596,6 +596,13 @@ main() {
     echo -e "${NC}"
     echo "One-liner installer v1.0"
     echo ""
+    if [[ "${LONGHOUSE_TELEMETRY:-}" =~ ^(0|false|no|off)$ ]] || [[ "${DO_NOT_TRACK:-}" == "1" ]]; then
+        info "Anonymous install telemetry disabled"
+    else
+        info "Anonymous install telemetry is enabled (set LONGHOUSE_TELEMETRY=0 or DO_NOT_TRACK=1 to disable)"
+        info "Telemetry excludes prompts, paths, secrets, and session contents"
+    fi
+    echo ""
 
     local platform
     platform=$(detect_platform)
