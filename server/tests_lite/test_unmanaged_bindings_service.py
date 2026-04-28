@@ -81,6 +81,7 @@ def test_fresh_heartbeat_and_fresh_binding_is_online_open(tmp_path):
                 process_start_time=now - timedelta(hours=1),
                 observed_at=now - timedelta(seconds=15),
                 last_seen_at=now - timedelta(seconds=15),
+                source_mtime=now - timedelta(seconds=10),
                 binding_state="observed",
             )
         )
@@ -98,17 +99,19 @@ def test_stale_host_yields_stale_host_state_no_closure(tmp_path):
     with SessionLocal() as db:
         session = _make_session(db)
         now = datetime(2026, 4, 27, 12, 0, tzinfo=timezone.utc)
-        db.add(AgentHeartbeat(device_id="cinder", received_at=now - timedelta(minutes=10)))
+        # Between HOST_ONLINE_WINDOW (10m) and HOST_STALE_WINDOW (30m).
+        db.add(AgentHeartbeat(device_id="cinder", received_at=now - timedelta(minutes=20)))
         db.add(
             UnmanagedSessionBinding(
                 machine_id="cinder",
+                device_id="cinder",
                 provider="codex",
                 provider_session_id="sess-abc",
                 session_id=session.id,
                 pid=1234,
-                process_start_time=now - timedelta(hours=1),
-                observed_at=now - timedelta(minutes=10),
-                last_seen_at=now - timedelta(minutes=10),
+                process_start_time=now - timedelta(hours=2),
+                observed_at=now - timedelta(minutes=20),
+                last_seen_at=now - timedelta(minutes=20),
                 binding_state="observed",
             )
         )
@@ -121,7 +124,8 @@ def test_stale_host_yields_stale_host_state_no_closure(tmp_path):
 
 def test_online_host_with_old_binding_promotes_process_gone(tmp_path):
     """Phase 6: when the host is still online but the binding hasn't been
-    re-observed in the latest heartbeat window, the process is gone."""
+    re-observed in the latest heartbeat window AND the transcript has
+    stopped growing, the process is gone."""
     SessionLocal = _make_db(tmp_path)
     with SessionLocal() as db:
         session = _make_session(db)
@@ -130,13 +134,15 @@ def test_online_host_with_old_binding_promotes_process_gone(tmp_path):
         db.add(
             UnmanagedSessionBinding(
                 machine_id="cinder",
+                device_id="cinder",
                 provider="codex",
                 provider_session_id="sess-abc",
                 session_id=session.id,
                 pid=1234,
-                process_start_time=now - timedelta(hours=1),
-                observed_at=now - timedelta(minutes=5),
-                last_seen_at=now - timedelta(minutes=5),
+                process_start_time=now - timedelta(hours=2),
+                observed_at=now - timedelta(hours=2),
+                last_seen_at=now - timedelta(hours=2),
+                source_mtime=now - timedelta(hours=2),
                 binding_state="observed",
             )
         )
@@ -146,6 +152,35 @@ def test_online_host_with_old_binding_promotes_process_gone(tmp_path):
         entry = overlay[session.id]
         assert entry.host_state == "online"
         assert entry.terminal_reason == "process_gone"
+
+
+def test_growing_transcript_stays_open_even_with_old_binding(tmp_path):
+    """If the fd is closed between writes but the JSONL is still
+    growing, do NOT promote process_gone."""
+    SessionLocal = _make_db(tmp_path)
+    with SessionLocal() as db:
+        session = _make_session(db)
+        now = datetime(2026, 4, 27, 12, 0, tzinfo=timezone.utc)
+        db.add(AgentHeartbeat(device_id="cinder", received_at=now - timedelta(seconds=5)))
+        db.add(
+            UnmanagedSessionBinding(
+                machine_id="cinder",
+                device_id="cinder",
+                provider="codex",
+                provider_session_id="sess-abc",
+                session_id=session.id,
+                pid=1234,
+                process_start_time=now - timedelta(hours=2),
+                observed_at=now - timedelta(minutes=20),
+                last_seen_at=now - timedelta(minutes=20),
+                source_mtime=now - timedelta(seconds=30),  # transcript still fresh
+                binding_state="observed",
+            )
+        )
+        db.commit()
+
+        overlay = load_binding_overlay(db, [session.id], now=now)
+        assert overlay[session.id].terminal_reason is None
 
 
 def test_stale_binding_state_promotes_process_gone_regardless_of_host(tmp_path):

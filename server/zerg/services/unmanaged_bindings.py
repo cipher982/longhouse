@@ -33,18 +33,29 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import UnmanagedSessionBinding
 
-# A heartbeat newer than this window means the host is actively talking
-# to us and its per-session bindings reflect current truth.
-HOST_ONLINE_WINDOW = timedelta(minutes=2)
+# Engine server heartbeat cadence (see engine/src/daemon.rs). Must be the
+# same value or Phase 6 false-positives every other heartbeat.
+HEARTBEAT_CADENCE = timedelta(minutes=5)
+
+# A heartbeat newer than ~2x the cadence means the host is actively
+# talking to us. 2x lets one missed heartbeat land without flipping the
+# machine to stale.
+HOST_ONLINE_WINDOW = HEARTBEAT_CADENCE * 2
 
 # Heartbeats older than this are stale — we still know the host exists
 # but cannot claim its bindings still apply.
 HOST_STALE_WINDOW = timedelta(minutes=30)
 
-# For Phase 6: if the latest binding for an unmanaged session was
-# last_seen_at more than this long ago AND the host is online, treat the
-# process as gone.
-BINDING_GONE_WINDOW = timedelta(minutes=2)
+# For Phase 6: only promote to process_gone if the latest binding was
+# last_seen_at more than this long ago. Must be > HOST_ONLINE_WINDOW so
+# "one heartbeat missed the binding" can't alone trigger closure.
+BINDING_GONE_WINDOW = HOST_ONLINE_WINDOW + HEARTBEAT_CADENCE
+
+# For Phase 6 we additionally require the transcript to be inactive for
+# this window before inferring process_gone. A provider CLI that closed
+# its fd between writes will appear unbound to the scanner; the growing
+# JSONL tells us the process is still alive.
+TRANSCRIPT_STALE_WINDOW = timedelta(hours=1)
 
 
 @dataclass(frozen=True)
@@ -73,34 +84,57 @@ def load_binding_overlay(
 
     current = (now or datetime.now(timezone.utc)).replace(tzinfo=timezone.utc)
 
-    bindings = db.query(UnmanagedSessionBinding).filter(UnmanagedSessionBinding.session_id.in_(ids)).all()
+    # Order by last_seen_at desc so the newest observation for each
+    # session wins when multiple machines have reported the same one.
+    bindings = (
+        db.query(UnmanagedSessionBinding)
+        .filter(UnmanagedSessionBinding.session_id.in_(ids))
+        .order_by(UnmanagedSessionBinding.last_seen_at.desc())
+        .all()
+    )
     if not bindings:
         return {}
 
-    machine_ids = {str(b.machine_id) for b in bindings if b.machine_id}
-    host_state_by_machine = _latest_heartbeat_state(db, machine_ids, now=current)
+    # Use the binding's device_id (the heartbeat-auth token identity)
+    # for heartbeat freshness — not machine_id, which is config-supplied
+    # on the engine side and may not match. Fall back to machine_id when
+    # device_id is null (older engines or tokenless installs).
+    def _heartbeat_key(binding: UnmanagedSessionBinding) -> str:
+        return str(binding.device_id or binding.machine_id or "")
+
+    heartbeat_keys = {_heartbeat_key(b) for b in bindings}
+    heartbeat_keys.discard("")
+    host_state_by_key = _latest_heartbeat_state(db, heartbeat_keys, now=current)
 
     overlay: dict[UUID, BindingOverlay] = {}
     for binding in bindings:
         session_id = binding.session_id
-        if session_id is None:
+        if session_id is None or session_id in overlay:
+            # Rows are already newest-first; keep the first one.
             continue
-        host_state = host_state_by_machine.get(str(binding.machine_id), "unknown")
+        host_state = host_state_by_key.get(_heartbeat_key(binding), "unknown")
 
         terminal_reason: str | None = None
         binding_state = (binding.binding_state or "observed").strip().lower()
         last_seen = _as_utc(binding.last_seen_at)
-        # Phase 6: promote to closed only with ground truth. Two shapes
-        # of ground truth:
+        source_mtime = _as_utc(binding.source_mtime) if binding.source_mtime else None
+        # Phase 6: promote to closed only with ground truth. Two shapes:
         #   - engine explicitly marked binding 'stale'
-        #   - engine is online but its latest heartbeat no longer lists
-        #     the binding (so last_seen_at is older than current heartbeat
-        #     and the gap exceeds BINDING_GONE_WINDOW).
+        #   - engine is online AND last_seen_at gap exceeds
+        #     BINDING_GONE_WINDOW AND the transcript has not grown for
+        #     TRANSCRIPT_STALE_WINDOW. The transcript check avoids
+        #     false-positives when the provider CLI closes its fd between
+        #     writes — the scanner sees no open fd, but the file keeps
+        #     growing.
         if binding_state == "stale":
             terminal_reason = "process_gone"
-        elif host_state == "online" and last_seen is not None:
-            if current - last_seen > BINDING_GONE_WINDOW:
-                terminal_reason = "process_gone"
+        elif (
+            host_state == "online"
+            and last_seen is not None
+            and current - last_seen > BINDING_GONE_WINDOW
+            and (source_mtime is None or current - source_mtime > TRANSCRIPT_STALE_WINDOW)
+        ):
+            terminal_reason = "process_gone"
 
         overlay[session_id] = BindingOverlay(
             host_state=host_state,
@@ -112,45 +146,43 @@ def load_binding_overlay(
 
 def _latest_heartbeat_state(
     db: Session,
-    machine_ids: set[str],
+    device_ids: set[str],
     *,
     now: datetime,
 ) -> dict[str, str]:
-    """Return ``{machine_id: host_state}`` for each listed machine.
+    """Return ``{device_id: host_state}`` for each listed device.
 
-    ``machine_id`` as emitted by the engine's Rust scanner is the same
-    value that flows through as the heartbeat's ``device_id``. We join
-    on that.
+    ``device_id`` is the heartbeat-auth identity (see
+    ``routers/heartbeat.py``). The engine's Rust scanner also stores
+    this as ``UnmanagedSessionBinding.device_id`` so we join on it.
     """
-    if not machine_ids:
+    if not device_ids:
         return {}
 
+    from sqlalchemy import func
+
     rows = (
-        db.query(AgentHeartbeat.device_id, AgentHeartbeat.received_at)
-        .filter(AgentHeartbeat.device_id.in_(machine_ids))
-        .order_by(AgentHeartbeat.device_id, AgentHeartbeat.received_at.desc())
+        db.query(AgentHeartbeat.device_id, func.max(AgentHeartbeat.received_at))
+        .filter(AgentHeartbeat.device_id.in_(device_ids))
+        .group_by(AgentHeartbeat.device_id)
         .all()
     )
 
-    latest: dict[str, datetime] = {}
-    for device_id, received_at in rows:
-        if device_id in latest:
-            continue
-        latest[device_id] = received_at
+    latest: dict[str, datetime] = {device_id: received for device_id, received in rows}
 
     states: dict[str, str] = {}
-    for machine_id in machine_ids:
-        received = latest.get(machine_id)
+    for device_id in device_ids:
+        received = latest.get(device_id)
         if received is None:
-            states[machine_id] = "unknown"
+            states[device_id] = "unknown"
             continue
         age = now - _as_utc(received)
         if age <= HOST_ONLINE_WINDOW:
-            states[machine_id] = "online"
+            states[device_id] = "online"
         elif age <= HOST_STALE_WINDOW:
-            states[machine_id] = "stale"
+            states[device_id] = "stale"
         else:
-            states[machine_id] = "offline"
+            states[device_id] = "offline"
     return states
 
 
