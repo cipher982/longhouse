@@ -559,7 +559,6 @@ jobs:
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag_name }}
       GH_TOKEN: ${{ github.token }}
-      LONGHOUSE_VERIFY_HOME: ${{ runner.temp }}/longhouse-verify-home
 
     steps:
       - name: Classify release tier
@@ -712,6 +711,7 @@ jobs:
           LONGHOUSE_SKIP_UPDATE_NOTIFIER: '1'
         run: |
           set -euo pipefail
+          LONGHOUSE_VERIFY_HOME="$RUNNER_TEMP/longhouse-verify-home"
           rm -rf "$LONGHOUSE_VERIFY_HOME"
           mkdir -p "$LONGHOUSE_VERIFY_HOME"
           export HOME="$LONGHOUSE_VERIFY_HOME"
@@ -728,6 +728,7 @@ jobs:
       - name: Assert engine binary is executable
         run: |
           set -euo pipefail
+          LONGHOUSE_VERIFY_HOME="$RUNNER_TEMP/longhouse-verify-home"
           engine="$LONGHOUSE_VERIFY_HOME/.local/bin/longhouse-engine"
           if [[ ! -x "$engine" ]]; then
             echo "engine binary missing or not executable at $engine" >&2
