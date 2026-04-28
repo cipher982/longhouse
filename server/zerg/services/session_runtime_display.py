@@ -331,7 +331,7 @@ def build_session_runtime_display(
         presence_state = "stalled"
         phase_label = "Stalled"
         headline = "Stalled"
-        detail = "No provider progress"
+        detail = "No recent managed-session progress"
         is_executing = False
         needs_attention = True
         is_idle = False

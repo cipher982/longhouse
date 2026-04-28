@@ -54,7 +54,7 @@ Runtime display adds:
   "state": "stalled",
   "tone": "stalled",
   "headline": "Stalled",
-  "detail": "No progress from the provider",
+  "detail": "No recent managed-session progress",
   "is_executing": false,
   "needs_attention": true,
   "is_stalled": true

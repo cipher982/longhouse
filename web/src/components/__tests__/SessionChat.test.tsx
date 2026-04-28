@@ -193,7 +193,7 @@ describe("SessionChat", () => {
     });
 
     const recovery = await screen.findByTestId("session-chat-stall-recovery");
-    expect(recovery).toHaveTextContent(/provider appears stalled/i);
+    expect(recovery).toHaveTextContent(/managed session appears stalled/i);
     expect(screen.queryByText(/click queue next to auto-send/i)).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /interrupt/i }));
