@@ -254,6 +254,8 @@ def build_session_runtime_display(
     runtime_view: SessionRuntimeView,
     capabilities: SessionCapabilityFlags,
     ended_at: datetime | None,
+    binding_host_state: str | None = None,
+    binding_terminal_reason: str | None = None,
 ) -> SessionRuntimeDisplay:
     status = runtime_view.status
     confidence = runtime_view.confidence
@@ -322,11 +324,24 @@ def build_session_runtime_display(
         heuristic_active=heuristic_active,
         has_signal=has_signal,
     )
-    lifecycle = "closed" if terminal_state else "open"
-    terminal_reason = _derive_terminal_reason(terminal_state)
-    # host_state wiring lands with machine-agent heartbeat (Phase 5+). Until
-    # then we emit "unknown" so clients can already render the axis honestly.
-    host_state = "unknown"
+    # Phase 6: machine-agent observed process-gone promotes lifecycle to
+    # closed even without an explicit terminal_signal. Only managed
+    # sessions are exempt — their terminal truth flows through the
+    # runtime-state reducer. For unmanaged, binding_terminal_reason
+    # comes from the unmanaged_bindings service.
+    binding_closed = binding_terminal_reason == "process_gone" and control_path == "unmanaged"
+    if terminal_state:
+        lifecycle = "closed"
+        terminal_reason = _derive_terminal_reason(terminal_state)
+    elif binding_closed:
+        lifecycle = "closed"
+        terminal_reason = "process_gone"
+    else:
+        lifecycle = "open"
+        terminal_reason = None
+    # Phase 5c: host_state comes from heartbeat+binding freshness when a
+    # binding overlay is supplied. Otherwise we honestly say "unknown".
+    host_state = binding_host_state if binding_host_state else "unknown"
 
     return SessionRuntimeDisplay(
         truth_tier=truth_tier,
