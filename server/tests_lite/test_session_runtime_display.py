@@ -1,9 +1,13 @@
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
+from types import SimpleNamespace
 
+from zerg.models.agents import SessionRuntimeState
 from zerg.services.session_capabilities import SessionCapabilityFlags
 from zerg.services.session_capabilities import build_session_capability_display
 from zerg.services.session_runtime import SessionRuntimeView
+from zerg.services.session_runtime import build_runtime_view
 from zerg.services.session_runtime_display import build_session_runtime_display
 from zerg.session_execution_home import SessionExecutionHome
 
@@ -181,8 +185,8 @@ def test_managed_stale_thinking_without_active_tool_is_stalled():
         runtime_view=_runtime_view(
             runtime_phase="thinking",
             runtime_source="managed_local_transport",
-            status="working",
-            presence_state="thinking",
+            status="idle",
+            presence_state=None,
             presence_tool=None,
             active_tool=None,
             confidence="stale",
@@ -204,6 +208,44 @@ def test_managed_stale_thinking_without_active_tool_is_stalled():
     assert display.needs_attention is True
     assert display.activity_recency == "stale"
     assert display.lifecycle == "open"
+
+
+def test_real_stale_runtime_view_without_presence_is_stalled():
+    now = datetime(2026, 4, 26, 12, 0, tzinfo=timezone.utc)
+    state = SessionRuntimeState(
+        runtime_key="claude:stalled-runtime-view",
+        provider="claude",
+        device_id="agent-device",
+        phase="thinking",
+        phase_source="managed_local_transport",
+        active_tool=None,
+        phase_started_at=now - timedelta(minutes=10),
+        last_runtime_signal_at=now - timedelta(minutes=10),
+        last_progress_at=now - timedelta(minutes=10),
+        last_live_at=now - timedelta(minutes=10),
+        timeline_anchor_at=now - timedelta(minutes=10),
+        freshness_expires_at=now - timedelta(minutes=8),
+        terminal_state=None,
+        runtime_version=3,
+    )
+    runtime_view = build_runtime_view(
+        state=state,
+        session=SimpleNamespace(started_at=now - timedelta(hours=1), ended_at=None),
+        now=now,
+    )
+
+    assert runtime_view.runtime_phase == "thinking"
+    assert runtime_view.presence_state is None
+    assert runtime_view.confidence == "stale"
+
+    display = build_session_runtime_display(
+        runtime_view=runtime_view,
+        capabilities=_capabilities(managed=True),
+        ended_at=None,
+    )
+
+    assert display.is_stalled is True
+    assert display.state == "stalled"
 
 
 def test_managed_stale_running_with_active_tool_is_not_stalled():
