@@ -198,7 +198,7 @@ def test_managed_stale_thinking_without_active_tool_is_stalled():
     assert display.state == "stalled"
     assert display.tone == "stalled"
     assert display.headline == "Stalled"
-    assert display.detail == "No provider progress"
+    assert display.detail == "No recent managed-session progress"
     assert display.phase_label == "Stalled"
     assert display.is_executing is False
     assert display.needs_attention is True

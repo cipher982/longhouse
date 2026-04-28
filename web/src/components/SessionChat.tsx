@@ -709,7 +709,7 @@ export function SessionChat({
       {isManagedLocal && isStalled ? (
         <div className="session-chat-stall-recovery" data-testid="session-chat-stall-recovery">
           <div className="session-chat-stall-recovery__copy">
-            <span className="session-chat-stall-recovery__title">Provider appears stalled</span>
+            <span className="session-chat-stall-recovery__title">Managed session appears stalled</span>
             <span className="session-chat-stall-recovery__detail">
               No progress has arrived from this managed session. Interrupt releases the current turn.
             </span>

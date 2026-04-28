@@ -305,7 +305,7 @@ describe("resolveSessionRuntimeState", () => {
           state: "stalled",
           tone: "stalled",
           headline: "Stalled",
-          detail: "No provider progress",
+          detail: "No recent managed-session progress",
           phase_label: "Stalled",
           compact_tool_label: null,
           is_live: false,
@@ -332,7 +332,7 @@ describe("resolveSessionRuntimeState", () => {
     expect(resolveSessionStatusLabel(runtime)).toBe("Stalled");
     expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
       headline: "Stalled",
-      detail: "No provider progress",
+      detail: "No recent managed-session progress",
     });
   });
 
