@@ -72,6 +72,76 @@ export interface SessionRuntimeState {
   runtimeDisplay: SessionRuntimeDisplay | null;
 }
 
+export type SessionControlPathLabel = "Managed" | "Unmanaged";
+
+export function resolveSessionOwnershipLabel(
+  runtime: SessionRuntimeState,
+  fallback: SessionControlPathLabel = "Unmanaged",
+): SessionControlPathLabel {
+  const controlPath = runtime.runtimeDisplay?.control_path;
+  if (controlPath === "managed") {
+    return "Managed";
+  }
+  if (controlPath === "unmanaged") {
+    return "Unmanaged";
+  }
+  return fallback;
+}
+
+export function resolveSessionStatusLabel(
+  runtime: SessionRuntimeState,
+  fallbackControlPath: "managed" | "unmanaged" = "unmanaged",
+): string {
+  const display = runtime.runtimeDisplay;
+  if (display?.lifecycle === "closed") {
+    return "Closed";
+  }
+
+  const controlPath = display?.control_path ?? fallbackControlPath;
+  if (controlPath === "managed") {
+    if (runtime.presenceState === "running" || runtime.presenceState === "thinking") {
+      return "Working";
+    }
+    if (runtime.presenceState === "needs_user" || runtime.presenceState === "blocked") {
+      return "Needs you";
+    }
+    if (runtime.presenceState === "idle" || runtime.isIdle) {
+      return "Ready";
+    }
+    if (display?.activity_recency === "live" || display?.activity_recency === "recent" || runtime.heuristicActive) {
+      return "Recent activity";
+    }
+    if (display?.activity_recency === "none") {
+      return "Unknown";
+    }
+    return "Disconnected";
+  }
+
+  if (controlPath === "unmanaged") {
+    if (display?.host_state === "online") {
+      return "Process seen";
+    }
+    if (display?.activity_recency === "live" || runtime.isExecuting || runtime.needsAttention || runtime.heuristicActive) {
+      return "Active";
+    }
+    if (display?.activity_recency === "recent") {
+      return "Recent activity";
+    }
+    if (display?.activity_recency === "stale") {
+      return "Stale";
+    }
+    return "Unknown";
+  }
+
+  if (runtime.isExecuting || runtime.needsAttention || runtime.heuristicActive) {
+    return "Active";
+  }
+  if (runtime.isIdle) {
+    return "Ready";
+  }
+  return "Unknown";
+}
+
 export function normalizePresenceState(state: string | null | undefined): KnownPresenceState | null {
   if (
     state === "thinking" ||

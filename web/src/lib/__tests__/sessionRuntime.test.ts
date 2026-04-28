@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { TimelineRuntimeSession } from "../sessionRuntime";
-import { resolveSessionRuntimeState } from "../sessionRuntime";
+import {
+  resolveSessionOwnershipLabel,
+  resolveSessionRuntimeState,
+  resolveSessionStatusLabel,
+} from "../sessionRuntime";
 import { getRuntimeDisplayCopy, getRuntimeOutcomeLabel } from "../sessionUtils";
 
 function makeSession(overrides: Partial<TimelineRuntimeSession> = {}): TimelineRuntimeSession {
@@ -259,5 +263,67 @@ describe("resolveSessionRuntimeState", () => {
       headline: "Not connected",
       detail: null,
     });
+  });
+
+  it("labels managed stale sessions as disconnected for card status", () => {
+    const runtime = resolveSessionRuntimeState(
+      makeSession({
+        runtime_display: {
+          truth_tier: "stale",
+          state: null,
+          tone: "inactive",
+          headline: "Not connected",
+          detail: null,
+          phase_label: "Recent",
+          compact_tool_label: null,
+          is_live: false,
+          is_executing: false,
+          needs_attention: false,
+          is_idle: false,
+          heuristic_active: false,
+          is_managed_local_truth: false,
+          has_signal: true,
+          control_path: "managed",
+          activity_recency: "stale",
+          lifecycle: "open",
+          host_state: "unknown",
+          terminal_reason: null,
+        },
+      }),
+    );
+
+    expect(resolveSessionOwnershipLabel(runtime)).toBe("Managed");
+    expect(resolveSessionStatusLabel(runtime)).toBe("Disconnected");
+  });
+
+  it("labels unmanaged process-scanner matches as process seen", () => {
+    const runtime = resolveSessionRuntimeState(
+      makeSession({
+        runtime_display: {
+          truth_tier: "fresh",
+          state: null,
+          tone: "inactive",
+          headline: "Inactive",
+          detail: null,
+          phase_label: "Recent",
+          compact_tool_label: null,
+          is_live: false,
+          is_executing: false,
+          needs_attention: false,
+          is_idle: false,
+          heuristic_active: false,
+          is_managed_local_truth: false,
+          has_signal: true,
+          control_path: "unmanaged",
+          activity_recency: "stale",
+          lifecycle: "open",
+          host_state: "online",
+          terminal_reason: null,
+        },
+      }),
+    );
+
+    expect(resolveSessionOwnershipLabel(runtime)).toBe("Unmanaged");
+    expect(resolveSessionStatusLabel(runtime)).toBe("Process seen");
   });
 });
