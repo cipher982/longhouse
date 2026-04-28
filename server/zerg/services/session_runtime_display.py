@@ -263,6 +263,7 @@ def build_session_runtime_display(
     status = runtime_view.status
     confidence = runtime_view.confidence
     runtime_source = _normalize_source(runtime_view.runtime_source)
+    runtime_phase = _normalize_presence_state(runtime_view.runtime_phase)
     presence_state = _normalize_presence_state(runtime_view.presence_state)
     tool_name = runtime_view.active_tool or runtime_view.presence_tool
     compact_tool = compact_runtime_tool_label(tool_name)
@@ -323,7 +324,7 @@ def build_session_runtime_display(
     is_stalled = (
         control_path == "managed"
         and terminal_state is None
-        and presence_state in LIVE_EXECUTION_STATES
+        and runtime_phase in LIVE_EXECUTION_STATES
         and confidence == "stale"
         and not (tool_name or "").strip()
     )
