@@ -63,9 +63,6 @@ struct TimelineView: View {
     private var timelineBody: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 20) {
-                if !viewModel.attention.isEmpty {
-                    timelineSection(title: "Needs you", sessions: viewModel.attention, emphasized: true)
-                }
                 if !viewModel.recent.isEmpty {
                     timelineSection(title: "Recent", sessions: viewModel.recent, emphasized: false)
                 }
@@ -322,7 +319,7 @@ final class TimelineViewModel: ObservableObject {
             let attention = sessions.filter(\.needsAttention)
             let attentionIds = Set(attention.map(\.id))
             self.attention = attention
-            self.recent = sessions.filter { !attentionIds.contains($0.id) }
+            self.recent = sessions
             WidgetSessionSnapshotStore.save(sessions: sessions)
             PushNotificationStore.removeResolvedAttentionNotifications(activeSessionIDs: attentionIds)
             self.lastUpdatedAt = Date()
@@ -350,7 +347,7 @@ final class TimelineViewModel: ObservableObject {
         guard autoRefreshTask == nil else { return }
         autoRefreshTask = Task { [weak self] in
             while !Task.isCancelled {
-                let delay = await self?.autoRefreshDelayNanoseconds ?? 4_000_000_000
+                let delay = self?.autoRefreshDelayNanoseconds ?? 4_000_000_000
                 try? await Task.sleep(nanoseconds: delay)
                 if Task.isCancelled { break }
                 await self?.refresh(using: appState, reloadWidget: true)

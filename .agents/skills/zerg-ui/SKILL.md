@@ -60,6 +60,35 @@ make qa-ui-baseline           # Run visual baseline tests
 make qa-ui-baseline-update    # Update baselines
 ```
 
+## iOS Layout QA (No Simulator)
+The simulator requires auth and can't be scripted past a login screen. For iOS layout work, mock the chrome in HTML and screenshot with Playwright instead:
+
+```bash
+# Write an HTML file mimicking the iOS view at iPhone 16 Pro dimensions
+cat > /tmp/ios-mock.html << 'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=393, initial-scale=1">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, sans-serif; }
+  body { background: #000; color: #fff; width: 393px; height: 852px; }
+  /* mirror SwiftUI .bar material: */ .bar { background: rgba(28,28,30,0.92); border-top: 1px solid rgba(255,255,255,0.1); }
+</style>
+</head>
+<body>
+  <!-- your mock layout here -->
+</body>
+</html>
+EOF
+
+bunx playwright screenshot --browser chromium --viewport-size "393,852" "file:///tmp/ios-mock.html" /tmp/ios-mock.png
+```
+
+Then `Read(/tmp/ios-mock.png)` to inspect with vision. Iterate HTML until the layout is right, then translate to SwiftUI. Not pixel-perfect (no SF Symbols, no blur material) but catches layout problems — crowded rows, wrong spacing, accidental tap targets — in ~2s per iteration.
+
+Add `#Preview` blocks in a `*Previews.swift` file (see `SessionViewPreviews.swift`) for a Xcode canvas view once the structure is settled.
+
 ## Gotchas
 - Dev must be running: `curl localhost:47300/health`
 - Local dev has AUTH_DISABLED=1 (auto-logged-in)

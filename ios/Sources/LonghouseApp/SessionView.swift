@@ -84,7 +84,14 @@ struct SessionView: View {
     @ViewBuilder
     private var runtimeDock: some View {
         if let detail = viewModel.detail {
-            SessionRuntimeDock(detail: detail)
+            SessionRuntimeDock(
+                detail: detail,
+                loopMode: detail.effectiveLoopMode,
+                isUpdatingLoopMode: viewModel.isUpdatingLoopMode,
+                onLoopModeChange: { mode in
+                    Task { await viewModel.setLoopMode(sessionId: sessionId, mode: mode, appState: appState) }
+                }
+            )
         }
     }
 
@@ -145,16 +152,10 @@ struct SessionView: View {
                         .padding(.horizontal)
                         .padding(.vertical, 12)
                     }
+                    .defaultScrollAnchor(.bottom)
                     .onChange(of: viewModel.items.count) { _, _ in
                         if let last = viewModel.items.last {
-                            withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
-                        }
-                    }
-                    .onAppear {
-                        if let last = viewModel.items.last {
-                            DispatchQueue.main.async {
-                                proxy.scrollTo(last.id, anchor: .bottom)
-                            }
+                            proxy.scrollTo(last.id, anchor: .bottom)
                         }
                     }
                 }
@@ -232,24 +233,6 @@ struct SessionView: View {
                 .accessibilityIdentifier("session-chat-turn-ended")
             }
 
-            HStack(spacing: 8) {
-                LoopModeButtons(
-                    currentMode: detail.effectiveLoopMode,
-                    disabled: viewModel.isUpdatingLoopMode,
-                    onChange: { mode in
-                        Task {
-                            await viewModel.setLoopMode(sessionId: sessionId, mode: mode, appState: appState)
-                        }
-                    }
-                )
-                if viewModel.isUpdatingLoopMode {
-                    ProgressView()
-                        .controlSize(.mini)
-                }
-                Spacer(minLength: 0)
-            }
-            .accessibilityIdentifier("session-loop-mode-controls")
-
             if let loopModeErrorMessage = viewModel.loopModeErrorMessage {
                 Text(loopModeErrorMessage)
                     .font(.caption)
@@ -257,21 +240,21 @@ struct SessionView: View {
             }
 
             HStack(alignment: .bottom, spacing: 8) {
+                // Sparkle: AI draft, only when field is empty
                 Button {
                     Task { await draft() }
                 } label: {
                     if viewModel.isDrafting {
-                        ProgressView()
-                            .controlSize(.small)
+                        ProgressView().controlSize(.small)
                     } else {
                         Image(systemName: "sparkles")
                             .font(.title3)
+                            .foregroundStyle(composerHasText ? Color.secondary.opacity(0.3) : Color.secondary)
                     }
                 }
                 .frame(width: 32, height: 32)
                 .disabled(composerHasText || viewModel.isSending || viewModel.isDrafting)
                 .accessibilityLabel("Draft reply")
-                .accessibilityHint("Available when the reply field is empty")
 
                 TextField("Reply", text: $composerText, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
@@ -279,37 +262,34 @@ struct SessionView: View {
                     .focused($composerFocused)
                     .disabled(viewModel.isSending || viewModel.isDrafting)
 
-                if showSecondaryQueueAction {
-                    Button("Queue next") {
-                        Task { await send(intent: "queue") }
+                // Send button: always a circle arrow icon; long-press reveals steer/queue split
+                Button {
+                    Task { await send() }
+                } label: {
+                    if viewModel.isSending {
+                        ProgressView()
+                            .frame(width: 28, height: 28)
+                    } else {
+                        Image(systemName: sendIcon)
+                            .font(.title2)
+                            .foregroundStyle(composerHasText ? Color.accentColor : Color.secondary.opacity(0.3))
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(!composerHasText || viewModel.isSending || viewModel.isDrafting)
-                    .accessibilityLabel("Queue next message")
                 }
-
-                if primaryIntent == "auto" {
-                    Button {
-                        Task { await send() }
-                    } label: {
-                        if viewModel.isSending {
-                            ProgressView()
-                        } else {
-                            Image(systemName: "arrow.up.circle.fill")
-                                .font(.title2)
+                .disabled(!composerHasText || viewModel.isSending || viewModel.isDrafting)
+                .accessibilityLabel(sendAccessibilityLabel)
+                .contextMenu {
+                    if showSecondaryQueueAction {
+                        Button {
+                            Task { await send(intent: "steer") }
+                        } label: {
+                            Label("Send update now", systemImage: "arrow.up.circle")
+                        }
+                        Button {
+                            Task { await send(intent: "queue") }
+                        } label: {
+                            Label("Queue for next turn", systemImage: "clock.arrow.circlepath")
                         }
                     }
-                    .disabled(!composerHasText || viewModel.isSending || viewModel.isDrafting)
-                    .accessibilityLabel("Send reply")
-                } else {
-                    Button(primaryIntent == "steer" ? "Send update" : "Queue next") {
-                        Task { await send() }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(!composerHasText || viewModel.isSending || viewModel.isDrafting)
-                    .accessibilityLabel(primaryIntent == "steer" ? "Send update mid-turn" : "Queue next message")
                 }
             }
         }
@@ -349,6 +329,22 @@ struct SessionView: View {
         return detail.isSessionExecuting && detail.canSteerActiveTurn && detail.canQueueNextInput
     }
 
+    private var sendIcon: String {
+        switch primaryIntent {
+        case "steer": return "arrow.up.circle.fill"
+        case "queue": return "clock.arrow.circlepath"
+        default: return "arrow.up.circle.fill"
+        }
+    }
+
+    private var sendAccessibilityLabel: String {
+        switch primaryIntent {
+        case "steer": return "Send update mid-turn"
+        case "queue": return "Queue for next turn"
+        default: return "Send reply"
+        }
+    }
+
     private func send(intent: String? = nil) async {
         let trimmed = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -384,6 +380,9 @@ struct SessionView: View {
 
 private struct SessionRuntimeDock: View {
     let detail: SessionDetail
+    var loopMode: SessionLoopMode? = nil
+    var isUpdatingLoopMode: Bool = false
+    var onLoopModeChange: ((SessionLoopMode) -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 10) {
@@ -404,6 +403,19 @@ private struct SessionRuntimeDock: View {
             }
 
             Spacer(minLength: 8)
+
+            if let loopMode, let onChange = onLoopModeChange {
+                if isUpdatingLoopMode {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    LoopModeButtons(
+                        currentMode: loopMode,
+                        disabled: isUpdatingLoopMode,
+                        onChange: onChange
+                    )
+                    .accessibilityIdentifier("session-loop-mode-controls")
+                }
+            }
 
             Text(capabilityLabel)
                 .font(.caption2.weight(.medium))
@@ -479,34 +491,49 @@ private struct LoopModeButtons: View {
     let onChange: (SessionLoopMode) -> Void
 
     var body: some View {
-        HStack(spacing: 6) {
-            modeButton(.assist, title: "Assist", systemImage: "wand.and.stars")
-            modeButton(.autopilot, title: "Autopilot", systemImage: "bolt.circle")
-            Menu {
-                Button {
-                    onChange(.manual)
-                } label: {
-                    Label("Turn off assistance", systemImage: "pause.circle")
-                }
-            } label: {
-                Image(systemName: currentMode == .manual ? "ellipsis.circle.fill" : "ellipsis.circle")
-                    .font(.title3)
-                    .accessibilityLabel("More control modes")
+        Menu {
+            Button { onChange(.assist) } label: {
+                Label("Assist", systemImage: "wand.and.stars")
             }
-            .disabled(disabled || currentMode == .manual)
+            Button { onChange(.autopilot) } label: {
+                Label("Autopilot", systemImage: "bolt.circle")
+            }
+            Divider()
+            Button { onChange(.manual) } label: {
+                Label("Off", systemImage: "pause.circle")
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: modeIcon)
+                    .font(.caption2.weight(.semibold))
+                Text(modeLabel)
+                    .font(.caption.weight(.medium))
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption2.weight(.semibold))
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Color(.tertiarySystemGroupedBackground), in: Capsule())
+        }
+        .disabled(disabled)
+        .accessibilityLabel("Loop mode: \(modeLabel)")
+    }
+
+    private var modeLabel: String {
+        switch currentMode {
+        case .assist: return "Assist"
+        case .autopilot: return "Autopilot"
+        case .manual: return "Off"
         }
     }
 
-    private func modeButton(_ mode: SessionLoopMode, title: String, systemImage: String) -> some View {
-        Button {
-            onChange(mode)
-        } label: {
-            Label(title, systemImage: systemImage)
+    private var modeIcon: String {
+        switch currentMode {
+        case .assist: return "wand.and.stars"
+        case .autopilot: return "bolt.circle"
+        case .manual: return "pause.circle"
         }
-        .buttonStyle(.bordered)
-        .tint(currentMode == mode ? Color.accentColor : Color.secondary)
-        .controlSize(.small)
-        .disabled(disabled || currentMode == mode)
     }
 }
 
