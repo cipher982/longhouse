@@ -267,6 +267,17 @@ def build_session_runtime_display(
     presence_state = _normalize_presence_state(runtime_view.presence_state)
     tool_name = runtime_view.active_tool or runtime_view.presence_tool
     compact_tool = compact_runtime_tool_label(tool_name)
+    control_path = _derive_control_path(capabilities)
+    # Phase 5c: host_state comes from heartbeat+binding freshness when a
+    # binding overlay is supplied. Otherwise we honestly say "unknown".
+    host_state = binding_host_state if binding_host_state else "unknown"
+    unmanaged_attention_unverified = control_path == "unmanaged" and presence_state in ATTENTION_STATES and host_state != "online"
+    if unmanaged_attention_unverified:
+        # A bare imported provider transcript often ends with the assistant
+        # handing control back to the user. Without an online machine binding,
+        # that is not actionable runtime state, so do not promote it to
+        # "Needs you".
+        presence_state = None
     truth_tier = _truth_tier(
         capabilities=capabilities,
         status=status,
@@ -280,12 +291,14 @@ def build_session_runtime_display(
         runtime_source=runtime_source,
         presence_state=presence_state,
     )
+    if unmanaged_attention_unverified:
+        heuristic_active = False
     is_executing = presence_state in LIVE_EXECUTION_STATES
     needs_attention = presence_state in ATTENTION_STATES
     is_idle = presence_state == "idle" or (not is_executing and not needs_attention and not heuristic_active and status == "idle")
     phase_label = _phase_label(
         presence_state=presence_state,
-        display_phase=runtime_view.display_phase,
+        display_phase="Recent" if unmanaged_attention_unverified else runtime_view.display_phase,
         compact_tool=compact_tool,
     )
     is_managed_session = (
@@ -320,7 +333,6 @@ def build_session_runtime_display(
 
     # Phase 2 of session-liveness-honesty: three-axis projection.
     terminal_state = runtime_view.terminal_state
-    control_path = _derive_control_path(capabilities)
     is_stalled = (
         control_path == "managed"
         and terminal_state is None
@@ -334,7 +346,7 @@ def build_session_runtime_display(
         headline = "Stalled"
         detail = "No recent managed-session progress"
         is_executing = False
-        needs_attention = True
+        needs_attention = False
         is_idle = False
     activity_recency = _derive_activity_recency(
         presence_state=presence_state,
@@ -376,10 +388,6 @@ def build_session_runtime_display(
             is_idle=is_idle,
         )
     )
-    # Phase 5c: host_state comes from heartbeat+binding freshness when a
-    # binding overlay is supplied. Otherwise we honestly say "unknown".
-    host_state = binding_host_state if binding_host_state else "unknown"
-
     return SessionRuntimeDisplay(
         truth_tier=truth_tier,
         state=presence_state,

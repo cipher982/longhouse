@@ -137,7 +137,11 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     var isBlocked: Bool { !isClosed && effectiveRuntimeState == "blocked" }
     var isNeedsUser: Bool { !isClosed && effectiveRuntimeState == "needs_user" }
     var isUserActive: Bool { userState == nil || userState == "active" }
-    var needsAttention: Bool { !isClosed && (runtimeDisplay?.needsAttention == true || isBlocked || isNeedsUser) && isUserActive }
+    var needsAttention: Bool {
+        if isClosed || !isUserActive { return false }
+        if let runtimeDisplay { return runtimeDisplay.needsAttention }
+        return isBlocked || isNeedsUser
+    }
     var isExecuting: Bool {
         if isClosed { return false }
         if let runtimeDisplay { return runtimeDisplay.isExecuting }
