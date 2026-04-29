@@ -191,6 +191,8 @@ def _display_phase_for_state(
         return "Completed"
     if confidence == "inferred":
         return "Recent progress"
+    if confidence == "stale" and phase in ATTENTION_PHASES:
+        return "Recent"
     if phase == "running":
         return f"Running {active_tool}" if active_tool else "Running"
     if phase == "thinking":
