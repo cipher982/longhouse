@@ -18,8 +18,10 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentsBase
+from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionRuntimeState
+from zerg.models.agents import UnmanagedSessionBinding
 from zerg.session_execution_home import SessionExecutionHome
 
 
@@ -557,6 +559,60 @@ def test_sessions_list_marks_materialized_needs_user_as_active_attention(tmp_pat
         assert row["runtime_display"]["headline"] == "Waiting for you"
         assert row["runtime_display"]["detail"] == "Reply needed"
         assert row["runtime_display"]["tone"] == "needs-user"
+        assert row["runtime_display"]["needs_attention"] is True
+
+
+def test_active_sessions_online_unmanaged_binding_keeps_attention_actionable(tmp_path):
+    factory = _make_db(tmp_path, "active_unmanaged_binding_attention.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            started_at=now - timedelta(hours=1),
+            ended_at=None,
+            project="online-unmanaged",
+        )
+        _upsert_runtime_state(
+            db,
+            session_id=str(session.id),
+            phase="needs_user",
+            updated_at=now - timedelta(seconds=20),
+        )
+        db.add(
+            AgentHeartbeat(
+                device_id="timeline-runtime",
+                received_at=now,
+            )
+        )
+        db.add(
+            UnmanagedSessionBinding(
+                machine_id="dev-machine",
+                device_id="timeline-runtime",
+                provider="claude",
+                provider_session_id=str(session.id),
+                session_id=session.id,
+                source_path="/tmp/session.jsonl",
+                pid=1234,
+                process_start_time=now - timedelta(hours=1),
+                observed_at=now,
+                last_seen_at=now,
+                source_mtime=now,
+                binding_state="observed",
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    for client in _client(factory):
+        resp = client.get("/agents/sessions/active?days_back=14&limit=5", headers={"X-Agents-Token": "dev"})
+        assert resp.status_code == 200, resp.text
+        row = next(item for item in resp.json()["sessions"] if item["id"] == str(session.id))
+        assert row["runtime_display"]["control_path"] == "unmanaged"
+        assert row["runtime_display"]["host_state"] == "online"
+        assert row["runtime_display"]["state"] == "needs_user"
         assert row["runtime_display"]["needs_attention"] is True
 
 

@@ -822,6 +822,7 @@ def build_active_session_response(
     last_assistant_message: str | None,
     attention: str,
     now: datetime,
+    binding_overlay=None,
 ) -> ActiveSessionResponse:
     capability_flags = build_session_capabilities(session)
     _started = (
@@ -835,6 +836,8 @@ def build_active_session_response(
         runtime_overlay=runtime_overlay,
         capability_flags=capability_flags,
         ended_at=session.ended_at,
+        binding_host_state=binding_overlay.host_state if binding_overlay is not None else None,
+        binding_terminal_reason=binding_overlay.terminal_reason if binding_overlay is not None else None,
     )
 
     return ActiveSessionResponse(
