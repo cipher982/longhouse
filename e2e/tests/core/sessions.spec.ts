@@ -577,6 +577,30 @@ test.describe("Sessions Page", () => {
         payload: { progress_kind: "assistant_message" },
       },
     ]);
+    const heartbeat = await request.post("/api/agents/heartbeat", {
+      data: {
+        version: "e2e",
+        daemon_pid: 123,
+        unmanaged_session_bindings: [
+          {
+            machine_id: `e2e-machine-${suffix}`,
+            provider: "claude",
+            provider_session_id: `claude-session-${needsUserId}`,
+            source_path: "/tmp/runtime-needs-user.jsonl",
+            pid: 4321,
+            process_start_time: new Date(now - 60_000).toISOString(),
+            cwd: "/tmp",
+            source_offset: 1,
+            source_mtime: new Date(now - 4_000).toISOString(),
+            observed_at: new Date(now - 4_000).toISOString(),
+          },
+        ],
+      },
+    });
+    expect(
+      heartbeat.status(),
+      `heartbeat failed: ${heartbeat.status()} ${await heartbeat.text()}`,
+    ).toBe(204);
 
     await page.goto(`/timeline?project=${project}`);
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
