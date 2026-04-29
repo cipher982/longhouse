@@ -234,6 +234,9 @@ export function getCardRuntimePhaseLabel(runtime: ReturnType<typeof resolveSessi
 export function getRuntimeOutcomeLabel(
   runtime: ReturnType<typeof resolveSessionRuntimeState>,
 ): string {
+  if (runtime.runtimeDisplay?.lifecycle === "closed") {
+    return "Completed";
+  }
   if (
     runtime.runtimeDisplay?.headline === "Active" ||
     runtime.runtimeDisplay?.headline === "Completed" ||
@@ -267,6 +270,12 @@ export function getRuntimeDisplayCopy(
   } = {},
 ): RuntimeDisplayCopy {
   if (runtime.runtimeDisplay) {
+    if (runtime.runtimeDisplay.lifecycle === "closed") {
+      return {
+        headline: "Completed",
+        detail: null,
+      };
+    }
     return {
       headline: runtime.runtimeDisplay.headline,
       detail: runtime.runtimeDisplay.detail,

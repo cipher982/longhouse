@@ -1687,7 +1687,7 @@ describe("SessionsPage", () => {
         sessions: [
           makeTimelineCard({
             ended_at: "2026-03-21T12:10:00Z",
-            presence_state: "idle",
+            presence_state: "needs_user",
             control: {
               managed_transport: "codex_app_server",
               source_runner_id: null,
@@ -1697,9 +1697,14 @@ describe("SessionsPage", () => {
             capabilities: makeCapabilities({ host_reattach_available: true }),
             runtime_display: makeRuntimeDisplay({
               control_path: "managed",
+              state: "needs_user",
+              tone: "needs-user",
+              headline: "Waiting for you",
+              phase_label: "Needs you",
+              needs_attention: true,
               activity_recency: "stale",
               lifecycle: "closed",
-              terminal_reason: "provider_signal",
+              terminal_reason: "process_gone",
             }),
           }),
         ],

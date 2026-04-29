@@ -210,6 +210,57 @@ struct SessionModelsTests {
     }
 
     @Test
+    func attentionWidgetOrderKeepsClosedStaleAttentionOutOfAttentionGroup() {
+        let closed = SessionSummary(
+            id: "session-closed-process-gone",
+            title: "Finished work",
+            presenceState: "needs_user",
+            provider: "codex",
+            project: "zerg",
+            lastActivityAt: "2026-04-25T20:00:00Z",
+            status: "active",
+            displayPhase: "Needs you",
+            runtimeDisplay: SessionRuntimeDisplay(
+                truthTier: "managed-local",
+                state: "needs_user",
+                tone: "needs-user",
+                headline: "Waiting for you",
+                detail: "Reply needed",
+                phaseLabel: "Needs you",
+                compactToolLabel: nil,
+                isLive: false,
+                isExecuting: false,
+                needsAttention: true,
+                isIdle: false,
+                heuristicActive: false,
+                isManagedLocalTruth: true,
+                hasSignal: true,
+                controlPath: "managed",
+                activityRecency: "stale",
+                lifecycle: "closed",
+                hostState: "offline",
+                terminalReason: "process_gone"
+            )
+        )
+        let openAttention = SessionSummary(
+            id: "session-open-attention",
+            title: "Needs reply",
+            presenceState: "needs_user",
+            provider: "claude",
+            project: "zerg",
+            lastActivityAt: "2026-04-25T20:01:00Z",
+            status: "active",
+            displayPhase: "Needs you"
+        )
+
+        let ordered = SessionSummary.attentionWidgetOrder([closed, openAttention], limit: 2)
+
+        #expect(!closed.needsAttention)
+        #expect(openAttention.needsAttention)
+        #expect(ordered.map(\.id) == ["session-open-attention", "session-closed-process-gone"])
+    }
+
+    @Test
     func sessionDetailMarksImportedSessionsReadOnly() throws {
         let json = """
         {

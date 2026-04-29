@@ -98,7 +98,7 @@ export interface SessionRuntimeDisplay {
   activity_recency?: "live" | "recent" | "stale" | "none" | (string & {});
   lifecycle?: "open" | "closed" | "unknown" | (string & {});
   host_state?: "online" | "stale" | "offline" | "unknown" | (string & {});
-  terminal_reason?: "provider_signal" | "process_gone" | "host_reported" | null | (string & {});
+  terminal_reason?: "provider_signal" | "process_gone" | "host_expired" | "user_closed" | "host_reported" | null | (string & {});
 }
 
 export interface SessionControl {
