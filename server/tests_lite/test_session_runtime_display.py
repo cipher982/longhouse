@@ -205,7 +205,7 @@ def test_managed_stale_thinking_without_active_tool_is_stalled():
     assert display.detail == "No recent managed-session progress"
     assert display.phase_label == "Stalled"
     assert display.is_executing is False
-    assert display.needs_attention is True
+    assert display.needs_attention is False
     assert display.activity_recency == "stale"
     assert display.lifecycle == "open"
 
@@ -246,6 +246,7 @@ def test_real_stale_runtime_view_without_presence_is_stalled():
 
     assert display.is_stalled is True
     assert display.state == "stalled"
+    assert display.needs_attention is False
 
 
 def test_managed_stale_running_with_active_tool_is_not_stalled():
@@ -288,6 +289,51 @@ def test_unmanaged_stale_thinking_without_active_tool_is_not_stalled():
     assert display.control_path == "unmanaged"
     assert display.is_stalled is False
     assert display.state == "thinking"
+
+
+def test_unmanaged_needs_user_without_online_host_is_not_actionable():
+    display = build_session_runtime_display(
+        runtime_view=_runtime_view(
+            runtime_phase="needs_user",
+            runtime_source="semantic",
+            status="active",
+            presence_state="needs_user",
+            confidence="live",
+            display_phase="Needs you",
+        ),
+        capabilities=_capabilities(managed=False),
+        ended_at=None,
+    )
+
+    assert display.control_path == "unmanaged"
+    assert display.host_state == "unknown"
+    assert display.state is None
+    assert display.phase_label == "Recent"
+    assert display.headline == "Inactive"
+    assert display.needs_attention is False
+
+
+def test_unmanaged_needs_user_with_online_host_stays_actionable():
+    display = build_session_runtime_display(
+        runtime_view=_runtime_view(
+            runtime_phase="needs_user",
+            runtime_source="semantic",
+            status="active",
+            presence_state="needs_user",
+            confidence="live",
+            display_phase="Needs you",
+        ),
+        capabilities=_capabilities(managed=False),
+        ended_at=None,
+        binding_host_state="online",
+    )
+
+    assert display.control_path == "unmanaged"
+    assert display.host_state == "online"
+    assert display.state == "needs_user"
+    assert display.phase_label == "Needs you"
+    assert display.headline == "Active"
+    assert display.needs_attention is True
 
 
 def test_managed_live_thinking_without_active_tool_is_not_stalled():

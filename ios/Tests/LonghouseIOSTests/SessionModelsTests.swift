@@ -300,6 +300,43 @@ struct SessionModelsTests {
     }
 
     @Test
+    func runtimeDisplayNeedsAttentionIsAuthoritativeOverState() {
+        let summary = SessionSummary(
+            id: "session-stalled-managed",
+            title: "Finished work",
+            presenceState: "needs_user",
+            provider: "codex",
+            project: "bar",
+            lastActivityAt: "2026-04-28T13:21:51Z",
+            status: "active",
+            displayPhase: "Needs you",
+            runtimeDisplay: SessionRuntimeDisplay(
+                truthTier: "stale",
+                state: "stalled",
+                tone: "stalled",
+                headline: "Stalled",
+                detail: "No recent managed-session progress",
+                phaseLabel: "Stalled",
+                compactToolLabel: nil,
+                isLive: false,
+                isExecuting: false,
+                needsAttention: false,
+                isIdle: false,
+                heuristicActive: false,
+                isManagedLocalTruth: false,
+                hasSignal: true,
+                controlPath: "managed",
+                activityRecency: "stale",
+                lifecycle: "open",
+                hostState: "unknown",
+                terminalReason: nil
+            )
+        )
+
+        #expect(!summary.needsAttention)
+    }
+
+    @Test
     func attentionWidgetOrderKeepsClosedStaleAttentionOutOfAttentionGroup() {
         let closed = SessionSummary(
             id: "session-closed-process-gone",
