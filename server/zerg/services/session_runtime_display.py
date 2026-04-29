@@ -456,7 +456,8 @@ def _derive_terminal_reason(terminal_state: str | None) -> str | None:
     normalized = terminal_state.strip().lower()
     if not normalized:
         return None
-    # The reducer stores values like "session_ended", "finished", etc. Today
-    # every closure comes from an explicit terminal_signal — classify all of
-    # them as provider_signal until process-gone detection lands (Phase 6).
+    if normalized in {"process_gone", "host_expired", "user_closed"}:
+        return normalized
+    # Provider terminal values such as "session_ended" and "finished" collapse
+    # to provider_signal. Machine-derived terminal values stay explicit.
     return "provider_signal"

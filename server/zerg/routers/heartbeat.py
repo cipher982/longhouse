@@ -35,6 +35,7 @@ from zerg.metrics import agents_heartbeat_write_seconds
 from zerg.metrics import managed_session_heartbeat_lease_rows_total
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionRuntimeEvent
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import UnmanagedSessionBinding
 from zerg.models.device_token import DeviceToken
@@ -47,6 +48,7 @@ from zerg.services.write_serializer import get_write_serializer
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.utils.time import UTCBaseModel
+from zerg.utils.time import normalize_utc
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +57,7 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 MANAGED_SESSION_LEASE_SOURCE = "engine_attached_lease"
 DEFAULT_MANAGED_SESSION_LEASE_TTL_MS = 15 * 60 * 1000
 MAX_MANAGED_SESSION_LEASE_TTL_MS = 60 * 60 * 1000
+MANAGED_SESSION_REATTACH_WINDOW = timedelta(hours=24)
 MANAGED_SESSION_LEASE_STATES = {"attached", "detached", "degraded"}
 MANAGED_SESSION_LEASE_PHASES = {"idle", "thinking", "running", "blocked", "needs_user", "none"}
 MANAGED_SESSION_LEASE_PROVIDERS = {"codex", "claude", "gemini"}
@@ -193,6 +196,14 @@ def _is_managed_codex_session(session: AgentSession | None) -> bool:
     return execution_home == SessionExecutionHome.MANAGED_LOCAL.value or managed_transport == ManagedSessionTransport.CODEX_APP_SERVER.value
 
 
+def _is_managed_session(session: AgentSession | None) -> bool:
+    if session is None:
+        return False
+    execution_home = str(getattr(session, "execution_home", "") or "").strip()
+    managed_transport = str(getattr(session, "managed_transport", "") or "").strip()
+    return execution_home == SessionExecutionHome.MANAGED_LOCAL.value or bool(managed_transport)
+
+
 def _runtime_events_for_managed_leases(
     leases: list[ManagedSessionLeaseIn],
     *,
@@ -256,6 +267,89 @@ def _runtime_events_for_managed_leases(
                     freshness_ms=lease.lease_ttl_ms,
                     dedupe_key=_dedupe_key_for_lease(lease),
                     payload=payload,
+                )
+            )
+
+    return events
+
+
+def _has_managed_lease_history(db: Session, runtime_key: str) -> bool:
+    return (
+        db.query(SessionRuntimeEvent.id)
+        .filter(SessionRuntimeEvent.runtime_key == runtime_key)
+        .filter(SessionRuntimeEvent.source == MANAGED_SESSION_LEASE_SOURCE)
+        .first()
+        is not None
+    )
+
+
+def _runtime_events_for_missing_managed_leases(
+    db: Session,
+    leases: list[ManagedSessionLeaseIn],
+    *,
+    device_id: str,
+    received_at: datetime,
+) -> list[RuntimeEventIngest]:
+    observed = {
+        ((lease.provider or "").strip().lower(), lease.session_id)
+        for lease in leases
+        if (lease.provider or "").strip() and lease.session_id is not None
+    }
+    rows = (
+        db.query(SessionRuntimeState, AgentSession)
+        .join(AgentSession, SessionRuntimeState.session_id == AgentSession.id)
+        .filter(SessionRuntimeState.device_id == device_id)
+        .filter(SessionRuntimeState.session_id.isnot(None))
+        .filter(SessionRuntimeState.terminal_state.is_(None))
+        .all()
+    )
+
+    events: list[RuntimeEventIngest] = []
+    reattach_window_ms = int(MANAGED_SESSION_REATTACH_WINDOW.total_seconds() * 1000)
+    for state, session in rows:
+        if not _is_managed_session(session):
+            continue
+        provider = (state.provider or session.provider or "").strip().lower()
+        session_id = state.session_id
+        if not provider or session_id is None or (provider, session_id) in observed:
+            continue
+        if not _has_managed_lease_history(db, state.runtime_key):
+            continue
+
+        detached_since = normalize_utc(state.phase_started_at) or normalize_utc(state.last_runtime_signal_at) or received_at
+        already_detached = state.phase == "blocked" and (state.active_tool or "").strip() == "control path"
+        if already_detached and received_at - detached_since >= MANAGED_SESSION_REATTACH_WINDOW:
+            events.append(
+                RuntimeEventIngest(
+                    runtime_key=state.runtime_key,
+                    session_id=session_id,
+                    provider=provider,
+                    device_id=device_id,
+                    source=MANAGED_SESSION_LEASE_SOURCE,
+                    kind="terminal_signal",
+                    occurred_at=received_at,
+                    dedupe_key=f"engine-managed-missing-terminal:{device_id}:{session_id}",
+                    payload={
+                        "terminal_state": "process_gone",
+                        "terminal_reason": "reattach_window_expired",
+                    },
+                )
+            )
+        elif not already_detached:
+            events.append(
+                RuntimeEventIngest(
+                    runtime_key=state.runtime_key,
+                    session_id=session_id,
+                    provider=provider,
+                    device_id=device_id,
+                    source=MANAGED_SESSION_LEASE_SOURCE,
+                    kind="phase_signal",
+                    phase="blocked",
+                    tool_name="control path",
+                    occurred_at=received_at,
+                    freshness_ms=reattach_window_ms,
+                    dedupe_key=f"engine-managed-missing-detached:{device_id}:{session_id}:{received_at.isoformat()}",
+                    payload={"state": "missing", "reattach_window_ms": reattach_window_ms},
                 )
             )
 
@@ -496,6 +590,7 @@ async def ingest_heartbeat(
             _disk = payload.disk_free_bytes
             _offline = 1 if payload.is_offline else 0
             _managed_leases = payload.managed_sessions
+            _managed_leases_present = "managed_sessions" in payload.model_fields_set
             _unmanaged_bindings = payload.unmanaged_session_bindings
             _unmanaged_bindings_present = "unmanaged_session_bindings" in payload.model_fields_set
 
@@ -551,6 +646,15 @@ async def ingest_heartbeat(
                     device_id=_device_id,
                     received_at=_now,
                 )
+                if _managed_leases_present:
+                    runtime_events.extend(
+                        _runtime_events_for_missing_managed_leases(
+                            write_db,
+                            _managed_leases,
+                            device_id=_device_id,
+                            received_at=_now,
+                        )
+                    )
                 if runtime_events:
                     ingest_runtime_events(write_db, runtime_events)
                     for lease in _managed_leases:
