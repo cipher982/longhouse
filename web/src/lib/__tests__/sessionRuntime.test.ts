@@ -17,6 +17,33 @@ function makeSession(overrides: Partial<TimelineRuntimeSession> = {}): TimelineR
   };
 }
 
+function makeRuntimeDisplay(
+  overrides: Partial<NonNullable<TimelineRuntimeSession["runtime_display"]>> = {},
+): NonNullable<TimelineRuntimeSession["runtime_display"]> {
+  return {
+    truth_tier: "managed-local",
+    state: null,
+    tone: "inactive",
+    headline: "Inactive",
+    detail: null,
+    phase_label: "Recent",
+    compact_tool_label: null,
+    is_live: false,
+    is_executing: false,
+    needs_attention: false,
+    is_idle: false,
+    heuristic_active: false,
+    is_managed_local_truth: true,
+    has_signal: true,
+    control_path: "managed",
+    activity_recency: "stale",
+    lifecycle: "open",
+    host_state: "unknown",
+    terminal_reason: null,
+    ...overrides,
+  };
+}
+
 describe("resolveSessionRuntimeState", () => {
   it("prefers server-derived runtime_display when present", () => {
     const runtime = resolveSessionRuntimeState(
@@ -396,5 +423,44 @@ describe("resolveSessionRuntimeState", () => {
 
     expect(resolveSessionOwnershipLabel(runtime)).toBe("Unmanaged");
     expect(resolveSessionStatusLabel(runtime)).toBe("Host online");
+  });
+
+  it("lets closed lifecycle suppress stale attention flags everywhere", () => {
+    const runtime = resolveSessionRuntimeState(
+      makeSession({
+        status: "active",
+        presence_state: "needs_user",
+        runtime_display: makeRuntimeDisplay({
+          state: "needs_user",
+          tone: "needs-user",
+          headline: "Waiting for you",
+          detail: "Reply needed",
+          phase_label: "Needs you",
+          needs_attention: true,
+          is_live: true,
+          is_executing: true,
+          heuristic_active: true,
+          is_stalled: true,
+          lifecycle: "closed",
+          terminal_reason: "process_gone",
+        }),
+      }),
+    );
+
+    expect(runtime.presenceState).toBeNull();
+    expect(runtime.isLive).toBe(false);
+    expect(runtime.isExecuting).toBe(false);
+    expect(runtime.needsAttention).toBe(false);
+    expect(runtime.heuristicActive).toBe(false);
+    expect(runtime.isStalled).toBe(false);
+    expect(runtime.isIdle).toBe(true);
+    expect(runtime.displayPhase).toBe("Completed");
+    expect(runtime.tone).toBe("inactive");
+    expect(resolveSessionStatusLabel(runtime)).toBe("Closed");
+    expect(getRuntimeOutcomeLabel(runtime)).toBe("Completed");
+    expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
+      headline: "Completed",
+      detail: null,
+    });
   });
 });

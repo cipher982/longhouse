@@ -308,7 +308,9 @@ export function resolveSessionRuntimeState(
   const serverDisplay = session.runtime_display ?? null;
   const sessionTruthTier = getRuntimeTruthTier(session);
   const status = session.status ?? null;
-  const presenceState = normalizePresenceState(serverDisplay?.state ?? session.presence_state ?? null);
+  const isClosed = serverDisplay?.lifecycle === "closed";
+  const rawPresenceState = normalizePresenceState(serverDisplay?.state ?? session.presence_state ?? null);
+  const presenceState = isClosed ? null : rawPresenceState;
   const presenceTool =
     session.active_tool ??
     session.presence_tool ??
@@ -321,26 +323,36 @@ export function resolveSessionRuntimeState(
   const confidence = session.confidence ?? null;
   const truthTier = normalizeRuntimeTruthTier(serverDisplay?.truth_tier) ?? sessionTruthTier;
 
-  const heuristicActive = serverDisplay?.heuristic_active ?? isProgressFallback({ status, confidence, runtimeSource, presenceState });
-  const isExecuting = serverDisplay?.is_executing ?? (presenceState === "thinking" || presenceState === "running");
-  const needsAttention = serverDisplay?.needs_attention ?? (presenceState === "needs_user" || presenceState === "blocked" || presenceState === "stalled");
+  const heuristicActive = isClosed
+    ? false
+    : (serverDisplay?.heuristic_active ?? isProgressFallback({ status, confidence, runtimeSource, presenceState }));
+  const isExecuting = isClosed
+    ? false
+    : (serverDisplay?.is_executing ?? (presenceState === "thinking" || presenceState === "running"));
+  const needsAttention = isClosed
+    ? false
+    : (serverDisplay?.needs_attention ?? (presenceState === "needs_user" || presenceState === "blocked" || presenceState === "stalled"));
 
-  const isLive = serverDisplay?.is_live ?? isExecuting;
-  const isIdle = serverDisplay?.is_idle ?? (presenceState === "idle" || (!isExecuting && !needsAttention && !heuristicActive && status === "idle"));
-  const isStalled = serverDisplay?.is_stalled ?? presenceState === "stalled";
+  const isLive = isClosed ? false : (serverDisplay?.is_live ?? isExecuting);
+  const isIdle = isClosed
+    ? true
+    : (serverDisplay?.is_idle ?? (presenceState === "idle" || (!isExecuting && !needsAttention && !heuristicActive && status === "idle")));
+  const isStalled = isClosed ? false : (serverDisplay?.is_stalled ?? presenceState === "stalled");
   const hasSignal = serverDisplay?.has_signal ?? (truthTier !== "none" || presenceState != null || status != null || lastLiveAt != null);
 
   const displayPhase =
-    serverDisplay?.phase_label ??
-    getDisplayPhase(
-      presenceState,
-      presenceTool,
-      status,
-      // Phase 1: do not feed ended_at as a terminal hint. See getDisplayPhase.
-      null,
-      session.display_phase ?? null,
-    );
-  const tone = normalizeRuntimeTone(serverDisplay?.tone) ?? getTone(presenceState, { heuristicActive, isIdle });
+    isClosed
+      ? "Completed"
+      : (serverDisplay?.phase_label ??
+        getDisplayPhase(
+          presenceState,
+          presenceTool,
+          status,
+          // Phase 1: do not feed ended_at as a terminal hint. See getDisplayPhase.
+          null,
+          session.display_phase ?? null,
+        ));
+  const tone = isClosed ? "inactive" : (normalizeRuntimeTone(serverDisplay?.tone) ?? getTone(presenceState, { heuristicActive, isIdle }));
 
   return {
     status,
