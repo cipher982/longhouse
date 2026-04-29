@@ -188,6 +188,7 @@ def test_sessions_list_uses_recent_activity_anchor_for_old_live_session(tmp_path
             "is_executing": True,
             "needs_attention": False,
             "is_idle": False,
+            "is_stalled": False,
             "heuristic_active": False,
             "is_managed_local_truth": False,
             "has_signal": True,

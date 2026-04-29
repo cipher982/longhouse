@@ -343,18 +343,17 @@ def build_session_runtime_display(
         heuristic_active=heuristic_active,
         has_signal=has_signal,
     )
-    # Phase 6: machine-agent observed process-gone promotes lifecycle to
-    # closed even without an explicit terminal_signal. Only managed
-    # sessions are exempt — their terminal truth flows through the
-    # runtime-state reducer. For unmanaged, binding_terminal_reason
-    # comes from the unmanaged_bindings service.
-    binding_closed = binding_terminal_reason == "process_gone" and control_path == "unmanaged"
+    # Phase 6: machine-agent observed unmanaged binding terminal reasons
+    # promote lifecycle to closed without an explicit provider terminal_signal.
+    # `process_gone` is confirmed local process disappearance; `host_expired`
+    # is a long-unverified host cleanup and must stay distinguishable.
+    binding_closed = binding_terminal_reason in {"process_gone", "host_expired"} and control_path == "unmanaged"
     if terminal_state:
         lifecycle = "closed"
         terminal_reason = _derive_terminal_reason(terminal_state)
     elif binding_closed:
         lifecycle = "closed"
-        terminal_reason = "process_gone"
+        terminal_reason = binding_terminal_reason
     else:
         lifecycle = "open"
         terminal_reason = None

@@ -15,7 +15,9 @@ Inputs:
 Outputs, keyed by session UUID:
 
 * ``host_state``: ``online`` / ``stale`` / ``offline`` / ``unknown``.
-* ``terminal_reason``: ``process_gone`` when Phase 6 criteria are met.
+* ``terminal_reason``: ``process_gone`` when Phase 6 criteria are met, or
+  ``host_expired`` when a previously observed host has been offline too long
+  to keep the session actionable.
 """
 
 from __future__ import annotations
@@ -46,6 +48,11 @@ HOST_ONLINE_WINDOW = HEARTBEAT_CADENCE * 2
 # but cannot claim its bindings still apply.
 HOST_STALE_WINDOW = timedelta(minutes=30)
 
+# If a host has been offline this long, close old unmanaged observations as
+# unverifiable rather than process-gone. This is a lifecycle cleanup, not proof
+# the provider process exited.
+HOST_EXPIRED_WINDOW = timedelta(days=7)
+
 # For Phase 6: only promote to process_gone if the latest binding was
 # last_seen_at more than this long ago. Must be > HOST_ONLINE_WINDOW so
 # "one heartbeat missed the binding" can't alone trigger closure.
@@ -63,7 +70,7 @@ class BindingOverlay:
     """Per-session info used to color the display contract."""
 
     host_state: str  # online | stale | offline | unknown
-    terminal_reason: str | None  # "process_gone" when Phase 6 triggers
+    terminal_reason: str | None  # process_gone | host_expired | None
 
 
 def load_binding_overlay(
@@ -105,6 +112,7 @@ def load_binding_overlay(
     heartbeat_keys = {_heartbeat_key(b) for b in bindings}
     heartbeat_keys.discard("")
     host_state_by_key = _latest_heartbeat_state(db, heartbeat_keys, now=current)
+    host_seen_at_by_key = _latest_heartbeat_at(db, heartbeat_keys)
 
     overlay: dict[UUID, BindingOverlay] = {}
     for binding in bindings:
@@ -128,6 +136,10 @@ def load_binding_overlay(
         #     growing.
         if binding_state == "stale":
             terminal_reason = "process_gone"
+        elif host_state == "offline":
+            heartbeat_at = host_seen_at_by_key.get(_heartbeat_key(binding))
+            if heartbeat_at is not None and current - _as_utc(heartbeat_at) > HOST_EXPIRED_WINDOW:
+                terminal_reason = "host_expired"
         elif (
             host_state == "online"
             and last_seen is not None
@@ -142,6 +154,21 @@ def load_binding_overlay(
         )
 
     return overlay
+
+
+def _latest_heartbeat_at(db: Session, device_ids: set[str]) -> dict[str, datetime]:
+    if not device_ids:
+        return {}
+
+    from sqlalchemy import func
+
+    rows = (
+        db.query(AgentHeartbeat.device_id, func.max(AgentHeartbeat.received_at))
+        .filter(AgentHeartbeat.device_id.in_(device_ids))
+        .group_by(AgentHeartbeat.device_id)
+        .all()
+    )
+    return {device_id: received for device_id, received in rows if received is not None}
 
 
 def _latest_heartbeat_state(
