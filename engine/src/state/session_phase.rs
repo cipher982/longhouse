@@ -55,7 +55,7 @@ pub const PHASE_FRESHNESS_SECONDS: &[(&str, i64)] = &[
     ("running", 10 * 60),
     ("idle", 10 * 60),
     ("blocked", 24 * 60 * 60),
-    ("needs_user", 24 * 60 * 60),
+    ("needs_user", 60 * 60),
     ("finished", 10 * 60),
 ];
 

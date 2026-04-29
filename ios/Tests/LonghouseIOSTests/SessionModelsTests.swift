@@ -170,6 +170,46 @@ struct SessionModelsTests {
     }
 
     @Test
+    func closedRuntimeDisplayDoesNotNeedAttention() {
+        let summary = SessionSummary(
+            id: "session-closed-attention",
+            title: "Finished work",
+            presenceState: "needs_user",
+            provider: "claude",
+            project: "zerg",
+            lastActivityAt: "2026-04-25T20:00:00Z",
+            status: "active",
+            displayPhase: "Needs you",
+            runtimeDisplay: SessionRuntimeDisplay(
+                truthTier: "managed-local",
+                state: "needs_user",
+                tone: "needs-user",
+                headline: "Waiting for you",
+                detail: "Reply needed",
+                phaseLabel: "Needs you",
+                compactToolLabel: nil,
+                isLive: false,
+                isExecuting: false,
+                needsAttention: true,
+                isIdle: false,
+                heuristicActive: false,
+                isManagedLocalTruth: true,
+                hasSignal: true,
+                controlPath: "managed",
+                activityRecency: "live",
+                lifecycle: "closed",
+                hostState: "online",
+                terminalReason: "provider_signal"
+            )
+        )
+
+        #expect(summary.isClosed)
+        #expect(!summary.needsAttention)
+        #expect(!summary.isNeedsUser)
+        #expect(summary.displayPhaseLabel == "Completed")
+    }
+
+    @Test
     func sessionDetailMarksImportedSessionsReadOnly() throws {
         let json = """
         {

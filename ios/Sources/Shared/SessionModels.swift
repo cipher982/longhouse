@@ -125,10 +125,15 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         self.runtimeDisplay = runtimeDisplay
     }
 
-    var isBlocked: Bool { runtimeDisplay?.state == "blocked" || presenceState == "blocked" }
-    var isNeedsUser: Bool { runtimeDisplay?.state == "needs_user" || presenceState == "needs_user" }
+    var isClosed: Bool {
+        if runtimeDisplay?.lifecycle == "closed" { return true }
+        if runtimeDisplay?.lifecycle == nil && status == "completed" { return true }
+        return false
+    }
+    var isBlocked: Bool { !isClosed && (runtimeDisplay?.state == "blocked" || presenceState == "blocked") }
+    var isNeedsUser: Bool { !isClosed && (runtimeDisplay?.state == "needs_user" || presenceState == "needs_user") }
     var isUserActive: Bool { userState == nil || userState == "active" }
-    var needsAttention: Bool { (runtimeDisplay?.needsAttention == true || isBlocked || isNeedsUser) && isUserActive }
+    var needsAttention: Bool { !isClosed && (runtimeDisplay?.needsAttention == true || isBlocked || isNeedsUser) && isUserActive }
     var isExecuting: Bool {
         runtimeDisplay?.isExecuting == true || presenceState == "thinking" || presenceState == "running" || status == "working" || status == "active"
     }
@@ -159,6 +164,9 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     }
 
     var displayPhaseLabel: String {
+        if isClosed {
+            return "Completed"
+        }
         if let phaseLabel = runtimeDisplay?.phaseLabel.trimmingCharacters(in: .whitespacesAndNewlines), !phaseLabel.isEmpty {
             return RuntimeDisplayText.canonicalDisplayText(phaseLabel)
         }

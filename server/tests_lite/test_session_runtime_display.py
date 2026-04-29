@@ -325,6 +325,30 @@ def test_three_axis_fields_closed_with_explicit_terminal():
     assert display.terminal_reason == "provider_signal"
 
 
+def test_process_gone_closure_suppresses_stale_attention_copy():
+    display = build_session_runtime_display(
+        runtime_view=_runtime_view(
+            runtime_phase="needs_user",
+            runtime_source="semantic",
+            status="active",
+            presence_state="needs_user",
+            confidence="live",
+            display_phase="Needs you",
+        ),
+        capabilities=_capabilities(),
+        ended_at=None,
+        binding_terminal_reason="process_gone",
+    )
+
+    assert display.lifecycle == "closed"
+    assert display.terminal_reason == "process_gone"
+    assert display.state is None
+    assert display.headline == "Completed"
+    assert display.phase_label == "Completed"
+    assert display.needs_attention is False
+    assert display.tone == "inactive"
+
+
 def test_three_axis_fields_ended_at_without_terminal_stays_open():
     # Phase 1 contract: ended_at alone no longer implies closure. Phase 2
     # three-axis projection must agree.
