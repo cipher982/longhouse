@@ -349,6 +349,29 @@ def test_process_gone_closure_suppresses_stale_attention_copy():
     assert display.tone == "inactive"
 
 
+def test_host_expired_closure_suppresses_stale_attention_copy_without_process_gone():
+    display = build_session_runtime_display(
+        runtime_view=_runtime_view(
+            runtime_phase="needs_user",
+            runtime_source="semantic",
+            status="active",
+            presence_state="needs_user",
+            confidence="live",
+            display_phase="Needs you",
+        ),
+        capabilities=_capabilities(),
+        ended_at=None,
+        binding_host_state="offline",
+        binding_terminal_reason="host_expired",
+    )
+
+    assert display.lifecycle == "closed"
+    assert display.host_state == "offline"
+    assert display.terminal_reason == "host_expired"
+    assert display.state is None
+    assert display.needs_attention is False
+
+
 def test_three_axis_fields_ended_at_without_terminal_stays_open():
     # Phase 1 contract: ended_at alone no longer implies closure. Phase 2
     # three-axis projection must agree.

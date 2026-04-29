@@ -122,6 +122,61 @@ def test_stale_host_yields_stale_host_state_no_closure(tmp_path):
         assert overlay[session.id].terminal_reason is None
 
 
+def test_offline_host_under_expiry_yields_offline_no_closure(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    with SessionLocal() as db:
+        session = _make_session(db)
+        now = datetime(2026, 4, 27, 12, 0, tzinfo=timezone.utc)
+        db.add(AgentHeartbeat(device_id="cinder", received_at=now - timedelta(hours=2)))
+        db.add(
+            UnmanagedSessionBinding(
+                machine_id="cinder",
+                device_id="cinder",
+                provider="codex",
+                provider_session_id="sess-abc",
+                session_id=session.id,
+                pid=1234,
+                process_start_time=now - timedelta(hours=3),
+                observed_at=now - timedelta(hours=2),
+                last_seen_at=now - timedelta(hours=2),
+                binding_state="observed",
+            )
+        )
+        db.commit()
+
+        overlay = load_binding_overlay(db, [session.id], now=now)
+        assert overlay[session.id].host_state == "offline"
+        assert overlay[session.id].terminal_reason is None
+
+
+def test_offline_host_past_expiry_promotes_host_expired_not_process_gone(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    with SessionLocal() as db:
+        session = _make_session(db)
+        now = datetime(2026, 4, 27, 12, 0, tzinfo=timezone.utc)
+        db.add(AgentHeartbeat(device_id="cinder", received_at=now - timedelta(days=8)))
+        db.add(
+            UnmanagedSessionBinding(
+                machine_id="cinder",
+                device_id="cinder",
+                provider="codex",
+                provider_session_id="sess-abc",
+                session_id=session.id,
+                pid=1234,
+                process_start_time=now - timedelta(days=9),
+                observed_at=now - timedelta(days=8),
+                last_seen_at=now - timedelta(days=8),
+                binding_state="observed",
+            )
+        )
+        db.commit()
+
+        overlay = load_binding_overlay(db, [session.id], now=now)
+        entry = overlay[session.id]
+        assert entry.host_state == "offline"
+        assert entry.terminal_reason == "host_expired"
+
+
 def test_online_host_with_old_binding_promotes_process_gone(tmp_path):
     """Phase 6: when the host is still online but the binding hasn't been
     re-observed in the latest heartbeat window AND the transcript has
