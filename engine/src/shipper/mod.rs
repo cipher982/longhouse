@@ -400,6 +400,18 @@ fn truncation_rewind_hint(path_str: &str) -> compressor::SourceRewindHint {
     }
 }
 
+fn full_document_rewrite_hint(path_str: &str) -> compressor::SourceRewindHint {
+    compressor::SourceRewindHint {
+        source_path: path_str.to_string(),
+        source_offset: 0,
+        reason: "full_document_rewrite".to_string(),
+    }
+}
+
+fn is_full_document_provider(provider: &str) -> bool {
+    provider.eq_ignore_ascii_case("gemini")
+}
+
 fn dead_letter_from_compressed_range(
     path_str: &str,
     provider: &str,
@@ -857,7 +869,7 @@ pub(crate) fn prepare_file_batches_with_parse_tracker(
         }
     };
 
-    let rewind_hint = if file_size < current_offset {
+    let mut rewind_hint = if file_size < current_offset {
         tracing::warn!(
             "File truncated: {} (was {}, now {}), resetting",
             path_str,
@@ -882,6 +894,15 @@ pub(crate) fn prepare_file_batches_with_parse_tracker(
         return Ok(None);
     } else if file_size == current_offset {
         return Ok(None);
+    } else if is_full_document_provider(provider) && current_offset > 0 {
+        // Gemini session JSON is rewritten in place as a whole document. The
+        // parser deliberately ignores incremental offsets and returns source
+        // lines from byte 0, so resuming from an old byte offset can land in
+        // the middle of a JSON line and fail batch planning. Re-ship the full
+        // document; ingest dedupes existing events and branches source lines
+        // using the explicit rewind hint.
+        rewind_hint = Some(full_document_rewrite_hint(&path_str));
+        0
     } else {
         current_offset
     };
@@ -2430,6 +2451,73 @@ mod tests {
                 panic!("normal batch limit should ship whole-document gemini payload")
             }
             PreparedAction::AckOnly(_) => panic!("conversation gemini file should not ack-only"),
+        }
+    }
+
+    #[test]
+    fn test_prepare_gemini_rewritten_document_rewinds_from_previous_offset() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session-gemini-rewritten.json");
+        let gemini = serde_json::json!({
+            "sessionId": "5053c934-f66d-4fea-96af-f95181de5986",
+            "startTime": "2026-02-20T15:59:12.296Z",
+            "messages": [
+                {
+                    "id": "11111111-1111-4111-8111-111111111111",
+                    "timestamp": "2026-02-20T15:59:12.296Z",
+                    "type": "user",
+                    "content": "Reply with exactly: \"gemini ok\""
+                },
+                {
+                    "id": "22222222-2222-4222-8222-222222222222",
+                    "timestamp": "2026-02-20T15:59:15.853Z",
+                    "type": "gemini",
+                    "content": format!("gemini ok {}", "x".repeat(700))
+                }
+            ]
+        });
+        std::fs::write(&path, serde_json::to_vec_pretty(&gemini).unwrap()).unwrap();
+        let path_str = path.to_string_lossy().to_string();
+        let file_len = std::fs::metadata(&path).unwrap().len();
+        assert!(
+            file_len > 497,
+            "fixture should be large enough to reproduce the real offset"
+        );
+
+        FileState::new(&conn)
+            .set_offset(
+                &path_str,
+                497,
+                "5053c934-f66d-4fea-96af-f95181de5986",
+                "5053c934-f66d-4fea-96af-f95181de5986",
+                "gemini",
+            )
+            .unwrap();
+
+        let prepared = prepare_file_batches(
+            &path,
+            "gemini",
+            CompressionAlgo::Gzip,
+            &conn,
+            5 * 1024 * 1024,
+            None,
+        )
+        .unwrap()
+        .expect("rewritten gemini file should prepare from the beginning");
+
+        assert_eq!(prepared.offset, 0);
+        assert_eq!(prepared.new_offset, file_len);
+        assert_eq!(prepared.actions.len(), 1);
+        match prepared.actions.into_iter().next().unwrap() {
+            PreparedAction::Ship(item) => {
+                assert_eq!(item.offset, 0);
+                assert_eq!(item.new_offset, file_len);
+                assert_eq!(item.event_count, 2);
+            }
+            PreparedAction::AckOnly(_) | PreparedAction::DeadLetter(_) => {
+                panic!("conversation gemini rewrite should ship as a full document")
+            }
         }
     }
 
