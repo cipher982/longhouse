@@ -135,9 +135,9 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     var isUserActive: Bool { userState == nil || userState == "active" }
     var needsAttention: Bool { !isClosed && (runtimeDisplay?.needsAttention == true || isBlocked || isNeedsUser) && isUserActive }
     var isExecuting: Bool {
-        runtimeDisplay?.isExecuting == true || presenceState == "thinking" || presenceState == "running" || status == "working" || status == "active"
+        !isClosed && (runtimeDisplay?.isExecuting == true || presenceState == "thinking" || presenceState == "running" || status == "working" || status == "active")
     }
-    var isIdle: Bool { runtimeDisplay?.isIdle == true || presenceState == "idle" || status == "idle" }
+    var isIdle: Bool { isClosed || runtimeDisplay?.isIdle == true || presenceState == "idle" || status == "idle" }
     var attentionLabel: String { isBlocked ? "Needs permission" : "Waiting on you" }
     var timelineAnchor: String? { timelineAnchorAt ?? lastActivityAt }
     var turnCount: Int { userMessages ?? 0 }

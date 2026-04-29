@@ -273,14 +273,17 @@ def _runtime_events_for_managed_leases(
     return events
 
 
-def _has_managed_lease_history(db: Session, runtime_key: str) -> bool:
-    return (
-        db.query(SessionRuntimeEvent.id)
-        .filter(SessionRuntimeEvent.runtime_key == runtime_key)
+def _managed_lease_history_keys(db: Session, runtime_keys: list[str]) -> set[str]:
+    if not runtime_keys:
+        return set()
+    rows = (
+        db.query(SessionRuntimeEvent.runtime_key)
+        .filter(SessionRuntimeEvent.runtime_key.in_(runtime_keys))
         .filter(SessionRuntimeEvent.source == MANAGED_SESSION_LEASE_SOURCE)
-        .first()
-        is not None
+        .distinct()
+        .all()
     )
+    return {row[0] for row in rows}
 
 
 def _runtime_events_for_missing_managed_leases(
@@ -303,6 +306,7 @@ def _runtime_events_for_missing_managed_leases(
         .filter(SessionRuntimeState.terminal_state.is_(None))
         .all()
     )
+    lease_history_keys = _managed_lease_history_keys(db, [state.runtime_key for state, _session in rows])
 
     events: list[RuntimeEventIngest] = []
     reattach_window_ms = int(MANAGED_SESSION_REATTACH_WINDOW.total_seconds() * 1000)
@@ -313,7 +317,7 @@ def _runtime_events_for_missing_managed_leases(
         session_id = state.session_id
         if not provider or session_id is None or (provider, session_id) in observed:
             continue
-        if not _has_managed_lease_history(db, state.runtime_key):
+        if state.runtime_key not in lease_history_keys:
             continue
 
         detached_since = normalize_utc(state.phase_started_at) or normalize_utc(state.last_runtime_signal_at) or received_at

@@ -364,8 +364,18 @@ def build_session_runtime_display(
         phase_label = "Completed"
         is_executing = False
         needs_attention = False
+        is_idle = True
         heuristic_active = False
         is_stalled = False
+    tone = (
+        "inactive"
+        if lifecycle == "closed"
+        else _tone(
+            presence_state=presence_state,
+            heuristic_active=heuristic_active,
+            is_idle=is_idle,
+        )
+    )
     # Phase 5c: host_state comes from heartbeat+binding freshness when a
     # binding overlay is supplied. Otherwise we honestly say "unknown".
     host_state = binding_host_state if binding_host_state else "unknown"
@@ -373,11 +383,7 @@ def build_session_runtime_display(
     return SessionRuntimeDisplay(
         truth_tier=truth_tier,
         state=presence_state,
-        tone=_tone(
-            presence_state=presence_state,
-            heuristic_active=heuristic_active,
-            is_idle=is_idle,
-        ),
+        tone=tone,
         headline=headline,
         detail=detail,
         phase_label=phase_label,
