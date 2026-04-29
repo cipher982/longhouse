@@ -812,6 +812,7 @@ async def list_active_sessions(
         last_ai = store.get_last_message_map(session_ids, role="assistant", max_len=300)
         now = datetime.now(timezone.utc)
         runtime_state_map = load_runtime_state_map(db, [session.id for session in sessions])
+        binding_overlay_map = load_binding_overlay(db, session_ids, now=now)
         items: List[ActiveSessionResponse] = []
         for s in sessions:
             last_activity_at = normalize_utc_datetime(last_activity.get(s.id) or s.ended_at or s.started_at) or now
@@ -838,6 +839,7 @@ async def list_active_sessions(
                     last_user_message=last_user.get(s.id),
                     last_assistant_message=last_ai.get(s.id),
                     now=now,
+                    binding_overlay=binding_overlay_map.get(s.id),
                 )
             )
 
