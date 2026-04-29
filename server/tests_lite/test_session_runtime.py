@@ -620,6 +620,129 @@ def test_heartbeat_detached_managed_codex_lease_is_recoverable_control_loss(tmp_
     engine.dispose()
 
 
+def test_heartbeat_missing_managed_lease_becomes_recoverable_detached_state(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_managed_missing_detached.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(
+            db,
+            provider="codex",
+            started_at=now - timedelta(hours=3),
+        )
+        session.execution_home = "managed_local"
+        session.managed_transport = "codex_app_server"
+        session_id = session.id
+        runtime_key = runtime_key_for_session("codex", str(session_id))
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session_id,
+                    provider="codex",
+                    device_id="runtime-device",
+                    source="engine_attached_lease",
+                    kind="phase_signal",
+                    phase="idle",
+                    occurred_at=now - timedelta(minutes=2),
+                    freshness_ms=15 * 60 * 1000,
+                    dedupe_key="managed-lease-before-missing",
+                    payload={"state": "attached"},
+                )
+            ],
+        )
+        db.commit()
+
+    for client in _client(SessionLocal):
+        response = client.post(
+            "/agents/heartbeat",
+            json={
+                "version": "test",
+                "daemon_pid": 123,
+                "managed_sessions": [],
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert response.status_code == 204, response.text
+
+    with SessionLocal() as db:
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        stored_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        view = build_runtime_view(state=state, session=stored_session, now=datetime.now(timezone.utc))
+
+        assert state.phase == "blocked"
+        assert state.active_tool == "control path"
+        assert state.terminal_state is None
+        assert view.status == "active"
+        assert view.presence_state == "blocked"
+        assert view.display_phase == "Blocked on control path"
+
+    engine.dispose()
+
+
+def test_heartbeat_missing_managed_lease_closes_after_reattach_window(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_managed_missing_expired.db")
+    now = datetime.now(timezone.utc)
+    detached_since = now - timedelta(hours=25)
+
+    with SessionLocal() as db:
+        session = _seed_session(
+            db,
+            provider="codex",
+            started_at=now - timedelta(days=2),
+        )
+        session.execution_home = "managed_local"
+        session.managed_transport = "codex_app_server"
+        session_id = session.id
+        runtime_key = runtime_key_for_session("codex", str(session_id))
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session_id,
+                    provider="codex",
+                    device_id="runtime-device",
+                    source="engine_attached_lease",
+                    kind="phase_signal",
+                    phase="blocked",
+                    tool_name="control path",
+                    occurred_at=detached_since,
+                    freshness_ms=24 * 60 * 60 * 1000,
+                    dedupe_key="managed-lease-detached-before-missing",
+                    payload={"state": "missing"},
+                )
+            ],
+        )
+        db.commit()
+
+    for client in _client(SessionLocal):
+        response = client.post(
+            "/agents/heartbeat",
+            json={
+                "version": "test",
+                "daemon_pid": 123,
+                "managed_sessions": [],
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert response.status_code == 204, response.text
+
+    with SessionLocal() as db:
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        stored_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        view = build_runtime_view(state=state, session=stored_session, now=datetime.now(timezone.utc))
+
+        assert state.phase == "finished"
+        assert state.terminal_state == "process_gone"
+        assert stored_session.ended_at is None
+        assert view.status == "completed"
+        assert view.display_phase == "Completed"
+
+    engine.dispose()
+
+
 def test_agents_store_ingest_mirrors_binding_and_progress_runtime_signals(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "runtime_store_mirror.db")
     now = datetime.now(timezone.utc)
@@ -666,9 +789,7 @@ def test_agents_store_ingest_mirrors_binding_and_progress_runtime_signals(tmp_pa
 
         event_kinds = {
             row.kind
-            for row in db.query(SessionRuntimeEvent)
-            .filter(SessionRuntimeEvent.runtime_key == runtime_key)
-            .all()
+            for row in db.query(SessionRuntimeEvent).filter(SessionRuntimeEvent.runtime_key == runtime_key).all()
         }
         assert event_kinds == {"binding_signal", "progress_signal"}
 

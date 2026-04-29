@@ -325,6 +325,23 @@ def test_three_axis_fields_closed_with_explicit_terminal():
     assert display.terminal_reason == "provider_signal"
 
 
+def test_three_axis_fields_closed_with_process_gone_terminal():
+    display = build_session_runtime_display(
+        runtime_view=_runtime_view(
+            runtime_phase="finished",
+            terminal_state="process_gone",
+            status="completed",
+            display_phase="Completed",
+        ),
+        capabilities=_capabilities(managed=True),
+        ended_at=None,
+    )
+
+    assert display.control_path == "managed"
+    assert display.lifecycle == "closed"
+    assert display.terminal_reason == "process_gone"
+
+
 def test_process_gone_closure_suppresses_stale_attention_copy():
     display = build_session_runtime_display(
         runtime_view=_runtime_view(
