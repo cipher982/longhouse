@@ -645,17 +645,22 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
         next_phase = (event.phase or state.phase or "idle").strip() or "idle"
         if next_phase not in KNOWN_PHASES:
             next_phase = "idle"
-        if state.phase != next_phase:
-            if _phase_reanchors(state.phase, next_phase):
+        next_active_tool = None
+        if next_phase in {"running", "blocked"}:
+            # Blocked-with-no-tool means "still blocked on the same tool as
+            # last time" — keep the prior active_tool instead of dropping
+            # it. Running signals always carry the tool explicitly.
+            next_active_tool = event.tool_name or (state.active_tool if next_phase == "blocked" else None)
+        phase_changed = state.phase != next_phase
+        active_tool_changed = next_phase in {"running", "blocked"} and (state.active_tool or None) != (next_active_tool or None)
+        if phase_changed or active_tool_changed:
+            if phase_changed and _phase_reanchors(state.phase, next_phase):
                 state.timeline_anchor_at = occurred_at
             state.phase_started_at = occurred_at
         state.phase = next_phase
         state.phase_source = "semantic"
         if next_phase in {"running", "blocked"}:
-            # Blocked-with-no-tool means "still blocked on the same tool as
-            # last time" — keep the prior active_tool instead of dropping
-            # it. Running signals always carry the tool explicitly.
-            state.active_tool = event.tool_name or (state.active_tool if next_phase == "blocked" else None)
+            state.active_tool = next_active_tool
         else:
             state.active_tool = None
         state.last_runtime_signal_at = occurred_at

@@ -620,6 +620,54 @@ def test_heartbeat_detached_managed_codex_lease_is_recoverable_control_loss(tmp_
     engine.dispose()
 
 
+def test_phase_signal_same_blocked_phase_with_new_tool_resets_phase_started_at(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_blocked_tool_reanchors.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, provider="codex", started_at=now - timedelta(hours=1))
+        runtime_key = runtime_key_for_session("codex", str(session.id))
+        first_at = now - timedelta(minutes=10)
+        second_at = now - timedelta(minutes=2)
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="codex",
+                    device_id="runtime-device",
+                    source="engine_attached_lease",
+                    kind="phase_signal",
+                    phase="blocked",
+                    tool_name="control path",
+                    occurred_at=first_at,
+                    dedupe_key="blocked-control-path",
+                ),
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="codex",
+                    device_id="runtime-device",
+                    source="engine_attached_lease",
+                    kind="phase_signal",
+                    phase="blocked",
+                    tool_name="bash",
+                    occurred_at=second_at,
+                    dedupe_key="blocked-bash",
+                ),
+            ],
+        )
+        db.commit()
+
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        assert state.phase == "blocked"
+        assert state.active_tool == "bash"
+        assert state.phase_started_at.replace(tzinfo=timezone.utc) == second_at
+
+    engine.dispose()
+
+
 def test_heartbeat_missing_managed_lease_becomes_recoverable_detached_state(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_managed_missing_detached.db")
     now = datetime.now(timezone.utc)
@@ -677,6 +725,56 @@ def test_heartbeat_missing_managed_lease_becomes_recoverable_detached_state(tmp_
         assert view.status == "active"
         assert view.presence_state == "blocked"
         assert view.display_phase == "Blocked on control path"
+
+    engine.dispose()
+
+
+def test_heartbeat_omitted_managed_sessions_field_does_not_detach_old_engine(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_managed_missing_legacy_engine.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, provider="codex", started_at=now - timedelta(hours=3))
+        session.execution_home = "managed_local"
+        session.managed_transport = "codex_app_server"
+        session_id = session.id
+        runtime_key = runtime_key_for_session("codex", str(session_id))
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session_id,
+                    provider="codex",
+                    device_id="runtime-device",
+                    source="engine_attached_lease",
+                    kind="phase_signal",
+                    phase="idle",
+                    occurred_at=now - timedelta(minutes=2),
+                    freshness_ms=15 * 60 * 1000,
+                    dedupe_key="managed-lease-before-legacy-heartbeat",
+                    payload={"state": "attached"},
+                )
+            ],
+        )
+        db.commit()
+
+    for client in _client(SessionLocal):
+        response = client.post(
+            "/agents/heartbeat",
+            json={
+                "version": "old-engine",
+                "daemon_pid": 123,
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert response.status_code == 204, response.text
+
+    with SessionLocal() as db:
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        assert state.phase == "idle"
+        assert state.active_tool is None
+        assert state.terminal_state is None
 
     engine.dispose()
 
@@ -739,6 +837,160 @@ def test_heartbeat_missing_managed_lease_closes_after_reattach_window(tmp_path):
         assert stored_session.ended_at is None
         assert view.status == "completed"
         assert view.display_phase == "Completed"
+
+    engine.dispose()
+
+
+def test_heartbeat_missing_managed_lease_only_detaches_missing_session(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_managed_one_missing.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        present = _seed_session(db, provider="codex", started_at=now - timedelta(hours=3))
+        present.execution_home = "managed_local"
+        present.managed_transport = "codex_app_server"
+        missing = _seed_session(db, provider="codex", started_at=now - timedelta(hours=3))
+        missing.execution_home = "managed_local"
+        missing.managed_transport = "codex_app_server"
+        present_key = runtime_key_for_session("codex", str(present.id))
+        missing_key = runtime_key_for_session("codex", str(missing.id))
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=present_key,
+                    session_id=present.id,
+                    provider="codex",
+                    device_id="runtime-device",
+                    source="engine_attached_lease",
+                    kind="phase_signal",
+                    phase="idle",
+                    occurred_at=now - timedelta(minutes=2),
+                    freshness_ms=15 * 60 * 1000,
+                    dedupe_key="present-before-partial-heartbeat",
+                    payload={"state": "attached"},
+                ),
+                RuntimeEventIngest(
+                    runtime_key=missing_key,
+                    session_id=missing.id,
+                    provider="codex",
+                    device_id="runtime-device",
+                    source="engine_attached_lease",
+                    kind="phase_signal",
+                    phase="idle",
+                    occurred_at=now - timedelta(minutes=2),
+                    freshness_ms=15 * 60 * 1000,
+                    dedupe_key="missing-before-partial-heartbeat",
+                    payload={"state": "attached"},
+                ),
+            ],
+        )
+        db.commit()
+        present_id = present.id
+        missing_id = missing.id
+
+    for client in _client(SessionLocal):
+        response = client.post(
+            "/agents/heartbeat",
+            json={
+                "version": "test",
+                "daemon_pid": 123,
+                "managed_sessions": [
+                    {
+                        "session_id": str(present_id),
+                        "provider": "codex",
+                        "machine_id": "cinder",
+                        "sequence": 99,
+                        "state": "attached",
+                        "phase": "idle",
+                        "observed_at": now.isoformat(),
+                        "lease_ttl_ms": 15 * 60 * 1000,
+                    }
+                ],
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert response.status_code == 204, response.text
+
+    with SessionLocal() as db:
+        present_state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == present_key).one()
+        missing_state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == missing_key).one()
+        assert present_state.phase == "idle"
+        assert present_state.active_tool is None
+        assert present_state.terminal_state is None
+        assert missing_state.phase == "blocked"
+        assert missing_state.active_tool == "control path"
+        assert missing_state.terminal_state is None
+        assert missing_state.session_id == missing_id
+
+    engine.dispose()
+
+
+def test_heartbeat_managed_reattach_rearms_missing_lease_window(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_managed_flap_rearms.db")
+    now = datetime.now(timezone.utc)
+    first_missing_at = now - timedelta(hours=23)
+    reattached_at = now - timedelta(minutes=5)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, provider="codex", started_at=now - timedelta(days=2))
+        session.execution_home = "managed_local"
+        session.managed_transport = "codex_app_server"
+        session_id = session.id
+        runtime_key = runtime_key_for_session("codex", str(session_id))
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session_id,
+                    provider="codex",
+                    device_id="runtime-device",
+                    source="engine_attached_lease",
+                    kind="phase_signal",
+                    phase="blocked",
+                    tool_name="control path",
+                    occurred_at=first_missing_at,
+                    freshness_ms=24 * 60 * 60 * 1000,
+                    dedupe_key="first-missing-detached",
+                    payload={"state": "missing"},
+                ),
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session_id,
+                    provider="codex",
+                    device_id="runtime-device",
+                    source="engine_attached_lease",
+                    kind="phase_signal",
+                    phase="blocked",
+                    tool_name="bash",
+                    occurred_at=reattached_at,
+                    freshness_ms=15 * 60 * 1000,
+                    dedupe_key="reattached-same-phase-new-tool",
+                    payload={"state": "attached"},
+                ),
+            ],
+        )
+        db.commit()
+
+    for client in _client(SessionLocal):
+        response = client.post(
+            "/agents/heartbeat",
+            json={
+                "version": "test",
+                "daemon_pid": 123,
+                "managed_sessions": [],
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert response.status_code == 204, response.text
+
+    with SessionLocal() as db:
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        assert state.phase == "blocked"
+        assert state.active_tool == "control path"
+        assert state.terminal_state is None
+        assert state.phase_started_at.replace(tzinfo=timezone.utc) >= reattached_at
 
     engine.dispose()
 

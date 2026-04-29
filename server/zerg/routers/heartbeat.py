@@ -329,10 +329,7 @@ def _runtime_events_for_missing_managed_leases(
                     kind="terminal_signal",
                     occurred_at=received_at,
                     dedupe_key=f"engine-managed-missing-terminal:{device_id}:{session_id}",
-                    payload={
-                        "terminal_state": "process_gone",
-                        "terminal_reason": "reattach_window_expired",
-                    },
+                    payload={"terminal_state": "process_gone"},
                 )
             )
         elif not already_detached:
