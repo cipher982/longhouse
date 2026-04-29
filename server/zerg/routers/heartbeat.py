@@ -356,6 +356,47 @@ def _upsert_unmanaged_session_bindings(
                 setattr(existing, key, value)
 
 
+def _mark_missing_unmanaged_session_bindings_stale(
+    db: Session,
+    bindings: list[UnmanagedSessionBindingIn],
+    *,
+    device_id: str,
+) -> None:
+    """Mark previously observed bindings stale when this heartbeat omits them.
+
+    The engine sends a full snapshot of currently live unmanaged bindings. If
+    a binding from this device was observed before and is absent now, the
+    local process is gone; downstream display code maps ``binding_state=stale``
+    to ``lifecycle=closed``.
+    """
+    observed_keys: set[tuple[str, str, str]] = set()
+    for binding in bindings:
+        machine = (binding.machine_id or "").strip()
+        provider = (binding.provider or "").strip().lower()
+        raw_session_key = (binding.provider_session_id or "").strip()
+        session_key = _normalize_unmanaged_provider_session_id(provider, raw_session_key)
+        if machine and provider and session_key:
+            observed_keys.add((machine, provider, session_key))
+
+    rows = (
+        db.query(UnmanagedSessionBinding)
+        .filter(UnmanagedSessionBinding.device_id == device_id)
+        .filter(UnmanagedSessionBinding.binding_state == "observed")
+        .all()
+    )
+    for row in rows:
+        key = (
+            str(row.machine_id or "").strip(),
+            str(row.provider or "").strip().lower(),
+            _normalize_unmanaged_provider_session_id(
+                str(row.provider or "").strip().lower(),
+                str(row.provider_session_id or "").strip(),
+            ),
+        )
+        if key not in observed_keys:
+            row.binding_state = "stale"
+
+
 @router.post("/heartbeat", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
 async def ingest_heartbeat(
     payload: HeartbeatIn,
@@ -456,6 +497,7 @@ async def ingest_heartbeat(
             _offline = 1 if payload.is_offline else 0
             _managed_leases = payload.managed_sessions
             _unmanaged_bindings = payload.unmanaged_session_bindings
+            _unmanaged_bindings_present = "unmanaged_session_bindings" in payload.model_fields_set
 
             def _do_heartbeat(write_db: Session) -> None:
                 hb = AgentHeartbeat(
@@ -497,6 +539,12 @@ async def ingest_heartbeat(
                         _unmanaged_bindings,
                         device_id=_device_id,
                         received_at=_now,
+                    )
+                if _unmanaged_bindings_present:
+                    _mark_missing_unmanaged_session_bindings_stale(
+                        write_db,
+                        _unmanaged_bindings,
+                        device_id=_device_id,
                     )
                 runtime_events = _runtime_events_for_managed_leases(
                     _managed_leases,

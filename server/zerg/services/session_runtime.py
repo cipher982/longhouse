@@ -38,11 +38,7 @@ PHASE_FRESHNESS = {
     "running": timedelta(minutes=10),
     "idle": timedelta(minutes=10),
     "blocked": timedelta(hours=24),
-    # `needs_user` is emitted for a normal idle prompt after every assistant
-    # response. Keep it fresh long enough for mobile/notification surfaces to
-    # catch real handoffs, but do not let finished coding sessions sit in an
-    # attention shelf for the rest of the day.
-    "needs_user": timedelta(hours=1),
+    "needs_user": timedelta(hours=24),
 }
 MANAGED_CODEX_FRESHNESS = timedelta(minutes=15)
 INFERRED_PROGRESS_WINDOW = timedelta(minutes=5)
@@ -183,8 +179,6 @@ def _display_phase_for_state(
         return "Completed"
     if confidence == "inferred":
         return "Recent progress"
-    if confidence == "stale" and phase in ATTENTION_PHASES:
-        return "Idle"
     if phase == "running":
         return f"Running {active_tool}" if active_tool else "Running"
     if phase == "thinking":
