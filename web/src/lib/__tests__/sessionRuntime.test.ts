@@ -83,6 +83,34 @@ describe("resolveSessionRuntimeState", () => {
     });
   });
 
+  it("does not resurrect stale top-level attention when runtime_display clears state", () => {
+    const runtime = resolveSessionRuntimeState(
+      makeSession({
+        status: "active",
+        presence_state: "needs_user",
+        display_phase: "Needs you",
+        runtime_display: makeRuntimeDisplay({
+          state: null,
+          tone: "inactive",
+          headline: "Not connected",
+          detail: null,
+          phase_label: "Recent",
+          needs_attention: false,
+          is_executing: false,
+          is_live: false,
+          lifecycle: "open",
+          activity_recency: "stale",
+        }),
+      }),
+    );
+
+    expect(runtime.presenceState).toBeNull();
+    expect(runtime.needsAttention).toBe(false);
+    expect(runtime.isExecuting).toBe(false);
+    expect(runtime.tone).toBe("inactive");
+    expect(resolveSessionStatusLabel(runtime)).toBe("Disconnected");
+  });
+
   it("treats legacy working-without-presence as inferred progress", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({

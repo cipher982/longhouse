@@ -130,14 +130,24 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         if runtimeDisplay?.lifecycle == nil && status == "completed" { return true }
         return false
     }
-    var isBlocked: Bool { !isClosed && (runtimeDisplay?.state == "blocked" || presenceState == "blocked") }
-    var isNeedsUser: Bool { !isClosed && (runtimeDisplay?.state == "needs_user" || presenceState == "needs_user") }
+    private var effectiveRuntimeState: String? {
+        if let runtimeDisplay { return runtimeDisplay.state }
+        return presenceState
+    }
+    var isBlocked: Bool { !isClosed && effectiveRuntimeState == "blocked" }
+    var isNeedsUser: Bool { !isClosed && effectiveRuntimeState == "needs_user" }
     var isUserActive: Bool { userState == nil || userState == "active" }
     var needsAttention: Bool { !isClosed && (runtimeDisplay?.needsAttention == true || isBlocked || isNeedsUser) && isUserActive }
     var isExecuting: Bool {
-        !isClosed && (runtimeDisplay?.isExecuting == true || presenceState == "thinking" || presenceState == "running" || status == "working" || status == "active")
+        if isClosed { return false }
+        if let runtimeDisplay { return runtimeDisplay.isExecuting }
+        return presenceState == "thinking" || presenceState == "running" || status == "working" || status == "active"
     }
-    var isIdle: Bool { isClosed || runtimeDisplay?.isIdle == true || presenceState == "idle" || status == "idle" }
+    var isIdle: Bool {
+        if isClosed { return true }
+        if let runtimeDisplay { return runtimeDisplay.isIdle }
+        return presenceState == "idle" || status == "idle"
+    }
     var attentionLabel: String { isBlocked ? "Needs permission" : "Waiting on you" }
     var timelineAnchor: String? { timelineAnchorAt ?? lastActivityAt }
     var turnCount: Int { userMessages ?? 0 }
@@ -378,7 +388,8 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     }
 
     var runtimePhaseState: String {
-        runtimeDisplay?.state ?? presenceState ?? status ?? "idle"
+        if let runtimeDisplay { return runtimeDisplay.state ?? "idle" }
+        return presenceState ?? status ?? "idle"
     }
 
     var runtimePhaseLabel: String {

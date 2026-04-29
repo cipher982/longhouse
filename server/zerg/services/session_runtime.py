@@ -55,6 +55,18 @@ def _latest_timestamp(*values: datetime | None) -> datetime | None:
     return max(present) if present else None
 
 
+def _payload_timestamp(payload: Mapping[str, Any], key: str) -> datetime | None:
+    raw = payload.get(key)
+    if isinstance(raw, datetime):
+        return normalize_utc(raw)
+    if not isinstance(raw, str):
+        return None
+    try:
+        return normalize_utc(datetime.fromisoformat(raw.replace("Z", "+00:00")))
+    except ValueError:
+        return None
+
+
 def coerce_session_uuid(value: str | UUID | None) -> UUID | None:
     if value is None:
         return None
@@ -711,7 +723,7 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
         state.freshness_expires_at = occurred_at
         state.terminal_state = terminal_state
         state.terminal_at = occurred_at
-        state.timeline_anchor_at = occurred_at
+        state.timeline_anchor_at = _payload_timestamp(event.payload or {}, "timeline_anchor_at") or occurred_at
         phase_started_at = normalize_utc(state.phase_started_at)
         if phase_started_at is None or phase_started_at < occurred_at:
             state.phase_started_at = occurred_at

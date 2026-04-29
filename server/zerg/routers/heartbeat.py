@@ -57,7 +57,6 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 MANAGED_SESSION_LEASE_SOURCE = "engine_attached_lease"
 DEFAULT_MANAGED_SESSION_LEASE_TTL_MS = 15 * 60 * 1000
 MAX_MANAGED_SESSION_LEASE_TTL_MS = 60 * 60 * 1000
-MANAGED_SESSION_REATTACH_WINDOW = timedelta(hours=24)
 MANAGED_SESSION_LEASE_STATES = {"attached", "detached", "degraded"}
 MANAGED_SESSION_LEASE_PHASES = {"idle", "thinking", "running", "blocked", "needs_user", "none"}
 MANAGED_SESSION_LEASE_PROVIDERS = {"codex", "claude", "gemini"}
@@ -286,6 +285,50 @@ def _managed_lease_history_keys(db: Session, runtime_keys: list[str]) -> set[str
     return {row[0] for row in rows}
 
 
+def _is_synthetic_missing_managed_lease_event(event: SessionRuntimeEvent) -> bool:
+    if (event.source or "").strip() != MANAGED_SESSION_LEASE_SOURCE:
+        return False
+    if (event.kind or "").strip() != "phase_signal":
+        return False
+    if (event.phase or "").strip() != "blocked":
+        return False
+    if (event.tool_name or "").strip() != "control path":
+        return False
+    payload_raw = event.payload_json
+    if isinstance(payload_raw, dict):
+        payload = payload_raw
+    else:
+        try:
+            payload = json.loads(payload_raw or "{}")
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+    return payload.get("state") == "missing"
+
+
+def _latest_real_managed_lease_at_by_key(db: Session, runtime_keys: list[str]) -> dict[str, datetime]:
+    if not runtime_keys:
+        return {}
+    rows = (
+        db.query(SessionRuntimeEvent)
+        .filter(SessionRuntimeEvent.runtime_key.in_(runtime_keys))
+        .filter(SessionRuntimeEvent.source == MANAGED_SESSION_LEASE_SOURCE)
+        .order_by(SessionRuntimeEvent.runtime_key.asc(), SessionRuntimeEvent.occurred_at.desc())
+        .all()
+    )
+    latest: dict[str, datetime] = {}
+    for event in rows:
+        # Rows are ordered newest-first per runtime_key, so the first
+        # non-synthetic row we keep is the latest real managed lease signal.
+        if event.runtime_key in latest:
+            continue
+        if _is_synthetic_missing_managed_lease_event(event):
+            continue
+        occurred_at = normalize_utc(event.occurred_at)
+        if occurred_at is not None:
+            latest[event.runtime_key] = occurred_at
+    return latest
+
+
 def _runtime_events_for_missing_managed_leases(
     db: Session,
     leases: list[ManagedSessionLeaseIn],
@@ -306,10 +349,11 @@ def _runtime_events_for_missing_managed_leases(
         .filter(SessionRuntimeState.terminal_state.is_(None))
         .all()
     )
-    lease_history_keys = _managed_lease_history_keys(db, [state.runtime_key for state, _session in rows])
+    runtime_keys = [state.runtime_key for state, _session in rows]
+    lease_history_keys = _managed_lease_history_keys(db, runtime_keys)
+    latest_real_lease_at = _latest_real_managed_lease_at_by_key(db, runtime_keys)
 
     events: list[RuntimeEventIngest] = []
-    reattach_window_ms = int(MANAGED_SESSION_REATTACH_WINDOW.total_seconds() * 1000)
     for state, session in rows:
         if not _is_managed_session(session):
             continue
@@ -320,39 +364,33 @@ def _runtime_events_for_missing_managed_leases(
         if state.runtime_key not in lease_history_keys:
             continue
 
-        detached_since = normalize_utc(state.phase_started_at) or normalize_utc(state.last_runtime_signal_at) or received_at
-        already_detached = state.phase == "blocked" and (state.active_tool or "").strip() == "control path"
-        if already_detached and received_at - detached_since >= MANAGED_SESSION_REATTACH_WINDOW:
-            events.append(
-                RuntimeEventIngest(
-                    runtime_key=state.runtime_key,
-                    session_id=session_id,
-                    provider=provider,
-                    device_id=device_id,
-                    source=MANAGED_SESSION_LEASE_SOURCE,
-                    kind="terminal_signal",
-                    occurred_at=received_at,
-                    dedupe_key=f"engine-managed-missing-terminal:{device_id}:{session_id}",
-                    payload={"terminal_state": "process_gone"},
-                )
+        timeline_anchor_at = (
+            latest_real_lease_at.get(state.runtime_key)
+            or normalize_utc(state.timeline_anchor_at)
+            or normalize_utc(session.last_activity_at)
+            or normalize_utc(state.last_progress_at)
+            or normalize_utc(state.last_live_at)
+            or received_at
+        )
+        events.append(
+            RuntimeEventIngest(
+                runtime_key=state.runtime_key,
+                session_id=session_id,
+                provider=provider,
+                device_id=device_id,
+                source=MANAGED_SESSION_LEASE_SOURCE,
+                kind="terminal_signal",
+                occurred_at=received_at,
+                dedupe_key=(
+                    f"engine-managed-missing-terminal:{device_id}:{session_id}:"
+                    f"{int(state.runtime_version or 0)}:{timeline_anchor_at.isoformat()}"
+                ),
+                payload={
+                    "terminal_state": "process_gone",
+                    "timeline_anchor_at": timeline_anchor_at.isoformat(),
+                },
             )
-        elif not already_detached:
-            events.append(
-                RuntimeEventIngest(
-                    runtime_key=state.runtime_key,
-                    session_id=session_id,
-                    provider=provider,
-                    device_id=device_id,
-                    source=MANAGED_SESSION_LEASE_SOURCE,
-                    kind="phase_signal",
-                    phase="blocked",
-                    tool_name="control path",
-                    occurred_at=received_at,
-                    freshness_ms=reattach_window_ms,
-                    dedupe_key=f"engine-managed-missing-detached:{device_id}:{session_id}:{received_at.isoformat()}",
-                    payload={"state": "missing", "reattach_window_ms": reattach_window_ms},
-                )
-            )
+        )
 
     return events
 
