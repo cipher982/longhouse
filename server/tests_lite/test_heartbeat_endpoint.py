@@ -349,6 +349,90 @@ def test_heartbeat_accepts_unmanaged_session_bindings(tmp_path):
         api_app_ref.dependency_overrides = {}
 
 
+def test_heartbeat_marks_missing_unmanaged_binding_stale(tmp_path):
+    """An explicit empty unmanaged binding snapshot means prior local
+    bindings from that device are gone, not still waiting on the user."""
+    from zerg.models.agents import UnmanagedSessionBinding
+    from zerg.services.unmanaged_bindings import load_binding_overlay
+
+    SessionLocal = _make_db(tmp_path)
+    client, api_app_ref = _make_client(SessionLocal)
+    provider_session_id = "sess-gone"
+    observed_at = datetime(2026, 4, 27, 10, 5, tzinfo=timezone.utc)
+
+    try:
+        with SessionLocal() as db:
+            session = AgentSession(
+                id=uuid4(),
+                provider="codex",
+                environment="laptop",
+                started_at=datetime(2026, 4, 27, 10, 0, tzinfo=timezone.utc),
+                last_activity_at=observed_at,
+                provider_session_id=provider_session_id,
+                thread_root_session_id=None,
+                user_messages=1,
+                assistant_messages=1,
+                tool_calls=0,
+                is_writable_head=1,
+            )
+            db.add(session)
+            db.commit()
+            session_id = session.id
+
+        first = client.post(
+            "/api/agents/heartbeat",
+            json={
+                "version": "0.6.0",
+                "daemon_pid": 1,
+                "spool_pending_count": 0,
+                "parse_error_count_1h": 0,
+                "consecutive_ship_failures": 0,
+                "disk_free_bytes": 0,
+                "is_offline": False,
+                "unmanaged_session_bindings": [
+                    {
+                        "machine_id": "cinder",
+                        "provider": "codex",
+                        "provider_session_id": provider_session_id,
+                        "source_path": f"/Users/x/.codex/sessions/{provider_session_id}.jsonl",
+                        "pid": 1234,
+                        "process_start_time": "2026-04-27T10:00:00Z",
+                        "source_offset": 100,
+                        "source_mtime": "2026-04-27T10:05:00Z",
+                        "observed_at": "2026-04-27T10:05:00Z",
+                    }
+                ],
+            },
+        )
+        assert first.status_code == 204, first.text
+
+        second = client.post(
+            "/api/agents/heartbeat",
+            json={
+                "version": "0.6.0",
+                "daemon_pid": 1,
+                "spool_pending_count": 0,
+                "parse_error_count_1h": 0,
+                "consecutive_ship_failures": 0,
+                "disk_free_bytes": 0,
+                "is_offline": False,
+                "unmanaged_session_bindings": [],
+            },
+        )
+        assert second.status_code == 204, second.text
+
+        with SessionLocal() as db:
+            row = db.query(UnmanagedSessionBinding).one()
+            assert row.session_id == session_id
+            assert row.binding_state == "stale"
+
+            overlay = load_binding_overlay(db, [session_id], now=datetime.now(timezone.utc))
+            assert overlay[session_id].host_state == "online"
+            assert overlay[session_id].terminal_reason == "process_gone"
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
 def test_heartbeat_normalizes_codex_rollout_binding_ids(tmp_path):
     """Older engines may send Codex rollout filename stems. The runtime stores
     only the Codex UUID suffix, so heartbeat ingest must normalize before

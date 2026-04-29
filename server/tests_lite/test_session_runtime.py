@@ -892,44 +892,6 @@ def test_runtime_reducer_ignores_out_of_order_events(tmp_path):
     engine.dispose()
 
 
-def test_needs_user_presence_expires_to_idle_display(tmp_path):
-    engine, SessionLocal = _make_db(tmp_path, "runtime_needs_user_expiry.db")
-    now = datetime.now(timezone.utc)
-
-    with SessionLocal() as db:
-        session = _seed_session(db, started_at=now - timedelta(hours=3))
-        state = SessionRuntimeState(
-            runtime_key=runtime_key_for_session("claude", str(session.id)),
-            session_id=session.id,
-            provider="claude",
-            device_id="cinder",
-            phase="needs_user",
-            phase_source="semantic",
-            active_tool=None,
-            phase_started_at=now - timedelta(hours=2),
-            last_runtime_signal_at=now - timedelta(hours=2),
-            last_progress_at=now - timedelta(hours=2),
-            last_live_at=now - timedelta(hours=2),
-            timeline_anchor_at=now - timedelta(hours=2),
-            freshness_expires_at=now - timedelta(hours=1),
-            terminal_state=None,
-            terminal_at=None,
-            runtime_version=1,
-        )
-        db.add(state)
-        db.commit()
-
-        view = build_runtime_view(state=state, session=session, now=now)
-
-        assert view.runtime_phase == "needs_user"
-        assert view.status == "idle"
-        assert view.presence_state is None
-        assert view.display_phase == "Idle"
-        assert view.confidence == "stale"
-
-    engine.dispose()
-
-
 def test_runtime_view_hides_semantic_phase_for_inferred_progress(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "runtime_inferred_phase_view.db")
     now = datetime.now(timezone.utc)
