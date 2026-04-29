@@ -1608,6 +1608,47 @@ def test_runtime_view_hides_semantic_phase_for_inferred_progress(tmp_path):
     engine.dispose()
 
 
+def test_runtime_view_hides_stale_attention_phase(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_stale_attention_view.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(hours=2))
+        runtime_key = runtime_key_for_session("claude", str(session.id))
+        db.add(
+            SessionRuntimeState(
+                runtime_key=runtime_key,
+                session_id=session.id,
+                provider="claude",
+                device_id="cinder",
+                phase="needs_user",
+                phase_source="managed_local_transport",
+                active_tool=None,
+                phase_started_at=now - timedelta(hours=2),
+                last_runtime_signal_at=now - timedelta(hours=2),
+                last_progress_at=now - timedelta(hours=2),
+                last_live_at=now - timedelta(hours=2),
+                timeline_anchor_at=now - timedelta(hours=2),
+                freshness_expires_at=now - timedelta(hours=1),
+                terminal_state=None,
+                terminal_at=None,
+                runtime_version=4,
+            )
+        )
+        db.commit()
+
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        view = build_runtime_view(state=state, session=session, now=now)
+
+        assert view.runtime_phase == "needs_user"
+        assert view.status == "idle"
+        assert view.presence_state is None
+        assert view.display_phase == "Recent"
+        assert view.confidence == "stale"
+
+    engine.dispose()
+
+
 def test_newer_progress_reopens_finished_runtime_state(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "runtime_progress_reopens_finished.db")
     now = datetime.now(timezone.utc)

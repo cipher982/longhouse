@@ -336,6 +336,54 @@ def test_unmanaged_needs_user_with_online_host_stays_actionable():
     assert display.needs_attention is True
 
 
+def test_managed_stale_needs_user_without_presence_is_not_actionable():
+    display = build_session_runtime_display(
+        runtime_view=_runtime_view(
+            runtime_phase="needs_user",
+            runtime_source="managed_local_transport",
+            status="idle",
+            presence_state=None,
+            confidence="stale",
+            display_phase="Recent",
+            last_live_at=datetime(2026, 4, 26, 11, 0, tzinfo=timezone.utc),
+        ),
+        capabilities=_capabilities(managed=True),
+        ended_at=None,
+    )
+
+    assert display.control_path == "managed"
+    assert display.state is None
+    assert display.phase_label == "Disconnected"
+    assert display.headline == "Not connected"
+    assert display.heuristic_active is False
+    assert display.needs_attention is False
+    assert display.tone == "inactive"
+
+
+def test_unmanaged_stale_needs_user_phase_without_presence_is_recent():
+    display = build_session_runtime_display(
+        runtime_view=_runtime_view(
+            runtime_phase="needs_user",
+            runtime_source="semantic",
+            status="idle",
+            presence_state=None,
+            confidence="stale",
+            display_phase="Recent",
+            last_live_at=datetime(2026, 4, 26, 11, 0, tzinfo=timezone.utc),
+        ),
+        capabilities=_capabilities(managed=False),
+        ended_at=None,
+        binding_host_state="online",
+    )
+
+    assert display.control_path == "unmanaged"
+    assert display.state is None
+    assert display.phase_label == "Recent"
+    assert display.headline == "Inactive"
+    assert display.heuristic_active is False
+    assert display.needs_attention is False
+
+
 def test_managed_live_thinking_without_active_tool_is_not_stalled():
     display = build_session_runtime_display(
         runtime_view=_runtime_view(

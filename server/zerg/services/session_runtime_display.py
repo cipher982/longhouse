@@ -278,6 +278,7 @@ def build_session_runtime_display(
         # that is not actionable runtime state, so do not promote it to
         # "Needs you".
         presence_state = None
+    stale_attention_phase = presence_state is None and runtime_phase in ATTENTION_STATES and confidence == "stale"
     truth_tier = _truth_tier(
         capabilities=capabilities,
         status=status,
@@ -291,14 +292,21 @@ def build_session_runtime_display(
         runtime_source=runtime_source,
         presence_state=presence_state,
     )
-    if unmanaged_attention_unverified:
+    if unmanaged_attention_unverified or stale_attention_phase:
         heuristic_active = False
     is_executing = presence_state in LIVE_EXECUTION_STATES
     needs_attention = presence_state in ATTENTION_STATES
-    is_idle = presence_state == "idle" or (not is_executing and not needs_attention and not heuristic_active and status == "idle")
+    is_idle = presence_state == "idle" or (
+        not stale_attention_phase and not is_executing and not needs_attention and not heuristic_active and status == "idle"
+    )
+    display_phase = runtime_view.display_phase
+    if unmanaged_attention_unverified:
+        display_phase = "Recent"
+    elif stale_attention_phase:
+        display_phase = "Disconnected" if control_path == "managed" else "Recent"
     phase_label = _phase_label(
         presence_state=presence_state,
-        display_phase="Recent" if unmanaged_attention_unverified else runtime_view.display_phase,
+        display_phase=display_phase,
         compact_tool=compact_tool,
     )
     is_managed_session = (
