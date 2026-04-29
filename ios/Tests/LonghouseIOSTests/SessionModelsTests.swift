@@ -105,6 +105,53 @@ struct SessionModelsTests {
     }
 
     @Test
+    func sessionDetailRuntimeDisplayNilStateSuppressesStalePresenceState() throws {
+        let json = """
+        {
+          "id": "session-stale-detail",
+          "provider": "codex",
+          "project": "zerg",
+          "user_state": "active",
+          "presence_state": "needs_user",
+          "status": "active",
+          "capabilities": {
+            "live_control_available": true,
+            "host_reattach_available": true,
+            "reply_to_live_session_available": true
+          },
+          "runtime_display": {
+            "truth_tier": "managed-local",
+            "state": null,
+            "tone": "inactive",
+            "headline": "Not connected",
+            "detail": null,
+            "phase_label": "Recent",
+            "compact_tool_label": null,
+            "is_live": false,
+            "is_executing": false,
+            "needs_attention": false,
+            "is_idle": false,
+            "heuristic_active": false,
+            "is_managed_local_truth": true,
+            "has_signal": true,
+            "control_path": "managed",
+            "activity_recency": "stale",
+            "lifecycle": "open",
+            "host_state": "unknown",
+            "terminal_reason": null
+          }
+        }
+        """.data(using: .utf8)!
+
+        let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
+
+        #expect(detail.runtimePhaseState == "idle")
+        #expect(detail.runtimeHeadline == "Not connected")
+        #expect(detail.runtimeTone == "inactive")
+        #expect(!detail.isSessionExecuting)
+    }
+
+    @Test
     func sessionDetailCanonicalizesLegacyShellLabels() throws {
         let json = """
         {
@@ -209,6 +256,47 @@ struct SessionModelsTests {
         #expect(!summary.isExecuting)
         #expect(summary.isIdle)
         #expect(summary.displayPhaseLabel == "Completed")
+    }
+
+    @Test
+    func runtimeDisplayNilStateSuppressesStaleTopLevelAttention() {
+        let summary = SessionSummary(
+            id: "session-disconnected-stale-attention",
+            title: "Disconnected work",
+            presenceState: "needs_user",
+            provider: "codex",
+            project: "zerg",
+            lastActivityAt: "2026-04-25T20:00:00Z",
+            status: "active",
+            displayPhase: "Needs you",
+            runtimeDisplay: SessionRuntimeDisplay(
+                truthTier: "managed-local",
+                state: nil,
+                tone: "inactive",
+                headline: "Not connected",
+                detail: nil,
+                phaseLabel: "Recent",
+                compactToolLabel: nil,
+                isLive: false,
+                isExecuting: false,
+                needsAttention: false,
+                isIdle: false,
+                heuristicActive: false,
+                isManagedLocalTruth: true,
+                hasSignal: true,
+                controlPath: "managed",
+                activityRecency: "stale",
+                lifecycle: "open",
+                hostState: "unknown",
+                terminalReason: nil
+            )
+        )
+
+        #expect(!summary.isNeedsUser)
+        #expect(!summary.isBlocked)
+        #expect(!summary.needsAttention)
+        #expect(!summary.isExecuting)
+        #expect(summary.displayPhaseLabel == "Recent")
     }
 
     @Test

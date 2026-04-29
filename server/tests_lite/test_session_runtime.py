@@ -668,9 +668,10 @@ def test_phase_signal_same_blocked_phase_with_new_tool_resets_phase_started_at(t
     engine.dispose()
 
 
-def test_heartbeat_missing_managed_lease_becomes_recoverable_detached_state(tmp_path):
+def test_heartbeat_missing_managed_lease_closes_immediately_with_stable_anchor(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_managed_missing_detached.db")
     now = datetime.now(timezone.utc)
+    last_real_lease_at = now - timedelta(minutes=2)
 
     with SessionLocal() as db:
         session = _seed_session(
@@ -693,7 +694,7 @@ def test_heartbeat_missing_managed_lease_becomes_recoverable_detached_state(tmp_
                     source="engine_attached_lease",
                     kind="phase_signal",
                     phase="idle",
-                    occurred_at=now - timedelta(minutes=2),
+                    occurred_at=last_real_lease_at,
                     freshness_ms=15 * 60 * 1000,
                     dedupe_key="managed-lease-before-missing",
                     payload={"state": "attached"},
@@ -719,12 +720,13 @@ def test_heartbeat_missing_managed_lease_becomes_recoverable_detached_state(tmp_
         stored_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         view = build_runtime_view(state=state, session=stored_session, now=datetime.now(timezone.utc))
 
-        assert state.phase == "blocked"
-        assert state.active_tool == "control path"
-        assert state.terminal_state is None
-        assert view.status == "active"
-        assert view.presence_state == "blocked"
-        assert view.display_phase == "Blocked on control path"
+        assert state.phase == "finished"
+        assert state.active_tool is None
+        assert state.terminal_state == "process_gone"
+        assert state.timeline_anchor_at.replace(tzinfo=timezone.utc) == last_real_lease_at
+        assert view.status == "completed"
+        assert view.presence_state is None
+        assert view.display_phase == "Completed"
 
     engine.dispose()
 
@@ -830,10 +832,11 @@ def test_heartbeat_missing_managed_lease_ignores_managed_session_without_lease_h
     engine.dispose()
 
 
-def test_heartbeat_missing_managed_lease_closes_after_reattach_window(tmp_path):
+def test_heartbeat_missing_managed_lease_closes_existing_synthetic_missing_state(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_managed_missing_expired.db")
     now = datetime.now(timezone.utc)
-    detached_since = now - timedelta(hours=25)
+    last_real_lease_at = now - timedelta(days=1)
+    bad_missing_at = now - timedelta(minutes=6)
 
     with SessionLocal() as db:
         session = _seed_session(
@@ -855,11 +858,24 @@ def test_heartbeat_missing_managed_lease_closes_after_reattach_window(tmp_path):
                     device_id="runtime-device",
                     source="engine_attached_lease",
                     kind="phase_signal",
+                    phase="idle",
+                    occurred_at=last_real_lease_at,
+                    freshness_ms=15 * 60 * 1000,
+                    dedupe_key="managed-lease-before-bad-missing",
+                    payload={"state": "attached"},
+                ),
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session_id,
+                    provider="codex",
+                    device_id="runtime-device",
+                    source="engine_attached_lease",
+                    kind="phase_signal",
                     phase="blocked",
                     tool_name="control path",
-                    occurred_at=detached_since,
+                    occurred_at=bad_missing_at,
                     freshness_ms=24 * 60 * 60 * 1000,
-                    dedupe_key="managed-lease-detached-before-missing",
+                    dedupe_key="managed-lease-bad-synthetic-missing",
                     payload={"state": "missing"},
                 )
             ],
@@ -885,6 +901,7 @@ def test_heartbeat_missing_managed_lease_closes_after_reattach_window(tmp_path):
 
         assert state.phase == "finished"
         assert state.terminal_state == "process_gone"
+        assert state.timeline_anchor_at.replace(tzinfo=timezone.utc) == last_real_lease_at
         assert stored_session.ended_at is None
         assert view.status == "completed"
         assert view.display_phase == "Completed"
@@ -892,10 +909,10 @@ def test_heartbeat_missing_managed_lease_closes_after_reattach_window(tmp_path):
     engine.dispose()
 
 
-def test_heartbeat_missing_managed_lease_before_reattach_window_stays_detached(tmp_path):
+def test_heartbeat_missing_managed_lease_without_real_anchor_falls_back_to_existing_anchor(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_managed_missing_before_boundary.db")
     now = datetime.now(timezone.utc)
-    detached_since = now - timedelta(hours=23, minutes=59)
+    existing_anchor = now - timedelta(hours=23, minutes=59)
 
     with SessionLocal() as db:
         session = _seed_session(
@@ -919,7 +936,7 @@ def test_heartbeat_missing_managed_lease_before_reattach_window_stays_detached(t
                     kind="phase_signal",
                     phase="blocked",
                     tool_name="control path",
-                    occurred_at=detached_since,
+                    occurred_at=existing_anchor,
                     freshness_ms=24 * 60 * 60 * 1000,
                     dedupe_key="managed-lease-detached-before-boundary",
                     payload={"state": "missing"},
@@ -942,14 +959,15 @@ def test_heartbeat_missing_managed_lease_before_reattach_window_stays_detached(t
 
     with SessionLocal() as db:
         state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
-        assert state.phase == "blocked"
-        assert state.active_tool == "control path"
-        assert state.terminal_state is None
+        assert state.phase == "finished"
+        assert state.active_tool is None
+        assert state.terminal_state == "process_gone"
+        assert state.timeline_anchor_at.replace(tzinfo=timezone.utc) == existing_anchor
 
     engine.dispose()
 
 
-def test_heartbeat_missing_managed_lease_only_detaches_missing_session(tmp_path):
+def test_heartbeat_missing_managed_lease_only_closes_missing_session(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_managed_one_missing.db")
     now = datetime.now(timezone.utc)
 
@@ -1026,9 +1044,9 @@ def test_heartbeat_missing_managed_lease_only_detaches_missing_session(tmp_path)
         assert present_state.phase == "idle"
         assert present_state.active_tool is None
         assert present_state.terminal_state is None
-        assert missing_state.phase == "blocked"
-        assert missing_state.active_tool == "control path"
-        assert missing_state.terminal_state is None
+        assert missing_state.phase == "finished"
+        assert missing_state.active_tool is None
+        assert missing_state.terminal_state == "process_gone"
         assert missing_state.session_id == missing_id
 
     engine.dispose()
@@ -1148,7 +1166,7 @@ def test_heartbeat_missing_managed_lease_does_not_detach_unmanaged_session(tmp_p
     engine.dispose()
 
 
-def test_heartbeat_managed_reattach_rearms_missing_lease_window(tmp_path):
+def test_heartbeat_managed_reattach_can_close_again_with_new_anchor(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_managed_flap_rearms.db")
     now = datetime.now(timezone.utc)
     first_missing_at = now - timedelta(hours=23)
@@ -1209,10 +1227,10 @@ def test_heartbeat_managed_reattach_rearms_missing_lease_window(tmp_path):
 
     with SessionLocal() as db:
         state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
-        assert state.phase == "blocked"
-        assert state.active_tool == "control path"
-        assert state.terminal_state is None
-        assert state.phase_started_at.replace(tzinfo=timezone.utc) >= reattached_at
+        assert state.phase == "finished"
+        assert state.active_tool is None
+        assert state.terminal_state == "process_gone"
+        assert state.timeline_anchor_at.replace(tzinfo=timezone.utc) == reattached_at
 
     engine.dispose()
 

@@ -309,7 +309,7 @@ export function resolveSessionRuntimeState(
   const sessionTruthTier = getRuntimeTruthTier(session);
   const status = session.status ?? null;
   const isClosed = serverDisplay?.lifecycle === "closed";
-  const rawPresenceState = normalizePresenceState(serverDisplay?.state ?? session.presence_state ?? null);
+  const rawPresenceState = normalizePresenceState(serverDisplay ? serverDisplay.state : session.presence_state ?? null);
   const presenceState = isClosed ? null : rawPresenceState;
   const presenceTool =
     session.active_tool ??

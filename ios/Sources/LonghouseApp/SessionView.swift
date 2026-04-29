@@ -378,7 +378,7 @@ struct SessionView: View {
     }
 }
 
-private struct SessionRuntimeDock: View {
+struct SessionRuntimeDock: View {
     let detail: SessionDetail
     var loopMode: SessionLoopMode? = nil
     var isUpdatingLoopMode: Bool = false
