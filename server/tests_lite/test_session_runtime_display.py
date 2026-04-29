@@ -363,6 +363,7 @@ def test_process_gone_closure_suppresses_stale_attention_copy():
     assert display.headline == "Completed"
     assert display.phase_label == "Completed"
     assert display.needs_attention is False
+    assert display.is_idle is True
     assert display.tone == "inactive"
 
 
@@ -387,6 +388,7 @@ def test_host_expired_closure_suppresses_stale_attention_copy_without_process_go
     assert display.terminal_reason == "host_expired"
     assert display.state is None
     assert display.needs_attention is False
+    assert display.is_idle is True
 
 
 def test_three_axis_fields_ended_at_without_terminal_stays_open():
