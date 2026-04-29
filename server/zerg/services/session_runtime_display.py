@@ -358,6 +358,15 @@ def build_session_runtime_display(
     else:
         lifecycle = "open"
         terminal_reason = None
+    if lifecycle == "closed":
+        presence_state = None
+        headline = "Completed"
+        detail = None
+        phase_label = "Completed"
+        is_executing = False
+        needs_attention = False
+        heuristic_active = False
+        is_stalled = False
     # Phase 5c: host_state comes from heartbeat+binding freshness when a
     # binding overlay is supplied. Otherwise we honestly say "unknown".
     host_state = binding_host_state if binding_host_state else "unknown"
