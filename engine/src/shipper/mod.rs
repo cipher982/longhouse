@@ -455,7 +455,8 @@ fn resolve_payload_session_id<'a>(
     // plus forked_from_id, and forcing them onto the parent Longhouse UUID
     // collapses every child transcript into the parent session.
     if provider.eq_ignore_ascii_case("codex")
-        && parse_result.metadata.forked_from_session_id.is_some()
+        && (parse_result.metadata.forked_from_session_id.is_some()
+            || parse_result.metadata.is_sidechain)
         && override_session_id != parse_result.metadata.session_id
     {
         return &parse_result.metadata.session_id;
@@ -1726,6 +1727,15 @@ mod tests {
         )
     }
 
+    fn codex_review_subagent_session_lines() -> &'static str {
+        concat!(
+            r#"{"type":"session_meta","timestamp":"2026-04-29T19:48:36Z","payload":{"type":"session_meta","id":"019ddb6e-114f-7643-89db-86c31a2aa706","source":{"subagent":{"review":{}}},"cwd":"/tmp/test","cli_version":"0.125.0"}}"#,
+            "\n",
+            r#"{"type":"response_item","timestamp":"2026-04-29T19:48:37Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello from review subagent"}]}}"#,
+            "\n",
+        )
+    }
+
     /// Write content to a temp file with a UUID-based name.
     fn write_session_file(content: &str, name: &str) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
@@ -2100,6 +2110,44 @@ mod tests {
             }
             PreparedAction::AckOnly(_) | PreparedAction::DeadLetter(_) => {
                 panic!("source subagent should ship, not ack-only or dead-letter")
+            }
+        }
+    }
+
+    #[test]
+    fn test_prepare_codex_non_thread_spawn_subagent_ignores_managed_parent_override() {
+        let (_tmp, _conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("rollout-2026-04-29T19-48-36-review-child.jsonl");
+        std::fs::write(&path, codex_review_subagent_session_lines()).unwrap();
+
+        let managed_parent_longhouse_id = "c3026405-5e99-447f-ae5c-baacd848ac47";
+
+        let prepared = prepare_path_range(
+            &path,
+            "codex",
+            0,
+            None,
+            CompressionAlgo::Gzip,
+            10_000,
+            Some(managed_parent_longhouse_id),
+        )
+        .unwrap()
+        .expect("review subagent should prepare");
+
+        assert_eq!(prepared.actions.len(), 1);
+        match prepared.actions.into_iter().next().unwrap() {
+            PreparedAction::Ship(item) => {
+                assert_eq!(item.session_id, "019ddb6e-114f-7643-89db-86c31a2aa706");
+                assert_eq!(
+                    decode_payload_session_id(&item.compressed),
+                    "019ddb6e-114f-7643-89db-86c31a2aa706"
+                );
+            }
+            PreparedAction::AckOnly(_) | PreparedAction::DeadLetter(_) => {
+                panic!("review subagent should ship, not ack-only or dead-letter")
             }
         }
     }

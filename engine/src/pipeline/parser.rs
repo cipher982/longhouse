@@ -191,6 +191,13 @@ struct CodexPayload {
 struct ScannedCodexSessionMeta {
     session_id: String,
     forked_from_session_id: Option<String>,
+    is_sidechain: bool,
+}
+
+#[derive(Debug, Default)]
+struct CodexPayloadParentage {
+    forked_from_session_id: Option<String>,
+    is_sidechain: bool,
 }
 
 #[derive(Deserialize)]
@@ -501,7 +508,12 @@ pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
             metadata: SessionMetadata {
                 session_id,
                 forked_from_session_id: scanned_session_meta
-                    .and_then(|item| item.forked_from_session_id),
+                    .as_ref()
+                    .and_then(|item| item.forked_from_session_id.clone()),
+                is_sidechain: scanned_session_meta
+                    .as_ref()
+                    .map(|item| item.is_sidechain)
+                    .unwrap_or(false),
                 ..Default::default()
             },
         });
@@ -519,7 +531,7 @@ pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
         if result.metadata.forked_from_session_id.is_none() {
             result.metadata.forked_from_session_id = scanned.forked_from_session_id.clone();
         }
-        if scanned.forked_from_session_id.is_some() {
+        if scanned.is_sidechain {
             result.metadata.is_sidechain = true;
         }
     }
@@ -574,10 +586,11 @@ fn scan_codex_session_meta(path: &Path) -> Option<ScannedCodexSessionMeta> {
         let payload = obj.payload.as_ref()?;
         let id = payload.id.as_ref()?;
         if Uuid::parse_str(id).is_ok() {
-            let forked_from_session_id = codex_payload_parent_thread_id(payload);
+            let parentage = codex_payload_parentage(payload);
             return Some(ScannedCodexSessionMeta {
                 session_id: id.clone(),
-                forked_from_session_id,
+                forked_from_session_id: parentage.forked_from_session_id,
+                is_sidechain: parentage.is_sidechain,
             });
         }
     }
@@ -585,20 +598,33 @@ fn scan_codex_session_meta(path: &Path) -> Option<ScannedCodexSessionMeta> {
     None
 }
 
-fn codex_payload_parent_thread_id(payload: &CodexPayload) -> Option<String> {
-    payload
+fn codex_payload_parentage(payload: &CodexPayload) -> CodexPayloadParentage {
+    let forked_from_session_id = payload
         .forked_from_id
         .as_ref()
         .filter(|candidate| Uuid::parse_str(candidate).is_ok())
-        .cloned()
-        .or_else(|| {
-            payload
-                .source
-                .as_ref()
-                .and_then(|source| parse_codex_subagent_source_str(source.get()))
-                .and_then(|source| source.parent_thread_id)
-                .filter(|candidate| Uuid::parse_str(candidate).is_ok())
-        })
+        .cloned();
+    if forked_from_session_id.is_some() {
+        return CodexPayloadParentage {
+            forked_from_session_id,
+            is_sidechain: true,
+        };
+    }
+
+    let Some(source) = payload
+        .source
+        .as_ref()
+        .and_then(|source| parse_codex_subagent_source_str(source.get()))
+    else {
+        return CodexPayloadParentage::default();
+    };
+
+    CodexPayloadParentage {
+        forked_from_session_id: source
+            .parent_thread_id
+            .filter(|candidate| Uuid::parse_str(candidate).is_ok()),
+        is_sidechain: true,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1190,8 +1216,11 @@ fn collect_metadata(
                 }
             }
             if meta.forked_from_session_id.is_none() {
-                if let Some(parent_thread_id) = codex_payload_parent_thread_id(payload) {
+                let parentage = codex_payload_parentage(payload);
+                if let Some(parent_thread_id) = parentage.forked_from_session_id {
                     meta.forked_from_session_id = Some(parent_thread_id);
+                }
+                if parentage.is_sidechain {
                     meta.is_sidechain = true;
                 }
             }
@@ -2649,6 +2678,39 @@ mod tests {
             result.metadata.forked_from_session_id.as_deref(),
             Some(parent_id)
         );
+        assert!(result.metadata.is_sidechain);
+        assert_eq!(result.events[0].session_id, child_id);
+    }
+
+    #[test]
+    fn test_codex_non_thread_spawn_subagent_marks_sidechain_without_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let child_id = "019ddb6e-114f-7643-89db-86c31a2aa706";
+        let session_meta = json!({
+            "type": "session_meta",
+            "timestamp": "2026-04-29T19:48:36Z",
+            "payload": {
+                "id": child_id,
+                "cwd": "/Users/test/project",
+                "source": {
+                    "subagent": {
+                        "review": {}
+                    }
+                }
+            }
+        })
+        .to_string();
+        let user_line = r#"{"type":"response_item","timestamp":"2026-04-29T19:48:37Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}}"#;
+        let path = make_jsonl_file(
+            dir.path(),
+            "rollout-review-child.jsonl",
+            &[&session_meta, user_line],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+
+        assert_eq!(result.metadata.session_id, child_id);
+        assert_eq!(result.metadata.forked_from_session_id, None);
         assert!(result.metadata.is_sidechain);
         assert_eq!(result.events[0].session_id, child_id);
     }

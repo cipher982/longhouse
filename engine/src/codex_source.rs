@@ -142,4 +142,16 @@ mod tests {
     fn root_string_source_is_not_subagent() {
         assert!(parse_codex_subagent_source(&json!("vscode")).is_none());
     }
+
+    #[test]
+    fn parses_non_thread_spawn_subagent_without_parent() {
+        let source = json!({
+            "subagent": {
+                "review": {}
+            }
+        });
+
+        let parsed = parse_codex_subagent_source(&source).unwrap();
+        assert_eq!(parsed.parent_thread_id, None);
+    }
 }
