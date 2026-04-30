@@ -23,6 +23,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use uuid::Uuid;
 
+use crate::codex_source::parse_codex_subagent_source_str;
+
 /// Threshold for switching from buffered read to mmap (1 MB).
 const MMAP_THRESHOLD: u64 = 1_048_576;
 
@@ -167,6 +169,8 @@ struct CodexPayload {
     id: Option<String>,
     /// session_meta: parent provider session UUID for forked subagents
     forked_from_id: Option<String>,
+    /// session_meta: Codex source object, including current subagent lineage.
+    source: Option<Box<RawValue>>,
     /// session_meta: working directory
     cwd: Option<String>,
     /// session_meta: git info (branch + remote URL)
@@ -570,11 +574,7 @@ fn scan_codex_session_meta(path: &Path) -> Option<ScannedCodexSessionMeta> {
         let payload = obj.payload.as_ref()?;
         let id = payload.id.as_ref()?;
         if Uuid::parse_str(id).is_ok() {
-            let forked_from_session_id = payload
-                .forked_from_id
-                .as_ref()
-                .filter(|candidate| Uuid::parse_str(candidate).is_ok())
-                .cloned();
+            let forked_from_session_id = codex_payload_parent_thread_id(payload);
             return Some(ScannedCodexSessionMeta {
                 session_id: id.clone(),
                 forked_from_session_id,
@@ -583,6 +583,22 @@ fn scan_codex_session_meta(path: &Path) -> Option<ScannedCodexSessionMeta> {
     }
 
     None
+}
+
+fn codex_payload_parent_thread_id(payload: &CodexPayload) -> Option<String> {
+    payload
+        .forked_from_id
+        .as_ref()
+        .filter(|candidate| Uuid::parse_str(candidate).is_ok())
+        .cloned()
+        .or_else(|| {
+            payload
+                .source
+                .as_ref()
+                .and_then(|source| parse_codex_subagent_source_str(source.get()))
+                .and_then(|source| source.parent_thread_id)
+                .filter(|candidate| Uuid::parse_str(candidate).is_ok())
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -1174,11 +1190,9 @@ fn collect_metadata(
                 }
             }
             if meta.forked_from_session_id.is_none() {
-                if let Some(ref forked_from_id) = payload.forked_from_id {
-                    if Uuid::parse_str(forked_from_id).is_ok() {
-                        meta.forked_from_session_id = Some(forked_from_id.clone());
-                        meta.is_sidechain = true;
-                    }
+                if let Some(parent_thread_id) = codex_payload_parent_thread_id(payload) {
+                    meta.forked_from_session_id = Some(parent_thread_id);
+                    meta.is_sidechain = true;
                 }
             }
             // Extract git branch and remote URL directly from session_meta.
@@ -2553,6 +2567,89 @@ mod tests {
         );
         assert!(result.metadata.is_sidechain);
         assert_eq!(result.events.len(), 1);
+        assert_eq!(result.events[0].session_id, child_id);
+    }
+
+    #[test]
+    fn test_codex_session_meta_source_thread_spawn_marks_sidechain() {
+        let dir = tempfile::tempdir().unwrap();
+        let child_id = "019ddb6e-114f-7643-89db-86c31a2aa706";
+        let parent_id = "019dd708-573a-7131-a4d9-9ee855520483";
+        let session_meta = json!({
+            "type": "session_meta",
+            "timestamp": "2026-04-29T19:48:36Z",
+            "payload": {
+                "id": child_id,
+                "cwd": "/Users/test/project",
+                "source": {
+                    "subagent": {
+                        "thread_spawn": {
+                            "parent_thread_id": parent_id,
+                            "depth": 1,
+                            "agent_nickname": "Ptolemy",
+                            "agent_role": "default"
+                        }
+                    }
+                }
+            }
+        })
+        .to_string();
+        let user_line = r#"{"type":"response_item","timestamp":"2026-04-29T19:48:37Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}}"#;
+        let path = make_jsonl_file(
+            dir.path(),
+            "rollout-child.jsonl",
+            &[&session_meta, user_line],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+
+        assert_eq!(result.metadata.session_id, child_id);
+        assert_eq!(
+            result.metadata.forked_from_session_id.as_deref(),
+            Some(parent_id)
+        );
+        assert!(result.metadata.is_sidechain);
+        assert_eq!(result.events[0].session_id, child_id);
+    }
+
+    #[test]
+    fn test_codex_offset_recovers_source_thread_spawn_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let child_id = "019ddb6e-114f-7643-89db-86c31a2aa706";
+        let parent_id = "019dd708-573a-7131-a4d9-9ee855520483";
+        let session_meta = json!({
+            "type": "session_meta",
+            "timestamp": "2026-04-29T19:48:36Z",
+            "payload": {
+                "id": child_id,
+                "cwd": "/Users/test/project",
+                "source": {
+                    "subagent": {
+                        "thread_spawn": {
+                            "parent_thread_id": parent_id,
+                            "depth": 1
+                        }
+                    }
+                }
+            }
+        })
+        .to_string();
+        let user_line = r#"{"type":"response_item","timestamp":"2026-04-29T19:48:37Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}}"#;
+        let path = make_jsonl_file(
+            dir.path(),
+            "rollout-child.jsonl",
+            &[&session_meta, user_line],
+        );
+
+        let offset = (session_meta.len() + 1) as u64;
+        let result = parse_session_file(&path, offset).unwrap();
+
+        assert_eq!(result.metadata.session_id, child_id);
+        assert_eq!(
+            result.metadata.forked_from_session_id.as_deref(),
+            Some(parent_id)
+        );
+        assert!(result.metadata.is_sidechain);
         assert_eq!(result.events[0].session_id, child_id);
     }
 

@@ -140,6 +140,13 @@ def _normalize_optional_int(value: Any) -> int | None:
         return None
 
 
+def _looks_like_subagent_control_error(value: str | None) -> bool:
+    if not value:
+        return False
+    lowered = value.lower()
+    return "subagent" in lowered and "managed primary" in lowered
+
+
 def _normalize_binding_path(path: str | None) -> str | None:
     normalized = _normalize_optional_string(path)
     if normalized is None:
@@ -1363,7 +1370,10 @@ def _collect_managed_codex_sessions(
             thread_subscription_issue = True
 
         if thread_subscription_issue:
-            reason_codes.append("thread_subscription_failed")
+            if _looks_like_subagent_control_error(last_error) or _looks_like_subagent_control_error(thread_subscription_last_error):
+                reason_codes.append("control_attached_to_subagent")
+            else:
+                reason_codes.append("thread_subscription_failed")
         if app_server is None:
             reason_codes.append("live_control_unavailable")
         if bridge_status != "ready":

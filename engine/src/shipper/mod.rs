@@ -1717,6 +1717,15 @@ mod tests {
         )
     }
 
+    fn codex_source_subagent_session_lines() -> &'static str {
+        concat!(
+            r#"{"type":"session_meta","timestamp":"2026-04-29T19:48:36Z","payload":{"type":"session_meta","id":"019ddb6e-114f-7643-89db-86c31a2aa706","source":{"subagent":{"thread_spawn":{"parent_thread_id":"019dd708-573a-7131-a4d9-9ee855520483","depth":1,"agent_nickname":"Ptolemy","agent_role":"default"}}},"cwd":"/tmp/test","cli_version":"0.125.0"}}"#,
+            "\n",
+            r#"{"type":"response_item","timestamp":"2026-04-29T19:48:37Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello from source subagent"}]}}"#,
+            "\n",
+        )
+    }
+
     /// Write content to a temp file with a UUID-based name.
     fn write_session_file(content: &str, name: &str) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
@@ -2053,6 +2062,44 @@ mod tests {
             }
             PreparedAction::AckOnly(_) | PreparedAction::DeadLetter(_) => {
                 panic!("forked codex child should ship, not ack-only or dead-letter")
+            }
+        }
+    }
+
+    #[test]
+    fn test_prepare_codex_source_subagent_ignores_managed_parent_override() {
+        let (_tmp, _conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout-2026-04-29T19-48-36-child.jsonl");
+        std::fs::write(&path, codex_source_subagent_session_lines()).unwrap();
+
+        let session_meta = r#"{"type":"session_meta","timestamp":"2026-04-29T19:48:36Z","payload":{"type":"session_meta","id":"019ddb6e-114f-7643-89db-86c31a2aa706","source":{"subagent":{"thread_spawn":{"parent_thread_id":"019dd708-573a-7131-a4d9-9ee855520483","depth":1,"agent_nickname":"Ptolemy","agent_role":"default"}}},"cwd":"/tmp/test","cli_version":"0.125.0"}}"#;
+        let offset = (session_meta.len() + 1) as u64;
+        let managed_parent_longhouse_id = "c3026405-5e99-447f-ae5c-baacd848ac47";
+
+        let prepared = prepare_path_range(
+            &path,
+            "codex",
+            offset,
+            None,
+            CompressionAlgo::Gzip,
+            10_000,
+            Some(managed_parent_longhouse_id),
+        )
+        .unwrap()
+        .expect("source subagent should prepare from incremental offset");
+
+        assert_eq!(prepared.actions.len(), 1);
+        match prepared.actions.into_iter().next().unwrap() {
+            PreparedAction::Ship(item) => {
+                assert_eq!(item.session_id, "019ddb6e-114f-7643-89db-86c31a2aa706");
+                assert_eq!(
+                    decode_payload_session_id(&item.compressed),
+                    "019ddb6e-114f-7643-89db-86c31a2aa706"
+                );
+            }
+            PreparedAction::AckOnly(_) | PreparedAction::DeadLetter(_) => {
+                panic!("source subagent should ship, not ack-only or dead-letter")
             }
         }
     }
