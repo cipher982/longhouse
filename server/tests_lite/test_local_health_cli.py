@@ -1202,6 +1202,13 @@ def test_collect_local_health_names_subagent_control_failure(monkeypatch, tmp_pa
     assert snapshot["managed_sessions"][0]["reason_codes"] == ["control_attached_to_subagent"]
 
 
+def test_codex_source_is_subagent_accepts_known_aliases():
+    assert local_health_service._codex_source_is_subagent({"subagent": {}})
+    assert local_health_service._codex_source_is_subagent({"subAgent": {}})
+    assert local_health_service._codex_source_is_subagent({"sub_agent": {}})
+    assert not local_health_service._codex_source_is_subagent({"threadSpawn": {}})
+
+
 def test_collect_local_health_names_stale_subagent_bridge_path(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))

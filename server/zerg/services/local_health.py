@@ -154,6 +154,8 @@ def _codex_source_is_subagent(source: Any) -> bool:
         return True
     if isinstance(source.get("subAgent"), Mapping):
         return True
+    if isinstance(source.get("sub_agent"), Mapping):
+        return True
     return False
 
 
