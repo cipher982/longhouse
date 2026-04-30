@@ -147,6 +147,49 @@ def _looks_like_subagent_control_error(value: str | None) -> bool:
     return "subagent" in lowered and "managed primary" in lowered
 
 
+def _codex_source_is_subagent(source: Any) -> bool:
+    if not isinstance(source, Mapping):
+        return False
+    if isinstance(source.get("subagent"), Mapping):
+        return True
+    if isinstance(source.get("subAgent"), Mapping):
+        return True
+    return False
+
+
+def _codex_rollout_is_subagent(path: str | None) -> bool:
+    normalized = _normalize_optional_string(path)
+    if normalized is None:
+        return False
+    try:
+        with Path(normalized).expanduser().open() as handle:
+            for index, raw_line in enumerate(handle):
+                if index >= 32:
+                    break
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(payload, Mapping):
+                    continue
+                if payload.get("type") == "session_meta":
+                    meta = payload.get("payload")
+                    if isinstance(meta, Mapping) and _codex_source_is_subagent(meta.get("source")):
+                        return True
+                meta = payload.get("session_meta")
+                if isinstance(meta, Mapping) and _codex_source_is_subagent(meta.get("source")):
+                    return True
+                message = payload.get("message")
+                if isinstance(message, Mapping) and _codex_source_is_subagent(message.get("source")):
+                    return True
+    except OSError:
+        return False
+    return False
+
+
 def _normalize_binding_path(path: str | None) -> str | None:
     normalized = _normalize_optional_string(path)
     if normalized is None:
@@ -1364,13 +1407,19 @@ def _collect_managed_codex_sessions(
         thread_subscription_failed = thread_subscription_status == "failed"
         thread_subscription_transitional = thread_subscription_status in _THREAD_SUBSCRIPTION_TRANSIENT_STATES
         thread_subscription_issue = bool(last_error or thread_subscription_failed)
+        bridge_thread_is_subagent = False
         if binding_path and state_thread_path and binding_path != state_thread_path:
             thread_subscription_issue = True
+            bridge_thread_is_subagent = _codex_rollout_is_subagent(state_thread_path)
         if rollout_missing_after_turn and not thread_subscription_transitional:
             thread_subscription_issue = True
 
         if thread_subscription_issue:
-            if _looks_like_subagent_control_error(last_error) or _looks_like_subagent_control_error(thread_subscription_last_error):
+            if (
+                bridge_thread_is_subagent
+                or _looks_like_subagent_control_error(last_error)
+                or _looks_like_subagent_control_error(thread_subscription_last_error)
+            ):
                 reason_codes.append("control_attached_to_subagent")
             else:
                 reason_codes.append("thread_subscription_failed")

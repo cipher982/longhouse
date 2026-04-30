@@ -1202,6 +1202,87 @@ def test_collect_local_health_names_subagent_control_failure(monkeypatch, tmp_pa
     assert snapshot["managed_sessions"][0]["reason_codes"] == ["control_attached_to_subagent"]
 
 
+def test_collect_local_health_names_stale_subagent_bridge_path(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(tmp_path, age_seconds=5)
+
+    parent_path = tmp_path / "sessions" / "2026" / "04" / "29" / "rollout-parent.jsonl"
+    child_path = tmp_path / "sessions" / "2026" / "04" / "29" / "rollout-child.jsonl"
+    child_path.parent.mkdir(parents=True, exist_ok=True)
+    parent_path.write_text("{}\n")
+    child_path.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {
+                    "source": {
+                        "subagent": {
+                            "thread_spawn": {
+                                "parent_thread_id": "019dd708-573a-7131-a4d9-9ee855520483",
+                                "depth": 1,
+                            }
+                        }
+                    }
+                },
+            }
+        )
+        + "\n"
+    )
+    _write_session_binding_rows(
+        tmp_path,
+        [
+            (str(child_path), "sess-subagent-control", "codex", "2026-04-29T19:48:36Z"),
+            (str(parent_path), "sess-subagent-control", "codex", "2026-04-30T01:12:27Z"),
+        ],
+    )
+
+    state_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
+    _write_codex_bridge_state(
+        state_dir,
+        "sess-subagent-control",
+        {
+            "session_id": "sess-subagent-control",
+            "pid": 8891,
+            "ws_url": "ws://127.0.0.1:49889",
+            "cwd": "/Users/test/git/chaos",
+            "status": "ready",
+            "updated_at": "2026-04-29T19:49:00Z",
+            "thread_path": str(child_path),
+            "last_turn_status": "completed",
+            "thread_subscription_status": "subscribed",
+            "thread_subscription_attempts": 12,
+            "thread_subscription_last_error": None,
+        },
+    )
+    monkeypatch.setattr(local_health_service, "_codex_bridge_state_dir", lambda base_dir: state_dir)
+    _stub_bridge_alive(monkeypatch)
+    monkeypatch.setattr(
+        local_health_service,
+        "_collect_process_rows",
+        lambda: [
+            {
+                "pid": 8891,
+                "ppid": 1,
+                "command": "longhouse-engine codex-bridge run --session-id sess-subagent-control",
+            },
+            {"pid": 8892, "ppid": 8891, "command": "/opt/homebrew/bin/codex app-server --listen ws://127.0.0.1:0"},
+            {
+                "pid": 8893,
+                "ppid": 8000,
+                "command": "/opt/homebrew/bin/codex --enable tui_app_server --remote ws://127.0.0.1:49889",
+            },
+        ],
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "broken"
+    assert snapshot["managed_sessions"][0]["state"] == "degraded"
+    assert snapshot["managed_sessions"][0]["thread_subscription_status"] == "subscribed"
+    assert snapshot["managed_sessions"][0]["reason_codes"] == ["control_attached_to_subagent"]
+
+
 def test_collect_local_health_broken_when_service_stopped_with_stuck_outbox(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("stopped"))
