@@ -4007,6 +4007,98 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn handle_bridge_followup_rejects_subagent_resume_without_replacing_parent() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = make_test_run_config(&temp);
+        let mut context = make_test_context(&temp);
+        let parent_path = temp.path().join("parent-rollout.jsonl");
+        let child_path = temp.path().join("child-rollout.jsonl");
+        fs::write(&parent_path, "{\"ok\":true}\n").unwrap();
+        fs::write(&child_path, "{\"ok\":true}\n").unwrap();
+        let parent_path_string = parent_path.display().to_string();
+        let child_path_string = child_path.display().to_string();
+        context.state.thread_id = Some("thr-parent".to_string());
+        context.state.thread_path = Some(parent_path_string.clone());
+        context.runtime.thread_id = Some("thr-parent".to_string());
+
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<String>();
+        let (events_tx, events_rx) = mpsc::unbounded_channel();
+        events_tx
+            .send(StreamEvent::Rpc(json!({
+                "id": 1,
+                "result": {
+                    "thread": {
+                        "id": "thr-child",
+                        "path": child_path_string,
+                        "source": {
+                            "subagent": {
+                                "thread_spawn": {
+                                    "parent_thread_id": "thr-parent",
+                                    "depth": 1
+                                }
+                            }
+                        }
+                    }
+                }
+            })))
+            .unwrap();
+        let mut client = RpcClient {
+            child: None,
+            child_pid: None,
+            child_pgid: None,
+            child_ws_url: None,
+            outbound: RpcOutbound::WebSocket(outbound_tx),
+            events_rx,
+            pending_methods: BTreeMap::new(),
+            next_request_id: 1,
+            ws_url: "ws://example.test".to_string(),
+        };
+
+        let err = handle_bridge_followup(
+            &config,
+            &mut client,
+            &mut context,
+            BridgeFollowup::SubscribeThread {
+                thread_id: "thr-parent".to_string(),
+                thread_path: Some(parent_path_string.clone()),
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("thread/resume returned Codex subagent thread thr-child"));
+        assert_eq!(context.state.thread_id.as_deref(), Some("thr-parent"));
+        assert_eq!(
+            context.state.thread_path.as_deref(),
+            Some(parent_path_string.as_str())
+        );
+        assert_eq!(context.runtime.thread_id.as_deref(), Some("thr-parent"));
+        assert_eq!(context.subscribed_thread_id, None);
+        assert_eq!(
+            context.state.thread_subscription_status.as_deref(),
+            Some(ThreadSubscriptionStatus::Failed.as_str())
+        );
+        assert_eq!(context.state.thread_subscription_attempts, 1);
+        assert!(context
+            .state
+            .thread_subscription_last_error
+            .as_deref()
+            .is_some_and(|message| message
+                .contains("thread/resume returned Codex subagent thread thr-child")));
+        assert!(context.rejected_thread_ids.contains("thr-child"));
+
+        let outbound = outbound_rx.recv().await.unwrap();
+        let payload: Value = serde_json::from_str(&outbound).unwrap();
+        assert_eq!(payload.get("method").and_then(Value::as_str), Some("thread/resume"));
+        assert_eq!(
+            payload.pointer("/params/threadId").and_then(Value::as_str),
+            Some("thr-parent")
+        );
+    }
+
+    #[tokio::test]
     async fn adopt_thread_identity_does_not_replace_locked_thread() {
         let temp = tempfile::tempdir().unwrap();
         let config = make_test_run_config(&temp);
