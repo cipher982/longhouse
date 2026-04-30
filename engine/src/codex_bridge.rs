@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -219,6 +219,7 @@ struct BridgeContext {
     last_progress_emit: Option<Instant>,
     runtime_tracker: CodexRuntimeTracker,
     subscribed_thread_id: Option<String>,
+    rejected_thread_ids: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -716,6 +717,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         last_progress_emit: None,
         runtime_tracker: CodexRuntimeTracker::default(),
         subscribed_thread_id: None,
+        rejected_thread_ids: BTreeSet::new(),
     };
     // Mark ready so the CLI can read ws_url and launch the TUI.
     // idle is posted once the TUI creates a thread (thread/started notification).
@@ -2013,6 +2015,9 @@ async fn process_notification(
             emit_runtime_updates(context, updates).await;
         }
         "turn/completed" => {
+            if notification_is_for_different_thread(&params, context) {
+                return Ok(None);
+            }
             context.state.last_turn_status = extract_string(&params, &["turn", "status"]);
             context.state.active_turn_id = None;
             write_state_file(&context.state_file, &context.state)?;
@@ -2082,6 +2087,12 @@ fn update_thread_subscription_tracking(
 }
 
 fn pending_thread_subscription(context: &mut BridgeContext) -> Result<Option<BridgeFollowup>> {
+    if let Some(thread_id) = context.state.thread_id.as_deref() {
+        if context.rejected_thread_ids.contains(thread_id) {
+            return Ok(None);
+        }
+    }
+
     let status = derive_thread_subscription_status(context);
     update_thread_subscription_tracking(
         context,
@@ -2850,6 +2861,7 @@ async fn handle_bridge_followup(
                             let error_text = format!(
                                 "thread/resume returned Codex subagent thread {resume_thread_id}; refusing to adopt as managed primary"
                             );
+                            context.rejected_thread_ids.insert(resume_thread_id);
                             update_thread_subscription_tracking(
                                 context,
                                 ThreadSubscriptionStatus::Failed,
@@ -3012,6 +3024,7 @@ mod tests {
             last_progress_emit: None,
             runtime_tracker: CodexRuntimeTracker::default(),
             subscribed_thread_id: None,
+            rejected_thread_ids: BTreeSet::new(),
         }
     }
 
@@ -3829,6 +3842,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn process_notification_ignores_turn_completed_for_different_thread() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = make_test_run_config(&temp);
+        let mut context = make_test_context(&temp);
+        context.state.thread_id = Some("thr-live".to_string());
+        context.state.thread_path = Some("/tmp/thread-live.jsonl".to_string());
+        context.state.active_turn_id = Some("turn-live".to_string());
+        context.runtime.thread_id = Some("thr-live".to_string());
+        context.runtime_tracker.active_turn_id = Some("turn-live".to_string());
+
+        let followup = process_notification(
+            &json!({
+                "method": "turn/completed",
+                "params": {
+                    "threadId": "thr-child",
+                    "turn": {
+                        "id": "turn-child",
+                        "status": "completed"
+                    }
+                }
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(followup, None);
+        assert_eq!(context.state.active_turn_id.as_deref(), Some("turn-live"));
+        assert_eq!(
+            context.runtime_tracker.active_turn_id.as_deref(),
+            Some("turn-live")
+        );
+    }
+
+    #[tokio::test]
     async fn process_notification_ignores_subagent_thread_started() {
         let temp = tempfile::tempdir().unwrap();
         let config = make_test_run_config(&temp);
@@ -3924,6 +3973,37 @@ mod tests {
         assert!(!changed);
         assert_eq!(context.state.thread_id, None);
         assert_eq!(context.state.thread_path, None);
+    }
+
+    #[test]
+    fn pending_thread_subscription_does_not_retry_rejected_thread() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut context = make_test_context(&temp);
+        let rollout_path = temp.path().join("child-rollout.jsonl");
+        fs::write(&rollout_path, "{\"ok\":true}\n").unwrap();
+        context.state.thread_id = Some("thr-child".to_string());
+        context.state.thread_path = Some(rollout_path.display().to_string());
+        context.state.thread_subscription_status =
+            Some(ThreadSubscriptionStatus::Failed.as_str().to_string());
+        context.state.thread_subscription_last_error = Some(
+            "thread/resume returned Codex subagent thread thr-child; refusing to adopt as managed primary"
+                .to_string(),
+        );
+        context.rejected_thread_ids.insert("thr-child".to_string());
+
+        let followup = pending_thread_subscription(&mut context).unwrap();
+
+        assert_eq!(followup, None);
+        assert_eq!(
+            context.state.thread_subscription_status.as_deref(),
+            Some(ThreadSubscriptionStatus::Failed.as_str())
+        );
+        assert_eq!(
+            context.state.thread_subscription_last_error.as_deref(),
+            Some(
+                "thread/resume returned Codex subagent thread thr-child; refusing to adopt as managed primary"
+            )
+        );
     }
 
     #[tokio::test]
