@@ -16,6 +16,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::warn;
 use uuid::Uuid;
 
+use crate::codex_source::{codex_rollout_file_is_subagent, codex_thread_value_is_subagent};
 use crate::text::truncate_tail_chars;
 
 const BRIDGE_RUNTIME_SOURCE: &str =
@@ -1952,6 +1953,12 @@ async fn process_notification(
     let mut followup = None;
     match method {
         "thread/started" => {
+            if notification_thread_is_subagent(&params) {
+                if let Some(id) = extract_notification_thread_id(&params) {
+                    eprintln!("[codex-bridge] ignoring Codex subagent thread candidate: {id}");
+                }
+                return Ok(None);
+            }
             let previous_thread_id = context.state.thread_id.clone();
             if adopt_thread_identity(
                 config,
@@ -1976,6 +1983,9 @@ async fn process_notification(
             }
         }
         "turn/started" | "item/started" | "item/completed" | "thread/status/changed" => {
+            if notification_is_for_different_thread(&params, context) {
+                return Ok(None);
+            }
             let _ = adopt_thread_identity(
                 config,
                 context,
@@ -2110,6 +2120,27 @@ fn extract_notification_thread_path(params: &Value) -> Option<String> {
         .or_else(|| extract_string(params, &["path"]))
 }
 
+fn notification_thread_is_subagent(params: &Value) -> bool {
+    params
+        .get("thread")
+        .map(codex_thread_value_is_subagent)
+        .unwrap_or(false)
+}
+
+fn notification_is_for_different_thread(params: &Value, context: &BridgeContext) -> bool {
+    let Some(current_id) = context.state.thread_id.as_deref() else {
+        return false;
+    };
+    let Some(next_id) = extract_notification_thread_id(params) else {
+        return false;
+    };
+    if next_id == current_id {
+        return false;
+    }
+    eprintln!("[codex-bridge] ignoring notification for non-primary Codex thread: {next_id}");
+    true
+}
+
 fn normalize_optional_string(value: Option<String>) -> Option<String> {
     value.and_then(|raw| {
         let trimmed = raw.trim();
@@ -2213,6 +2244,16 @@ fn adopt_thread_identity(
 
     if desired_id == current_id && desired_path == current_path {
         return Ok(false);
+    }
+    if desired_path != current_path {
+        if let Some(path) = desired_path.as_deref() {
+            if codex_rollout_file_is_subagent(Path::new(path)) {
+                eprintln!(
+                    "[codex-bridge] refusing to adopt Codex subagent rollout as managed primary: {path}"
+                );
+                return Ok(false);
+            }
+        }
     }
 
     let old_path = current_path.clone();
@@ -2803,6 +2844,19 @@ async fn handle_bridge_followup(
                 {
                     Ok(response) => {
                         let resume_thread = response.get("thread").cloned().unwrap_or(Value::Null);
+                        if codex_thread_value_is_subagent(&resume_thread) {
+                            let resume_thread_id = extract_string(&resume_thread, &["id"])
+                                .unwrap_or_else(|| thread_id.clone());
+                            let error_text = format!(
+                                "thread/resume returned Codex subagent thread {resume_thread_id}; refusing to adopt as managed primary"
+                            );
+                            update_thread_subscription_tracking(
+                                context,
+                                ThreadSubscriptionStatus::Failed,
+                                Some(error_text.clone()),
+                            )?;
+                            bail!("{error_text}");
+                        }
                         let resume_thread_id = extract_string(&resume_thread, &["id"])
                             .or_else(|| context.state.thread_id.clone())
                             .or_else(|| Some(thread_id.clone()));
@@ -3721,7 +3775,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn process_notification_replaces_unsubscribed_thread_candidate_from_turn_started() {
+    async fn process_notification_does_not_replace_thread_candidate_from_turn_started() {
         let temp = tempfile::tempdir().unwrap();
         let config = make_test_run_config(&temp);
         let mut context = make_test_context(&temp);
@@ -3757,21 +3811,119 @@ mod tests {
         .await
         .unwrap();
 
+        assert_eq!(followup, None);
+        assert_eq!(context.state.thread_id.as_deref(), Some("thr-bad"));
         assert_eq!(
-            followup,
-            Some(BridgeFollowup::SubscribeThread {
-                thread_id: "thr-live".to_string(),
-                thread_path: None,
-            })
+            context.state.thread_path.as_deref(),
+            Some("/tmp/bad-thread.jsonl")
         );
-        assert_eq!(context.state.thread_id.as_deref(), Some("thr-live"));
-        assert_eq!(context.state.thread_path, None);
-        assert_eq!(context.runtime.thread_id.as_deref(), Some("thr-live"));
+        assert_eq!(context.runtime.thread_id.as_deref(), Some("thr-bad"));
         assert_eq!(
             context.state.thread_subscription_status.as_deref(),
-            Some(ThreadSubscriptionStatus::ReadyToSubscribe.as_str())
+            Some(ThreadSubscriptionStatus::WaitingForThread.as_str())
         );
-        assert_eq!(binding.get("/tmp/bad-thread.jsonl").unwrap(), None);
+        assert_eq!(
+            binding.get("/tmp/bad-thread.jsonl").unwrap().as_deref(),
+            Some(context.state.session_id.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn process_notification_ignores_subagent_thread_started() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = make_test_run_config(&temp);
+        let mut context = make_test_context(&temp);
+
+        let followup = process_notification(
+            &json!({
+                "method": "thread/started",
+                "params": {
+                    "thread": {
+                        "id": "thr-child",
+                        "path": "/tmp/child.jsonl",
+                        "source": {
+                            "subagent": {
+                                "thread_spawn": {
+                                    "parent_thread_id": "thr-parent",
+                                    "depth": 1
+                                }
+                            }
+                        }
+                    }
+                }
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(followup, None);
+        assert_eq!(context.state.thread_id, None);
+        assert_eq!(context.state.thread_path, None);
+        assert_eq!(context.runtime.thread_id, None);
+    }
+
+    #[tokio::test]
+    async fn process_notification_ignores_camel_subagent_thread_started() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = make_test_run_config(&temp);
+        let mut context = make_test_context(&temp);
+
+        let followup = process_notification(
+            &json!({
+                "method": "thread/started",
+                "params": {
+                    "thread": {
+                        "id": "thr-child",
+                        "path": "/tmp/child.jsonl",
+                        "source": {
+                            "subAgent": {
+                                "threadSpawn": {
+                                    "parentThreadId": "thr-parent",
+                                    "depth": 1
+                                }
+                            }
+                        }
+                    }
+                }
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(followup, None);
+        assert_eq!(context.state.thread_id, None);
+        assert_eq!(context.state.thread_path, None);
+        assert_eq!(context.runtime.thread_id, None);
+    }
+
+    #[tokio::test]
+    async fn adopt_thread_identity_refuses_subagent_rollout_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = make_test_run_config(&temp);
+        let mut context = make_test_context(&temp);
+        let rollout_path = temp.path().join("child-rollout.jsonl");
+        fs::write(
+            &rollout_path,
+            r#"{"type":"session_meta","timestamp":"2026-04-29T19:48:36Z","payload":{"id":"019ddb6e-114f-7643-89db-86c31a2aa706","source":{"subagent":{"thread_spawn":{"parent_thread_id":"019dd708-573a-7131-a4d9-9ee855520483","depth":1}}}}}"#,
+        )
+        .unwrap();
+
+        let changed = adopt_thread_identity(
+            &config,
+            &mut context,
+            Some("thr-child".to_string()),
+            Some(rollout_path.display().to_string()),
+            false,
+        )
+        .unwrap();
+
+        assert!(!changed);
+        assert_eq!(context.state.thread_id, None);
+        assert_eq!(context.state.thread_path, None);
     }
 
     #[tokio::test]
