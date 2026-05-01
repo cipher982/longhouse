@@ -20,6 +20,8 @@ use crate::discovery::{self, ProviderConfig};
 use crate::error_tracker::ConsecutiveErrorTracker;
 use crate::error_tracker::RecentIssueTracker;
 use crate::heartbeat;
+use crate::managed_bridge_scan;
+use crate::managed_reaper::ManagedBridgeReaper;
 use crate::outbox;
 use crate::pipeline::compressor::CompressionAlgo;
 use crate::scheduler::{PathJob, PathScheduler, WorkPriority};
@@ -246,6 +248,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
     let mut offline = OfflineState::new();
     let mut last_ship_at: Option<String> = None;
+    let mut bridge_reaper = ManagedBridgeReaper::from_env();
 
     let outbox_dir = config::get_agent_outbox_dir()?;
     let status_path = config::get_agent_status_path()?;
@@ -442,6 +445,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
             // Frequent local status file refresh for ambient UX and debugging
             _ = local_status_timer.tick() => {
+                let observations = managed_bridge_scan::collect_observations();
                 write_local_status_snapshot(
                     &conn,
                     &tracker,
@@ -451,11 +455,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &last_ship_at,
                     &config.shipper_config.machine_name,
                     &status_path,
+                    &observations,
                 );
+                bridge_reaper.tick(&observations);
             }
 
             // Periodic server heartbeat
             _ = heartbeat_timer.tick() => {
+                let observations = managed_bridge_scan::collect_observations();
                 let payload = write_local_status_snapshot(
                     &conn,
                     &tracker,
@@ -465,6 +472,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &last_ship_at,
                     &config.shipper_config.machine_name,
                     &status_path,
+                    &observations,
                 );
                 if !offline.is_offline {
                     if let Err(e) = heartbeat::send_heartbeat(&client, &payload).await {
@@ -488,6 +496,7 @@ fn write_local_status_snapshot(
     last_ship_at: &Option<String>,
     machine_id: &str,
     status_path: &Path,
+    observations: &[managed_bridge_scan::CodexBridgeObservation],
 ) -> heartbeat::HeartbeatPayload {
     let spool = Spool::new(conn);
     let stats = heartbeat::HeartbeatStats {
@@ -499,7 +508,8 @@ fn write_local_status_snapshot(
         last_ship_at: last_ship_at.clone(),
     };
     let mut payload = heartbeat::HeartbeatPayload::build(&stats);
-    payload.managed_sessions = heartbeat::collect_managed_session_leases(conn, machine_id);
+    payload.managed_sessions =
+        heartbeat::leases_from_observations(conn, machine_id, observations, chrono::Utc::now());
     payload.unmanaged_session_bindings = heartbeat::collect_unmanaged_session_bindings(machine_id);
     // Compute the fresh ledger view up front so a read failure is both
     // logged and encoded in the status file as `phase_ledger_status`.

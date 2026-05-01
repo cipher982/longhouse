@@ -14,9 +14,7 @@ use chrono::Utc;
 use serde::Serialize;
 
 use crate::build_identity::BuildIdentity;
-use crate::managed_bridge_scan::{
-    self, collect_observations_from, default_codex_bridge_state_dir, CodexBridgeObservation,
-};
+use crate::managed_bridge_scan::CodexBridgeObservation;
 
 /// Captured once per daemon process at the first write_status_file call.
 /// Compared against the on-disk binary mtime to detect "restart pending".
@@ -193,18 +191,6 @@ impl HeartbeatPayload {
             unmanaged_session_bindings: Vec::new(),
         }
     }
-}
-
-pub fn collect_managed_session_leases(
-    conn: &rusqlite::Connection,
-    machine_id: &str,
-) -> Vec<ManagedSessionLease> {
-    let Some(state_dir) = default_codex_bridge_state_dir() else {
-        return Vec::new();
-    };
-    let process_commands = managed_bridge_scan::collect_process_commands();
-    let observations = collect_observations_from(&state_dir, &process_commands);
-    leases_from_observations(conn, machine_id, &observations, Utc::now())
 }
 
 /// Build lease views from a pre-collected set of bridge observations.
