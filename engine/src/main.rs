@@ -10,6 +10,7 @@ mod daemon;
 mod discovery;
 mod error_tracker;
 mod heartbeat;
+mod managed_bridge_scan;
 mod observability;
 mod outbox;
 mod pipeline;
