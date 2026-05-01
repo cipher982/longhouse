@@ -278,25 +278,34 @@ async fn stop_orphan_app_server(obs: &CodexBridgeObservation) {
     }
 
     let pgid = obs.app_server_pgid.filter(|p| *p > 0);
-    // SAFETY: killpg/kill with tested signals; PID reuse is guarded by
-    // process_identity_matches above.
-    unsafe {
+    // Only TERM/KILL the pgid if we actually confirmed pid's current
+    // pgid matches the recorded one. Otherwise another unrelated
+    // process group may have inherited that pgid number and signaling
+    // it would take down unrelated work. Track this explicitly.
+    // SAFETY: all libc calls below operate on the verified pid and
+    // (when permitted) the verified pgid; no raw pointers touched.
+    let termed_pgid = unsafe {
         if let Some(pgid) = pgid {
             let live_pgid = libc::getpgid(pid);
             if live_pgid == pgid {
                 let _ = libc::killpg(pgid, libc::SIGTERM);
+                true
             } else {
                 let _ = libc::kill(pid, libc::SIGTERM);
+                false
             }
         } else {
             let _ = libc::kill(pid, libc::SIGTERM);
+            false
         }
-    }
+    };
     tokio::time::sleep(Duration::from_millis(500)).await;
     unsafe {
-        if let Some(pgid) = pgid {
-            if libc::killpg(pgid, 0) == 0 {
-                let _ = libc::killpg(pgid, libc::SIGKILL);
+        if termed_pgid {
+            if let Some(pgid) = pgid {
+                if libc::killpg(pgid, 0) == 0 {
+                    let _ = libc::killpg(pgid, libc::SIGKILL);
+                }
             }
         }
         if libc::kill(pid, 0) == 0 {
