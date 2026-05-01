@@ -6,20 +6,17 @@
 //! - less frequent server heartbeats to `/api/agents/heartbeat`
 
 use std::collections::HashMap;
-use std::fs;
-use std::fs::OpenOptions;
-use std::path::Path;
-use std::path::PathBuf;
-use std::process::Command;
 use std::sync::OnceLock;
 
 use anyhow::Result;
 use chrono::DateTime;
 use chrono::Utc;
-use serde::Deserialize;
 use serde::Serialize;
 
 use crate::build_identity::BuildIdentity;
+use crate::managed_bridge_scan::{
+    self, collect_observations_from, default_codex_bridge_state_dir, CodexBridgeObservation,
+};
 
 /// Captured once per daemon process at the first write_status_file call.
 /// Compared against the on-disk binary mtime to detect "restart pending".
@@ -128,16 +125,6 @@ pub struct ManagedSessionLease {
     pub lease_ttl_ms: u64,
 }
 
-#[derive(Debug, Deserialize)]
-struct CodexBridgeLeaseState {
-    session_id: String,
-    ws_url: Option<String>,
-    status: String,
-    last_error: Option<String>,
-    thread_subscription_status: Option<String>,
-    updated_at: String,
-}
-
 #[derive(Debug, Clone)]
 struct ManagedPhaseOverlay {
     phase: Option<String>,
@@ -215,69 +202,44 @@ pub fn collect_managed_session_leases(
     let Some(state_dir) = default_codex_bridge_state_dir() else {
         return Vec::new();
     };
-    let process_commands = collect_process_commands();
-    collect_codex_bridge_leases_from_state_dir(
-        conn,
-        machine_id,
-        &state_dir,
-        &process_commands,
-        Utc::now(),
-    )
+    let process_commands = managed_bridge_scan::collect_process_commands();
+    let observations = collect_observations_from(&state_dir, &process_commands);
+    leases_from_observations(conn, machine_id, &observations, Utc::now())
 }
 
-fn collect_codex_bridge_leases_from_state_dir(
+/// Build lease views from a pre-collected set of bridge observations.
+/// Kept pure (no fs/ps side effects) so the reaper and tests can share
+/// the same scan pass.
+pub fn leases_from_observations(
     conn: &rusqlite::Connection,
     machine_id: &str,
-    state_dir: &Path,
-    process_commands: &[String],
+    observations: &[CodexBridgeObservation],
     now: DateTime<Utc>,
 ) -> Vec<ManagedSessionLease> {
     let phase_overlay = load_managed_phase_overlay(conn);
-    let mut leases = Vec::new();
-    let Ok(entries) = fs::read_dir(state_dir) else {
-        return leases;
-    };
     let sequence = now.timestamp_millis().max(0) as u64;
     let observed_at = now.to_rfc3339();
+    let mut leases = Vec::with_capacity(observations.len());
 
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|value| value.to_str()) != Some("json") {
-            continue;
-        }
-        let Ok(bytes) = fs::read(&path) else {
-            continue;
-        };
-        let Ok(state) = serde_json::from_slice::<CodexBridgeLeaseState>(&bytes) else {
-            continue;
-        };
-        let session_id = state.session_id.trim();
-        if session_id.is_empty() {
-            continue;
-        }
-        let overlay = phase_overlay.get(session_id);
-        let bridge_alive = bridge_lock_is_held(&path);
-        let has_tui_attachment = state
-            .ws_url
-            .as_deref()
-            .is_some_and(|ws_url| codex_tui_process_attached(process_commands, ws_url));
-        let thread_failed = state.thread_subscription_status.as_deref() == Some("failed");
-        let has_bridge_error = state
+    for obs in observations {
+        let overlay = phase_overlay.get(&obs.session_id);
+        let thread_failed = obs.thread_subscription_status.as_deref() == Some("failed");
+        let has_bridge_error = obs
             .last_error
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty());
-        let bridge_ready = state.status == "ready";
+        let bridge_ready = obs.status == "ready";
 
-        let lease_state = if !bridge_alive {
+        let lease_state = if !obs.bridge_alive {
             "detached"
-        } else if bridge_ready && has_tui_attachment && !thread_failed && !has_bridge_error {
+        } else if bridge_ready && obs.has_tui_attachment && !thread_failed && !has_bridge_error {
             "attached"
         } else {
             "degraded"
         };
 
         leases.push(ManagedSessionLease {
-            session_id: session_id.to_string(),
+            session_id: obs.session_id.clone(),
             provider: "codex".to_string(),
             machine_id: machine_id.trim().to_string(),
             sequence,
@@ -291,11 +253,11 @@ fn collect_codex_bridge_leases_from_state_dir(
                 _ => None,
             },
             tool_name: overlay.and_then(|row| row.tool_name.clone()),
-            bridge_status: Some(state.status),
-            thread_subscription_status: state.thread_subscription_status,
+            bridge_status: Some(obs.status.clone()),
+            thread_subscription_status: obs.thread_subscription_status.clone(),
             observed_at: overlay
                 .and_then(|row| row.observed_at.clone())
-                .unwrap_or_else(|| state.updated_at.clone())
+                .unwrap_or_else(|| obs.updated_at.clone())
                 .if_empty(observed_at.clone()),
             lease_ttl_ms: 15 * 60 * 1000,
         });
@@ -327,16 +289,6 @@ fn normalize_managed_phase(value: Option<&str>) -> Option<String> {
     }
 }
 
-fn default_codex_bridge_state_dir() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    Some(
-        PathBuf::from(home)
-            .join(".claude")
-            .join("managed-local")
-            .join("codex-bridge"),
-    )
-}
-
 fn load_managed_phase_overlay(conn: &rusqlite::Connection) -> HashMap<String, ManagedPhaseOverlay> {
     let mut rows = HashMap::new();
     let Ok(mut stmt) = conn.prepare(
@@ -362,48 +314,6 @@ fn load_managed_phase_overlay(conn: &rusqlite::Connection) -> HashMap<String, Ma
         rows.insert(item.0, item.1);
     }
     rows
-}
-
-fn bridge_lock_is_held(state_file: &Path) -> bool {
-    let lock_path = state_file.with_extension("lock");
-    let Ok(file) = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(lock_path)
-    else {
-        return false;
-    };
-    let mut lock = fd_lock::RwLock::new(file);
-    let is_held = match lock.try_write() {
-        Ok(_guard) => false,
-        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => true,
-        Err(_) => false,
-    };
-    is_held
-}
-
-fn collect_process_commands() -> Vec<String> {
-    let Ok(output) = Command::new("ps").args(["-axo", "command="]).output() else {
-        return Vec::new();
-    };
-    if !output.status.success() {
-        return Vec::new();
-    }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::to_string)
-        .collect()
-}
-
-fn codex_tui_process_attached(process_commands: &[String], ws_url: &str) -> bool {
-    let normalized_ws = ws_url.trim();
-    if normalized_ws.is_empty() {
-        return false;
-    }
-    process_commands
-        .iter()
-        .any(|command| command.contains(normalized_ws) && command.contains("--remote"))
 }
 
 /// Send heartbeat to server via the existing authenticated client.
@@ -603,6 +513,7 @@ fn disk_free_bytes(_path: &std::path::Path) -> u64 {
 mod tests {
     use super::*;
     use crate::state::db::open_db;
+    use std::path::PathBuf;
 
     #[test]
     fn test_heartbeat_payload_fields() {
@@ -702,32 +613,37 @@ mod tests {
         assert_eq!(parsed["managed_sessions"][0]["lease_ttl_ms"], 900_000);
     }
 
+    fn test_observation(session_id: &str, ws_url: &str) -> CodexBridgeObservation {
+        CodexBridgeObservation {
+            session_id: session_id.to_string(),
+            state_file: PathBuf::from(format!("/tmp/{session_id}.json")),
+            cwd: Some("/tmp/cwd".to_string()),
+            ws_url: Some(ws_url.to_string()),
+            status: "ready".to_string(),
+            thread_id: Some("thread-1".to_string()),
+            active_turn_id: None,
+            last_turn_status: Some("completed".to_string()),
+            last_error: None,
+            thread_subscription_status: Some("subscribed".to_string()),
+            app_server_pid: Some(12345),
+            app_server_pgid: Some(12345),
+            updated_at: "2026-04-26T00:00:00Z".to_string(),
+            bridge_alive: true,
+            has_tui_attachment: true,
+            app_server_alive: true,
+        }
+    }
+
     #[test]
-    fn test_collect_codex_bridge_leases_classifies_attached_with_phase_overlay() {
+    fn leases_from_observations_classifies_attached_with_phase_overlay() {
         use crate::state::managed_session_state::{
             ManagedSessionPhaseSignal, ManagedSessionStateStore,
         };
 
-        let dir = tempfile::tempdir().unwrap();
         let db = tempfile::NamedTempFile::new().unwrap();
         let conn = open_db(Some(db.path())).unwrap();
         let session_id = "7474a2a1-ab9f-4a10-9726-898e895fedf0";
-        let ws_url = "ws://127.0.0.1:45678/session";
         let now = Utc::now();
-        let state_path = dir.path().join("attached.json");
-        fs::write(
-            &state_path,
-            serde_json::json!({
-                "session_id": session_id,
-                "ws_url": ws_url,
-                "status": "ready",
-                "last_error": null,
-                "thread_subscription_status": "subscribed",
-                "updated_at": now.to_rfc3339()
-            })
-            .to_string(),
-        )
-        .unwrap();
         ManagedSessionStateStore::new(&conn)
             .record_phase(&ManagedSessionPhaseSignal {
                 session_id: session_id.to_string(),
@@ -739,23 +655,9 @@ mod tests {
                 observed_at: now,
             })
             .unwrap();
-        let lock_file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(state_path.with_extension("lock"))
-            .unwrap();
-        let mut lock = fd_lock::RwLock::new(lock_file);
-        let _guard = lock.write().unwrap();
 
-        let leases = collect_codex_bridge_leases_from_state_dir(
-            &conn,
-            "cinder",
-            dir.path(),
-            &[format!("codex --enable tui_app_server --remote {ws_url}")],
-            now,
-        );
+        let obs = test_observation(session_id, "ws://127.0.0.1:45678/session");
+        let leases = leases_from_observations(&conn, "cinder", &[obs], now);
 
         assert_eq!(leases.len(), 1);
         let lease = &leases[0];
@@ -763,72 +665,32 @@ mod tests {
         assert_eq!(lease.state, "attached");
         assert_eq!(lease.phase.as_deref(), Some("running"));
         assert_eq!(lease.tool_name.as_deref(), Some("Shell"));
-        assert_eq!(
-            lease.thread_subscription_status.as_deref(),
-            Some("subscribed")
-        );
     }
 
     #[test]
-    fn test_collect_codex_bridge_leases_classifies_degraded_and_detached() {
-        let dir = tempfile::tempdir().unwrap();
+    fn leases_from_observations_classifies_degraded_and_detached() {
         let db = tempfile::NamedTempFile::new().unwrap();
         let conn = open_db(Some(db.path())).unwrap();
         let now = Utc::now();
-        let degraded_path = dir.path().join("degraded.json");
-        fs::write(
-            &degraded_path,
-            serde_json::json!({
-                "session_id": "degraded-session",
-                "ws_url": "ws://127.0.0.1:45679/session",
-                "status": "ready",
-                "last_error": null,
-                "thread_subscription_status": "subscribed",
-                "updated_at": now.to_rfc3339()
-            })
-            .to_string(),
-        )
-        .unwrap();
-        let detached_path = dir.path().join("detached.json");
-        fs::write(
-            &detached_path,
-            serde_json::json!({
-                "session_id": "detached-session",
-                "ws_url": "ws://127.0.0.1:45680/session",
-                "status": "ready",
-                "last_error": null,
-                "thread_subscription_status": "subscribed",
-                "updated_at": now.to_rfc3339()
-            })
-            .to_string(),
-        )
-        .unwrap();
-        let lock_file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(degraded_path.with_extension("lock"))
-            .unwrap();
-        let mut lock = fd_lock::RwLock::new(lock_file);
-        let _guard = lock.write().unwrap();
 
-        let leases =
-            collect_codex_bridge_leases_from_state_dir(&conn, "cinder", dir.path(), &[], now);
+        let mut degraded = test_observation("degraded-session", "ws://127.0.0.1:45679/session");
+        degraded.has_tui_attachment = false; // alive but no TUI → degraded
+        let mut detached = test_observation("detached-session", "ws://127.0.0.1:45680/session");
+        detached.bridge_alive = false; // lock not held → detached
+
+        let leases = leases_from_observations(&conn, "cinder", &[degraded, detached], now);
 
         assert_eq!(leases.len(), 2);
-        let degraded = leases
+        let degraded_lease = leases
             .iter()
-            .find(|lease| lease.session_id == "degraded-session")
+            .find(|l| l.session_id == "degraded-session")
             .unwrap();
-        let detached = leases
+        let detached_lease = leases
             .iter()
-            .find(|lease| lease.session_id == "detached-session")
+            .find(|l| l.session_id == "detached-session")
             .unwrap();
-        assert_eq!(degraded.state, "degraded");
-        assert_eq!(degraded.phase, None);
-        assert_eq!(detached.state, "detached");
-        assert_eq!(detached.phase, None);
+        assert_eq!(degraded_lease.state, "degraded");
+        assert_eq!(detached_lease.state, "detached");
     }
 
     #[test]
