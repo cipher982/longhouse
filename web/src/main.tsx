@@ -18,6 +18,7 @@ const isLocalhost = window.location.hostname === "localhost" || window.location.
 const umamiWebsiteId = config.umamiWebsiteId;
 const umamiScriptSrc = config.umamiScriptSrc;
 const umamiDomains = config.umamiDomains;
+const umamiTag = config.umamiTag;
 
 if (!isLocalhost && umamiWebsiteId) {
   const script = document.createElement("script");
@@ -27,7 +28,20 @@ if (!isLocalhost && umamiWebsiteId) {
   if (umamiDomains) {
     script.dataset.domains = umamiDomains;
   }
+  if (umamiTag) {
+    script.dataset.tag = umamiTag;
+  }
+  script.dataset.performance = "true";
   document.head.appendChild(script);
+
+  const recorder = document.createElement("script");
+  recorder.defer = true;
+  recorder.src = umamiScriptSrc.replace("script.js", "recorder.js");
+  recorder.dataset.websiteId = umamiWebsiteId;
+  recorder.dataset.sampleRate = "1";
+  recorder.dataset.maskLevel = "moderate";
+  recorder.dataset.maxDuration = "1800000";
+  document.head.appendChild(recorder);
 }
 
 // Global error beacon - captures JS errors from all users (including anonymous)

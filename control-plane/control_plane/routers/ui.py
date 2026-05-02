@@ -72,8 +72,11 @@ def _page(title: str, body: str, *, nav: bool = True, extra_styles: str = "", bo
     analytics_script = ""
     if settings.umami_website_id:
         domains_attr = f' data-domains="{html.escape(settings.umami_domains)}"' if settings.umami_domains else ""
+        tag_attr = f' data-tag="{html.escape(settings.umami_tag)}"' if settings.umami_tag else ""
+        recorder_src = settings.umami_script_src.replace("script.js", "recorder.js")
         analytics_script = f"""
-    <script defer src="{html.escape(settings.umami_script_src)}" data-website-id="{html.escape(settings.umami_website_id)}"{domains_attr}></script>"""
+    <script defer src="{html.escape(settings.umami_script_src)}" data-website-id="{html.escape(settings.umami_website_id)}"{domains_attr}{tag_attr} data-performance="true"></script>
+    <script defer src="{html.escape(recorder_src)}" data-website-id="{html.escape(settings.umami_website_id)}" data-sample-rate="1" data-mask-level="moderate" data-max-duration="1800000"></script>"""
     analytics_html = f"""{analytics_script}
     <script>
       window.trackLonghouseEvent = function(name, props) {{

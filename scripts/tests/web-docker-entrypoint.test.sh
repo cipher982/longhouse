@@ -44,6 +44,7 @@ PUBLIC_WS_URL="" \
 UMAMI_WEBSITE_ID="runtime-site" \
 UMAMI_SCRIPT_SRC="https://analytics.example/script.js" \
 UMAMI_DOMAINS="longhouse.ai" \
+UMAMI_TAG="prod" \
 sh "$ROOT_DIR/../web/docker-entrypoint.sh"
 
 grep -F 'window.__UMAMI_WEBSITE_ID__ = "runtime-site";' "$CONFIG_FILE" >/dev/null || {
@@ -58,6 +59,11 @@ grep -F 'window.__UMAMI_SCRIPT_SRC__ = "https://analytics.example/script.js";' "
 
 grep -F 'window.__UMAMI_DOMAINS__ = "longhouse.ai";' "$CONFIG_FILE" >/dev/null || {
   echo "Expected config.js to include runtime Umami domains"
+  exit 1
+}
+
+grep -F 'window.__UMAMI_TAG__ = "prod";' "$CONFIG_FILE" >/dev/null || {
+  echo "Expected config.js to include runtime Umami tag"
   exit 1
 }
 

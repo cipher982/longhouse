@@ -19,6 +19,7 @@ afterEach(() => {
   delete window.__UMAMI_WEBSITE_ID__;
   delete window.__UMAMI_SCRIPT_SRC__;
   delete window.__UMAMI_DOMAINS__;
+  delete window.__UMAMI_TAG__;
 });
 
 describe("config analytics runtime overrides", () => {
@@ -27,16 +28,19 @@ describe("config analytics runtime overrides", () => {
     window.__UMAMI_WEBSITE_ID__ = "runtime-site";
     window.__UMAMI_SCRIPT_SRC__ = "https://runtime.example/script.js";
     window.__UMAMI_DOMAINS__ = "runtime.longhouse.ai";
+    window.__UMAMI_TAG__ = "runtime-prod";
 
     vi.stubEnv("VITE_UMAMI_WEBSITE_ID", "vite-site");
     vi.stubEnv("VITE_UMAMI_SCRIPT_SRC", "https://vite.example/script.js");
     vi.stubEnv("VITE_UMAMI_DOMAINS", "vite.longhouse.ai");
+    vi.stubEnv("VITE_UMAMI_TAG", "vite-prod");
 
     const { config } = await loadConfigModule();
 
     expect(config.umamiWebsiteId).toBe("runtime-site");
     expect(config.umamiScriptSrc).toBe("https://runtime.example/script.js");
     expect(config.umamiDomains).toBe("runtime.longhouse.ai");
+    expect(config.umamiTag).toBe("runtime-prod");
   });
 
   it("falls back to legacy Vite umami env when runtime config is absent", async () => {
@@ -45,12 +49,14 @@ describe("config analytics runtime overrides", () => {
     vi.stubEnv("VITE_UMAMI_WEBSITE_ID", "vite-site");
     vi.stubEnv("VITE_UMAMI_SCRIPT_SRC", "https://vite.example/script.js");
     vi.stubEnv("VITE_UMAMI_DOMAINS", "vite.longhouse.ai");
+    vi.stubEnv("VITE_UMAMI_TAG", "vite-prod");
 
     const { config } = await loadConfigModule();
 
     expect(config.umamiWebsiteId).toBe("vite-site");
     expect(config.umamiScriptSrc).toBe("https://vite.example/script.js");
     expect(config.umamiDomains).toBe("vite.longhouse.ai");
+    expect(config.umamiTag).toBe("vite-prod");
   });
 
   it("preserves explicit empty runtime values instead of falling back to legacy Vite analytics config", async () => {
@@ -58,15 +64,18 @@ describe("config analytics runtime overrides", () => {
     window.__UMAMI_WEBSITE_ID__ = "";
     window.__UMAMI_SCRIPT_SRC__ = "";
     window.__UMAMI_DOMAINS__ = "";
+    window.__UMAMI_TAG__ = "";
 
     vi.stubEnv("VITE_UMAMI_WEBSITE_ID", "vite-site");
     vi.stubEnv("VITE_UMAMI_SCRIPT_SRC", "https://vite.example/script.js");
     vi.stubEnv("VITE_UMAMI_DOMAINS", "vite.longhouse.ai");
+    vi.stubEnv("VITE_UMAMI_TAG", "vite-prod");
 
     const { config } = await loadConfigModule();
 
     expect(config.umamiWebsiteId).toBe("");
     expect(config.umamiScriptSrc).toBe("https://analytics.drose.io/script.js");
     expect(config.umamiDomains).toBe("");
+    expect(config.umamiTag).toBe("");
   });
 });

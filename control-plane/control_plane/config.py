@@ -70,6 +70,7 @@ class Settings(BaseSettings):
     umami_website_id: str | None = None
     umami_script_src: str = "https://analytics.drose.io/script.js"
     umami_domains: str | None = None
+    umami_tag: str = "prod"
 
     # Email (SES) — injected into instances so email works out of the box
     instance_aws_ses_access_key_id: str | None = None
