@@ -14,6 +14,7 @@ declare global {
     __UMAMI_WEBSITE_ID__?: string;
     __UMAMI_SCRIPT_SRC__?: string;
     __UMAMI_DOMAINS__?: string;
+    __UMAMI_TAG__?: string;
   }
 }
 
@@ -69,6 +70,7 @@ export interface AppConfig {
   umamiWebsiteId: string;
   umamiScriptSrc: string;
   umamiDomains: string;
+  umamiTag: string;
 
   // Features
   enablePerformanceMonitoring: boolean;
@@ -142,6 +144,7 @@ function loadConfig(): AppConfig {
   const runtimeUmamiWebsiteId = typeof window !== 'undefined' ? window.__UMAMI_WEBSITE_ID__ : undefined;
   const runtimeUmamiScriptSrc = typeof window !== 'undefined' ? window.__UMAMI_SCRIPT_SRC__ : undefined;
   const runtimeUmamiDomains = typeof window !== 'undefined' ? window.__UMAMI_DOMAINS__ : undefined;
+  const runtimeUmamiTag = typeof window !== 'undefined' ? window.__UMAMI_TAG__ : undefined;
 
   // FAIL FAST: No fallbacks, no silent defaults
   // Production MUST have config.js loaded with API_BASE_URL and WS_BASE_URL
@@ -217,6 +220,7 @@ function loadConfig(): AppConfig {
         ? runtimeUmamiScriptSrc || "https://analytics.drose.io/script.js"
         : import.meta.env.VITE_UMAMI_SCRIPT_SRC || "https://analytics.drose.io/script.js",
     umamiDomains: runtimeUmamiDomains ?? import.meta.env.VITE_UMAMI_DOMAINS ?? "",
+    umamiTag: runtimeUmamiTag ?? import.meta.env.VITE_UMAMI_TAG ?? "prod",
 
     // Environment
     isDevelopment,

@@ -349,6 +349,7 @@ async def serve_config_js():
         "__UMAMI_WEBSITE_ID__": _settings.umami_website_id or "",
         "__UMAMI_SCRIPT_SRC__": _settings.umami_script_src or "",
         "__UMAMI_DOMAINS__": _settings.umami_domains or "",
+        "__UMAMI_TAG__": _settings.umami_tag or "prod",
     }
     js = "".join(f"window.{key}={json.dumps(value)};\n" for key, value in runtime_config.items())
     return Response(

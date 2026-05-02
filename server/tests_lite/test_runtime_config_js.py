@@ -60,6 +60,7 @@ def test_config_js_includes_runtime_umami_values(monkeypatch):
     monkeypatch.setattr(_settings, "umami_website_id", "demo-site")
     monkeypatch.setattr(_settings, "umami_script_src", "https://analytics.example/script.js")
     monkeypatch.setattr(_settings, "umami_domains", "longhouse.ai")
+    monkeypatch.setattr(_settings, "umami_tag", "prod")
     monkeypatch.setattr(_settings, "openai_api_key", "test-openai-key")
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
 
@@ -77,3 +78,4 @@ def test_config_js_includes_runtime_umami_values(monkeypatch):
     assert 'window.__UMAMI_WEBSITE_ID__="demo-site";' in response.text
     assert 'window.__UMAMI_SCRIPT_SRC__="https://analytics.example/script.js";' in response.text
     assert 'window.__UMAMI_DOMAINS__="longhouse.ai";' in response.text
+    assert 'window.__UMAMI_TAG__="prod";' in response.text

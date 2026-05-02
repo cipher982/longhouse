@@ -199,6 +199,7 @@ class Settings:  # noqa: D401 – simple data container
     umami_website_id: str | None = None
     umami_script_src: str | None = None
     umami_domains: str | None = None
+    umami_tag: str | None = None
 
     # Telegram channel integration ------------------------------------
     telegram_bot_token: str | None = None  # TELEGRAM_BOT_TOKEN from @BotFather
@@ -486,6 +487,7 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         umami_website_id=_env_or_fallback("UMAMI_WEBSITE_ID", "VITE_UMAMI_WEBSITE_ID"),
         umami_script_src=_env_or_fallback("UMAMI_SCRIPT_SRC", "VITE_UMAMI_SCRIPT_SRC"),
         umami_domains=_env_or_fallback("UMAMI_DOMAINS", "VITE_UMAMI_DOMAINS"),
+        umami_tag=_env_or_fallback("UMAMI_TAG", "VITE_UMAMI_TAG") or "prod",
         runner_docker_image=os.getenv("RUNNER_DOCKER_IMAGE", "ghcr.io/cipher982/longhouse-runner:latest"),
         runner_binary_tag=os.getenv("RUNNER_BINARY_TAG", "runner-v0.1.7"),
         pubsub_audience=os.getenv("PUBSUB_AUDIENCE"),
