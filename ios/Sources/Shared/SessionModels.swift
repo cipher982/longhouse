@@ -496,6 +496,54 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     }
 }
 
+struct SessionThreadResponse: Codable, Sendable {
+    let rootSessionId: String
+    let headSessionId: String
+    let sessions: [SessionDetail]
+}
+
+struct SessionProjectionItem: Codable, Identifiable, Sendable {
+    let kind: String
+    let sessionId: String
+    let timestamp: String
+    let event: SessionEvent?
+    let continuedFromSessionId: String?
+    let continuationKind: String?
+    let originLabel: String?
+    let parentOriginLabel: String?
+    let parentContinuationKind: String?
+    let branchedFromEventId: Int?
+
+    var id: String {
+        if kind == "event", let event {
+            return "event:\(event.id)"
+        }
+        return "seam:\(sessionId):\(timestamp)"
+    }
+}
+
+struct SessionProjectionResponse: Codable, Sendable {
+    let rootSessionId: String
+    let focusSessionId: String
+    let headSessionId: String
+    let pathSessionIds: [String]
+    let items: [SessionProjectionItem]
+    let total: Int
+    let pageOffset: Int
+    let branchMode: String
+    let abandonedEvents: Int
+}
+
+struct SessionWorkspaceResponse: Codable, Sendable {
+    let session: SessionDetail
+    let thread: SessionThreadResponse
+    let projection: SessionProjectionResponse
+
+    var events: [SessionEvent] {
+        projection.items.compactMap(\.event)
+    }
+}
+
 struct SessionEvent: Codable, Identifiable, Sendable {
     let id: Int
     let role: String

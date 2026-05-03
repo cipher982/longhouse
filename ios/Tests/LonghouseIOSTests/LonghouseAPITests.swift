@@ -4,6 +4,27 @@ import Testing
 
 struct LonghouseAPITests {
     @Test
+    func sessionWorkspaceURLIncludesLimitAndBranchMode() throws {
+        let baseURL = try #require(URL(string: "https://david010.longhouse.ai"))
+
+        let url = LonghouseAPI.sessionWorkspaceURL(
+            baseURL: baseURL,
+            id: "session-1",
+            limit: 200,
+            branchMode: "head"
+        )
+        let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
+
+        #expect(components.scheme == "https")
+        #expect(components.host == "david010.longhouse.ai")
+        #expect(components.path == "/api/timeline/sessions/session-1/workspace")
+        #expect(components.queryItems == [
+            URLQueryItem(name: "limit", value: "200"),
+            URLQueryItem(name: "branch_mode", value: "head"),
+        ])
+    }
+
+    @Test
     func structuredErrorParsingDecodesHTTPExceptionDetail() throws {
         let data = try #require("""
         {

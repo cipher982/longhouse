@@ -108,6 +108,29 @@ struct LonghouseAPI: Sendable {
         }
     }
 
+    static func sessionWorkspaceURL(baseURL: URL, id: String, limit: Int = 200, branchMode: String = "head") -> URL {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("/api/timeline/sessions/\(id)/workspace"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "branch_mode", value: branchMode),
+        ]
+        return components.url!
+    }
+
+    func sessionWorkspace(id: String, limit: Int = 200, branchMode: String = "head") async throws -> SessionWorkspaceResponse {
+        var request = URLRequest(url: Self.sessionWorkspaceURL(baseURL: baseURL, id: id, limit: limit, branchMode: branchMode))
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (data, httpResponse) = try await data(for: request)
+        guard httpResponse.statusCode == 200 else {
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
+        return try JSONDecoder.snakeCase.decode(SessionWorkspaceResponse.self, from: data)
+    }
+
     func sessionDetail(id: String) async throws -> SessionDetail {
         var request = URLRequest(url: baseURL.appendingPathComponent("/api/timeline/sessions/\(id)"))
         request.addValue("application/json", forHTTPHeaderField: "Accept")
