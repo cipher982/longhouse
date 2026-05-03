@@ -172,7 +172,7 @@ class SessionCapabilitiesResponse(BaseModel):
         False,
         description="True when mid-turn steer is likely to land; the active turn may still end before the call arrives",
     )
-    display_label: str = Field("Search only", description="User-facing capability label")
+    display_label: str = Field("Read only", description="User-facing capability label")
     display_detail: str = Field(
         "This imported session is searchable, but Longhouse cannot steer it.",
         description="User-facing capability explanation",

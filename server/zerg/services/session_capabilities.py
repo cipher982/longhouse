@@ -73,7 +73,7 @@ def build_session_capability_display(
     normalized_host = _normalize_host_label(host_label or capability_flags.home_label)
     if capability_flags.live_control_available or capability_flags.reply_to_live_session_available:
         return SessionCapabilityDisplay(
-            label=f"Live on {normalized_host}" if normalized_host else "Live control",
+            label=f"Live on {normalized_host}" if normalized_host else "Send",
             detail="Longhouse can send prompts into this live session.",
             tone="success",
         )
@@ -84,7 +84,7 @@ def build_session_capability_display(
             tone="warning",
         )
     return SessionCapabilityDisplay(
-        label="Search only",
+        label="Read only",
         detail="This imported session is searchable, but Longhouse cannot steer it.",
         tone="neutral",
     )
