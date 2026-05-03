@@ -1598,7 +1598,7 @@ def test_runtime_view_hides_semantic_phase_for_inferred_progress(tmp_path):
         state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
         view = build_runtime_view(state=state, session=session, now=now)
 
-        assert state.phase == "running"
+        assert state.phase == "idle"
         assert state.phase_source == "progress"
         assert view.runtime_phase is None
         assert view.status == "active"
@@ -1637,12 +1637,180 @@ def test_runtime_view_does_not_keep_stale_progress_running(tmp_path):
         state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
         view = build_runtime_view(state=state, session=session, now=now)
 
-        assert state.phase == "running"
+        assert state.phase == "idle"
         assert state.phase_source == "progress"
         assert view.presence_state is None
         assert view.status == "idle"
-        assert view.display_phase == "Recent"
+        assert view.display_phase == "Inactive"
         assert view.confidence == "stale"
+
+    engine.dispose()
+
+
+def test_progress_signal_preserves_fresh_managed_phase_truth(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_progress_preserves_managed_phase.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(hours=1))
+        runtime_key = runtime_key_for_session("claude", str(session.id))
+
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="phase_signal",
+                    phase="running",
+                    tool_name="bash",
+                    occurred_at=now - timedelta(seconds=30),
+                    freshness_ms=phase_freshness_ms("running"),
+                    dedupe_key="phase-running",
+                    payload={},
+                ),
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="transcript",
+                    kind="progress_signal",
+                    occurred_at=now - timedelta(seconds=5),
+                    dedupe_key="progress-fresh",
+                    payload={"progress_kind": "assistant_message"},
+                ),
+            ],
+        )
+        db.commit()
+
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        view = build_runtime_view(state=state, session=session, now=now)
+
+        assert state.phase == "running"
+        assert state.phase_source == "semantic"
+        assert view.presence_state == "running"
+        assert view.status == "working"
+        assert view.display_phase == "Running bash"
+        assert view.confidence == "live"
+
+    engine.dispose()
+
+
+def test_progress_signal_after_stale_managed_phase_does_not_revive_phase_truth(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_progress_does_not_revive_stale_phase.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(hours=1))
+        runtime_key = runtime_key_for_session("claude", str(session.id))
+        db.add(
+            SessionRuntimeState(
+                runtime_key=runtime_key,
+                session_id=session.id,
+                provider="claude",
+                device_id="cinder",
+                phase="running",
+                phase_source="semantic",
+                active_tool="bash",
+                phase_started_at=now - timedelta(minutes=20),
+                last_runtime_signal_at=now - timedelta(minutes=20),
+                last_progress_at=now - timedelta(minutes=20),
+                last_live_at=now - timedelta(minutes=20),
+                timeline_anchor_at=now - timedelta(minutes=20),
+                freshness_expires_at=now - timedelta(minutes=10),
+                terminal_state=None,
+                terminal_at=None,
+                runtime_version=1,
+            )
+        )
+        db.commit()
+
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="transcript",
+                    kind="progress_signal",
+                    occurred_at=now - timedelta(seconds=5),
+                    dedupe_key="progress-after-stale-phase",
+                    payload={"progress_kind": "assistant_message"},
+                )
+            ],
+        )
+        db.commit()
+
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        view = build_runtime_view(state=state, session=session, now=now)
+
+        assert state.phase == "running"
+        assert state.phase_source == "semantic"
+        assert view.runtime_phase is None
+        assert view.presence_state is None
+        assert view.status == "active"
+        assert view.display_phase == "Recent progress"
+        assert view.confidence == "inferred"
+
+    engine.dispose()
+
+
+def test_needs_user_freshness_is_not_extended_by_progress(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_needs_user_progress_does_not_extend_freshness.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(hours=1))
+        runtime_key = runtime_key_for_session("claude", str(session.id))
+
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="phase_signal",
+                    phase="needs_user",
+                    occurred_at=now - timedelta(minutes=20),
+                    freshness_ms=phase_freshness_ms("needs_user"),
+                    dedupe_key="phase-needs-user",
+                    payload={},
+                ),
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="transcript",
+                    kind="progress_signal",
+                    occurred_at=now - timedelta(seconds=30),
+                    dedupe_key="progress-after-needs-user",
+                    payload={"progress_kind": "transcript_append"},
+                ),
+            ],
+        )
+        db.commit()
+
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        view = build_runtime_view(state=state, session=session, now=now)
+
+        assert state.phase == "needs_user"
+        assert state.phase_source == "semantic"
+        assert state.freshness_expires_at == (now - timedelta(minutes=10)).replace(tzinfo=None)
+        assert view.runtime_phase is None
+        assert view.presence_state is None
+        assert view.status == "active"
+        assert view.display_phase == "Recent progress"
+        assert view.confidence == "inferred"
 
     engine.dispose()
 
@@ -1726,7 +1894,7 @@ def test_newer_progress_reopens_finished_runtime_state(tmp_path):
         db.commit()
 
         state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
-        assert state.phase == "running"
+        assert state.phase == "idle"
         assert state.phase_source == "progress"
         assert state.terminal_state is None
         assert state.last_progress_at == (now - timedelta(seconds=5)).replace(tzinfo=None)
@@ -1887,7 +2055,7 @@ def test_older_phase_signal_does_not_override_newer_progress(tmp_path):
         state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
         view = build_runtime_view(state=state, session=session, now=now)
 
-        assert state.phase == "running"
+        assert state.phase == "idle"
         assert state.phase_source == "progress"
         assert state.last_progress_at == now.replace(tzinfo=None)
         assert state.last_runtime_signal_at is None
@@ -1938,7 +2106,7 @@ def test_older_terminal_signal_does_not_override_newer_progress(tmp_path):
         state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
         view = build_runtime_view(state=state, session=session, now=now)
 
-        assert state.phase == "running"
+        assert state.phase == "idle"
         assert state.phase_source == "progress"
         assert state.terminal_state is None
         assert state.terminal_at is None
