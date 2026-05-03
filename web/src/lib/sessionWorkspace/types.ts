@@ -91,7 +91,6 @@ export type SessionInteractionCapabilities = {
   hostReattachAvailable: boolean;
   canChatFromBrowser: boolean;
   managementLabel: string;
-  managementVariant: "neutral" | "success";
   managementDescription: string;
   managedLaunchSuggestion: ManagedLaunchSuggestion | null;
   capabilityLabel: string;

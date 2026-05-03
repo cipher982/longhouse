@@ -3,7 +3,7 @@ import { fetchWithRefresh } from "../../lib/auth-refresh";
 import { logger } from "../../lib/logger";
 
 export const DEMO_READ_ONLY_MESSAGE =
-  "This is a demo. You can browse sessions, but changes and live control are disabled.";
+  "This is a demo. You can browse sessions, but changes and session control are disabled.";
 
 export function isDemoReadOnlyBody(body: unknown): body is { error?: string; demo?: boolean } {
   return Boolean(

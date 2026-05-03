@@ -38,7 +38,8 @@ function expectedUnmanagedHint(provider: string | null | undefined): string {
   if (provider === "codex") {
     return "Restart it with longhouse codex when you want Longhouse to keep it managed and steerable.";
   }
-  return "Launch new sessions through Longhouse when you want live control.";
+  const label = provider ? provider[0].toUpperCase() + provider.slice(1) : "Session";
+  return `Launch new ${label} sessions through Longhouse when you want to steer them from Longhouse.`;
 }
 
 function buildTimelinePath(params: Record<string, string | number | undefined>): string {
@@ -144,7 +145,7 @@ test("unmanaged sessions stay honest on hosted timeline and detail", async ({ co
 
     const unmanagedCard = page.locator(`[data-session-id="${card.detail.id}"]`);
     await expect(unmanagedCard, "unmanaged thread card should be rendered").toBeVisible();
-    await expect(unmanagedCard.getByTestId("session-card-management")).toHaveText("Unmanaged");
+    await expect(unmanagedCard.getByTestId("session-card-ownership")).toHaveText("Unmanaged");
 
     await page.goto(`/timeline/${card.detail.id}`, { waitUntil: "domcontentloaded" });
     await waitForPageReady(page, { timeout: 20_000 });
@@ -179,16 +180,16 @@ test("managed sessions stay quiet on cards and explicit on detail when present",
       const managedCard = page.locator(`[data-session-id="${visibleManagedCard.card.detail.id}"]`);
       await expect(managedCard, "managed thread card should be rendered").toBeVisible();
       await expect(
-        managedCard.getByTestId("session-card-management"),
-        "managed thread cards should stay quiet by default",
-      ).toHaveCount(0);
+        managedCard.getByTestId("session-card-ownership"),
+        "managed thread cards should show ownership without implying current action availability",
+      ).toHaveText("Managed");
     }
 
     await page.goto(`/timeline/${anyManagedCard.detail.id}`, { waitUntil: "domcontentloaded" });
     await waitForPageReady(page, { timeout: 20_000 });
     await expect(page.getByTestId("session-management-badge")).toHaveText("Managed");
     await expect(page.getByTestId("session-management-summary")).toContainText(
-      "Longhouse owns the live control path for this session.",
+      "Longhouse owns the control path for this session.",
     );
   } finally {
     await page.close();

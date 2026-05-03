@@ -641,7 +641,9 @@ struct SessionModelsTests {
         let readOnlyDetail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: readOnlyJSON)
 
         #expect(liveDetail.runtimeCapabilityLabel == "Send")
+        #expect(liveDetail.runtimeCapabilityTone == "success")
         #expect(readOnlyDetail.runtimeCapabilityLabel == "Read only")
+        #expect(readOnlyDetail.runtimeCapabilityTone == "neutral")
         #expect(readOnlyDetail.runtimeHeadline == "Read only")
     }
 
