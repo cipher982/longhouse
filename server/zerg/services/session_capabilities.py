@@ -61,7 +61,15 @@ def build_session_capability_display(
     capability_flags: SessionCapabilityFlags,
     *,
     host_label: str | None = None,
+    lifecycle: str | None = None,
 ) -> SessionCapabilityDisplay:
+    if lifecycle == "closed":
+        return SessionCapabilityDisplay(
+            label="Closed",
+            detail="This session has ended.",
+            tone="neutral",
+        )
+
     normalized_host = _normalize_host_label(host_label or capability_flags.home_label)
     if capability_flags.live_control_available or capability_flags.reply_to_live_session_available:
         return SessionCapabilityDisplay(

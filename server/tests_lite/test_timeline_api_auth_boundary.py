@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import time
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from unittest.mock import patch
 from uuid import uuid4
@@ -33,6 +34,7 @@ from zerg.models import User
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionTurn
 from zerg.services.managed_local_transport import build_managed_local_attach_command
 
@@ -477,6 +479,69 @@ def test_timeline_and_agents_session_workspace_return_same_body(tmp_path):
         assert "load_projection;dur=" in agents_response.headers["server-timing"]
         assert "build_projection;dur=" in timeline_response.headers["server-timing"]
         assert "build_projection;dur=" in agents_response.headers["server-timing"]
+    finally:
+        auth_deps._strategy_cache.clear()
+        api_app.dependency_overrides.clear()
+
+
+def test_timeline_workspace_does_not_claim_live_control_without_runner_truth(tmp_path):
+    session_local = _make_db(tmp_path)
+    now = datetime.now(timezone.utc)
+    with session_local() as db:
+        _seed_user(db)
+        session = AgentSession(
+            id=uuid4(),
+            provider="claude",
+            environment="development",
+            project="timeline-auth",
+            device_id="cinder",
+            cwd="/tmp/timeline-auth",
+            git_repo=None,
+            git_branch="main",
+            started_at=now,
+            ended_at=None,
+            user_messages=1,
+            assistant_messages=1,
+            tool_calls=0,
+            execution_home="managed_local",
+            managed_transport="claude_channel_bridge",
+            source_runner_id=9,
+            source_runner_name="cinder",
+        )
+        db.add(session)
+        db.add(
+            SessionRuntimeState(
+                runtime_key=f"claude:{session.id}",
+                session_id=session.id,
+                provider="claude",
+                device_id="cinder",
+                phase="idle",
+                phase_source="semantic",
+                phase_started_at=now,
+                last_runtime_signal_at=now,
+                last_progress_at=now,
+                last_live_at=now,
+                timeline_anchor_at=now,
+                freshness_expires_at=now + timedelta(minutes=5),
+                runtime_version=1,
+            )
+        )
+        db.commit()
+        session_id = str(session.id)
+
+    client = _make_client(session_local)
+
+    try:
+        with _force_browser_jwt_mode():
+            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
+            response = client.get(f"/timeline/sessions/{session_id}/workspace?limit=50")
+
+        assert response.status_code == 200
+        capabilities = response.json()["session"]["capabilities"]
+        assert capabilities["live_control_available"] is False
+        assert capabilities["reply_to_live_session_available"] is False
+        assert capabilities["can_queue_next_input"] is False
+        assert capabilities["display_label"] == "Control offline"
     finally:
         auth_deps._strategy_cache.clear()
         api_app.dependency_overrides.clear()
