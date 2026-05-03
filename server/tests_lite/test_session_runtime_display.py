@@ -537,6 +537,24 @@ def test_capability_display_names_live_control_host():
     assert display.tone == "success"
 
 
+def test_capability_display_uses_action_label_without_host():
+    flags = SessionCapabilityFlags(
+        execution_home=SessionExecutionHome.MANAGED_LOCAL,
+        managed_transport=None,
+        live_control_available=True,
+        host_reattach_available=True,
+        reply_to_live_session_available=True,
+        can_queue_next_input=True,
+        can_steer_active_turn=False,
+        home_label=None,
+    )
+
+    display = build_session_capability_display(flags)
+
+    assert display.label == "Send"
+    assert display.tone == "success"
+
+
 def test_capability_display_names_control_offline():
     flags = SessionCapabilityFlags(
         execution_home=SessionExecutionHome.MANAGED_LOCAL,
@@ -555,8 +573,8 @@ def test_capability_display_names_control_offline():
     assert display.tone == "warning"
 
 
-def test_capability_display_names_imported_sessions_search_only():
+def test_capability_display_names_imported_sessions_read_only():
     display = build_session_capability_display(_capabilities())
 
-    assert display.label == "Search only"
+    assert display.label == "Read only"
     assert display.tone == "neutral"

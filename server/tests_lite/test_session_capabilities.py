@@ -97,6 +97,22 @@ def test_capability_response_prefers_source_runner_name_for_display_label():
     assert response.display_tone == "success"
 
 
+def test_capability_response_marks_unmanaged_sessions_read_only():
+    session = _make_session()
+    capabilities = build_session_capabilities(session)
+
+    response = build_session_capabilities_response(
+        session=session,
+        capability_flags=capabilities,
+        runtime_display=_runtime_display(activity_recency="recent"),
+    )
+
+    assert response.live_control_available is False
+    assert response.host_reattach_available is False
+    assert response.display_label == "Read only"
+    assert response.display_tone == "neutral"
+
+
 def test_capability_response_does_not_claim_live_without_runtime_truth():
     session = _make_session(
         execution_home="managed_local",
