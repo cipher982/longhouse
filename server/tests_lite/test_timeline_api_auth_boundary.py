@@ -27,10 +27,11 @@ from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import require_single_tenant
+from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.models import User
-from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentEvent
+from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionTurn
 from zerg.services.managed_local_transport import build_managed_local_attach_command
@@ -422,6 +423,7 @@ def test_timeline_session_turn_detail_accepts_browser_session_cookie(tmp_path):
         auth_deps._strategy_cache.clear()
         api_app.dependency_overrides.clear()
 
+
 def test_timeline_session_workspace_bootstraps_session_thread_and_projection(tmp_path):
     session_local = _make_db(tmp_path)
     with session_local() as db:
@@ -446,6 +448,35 @@ def test_timeline_session_workspace_bootstraps_session_thread_and_projection(tmp
         assert "load_thread;dur=" in response.headers["server-timing"]
         assert "load_projection;dur=" in response.headers["server-timing"]
         assert "build_projection;dur=" in response.headers["server-timing"]
+    finally:
+        auth_deps._strategy_cache.clear()
+        api_app.dependency_overrides.clear()
+
+
+def test_timeline_and_agents_session_workspace_return_same_body(tmp_path):
+    session_local = _make_db(tmp_path)
+    with session_local() as db:
+        _seed_user(db)
+        session_id = _seed_session(db)
+
+    client = _make_client(session_local)
+    api_app.dependency_overrides[verify_agents_token] = lambda: None
+
+    try:
+        with _force_browser_jwt_mode():
+            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
+            timeline_response = client.get(f"/timeline/sessions/{session_id}/workspace?limit=50")
+            agents_response = client.get(f"/agents/sessions/{session_id}/workspace?limit=50")
+
+        assert timeline_response.status_code == 200
+        assert agents_response.status_code == 200
+        assert timeline_response.json() == agents_response.json()
+        assert timeline_response.headers["cache-control"] == "private, max-age=5"
+        assert agents_response.headers["cache-control"] == "private, max-age=5"
+        assert "load_projection;dur=" in timeline_response.headers["server-timing"]
+        assert "load_projection;dur=" in agents_response.headers["server-timing"]
+        assert "build_projection;dur=" in timeline_response.headers["server-timing"]
+        assert "build_projection;dur=" in agents_response.headers["server-timing"]
     finally:
         auth_deps._strategy_cache.clear()
         api_app.dependency_overrides.clear()
