@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from types import SimpleNamespace
 from uuid import uuid4
@@ -37,12 +38,17 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.models.agents import SessionInput
+from zerg.models.agents import SessionRuntimeState
 from zerg.models.enums import UserRole
+from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
+from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.session_continuity import session_lock_manager
+from zerg.services.session_runtime import phase_freshness_ms
+from zerg.services.session_runtime import runtime_key_for_session
 
 
 def _make_db(tmp_path, name):
@@ -55,6 +61,28 @@ def _make_db(tmp_path, name):
     engine = make_engine(f"sqlite:///{db_path}", pool_size=50, max_overflow=50)
     initialize_database(engine)
     return make_sessionmaker(engine)
+
+
+def _seed_live_runtime_state(db, session, *, phase: str = "idle") -> None:
+    now = datetime.now(timezone.utc)
+    freshness_ms = phase_freshness_ms(phase) or int(timedelta(minutes=5).total_seconds() * 1000)
+    key = runtime_key_for_session(str(session.provider or "codex"), str(session.id))
+    state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == key).first()
+    if state is None:
+        state = SessionRuntimeState(runtime_key=key, session_id=session.id, provider=str(session.provider or "codex"), device_id=session.device_id)
+        db.add(state)
+    state.phase = phase
+    state.phase_source = "semantic"
+    state.phase_started_at = now
+    state.last_runtime_signal_at = now
+    state.last_progress_at = now
+    state.last_live_at = now
+    state.timeline_anchor_at = now
+    state.freshness_expires_at = now + timedelta(milliseconds=freshness_ms)
+    state.terminal_state = None
+    state.terminal_at = None
+    state.runtime_version = int(getattr(state, "runtime_version", 0) or 0) + 1
+    db.commit()
 
 
 def _seed_managed_session(session_local, *, transport: str = "codex_app_server") -> tuple:
@@ -97,7 +125,17 @@ def _seed_managed_session(session_local, *, transport: str = "codex_app_server")
         sess.source_runner_id = 1
         sess.source_runner_name = "cinder"
         sess.managed_session_name = "lh-stress"
+        runner = Runner(
+            id=1,
+            owner_id=user.id,
+            name="cinder",
+            status="online",
+            auth_secret_hash="test",
+        )
+        db.merge(runner)
         db.commit()
+        get_runner_connection_manager().register(user.id, 1, SimpleNamespace())
+        _seed_live_runtime_state(db, sess)
         user_id = user.id
     return session_id, user_id
 

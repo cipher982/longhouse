@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from types import SimpleNamespace
 from uuid import uuid4
@@ -21,6 +22,7 @@ from zerg.database import make_sessionmaker
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionTurn
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
@@ -29,7 +31,10 @@ from zerg.services import session_chat_impl
 from zerg.services.managed_local_control import ManagedLocalPhaseUpdate
 from zerg.services.managed_local_control import ManagedLocalTerminalResult
 from zerg.services.managed_local_event_polling import managed_local_events_include_expected_turn
+from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.session_continuity import session_lock_manager
+from zerg.services.session_runtime import phase_freshness_ms
+from zerg.services.session_runtime import runtime_key_for_session
 from zerg.services.session_turns import create_session_turn
 from zerg.services.session_turns import mark_session_turn_send_accepted
 from zerg.session_execution_home import ManagedSessionTransport
@@ -79,7 +84,33 @@ def _seed_user_and_runner(db):
     db.add(runner)
     db.commit()
     db.refresh(runner)
+    get_runner_connection_manager().register(user.id, runner.id, SimpleNamespace())
     return user, runner
+
+
+def _seed_live_runtime_state(db, session: AgentSession, *, phase: str = "idle") -> None:
+    now = datetime.now(timezone.utc)
+    freshness_ms = phase_freshness_ms(phase) or int(timedelta(minutes=5).total_seconds() * 1000)
+    db.add(
+        SessionRuntimeState(
+            runtime_key=runtime_key_for_session(str(session.provider or "claude"), str(session.id)),
+            session_id=session.id,
+            provider=str(session.provider or "claude"),
+            device_id=session.device_id,
+            phase=phase,
+            phase_source="semantic",
+            phase_started_at=now,
+            last_runtime_signal_at=now,
+            last_progress_at=now,
+            last_live_at=now,
+            timeline_anchor_at=now,
+            freshness_expires_at=now + timedelta(milliseconds=freshness_ms),
+            terminal_state=None,
+            terminal_at=None,
+            runtime_version=1,
+        )
+    )
+    db.commit()
 
 
 def _seed_managed_local_session(db, *, runner: Runner, provider: str = "claude") -> AgentSession:
@@ -117,6 +148,7 @@ def _seed_managed_local_session(db, *, runner: Runner, provider: str = "claude")
     db.add(session)
     db.commit()
     db.refresh(session)
+    _seed_live_runtime_state(db, session)
     return session
 
 

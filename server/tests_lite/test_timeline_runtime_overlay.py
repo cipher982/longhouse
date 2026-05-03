@@ -266,6 +266,46 @@ def test_sessions_list_exposes_home_label_from_existing_session_metadata(tmp_pat
         assert rows["cloud-branch"]["home_label"] is None  # cloud labels hidden for launch
 
 
+def test_managed_session_capability_needs_current_runner_truth(tmp_path):
+    factory = _make_db(tmp_path, "managed_capability_requires_runner.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            started_at=now - timedelta(minutes=10),
+            ended_at=None,
+            project="managed-without-runner",
+            execution_home="managed_local",
+            managed_transport="claude_channel_bridge",
+            source_runner_id=7,
+            managed_session_name="lh-managed-without-runner",
+        )
+        _upsert_runtime_state(
+            db,
+            session_id=str(session.id),
+            phase="idle",
+            updated_at=now,
+        )
+    finally:
+        db.close()
+
+    for client in _client(factory):
+        resp = client.get("/agents/sessions?days_back=1", headers={"X-Agents-Token": "dev"})
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["sessions"][0]
+        assert data["id"] == str(session.id)
+        assert data["runtime_display"]["control_path"] == "managed"
+        assert data["runtime_display"]["activity_recency"] == "live"
+        assert data["runtime_display"]["host_state"] == "unknown"
+        assert data["capabilities"]["live_control_available"] is False
+        assert data["capabilities"]["reply_to_live_session_available"] is False
+        assert data["capabilities"]["can_queue_next_input"] is False
+        assert data["capabilities"]["display_label"] == "Control offline"
+        assert not str(data["capabilities"]["display_label"]).startswith("Live on")
+
+
 def test_active_sessions_fresh_presence_beats_ended_at(tmp_path):
     factory = _make_db(tmp_path, "presence_beats_ended.db")
     now = datetime.now(timezone.utc)
