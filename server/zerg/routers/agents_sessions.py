@@ -833,6 +833,7 @@ async def list_active_sessions(
 
             items.append(
                 build_active_session_response(
+                    store,
                     s,
                     last_activity_at=last_activity_at,
                     runtime_overlay=runtime_overlay,

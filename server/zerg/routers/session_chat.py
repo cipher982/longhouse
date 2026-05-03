@@ -44,6 +44,7 @@ from zerg.services.session_chat_impl import _lock_scope_id_for_session
 from zerg.services.session_chat_impl import _managed_local_launch_response
 from zerg.services.session_chat_impl import _resolve_agents_owner_id
 from zerg.services.session_continuity import session_lock_manager
+from zerg.services.session_current_control import current_session_capabilities
 from zerg.services.session_inputs import INPUT_INTENT_AUTO
 from zerg.services.session_inputs import INPUT_INTENT_QUEUE
 from zerg.services.session_inputs import INPUT_INTENT_STEER
@@ -229,7 +230,7 @@ async def send_to_live_session(
     request_id = str(uuid.uuid4())[:8]
     source_session = _load_session_for_continuation(db, session_id)
     logger.info(f"[{request_id}] Live session send request for session {source_session.id}")
-    _assert_live_session_send_available(source_session)
+    _assert_live_session_send_available(db, source_session)
     lock_scope_id = await _acquire_session_lock_or_raise(source_session=source_session, request_id=request_id)
     try:
         return await _build_managed_local_chat_response(
@@ -262,7 +263,7 @@ async def draft_reply_for_live_session(
     """Generate a suggested next user message for a live managed-local session."""
     request_id = str(uuid.uuid4())[:8]
     source_session = _load_session_for_continuation(db, session_id)
-    _assert_live_session_send_available(source_session)
+    _assert_live_session_send_available(db, source_session)
     try:
         max_chars = (body or SessionDraftReplyRequest()).max_chars
         return await _build_managed_local_draft_reply_response(
@@ -301,7 +302,7 @@ async def send_to_live_session_agents(
         device_token=resolved_device_token,
         auth_disabled=settings.auth_disabled,
     )
-    _assert_live_session_send_available(source_session)
+    _assert_live_session_send_available(db, source_session)
     owner_id = _resolve_agents_owner_id(db, resolved_device_token)
     lock_scope_id = await _acquire_session_lock_or_raise(source_session=source_session, request_id=request_id)
 
@@ -346,7 +347,7 @@ async def draft_reply_for_live_session_agents(
         device_token=resolved_device_token,
         auth_disabled=settings.auth_disabled,
     )
-    _assert_live_session_send_available(source_session)
+    _assert_live_session_send_available(db, source_session)
 
     try:
         max_chars = (body or SessionDraftReplyRequest()).max_chars
@@ -375,7 +376,7 @@ async def interrupt_live_session(
     """Browser-authenticated explicit interrupt for managed-local sessions."""
     request_id = str(uuid.uuid4())[:8]
     source_session = _load_session_for_continuation(db, session_id)
-    _assert_live_session_send_available(source_session)
+    _assert_live_session_send_available(db, source_session)
     return await _interrupt_live_session_response(
         db=db,
         owner_id=current_user.id,
@@ -407,7 +408,7 @@ async def interrupt_live_session_agents(
         device_token=resolved_device_token,
         auth_disabled=settings.auth_disabled,
     )
-    _assert_live_session_send_available(source_session)
+    _assert_live_session_send_available(db, source_session)
     owner_id = _resolve_agents_owner_id(db, resolved_device_token)
     return await _interrupt_live_session_response(
         db=db,
@@ -520,9 +521,8 @@ async def _dispatch_steer_input(
     """
     from zerg.services.managed_local_control import MANAGED_LOCAL_STEER_TURN_ENDED
     from zerg.services.managed_local_control import steer_text_to_managed_local_session
-    from zerg.services.session_capabilities import build_session_capabilities
 
-    capabilities = build_session_capabilities(source_session)
+    capabilities = current_session_capabilities(db, source_session)
     if not capabilities.can_steer_active_turn:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -600,7 +600,7 @@ async def _create_session_input_response(
             detail=f"unknown intent: {body.intent}",
         )
 
-    _assert_live_session_send_available(source_session)
+    _assert_live_session_send_available(db, source_session)
 
     request_id = str(uuid.uuid4())[:8]
 

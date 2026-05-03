@@ -12,6 +12,7 @@ import zerg.services.live_session_dispatch as live_session_dispatch
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionMessage
 from zerg.models.user import User
+from zerg.services.session_current_control import current_session_capabilities
 from zerg.services.session_runtime import current_presence_state_for_session
 
 logger = logging.getLogger(__name__)
@@ -78,7 +79,7 @@ async def deliver_next_queued_session_message(
     target_presence_state: str | None = None,
 ) -> SessionMessageDispatchOutcome | None:
     target_session = db.query(AgentSession).filter(AgentSession.id == target_session_id).first()
-    if not live_session_dispatch.supports_live_text_dispatch(target_session):
+    if target_session is None or not current_session_capabilities(db, target_session).live_control_available:
         return None
 
     current_state = target_presence_state or current_presence_state_for_session(
@@ -224,7 +225,9 @@ async def create_session_message(
     if from_session_id == to_session_id:
         raise ValueError("Cannot send a session message to the same session")
 
-    initial_status = MESSAGE_STATUS_QUEUED if live_session_dispatch.supports_live_text_dispatch(to_session) else MESSAGE_STATUS_STORED_ONLY
+    initial_status = (
+        MESSAGE_STATUS_QUEUED if current_session_capabilities(db, to_session).live_control_available else MESSAGE_STATUS_STORED_ONLY
+    )
     message = SessionMessage(
         from_session_id=from_session_id,
         to_session_id=to_session_id,

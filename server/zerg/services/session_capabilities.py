@@ -7,6 +7,8 @@ from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_execution_home import infer_execution_home
 
+STEERABLE_RUNTIME_STATES = frozenset({"thinking", "running"})
+
 
 @dataclass(frozen=True)
 class SessionCapabilityFlags:
@@ -77,6 +79,42 @@ def build_session_capability_display(
         label="Search only",
         detail="This imported session is searchable, but Longhouse cannot steer it.",
         tone="neutral",
+    )
+
+
+def project_current_session_capabilities(
+    capability_flags: SessionCapabilityFlags,
+    *,
+    runtime_display,
+) -> SessionCapabilityFlags:
+    """Project durable managed-session metadata into current action availability.
+
+    ``build_session_capabilities`` answers what kind of control path the session
+    was created with. This helper answers what Longhouse can truthfully do right
+    now. A managed session is not "live control" unless runtime truth says the
+    session is open, fresh, and hosted on an online runner.
+    """
+
+    lifecycle = str(getattr(runtime_display, "lifecycle", "") or "").strip()
+    host_state = str(getattr(runtime_display, "host_state", "") or "").strip()
+    activity_recency = str(getattr(runtime_display, "activity_recency", "") or "").strip()
+    runtime_state = str(getattr(runtime_display, "state", "") or "").strip()
+
+    currently_live = (
+        capability_flags.live_control_available and lifecycle == "open" and host_state == "online" and activity_recency == "live"
+    )
+    reattach_available = capability_flags.host_reattach_available and lifecycle != "closed" and not currently_live
+    can_steer = currently_live and capability_flags.can_steer_active_turn and runtime_state in STEERABLE_RUNTIME_STATES
+
+    return SessionCapabilityFlags(
+        execution_home=capability_flags.execution_home,
+        managed_transport=capability_flags.managed_transport,
+        live_control_available=currently_live,
+        host_reattach_available=reattach_available,
+        reply_to_live_session_available=currently_live,
+        can_queue_next_input=currently_live,
+        can_steer_active_turn=can_steer,
+        home_label=capability_flags.home_label,
     )
 
 

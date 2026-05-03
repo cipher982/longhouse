@@ -23,8 +23,11 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionTurn
 from zerg.services.agents_store import AgentsStore
 from zerg.services.managed_local_transport import build_managed_local_attach_command
+from zerg.services.session_capabilities import SessionCapabilityDisplay
 from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_capabilities import build_session_capability_display
+from zerg.services.session_capabilities import project_current_session_capabilities
+from zerg.services.session_runner_state import managed_runner_host_state
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_runtime import should_include_runtime_view
 from zerg.services.session_runtime_display import build_session_runtime_display
@@ -53,12 +56,21 @@ def build_session_capabilities_response(
     session: AgentSession | None = None,
     *,
     capability_flags=None,
+    runtime_display=None,
 ) -> SessionCapabilitiesResponse:
     capability_flags = capability_flags or build_session_capabilities(session)
+    capability_flags = project_current_session_capabilities(capability_flags, runtime_display=runtime_display)
     host_label = None
     if session is not None:
         host_label = str(getattr(session, "source_runner_name", "") or "").strip() or None
     capability_display = build_session_capability_display(capability_flags, host_label=host_label)
+    lifecycle = str(getattr(runtime_display, "lifecycle", "") or "").strip() if runtime_display is not None else ""
+    if lifecycle == "closed":
+        capability_display = SessionCapabilityDisplay(
+            label="Closed",
+            detail="This session has ended.",
+            tone="neutral",
+        )
     return SessionCapabilitiesResponse(
         live_control_available=capability_flags.live_control_available,
         host_reattach_available=capability_flags.host_reattach_available,
@@ -747,6 +759,8 @@ def build_session_response(
     if binding_overlay is not None:
         binding_host_state = binding_overlay.host_state
         binding_terminal_reason = binding_overlay.terminal_reason
+    if capability_flags.live_control_available or capability_flags.host_reattach_available:
+        binding_host_state = managed_runner_host_state(store.db, session) or binding_host_state
     runtime_display = (
         build_session_runtime_display_response(
             runtime_overlay=runtime_overlay,
@@ -758,6 +772,7 @@ def build_session_response(
         if include_runtime
         else None
     )
+    effective_capability_flags = project_current_session_capabilities(capability_flags, runtime_display=runtime_display)
     return SessionResponse(
         id=str(session.id),
         provider=session.provider,
@@ -805,8 +820,12 @@ def build_session_response(
         branched_from_event_id=session.branched_from_event_id,
         is_writable_head=bool(session.is_writable_head),
         is_sidechain=bool(session.is_sidechain or False),
-        control=build_session_control_response(session, capability_flags=capability_flags),
-        capabilities=build_session_capabilities_response(session=session, capability_flags=capability_flags),
+        control=build_session_control_response(session, capability_flags=effective_capability_flags),
+        capabilities=build_session_capabilities_response(
+            session=session,
+            capability_flags=capability_flags,
+            runtime_display=runtime_display,
+        ),
         runtime_display=runtime_display,
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
         user_state=session.user_state or "active",
@@ -814,6 +833,7 @@ def build_session_response(
 
 
 def build_active_session_response(
+    store: AgentsStore,
     session: AgentSession,
     *,
     last_activity_at: datetime,
@@ -832,13 +852,18 @@ def build_active_session_response(
     end_time = _ended or now
     duration_minutes = int((end_time - _started).total_seconds() / 60) if _started else 0
     message_count = (session.user_messages or 0) + (session.assistant_messages or 0)
+    binding_host_state = binding_overlay.host_state if binding_overlay is not None else None
+    binding_terminal_reason = binding_overlay.terminal_reason if binding_overlay is not None else None
+    if capability_flags.live_control_available or capability_flags.host_reattach_available:
+        binding_host_state = managed_runner_host_state(store.db, session) or binding_host_state
     runtime_display = build_session_runtime_display_response(
         runtime_overlay=runtime_overlay,
         capability_flags=capability_flags,
         ended_at=session.ended_at,
-        binding_host_state=binding_overlay.host_state if binding_overlay is not None else None,
-        binding_terminal_reason=binding_overlay.terminal_reason if binding_overlay is not None else None,
+        binding_host_state=binding_host_state,
+        binding_terminal_reason=binding_terminal_reason,
     )
+    effective_capability_flags = project_current_session_capabilities(capability_flags, runtime_display=runtime_display)
 
     return ActiveSessionResponse(
         id=str(session.id),
@@ -872,8 +897,12 @@ def build_active_session_response(
         confidence=runtime_overlay.confidence,
         user_state=session.user_state or "active",
         home_label=capability_flags.home_label,
-        control=build_session_control_response(session, capability_flags=capability_flags),
-        capabilities=build_session_capabilities_response(session=session, capability_flags=capability_flags),
+        control=build_session_control_response(session, capability_flags=effective_capability_flags),
+        capabilities=build_session_capabilities_response(
+            session=session,
+            capability_flags=capability_flags,
+            runtime_display=runtime_display,
+        ),
         runtime_display=runtime_display,
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
     )

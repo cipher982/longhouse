@@ -22,6 +22,9 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionMessage
 from zerg.models.agents import SessionRuntimeState
+from zerg.models.models import Runner
+from zerg.models.user import User
+from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
 
@@ -92,6 +95,17 @@ def _seed_session(
         managed_session_name=f"lh-{session_id.hex[:8]}",
     )
     db.add(session)
+    if execution_home == "managed_local" and source_runner_id is not None:
+        db.merge(User(id=1, email="test-owner@example.com"))
+        runner = Runner(
+            id=int(source_runner_id),
+            owner_id=1,
+            name=source_runner_name or f"runner-{source_runner_id}",
+            status="online",
+            auth_secret_hash="test",
+        )
+        db.merge(runner)
+        get_runner_connection_manager().register(1, int(source_runner_id), SimpleNamespace())
     db.commit()
     db.refresh(session)
     return session

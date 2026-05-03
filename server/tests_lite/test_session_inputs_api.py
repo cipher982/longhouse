@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from types import SimpleNamespace
 from uuid import uuid4
@@ -22,16 +23,20 @@ from zerg.database import make_sessionmaker
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.models.agents import SessionInput
 from zerg.models.enums import UserRole
+from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.routers import session_chat
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
+from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.session_continuity import session_lock_manager
 from zerg.services.session_inputs import INPUT_STATUS_CANCELLED
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
 from zerg.services.session_inputs import INPUT_STATUS_FAILED
 from zerg.services.session_inputs import INPUT_STATUS_QUEUED
+from zerg.services.session_runtime import phase_freshness_ms
+from zerg.services.session_runtime import runtime_key_for_session
 
 
 def _make_db(tmp_path):
@@ -58,6 +63,30 @@ def _make_client(session_local, current_user):
     api_app.dependency_overrides[get_db] = override_get_db
     api_app.dependency_overrides[get_current_browser_route_user] = override_current_user
     return TestClient(app, backend="asyncio"), api_app
+
+
+def _seed_live_runtime_state(db, session, *, phase: str = "idle") -> None:
+    from zerg.models.agents import SessionRuntimeState
+
+    now = datetime.now(timezone.utc)
+    freshness_ms = phase_freshness_ms(phase) or int(timedelta(minutes=5).total_seconds() * 1000)
+    key = runtime_key_for_session(str(session.provider or "claude"), str(session.id))
+    state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == key).first()
+    if state is None:
+        state = SessionRuntimeState(runtime_key=key, session_id=session.id, provider=str(session.provider or "claude"), device_id=session.device_id)
+        db.add(state)
+    state.phase = phase
+    state.phase_source = "semantic"
+    state.phase_started_at = now
+    state.last_runtime_signal_at = now
+    state.last_progress_at = now
+    state.last_live_at = now
+    state.timeline_anchor_at = now
+    state.freshness_expires_at = now + timedelta(milliseconds=freshness_ms)
+    state.terminal_state = None
+    state.terminal_at = None
+    state.runtime_version = int(getattr(state, "runtime_version", 0) or 0) + 1
+    db.commit()
 
 
 def _seed_live_session(session_local):
@@ -102,7 +131,17 @@ def _seed_live_session(session_local):
         session.source_runner_id = 1
         session.source_runner_name = "cinder"
         session.managed_session_name = "lh-input"
+        runner = Runner(
+            id=1,
+            owner_id=user.id,
+            name="cinder",
+            status="online",
+            auth_secret_hash="test",
+        )
+        db.merge(runner)
         db.commit()
+        get_runner_connection_manager().register(user.id, 1, SimpleNamespace())
+        _seed_live_runtime_state(db, session)
         user_id = user.id
 
     return session_id, user_id
@@ -278,6 +317,7 @@ def _seed_codex_session(session_local):
         session = db.query(__import__("zerg.models.agents", fromlist=["AgentSession"]).AgentSession).filter_by(id=session_id).one()
         session.managed_transport = "codex_app_server"
         db.commit()
+        _seed_live_runtime_state(db, session, phase="running")
     return session_id, user_id
 
 
