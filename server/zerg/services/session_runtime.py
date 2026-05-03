@@ -45,7 +45,7 @@ PHASE_FRESHNESS = {
 MANAGED_CODEX_FRESHNESS = timedelta(minutes=15)
 INFERRED_PROGRESS_WINDOW = timedelta(minutes=5)
 LIVE_EXECUTION_PHASES = {"thinking", "running"}
-ATTENTION_PHASES = {"blocked", "needs_user"}
+ATTENTION_PHASES = {"blocked"}
 KNOWN_PHASES = {"thinking", "running", "blocked", "needs_user", "idle", "finished"}
 MANAGED_CODEX_RUNTIME_SOURCES = {"engine_attached_lease", "codex_bridge"}
 MANAGED_CODEX_INVARIANTS = ("ended_without_session_ended", "short_freshness")
@@ -203,7 +203,7 @@ def _display_phase_for_state(
     if phase == "thinking":
         return "Thinking"
     if phase == "needs_user":
-        return "Needs you"
+        return "Ready"
     if phase == "blocked":
         return f"Blocked on {active_tool}" if active_tool else "Needs permission"
     if phase == "idle":
