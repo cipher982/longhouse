@@ -263,8 +263,18 @@ def build_runtime_view(
         presence_tool = active_tool if runtime_phase in {"running", "blocked"} else None
 
     exposed_runtime_phase = runtime_phase
-    if confidence == "inferred" and phase_source == "progress":
+    if confidence == "inferred":
         exposed_runtime_phase = ""
+
+    display_phase = _display_phase_for_state(
+        phase=runtime_phase,
+        active_tool=active_tool,
+        confidence=confidence,
+        terminal_state=terminal_state,
+        status=status,
+    )
+    if phase_source == "progress" and confidence == "stale" and terminal_state is None:
+        display_phase = "Inactive"
 
     return SessionRuntimeView(
         runtime_phase=exposed_runtime_phase or None,
@@ -278,13 +288,7 @@ def build_runtime_view(
         presence_tool=presence_tool,
         presence_updated_at=presence_updated_at,
         last_live_at=normalize_utc(state.last_live_at) or normalize_utc(state.last_progress_at) or presence_updated_at,
-        display_phase=_display_phase_for_state(
-            phase=runtime_phase,
-            active_tool=active_tool,
-            confidence=confidence,
-            terminal_state=terminal_state,
-            status=status,
-        ),
+        display_phase=display_phase,
         active_tool=active_tool,
         confidence=confidence,
         timeline_anchor_at=timeline_anchor_at,
@@ -704,12 +708,12 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
         ):
             state.terminal_state = None
             state.terminal_at = None
-        freshness_expires_at = normalize_utc(state.freshness_expires_at)
-        if freshness_expires_at is None or freshness_expires_at <= occurred_at or state.phase not in KNOWN_PHASES:
-            if state.phase not in ATTENTION_PHASES:
-                if state.phase != "running":
-                    state.phase = "running"
-                    state.phase_started_at = occurred_at
+            state.phase = "idle"
+            state.active_tool = None
+            state.freshness_expires_at = None
+            state.phase_started_at = occurred_at
+            state.phase_source = "progress"
+        if state.phase_source in {"fallback", "progress"}:
             state.phase_source = "progress"
 
     elif event.kind == "terminal_signal":
