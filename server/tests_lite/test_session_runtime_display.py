@@ -338,7 +338,7 @@ def test_unmanaged_stale_thinking_without_active_tool_is_not_stalled():
     assert display.state == "thinking"
 
 
-def test_unmanaged_needs_user_without_online_host_is_not_actionable():
+def test_unmanaged_needs_user_without_online_host_renders_ready():
     display = build_session_runtime_display(
         runtime_view=_runtime_view(
             runtime_phase="needs_user",
@@ -346,7 +346,7 @@ def test_unmanaged_needs_user_without_online_host_is_not_actionable():
             status="active",
             presence_state="needs_user",
             confidence="live",
-            display_phase="Needs you",
+            display_phase="Ready",
         ),
         capabilities=_capabilities(managed=False),
         ended_at=None,
@@ -354,15 +354,15 @@ def test_unmanaged_needs_user_without_online_host_is_not_actionable():
 
     assert display.control_path == "unmanaged"
     assert display.host_state == "unknown"
-    assert display.state is None
-    assert display.phase_label == "Recent"
+    assert display.state == "needs_user"
+    assert display.phase_label == "Ready"
     assert display.headline == "Inactive"
     assert display.is_idle is True
-    assert display.tone == "inactive"
+    assert display.tone == "idle"
     assert display.needs_attention is False
 
 
-def test_unmanaged_needs_user_with_online_host_stays_actionable():
+def test_unmanaged_needs_user_with_online_host_still_renders_ready():
     display = build_session_runtime_display(
         runtime_view=_runtime_view(
             runtime_phase="needs_user",
@@ -370,7 +370,7 @@ def test_unmanaged_needs_user_with_online_host_stays_actionable():
             status="active",
             presence_state="needs_user",
             confidence="live",
-            display_phase="Needs you",
+            display_phase="Ready",
         ),
         capabilities=_capabilities(managed=False),
         ended_at=None,
@@ -380,9 +380,10 @@ def test_unmanaged_needs_user_with_online_host_stays_actionable():
     assert display.control_path == "unmanaged"
     assert display.host_state == "online"
     assert display.state == "needs_user"
-    assert display.phase_label == "Needs you"
-    assert display.headline == "Active"
-    assert display.needs_attention is True
+    assert display.phase_label == "Ready"
+    assert display.headline == "Inactive"
+    assert display.tone == "idle"
+    assert display.needs_attention is False
 
 
 def test_managed_stale_needs_user_without_presence_is_not_actionable():

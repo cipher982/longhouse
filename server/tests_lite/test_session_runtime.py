@@ -1562,8 +1562,8 @@ def test_runtime_reducer_ignores_out_of_order_events(tmp_path):
 
         view = build_runtime_view(state=state, session=session, now=now)
         assert view.runtime_phase == "needs_user"
-        assert view.status == "active"
-        assert view.display_phase == "Needs you"
+        assert view.status == "idle"
+        assert view.display_phase == "Ready"
         assert view.confidence == "live"
 
     engine.dispose()
@@ -1855,7 +1855,7 @@ def test_runtime_view_hides_stale_attention_phase(tmp_path):
         assert view.runtime_phase == "needs_user"
         assert view.status == "idle"
         assert view.presence_state is None
-        assert view.display_phase == "Recent"
+        assert view.display_phase == "Ready"
         assert view.confidence == "stale"
 
     engine.dispose()

@@ -179,8 +179,9 @@ def test_sessions_list_uses_recent_activity_anchor_for_old_live_session(tmp_path
         assert top["display_phase"] == "Running bash"
         assert top["confidence"] == "live"
         assert top["runtime_display"] == {
-            "truth_tier": "fresh",
-            "state": "running",
+                "truth_tier": "fresh",
+                "signal_tier": "managed_phase",
+                "state": "running",
             "tone": "running",
             "headline": "Active",
             "detail": None,
@@ -544,7 +545,7 @@ def test_sessions_list_keeps_progress_runtime_overlay_for_recent_closed_session(
         assert row["confidence"] == "inferred"
 
 
-def test_sessions_list_marks_materialized_needs_user_as_active_attention(tmp_path):
+def test_sessions_list_marks_materialized_needs_user_as_ready(tmp_path):
     factory = _make_db(tmp_path, "materialized_runtime_needs_user.db")
     now = datetime.now(timezone.utc)
 
@@ -589,20 +590,21 @@ def test_sessions_list_marks_materialized_needs_user_as_active_attention(tmp_pat
         assert resp.status_code == 200, resp.text
         row = resp.json()["sessions"][0]
         assert row["id"] == str(session.id)
-        assert row["status"] == "active"
+        assert row["status"] == "idle"
         assert row["presence_state"] == "needs_user"
-        assert row["display_phase"] == "Needs you"
+        assert row["display_phase"] == "Ready"
         assert row["runtime_phase"] == "needs_user"
         assert row["runtime_source"] == "managed_local_transport"
         assert row["confidence"] == "live"
         assert row["runtime_display"]["truth_tier"] == "managed-local"
-        assert row["runtime_display"]["headline"] == "Waiting for you"
-        assert row["runtime_display"]["detail"] == "Reply needed"
-        assert row["runtime_display"]["tone"] == "needs-user"
-        assert row["runtime_display"]["needs_attention"] is True
+        assert row["runtime_display"]["signal_tier"] == "managed_phase"
+        assert row["runtime_display"]["headline"] == "Ready"
+        assert row["runtime_display"]["detail"] == "Ready for next prompt"
+        assert row["runtime_display"]["tone"] == "idle"
+        assert row["runtime_display"]["needs_attention"] is False
 
 
-def test_active_sessions_online_unmanaged_binding_keeps_attention_actionable(tmp_path):
+def test_active_sessions_online_unmanaged_binding_keeps_needs_user_ready(tmp_path):
     factory = _make_db(tmp_path, "active_unmanaged_binding_attention.db")
     now = datetime.now(timezone.utc)
 
@@ -651,9 +653,11 @@ def test_active_sessions_online_unmanaged_binding_keeps_attention_actionable(tmp
         assert resp.status_code == 200, resp.text
         row = next(item for item in resp.json()["sessions"] if item["id"] == str(session.id))
         assert row["runtime_display"]["control_path"] == "unmanaged"
+        assert row["runtime_display"]["signal_tier"] == "unmanaged_binding"
         assert row["runtime_display"]["host_state"] == "online"
         assert row["runtime_display"]["state"] == "needs_user"
-        assert row["runtime_display"]["needs_attention"] is True
+        assert row["runtime_display"]["phase_label"] == "Ready"
+        assert row["runtime_display"]["needs_attention"] is False
 
 
 def test_active_sessions_recent_progress_fallback_is_non_executing(tmp_path):

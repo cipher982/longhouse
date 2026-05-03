@@ -17,7 +17,7 @@ from zerg.session_execution_home import SessionExecutionHome
 
 KNOWN_PRESENCE_STATES = {"thinking", "running", "idle", "needs_user", "blocked", "stalled"}
 LIVE_EXECUTION_STATES = {"thinking", "running"}
-ATTENTION_STATES = {"needs_user", "blocked"}
+ATTENTION_STATES = {"blocked"}
 LEGACY_PROGRESS_STATUSES = {"working", "active"}
 
 
@@ -178,6 +178,8 @@ def _phase_label(
     display_phase: str | None,
     compact_tool: str | None,
 ) -> str:
+    if presence_state == "needs_user":
+        return "Ready"
     if presence_state == "running" and compact_tool:
         return f"Running {compact_tool}"
     if presence_state == "blocked" and compact_tool:
@@ -196,7 +198,7 @@ def _tone(
     if presence_state == "blocked":
         return "blocked"
     if presence_state == "needs_user":
-        return "needs-user"
+        return "idle"
     if presence_state == "running":
         return "running"
     if presence_state == "thinking":
@@ -241,7 +243,7 @@ def _managed_copy(
     if presence_state == "running":
         return "Working", f"Running {compact_tool}" if compact_tool else phase_label
     if presence_state == "needs_user":
-        return "Waiting for you", "Reply needed"
+        return "Ready", "Ready for next prompt"
     if presence_state == "blocked":
         return "Waiting for you", f"Approval needed • {compact_tool}" if compact_tool else "Approval needed"
     if presence_state is None and truth_tier != "managed-local":
@@ -252,7 +254,7 @@ def _managed_copy(
         return "Working", phase_label
     if presence_state is None and truth_tier == "managed-local":
         return "Not connected", None
-    if presence_state == "idle" or is_idle:
+    if presence_state in {"idle", "needs_user"} or is_idle:
         return "Ready", "Ready for next prompt"
     return "Ready", "Ready for next prompt"
 
@@ -290,6 +292,7 @@ def build_session_runtime_display(
         # "Needs you".
         presence_state = None
     stale_attention_phase = presence_state is None and runtime_phase in ATTENTION_STATES and confidence == "stale"
+    stale_ready_phase = presence_state is None and runtime_phase == "needs_user" and confidence == "stale"
     truth_tier = _truth_tier(
         capabilities=capabilities,
         status=status,
@@ -307,8 +310,13 @@ def build_session_runtime_display(
         heuristic_active = False
     is_executing = presence_state in LIVE_EXECUTION_STATES
     needs_attention = presence_state in ATTENTION_STATES
-    is_idle = presence_state == "idle" or (
-        not stale_attention_phase and not is_executing and not needs_attention and not heuristic_active and status == "idle"
+    is_idle = presence_state in {"idle", "needs_user"} or (
+        not stale_attention_phase
+        and not stale_ready_phase
+        and not is_executing
+        and not needs_attention
+        and not heuristic_active
+        and status == "idle"
     )
     if unmanaged_attention_unverified:
         is_idle = True
@@ -316,6 +324,8 @@ def build_session_runtime_display(
     if unmanaged_attention_unverified:
         display_phase = "Recent"
     elif stale_attention_phase:
+        display_phase = "Disconnected" if control_path == "managed" else "Recent"
+    elif stale_ready_phase:
         display_phase = "Disconnected" if control_path == "managed" else "Recent"
     phase_label = _phase_label(
         presence_state=presence_state,
