@@ -4,6 +4,133 @@ import Testing
 
 struct SessionModelsTests {
     @Test
+    func sessionWorkspaceDecodesThreadProjectionEventsAndSeams() throws {
+        let json = """
+        {
+          "session": {
+            "id": "session-child",
+            "provider": "codex",
+            "project": "zerg",
+            "cwd": "/Users/davidrose/git/zerg",
+            "git_branch": "main",
+            "summary": "Move iOS to workspace",
+            "summary_title": "iOS Workspace",
+            "presence_state": "idle",
+            "presence_tool": null,
+            "user_state": "active",
+            "status": "idle",
+            "last_activity_at": "2026-05-02T20:00:00Z",
+            "display_phase": "Idle",
+            "active_tool": null,
+            "home_label": "On this Mac",
+            "origin_label": "On this Mac",
+            "capabilities": {
+              "live_control_available": true,
+              "host_reattach_available": true,
+              "reply_to_live_session_available": true,
+              "can_queue_next_input": true,
+              "can_steer_active_turn": false,
+              "display_label": "Live on this Mac",
+              "display_detail": "Longhouse can send prompts into this live session.",
+              "display_tone": "success"
+            },
+            "runtime_display": {
+              "truth_tier": "managed-local",
+              "state": "idle",
+              "tone": "idle",
+              "headline": "Ready",
+              "detail": null,
+              "phase_label": "Idle",
+              "compact_tool_label": null,
+              "is_live": false,
+              "is_executing": false,
+              "needs_attention": false,
+              "is_idle": true,
+              "heuristic_active": false,
+              "is_managed_local_truth": true,
+              "has_signal": true,
+              "control_path": "managed",
+              "activity_recency": "recent",
+              "lifecycle": "open",
+              "host_state": "online",
+              "terminal_reason": null
+            },
+            "loop_mode": "assist"
+          },
+          "thread": {
+            "root_session_id": "session-root",
+            "head_session_id": "session-child",
+            "sessions": [
+              {
+                "id": "session-child",
+                "provider": "codex",
+                "project": "zerg",
+                "user_state": "active",
+                "capabilities": {
+                  "live_control_available": true,
+                  "host_reattach_available": true,
+                  "reply_to_live_session_available": true
+                }
+              }
+            ]
+          },
+          "projection": {
+            "root_session_id": "session-root",
+            "focus_session_id": "session-child",
+            "head_session_id": "session-child",
+            "path_session_ids": ["session-root", "session-child"],
+            "items": [
+              {
+                "kind": "event",
+                "session_id": "session-root",
+                "timestamp": "2026-05-02T19:59:00Z",
+                "event": {
+                  "id": 10,
+                  "role": "user",
+                  "content_text": "Can you migrate iOS?",
+                  "tool_name": null,
+                  "tool_input_json": null,
+                  "tool_output_text": null,
+                  "tool_call_id": null,
+                  "timestamp": "2026-05-02T19:59:00Z",
+                  "in_active_context": true,
+                  "is_head_branch": true
+                }
+              },
+              {
+                "kind": "seam",
+                "session_id": "session-child",
+                "timestamp": "2026-05-02T20:00:00Z",
+                "continued_from_session_id": "session-root",
+                "continuation_kind": "local",
+                "origin_label": "On this Mac",
+                "parent_origin_label": "Hosted",
+                "parent_continuation_kind": "cloud",
+                "branched_from_event_id": 10
+              }
+            ],
+            "total": 2,
+            "page_offset": 0,
+            "branch_mode": "head",
+            "abandoned_events": 0
+          }
+        }
+        """.data(using: .utf8)!
+
+        let workspace = try JSONDecoder.snakeCase.decode(SessionWorkspaceResponse.self, from: json)
+
+        #expect(workspace.session.id == "session-child")
+        #expect(workspace.thread.rootSessionId == "session-root")
+        #expect(workspace.thread.sessions.map(\.id) == ["session-child"])
+        #expect(workspace.projection.pathSessionIds == ["session-root", "session-child"])
+        #expect(workspace.projection.items.map(\.kind) == ["event", "seam"])
+        #expect(workspace.projection.items[0].id == "event:10")
+        #expect(workspace.projection.items[1].id == "seam:session-child:2026-05-02T20:00:00Z")
+        #expect(workspace.projection.items[1].continuedFromSessionId == "session-root")
+        #expect(workspace.events.map(\.id) == [10])
+    }
+
+    @Test
     func sessionDetailDecodesLoopModeAndRuntimeState() throws {
         let json = """
         {
