@@ -620,12 +620,12 @@ describe("SessionDetailPage", () => {
   it("keeps managed waiting states explicit in the dock", () => {
     const session = makeSession({
       ended_at: null,
-      status: "active",
+      status: "idle",
       presence_state: "needs_user",
       active_tool: null,
       runtime_source: "managed_local_transport",
       confidence: "live",
-      display_phase: "Needs you",
+      display_phase: "Ready",
       last_live_at: "2026-03-22T22:04:30Z",
     });
     const model = buildTimelineModel([
@@ -689,11 +689,9 @@ describe("SessionDetailPage", () => {
     expect(
       screen.queryByTestId("session-detail-header-runtime"),
     ).not.toBeInTheDocument();
+    expect(screen.getByTestId("session-control-strip")).toHaveTextContent("Ready");
     expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
-      "Waiting for you",
-    );
-    expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
-      "Reply needed",
+      "Ready for next prompt",
     );
   });
 

@@ -245,7 +245,7 @@ def _managed_copy(
     if presence_state == "needs_user":
         return "Ready", "Ready for next prompt"
     if presence_state == "blocked":
-        return "Waiting for you", f"Approval needed • {compact_tool}" if compact_tool else "Approval needed"
+        return "Needs permission", f"Approval needed • {compact_tool}" if compact_tool else "Approval needed"
     if presence_state is None and truth_tier != "managed-local":
         if heuristic_active:
             return "Active", "Last known activity"
