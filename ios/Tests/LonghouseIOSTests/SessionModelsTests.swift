@@ -131,6 +131,35 @@ struct SessionModelsTests {
     }
 
     @Test
+    func timelineBranchBadgeUsesOnlyRealGitBranch() {
+        let branchSession = SessionSummary(
+            id: "session-branch",
+            title: "Branch session",
+            presenceState: "idle",
+            provider: "codex",
+            project: "zerg",
+            lastActivityAt: nil,
+            gitBranch: " main ",
+            homeLabel: "cinder",
+            headOriginLabel: "Cloud"
+        )
+        let originOnlySession = SessionSummary(
+            id: "session-origin",
+            title: "Origin session",
+            presenceState: "idle",
+            provider: "opencode",
+            project: "sauron-email-agent",
+            lastActivityAt: nil,
+            gitBranch: nil,
+            homeLabel: "cinder",
+            headOriginLabel: "email:Sauron production-mode validation"
+        )
+
+        #expect(branchSession.timelineBranchBadgeLabel == "main")
+        #expect(originOnlySession.timelineBranchBadgeLabel == nil)
+    }
+
+    @Test
     func sessionDetailDecodesLoopModeAndRuntimeState() throws {
         let json = """
         {

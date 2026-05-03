@@ -154,6 +154,12 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     }
     var attentionLabel: String { isBlocked ? "Needs permission" : "Ready" }
     var timelineAnchor: String? { timelineAnchorAt ?? lastActivityAt }
+    var timelineBranchBadgeLabel: String? {
+        guard let branch = gitBranch?.trimmingCharacters(in: .whitespacesAndNewlines), !branch.isEmpty else {
+            return nil
+        }
+        return branch
+    }
     var turnCount: Int { userMessages ?? 0 }
     var toolCount: Int { toolCalls ?? 0 }
 

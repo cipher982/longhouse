@@ -155,11 +155,8 @@ private struct TimelineSessionCardRow: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     ProviderBadge(session: session)
-                    if let branch = nonEmpty(session.gitBranch) {
+                    if let branch = session.timelineBranchBadgeLabel {
                         MetadataBadge(systemImage: "arrow.triangle.branch", text: branch)
-                    }
-                    if let origin = nonEmpty(session.headOriginLabel), origin != nonEmpty(session.homeLabel) {
-                        MetadataBadge(text: "Head: \(origin)")
                     }
                 }
                 .lineLimit(1)
