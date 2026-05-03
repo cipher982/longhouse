@@ -1,6 +1,6 @@
 # Session State Surface Convergence
 
-Status: Draft for implementation
+Status: Implemented
 Last updated: 2026-05-03
 Related:
 - `session-runtime-display-contract.md`
@@ -144,6 +144,14 @@ Backend capability display labels should use:
 - `Read only` for unmanaged sessions.
 
 ## Implementation Plan
+
+Implementation completed in commits:
+
+- `fc30cb20` / `8168a95a` - spec and Opus review revisions
+- `fa9c3832` - backend capability labels
+- `79099519` - web session state copy
+- `bd923429` - iOS capability labels
+- `040713af` - E2E managed runner test truth
 
 ### Phase 0 - Spec and Review
 
