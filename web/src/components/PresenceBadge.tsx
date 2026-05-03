@@ -161,10 +161,8 @@ function Dot({ state, size, compact = false, animateCompact = false }: DotProps)
       <span
         style={{
           ...base,
-          background: compact ? "#d97706" : "radial-gradient(circle, #fbbf24 30%, #f59e0b 100%)",
-          animation: compact ? undefined : "presence-pulse 2s ease-in-out infinite",
-          opacity: compact ? 0.78 : 1,
-          ["--presence-glow" as string]: "rgba(251, 191, 36, 0.5)",
+          background: compact ? "#6b7280" : "radial-gradient(circle, #9ca3af 30%, #6b7280 100%)",
+          opacity: compact ? 0.72 : 1,
         }}
       />
     );
@@ -344,7 +342,7 @@ export function PresenceBadge({
         : normalizedState === "blocked" && tool
           ? `Blocked: ${tool}`
             : normalizedState === "needs_user"
-              ? "Waiting for input"
+              ? "Ready"
               : normalizedState === "stalled"
                 ? "Stalled"
               : normalizedState;
@@ -412,8 +410,8 @@ export function PresenceBadge({
     return (
       <span className={className} style={containerStyle}>
         <Dot state="needs_user" size={dotSize} />
-        <span style={{ color: "#fbbf24", fontWeight: 500, letterSpacing: "0.02em" }}>
-          Waiting for input
+        <span style={{ color: "#9ca3af", fontWeight: 500, letterSpacing: "0.02em" }}>
+          Ready
         </span>
       </span>
     );
@@ -484,7 +482,7 @@ export function PresenceHero({ state, tool, className }: PresenceHeroProps) {
 
   const isThinking = normalizedState === "thinking";
   const isRunning = normalizedState === "running";
-  const isNeedsUser = normalizedState === "needs_user";
+  const isNeedsUser = false;
   const isBlocked = normalizedState === "blocked";
   const isStalled = normalizedState === "stalled";
 

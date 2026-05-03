@@ -130,7 +130,7 @@ describe("resolveSessionRuntimeState", () => {
     expect(runtime.tone).toBe("inferred");
   });
 
-  it("treats managed-local needs-user as trusted attention, not execution", () => {
+  it("treats managed-local needs-user as ready, not attention or execution", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({
         capabilities: {
@@ -138,21 +138,21 @@ describe("resolveSessionRuntimeState", () => {
           host_reattach_available: true,
           reply_to_live_session_available: false,
         },
-        status: "active",
+        status: "idle",
         confidence: "live",
         runtime_source: "managed_local_transport",
         presence_state: "needs_user",
-        display_phase: "Needs you",
+        display_phase: "Ready",
       }),
     );
 
     expect(runtime.truthTier).toBe("managed-local");
-    expect(runtime.needsAttention).toBe(true);
+    expect(runtime.needsAttention).toBe(false);
     expect(runtime.isLive).toBe(false);
     expect(runtime.isExecuting).toBe(false);
     expect(runtime.heuristicActive).toBe(false);
-    expect(runtime.tone).toBe("needs-user");
-    expect(runtime.displayPhase).toBe("Needs you");
+    expect(runtime.tone).toBe("idle");
+    expect(runtime.displayPhase).toBe("Ready");
   });
 
   it("treats a fresh managed-local idle lease as ready even when ended_at is old", () => {
@@ -221,7 +221,7 @@ describe("resolveSessionRuntimeState", () => {
     expect(getRuntimeOutcomeLabel(runtime)).toBe("Active");
   });
 
-  it("collapses managed-local blocked state into Waiting for you with approval detail", () => {
+  it("collapses managed-local blocked state into permission copy", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({
         capabilities: {
@@ -239,7 +239,7 @@ describe("resolveSessionRuntimeState", () => {
     );
 
     expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
-      headline: "Waiting for you",
+      headline: "Needs permission",
       detail: "Approval needed • Edit",
     });
   });
@@ -460,10 +460,10 @@ describe("resolveSessionRuntimeState", () => {
         presence_state: "needs_user",
         runtime_display: makeRuntimeDisplay({
           state: "needs_user",
-          tone: "needs-user",
-          headline: "Waiting for you",
-          detail: "Reply needed",
-          phase_label: "Needs you",
+          tone: "idle",
+          headline: "Ready",
+          detail: "Ready for next prompt",
+          phase_label: "Ready",
           needs_attention: true,
           is_live: true,
           is_executing: true,

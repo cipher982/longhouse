@@ -106,8 +106,11 @@ export function resolveSessionStatusLabel(
     if (runtime.presenceState === "running" || runtime.presenceState === "thinking") {
       return "Working";
     }
-    if (runtime.presenceState === "needs_user" || runtime.presenceState === "blocked") {
-      return "Needs you";
+    if (runtime.presenceState === "blocked") {
+      return "Needs permission";
+    }
+    if (runtime.presenceState === "needs_user") {
+      return "Ready";
     }
     if (runtime.presenceState === "idle" || runtime.isIdle) {
       return "Ready";
@@ -246,7 +249,7 @@ function getDisplayPhase(
     return "Thinking";
   }
   if (presenceState === "needs_user") {
-    return "Needs you";
+    return "Ready";
   }
   if (presenceState === "blocked") {
     return presenceTool ? `Blocked on ${presenceTool}` : "Needs permission";
@@ -285,7 +288,7 @@ function getTone(
     return "blocked";
   }
   if (presenceState === "needs_user") {
-    return "needs-user";
+    return "idle";
   }
   if (presenceState === "running") {
     return "running";
@@ -331,7 +334,7 @@ export function resolveSessionRuntimeState(
     : (serverDisplay?.is_executing ?? (presenceState === "thinking" || presenceState === "running"));
   const needsAttention = isClosed
     ? false
-    : (serverDisplay?.needs_attention ?? (presenceState === "needs_user" || presenceState === "blocked" || presenceState === "stalled"));
+    : (serverDisplay?.needs_attention ?? (presenceState === "blocked" || presenceState === "stalled"));
 
   const isLive = isClosed ? false : (serverDisplay?.is_live ?? isExecuting);
   const isIdle = isClosed

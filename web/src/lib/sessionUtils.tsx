@@ -306,13 +306,13 @@ export function getRuntimeDisplayCopy(
   }
   if (runtime.presenceState === "needs_user") {
     return {
-      headline: "Waiting for you",
-      detail: "Reply needed",
+      headline: "Ready",
+      detail: "Ready for next prompt",
     };
   }
   if (runtime.presenceState === "blocked") {
     return {
-      headline: "Waiting for you",
+      headline: "Needs permission",
       detail: compactTool ? `Approval needed • ${compactTool}` : "Approval needed",
     };
   }

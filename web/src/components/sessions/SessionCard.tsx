@@ -119,7 +119,6 @@ export function SessionCard({
     !isClosedSession && runtime.tone === "inferred" ? "session-card--inferred" : "",
     !isClosedSession && runtime.tone === "thinking" ? "session-card--thinking" : "",
     !isClosedSession && runtime.tone === "running" ? "session-card--running" : "",
-    !isClosedSession && runtime.tone === "needs-user" ? "session-card--needs-user" : "",
     !isClosedSession && runtime.tone === "blocked" ? "session-card--blocked" : "",
   ].filter(Boolean).join(" ");
 

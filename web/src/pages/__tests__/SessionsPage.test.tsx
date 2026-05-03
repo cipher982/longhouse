@@ -1299,20 +1299,20 @@ describe("SessionsPage", () => {
     expect(card).not.toHaveClass("session-card--thinking");
   });
 
-  it("styles needs-you sessions as attention state, not executing work", async () => {
+  it("styles needs-user sessions as ready state, not attention or execution", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
           makeTimelineCard({
             ended_at: null,
             runtime_source: "managed_local_transport",
-            status: "active",
+            status: "idle",
             confidence: "live",
             presence_state: "needs_user",
             presence_updated_at: "2026-03-21T12:04:00Z",
             last_live_at: "2026-03-21T12:04:00Z",
             timeline_anchor_at: "2026-03-21T12:04:00Z",
-            display_phase: "Needs you",
+            display_phase: "Ready",
             capabilities: makeCapabilities({
               live_control_available: true,
               host_reattach_available: true,
@@ -1330,13 +1330,13 @@ describe("SessionsPage", () => {
 
     const { container } = renderSessionsPage();
 
-    expect(await screen.findByText("Needs you")).toBeInTheDocument();
+    expect(await screen.findByText("Ready")).toBeInTheDocument();
     expect(screen.getByTestId("session-card-ownership")).toHaveTextContent("Managed");
     expect(screen.queryByText(/Reply needed/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Live on laptop/)).not.toBeInTheDocument();
 
     const card = container.querySelector(".session-card");
-    expect(card).toHaveClass("session-card--needs-user");
+    expect(card).not.toHaveClass("session-card--needs-user");
     expect(card).toHaveAttribute("data-card-state", "actionable");
     expect(card).not.toHaveClass("session-card--closed");
     expect(card).not.toHaveClass("session-card--live");
@@ -1376,7 +1376,7 @@ describe("SessionsPage", () => {
 
     const { container } = renderSessionsPage();
 
-    expect(await screen.findByText("Needs you")).toBeInTheDocument();
+    expect(await screen.findByText("Needs permission")).toBeInTheDocument();
     expect(screen.getByTestId("session-card-ownership")).toHaveTextContent("Managed");
     expect(screen.queryByText(/Approval needed .* Shell/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Live on laptop/)).not.toBeInTheDocument();
@@ -1698,10 +1698,10 @@ describe("SessionsPage", () => {
             runtime_display: makeRuntimeDisplay({
               control_path: "managed",
               state: "needs_user",
-              tone: "needs-user",
-              headline: "Waiting for you",
-              phase_label: "Needs you",
-              needs_attention: true,
+              tone: "idle",
+              headline: "Ready",
+              phase_label: "Ready",
+              needs_attention: false,
               activity_recency: "stale",
               lifecycle: "closed",
               terminal_reason: "process_gone",
