@@ -46,6 +46,13 @@ availability as if it were the session's state.
   fallback only and keep them smaller than the server contract.
 - Do not introduce a broad schema migration unless implementation proves it is
   required for the client contract.
+- Do not change menu bar local-health copy in this slice. That surface uses a
+  separate local-health model and should be handled as a follow-up.
+- Do not change docs/marketing copy such as the Integrations page unless it is
+  shown in the session timeline/detail product flow.
+- Do not continue the `ended_at` cleanup here. That remains owned by
+  `session-liveness-honesty.md`; this slice reads `runtime_display.lifecycle`
+  and existing terminal fields.
 
 ## Target Contract
 
@@ -72,6 +79,10 @@ Durable management and current action availability must not be collapsed. A
 session can be `Managed` while current control is offline. A session can be
 `Unmanaged` while it has recent transcript activity. A session can be `Closed`
 while it was historically managed.
+
+The runtime axes in this contract already exist in current backend payloads.
+This slice is primarily about tightening labels and making clients consume the
+contract consistently, not inventing a new display state machine.
 
 ## User-Facing Vocabulary
 
@@ -124,6 +135,14 @@ Action copy belongs near controls, not in the timeline ownership/state row:
 as an internal concept in code only if the surrounding API still uses that
 field name.
 
+Backend capability display labels should use:
+
+- `Live on <host>` when a current live host label is known.
+- `Send` when live send is available but no host label is known.
+- `Reattach` when reattach is available.
+- `Control offline` for managed sessions without current action availability.
+- `Read only` for unmanaged sessions.
+
 ## Implementation Plan
 
 ### Phase 0 - Spec and Review
@@ -134,15 +153,17 @@ Acceptance criteria:
 - Hatch Opus reviews the plan before implementation starts.
 - Spec is committed before code changes.
 
-### Phase 1 - Backend Contract Tightening
+### Phase 1 - Backend Label Cleanup
 
-Intent: make backend-provided display and capability copy match the three-axis
-model before clients consume it more aggressively.
+Intent: retire `Live control` as a user-facing backend label before clients
+consume backend labels more aggressively.
 
 Expected changes:
 
-- Update capability display fallback so it never emits `Live control` as a
-  user-facing label.
+- Update `server/zerg/services/session_capabilities.py` so
+  `SessionCapabilitiesResponse.display_label` never emits `Live control`.
+- Keep `Live on <host>` when a current host label is known; use `Send` for the
+  host-less live-send case.
 - Keep `Managed` / `Unmanaged` ownership separate from current action
   availability.
 - Add or update backend tests for:
@@ -151,10 +172,13 @@ Expected changes:
   - unmanaged + recent activity
   - unmanaged + no current action
   - closed managed session
+- Update exact label assertions in:
+  - `server/tests_lite/test_session_capabilities.py`
+  - `server/tests_lite/test_session_runtime_display.py`
+  - runtime/timeline tests that assert capability `display_label`
 
 Acceptance criteria:
 
-- Backend payloads expose stable ownership through `runtime_display.control_path`.
 - Capability display labels are action/read-only labels, not state labels.
 - Backend tests cover the screenshots' failure cases.
 
@@ -174,6 +198,15 @@ Expected changes:
   - state from `runtime_display`
   - action enablement from `capabilities`
 - Composer disabled/help copy stops saying `Live control is unavailable`.
+- Update exact `Live control` web emission sites:
+  - `web/src/lib/sessionWorkspace/interaction.ts`
+  - `web/src/lib/sessionExecutionHome.ts`
+- Verify `web/src/components/session-workspace/SessionRuntimeStrip.tsx` does
+  not reintroduce the old label through backend or local fallback data.
+- Update tests in:
+  - `web/src/lib/__tests__/sessionWorkspace.test.ts`
+  - `web/src/components/__tests__/SessionChat.test.tsx`
+  - `web/src/pages/__tests__/SessionDetailPage.test.tsx`
 
 Acceptance criteria:
 
@@ -193,6 +226,10 @@ Expected changes:
 
 - Swift models expose small derived helpers for ownership, state, and action
   labels from backend payloads.
+- Update `ios/Sources/Shared/SessionModels.swift` computed properties:
+  - `runtimeCapabilityLabel` drops the `Live control` fallback.
+  - `runtimeCapabilityTone` keeps current action-tone semantics.
+  - `runtimeHeadline` continues to prefer backend display state.
 - Timeline card uses `Managed` / `Unmanaged` for ownership and state badges for
   activity/lifecycle only.
 - Session detail/composer removes `Live control` and `Reattach` as ownership
