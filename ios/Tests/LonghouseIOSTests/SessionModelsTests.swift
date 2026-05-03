@@ -144,9 +144,9 @@ struct SessionModelsTests {
           "presence_state": "needs_user",
           "presence_tool": null,
           "user_state": "active",
-          "status": "working",
+          "status": "idle",
           "last_activity_at": "2026-04-25T20:00:00Z",
-          "display_phase": "Waiting on you",
+          "display_phase": "Ready",
           "active_tool": null,
           "home_label": "On this Mac",
           "origin_label": "On this Mac",
@@ -168,7 +168,7 @@ struct SessionModelsTests {
         #expect(detail.canSendLive)
         #expect(detail.runtimeCapabilityLabel == "Live on this Mac")
         #expect(detail.runtimeCapabilityTone == "success")
-        #expect(detail.runtimePhaseLabel == "Waiting on you")
+        #expect(detail.runtimePhaseLabel == "Ready")
         #expect(detail.controlHealthMessage == nil)
     }
 
@@ -353,14 +353,14 @@ struct SessionModelsTests {
             project: "zerg",
             lastActivityAt: "2026-04-25T20:00:00Z",
             status: "active",
-            displayPhase: "Needs you",
+            displayPhase: "Ready",
             runtimeDisplay: SessionRuntimeDisplay(
                 truthTier: "managed-local",
                 state: "needs_user",
-                tone: "needs-user",
-                headline: "Waiting for you",
-                detail: "Reply needed",
-                phaseLabel: "Needs you",
+                tone: "idle",
+                headline: "Ready",
+                detail: "Ready for next prompt",
+                phaseLabel: "Ready",
                 compactToolLabel: nil,
                 isLive: false,
                 isExecuting: false,
@@ -395,7 +395,7 @@ struct SessionModelsTests {
             project: "zerg",
             lastActivityAt: "2026-04-25T20:00:00Z",
             status: "active",
-            displayPhase: "Needs you",
+            displayPhase: "Ready",
             runtimeDisplay: SessionRuntimeDisplay(
                 truthTier: "managed-local",
                 state: nil,
@@ -455,11 +455,11 @@ struct SessionModelsTests {
             project: "bar",
             lastActivityAt: "2026-04-28T13:21:51Z",
             status: "active",
-            displayPhase: "Needs you",
+            displayPhase: "Ready",
             runtimeDisplay: SessionRuntimeDisplay(
                 truthTier: "stale",
                 state: "needs_user",
-                tone: "needs-user",
+                tone: "idle",
                 headline: "Inactive",
                 detail: nil,
                 phaseLabel: "Recent",
@@ -492,14 +492,14 @@ struct SessionModelsTests {
             project: "zerg",
             lastActivityAt: "2026-04-25T20:00:00Z",
             status: "active",
-            displayPhase: "Needs you",
+            displayPhase: "Ready",
             runtimeDisplay: SessionRuntimeDisplay(
                 truthTier: "managed-local",
                 state: "needs_user",
-                tone: "needs-user",
-                headline: "Waiting for you",
-                detail: "Reply needed",
-                phaseLabel: "Needs you",
+                tone: "idle",
+                headline: "Ready",
+                detail: "Ready for next prompt",
+                phaseLabel: "Ready",
                 compactToolLabel: nil,
                 isLive: false,
                 isExecuting: false,
@@ -523,14 +523,14 @@ struct SessionModelsTests {
             project: "zerg",
             lastActivityAt: "2026-04-25T20:01:00Z",
             status: "active",
-            displayPhase: "Needs you"
+            displayPhase: "Ready"
         )
 
         let ordered = SessionSummary.attentionWidgetOrder([closed, openAttention], limit: 2)
 
         #expect(!closed.needsAttention)
-        #expect(openAttention.needsAttention)
-        #expect(ordered.map(\.id) == ["session-open-attention", "session-closed-process-gone"])
+        #expect(!openAttention.needsAttention)
+        #expect(ordered.map(\.id) == ["session-closed-process-gone", "session-open-attention"])
     }
 
     @Test

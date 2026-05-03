@@ -30,7 +30,7 @@ extension SessionDetail {
             displayPhase: phase,
             activeTool: tool,
             updatedAt: Int(updatedAt.timeIntervalSince1970),
-            isAttention: state == "needs_user" || state == "blocked"
+            isAttention: state == "blocked"
         )
     }
 
@@ -50,7 +50,7 @@ extension SessionDetail {
         case "thinking":
             return "Thinking"
         case "needs_user":
-            return "Waiting on you"
+            return "Ready"
         case "blocked":
             return tool.map { "Blocked on \($0)" } ?? "Needs permission"
         case "idle":

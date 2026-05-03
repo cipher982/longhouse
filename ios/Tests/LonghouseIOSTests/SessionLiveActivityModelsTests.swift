@@ -29,10 +29,10 @@ struct SessionLiveActivityModelsTests {
         let payload = """
         {
           "presenceState": "needs_user",
-          "displayPhase": "Waiting on you",
+          "displayPhase": "Ready",
           "activeTool": null,
           "updatedAt": 1777140001,
-          "isAttention": true
+          "isAttention": false
         }
         """
         let data = try #require(payload.data(using: .utf8))
@@ -40,7 +40,7 @@ struct SessionLiveActivityModelsTests {
 
         #expect(state.presenceState == "needs_user")
         #expect(state.activeTool == nil)
-        #expect(state.isAttention == true)
+        #expect(state.isAttention == false)
     }
 
     @Test
