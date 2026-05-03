@@ -3,6 +3,7 @@ import os
 from datetime import datetime
 from datetime import timezone
 from enum import Enum
+from types import SimpleNamespace
 from typing import Literal
 from typing import Optional
 from uuid import UUID
@@ -30,8 +31,11 @@ from zerg.dependencies.auth import require_admin
 from zerg.dependencies.auth import require_super_admin
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
+from zerg.models.models import Runner
+from zerg.models.user import User
 from zerg.schemas.usage import AdminUserDetailResponse
 from zerg.schemas.usage import AdminUsersResponse
+from zerg.services.runner_connection_manager import get_runner_connection_manager
 
 # Usage service
 from zerg.services.usage_service import get_all_users_usage
@@ -597,6 +601,28 @@ async def configure_test_session_runtime(
         session.source_runner_id = request.source_runner_id if request.source_runner_id is not None else 1
         session.source_runner_name = request.source_runner_name or session.source_runner_name or "E2E Runner"
         session.managed_session_name = request.managed_session_name or session.managed_session_name or f"e2e-{session_id[:8]}"
+        try:
+            owner_id = int(getattr(current_user, "id", 1) or 1)
+        except (TypeError, ValueError):
+            owner_id = 1
+        if db.query(User).filter(User.id == owner_id).first() is None:
+            db.add(User(id=owner_id, email=f"test-admin-{owner_id}@example.com"))
+        runner_id = int(session.source_runner_id)
+        runner = db.query(Runner).filter(Runner.id == runner_id).first()
+        if runner is None:
+            runner = Runner(
+                id=runner_id,
+                owner_id=owner_id,
+                name=session.source_runner_name,
+                status="online",
+                auth_secret_hash="test",
+            )
+            db.add(runner)
+        else:
+            runner.owner_id = owner_id
+            runner.name = session.source_runner_name
+            runner.status = "online"
+        get_runner_connection_manager().register(owner_id, runner_id, SimpleNamespace())
         if request.clear_ended_at:
             session.ended_at = None
     else:
