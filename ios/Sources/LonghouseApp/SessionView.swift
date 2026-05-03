@@ -1010,6 +1010,7 @@ final class SessionViewModel: ObservableObject {
     private var stream: SessionWorkspaceStream?
     private var streamTask: Task<Void, Never>?
     private var streamConnected: Bool = false
+    private var activeSessionId: String?
 
     func isExpanded(_ id: String) -> Bool { expandedIds.contains(id) }
 
@@ -1019,6 +1020,14 @@ final class SessionViewModel: ObservableObject {
     }
 
     func start(sessionId: String, appState: AppState) async {
+        if activeSessionId != sessionId {
+            activeSessionId = sessionId
+            isInitialLoading = true
+            detail = nil
+            items = []
+            errorMessage = nil
+            expandedIds.removeAll()
+        }
         if isInitialLoading {
             await reload(sessionId: sessionId, appState: appState)
         }
@@ -1034,6 +1043,7 @@ final class SessionViewModel: ObservableObject {
         Task { [stream] in await stream?.stop() }
         stream = nil
         streamConnected = false
+        activeSessionId = nil
     }
 
     func reload(sessionId: String, appState: AppState) async {
@@ -1043,14 +1053,9 @@ final class SessionViewModel: ObservableObject {
             return
         }
         do {
-            async let detailTask = api.sessionDetail(id: sessionId)
-            async let eventsTask = api.sessionEvents(id: sessionId)
-            let (detail, events) = try await (detailTask, eventsTask)
-            self.detail = detail
-            self.items = TimelineBuilder.build(events: events)
-            self.errorMessage = nil
-            self.loopModeErrorMessage = nil
-            await reportRenderBeacon(api: api, sessionId: sessionId, events: events)
+            try await refreshWorkspace(api: api, sessionId: sessionId)
+            errorMessage = nil
+            loopModeErrorMessage = nil
         } catch LonghouseAPIError.notAuthenticated {
             errorMessage = "Session expired."
         } catch {
@@ -1167,28 +1172,33 @@ final class SessionViewModel: ObservableObject {
         case .changed:
             // Push wake → refetch workspace and emit render beacon.
             guard let api = LonghouseAPI(host: appState.serverURL) else { return }
-            async let detailTask = api.sessionDetail(id: sessionId)
-            async let eventsTask = api.sessionEvents(id: sessionId)
-            if let detail = try? await detailTask {
-                self.detail = detail
-            }
-            if let events = try? await eventsTask {
-                self.items = TimelineBuilder.build(events: events)
-                await reportRenderBeacon(api: api, sessionId: sessionId, events: events)
-            }
+            try? await refreshWorkspace(api: api, sessionId: sessionId, allowPartial: true)
         }
     }
 
     private func pollTick(sessionId: String, appState: AppState) async {
         guard let api = LonghouseAPI(host: appState.serverURL) else { return }
-        async let detailTask = api.sessionDetail(id: sessionId)
-        async let eventsTask = api.sessionEvents(id: sessionId)
-        if let detail = try? await detailTask {
+        try? await refreshWorkspace(api: api, sessionId: sessionId, allowPartial: true)
+    }
+
+    private func refreshWorkspace(api: LonghouseAPI, sessionId: String, allowPartial: Bool = false) async throws {
+        guard activeSessionId == sessionId else { return }
+
+        do {
+            let detail = try await api.sessionDetail(id: sessionId)
+            guard activeSessionId == sessionId else { return }
             self.detail = detail
+        } catch {
+            if !allowPartial { throw error }
         }
-        if let events = try? await eventsTask {
+
+        do {
+            let events = try await api.sessionEvents(id: sessionId)
+            guard activeSessionId == sessionId else { return }
             self.items = TimelineBuilder.build(events: events)
             await reportRenderBeacon(api: api, sessionId: sessionId, events: events)
+        } catch {
+            if !allowPartial { throw error }
         }
     }
 
