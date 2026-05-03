@@ -69,6 +69,7 @@ export interface AgentSession {
 
 export interface SessionRuntimeDisplay {
   truth_tier: "none" | "stale" | "inferred" | "fresh" | "managed-local" | (string & {});
+  signal_tier?: "managed_phase" | "unmanaged_binding" | "transcript_progress" | "none" | (string & {});
   state: PresenceState | null;
   tone:
     | "inactive"

@@ -24,6 +24,7 @@ LEGACY_PROGRESS_STATUSES = {"working", "active"}
 @dataclass(frozen=True)
 class SessionRuntimeDisplay:
     truth_tier: str
+    signal_tier: str
     state: str | None
     tone: str
     headline: str
@@ -272,6 +273,12 @@ def build_session_runtime_display(
     tool_name = runtime_view.active_tool or runtime_view.presence_tool
     compact_tool = compact_runtime_tool_label(tool_name)
     control_path = _derive_control_path(capabilities)
+    signal_tier = _derive_signal_tier(
+        runtime_view=runtime_view,
+        control_path=control_path,
+        binding_host_state=binding_host_state,
+        binding_terminal_reason=binding_terminal_reason,
+    )
     # Phase 5c: host_state comes from heartbeat+binding freshness when a
     # binding overlay is supplied. Otherwise we honestly say "unknown".
     host_state = binding_host_state if binding_host_state else "unknown"
@@ -404,6 +411,7 @@ def build_session_runtime_display(
     )
     return SessionRuntimeDisplay(
         truth_tier=truth_tier,
+        signal_tier=signal_tier,
         state=presence_state,
         tone=tone,
         headline=headline,
@@ -445,6 +453,30 @@ def _derive_control_path(capabilities: SessionCapabilityFlags) -> str:
     if capabilities.managed_transport is not None:
         return "managed"
     return "unmanaged"
+
+
+def _derive_signal_tier(
+    *,
+    runtime_view: SessionRuntimeView,
+    control_path: str,
+    binding_host_state: str | None,
+    binding_terminal_reason: str | None,
+) -> str:
+    if control_path == "unmanaged" and binding_terminal_reason in {"process_gone", "host_expired"}:
+        return "unmanaged_binding"
+    if control_path == "unmanaged" and binding_host_state == "online":
+        return "unmanaged_binding"
+    tier = (runtime_view.signal_tier or "").strip()
+    if tier in {"managed_phase", "transcript_progress", "none"}:
+        if tier != "none":
+            return tier
+        runtime_source = _normalize_source(runtime_view.runtime_source)
+        if runtime_view.confidence == "inferred" or runtime_source == "progress":
+            return "transcript_progress"
+        if runtime_source not in {None, "fallback"}:
+            return "managed_phase"
+        return "none"
+    return "none"
 
 
 def _derive_activity_recency(

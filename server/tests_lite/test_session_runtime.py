@@ -1601,6 +1601,7 @@ def test_runtime_view_hides_semantic_phase_for_inferred_progress(tmp_path):
         assert state.phase == "idle"
         assert state.phase_source == "progress"
         assert view.runtime_phase is None
+        assert view.signal_tier == "transcript_progress"
         assert view.status == "active"
         assert view.display_phase == "Recent progress"
         assert view.confidence == "inferred"
@@ -1640,6 +1641,7 @@ def test_runtime_view_does_not_keep_stale_progress_running(tmp_path):
         assert state.phase == "idle"
         assert state.phase_source == "progress"
         assert view.presence_state is None
+        assert view.signal_tier == "transcript_progress"
         assert view.status == "idle"
         assert view.display_phase == "Inactive"
         assert view.confidence == "stale"
@@ -1693,6 +1695,7 @@ def test_progress_signal_preserves_fresh_managed_phase_truth(tmp_path):
         assert state.phase == "running"
         assert state.phase_source == "semantic"
         assert view.presence_state == "running"
+        assert view.signal_tier == "managed_phase"
         assert view.status == "working"
         assert view.display_phase == "Running bash"
         assert view.confidence == "live"
@@ -1754,6 +1757,7 @@ def test_progress_signal_after_stale_managed_phase_does_not_revive_phase_truth(t
         assert state.phase_source == "semantic"
         assert view.runtime_phase is None
         assert view.presence_state is None
+        assert view.signal_tier == "transcript_progress"
         assert view.status == "active"
         assert view.display_phase == "Recent progress"
         assert view.confidence == "inferred"
@@ -1808,6 +1812,7 @@ def test_needs_user_freshness_is_not_extended_by_progress(tmp_path):
         assert state.freshness_expires_at == (now - timedelta(minutes=10)).replace(tzinfo=None)
         assert view.runtime_phase is None
         assert view.presence_state is None
+        assert view.signal_tier == "transcript_progress"
         assert view.status == "active"
         assert view.display_phase == "Recent progress"
         assert view.confidence == "inferred"

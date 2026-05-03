@@ -310,6 +310,7 @@ struct SessionInputResponse: Codable, Sendable {
 
 struct SessionRuntimeDisplay: Codable, Hashable, Sendable {
     let truthTier: String
+    var signalTier: String? = nil
     let state: String?
     let tone: String
     let headline: String

@@ -95,6 +95,7 @@ def build_session_runtime_display_response(
     )
     return SessionRuntimeDisplayResponse(
         truth_tier=display.truth_tier,
+        signal_tier=display.signal_tier,
         state=display.state,
         tone=display.tone,
         headline=display.headline,
@@ -182,6 +183,10 @@ class SessionCapabilitiesResponse(BaseModel):
 
 class SessionRuntimeDisplayResponse(BaseModel):
     truth_tier: str = Field(..., description="Runtime truth tier: none|stale|inferred|fresh|managed-local")
+    signal_tier: str = Field(
+        "none",
+        description="Strongest source signal tier: managed_phase|unmanaged_binding|transcript_progress|none",
+    )
     state: Optional[str] = Field(None, description="Canonical presence state when known")
     tone: str = Field(..., description="Stable visual tone for clients")
     headline: str = Field(..., description="Primary user-facing runtime label")

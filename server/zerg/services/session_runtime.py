@@ -152,6 +152,7 @@ class RuntimeEventBatchResult(BaseModel):
 
 @dataclass(frozen=True)
 class SessionRuntimeView:
+    signal_tier: str
     runtime_phase: str | None
     phase_started_at: datetime | None
     last_progress_at: datetime | None
@@ -235,6 +236,16 @@ def _status_for_state(
     return "idle"
 
 
+def _signal_tier_for_state(*, phase_source: str, confidence: str | None) -> str:
+    if confidence == "inferred":
+        return "transcript_progress"
+    if phase_source == "progress":
+        return "transcript_progress"
+    if phase_source not in {"fallback", ""}:
+        return "managed_phase"
+    return "none"
+
+
 def build_runtime_view(
     *,
     state: SessionRuntimeState,
@@ -277,6 +288,7 @@ def build_runtime_view(
         display_phase = "Inactive"
 
     return SessionRuntimeView(
+        signal_tier=_signal_tier_for_state(phase_source=phase_source, confidence=confidence),
         runtime_phase=exposed_runtime_phase or None,
         phase_started_at=normalize_utc(state.phase_started_at),
         last_progress_at=normalize_utc(state.last_progress_at),
@@ -331,6 +343,7 @@ def build_fallback_runtime_view(
         terminal_state = None
 
     return SessionRuntimeView(
+        signal_tier="transcript_progress" if confidence == "inferred" else "none",
         runtime_phase=runtime_phase,
         phase_started_at=progress_at,
         last_progress_at=progress_at,
