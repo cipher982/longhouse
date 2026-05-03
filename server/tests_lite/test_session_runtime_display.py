@@ -28,6 +28,7 @@ def _capabilities(*, managed: bool = False) -> SessionCapabilityFlags:
 def _runtime_view(**overrides) -> SessionRuntimeView:
     now = datetime(2026, 4, 26, 12, 0, tzinfo=timezone.utc)
     values = {
+        "signal_tier": "none",
         "runtime_phase": "idle",
         "phase_started_at": now,
         "last_progress_at": now,
@@ -56,6 +57,7 @@ def test_fallback_idle_has_no_renderable_runtime_signal():
     )
 
     assert display.truth_tier == "stale"
+    assert display.signal_tier == "none"
     assert display.headline == "Inactive"
     assert display.has_signal is False
 
@@ -73,6 +75,7 @@ def test_inferred_progress_has_renderable_runtime_signal():
     )
 
     assert display.truth_tier == "inferred"
+    assert display.signal_tier == "transcript_progress"
     assert display.headline == "Active"
     assert display.heuristic_active is True
     assert display.has_signal is True
@@ -93,6 +96,7 @@ def test_stale_progress_source_is_inactive():
     )
 
     assert display.truth_tier == "stale"
+    assert display.signal_tier == "transcript_progress"
     assert display.headline == "Inactive"
     assert display.phase_label == "Recent"
     assert display.heuristic_active is False
@@ -117,6 +121,7 @@ def test_managed_running_has_renderable_runtime_signal():
     )
 
     assert display.truth_tier == "managed-local"
+    assert display.signal_tier == "managed_phase"
     assert display.headline == "Working"
     assert display.detail == "Running Shell"
     assert display.has_signal is True
@@ -198,8 +203,28 @@ def test_three_axis_fields_managed_live_running():
     )
 
     assert display.control_path == "managed"
+    assert display.signal_tier == "managed_phase"
     assert display.activity_recency == "live"
     assert display.lifecycle == "open"
+
+
+def test_unmanaged_online_binding_promotes_signal_tier():
+    display = build_session_runtime_display(
+        runtime_view=_runtime_view(
+            signal_tier="none",
+            runtime_source="fallback",
+            status="idle",
+            confidence=None,
+            display_phase="Idle",
+        ),
+        capabilities=_capabilities(managed=False),
+        ended_at=None,
+        binding_host_state="online",
+    )
+
+    assert display.control_path == "unmanaged"
+    assert display.signal_tier == "unmanaged_binding"
+    assert display.host_state == "online"
 
 
 def test_managed_stale_thinking_without_active_tool_is_stalled():
