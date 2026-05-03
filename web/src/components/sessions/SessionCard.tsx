@@ -66,7 +66,6 @@ export function SessionCard({
   const runtimeMetaLabel = getRuntimeMetaLabel(runtime);
   const fallbackOwnershipLabel = interaction.isManagedLocalSession ? "Managed" : "Unmanaged";
   const ownershipLabel = resolveSessionOwnershipLabel(runtime, fallbackOwnershipLabel);
-  const ownershipTone = "neutral";
   const fallbackControlPath = ownershipLabel === "Managed" ? "managed" : "unmanaged";
   const runtimePhaseLabel = resolveSessionStatusLabel(runtime, fallbackControlPath);
 
@@ -206,7 +205,7 @@ export function SessionCard({
 
           <div className="session-card-status">
             <span
-              className={`session-card-ownership-pill session-card-ownership-pill--${ownershipTone}`}
+              className="session-card-ownership-pill session-card-ownership-pill--neutral"
               data-testid="session-card-ownership"
               title={
                 ownershipLabel === "Managed"

@@ -80,7 +80,6 @@ export function getSessionInteractionCapabilities({
     : `Longhouse imported this ${providerLabel} session. ${genericLaunchHint}`;
 
   const managementLabel = isManagedLocalSession ? "Managed" : "Unmanaged";
-  const managementVariant = "neutral";
   const managementDescription = isManagedLocalSession
     ? liveControlAvailable
       ? "Longhouse owns the control path for this session."
@@ -170,7 +169,6 @@ export function getSessionInteractionCapabilities({
     hostReattachAvailable,
     canChatFromBrowser: liveControlAvailable,
     managementLabel,
-    managementVariant,
     managementDescription,
     managedLaunchSuggestion,
     capabilityLabel,
