@@ -66,7 +66,7 @@ export function SessionCard({
   const runtimeMetaLabel = getRuntimeMetaLabel(runtime);
   const fallbackOwnershipLabel = interaction.isManagedLocalSession ? "Managed" : "Unmanaged";
   const ownershipLabel = resolveSessionOwnershipLabel(runtime, fallbackOwnershipLabel);
-  const ownershipTone = ownershipLabel === "Managed" ? "success" : "neutral";
+  const ownershipTone = "neutral";
   const fallbackControlPath = ownershipLabel === "Managed" ? "managed" : "unmanaged";
   const runtimePhaseLabel = resolveSessionStatusLabel(runtime, fallbackControlPath);
 
@@ -210,8 +210,8 @@ export function SessionCard({
               data-testid="session-card-ownership"
               title={
                 ownershipLabel === "Managed"
-                  ? "Longhouse owns the live control path for this session."
-                  : "Longhouse imported or discovered this session without a live control path."
+                  ? "Longhouse owns the control path for this session."
+                  : "Longhouse imported or discovered this session without a control path."
               }
             >
               {ownershipLabel}

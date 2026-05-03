@@ -415,11 +415,11 @@ describe("SessionDetailPage", () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
-      screen.getByText("Saved as a preference. Active controls return when live control connects."),
+      screen.getByText("Saved as a preference. Active controls return when the host reconnects."),
     ).toBeInTheDocument();
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
       "data-disabled-reason",
-      "Longhouse can see this live Codex session, but cannot send prompts until the engine reconnects.",
+      "Longhouse can see this Codex session, but cannot send prompts until the engine reconnects.",
     );
   });
 
@@ -773,7 +773,7 @@ describe("SessionDetailPage", () => {
     expect(screen.getByTestId("session-chat")).toBeInTheDocument();
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
       "data-disabled-reason",
-      "Longhouse can search this unmanaged Gemini session here, but it cannot steer the live session. Launch new Gemini sessions through Longhouse when you want live control.",
+      "Longhouse can search this unmanaged Gemini session here, but it cannot steer it. Launch new Gemini sessions through Longhouse when you want to steer them from Longhouse.",
     );
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
       "data-launch-command",
@@ -786,7 +786,7 @@ describe("SessionDetailPage", () => {
       screen.getByTestId("session-continuation-unavailable"),
     ).toHaveTextContent("Gemini session — unmanaged");
     expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
-      "Search only",
+      "Read only",
     );
     expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
       "Active",
@@ -869,7 +869,7 @@ describe("SessionDetailPage", () => {
     ).toHaveTextContent("longhouse codex");
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
       "data-disabled-reason",
-      "Live control is unavailable for this unmanaged Codex session.",
+      "This unmanaged Codex session is read-only in Longhouse.",
     );
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
       "data-launch-command",

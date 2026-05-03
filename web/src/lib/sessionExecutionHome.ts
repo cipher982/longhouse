@@ -10,7 +10,7 @@ export function normalizeExecutionVenueLabel(label: string | null | undefined): 
 export function getExecutionHomeLabel(home: SessionExecutionHome | null | undefined): string | null {
   switch (home) {
     case "managed_local":
-      return "Live control";
+      return "Managed";
     case "managed_hosted":
     case "cloud_takeover":
     case "legacy":

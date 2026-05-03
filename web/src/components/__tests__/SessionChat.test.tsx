@@ -235,7 +235,7 @@ describe("SessionChat", () => {
 
   it("shows a managed-launch hint card for unmanaged sessions", () => {
     renderSessionChat({
-      composerDisabledReason: "Live control is unavailable for this unmanaged Codex session.",
+      composerDisabledReason: "This unmanaged Codex session is read-only in Longhouse.",
       managedLaunchSuggestion: {
         title: "Start the next Codex session through Longhouse",
         body: "This session stays searchable here. Use this command when you want the next Codex session to stay steerable from Longhouse.",

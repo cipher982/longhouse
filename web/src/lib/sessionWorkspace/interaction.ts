@@ -22,7 +22,7 @@ function getManagedLaunchSuggestion(provider: string, providerLabel: string): Ma
 }
 
 function getManagedLaunchHint(providerLabel: string): string {
-  return `Launch new ${providerLabel} sessions through Longhouse when you want live control.`;
+  return `Launch new ${providerLabel} sessions through Longhouse when you want to steer them from Longhouse.`;
 }
 
 export function getSessionInteractionCapabilities({
@@ -42,7 +42,13 @@ export function getSessionInteractionCapabilities({
     live_control_available: liveControlAvailable,
     host_reattach_available: hostReattachAvailable,
   } = session.capabilities;
-  const isManagedLocalSession = liveControlAvailable || hostReattachAvailable;
+  const controlPath = session.runtime_display?.control_path;
+  const isManagedLocalSession =
+    controlPath === "managed"
+      ? true
+      : controlPath === "unmanaged"
+        ? false
+        : liveControlAvailable || hostReattachAvailable;
   const isManagedLocalCodex = session.provider === "codex" && isManagedLocalSession;
   const sourceOriginLabel = getSessionOriginLabel(session);
   const headOriginLabel = headThreadSession ? getSessionOriginLabel(headThreadSession) : null;
@@ -53,24 +59,31 @@ export function getSessionInteractionCapabilities({
     : hostReattachAvailable
       ? "managed_local_unavailable"
       : "unsupported";
+  const isUnsupportedManagedSession = mode === "unsupported" && isManagedLocalSession;
 
   const managedLaunchSuggestion =
-    mode === "unsupported" ? getManagedLaunchSuggestion(session.provider, providerLabel) : null;
+    mode === "unsupported" && !isManagedLocalSession
+      ? getManagedLaunchSuggestion(session.provider, providerLabel)
+      : null;
   const unsupportedCapabilityDescription = managedLaunchSuggestion
-    ? `Longhouse can search this unmanaged ${providerLabel} session here, but it cannot steer the live session.`
-    : `Longhouse can search this unmanaged ${providerLabel} session here, but it cannot steer the live session. ${genericLaunchHint}`;
+    ? `Longhouse can search this unmanaged ${providerLabel} session here, but it cannot steer it.`
+    : isUnsupportedManagedSession
+      ? `This managed ${providerLabel} session is read-only because no current control action is available.`
+      : `Longhouse can search this unmanaged ${providerLabel} session here, but it cannot steer it. ${genericLaunchHint}`;
   const unsupportedDescription = managedLaunchSuggestion
-    ? `This unmanaged ${providerLabel} session is searchable here, but Longhouse cannot inject prompts into it.`
-    : `This unmanaged ${providerLabel} session is searchable here, but Longhouse cannot inject prompts into it. ${genericLaunchHint}`;
+    ? `This unmanaged ${providerLabel} session is searchable here, but Longhouse cannot send prompts into it.`
+    : isUnsupportedManagedSession
+      ? `This managed ${providerLabel} session is read-only because no current control action is available.`
+      : `This unmanaged ${providerLabel} session is searchable here, but Longhouse cannot send prompts into it. ${genericLaunchHint}`;
   const unsupportedManagementDescription = managedLaunchSuggestion
     ? `Longhouse imported this ${providerLabel} session.`
     : `Longhouse imported this ${providerLabel} session. ${genericLaunchHint}`;
 
   const managementLabel = isManagedLocalSession ? "Managed" : "Unmanaged";
-  const managementVariant = isManagedLocalSession ? "success" : "neutral";
+  const managementVariant = "neutral";
   const managementDescription = isManagedLocalSession
     ? liveControlAvailable
-      ? "Longhouse owns the live control path for this session."
+      ? "Longhouse owns the control path for this session."
       : "Longhouse owns this session, but control is currently offline."
     : unsupportedManagementDescription;
 
@@ -80,11 +93,12 @@ export function getSessionInteractionCapabilities({
       : "Reply";
 
   const capabilityLabel =
-    mode === "managed_local"
-      ? "Live control"
+    session.capabilities.display_label?.trim() ||
+    (mode === "managed_local"
+      ? "Send"
       : mode === "managed_local_unavailable"
         ? "Control offline"
-        : "Search only";
+        : "Read only");
 
   const capabilityVariant =
     mode === "managed_local"
@@ -97,12 +111,12 @@ export function getSessionInteractionCapabilities({
     mode === "managed_local"
       ? `Message this live ${providerLabel} session from Longhouse.`
       : mode === "managed_local_unavailable"
-        ? `Longhouse can see this live ${providerLabel} session, but cannot send prompts until the engine reconnects.`
+        ? `Longhouse can see this ${providerLabel} session, but cannot send prompts until the engine reconnects.`
         : unsupportedCapabilityDescription;
 
   const title =
     mode === "managed_local"
-      ? "Live control"
+      ? "Send to session"
       : mode === "managed_local_unavailable"
         ? "Control is offline"
         : "Search and inspect this session";
@@ -111,7 +125,7 @@ export function getSessionInteractionCapabilities({
     mode === "managed_local"
       ? `Longhouse can send your next prompt into this live ${providerLabel} session on ${sourceOriginLabel}, and the results sync back into the timeline here.`
       : mode === "managed_local_unavailable"
-        ? `Longhouse can see this live ${providerLabel} session, but cannot send prompts until the engine reconnects.`
+        ? `Longhouse can see this ${providerLabel} session, but cannot send prompts until the engine reconnects.`
         : unsupportedDescription;
 
   const placeholder =
@@ -125,11 +139,13 @@ export function getSessionInteractionCapabilities({
     mode === "managed_local_unavailable"
         ? {
             title: "Control is offline",
-            body: `Longhouse can see this live ${providerLabel} session, but cannot send prompts until the engine reconnects.`,
+            body: `Longhouse can see this ${providerLabel} session, but cannot send prompts until the engine reconnects.`,
           }
       : mode === "unsupported"
         ? {
-            title: `${providerLabel} session — unmanaged`,
+            title: isManagedLocalSession
+              ? `${providerLabel} session — managed`
+              : `${providerLabel} session — unmanaged`,
             body: unsupportedCapabilityDescription,
           }
         : null;
@@ -139,7 +155,7 @@ export function getSessionInteractionCapabilities({
       ? notice?.body ?? null
       : mode === "unsupported"
         ? managedLaunchSuggestion
-          ? `Live control is unavailable for this unmanaged ${providerLabel} session.`
+          ? `This unmanaged ${providerLabel} session is read-only in Longhouse.`
           : notice?.body ?? null
         : null;
 

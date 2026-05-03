@@ -79,7 +79,7 @@ export function SessionContextPane({
         ? session.loop_mode === "autopilot"
           ? "Saved as an autopilot preference. Automatic turns are not active until a runner is connected."
           : "Drafts replies for review. You choose what gets sent."
-        : "Saved as a preference. Active controls return when live control connects.";
+        : "Saved as a preference. Active controls return when the host reconnects.";
   const attachDebugCopy = `Run this on ${attachRunnerLabel} to open this existing managed ${interaction.providerLabel} session in a terminal UI. This does not restart the session.`;
   const shouldShowNotice =
     continuationNotice && !interaction.managedLaunchSuggestion;

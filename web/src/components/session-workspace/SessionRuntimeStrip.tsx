@@ -39,7 +39,7 @@ function getFallbackCapabilityLabel({
   if (hostReattachAvailable) {
     return "Control offline";
   }
-  return "Search only";
+  return "Read only";
 }
 
 export function SessionRuntimeStrip({
