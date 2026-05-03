@@ -166,7 +166,7 @@ private struct TimelineSessionCardRow: View {
 
                 HStack(spacing: 8) {
                     RuntimeBadge(session: session)
-                    MetadataBadge(text: session.managementLabel)
+                    CapabilityBadge(session: session)
                 }
             }
 
@@ -251,6 +251,20 @@ private struct RuntimeBadge: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
         .background(runtimeColor(session).opacity(0.14), in: Capsule())
+    }
+}
+
+private struct CapabilityBadge: View {
+    let session: SessionSummary
+
+    var body: some View {
+        Text(session.managementLabel)
+            .font(.caption.weight(.semibold))
+            .lineLimit(1)
+            .foregroundStyle(managementColor(session))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(managementColor(session).opacity(0.14), in: Capsule())
     }
 }
 
@@ -395,12 +409,19 @@ private func runtimeColor(_ session: SessionSummary) -> Color {
     if session.presenceState == "running" { return .green }
     if session.presenceState == "thinking" { return .orange }
     if session.isExecuting { return .orange }
+    if let recency = session.runtimeDisplay?.activityRecency, recency == "stale" || recency == "none" {
+        return .secondary
+    }
     // Phase 3 of session-liveness-honesty: trust lifecycle=="closed" when
     // present; fall back to status only for older payloads.
     let lifecycle = session.runtimeDisplay?.lifecycle
     if session.isIdle || lifecycle == "closed" { return .secondary }
     if lifecycle == nil && session.status == "completed" { return .secondary }
     return .blue
+}
+
+private func managementColor(_ session: SessionSummary) -> Color {
+    .secondary
 }
 
 private func providerColor(_ provider: String?) -> Color {

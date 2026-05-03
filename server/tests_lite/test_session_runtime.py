@@ -1608,6 +1608,45 @@ def test_runtime_view_hides_semantic_phase_for_inferred_progress(tmp_path):
     engine.dispose()
 
 
+def test_runtime_view_does_not_keep_stale_progress_running(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_stale_progress_view.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(hours=1))
+        runtime_key = runtime_key_for_session("opencode", str(session.id))
+
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="opencode",
+                    device_id="cinder",
+                    source="agents_ingest",
+                    kind="progress_signal",
+                    occurred_at=now - timedelta(hours=1),
+                    dedupe_key="progress-old",
+                    payload={"progress_kind": "transcript_append"},
+                )
+            ],
+        )
+        db.commit()
+
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        view = build_runtime_view(state=state, session=session, now=now)
+
+        assert state.phase == "running"
+        assert state.phase_source == "progress"
+        assert view.presence_state is None
+        assert view.status == "idle"
+        assert view.display_phase == "Recent"
+        assert view.confidence == "stale"
+
+    engine.dispose()
+
+
 def test_runtime_view_hides_stale_attention_phase(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "runtime_stale_attention_view.db")
     now = datetime.now(timezone.utc)
