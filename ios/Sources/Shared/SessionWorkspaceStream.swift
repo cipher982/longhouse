@@ -36,14 +36,27 @@ actor SessionWorkspaceStream {
 
     private let baseURL: URL
     private let sessionId: String
+    private let skipInitial: Bool
     private var task: Task<Void, Never>?
     private var lastEventId: Int = 0
     private var serverClockSkewMs: Int64 = 0
     private var continuation: AsyncStream<Event>.Continuation?
 
-    init(baseURL: URL, sessionId: String) {
+    init(baseURL: URL, sessionId: String, skipInitial: Bool = true) {
         self.baseURL = baseURL
         self.sessionId = sessionId
+        self.skipInitial = skipInitial
+    }
+
+    static func streamURL(baseURL: URL, sessionId: String, skipInitial: Bool = true) -> URL {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("/api/timeline/sessions/\(sessionId)/workspace/stream"),
+            resolvingAgainstBaseURL: false
+        )!
+        if skipInitial {
+            components.queryItems = [URLQueryItem(name: "skip_initial", value: "true")]
+        }
+        return components.url!
     }
 
     func clockSkewMs() -> Int64 { serverClockSkewMs }
@@ -104,7 +117,7 @@ actor SessionWorkspaceStream {
     }
 
     private func openAndDrain() async throws {
-        let url = baseURL.appendingPathComponent("/api/timeline/sessions/\(sessionId)/workspace/stream")
+        let url = Self.streamURL(baseURL: baseURL, sessionId: sessionId, skipInitial: skipInitial)
         var req = URLRequest(url: url)
         req.addValue("text/event-stream", forHTTPHeaderField: "Accept")
         req.addValue("no-cache", forHTTPHeaderField: "Cache-Control")

@@ -1011,6 +1011,16 @@ final class SessionViewModel: ObservableObject {
     private var streamTask: Task<Void, Never>?
     private var streamConnected: Bool = false
     private var activeSessionId: String?
+    private let apiFactory: (String) -> SessionWorkspaceClient?
+    private let enableRealtime: Bool
+
+    init(
+        apiFactory: @escaping (String) -> SessionWorkspaceClient? = { LonghouseAPI(host: $0) },
+        enableRealtime: Bool = true
+    ) {
+        self.apiFactory = apiFactory
+        self.enableRealtime = enableRealtime
+    }
 
     func isExpanded(_ id: String) -> Bool { expandedIds.contains(id) }
 
@@ -1031,6 +1041,7 @@ final class SessionViewModel: ObservableObject {
         if isInitialLoading {
             await reload(sessionId: sessionId, appState: appState)
         }
+        guard enableRealtime else { return }
         startStream(sessionId: sessionId, appState: appState)
         startVisiblePolling(sessionId: sessionId, appState: appState)
     }
@@ -1047,7 +1058,7 @@ final class SessionViewModel: ObservableObject {
     }
 
     func reload(sessionId: String, appState: AppState) async {
-        guard let api = LonghouseAPI(host: appState.serverURL) else {
+        guard let api = apiFactory(appState.serverURL) else {
             errorMessage = "Invalid server URL"
             isInitialLoading = false
             return
@@ -1065,7 +1076,7 @@ final class SessionViewModel: ObservableObject {
     }
 
     func send(text: String, sessionId: String, appState: AppState, intent: String = "auto") async -> Bool {
-        guard let api = LonghouseAPI(host: appState.serverURL) else { return false }
+        guard let api = apiFactory(appState.serverURL) else { return false }
         isSending = true
         draftErrorMessage = nil
         defer { isSending = false }
@@ -1076,9 +1087,7 @@ final class SessionViewModel: ObservableObject {
             queuedInputCount = response.pendingInputCount
             failedInputCount = response.visibleFailedInputCount
             turnEndedDraft = nil
-            if response.outcome == .sent, let events = try? await api.sessionEvents(id: sessionId) {
-                self.items = TimelineBuilder.build(events: events)
-            }
+            try? await refreshWorkspace(api: api, sessionId: sessionId, allowFailure: true)
             return true
         } catch let LonghouseAPIError.structured(_, code, message) where intent == "steer" && code == "turn_ended" {
             // Preserve the original text; the UI offers an explicit
@@ -1101,12 +1110,12 @@ final class SessionViewModel: ObservableObject {
     }
 
     func draftReply(sessionId: String, appState: AppState) async -> String? {
-        guard let api = LonghouseAPI(host: appState.serverURL) else { return nil }
+        guard let api = apiFactory(appState.serverURL) else { return nil }
         isDrafting = true
         draftErrorMessage = nil
         defer { isDrafting = false }
         do {
-            let response = try await api.draftReply(id: sessionId)
+            let response = try await api.draftReply(id: sessionId, maxChars: 1200)
             let draft = response.draftText.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !draft.isEmpty else {
                 draftErrorMessage = "No draft suggestion available yet."
@@ -1120,13 +1129,13 @@ final class SessionViewModel: ObservableObject {
     }
 
     func setLoopMode(sessionId: String, mode: SessionLoopMode, appState: AppState) async {
-        guard let api = LonghouseAPI(host: appState.serverURL) else { return }
+        guard let api = apiFactory(appState.serverURL) else { return }
         isUpdatingLoopMode = true
         loopModeErrorMessage = nil
         defer { isUpdatingLoopMode = false }
         do {
             _ = try await api.setSessionLoopMode(id: sessionId, loopMode: mode)
-            detail = try await api.sessionDetail(id: sessionId)
+            try await refreshWorkspace(api: api, sessionId: sessionId)
         } catch {
             loopModeErrorMessage = "Mode unavailable: \(error.localizedDescription)"
         }
@@ -1171,38 +1180,32 @@ final class SessionViewModel: ObservableObject {
             break
         case .changed:
             // Push wake → refetch workspace and emit render beacon.
-            guard let api = LonghouseAPI(host: appState.serverURL) else { return }
-            try? await refreshWorkspace(api: api, sessionId: sessionId, allowPartial: true)
+            guard let api = apiFactory(appState.serverURL) else { return }
+            try? await refreshWorkspace(api: api, sessionId: sessionId, allowFailure: true)
         }
     }
 
     private func pollTick(sessionId: String, appState: AppState) async {
-        guard let api = LonghouseAPI(host: appState.serverURL) else { return }
-        try? await refreshWorkspace(api: api, sessionId: sessionId, allowPartial: true)
+        guard let api = apiFactory(appState.serverURL) else { return }
+        try? await refreshWorkspace(api: api, sessionId: sessionId, allowFailure: true)
     }
 
-    private func refreshWorkspace(api: LonghouseAPI, sessionId: String, allowPartial: Bool = false) async throws {
+    private func refreshWorkspace(api: SessionWorkspaceClient, sessionId: String, allowFailure: Bool = false) async throws {
         guard activeSessionId == sessionId else { return }
 
         do {
-            let detail = try await api.sessionDetail(id: sessionId)
+            let workspace = try await api.sessionWorkspace(id: sessionId, limit: 200, branchMode: "head")
             guard activeSessionId == sessionId else { return }
-            self.detail = detail
-        } catch {
-            if !allowPartial { throw error }
-        }
-
-        do {
-            let events = try await api.sessionEvents(id: sessionId)
-            guard activeSessionId == sessionId else { return }
+            self.detail = workspace.session
+            let events = workspace.events
             self.items = TimelineBuilder.build(events: events)
             await reportRenderBeacon(api: api, sessionId: sessionId, events: events)
         } catch {
-            if !allowPartial { throw error }
+            if !allowFailure { throw error }
         }
     }
 
-    private func reportRenderBeacon(api: LonghouseAPI, sessionId: String, events: [SessionEvent]) async {
+    private func reportRenderBeacon(api: SessionWorkspaceClient, sessionId: String, events: [SessionEvent]) async {
         guard let latest = events.last else { return }
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

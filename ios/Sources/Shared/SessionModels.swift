@@ -617,12 +617,6 @@ enum JSONValue: Codable, Sendable, Hashable {
     }
 }
 
-struct SessionEventsResponse: Codable, Sendable {
-    let events: [SessionEvent]
-    let total: Int
-    let branchMode: String
-}
-
 struct SessionTurn: Codable, Identifiable, Sendable {
     let id: Int
     let sessionId: String

@@ -40,6 +40,14 @@ actor RenderBeaconReporter {
     }
 }
 
+protocol SessionWorkspaceClient: Sendable {
+    func sessionWorkspace(id: String, limit: Int, branchMode: String) async throws -> SessionWorkspaceResponse
+    func sendInput(id: String, text: String, intent: String) async throws -> SessionInputResponse
+    func draftReply(id: String, maxChars: Int) async throws -> DraftReplyResponse
+    func setSessionLoopMode(id: String, loopMode: SessionLoopMode) async throws -> LoopModeResponse
+    func postRenderBeacon(_ payload: RenderBeaconReporter.Payload) async
+}
+
 struct LonghouseAPI: Sendable {
     let baseURL: URL
 
@@ -129,38 +137,6 @@ struct LonghouseAPI: Sendable {
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
         return try JSONDecoder.snakeCase.decode(SessionWorkspaceResponse.self, from: data)
-    }
-
-    func sessionDetail(id: String) async throws -> SessionDetail {
-        var request = URLRequest(url: baseURL.appendingPathComponent("/api/timeline/sessions/\(id)"))
-        request.addValue("application/json", forHTTPHeaderField: "Accept")
-
-        let (data, httpResponse) = try await data(for: request)
-        guard httpResponse.statusCode == 200 else {
-            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
-        }
-        return try JSONDecoder.snakeCase.decode(SessionDetail.self, from: data)
-    }
-
-    func sessionEvents(id: String, limit: Int = 200, anchor: String = "tail") async throws -> [SessionEvent] {
-        var components = URLComponents(
-            url: baseURL.appendingPathComponent("/api/timeline/sessions/\(id)/events"),
-            resolvingAgainstBaseURL: false
-        )!
-        components.queryItems = [
-            URLQueryItem(name: "limit", value: String(limit)),
-            URLQueryItem(name: "anchor", value: anchor),
-            URLQueryItem(name: "branch_mode", value: "head"),
-        ]
-        var request = URLRequest(url: components.url!)
-        request.addValue("application/json", forHTTPHeaderField: "Accept")
-
-        let (data, httpResponse) = try await data(for: request)
-        guard httpResponse.statusCode == 200 else {
-            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
-        }
-        let decoded = try JSONDecoder.snakeCase.decode(SessionEventsResponse.self, from: data)
-        return decoded.events
     }
 
     func sessionTurns(id: String) async throws -> [SessionTurn] {
@@ -419,6 +395,8 @@ struct LonghouseAPI: Sendable {
         }
     }
 }
+
+extension LonghouseAPI: SessionWorkspaceClient {}
 
 enum LonghouseAPIError: Error {
     case requestFailed
