@@ -25,6 +25,19 @@ struct LonghouseAPITests {
     }
 
     @Test
+    func sessionWorkspaceStreamURLSkipsInitialSnapshotByDefault() throws {
+        let baseURL = try #require(URL(string: "https://david010.longhouse.ai"))
+
+        let url = SessionWorkspaceStream.streamURL(baseURL: baseURL, sessionId: "session-1")
+        let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
+
+        #expect(components.path == "/api/timeline/sessions/session-1/workspace/stream")
+        #expect(components.queryItems == [
+            URLQueryItem(name: "skip_initial", value: "true"),
+        ])
+    }
+
+    @Test
     func structuredErrorParsingDecodesHTTPExceptionDetail() throws {
         let data = try #require("""
         {
