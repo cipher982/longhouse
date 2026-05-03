@@ -433,18 +433,20 @@ struct SessionDetail: Codable, Identifiable, Sendable {
             return capabilities.displayDetail ?? "Control is offline until the host reconnects."
         }
         if isReadOnly {
-            return capabilities.displayDetail ?? "Search-only imported session."
+            return capabilities.displayDetail ?? "Read-only imported session."
         }
         return nil
     }
 
     var runtimeCapabilityLabel: String {
         if let label = capabilities.displayLabel?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
+            if label.caseInsensitiveCompare("Live control") == .orderedSame { return "Send" }
+            if label.caseInsensitiveCompare("Search only") == .orderedSame { return "Read only" }
             return label
         }
-        if canSendLive { return "Live control" }
-        if capabilities.hostReattachAvailable { return "Reattach" }
-        return "Search only"
+        if canSendLive { return "Send" }
+        if capabilities.hostReattachAvailable { return "Control offline" }
+        return "Read only"
     }
 
     var runtimeCapabilityTone: String {

@@ -557,7 +557,7 @@ struct SessionModelsTests {
             "live_control_available": false,
             "host_reattach_available": false,
             "reply_to_live_session_available": false,
-            "display_label": "Search only",
+            "display_label": "Read only",
             "display_detail": "This imported session is searchable, but Longhouse cannot steer it.",
             "display_tone": "neutral"
           },
@@ -568,12 +568,81 @@ struct SessionModelsTests {
         let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
 
         #expect(detail.isReadOnly)
-        #expect(detail.runtimeCapabilityLabel == "Search only")
+        #expect(detail.runtimeCapabilityLabel == "Read only")
         #expect(detail.runtimeCapabilityTone == "neutral")
-        #expect(detail.runtimeHeadline == "Search only")
+        #expect(detail.runtimeHeadline == "Read only")
         #expect(detail.runtimeDetail == "This imported session is searchable, but Longhouse cannot steer it.")
         #expect(detail.controlHealthMessage == "This imported session is searchable, but Longhouse cannot steer it.")
         #expect(detail.runtimePhaseLabel == "Idle")
+    }
+
+    @Test
+    func sessionDetailNormalizesLegacyCapabilityLabels() throws {
+        let liveJSON = """
+        {
+          "id": "session-live-legacy",
+          "provider": "codex",
+          "project": "zerg",
+          "cwd": null,
+          "git_branch": null,
+          "summary": null,
+          "summary_title": null,
+          "presence_state": "idle",
+          "presence_tool": null,
+          "user_state": "active",
+          "status": "idle",
+          "last_activity_at": null,
+          "display_phase": null,
+          "active_tool": null,
+          "home_label": null,
+          "origin_label": null,
+          "capabilities": {
+            "live_control_available": true,
+            "host_reattach_available": true,
+            "reply_to_live_session_available": true,
+            "display_label": "Live control",
+            "display_detail": null,
+            "display_tone": "success"
+          },
+          "loop_mode": "assist"
+        }
+        """.data(using: .utf8)!
+        let readOnlyJSON = """
+        {
+          "id": "session-readonly-legacy",
+          "provider": "gemini",
+          "project": "zerg",
+          "cwd": null,
+          "git_branch": null,
+          "summary": null,
+          "summary_title": null,
+          "presence_state": "idle",
+          "presence_tool": null,
+          "user_state": "active",
+          "status": "idle",
+          "last_activity_at": null,
+          "display_phase": null,
+          "active_tool": null,
+          "home_label": null,
+          "origin_label": null,
+          "capabilities": {
+            "live_control_available": false,
+            "host_reattach_available": false,
+            "reply_to_live_session_available": false,
+            "display_label": "Search only",
+            "display_detail": null,
+            "display_tone": "neutral"
+          },
+          "loop_mode": "manual"
+        }
+        """.data(using: .utf8)!
+
+        let liveDetail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: liveJSON)
+        let readOnlyDetail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: readOnlyJSON)
+
+        #expect(liveDetail.runtimeCapabilityLabel == "Send")
+        #expect(readOnlyDetail.runtimeCapabilityLabel == "Read only")
+        #expect(readOnlyDetail.runtimeHeadline == "Read only")
     }
 
     @Test
