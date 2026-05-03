@@ -161,12 +161,48 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.mode).toBe("managed_local");
     expect(capabilities.canChatFromBrowser).toBe(true);
     expect(capabilities.managementLabel).toBe("Managed");
-    expect(capabilities.managementDescription).toMatch(/owns the live control path/i);
+    expect(capabilities.managementDescription).toMatch(/owns the control path/i);
     expect(capabilities.managedLaunchSuggestion).toBeNull();
-    expect(capabilities.capabilityLabel).toBe("Live control");
+    expect(capabilities.capabilityLabel).toBe("Send");
     expect(capabilities.composerDisabledReason).toBeNull();
     expect(capabilities.primaryActionLabel).toBe("Open live dock");
     expect(capabilities.submitLabel).toBe("Send");
+  });
+
+  it("uses runtime display control_path as the ownership axis", () => {
+    const capabilities = getSessionInteractionCapabilities({
+      session: makeSession({
+        provider: "codex",
+        runtime_display: {
+          truth_tier: "fresh",
+          state: "idle",
+          tone: "idle",
+          headline: "Ready",
+          detail: "Waiting",
+          phase_label: "Ready",
+          compact_tool_label: null,
+          is_live: false,
+          is_executing: false,
+          needs_attention: false,
+          is_idle: true,
+          heuristic_active: false,
+          is_managed_local_truth: true,
+          has_signal: true,
+          control_path: "managed",
+          lifecycle: "open",
+          activity_recency: "stale",
+          host_state: "offline",
+          terminal_reason: null,
+        },
+        capabilities: makeCapabilities(),
+      }),
+    });
+
+    expect(capabilities.mode).toBe("unsupported");
+    expect(capabilities.managementLabel).toBe("Managed");
+    expect(capabilities.managedLaunchSuggestion).toBeNull();
+    expect(capabilities.capabilityLabel).toBe("Read only");
+    expect(capabilities.composerDisabledReason).toMatch(/managed Codex session is read-only/i);
   });
 
   it("surfaces managed-local sessions without runner metadata as host-reattach only", () => {
@@ -229,14 +265,14 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.mode).toBe("unsupported");
     expect(capabilities.canChatFromBrowser).toBe(false);
     expect(capabilities.managementLabel).toBe("Unmanaged");
-    expect(capabilities.capabilityDescription).toMatch(/cannot steer the live session/i);
+    expect(capabilities.capabilityDescription).toMatch(/cannot steer it/i);
     expect(capabilities.capabilityDescription).not.toMatch(/longhouse claude/i);
-    expect(capabilities.capabilityLabel).toBe("Search only");
+    expect(capabilities.capabilityLabel).toBe("Read only");
     expect(capabilities.primaryActionLabel).toBe("Unavailable");
     expect(capabilities.notice?.title).toBe("Claude session — unmanaged");
     expect(capabilities.managementDescription).toBe("Longhouse imported this Claude session.");
     expect(capabilities.composerDisabledReason).toBe(
-      "Live control is unavailable for this unmanaged Claude session.",
+      "This unmanaged Claude session is read-only in Longhouse.",
     );
     expect(capabilities.managedLaunchSuggestion?.command).toBe("longhouse claude");
   });
@@ -252,9 +288,9 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.mode).toBe("unsupported");
     expect(capabilities.canChatFromBrowser).toBe(false);
     expect(capabilities.managementLabel).toBe("Unmanaged");
-    expect(capabilities.capabilityLabel).toBe("Search only");
-    expect(capabilities.composerDisabledReason).toMatch(/cannot steer the live session/i);
-    expect(capabilities.composerDisabledReason).toMatch(/Launch new Gemini sessions through Longhouse/i);
+    expect(capabilities.capabilityLabel).toBe("Read only");
+    expect(capabilities.composerDisabledReason).toMatch(/cannot steer it/i);
+    expect(capabilities.composerDisabledReason).toMatch(/steer them from Longhouse/i);
     expect(capabilities.managedLaunchSuggestion).toBeNull();
     expect(capabilities.primaryActionLabel).toBe("Unavailable");
   });
