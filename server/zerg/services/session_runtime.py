@@ -38,7 +38,9 @@ PHASE_FRESHNESS = {
     "running": timedelta(minutes=10),
     "idle": timedelta(minutes=10),
     "blocked": timedelta(hours=24),
-    "needs_user": timedelta(hours=24),
+    # `needs_user` is often the provider's normal prompt after a response.
+    # Without a session-level heartbeat, do not let it imply live control all day.
+    "needs_user": timedelta(minutes=10),
 }
 MANAGED_CODEX_FRESHNESS = timedelta(minutes=15)
 INFERRED_PROGRESS_WINDOW = timedelta(minutes=5)
@@ -191,6 +193,8 @@ def _display_phase_for_state(
         return "Completed"
     if confidence == "inferred":
         return "Recent progress"
+    if confidence == "stale" and phase in LIVE_EXECUTION_PHASES:
+        return "Recent"
     if confidence == "stale" and phase in ATTENTION_PHASES:
         return "Recent"
     if phase == "running":

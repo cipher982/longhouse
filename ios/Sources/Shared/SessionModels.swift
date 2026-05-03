@@ -168,13 +168,17 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     }
 
     var managementLabel: String {
-        if liveControlAvailable == true || replyToLiveSessionAvailable == true {
-            return "Live control"
-        }
-        if hostReattachAvailable == true {
-            return "Reattach"
-        }
-        return "Unmanaged"
+        isManaged ? "Managed" : "Unmanaged"
+    }
+
+    var managementTone: String {
+        return "neutral"
+    }
+
+    private var isManaged: Bool {
+        if runtimeDisplay?.controlPath == "managed" { return true }
+        if runtimeDisplay?.controlPath == "unmanaged" { return false }
+        return liveControlAvailable == true || hostReattachAvailable == true || replyToLiveSessionAvailable == true
     }
 
     var displayPhaseLabel: String {

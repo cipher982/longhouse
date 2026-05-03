@@ -78,6 +78,28 @@ def test_inferred_progress_has_renderable_runtime_signal():
     assert display.has_signal is True
 
 
+def test_stale_progress_source_is_inactive():
+    display = build_session_runtime_display(
+        runtime_view=_runtime_view(
+            runtime_phase="running",
+            runtime_source="progress",
+            status="idle",
+            confidence="stale",
+            display_phase="Recent",
+            last_live_at=datetime(2026, 4, 26, 11, 0, tzinfo=timezone.utc),
+        ),
+        capabilities=_capabilities(),
+        ended_at=None,
+    )
+
+    assert display.truth_tier == "stale"
+    assert display.headline == "Inactive"
+    assert display.phase_label == "Recent"
+    assert display.heuristic_active is False
+    assert display.is_idle is True
+    assert display.activity_recency == "stale"
+
+
 def test_managed_running_has_renderable_runtime_signal():
     display = build_session_runtime_display(
         runtime_view=_runtime_view(
@@ -310,6 +332,8 @@ def test_unmanaged_needs_user_without_online_host_is_not_actionable():
     assert display.state is None
     assert display.phase_label == "Recent"
     assert display.headline == "Inactive"
+    assert display.is_idle is True
+    assert display.tone == "inactive"
     assert display.needs_attention is False
 
 

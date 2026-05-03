@@ -69,7 +69,11 @@ def _is_progress_fallback(
 ) -> bool:
     if presence_state is not None:
         return False
-    return confidence == "inferred" or runtime_source == "progress" or _is_legacy_progress_status(status)
+    if confidence == "inferred":
+        return True
+    if confidence == "stale":
+        return False
+    return runtime_source == "progress" or _is_legacy_progress_status(status)
 
 
 def _has_fresh_signal(
@@ -299,6 +303,8 @@ def build_session_runtime_display(
     is_idle = presence_state == "idle" or (
         not stale_attention_phase and not is_executing and not needs_attention and not heuristic_active and status == "idle"
     )
+    if unmanaged_attention_unverified:
+        is_idle = True
     display_phase = runtime_view.display_phase
     if unmanaged_attention_unverified:
         display_phase = "Recent"
@@ -389,7 +395,7 @@ def build_session_runtime_display(
         is_stalled = False
     tone = (
         "inactive"
-        if lifecycle == "closed"
+        if lifecycle == "closed" or unmanaged_attention_unverified
         else _tone(
             presence_state=presence_state,
             heuristic_active=heuristic_active,

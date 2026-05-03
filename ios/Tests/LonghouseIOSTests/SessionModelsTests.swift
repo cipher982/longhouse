@@ -427,6 +427,25 @@ struct SessionModelsTests {
     }
 
     @Test
+    func sessionSummaryShowsManagedAxisNotLiveControlCapability() {
+        let summary = SessionSummary(
+            id: "session-control-offline",
+            title: "Offline managed session",
+            presenceState: "needs_user",
+            provider: "claude",
+            project: "zerg",
+            lastActivityAt: "2026-04-25T20:00:00Z",
+            status: "idle",
+            liveControlAvailable: false,
+            hostReattachAvailable: true,
+            replyToLiveSessionAvailable: false
+        )
+
+        #expect(summary.managementLabel == "Managed")
+        #expect(summary.managementTone == "neutral")
+    }
+
+    @Test
     func runtimeDisplayNeedsAttentionIsAuthoritativeOverState() {
         let summary = SessionSummary(
             id: "session-stalled-managed",
