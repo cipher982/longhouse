@@ -23,7 +23,6 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionTurn
 from zerg.services.agents_store import AgentsStore
 from zerg.services.managed_local_transport import build_managed_local_attach_command
-from zerg.services.session_capabilities import SessionCapabilityDisplay
 from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_capabilities import build_session_capability_display
 from zerg.services.session_capabilities import project_current_session_capabilities
@@ -63,14 +62,8 @@ def build_session_capabilities_response(
     host_label = None
     if session is not None:
         host_label = str(getattr(session, "source_runner_name", "") or "").strip() or None
-    capability_display = build_session_capability_display(capability_flags, host_label=host_label)
     lifecycle = str(getattr(runtime_display, "lifecycle", "") or "").strip() if runtime_display is not None else ""
-    if lifecycle == "closed":
-        capability_display = SessionCapabilityDisplay(
-            label="Closed",
-            detail="This session has ended.",
-            tone="neutral",
-        )
+    capability_display = build_session_capability_display(capability_flags, host_label=host_label, lifecycle=lifecycle)
     return SessionCapabilitiesResponse(
         live_control_available=capability_flags.live_control_available,
         host_reattach_available=capability_flags.host_reattach_available,

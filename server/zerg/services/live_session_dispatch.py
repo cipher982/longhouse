@@ -22,7 +22,8 @@ def live_text_dispatch_label(session: AgentSession | None) -> str | None:
     return resolve_execution_home(session).value
 
 
-def supports_live_text_dispatch(session: AgentSession | None) -> bool:
+def supports_live_text_dispatch_metadata(session: AgentSession | None) -> bool:
+    """Structural precondition only; callers must check current liveness first."""
     return supports_live_control(session)
 
 
@@ -102,7 +103,7 @@ async def send_text_to_live_session(
     implemented.
     """
 
-    if supports_live_text_dispatch(session):
+    if supports_live_text_dispatch_metadata(session):
         if _use_fake_live_text_dispatch():
             return await _fake_send_text_to_live_session(
                 db=db,
