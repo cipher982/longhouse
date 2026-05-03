@@ -140,7 +140,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     var needsAttention: Bool {
         if isClosed || !isUserActive { return false }
         if let runtimeDisplay { return runtimeDisplay.needsAttention }
-        return isBlocked || isNeedsUser
+        return isBlocked
     }
     var isExecuting: Bool {
         if isClosed { return false }
@@ -152,7 +152,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         if let runtimeDisplay { return runtimeDisplay.isIdle }
         return presenceState == "idle" || status == "idle"
     }
-    var attentionLabel: String { isBlocked ? "Needs permission" : "Waiting on you" }
+    var attentionLabel: String { isBlocked ? "Needs permission" : "Ready" }
     var timelineAnchor: String? { timelineAnchorAt ?? lastActivityAt }
     var turnCount: Int { userMessages ?? 0 }
     var toolCount: Int { toolCalls ?? 0 }
@@ -198,7 +198,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         case "thinking":
             return "Thinking"
         case "needs_user":
-            return "Needs you"
+            return "Ready"
         case "blocked":
             return tool.map { "Blocked on \($0)" } ?? "Needs permission"
         case "idle":
@@ -415,7 +415,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         case "thinking":
             return "Thinking"
         case "needs_user":
-            return "Needs you"
+            return "Ready"
         case "blocked":
             return tool.map { "Blocked on \($0)" } ?? "Needs permission"
         case "working", "active":
@@ -490,7 +490,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         switch runtimePhaseState {
         case "running": return "running"
         case "thinking": return "thinking"
-        case "needs_user": return "needs-user"
+        case "needs_user": return "idle"
         case "blocked": return "blocked"
         case "idle", "completed": return "idle"
         case "working", "active": return "inferred"

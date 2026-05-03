@@ -405,7 +405,6 @@ private func nonEmpty(_ value: String?) -> String? {
 private func runtimeColor(_ session: SessionSummary) -> Color {
     if session.isClosed { return .secondary }
     if session.isBlocked { return .orange }
-    if session.isNeedsUser { return .yellow }
     if session.presenceState == "running" { return .green }
     if session.presenceState == "thinking" { return .orange }
     if session.isExecuting { return .orange }

@@ -207,7 +207,7 @@ private func sessionURL(_ sessionId: String) -> URL? {
 private func shortState(_ state: String) -> String {
     switch state {
     case "needs_user":
-        return "You"
+        return "Idle"
     case "blocked":
         return "Hold"
     case "running":
@@ -227,8 +227,10 @@ private func liveActivityStateColor(_ state: String) -> Color {
         return .green
     case "thinking":
         return .orange
-    case "needs_user", "blocked":
+    case "blocked":
         return .orange
+    case "needs_user":
+        return .secondary
     case "idle":
         return .secondary
     default:

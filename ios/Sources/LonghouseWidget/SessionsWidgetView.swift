@@ -128,8 +128,8 @@ struct SessionsWidgetView: View {
         if attentionCount > 0 {
             return WidgetMetric(
                 count: attentionCount,
-                label: attentionCount == 1 ? "needs you" : "need you",
-                shortLabel: attentionCount == 1 ? "needs you" : "need you",
+                label: attentionCount == 1 ? "needs permission" : "need permission",
+                shortLabel: "permission",
                 color: .orange
             )
         }
@@ -182,7 +182,6 @@ private struct WidgetMetric {
 
 private func widgetRuntimeColor(_ session: SessionSummary) -> Color {
     if session.isBlocked { return .orange }
-    if session.isNeedsUser { return .yellow }
     if session.presenceState == "running" { return .green }
     if session.presenceState == "thinking" { return .orange }
     if session.isExecuting { return .orange }

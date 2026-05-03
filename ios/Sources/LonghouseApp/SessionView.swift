@@ -465,9 +465,8 @@ struct SessionRuntimeDock: View {
 
     private var iconName: String {
         switch detail.runtimeTone {
-        case "needs-user": return "exclamationmark.circle"
         case "blocked": return "lock.circle"
-        case "idle": return "checkmark.circle"
+        case "idle", "needs-user": return "checkmark.circle"
         case "inferred": return "waveform.path"
         default: return "circle"
         }
@@ -476,9 +475,8 @@ struct SessionRuntimeDock: View {
     private var toneColor: Color {
         switch detail.runtimeTone {
         case "running", "thinking": return .green
-        case "needs-user": return .yellow
         case "blocked": return .orange
-        case "idle": return .gray
+        case "idle", "needs-user": return .gray
         case "inferred": return .blue
         default: return .gray
         }
@@ -1226,7 +1224,7 @@ final class SessionViewModel: ObservableObject {
 
     var isSessionActive: Bool {
         guard let detail else { return false }
-        let active: Set<String> = ["running", "thinking", "working", "needs_user", "blocked", "active"]
+        let active: Set<String> = ["running", "thinking", "working", "blocked", "active"]
         if let presence = detail.presenceState, active.contains(presence) { return true }
         if let status = detail.status, active.contains(status) { return true }
         return false
