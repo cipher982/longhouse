@@ -64,6 +64,7 @@ from zerg.services.session_views import SessionTurnsListResponse
 from zerg.services.session_views import SessionWorkspaceResponse
 from zerg.services.session_views import build_session_response
 from zerg.services.session_views import normalize_utc_datetime
+from zerg.services.session_workspace import build_session_workspace
 from zerg.services.unmanaged_bindings import load_binding_overlay
 from zerg.utils.server_timing import ServerTimingRecorder
 from zerg.utils.time import UTCBaseModel
@@ -837,15 +838,11 @@ async def get_timeline_session_workspace(
     limit: int = Query(100, ge=1, le=1000, description="Max projected items"),
     db: Session = Depends(get_db),
 ):
-    return await _sessions_router.get_session_workspace(
-        session_id=session_id,
-        branch_mode=branch_mode,
-        limit=limit,
-        response=response,
-        db=db,
-        _auth=None,
-        _single=None,
-    )
+    timing = ServerTimingRecorder()
+    response.headers["Cache-Control"] = "private, max-age=5"
+    result = build_session_workspace(db=db, session_id=session_id, branch_mode=branch_mode, limit=limit, timing=timing)
+    timing.apply(response)
+    return result
 
 
 @router.get("/sessions/{session_id}/export")
