@@ -459,7 +459,7 @@ test.describe("Sessions Page", () => {
     await expect(card).toHaveAttribute("data-thread-id", rootId);
     await expect(card).toHaveAttribute("data-session-id", matchedId);
     await expect(card.locator(".session-card-snippet")).toContainText(token);
-    await expect(card).toContainText("Observed Running Pytest");
+    await expect(card).toContainText("Running Pytest");
     await expect(card).toHaveAttribute("data-runtime-tone", "inactive");
     await expect(card).not.toContainText(
       "Newest writable head is just housekeeping without the search token",
@@ -609,7 +609,7 @@ test.describe("Sessions Page", () => {
       .locator('[data-testid="session-card"]', { hasText: `running-state-${suffix}` })
       .first();
     await expect(runningCard).toBeVisible();
-    await expect(runningCard).toContainText("Observed Running Shell");
+    await expect(runningCard).toContainText("Running Shell");
     await expect(runningCard).toHaveAttribute("data-runtime-tone", "inactive");
     await expect(runningCard).not.toHaveClass(/session-card--live/);
     await expect(runningCard).not.toHaveClass(/session-card--running/);
@@ -618,7 +618,7 @@ test.describe("Sessions Page", () => {
       .locator('[data-testid="session-card"]', { hasText: `needs-user-state-${suffix}` })
       .first();
     await expect(needsUserCard).toBeVisible();
-    await expect(needsUserCard).toContainText("Observed Ready");
+    await expect(needsUserCard).toContainText("Ready");
     await expect(needsUserCard).not.toContainText("Needs you");
     await expect(needsUserCard).toHaveAttribute("data-runtime-tone", "inactive");
     await expect(needsUserCard).not.toHaveClass(/session-card--live/);
@@ -710,7 +710,7 @@ test.describe("Sessions Page", () => {
       },
     ]);
 
-    await expect(olderCard).toContainText("Observed Running Shell", {
+    await expect(olderCard).toContainText("Running Shell", {
       timeout: 15000,
     });
     await expect(olderCard).toHaveAttribute("data-runtime-tone", "inactive");

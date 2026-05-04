@@ -226,7 +226,7 @@ def _signal_tier_for_state(*, phase_source: str, confidence: str | None) -> str:
     if phase_source == "progress":
         return "transcript_progress"
     if phase_source not in {"fallback", ""}:
-        return "managed_phase"
+        return "phase_signal"
     return "none"
 
 

@@ -311,7 +311,7 @@ export function buildTimelineCardStressFixture(): {
         },
         lifecycle: {
           state: "open",
-          reason: "managed_phase_observed",
+          reason: "phase_observed",
           observed_at: "2026-04-15T16:11:35Z",
         },
       }),
@@ -380,7 +380,7 @@ export function buildTimelineCardStressFixture(): {
         },
         lifecycle: {
           state: "open",
-          reason: "managed_phase_observed",
+          reason: "phase_observed",
           observed_at: "2026-04-15T16:10:00Z",
         },
       }),
@@ -723,7 +723,7 @@ export function buildTimelineCardStressFixture(): {
         },
         lifecycle: {
           state: "open",
-          reason: "managed_phase_observed",
+          reason: "phase_observed",
           observed_at: "2026-04-15T15:58:00Z",
         },
       }),

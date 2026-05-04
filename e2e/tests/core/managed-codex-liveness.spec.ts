@@ -123,7 +123,7 @@ test.describe("Managed Codex liveness", () => {
       .locator('[data-testid="session-card"]', { hasText: token })
       .first();
     await expect(card).toBeVisible();
-    await expect(card).toContainText("Observed Idle");
+    await expect(card).toContainText("Idle");
     await expect(card).not.toContainText("State unavailable");
     await expect(card).not.toContainText("Not connected");
     await expect(card).toHaveAttribute("data-runtime-tone", "inactive");

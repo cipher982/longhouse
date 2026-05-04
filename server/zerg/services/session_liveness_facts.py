@@ -179,7 +179,7 @@ def _lifecycle(
     if process.status == "observed":
         return LifecycleFact(state="open", reason="process_observed", observed_at=process.observed_at or process.last_seen_at)
     if control_path == "managed" and host.state == "online" and phase.kind is not None:
-        return LifecycleFact(state="open", reason="managed_phase_observed", observed_at=phase.observed_at)
+        return LifecycleFact(state="open", reason="phase_observed", observed_at=phase.observed_at)
     return LifecycleFact(state="unknown", reason=None, observed_at=None)
 
 

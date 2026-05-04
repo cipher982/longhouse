@@ -29,6 +29,32 @@ import {
 
 const SESSION_CARD_HOVER_PREFETCH_DELAY_MS = 180;
 
+type TimelineStatusLike = {
+  label: string;
+  seen_at?: string | null;
+};
+
+function getTimelineStatusSeenAtPrefix(status: TimelineStatusLike): "Closed" | "Checked" | "Seen" | "Transcript" {
+  const label = status.label.trim().toLowerCase();
+  if (label === "closed") {
+    return "Closed";
+  }
+  if (label === "transcript only") {
+    return "Transcript";
+  }
+  if (label === "process not visible") {
+    return "Checked";
+  }
+  return "Seen";
+}
+
+function formatTimelineStatusMeta(status: TimelineStatusLike | null, relativeNowMs: number): string | null {
+  if (!status?.seen_at) {
+    return null;
+  }
+  return `${getTimelineStatusSeenAtPrefix(status)} ${formatRelativeTime(status.seen_at, relativeNowMs)}`;
+}
+
 // ---------------------------------------------------------------------------
 // SessionCard
 // ---------------------------------------------------------------------------
@@ -65,17 +91,16 @@ export function SessionCard({
   const toolCount = session.tool_calls;
   const runtime = resolveSessionRuntimeState(session);
   const timelineCard = session.timeline_card ?? null;
-  const timelineCardStatus = runtime.factStatus ? null : (timelineCard?.status ?? null);
+  const timelineCardStatus = timelineCard?.status ?? null;
+  const cardStatus = timelineCardStatus ?? runtime.factStatus ?? null;
   const runtimeMetaLabel =
-    getRuntimeMetaLabel(runtime, relativeNowMs) ??
-    (timelineCardStatus?.seen_at
-      ? `Seen ${formatRelativeTime(timelineCardStatus.seen_at, relativeNowMs)}`
-      : null);
+    formatTimelineStatusMeta(timelineCardStatus, relativeNowMs) ??
+    getRuntimeMetaLabel(runtime, relativeNowMs);
   const fallbackOwnershipLabel = interaction.isManagedLocalSession ? "Managed" : "Unmanaged";
   const ownershipLabel = timelineCard?.ownership.label || resolveSessionOwnershipLabel(runtime, fallbackOwnershipLabel);
   const fallbackControlPath = ownershipLabel === "Managed" ? "managed" : "unmanaged";
-  const runtimePhaseLabel = runtime.factStatus?.label || timelineCardStatus?.label || resolveSessionStatusLabel(runtime, fallbackControlPath);
-  const cardRuntimeTone = runtime.factStatus?.tone ?? timelineCard?.border_tone ?? runtime.tone;
+  const runtimePhaseLabel = cardStatus?.label || resolveSessionStatusLabel(runtime, fallbackControlPath);
+  const cardRuntimeTone = timelineCard?.border_tone ?? cardStatus?.tone ?? runtime.tone;
 
   const projectLabel = getProjectLabel(session);
   const title = getSessionTitle(session);
@@ -100,8 +125,8 @@ export function SessionCard({
   const lifecycle = runtime.runtimeFacts?.lifecycle?.state ?? runtime.runtimeDisplay?.lifecycle ?? null;
   const hasCurrentControlledPresence = hasControlPath && runtime.presenceState != null;
   const isClosedSession =
-    timelineCardStatus?.tone === "closed" ||
-    timelineCardStatus?.label === "Closed" ||
+    cardStatus?.tone === "closed" ||
+    cardStatus?.label === "Closed" ||
     (lifecycle != null
       ? lifecycle === "closed"
       : isSessionClosed(session) && !hasCurrentControlledPresence);
@@ -112,9 +137,9 @@ export function SessionCard({
     runtime.runtimeFacts?.control_path === "unmanaged" ||
     runtime.runtimeDisplay?.control_path === "managed" ||
     runtime.runtimeDisplay?.control_path === "unmanaged";
-  const showRuntimePill = !isClosedSession && (runtime.factStatus != null || timelineCardStatus != null || runtime.hasSignal || hasRuntimeAxes);
+  const showRuntimePill = !isClosedSession && (cardStatus != null || runtime.hasSignal || hasRuntimeAxes);
   // Outcome labels are semantic summaries; keep their chips neutral across runtime sources.
-  const runtimePillTone = runtime.factStatus?.tone || timelineCardStatus?.tone || (runtimePhaseLabel === "Active" ? "active" : runtime.tone);
+  const runtimePillTone = cardStatus?.tone || (runtimePhaseLabel === "Active" ? "active" : runtime.tone);
   const cardClassName = [
     "session-card",
     confirming ? "session-card--confirming" : "",
@@ -245,10 +270,10 @@ export function SessionCard({
                   <span className="session-card-runtime-dot" aria-hidden="true" />
                 ) : (
                   <PresenceBadge
-                    state={runtime.factStatus ? null : runtime.presenceState}
-                    tool={runtime.factStatus ? null : runtime.presenceTool}
+                    state={cardStatus ? null : runtime.presenceState}
+                    tool={cardStatus ? null : runtime.presenceTool}
                     compact
-                    showUnknown={runtime.factStatus != null || runtime.truthTier === "stale"}
+                    showUnknown={cardStatus != null || runtime.truthTier === "stale"}
                   />
                 )}
                 <span className="session-card-runtime-phase">{runtimePhaseLabel}</span>

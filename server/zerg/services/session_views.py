@@ -229,7 +229,7 @@ def _timeline_status_from_liveness_facts(runtime_facts: SessionLivenessFactsResp
     phase_kind = str(phase.kind or "").strip()
     if phase_kind:
         return TimelineStatusPresentationResponse(
-            label=f"Observed {_observed_phase_label(phase_kind, phase.tool)}",
+            label=_phase_status_label(phase_kind, phase.tool),
             tone="inactive",
             seen_at=phase.observed_at,
         )
@@ -237,13 +237,13 @@ def _timeline_status_from_liveness_facts(runtime_facts: SessionLivenessFactsResp
     process = runtime_facts.process
     if process.status == "observed":
         return TimelineStatusPresentationResponse(
-            label="Process observed",
+            label="Process visible",
             tone="inactive",
             seen_at=process.observed_at or process.last_seen_at,
         )
     if process.status == "not_observed":
         return TimelineStatusPresentationResponse(
-            label="Process not observed",
+            label="Process not visible",
             tone="inactive",
             seen_at=process.last_seen_at or process.observed_at,
         )
@@ -263,10 +263,10 @@ def _timeline_status_from_liveness_facts(runtime_facts: SessionLivenessFactsResp
             seen_at=runtime_facts.activity.last_transcript_at,
         )
 
-    return TimelineStatusPresentationResponse(label="Host unverified", tone="inactive", seen_at=None)
+    return TimelineStatusPresentationResponse(label="Runtime unverified", tone="inactive", seen_at=None)
 
 
-def _observed_phase_label(kind: str, tool_name: str | None) -> str:
+def _phase_status_label(kind: str, tool_name: str | None) -> str:
     phase = "ready" if kind == "needs_user" else kind.replace("_", " ").replace("-", " ")
     compact_tool = compact_runtime_tool_label(tool_name)
     if compact_tool and kind in {"running", "blocked"}:
@@ -352,7 +352,7 @@ class SessionRuntimeDisplayResponse(BaseModel):
     truth_tier: str = Field(..., description="Runtime truth tier: none|stale|fresh|managed-local")
     signal_tier: str = Field(
         "none",
-        description="Strongest source signal tier: managed_phase|unmanaged_binding|transcript_progress|none",
+        description="Strongest source signal tier: phase_signal|process_binding|transcript_progress|none",
     )
     state: Optional[str] = Field(None, description="Canonical presence state when known")
     tone: str = Field(..., description="Stable visual tone for clients")

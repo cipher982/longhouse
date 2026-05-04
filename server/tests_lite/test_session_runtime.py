@@ -1651,8 +1651,8 @@ def test_runtime_view_does_not_keep_stale_progress_running(tmp_path):
     engine.dispose()
 
 
-def test_progress_signal_preserves_fresh_managed_phase_truth(tmp_path):
-    engine, SessionLocal = _make_db(tmp_path, "runtime_progress_preserves_managed_phase.db")
+def test_progress_signal_preserves_fresh_phase_signal_truth(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_progress_preserves_phase_signal.db")
     now = datetime.now(timezone.utc)
 
     with SessionLocal() as db:
@@ -1697,7 +1697,7 @@ def test_progress_signal_preserves_fresh_managed_phase_truth(tmp_path):
         assert state.phase == "running"
         assert state.phase_source == "semantic"
         assert view.presence_state == "running"
-        assert view.signal_tier == "managed_phase"
+        assert view.signal_tier == "phase_signal"
         assert view.status == "working"
         assert view.display_phase == "Running bash"
         assert view.confidence == "live"
@@ -1705,7 +1705,7 @@ def test_progress_signal_preserves_fresh_managed_phase_truth(tmp_path):
     engine.dispose()
 
 
-def test_progress_signal_after_stale_managed_phase_does_not_revive_phase_truth(tmp_path):
+def test_progress_signal_after_stale_phase_signal_does_not_revive_phase_truth(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "runtime_progress_does_not_revive_stale_phase.db")
     now = datetime.now(timezone.utc)
 
@@ -1759,7 +1759,7 @@ def test_progress_signal_after_stale_managed_phase_does_not_revive_phase_truth(t
         assert state.phase_source == "semantic"
         assert view.runtime_phase == "running"
         assert view.presence_state is None
-        assert view.signal_tier == "managed_phase"
+        assert view.signal_tier == "phase_signal"
         assert view.status == "idle"
         assert view.display_phase == "Recent"
         assert view.confidence == "stale"
@@ -1814,7 +1814,7 @@ def test_needs_user_freshness_is_not_extended_by_progress(tmp_path):
         assert state.freshness_expires_at == (now - timedelta(minutes=10)).replace(tzinfo=None)
         assert view.runtime_phase == "needs_user"
         assert view.presence_state is None
-        assert view.signal_tier == "managed_phase"
+        assert view.signal_tier == "phase_signal"
         assert view.status == "idle"
         assert view.display_phase == "Ready"
         assert view.confidence == "stale"

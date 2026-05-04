@@ -451,7 +451,7 @@ struct SessionModelsTests {
             "process": {"status": "unknown", "pid": null, "process_start_time": null, "observed_at": null, "last_seen_at": null, "source_mtime": null, "source_path": null, "reason": null, "source": null},
             "phase": {"kind": "running", "tool": "shell", "source": "managed_local_transport", "observed_at": "2026-04-25T20:00:00Z", "expires_at": "2026-04-25T20:15:00Z"},
             "activity": {"last_transcript_at": "2026-04-25T20:00:00Z", "last_runtime_signal_at": "2026-04-25T20:00:00Z", "last_progress_at": null},
-            "lifecycle": {"state": "open", "reason": "managed_phase_observed", "observed_at": "2026-04-25T20:00:00Z"}
+            "lifecycle": {"state": "open", "reason": "phase_observed", "observed_at": "2026-04-25T20:00:00Z"}
           },
           "loop_mode": "assist"
         }
@@ -459,8 +459,8 @@ struct SessionModelsTests {
 
         let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: Data(jsonString.utf8))
 
-        #expect(detail.runtimePhaseLabel == "Observed Running Shell")
-        #expect(detail.runtimeHeadline == "Observed Running Shell")
+        #expect(detail.runtimePhaseLabel == "Running Shell")
+        #expect(detail.runtimeHeadline == "Running Shell")
         #expect(detail.runtimeDetail == nil)
         #expect(detail.runtimeTone == "inactive")
         #expect(detail.isSessionExecuting)
@@ -769,13 +769,13 @@ struct SessionModelsTests {
                 phaseTool: "mcp__hatch__hatch_codex",
                 transcriptAt: "2026-04-25T20:00:00Z",
                 lifecycleState: "open",
-                lifecycleReason: "managed_phase_observed"
+                lifecycleReason: "phase_observed"
             )
         )
 
         #expect(managedPhase.managementLabel == "Managed")
-        #expect(managedPhase.timelineStatusLabel == "Observed Running Codex")
-        #expect(managedPhase.displayPhaseLabel == "Observed Running Codex")
+        #expect(managedPhase.timelineStatusLabel == "Running Codex")
+        #expect(managedPhase.displayPhaseLabel == "Running Codex")
         #expect(managedPhase.timelineStatusTone == "inactive")
         #expect(!managedPhase.isExecuting)
     }
@@ -811,7 +811,7 @@ struct SessionModelsTests {
         )
         let hostUnverified = SessionSummary(
             id: "session-host-unverified",
-            title: "Host unverified",
+            title: "Runtime unverified",
             presenceState: "idle",
             provider: "codex",
             project: "zerg",
@@ -866,11 +866,11 @@ struct SessionModelsTests {
         )
 
         #expect(processObserved.managementLabel == "Unmanaged")
-        #expect(processObserved.timelineStatusLabel == "Process observed")
-        #expect(processObserved.timelineStatusSeenAtPrefix == "Observed")
+        #expect(processObserved.timelineStatusLabel == "Process visible")
+        #expect(processObserved.timelineStatusSeenAtPrefix == "Seen")
         #expect(transcriptOnly.timelineStatusLabel == "Transcript only")
         #expect(transcriptOnly.timelineStatusSeenAtPrefix == "Transcript")
-        #expect(hostUnverified.timelineStatusLabel == "Host unverified")
+        #expect(hostUnverified.timelineStatusLabel == "Runtime unverified")
         #expect(closed.isClosed)
         #expect(closed.timelineStatusLabel == "Closed")
         #expect(closed.timelineStatusTone == "closed")
@@ -918,7 +918,7 @@ struct SessionModelsTests {
                   "process": {"status": "unknown", "pid": null, "process_start_time": null, "observed_at": null, "last_seen_at": null, "source_mtime": null, "source_path": null, "reason": null, "source": null},
                   "phase": {"kind": "needs_user", "tool": null, "source": "managed_local_transport", "observed_at": "2026-04-25T20:00:00Z", "expires_at": "2026-04-25T20:15:00Z"},
                   "activity": {"last_transcript_at": "2026-04-25T20:00:00Z", "last_runtime_signal_at": "2026-04-25T20:00:00Z", "last_progress_at": null},
-                  "lifecycle": {"state": "open", "reason": "managed_phase_observed", "observed_at": "2026-04-25T20:00:00Z"}
+                  "lifecycle": {"state": "open", "reason": "phase_observed", "observed_at": "2026-04-25T20:00:00Z"}
                 },
                 "timeline_card": {
                   "ownership": {"label": "Managed", "tone": "neutral"},
@@ -939,6 +939,38 @@ struct SessionModelsTests {
         #expect(session.timelineCard?.borderTone == "idle")
         #expect(session.runtimeFacts?.controlPath == "managed")
         #expect(session.runtimeFacts?.phase.kind == "needs_user")
+    }
+
+    @Test
+    func sessionSummaryUsesTimelineCardStatusBeforeLocalFactFallback() {
+        let summary = SessionSummary(
+            id: "session-card-first",
+            title: "Timeline card first",
+            presenceState: "running",
+            provider: "codex",
+            project: "zerg",
+            lastActivityAt: "2026-04-25T20:00:00Z",
+            status: "working",
+            runtimeFacts: runtimeFacts(
+                controlPath: "managed",
+                hostState: "online",
+                phaseKind: "running",
+                phaseTool: "shell",
+                transcriptAt: "2026-04-25T20:00:00Z",
+                lifecycleState: "open",
+                lifecycleReason: "phase_observed"
+            ),
+            timelineCard: TimelineCardPresentation(
+                ownership: TimelineBadgePresentation(label: "Managed", tone: "neutral"),
+                status: TimelineStatusPresentation(label: "Ready", tone: "idle", seenAt: nil),
+                borderTone: "idle"
+            )
+        )
+
+        #expect(summary.timelineStatusLabel == "Ready")
+        #expect(summary.timelineStatusTone == "idle")
+        #expect(summary.timelineBorderTone == "idle")
+        #expect(summary.displayPhaseLabel == "Running Shell")
     }
 
     @Test
