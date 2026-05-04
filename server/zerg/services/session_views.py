@@ -144,11 +144,17 @@ def build_session_timeline_card_response(
         or getattr(capability_flags, "host_reattach_available", False)
         or getattr(capability_flags, "reply_to_live_session_available", False)
     )
+    terminal_reason = None
+    if runtime_overlay is not None and runtime_overlay.terminal_state:
+        terminal_reason = runtime_overlay.terminal_state
+    elif binding_terminal_reason in {"process_gone", "host_expired"}:
+        terminal_reason = binding_terminal_reason
     card = build_timeline_card_presentation(
         runtime_display=runtime_display,
         last_live_at=(runtime_overlay.last_live_at if runtime_overlay is not None else None),
         last_activity_at=last_activity_at,
         managed_fallback=managed_fallback,
+        terminal_reason=terminal_reason,
     )
     return TimelineCardPresentationResponse(
         ownership=TimelineBadgePresentationResponse(
@@ -892,7 +898,7 @@ def build_session_response(
         ),
         runtime_display=runtime_display,
         timeline_card=build_session_timeline_card_response(
-            runtime_overlay=runtime_overlay if include_runtime else None,
+            runtime_overlay=runtime_overlay,
             capability_flags=capability_flags,
             ended_at=session.ended_at,
             last_activity_at=last_activity_at,
