@@ -201,8 +201,8 @@ fn is_provider_process(command: &str) -> Option<&'static str> {
     }
     // Claude and Gemini are not Node-launched on supported installs today.
     match script_basename {
-        "codex" | "codex.js" => Some("codex"),
         "opencode" | "opencode.js" => Some("opencode"),
+        "codex" | "codex.js" if matches!(basename, "node" | "nodejs") => Some("codex"),
         _ => None,
     }
 }
@@ -482,6 +482,7 @@ mod tests {
             is_provider_process("bun /opt/homebrew/bin/opencode serve"),
             Some("opencode")
         );
+        assert_eq!(is_provider_process("bun /opt/homebrew/bin/codex --tui"), None);
         assert_eq!(is_provider_process("claude"), Some("claude"));
         assert_eq!(is_provider_process("gemini chat"), Some("gemini"));
         assert_eq!(is_provider_process("longhouse-codex --attach"), None);
