@@ -46,13 +46,14 @@ struct PushNotificationsTests {
         let sessions = [
             makeSession(id: "idle", presenceState: "idle"),
             makeSession(id: "needs", presenceState: "needs_user"),
+            makeSession(id: "blocked", presenceState: "blocked"),
             makeSession(id: "archived-blocked", presenceState: "blocked", userState: "archived"),
             makeSession(id: "running", presenceState: "running"),
         ]
 
         let ordered = SessionSummary.attentionWidgetOrder(sessions, limit: 3)
 
-        #expect(ordered.map(\.id) == ["needs", "idle", "running"])
+        #expect(ordered.map(\.id) == ["blocked", "idle", "needs"])
     }
 
     @Test
