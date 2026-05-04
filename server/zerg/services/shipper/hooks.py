@@ -15,9 +15,10 @@ Claude hooks (via settings.json):
 
 Codex hooks (via hooks.json):
 
-- **longhouse-codex-hook.sh** (SessionStart, UserPromptSubmit, Stop):
+- **longhouse-codex-hook.sh** (SessionStart, UserPromptSubmit, PreToolUse,
+  PostToolUse, PermissionRequest, Stop):
   Same pattern as Claude. Codex has fewer hook events (no
-  PreToolUse/PostToolUse), so tool-level granularity is not available there.
+  Notification hook), so idle-prompt granularity is not available there.
 
 Startup continuity injection (fetching recent project context on
 SessionStart) is not part of the default hook. See
@@ -142,16 +143,18 @@ CODEX_HOOK_SCRIPT = """\
 #!/bin/bash
 # Longhouse Codex hook — presence outbox + session binding seed
 # Installed by: longhouse connect --install
-# Registered on: SessionStart, UserPromptSubmit, Stop (via ~/.codex/hooks.json)
+# Registered on: SessionStart, UserPromptSubmit, PreToolUse, PostToolUse,
+#                PermissionRequest, Stop (via ~/.codex/hooks.json)
 # All events: local-only presence outbox write + session binding seed.
 INPUT=$(cat)
 LONGHOUSE_HOME="${LONGHOUSE_HOME:-__LONGHOUSE_HOME__}"
 
 # Codex command hooks use snake_case field names.
-IFS=$'\\x1f' read -r EVENT CODEX_SESSION_ID CWD TRANSCRIPT <<< "$(
+IFS=$'\\x1f' read -r EVENT CODEX_SESSION_ID TOOL CWD TRANSCRIPT <<< "$(
   printf '%s' "$INPUT" | jq -r '[
     (.hook_event_name // ""),
     (.session_id // ""),
+    (.tool_name // ""),
     (.cwd // ""),
     (.transcript_path // "")
   ] | join("\\u001f")'
@@ -178,13 +181,17 @@ write_presence_outbox() {
 case "$EVENT" in
   SessionStart)         STATE="idle" ;;
   UserPromptSubmit)     STATE="thinking" ;;
+  PreToolUse)           STATE="running" ;;
+  # Codex exposes PostToolUse, but not Claude's PostToolUseFailure event.
+  PostToolUse)          STATE="thinking" ;;
+  PermissionRequest)    STATE="blocked" ;;
   Stop)                 STATE="idle" ;;
   *)                    STATE="" ;;
 esac
 
 if [[ -n "$STATE" ]] && [[ -n "$SID" ]]; then
   PAYLOAD=$(jq -n --arg sid "$SID" --arg st "$STATE" \\
-        --arg tool "" --arg cwd "$CWD" --arg provider "codex" \\
+        --arg tool "$TOOL" --arg cwd "$CWD" --arg provider "codex" \\
         --arg transcript "$TRANSCRIPT" \\
     '{session_id: $sid, state: $st, tool_name: $tool, cwd: $cwd, provider: $provider, transcript_path: $transcript}')
   write_presence_outbox "$PAYLOAD" >/dev/null 2>&1 || true
@@ -578,7 +585,16 @@ def install_codex_hooks(
         "hooks": [{"type": "command", "command": hook_path, "timeout": 5}],
     }
 
-    for event in ("SessionStart", "UserPromptSubmit"):
+    lifecycle_events = (
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        # Codex exposes PermissionRequest, but has no Notification hook for
+        # idle-prompt style attention states.
+        "PermissionRequest",
+    )
+    for event in lifecycle_events:
         existing = hooks_obj.get(event, [])
         if not isinstance(existing, list):
             existing = []
@@ -593,7 +609,9 @@ def install_codex_hooks(
     # 4. Write hooks.json back
     # ------------------------------------------------------------------
     hooks_json_path.write_text(json.dumps(hooks_data, indent=2) + "\n")
-    actions.append(f"Updated {hooks_json_path} with SessionStart, UserPromptSubmit, Stop hooks")
+    actions.append(
+        f"Updated {hooks_json_path} with SessionStart, UserPromptSubmit, PreToolUse, " "PostToolUse, PermissionRequest, Stop hooks"
+    )
 
     logger.info("Installed Longhouse Codex hooks in %s", codex_dir)
     return actions

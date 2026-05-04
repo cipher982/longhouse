@@ -14,6 +14,7 @@ def test_codex_hook_script_template_has_required_markers():
     """Hook script must contain the key patterns the engine + outbox expect."""
     assert "hook_event_name" in CODEX_HOOK_SCRIPT, "must read Codex snake_case hook event input"
     assert "session_id" in CODEX_HOOK_SCRIPT, "must read Codex session ID"
+    assert "tool_name" in CODEX_HOOK_SCRIPT, "must read Codex tool hook names"
     assert "transcript_path" in CODEX_HOOK_SCRIPT, "must read transcript path"
     assert 'LONGHOUSE_HOME="${LONGHOUSE_HOME:-__LONGHOUSE_HOME__}"' in CODEX_HOOK_SCRIPT
     assert "prs." in CODEX_HOOK_SCRIPT, "must use prs.*.json outbox naming"
@@ -24,6 +25,7 @@ def test_codex_hook_script_template_has_required_markers():
     # use the placeholder so install_codex_hooks can bake in the real path.
     assert 'ENGINE="__ENGINE_PATH__"' in CODEX_HOOK_SCRIPT, "must use placeholder in the command variable"
     assert "provider: $provider" in CODEX_HOOK_SCRIPT, "must include provider in presence payload"
+    assert "tool_name: $tool" in CODEX_HOOK_SCRIPT, "must include tool names in presence payload"
     assert "transcript_path: $transcript" in CODEX_HOOK_SCRIPT, "must include transcript path in presence payload"
 
 
@@ -56,9 +58,12 @@ def test_codex_hook_hot_path_stays_local_only():
 
 
 def test_codex_hook_script_maps_all_events():
-    """Hook script must handle all three Codex hook events."""
+    """Hook script must handle the Codex hook events that produce liveness facts."""
     assert "SessionStart)" in CODEX_HOOK_SCRIPT
     assert "UserPromptSubmit)" in CODEX_HOOK_SCRIPT
+    assert "PreToolUse)" in CODEX_HOOK_SCRIPT
+    assert "PostToolUse)" in CODEX_HOOK_SCRIPT
+    assert "PermissionRequest)" in CODEX_HOOK_SCRIPT
     assert "Stop)" in CODEX_HOOK_SCRIPT
 
 
@@ -136,13 +141,19 @@ def test_install_codex_hooks_creates_valid_hooks_json(tmp_path, monkeypatch):
     data = json.loads(hooks_json.read_text())
     hooks = data["hooks"]
 
-    # Must have all three Codex hook events (PascalCase keys)
-    assert "SessionStart" in hooks
-    assert "UserPromptSubmit" in hooks
-    assert "Stop" in hooks
+    # Must have all Codex hook events that map to explicit liveness facts.
+    expected_events = {
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "PermissionRequest",
+        "Stop",
+    }
+    assert expected_events.issubset(hooks)
 
     # Each event should be an array of MatcherGroups
-    for event in ("SessionStart", "UserPromptSubmit", "Stop"):
+    for event in expected_events:
         groups = hooks[event]
         assert isinstance(groups, list)
         assert len(groups) == 1
@@ -154,8 +165,8 @@ def test_install_codex_hooks_creates_valid_hooks_json(tmp_path, monkeypatch):
         assert "longhouse-codex-hook.sh" in handler["command"]
 
     # All hooks use 5s timeout (no shipping, just outbox write + binding)
-    assert hooks["Stop"][0]["hooks"][0]["timeout"] == 5
-    assert hooks["SessionStart"][0]["hooks"][0]["timeout"] == 5
+    for event in expected_events:
+        assert hooks[event][0]["hooks"][0]["timeout"] == 5
 
 
 def test_install_codex_hooks_preserves_existing_hooks_json(tmp_path, monkeypatch):
@@ -197,8 +208,17 @@ def test_install_codex_hooks_is_idempotent(tmp_path, monkeypatch):
 
     data = json.loads((codex_dir / "hooks.json").read_text())
 
-    for event in ("SessionStart", "UserPromptSubmit", "Stop"):
-        assert len(data["hooks"][event]) == 1, f"{event} should have exactly 1 entry after double install"
+    for event in (
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "PermissionRequest",
+        "Stop",
+    ):
+        assert len(data["hooks"][event]) == 1, (
+            f"{event} should have exactly 1 entry after double install"
+        )
 
 
 def test_install_codex_hooks_handles_corrupt_hooks_json(tmp_path, monkeypatch):
