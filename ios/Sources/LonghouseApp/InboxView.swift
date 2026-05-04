@@ -400,20 +400,12 @@ private func nonEmpty(_ value: String?) -> String? {
 }
 
 private func runtimeColor(_ session: SessionSummary) -> Color {
-    if session.isClosed { return .secondary }
-    if session.isBlocked { return .orange }
-    if session.presenceState == "running" { return .green }
-    if session.presenceState == "thinking" { return .orange }
-    if session.isExecuting { return .orange }
-    if let recency = session.runtimeDisplay?.activityRecency, recency == "stale" || recency == "none" {
-        return .secondary
+    switch session.runtimeTone {
+    case "running": return .green
+    case "thinking", "blocked", "stalled": return .orange
+    case "inferred": return .blue
+    default: return .secondary
     }
-    // Phase 3 of session-liveness-honesty: trust lifecycle=="closed" when
-    // present; fall back to status only for older payloads.
-    let lifecycle = session.runtimeDisplay?.lifecycle
-    if session.isIdle || lifecycle == "closed" { return .secondary }
-    if lifecycle == nil && session.status == "completed" { return .secondary }
-    return .blue
 }
 
 private func managementColor(_ session: SessionSummary) -> Color {
