@@ -158,6 +158,9 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         guard let branch = gitBranch?.trimmingCharacters(in: .whitespacesAndNewlines), !branch.isEmpty else {
             return nil
         }
+        if branch.caseInsensitiveCompare("HEAD") == .orderedSame {
+            return nil
+        }
         return branch
     }
     var turnCount: Int { userMessages ?? 0 }

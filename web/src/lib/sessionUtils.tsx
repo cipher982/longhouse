@@ -117,8 +117,16 @@ export function getSessionTitle(session: AgentSession): string {
     const snippet = session.first_user_message.trim().slice(0, 80);
     if (snippet) return snippet;
   }
-  if (isValidTitle(session.git_branch)) return session.git_branch!;
+  const branch = getBranchLabel(session.git_branch);
+  if (branch) return branch;
   return "";
+}
+
+export function getBranchLabel(value: string | null | undefined): string | null {
+  if (!isValidTitle(value)) return null;
+  const branch = value!.trim();
+  if (branch.toUpperCase() === "HEAD") return null;
+  return branch;
 }
 
 // ---------------------------------------------------------------------------

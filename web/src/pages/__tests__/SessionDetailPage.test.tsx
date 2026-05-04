@@ -354,6 +354,17 @@ describe("SessionDetailPage", () => {
     expect(screen.getByText("output")).toBeInTheDocument();
   });
 
+  it("does not render HEAD as branch metadata", () => {
+    const session = makeSession({ git_branch: "HEAD" });
+    mockWorkspaceState({ session, model: buildTimelineModel([]) });
+
+    renderSessionDetailPage();
+
+    expect(screen.getByText("Metadata")).toBeInTheDocument();
+    expect(screen.queryByText("Branch")).not.toBeInTheDocument();
+    expect(screen.queryByText("HEAD")).not.toBeInTheDocument();
+  });
+
   it("keeps terminal attach in the terminal section when control is offline", () => {
     const session = makeSession({
       ended_at: null,

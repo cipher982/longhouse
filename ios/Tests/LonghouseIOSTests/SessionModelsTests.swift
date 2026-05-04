@@ -154,9 +154,19 @@ struct SessionModelsTests {
             homeLabel: "cinder",
             headOriginLabel: "email:Sauron production-mode validation"
         )
+        let headSession = SessionSummary(
+            id: "session-head",
+            title: "Detached session",
+            presenceState: "idle",
+            provider: "codex",
+            project: "zerg",
+            lastActivityAt: nil,
+            gitBranch: "HEAD"
+        )
 
         #expect(branchSession.timelineBranchBadgeLabel == "main")
         #expect(originOnlySession.timelineBranchBadgeLabel == nil)
+        #expect(headSession.timelineBranchBadgeLabel == nil)
     }
 
     @Test
