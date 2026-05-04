@@ -71,6 +71,16 @@ class BindingOverlay:
 
     host_state: str  # online | stale | offline | unknown
     terminal_reason: str | None  # process_gone | host_expired | None
+    host_last_seen_at: datetime | None = None
+    machine_id: str | None = None
+    device_id: str | None = None
+    pid: int | None = None
+    process_start_time: datetime | None = None
+    observed_at: datetime | None = None
+    last_seen_at: datetime | None = None
+    source_mtime: datetime | None = None
+    source_path: str | None = None
+    binding_state: str | None = None
 
 
 def load_binding_overlay(
@@ -120,7 +130,9 @@ def load_binding_overlay(
         if session_id is None or session_id in overlay:
             # Rows are already newest-first; keep the first one.
             continue
-        host_state = host_state_by_key.get(_heartbeat_key(binding), "unknown")
+        heartbeat_key = _heartbeat_key(binding)
+        host_state = host_state_by_key.get(heartbeat_key, "unknown")
+        heartbeat_at = host_seen_at_by_key.get(heartbeat_key)
 
         terminal_reason: str | None = None
         binding_state = (binding.binding_state or "observed").strip().lower()
@@ -137,7 +149,6 @@ def load_binding_overlay(
         if binding_state == "stale":
             terminal_reason = "process_gone"
         elif host_state == "offline":
-            heartbeat_at = host_seen_at_by_key.get(_heartbeat_key(binding))
             if heartbeat_at is not None and current - _as_utc(heartbeat_at) > HOST_EXPIRED_WINDOW:
                 terminal_reason = "host_expired"
         elif (
@@ -151,6 +162,16 @@ def load_binding_overlay(
         overlay[session_id] = BindingOverlay(
             host_state=host_state,
             terminal_reason=terminal_reason,
+            host_last_seen_at=_as_utc(heartbeat_at) if heartbeat_at else None,
+            machine_id=binding.machine_id,
+            device_id=binding.device_id,
+            pid=binding.pid,
+            process_start_time=_as_utc(binding.process_start_time) if binding.process_start_time else None,
+            observed_at=_as_utc(binding.observed_at) if binding.observed_at else None,
+            last_seen_at=last_seen,
+            source_mtime=source_mtime,
+            source_path=binding.source_path,
+            binding_state=binding_state,
         )
 
     return overlay

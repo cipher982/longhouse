@@ -26,6 +26,7 @@ from zerg.services.managed_local_transport import build_managed_local_attach_com
 from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_capabilities import build_session_capability_display
 from zerg.services.session_capabilities import project_current_session_capabilities
+from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_runner_state import managed_runner_host_state
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_runtime import should_include_runtime_view
@@ -116,6 +117,63 @@ def build_session_runtime_display_response(
         lifecycle=display.lifecycle,
         host_state=display.host_state,
         terminal_reason=display.terminal_reason,
+    )
+
+
+def build_session_liveness_facts_response(
+    *,
+    runtime_overlay: SessionRuntimeView | None,
+    capability_flags,
+    last_activity_at: datetime | None,
+    binding_overlay=None,
+    binding_host_state: str | None = None,
+    binding_terminal_reason: str | None = None,
+) -> SessionLivenessFactsResponse | None:
+    if runtime_overlay is None:
+        return None
+    facts = build_session_liveness_facts(
+        runtime_view=runtime_overlay,
+        capabilities=capability_flags,
+        last_activity_at=last_activity_at,
+        binding_overlay=binding_overlay,
+        binding_host_state=binding_host_state,
+        binding_terminal_reason=binding_terminal_reason,
+    )
+    return SessionLivenessFactsResponse(
+        control_path=facts.control_path,
+        host=HostObservationResponse(
+            state=facts.host.state,
+            last_seen_at=facts.host.last_seen_at,
+            source=facts.host.source,
+        ),
+        process=ProcessObservationResponse(
+            status=facts.process.status,
+            pid=facts.process.pid,
+            process_start_time=facts.process.process_start_time,
+            observed_at=facts.process.observed_at,
+            last_seen_at=facts.process.last_seen_at,
+            source_mtime=facts.process.source_mtime,
+            source_path=facts.process.source_path,
+            reason=facts.process.reason,
+            source=facts.process.source,
+        ),
+        phase=PhaseObservationResponse(
+            kind=facts.phase.kind,
+            tool=facts.phase.tool,
+            source=facts.phase.source,
+            observed_at=facts.phase.observed_at,
+            expires_at=facts.phase.expires_at,
+        ),
+        activity=ActivityObservationResponse(
+            last_transcript_at=facts.activity.last_transcript_at,
+            last_runtime_signal_at=facts.activity.last_runtime_signal_at,
+            last_progress_at=facts.activity.last_progress_at,
+        ),
+        lifecycle=LifecycleFactResponse(
+            state=facts.lifecycle.state,
+            reason=facts.lifecycle.reason,
+            observed_at=facts.lifecycle.observed_at,
+        ),
     )
 
 
@@ -280,6 +338,60 @@ class SessionRuntimeDisplayResponse(BaseModel):
     )
 
 
+class HostObservationResponse(UTCBaseModel):
+    state: str = Field("unknown", description="Observed host state: online|stale|offline|unknown")
+    last_seen_at: Optional[datetime] = Field(None, description="When the host last heartbeated, when known")
+    source: Optional[str] = Field(None, description="Observation source, e.g. machine_heartbeat")
+
+
+class ProcessObservationResponse(UTCBaseModel):
+    status: str = Field("unknown", description="Observed process state: observed|not_observed|unknown")
+    pid: Optional[int] = Field(None, description="Observed process id, when known")
+    process_start_time: Optional[datetime] = Field(None, description="Observed process start time, when known")
+    observed_at: Optional[datetime] = Field(None, description="When this process binding was observed")
+    last_seen_at: Optional[datetime] = Field(None, description="Server time when this binding was last reported")
+    source_mtime: Optional[datetime] = Field(None, description="Transcript mtime seen with the process observation")
+    source_path: Optional[str] = Field(None, description="Transcript path tied to this observation")
+    reason: Optional[str] = Field(None, description="Why the status is not observed or unknown")
+    source: Optional[str] = Field(None, description="Observation source, e.g. machine_process_scan")
+
+
+class PhaseObservationResponse(UTCBaseModel):
+    kind: Optional[str] = Field(None, description="Observed phase kind, when a semantic phase signal exists")
+    tool: Optional[str] = Field(None, description="Observed active tool for the phase, when known")
+    source: Optional[str] = Field(None, description="Phase observation source")
+    observed_at: Optional[datetime] = Field(None, description="When the phase was observed")
+    expires_at: Optional[datetime] = Field(None, description="Producer/debouncer freshness budget, not lifecycle truth")
+
+
+class ActivityObservationResponse(UTCBaseModel):
+    last_transcript_at: Optional[datetime] = Field(None, description="Last transcript event/activity timestamp")
+    last_runtime_signal_at: Optional[datetime] = Field(None, description="Last semantic runtime signal timestamp")
+    last_progress_at: Optional[datetime] = Field(None, description="Last progress-only signal timestamp")
+
+
+class LifecycleFactResponse(UTCBaseModel):
+    state: str = Field("unknown", description="Observed lifecycle state: open|closed|unknown")
+    reason: Optional[str] = Field(None, description="Reason for the lifecycle state when known")
+    observed_at: Optional[datetime] = Field(None, description="When the lifecycle fact was observed")
+
+
+class SessionLivenessFactsResponse(UTCBaseModel):
+    """Observed facts only.
+
+    This contract is intentionally orthogonal to ``runtime_display``. Clients
+    should render these facts with timestamps/sources, not reconcile them with
+    display labels or use them as a second display state machine.
+    """
+
+    control_path: str = Field(..., description="Does Longhouse own a control path? managed|unmanaged")
+    host: HostObservationResponse
+    process: ProcessObservationResponse
+    phase: PhaseObservationResponse
+    activity: ActivityObservationResponse
+    lifecycle: LifecycleFactResponse
+
+
 class TimelineBadgePresentationResponse(UTCBaseModel):
     label: str = Field(..., description="Stable user-facing badge label")
     tone: str = Field(..., description="Stable visual tone token for clients")
@@ -347,6 +459,7 @@ class SessionResponse(UTCBaseModel):
     control: Optional[SessionControlResponse] = Field(None, description="Host-control and managed-launch debugging detail")
     capabilities: SessionCapabilitiesResponse = Field(..., description="Canonical session capability flags")
     runtime_display: Optional[SessionRuntimeDisplayResponse] = Field(None, description="Server-derived display state for clients")
+    runtime_facts: Optional[SessionLivenessFactsResponse] = Field(None, description="Observed liveness facts with timestamps and sources")
     timeline_card: TimelineCardPresentationResponse = Field(..., description="Server-derived timeline-card presentation")
     loop_mode: SessionLoopMode = Field(SessionLoopMode.ASSIST, description="Session loop mode: assist|autopilot")
     user_state: str = Field("active", description="User classification: active|parked|snoozed|archived")
@@ -468,6 +581,7 @@ class ActiveSessionResponse(UTCBaseModel):
     control: Optional[SessionControlResponse] = Field(None, description="Host-control and managed-launch debugging detail")
     capabilities: SessionCapabilitiesResponse = Field(..., description="Canonical session capability flags")
     runtime_display: Optional[SessionRuntimeDisplayResponse] = Field(None, description="Server-derived display state for clients")
+    runtime_facts: Optional[SessionLivenessFactsResponse] = Field(None, description="Observed liveness facts with timestamps and sources")
     loop_mode: SessionLoopMode = Field(SessionLoopMode.ASSIST, description="Session loop mode: assist|autopilot")
 
 
@@ -842,6 +956,18 @@ def build_session_response(
         if include_runtime
         else None
     )
+    runtime_facts = (
+        build_session_liveness_facts_response(
+            runtime_overlay=runtime_overlay,
+            capability_flags=capability_flags,
+            last_activity_at=last_activity_at,
+            binding_overlay=binding_overlay,
+            binding_host_state=binding_host_state,
+            binding_terminal_reason=binding_terminal_reason,
+        )
+        if runtime_overlay is not None
+        else None
+    )
     effective_capability_flags = project_current_session_capabilities(capability_flags, runtime_display=runtime_display)
     return SessionResponse(
         id=str(session.id),
@@ -897,6 +1023,7 @@ def build_session_response(
             runtime_display=runtime_display,
         ),
         runtime_display=runtime_display,
+        runtime_facts=runtime_facts,
         timeline_card=build_session_timeline_card_response(
             runtime_overlay=runtime_overlay,
             capability_flags=capability_flags,
@@ -941,6 +1068,14 @@ def build_active_session_response(
         binding_host_state=binding_host_state,
         binding_terminal_reason=binding_terminal_reason,
     )
+    runtime_facts = build_session_liveness_facts_response(
+        runtime_overlay=runtime_overlay,
+        capability_flags=capability_flags,
+        last_activity_at=last_activity_at,
+        binding_overlay=binding_overlay,
+        binding_host_state=binding_host_state,
+        binding_terminal_reason=binding_terminal_reason,
+    )
     effective_capability_flags = project_current_session_capabilities(capability_flags, runtime_display=runtime_display)
 
     return ActiveSessionResponse(
@@ -982,6 +1117,7 @@ def build_active_session_response(
             runtime_display=runtime_display,
         ),
         runtime_display=runtime_display,
+        runtime_facts=runtime_facts,
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
     )
 

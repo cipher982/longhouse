@@ -168,6 +168,7 @@ class SessionRuntimeView:
     active_tool: str | None
     confidence: str | None
     timeline_anchor_at: datetime
+    freshness_expires_at: datetime | None = None
 
 
 def _confidence_for_state(state: SessionRuntimeState, *, now: datetime) -> str:
@@ -304,6 +305,7 @@ def build_runtime_view(
         active_tool=active_tool,
         confidence=confidence,
         timeline_anchor_at=timeline_anchor_at,
+        freshness_expires_at=normalize_utc(state.freshness_expires_at),
     )
 
 
@@ -365,6 +367,7 @@ def build_fallback_runtime_view(
         active_tool=None,
         confidence=confidence,
         timeline_anchor_at=timeline_anchor_at,
+        freshness_expires_at=None,
     )
 
 
