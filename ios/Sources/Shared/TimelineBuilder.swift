@@ -37,6 +37,29 @@ enum TimelineItem: Identifiable, Sendable {
     }
 }
 
+/// Shared ISO8601 parsing for Longhouse backend timestamps.
+///
+/// ISO8601DateFormatter is thread-safe for `date(from:)` once configured. We
+/// keep two pre-configured instances (fractional + plain) to avoid allocating
+/// them on every tool-row render — this got called O(tool_rows × re-renders)
+/// on the SessionView hot path.
+enum LonghouseDateParser {
+    nonisolated(unsafe) private static let fractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    nonisolated(unsafe) private static let plain: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
+    static func parse(_ s: String) -> Date? {
+        fractional.date(from: s) ?? plain.date(from: s)
+    }
+}
+
 enum TimelineBuilder {
     /// A tool is "passive" if its tier is `.noise` in config/tool-tiers.json —
     /// a low-signal read/search safe to collapse into a single "Explored" row.
@@ -168,14 +191,8 @@ enum TimelineBuilder {
     /// Duration between call and result in seconds. nil if pending.
     static func durationSeconds(call: SessionEvent, result: SessionEvent?) -> Double? {
         guard let result else { return nil }
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let fallback = ISO8601DateFormatter()
-        fallback.formatOptions = [.withInternetDateTime]
-        func parse(_ s: String) -> Date? {
-            formatter.date(from: s) ?? fallback.date(from: s)
-        }
-        guard let a = parse(call.timestamp), let b = parse(result.timestamp) else { return nil }
+        guard let a = LonghouseDateParser.parse(call.timestamp),
+              let b = LonghouseDateParser.parse(result.timestamp) else { return nil }
         return max(0, b.timeIntervalSince(a))
     }
 
@@ -188,13 +205,7 @@ enum TimelineBuilder {
 
     static func isDropped(call: SessionEvent, sessionEnded: Bool, now: Date = Date()) -> Bool {
         if sessionEnded { return true }
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let fallback = ISO8601DateFormatter()
-        fallback.formatOptions = [.withInternetDateTime]
-        guard let callDate = formatter.date(from: call.timestamp) ?? fallback.date(from: call.timestamp) else {
-            return false
-        }
+        guard let callDate = LonghouseDateParser.parse(call.timestamp) else { return false }
         return now.timeIntervalSince(callDate) > droppedAgeThreshold
     }
 
