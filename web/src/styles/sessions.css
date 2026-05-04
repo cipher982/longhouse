@@ -752,6 +752,21 @@
     letter-spacing: 0;
   }
 
+  .session-card-branch-pill {
+    font-size: 10px;
+    font-weight: var(--font-weight-semibold);
+    line-height: 1;
+    padding: 3px 7px;
+    border-radius: var(--radius-full);
+    white-space: nowrap;
+    background: color-mix(in srgb, var(--color-text-secondary) 10%, transparent);
+    color: color-mix(in srgb, var(--color-text-secondary) 84%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-text-secondary) 24%, transparent);
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   .session-card-closed-pill {
     font-size: 10px;
     font-weight: var(--font-weight-semibold);
@@ -986,7 +1001,8 @@
     }
 
     .session-card-ownership-pill,
-    .session-card-closed-pill {
+    .session-card-closed-pill,
+    .session-card-branch-pill {
       font-size: 9px;
       padding: 2px 5px;
     }

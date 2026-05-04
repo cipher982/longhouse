@@ -15,6 +15,7 @@ import {
 import { getSessionInteractionCapabilities } from "../../lib/sessionWorkspace";
 import {
   formatRelativeTime,
+  getBranchLabel,
   getRuntimeMetaLabel,
   getProjectLabel,
   getSessionTitle,
@@ -71,6 +72,7 @@ export function SessionCard({
 
   const projectLabel = getProjectLabel(session);
   const title = getSessionTitle(session);
+  const branchLabel = getBranchLabel(session.git_branch);
   const cardRuntimeMetaParts = [runtimeMetaLabel].filter(Boolean);
   const showContinuationCount = !compatibilityMode && thread.continuation_count > 1;
   const secondaryStatsLabel = compatibilityMode
@@ -199,6 +201,15 @@ export function SessionCard({
               <span className="session-card-provider-badge">
                 <span className="provider-name">{session.provider}</span>
               </span>
+              {branchLabel && (
+                <span
+                  className="session-card-branch-pill"
+                  data-testid="session-card-branch"
+                  title={`Git branch: ${branchLabel}`}
+                >
+                  {branchLabel}
+                </span>
+              )}
             </div>
           </div>
 

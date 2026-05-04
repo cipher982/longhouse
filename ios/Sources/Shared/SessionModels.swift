@@ -235,6 +235,69 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         }
     }
 
+    var timelineStatusLabel: String {
+        if isClosed {
+            return "Closed"
+        }
+
+        let controlPath = runtimeDisplay?.controlPath ?? (isManaged ? "managed" : "unmanaged")
+        if controlPath == "managed" {
+            if isBlocked { return "Needs permission" }
+            if isExecuting { return "Working" }
+            if runtimeDisplay?.state == "needs_user" || runtimeDisplay?.state == "idle" || isIdle {
+                return "Ready"
+            }
+            switch runtimeDisplay?.activityRecency {
+            case "live", "recent":
+                return "Recent activity"
+            case "none":
+                return "Unknown"
+            default:
+                return "Disconnected"
+            }
+        }
+
+        if controlPath == "unmanaged" {
+            switch runtimeDisplay?.activityRecency {
+            case "live":
+                return "Active"
+            case "recent":
+                return "Recent activity"
+            case "stale":
+                return "Stale"
+            default:
+                break
+            }
+            if isExecuting || needsAttention || runtimeDisplay?.heuristicActive == true {
+                return "Active"
+            }
+            if runtimeDisplay?.hostState == "online" {
+                return "Host online"
+            }
+            return "Unknown"
+        }
+
+        if isExecuting || needsAttention || runtimeDisplay?.heuristicActive == true {
+            return "Active"
+        }
+        if isIdle {
+            return "Ready"
+        }
+        return "Unknown"
+    }
+
+    var timelineStatusSeenAt: String? {
+        guard runtimeDisplay?.activityRecency == "stale" else { return nil }
+        return lastActivityAt ?? timelineAnchorAt
+    }
+
+    var timelineStatusTone: String {
+        if timelineStatusLabel == "Active" {
+            return "active"
+        }
+        return runtimeTone
+    }
+
     var summaryPreview: String? {
         guard let summary = summary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty else {
             return nil
