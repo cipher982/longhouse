@@ -31,7 +31,7 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
     now = datetime(2026, 4, 26, 12, 0, tzinfo=timezone.utc)
     values = {
         "signal_tier": "none",
-        "runtime_phase": "idle",
+        "runtime_phase": None,
         "phase_started_at": now,
         "last_progress_at": now,
         "runtime_source": "fallback",
@@ -42,7 +42,7 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
         "presence_tool": None,
         "presence_updated_at": None,
         "last_live_at": None,
-        "display_phase": "Idle",
+        "display_phase": "Recent",
         "active_tool": None,
         "confidence": None,
         "timeline_anchor_at": now,
@@ -158,7 +158,7 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
         {
             "id": "managed-disconnected",
             "managed": True,
-            "view": {"signal_tier": "none", "runtime_source": "fallback", "display_phase": "Idle"},
+            "view": {"signal_tier": "none", "runtime_source": "fallback", "display_phase": "Recent"},
             "expect": {
                 "control_path": "managed",
                 "signal_tier": "none",
@@ -166,7 +166,7 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
                 "state": None,
                 "tone": "inactive",
                 "headline": "Not connected",
-                "phase_label": "Idle",
+                "phase_label": "Recent",
                 "activity_recency": "none",
                 "needs_attention": False,
             },
@@ -197,7 +197,7 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
             "id": "unmanaged-binding-online",
             "managed": False,
             "binding_host_state": "online",
-            "view": {"signal_tier": "none", "runtime_source": "fallback", "display_phase": "Idle"},
+            "view": {"signal_tier": "none", "runtime_source": "fallback", "display_phase": "Recent"},
             "expect": {
                 "control_path": "unmanaged",
                 "signal_tier": "process_binding",
@@ -205,7 +205,7 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
                 "state": None,
                 "tone": "active",
                 "headline": "Active",
-                "phase_label": "Idle",
+                "phase_label": "Recent",
                 "activity_recency": "live",
                 "needs_attention": False,
             },
@@ -214,7 +214,7 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
             "id": "unmanaged-binding-process-gone",
             "managed": False,
             "binding_terminal_reason": "process_gone",
-            "view": {"signal_tier": "none", "runtime_source": "fallback", "display_phase": "Idle"},
+            "view": {"signal_tier": "none", "runtime_source": "fallback", "display_phase": "Recent"},
             "expect": {
                 "control_path": "unmanaged",
                 "signal_tier": "process_binding",
@@ -297,7 +297,7 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
         {
             "id": "unmanaged-no-signal",
             "managed": False,
-            "view": {"signal_tier": "none", "runtime_source": "fallback", "display_phase": "Idle"},
+            "view": {"signal_tier": "none", "runtime_source": "fallback", "display_phase": "Recent"},
             "expect": {
                 "control_path": "unmanaged",
                 "signal_tier": "none",
@@ -305,7 +305,7 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
                 "state": None,
                 "tone": "inactive",
                 "headline": "Inactive",
-                "phase_label": "Idle",
+                "phase_label": "Recent",
                 "activity_recency": "none",
                 "needs_attention": False,
             },
@@ -431,7 +431,7 @@ def test_three_axis_fields_managed_stale_after_live():
         runtime_view=_runtime_view(
             runtime_source="managed_local_transport",
             presence_state="idle",
-            display_phase="Idle",
+            display_phase="Recent",
             confidence="stale",
             last_live_at=datetime(2026, 4, 26, 11, 0, tzinfo=timezone.utc),
         ),
@@ -494,7 +494,7 @@ def test_unmanaged_online_binding_promotes_signal_tier():
             runtime_source="fallback",
             status="idle",
             confidence=None,
-            display_phase="Idle",
+            display_phase="Recent",
         ),
         capabilities=_capabilities(managed=False),
         ended_at=None,
