@@ -21,7 +21,11 @@ extension SessionDetail {
         let state: String
         let tool: String?
         let phase: String?
-        if let runtimeDisplay {
+        if let factStatus = sessionFactStatus(runtimeFacts) {
+            state = "unknown"
+            tool = nil
+            phase = factStatus.label
+        } else if let runtimeDisplay {
             state = runtimeDisplay.state ?? "unknown"
             tool = RuntimeDisplayText.canonicalToolLabel(runtimeDisplay.compactToolLabel)
             phase = RuntimeDisplayText.canonicalDisplayText(Optional(runtimeDisplay.phaseLabel))
@@ -35,7 +39,7 @@ extension SessionDetail {
             displayPhase: phase ?? liveActivityPhaseLabel(state: state, tool: tool),
             activeTool: tool,
             updatedAt: Int(updatedAt.timeIntervalSince1970),
-            isAttention: (runtimeDisplay?.needsAttention) ?? (state == "blocked")
+            isAttention: runtimeFacts == nil ? ((runtimeDisplay?.needsAttention) ?? (state == "blocked")) : false
         )
     }
 
@@ -61,7 +65,7 @@ extension SessionDetail {
         case "idle":
             return "Idle"
         default:
-            return status == "completed" ? "Completed" : "Recent progress"
+            return status == "completed" ? "Closed" : "Recent progress"
         }
     }
 }
