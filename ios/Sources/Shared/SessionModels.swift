@@ -76,6 +76,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     let hostReattachAvailable: Bool?
     let replyToLiveSessionAvailable: Bool?
     let runtimeDisplay: SessionRuntimeDisplay?
+    let timelineCard: TimelineCardPresentation?
 
     init(
         id: String,
@@ -99,7 +100,8 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         liveControlAvailable: Bool? = nil,
         hostReattachAvailable: Bool? = nil,
         replyToLiveSessionAvailable: Bool? = nil,
-        runtimeDisplay: SessionRuntimeDisplay? = nil
+        runtimeDisplay: SessionRuntimeDisplay? = nil,
+        timelineCard: TimelineCardPresentation? = nil
     ) {
         self.id = id
         self.title = title
@@ -123,6 +125,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         self.hostReattachAvailable = hostReattachAvailable
         self.replyToLiveSessionAvailable = replyToLiveSessionAvailable
         self.runtimeDisplay = runtimeDisplay
+        self.timelineCard = timelineCard
     }
 
     var isClosed: Bool {
@@ -189,11 +192,14 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     }
 
     var managementLabel: String {
-        isManaged ? "Managed" : "Unmanaged"
+        if let label = timelineCard?.ownership.label.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
+            return label
+        }
+        return isManaged ? "Managed" : "Unmanaged"
     }
 
     var managementTone: String {
-        return "neutral"
+        return timelineCard?.ownership.tone ?? "neutral"
     }
 
     private var isManaged: Bool {
@@ -236,6 +242,9 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     }
 
     var timelineStatusLabel: String {
+        if let label = timelineCard?.status?.label.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
+            return label
+        }
         if isClosed {
             return "Closed"
         }
@@ -287,13 +296,26 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     }
 
     var timelineStatusSeenAt: String? {
+        if let seenAt = timelineCard?.status?.seenAt?.trimmingCharacters(in: .whitespacesAndNewlines), !seenAt.isEmpty {
+            return seenAt
+        }
         guard runtimeDisplay?.activityRecency == "stale" else { return nil }
         return lastActivityAt ?? timelineAnchorAt
     }
 
     var timelineStatusTone: String {
+        if let tone = timelineCard?.status?.tone.trimmingCharacters(in: .whitespacesAndNewlines), !tone.isEmpty {
+            return tone
+        }
         if timelineStatusLabel == "Active" {
             return "active"
+        }
+        return runtimeTone
+    }
+
+    var timelineBorderTone: String {
+        if let tone = timelineCard?.borderTone.trimmingCharacters(in: .whitespacesAndNewlines), !tone.isEmpty {
+            return tone
         }
         return runtimeTone
     }
@@ -343,6 +365,7 @@ struct TimelineSession: Codable, Sendable {
     let capabilities: SessionCapabilities?
     let loopMode: SessionLoopMode?
     let runtimeDisplay: SessionRuntimeDisplay?
+    let timelineCard: TimelineCardPresentation?
 }
 
 struct SessionCapabilities: Codable, Sendable {
@@ -354,6 +377,23 @@ struct SessionCapabilities: Codable, Sendable {
     let displayLabel: String?
     let displayDetail: String?
     let displayTone: String?
+}
+
+struct TimelineBadgePresentation: Codable, Hashable, Sendable {
+    let label: String
+    let tone: String
+}
+
+struct TimelineStatusPresentation: Codable, Hashable, Sendable {
+    let label: String
+    let tone: String
+    let seenAt: String?
+}
+
+struct TimelineCardPresentation: Codable, Hashable, Sendable {
+    let ownership: TimelineBadgePresentation
+    let status: TimelineStatusPresentation?
+    let borderTone: String
 }
 
 /// Outcome returned from POST /api/sessions/{id}/input.

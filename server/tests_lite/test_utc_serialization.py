@@ -76,6 +76,11 @@ def test_session_response_model():
             "host_reattach_available": False,
             "reply_to_live_session_available": False,
         },
+        timeline_card={
+            "ownership": {"label": "Unmanaged", "tone": "neutral"},
+            "status": {"label": "Unknown", "tone": "inactive"},
+            "border_tone": "inactive",
+        },
     )
     encoded = jsonable_encoder(resp)
     assert encoded["started_at"].endswith("Z"), f"started_at missing Z: {encoded['started_at']}"
