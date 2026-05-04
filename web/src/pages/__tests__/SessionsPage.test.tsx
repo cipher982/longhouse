@@ -1692,7 +1692,7 @@ describe("SessionsPage", () => {
             }),
             timeline_card: {
               ownership: { label: "Unmanaged", tone: "neutral" },
-              status: { label: "Stale", tone: "inactive", seen_at: "2026-03-21T11:00:00Z" },
+              status: { label: "Stale", tone: "inactive", seen_at: "2026-03-21T11:00:00Z", seen_at_prefix: "Updated" },
               border_tone: "inactive",
             },
           }),
@@ -1711,7 +1711,7 @@ describe("SessionsPage", () => {
     expect(await within(card).findByTestId("session-card-ownership")).toHaveTextContent("Unmanaged");
     const runtime = await within(card).findByTestId("session-card-runtime");
     expect(runtime).toHaveTextContent("Stale");
-    expect(runtime).toHaveTextContent("Seen ");
+    expect(runtime).toHaveTextContent("Updated ");
   });
 
   it("prefers lifecycle=='closed' over stale managed presence", async () => {

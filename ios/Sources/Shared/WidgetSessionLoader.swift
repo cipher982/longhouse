@@ -58,7 +58,7 @@ struct WidgetSessionSnapshot: Codable, Sendable {
 }
 
 enum WidgetSessionSnapshotStore {
-    private static let snapshotKey = "longhouse.widget.sessions.snapshot"
+    private static let snapshotKey = "longhouse.widget.sessions.snapshot.v2"
 
     static func save(sessions: [SessionSummary], defaults: UserDefaults? = sharedDefaults) {
         let active = sessions.filter(\.isUserActive)

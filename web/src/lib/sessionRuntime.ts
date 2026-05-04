@@ -83,7 +83,7 @@ export interface SessionFactStatus {
   label: string;
   tone: RuntimeTone;
   seenAt: string | null;
-  seenAtPrefix: "Closed" | "Checked" | "Seen" | "Transcript";
+  seenAtPrefix: "Closed" | "Checked" | "Updated" | "Verified" | "Heartbeat" | "Transcript";
 }
 
 export function resolveSessionOwnershipLabel(
@@ -247,7 +247,7 @@ function resolveSessionFactStatus(facts: SessionLivenessFacts | null): SessionFa
       label: formatPhaseStatus(phaseKind, facts.phase?.tool),
       tone: "inactive",
       seenAt: facts.phase?.observed_at ?? null,
-      seenAtPrefix: "Seen",
+      seenAtPrefix: "Updated",
     };
   }
 
@@ -256,7 +256,7 @@ function resolveSessionFactStatus(facts: SessionLivenessFacts | null): SessionFa
       label: "Process visible",
       tone: "inactive",
       seenAt: facts.process?.observed_at ?? facts.process?.last_seen_at ?? null,
-      seenAtPrefix: "Seen",
+      seenAtPrefix: "Verified",
     };
   }
 
@@ -274,7 +274,7 @@ function resolveSessionFactStatus(facts: SessionLivenessFacts | null): SessionFa
       label: "Host online",
       tone: "inactive",
       seenAt: facts.host?.last_seen_at ?? null,
-      seenAtPrefix: "Seen",
+      seenAtPrefix: "Heartbeat",
     };
   }
 
@@ -283,7 +283,7 @@ function resolveSessionFactStatus(facts: SessionLivenessFacts | null): SessionFa
       label: "Host last seen",
       tone: "inactive",
       seenAt: facts.host?.last_seen_at ?? null,
-      seenAtPrefix: "Seen",
+      seenAtPrefix: "Heartbeat",
     };
   }
 
@@ -292,7 +292,7 @@ function resolveSessionFactStatus(facts: SessionLivenessFacts | null): SessionFa
       label: "Host offline",
       tone: "inactive",
       seenAt: facts.host?.last_seen_at ?? null,
-      seenAtPrefix: "Seen",
+      seenAtPrefix: "Heartbeat",
     };
   }
 
@@ -309,7 +309,7 @@ function resolveSessionFactStatus(facts: SessionLivenessFacts | null): SessionFa
     label: "Runtime unverified",
     tone: "inactive",
     seenAt: null,
-    seenAtPrefix: "Seen",
+    seenAtPrefix: "Checked",
   };
 }
 

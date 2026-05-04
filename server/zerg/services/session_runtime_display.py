@@ -229,8 +229,9 @@ def build_session_runtime_display(
     status = runtime_view.status
     confidence = runtime_view.confidence
     runtime_source = _normalize_source(runtime_view.runtime_source)
-    runtime_phase = _normalize_presence_state(runtime_view.runtime_phase)
     presence_state = _normalize_presence_state(runtime_view.presence_state)
+    if confidence != "live":
+        presence_state = None
     tool_name = runtime_view.active_tool or runtime_view.presence_tool
     compact_tool = compact_runtime_tool_label(tool_name)
     control_path = _derive_control_path(capabilities)
@@ -248,8 +249,6 @@ def build_session_runtime_display(
         # that is not actionable runtime state, so do not promote it to
         # "Needs you".
         presence_state = None
-    stale_attention_phase = presence_state is None and runtime_phase in ATTENTION_STATES and confidence == "stale"
-    stale_ready_phase = presence_state is None and runtime_phase == "needs_user" and confidence == "stale"
     truth_tier = _truth_tier(
         capabilities=capabilities,
         confidence=confidence,
@@ -267,22 +266,15 @@ def build_session_runtime_display(
     is_executing = presence_state in LIVE_EXECUTION_STATES
     needs_attention = presence_state in ATTENTION_STATES
     is_idle = presence_state in {"idle", "needs_user"} or (
-        not stale_attention_phase
-        and not stale_ready_phase
-        and not is_executing
-        and not needs_attention
-        and not process_observed
-        and status == "idle"
+        not is_executing and not needs_attention and not process_observed and status == "idle"
     )
     if unmanaged_attention_unverified:
         is_idle = True
     display_phase = runtime_view.display_phase
+    if confidence != "live" and runtime_source not in {"fallback", "progress"} and runtime_view.terminal_state is None:
+        display_phase = "Recent"
     if unmanaged_attention_unverified:
         display_phase = "Recent"
-    elif stale_attention_phase:
-        display_phase = "Disconnected" if control_path == "managed" else "Recent"
-    elif stale_ready_phase:
-        display_phase = "Disconnected" if control_path == "managed" else "Recent"
     phase_label = _phase_label(
         presence_state=presence_state,
         display_phase=display_phase,
@@ -318,18 +310,11 @@ def build_session_runtime_display(
     )
 
     terminal_state = runtime_view.terminal_state
-    is_stalled = (
-        control_path == "managed"
-        and terminal_state is None
-        and runtime_phase in LIVE_EXECUTION_STATES
-        and confidence == "stale"
-        and not (tool_name or "").strip()
-    )
+    is_stalled = presence_state == "stalled"
     if is_stalled:
-        presence_state = "stalled"
         phase_label = "Stalled"
         headline = "Stalled"
-        detail = "No recent managed-session progress"
+        detail = "Provider reported stalled"
         is_executing = False
         needs_attention = False
         is_idle = False

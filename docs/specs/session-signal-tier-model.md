@@ -20,10 +20,11 @@ This spec splits the flow into three layers:
 1. **Source signals**: provider/runtime facts we observed.
 2. **Runtime reduction**: durable DB state about phase, activity, and terminal
    signals.
-3. **Display contract**: `runtime_display`, consumed verbatim by web and iOS.
+3. **Display contract**: `runtime_display` and `timeline_card`, consumed
+   verbatim by web and iOS.
 
 Clients may format layout locally, but they must not re-derive the meaning of a
-session from raw fields when `runtime_display` exists.
+session from raw fields when `runtime_display` or `timeline_card` exists.
 
 ## Signal Tiers
 
@@ -46,8 +47,8 @@ phase/lifecycle changes.
 | managed | phase_signal | `blocked`, fresh | open | `Needs permission` or `Blocked on <tool>` | blocked | Approve / send / queue |
 | managed | phase_signal | `needs_user`, fresh | open | `Ready` | idle | Send |
 | managed | phase_signal | `idle`, fresh | open | `Ready` | idle | Send |
-| managed | phase_signal | `thinking` / `running`, stale | open | `Stalled` | stalled | Reattach |
-| managed | none | no fresh bridge truth | open | `Disconnected` | inactive | Reattach or control offline |
+| managed | phase_signal | `thinking` / `running`, stale | unknown/open | `Not connected` / host or transcript fact | inactive | Reattach |
+| managed | none | no fresh bridge truth | open | `Not connected` | inactive | Reattach or control offline |
 | managed | any | explicit terminal signal | closed | `Closed` | inactive | Read-only |
 | unmanaged | process_binding | online process visible | open | `Active` | active | Read-only |
 | unmanaged | process_binding | process gone / host expired | closed | `Closed` | inactive | Read-only |
@@ -59,6 +60,15 @@ phase/lifecycle changes.
 `needs_user` remains a raw semantic phase for debugging, delivery, and future
 queueing decisions. It is not an attention state in timeline UI. `blocked` is
 the only attention phase.
+
+Timeline cards must only show `thinking`, `running`, `idle`, `ready`, or
+`blocked` when the semantic phase signal is still fresh. Expired phase state is
+activity history, not current runtime truth. The server owns
+`timeline_card.status.seen_at_prefix` so clients do not infer timestamp meaning
+from labels. Use `Updated` for fresh phase state, `Verified` for process-visible
+facts, `Checked` for process-not-visible or unverified facts, `Heartbeat` for
+host facts, `Transcript` for transcript-only facts, and `Closed` for explicit
+closure.
 
 ## Metadata Policy
 

@@ -215,7 +215,7 @@ def build_session_timeline_card_response(
 
 def _timeline_status_from_liveness_facts(runtime_facts: SessionLivenessFactsResponse | None) -> TimelineStatusPresentationResponse:
     if runtime_facts is None:
-        return TimelineStatusPresentationResponse(label="Unknown", tone="inactive", seen_at=None)
+        return TimelineStatusPresentationResponse(label="Unknown", tone="inactive", seen_at=None, seen_at_prefix="Checked")
 
     lifecycle = runtime_facts.lifecycle
     if lifecycle.state == "closed":
@@ -223,6 +223,7 @@ def _timeline_status_from_liveness_facts(runtime_facts: SessionLivenessFactsResp
             label="Closed",
             tone="closed",
             seen_at=lifecycle.observed_at or runtime_facts.phase.observed_at or runtime_facts.activity.last_transcript_at,
+            seen_at_prefix="Closed",
         )
 
     phase = runtime_facts.phase
@@ -232,6 +233,7 @@ def _timeline_status_from_liveness_facts(runtime_facts: SessionLivenessFactsResp
             label=_phase_status_label(phase_kind, phase.tool),
             tone="inactive",
             seen_at=phase.observed_at,
+            seen_at_prefix="Updated",
         )
 
     process = runtime_facts.process
@@ -240,30 +242,53 @@ def _timeline_status_from_liveness_facts(runtime_facts: SessionLivenessFactsResp
             label="Process visible",
             tone="inactive",
             seen_at=process.observed_at or process.last_seen_at,
+            seen_at_prefix="Verified",
         )
     if process.status == "not_observed":
         return TimelineStatusPresentationResponse(
             label="Process not visible",
             tone="inactive",
             seen_at=process.last_seen_at or process.observed_at,
+            seen_at_prefix="Checked",
         )
 
     host = runtime_facts.host
     if host.state == "online":
-        return TimelineStatusPresentationResponse(label="Host online", tone="inactive", seen_at=host.last_seen_at)
+        return TimelineStatusPresentationResponse(
+            label="Host online",
+            tone="inactive",
+            seen_at=host.last_seen_at,
+            seen_at_prefix="Heartbeat",
+        )
     if host.state == "stale":
-        return TimelineStatusPresentationResponse(label="Host last seen", tone="inactive", seen_at=host.last_seen_at)
+        return TimelineStatusPresentationResponse(
+            label="Host last seen",
+            tone="inactive",
+            seen_at=host.last_seen_at,
+            seen_at_prefix="Heartbeat",
+        )
     if host.state == "offline":
-        return TimelineStatusPresentationResponse(label="Host offline", tone="inactive", seen_at=host.last_seen_at)
+        return TimelineStatusPresentationResponse(
+            label="Host offline",
+            tone="inactive",
+            seen_at=host.last_seen_at,
+            seen_at_prefix="Heartbeat",
+        )
 
     if runtime_facts.activity.last_transcript_at is not None:
         return TimelineStatusPresentationResponse(
             label="Transcript only",
             tone="inactive",
             seen_at=runtime_facts.activity.last_transcript_at,
+            seen_at_prefix="Transcript",
         )
 
-    return TimelineStatusPresentationResponse(label="Runtime unverified", tone="inactive", seen_at=None)
+    return TimelineStatusPresentationResponse(
+        label="Runtime unverified",
+        tone="inactive",
+        seen_at=None,
+        seen_at_prefix="Checked",
+    )
 
 
 def _phase_status_label(kind: str, tool_name: str | None) -> str:
@@ -364,7 +389,7 @@ class SessionRuntimeDisplayResponse(BaseModel):
     is_executing: bool = Field(False, description="True when the agent is thinking or running a tool")
     needs_attention: bool = Field(False, description="True when the user should respond or approve")
     is_idle: bool = Field(False, description="True when the runtime is ready for the next prompt")
-    is_stalled: bool = Field(False, description="True when a managed live phase has gone stale without an active tool")
+    is_stalled: bool = Field(False, description="True when a provider explicitly reports stalled state")
     is_managed_local_truth: bool = Field(False, description="True when runtime truth is from a managed-local control path")
     has_signal: bool = Field(False, description="True when clients should render runtime state")
     control_path: str = Field(
@@ -450,6 +475,7 @@ class TimelineBadgePresentationResponse(UTCBaseModel):
 
 class TimelineStatusPresentationResponse(TimelineBadgePresentationResponse):
     seen_at: Optional[datetime] = Field(None, description="Signal timestamp for stale status copy")
+    seen_at_prefix: str = Field(..., description="Server-owned word that qualifies the status timestamp")
 
 
 class TimelineCardPresentationResponse(UTCBaseModel):

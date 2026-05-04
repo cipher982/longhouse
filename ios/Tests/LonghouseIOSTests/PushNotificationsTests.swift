@@ -74,6 +74,17 @@ struct PushNotificationsTests {
         #expect(snapshot.sessions.map(\.id) == ["needs", "running"])
     }
 
+    @Test
+    func widgetSnapshotIgnoresPreTimelinePrefixCacheKey() throws {
+        let suiteName = "LonghouseWidgetSnapshotKeyTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        defaults.set(Data(#"{"sessions":[],"totalActive":0,"savedAt":"2026-05-04T00:00:00Z"}"#.utf8), forKey: "longhouse.widget.sessions.snapshot")
+
+        #expect(WidgetSessionSnapshotStore.load(defaults: defaults) == nil)
+    }
+
     private func makeSession(
         id: String,
         presenceState: String,

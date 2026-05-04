@@ -720,7 +720,7 @@ struct SessionModelsTests {
             ),
             timelineCard: TimelineCardPresentation(
                 ownership: TimelineBadgePresentation(label: "Unmanaged", tone: "neutral"),
-                status: TimelineStatusPresentation(label: "Stale", tone: "inactive", seenAt: "2026-04-25T19:00:00Z"),
+                status: TimelineStatusPresentation(label: "Stale", tone: "inactive", seenAt: "2026-04-25T19:00:00Z", seenAtPrefix: "Updated"),
                 borderTone: "inactive"
             )
         )
@@ -867,7 +867,7 @@ struct SessionModelsTests {
 
         #expect(processObserved.managementLabel == "Unmanaged")
         #expect(processObserved.timelineStatusLabel == "Process visible")
-        #expect(processObserved.timelineStatusSeenAtPrefix == "Seen")
+        #expect(processObserved.timelineStatusSeenAtPrefix == "Verified")
         #expect(transcriptOnly.timelineStatusLabel == "Transcript only")
         #expect(transcriptOnly.timelineStatusSeenAtPrefix == "Transcript")
         #expect(hostUnverified.timelineStatusLabel == "Runtime unverified")
@@ -922,7 +922,7 @@ struct SessionModelsTests {
                 },
                 "timeline_card": {
                   "ownership": {"label": "Managed", "tone": "neutral"},
-                  "status": {"label": "Ready", "tone": "idle", "seen_at": null},
+                  "status": {"label": "Ready", "tone": "idle", "seen_at": null, "seen_at_prefix": "Updated"},
                   "border_tone": "idle"
                 }
               }
@@ -962,7 +962,7 @@ struct SessionModelsTests {
             ),
             timelineCard: TimelineCardPresentation(
                 ownership: TimelineBadgePresentation(label: "Managed", tone: "neutral"),
-                status: TimelineStatusPresentation(label: "Ready", tone: "idle", seenAt: nil),
+                status: TimelineStatusPresentation(label: "Ready", tone: "idle", seenAt: nil, seenAtPrefix: "Updated"),
                 borderTone: "idle"
             )
         )

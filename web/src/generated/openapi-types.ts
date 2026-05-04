@@ -8452,7 +8452,7 @@ export interface components {
             is_idle: boolean;
             /**
              * Is Stalled
-             * @description True when a managed live phase has gone stale without an active tool
+             * @description True when a provider explicitly reports stalled state
              * @default false
              */
             is_stalled: boolean;
@@ -9327,6 +9327,11 @@ export interface components {
              * @description Signal timestamp for stale status copy
              */
             seen_at?: string | null;
+            /**
+             * Seen At Prefix
+             * @description Server-owned word that qualifies the status timestamp
+             */
+            seen_at_prefix: string;
         };
         /**
          * TokenBreakdown

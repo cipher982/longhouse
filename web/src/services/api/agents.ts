@@ -154,6 +154,7 @@ export interface TimelineBadgePresentation {
 
 export interface TimelineStatusPresentation extends TimelineBadgePresentation {
   seen_at?: string | null;
+  seen_at_prefix: string;
 }
 
 export interface TimelineCardPresentation {

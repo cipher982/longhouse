@@ -32,27 +32,15 @@ const SESSION_CARD_HOVER_PREFETCH_DELAY_MS = 180;
 type TimelineStatusLike = {
   label: string;
   seen_at?: string | null;
+  seen_at_prefix: string;
 };
-
-function getTimelineStatusSeenAtPrefix(status: TimelineStatusLike): "Closed" | "Checked" | "Seen" | "Transcript" {
-  const label = status.label.trim().toLowerCase();
-  if (label === "closed") {
-    return "Closed";
-  }
-  if (label === "transcript only") {
-    return "Transcript";
-  }
-  if (label === "process not visible") {
-    return "Checked";
-  }
-  return "Seen";
-}
 
 function formatTimelineStatusMeta(status: TimelineStatusLike | null, relativeNowMs: number): string | null {
   if (!status?.seen_at) {
     return null;
   }
-  return `${getTimelineStatusSeenAtPrefix(status)} ${formatRelativeTime(status.seen_at, relativeNowMs)}`;
+  const prefix = status.seen_at_prefix.trim();
+  return `${prefix} ${formatRelativeTime(status.seen_at, relativeNowMs)}`;
 }
 
 // ---------------------------------------------------------------------------
