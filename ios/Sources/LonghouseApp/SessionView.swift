@@ -1222,14 +1222,6 @@ final class SessionViewModel: ObservableObject {
         }
     }
 
-    var isSessionActive: Bool {
-        guard let detail else { return false }
-        let active: Set<String> = ["running", "thinking", "working", "blocked", "active"]
-        if let presence = detail.presenceState, active.contains(presence) { return true }
-        if let status = detail.status, active.contains(status) { return true }
-        return false
-    }
-
     var liveActivityFingerprint: String {
         guard let detail else { return "" }
         return [
