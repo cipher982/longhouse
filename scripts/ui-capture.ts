@@ -300,6 +300,9 @@ async function installScenePageOverrides(page: Page, scene: SceneName, pageName:
   }
 
   await page.addInitScript(() => {
+    const fixtureNow = Date.parse("2026-04-15T16:12:00Z");
+    Date.now = () => fixtureNow;
+
     Object.defineProperty(window, "EventSource", {
       configurable: true,
       value: undefined,
