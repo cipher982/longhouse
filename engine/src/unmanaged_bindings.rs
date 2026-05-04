@@ -16,8 +16,10 @@
 //!      roots via `discovery::discover_all_files`, filtered by mtime.
 //!   2. Enumerate candidate provider-CLI processes with
 //!      `ps -axo pid=,lstart=,command=`. Filter by command basename
-//!      (`claude`, `codex`, `gemini`) — never `longhouse-*` wrappers
-//!      (those are managed sessions and get their own lease surface).
+//!      (`claude`, `codex`, `gemini`) plus the stock Node-backed Codex
+//!      launcher shape (`node .../codex` / `node .../codex.js`) — never
+//!      `longhouse-*` wrappers (those are managed sessions and get their
+//!      own lease surface).
 //!   3. For each candidate pid, ask `lsof -F n -p <pid>` which regular
 //!      files it has open, and look for transcript paths.
 //!   4. Emit one [`UnmanagedSessionBinding`] per `(provider,
@@ -173,11 +175,38 @@ fn parse_lsof(text: &str) -> Vec<PathBuf> {
 
 fn is_provider_process(command: &str) -> Option<&'static str> {
     // Grab argv[0] — the first whitespace-separated token.
-    let argv0 = command.split_whitespace().next().unwrap_or("");
+    let mut argv = command.split_whitespace();
+    let argv0 = argv.next().unwrap_or("");
     let basename = Path::new(argv0)
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("");
+    if let Some(provider) = provider_from_argv0_basename(basename) {
+        return Some(provider);
+    }
+
+    // Homebrew/npm Codex commonly appears in `ps` as
+    // `node /opt/homebrew/bin/codex ...`; the provider executable is still
+    // the user's stock Codex launcher, not a Longhouse-owned runtime.
+    if !matches!(basename, "node" | "nodejs") {
+        return None;
+    }
+    let script = argv.next().unwrap_or("");
+    let script_basename = Path::new(script)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    if script_basename.starts_with("longhouse-") {
+        return None;
+    }
+    // Claude and Gemini are not Node-launched on supported installs today.
+    match script_basename {
+        "codex" | "codex.js" => Some("codex"),
+        _ => None,
+    }
+}
+
+fn provider_from_argv0_basename(basename: &str) -> Option<&'static str> {
     // Reject Longhouse-managed wrappers. Those sessions show up on the
     // managed-lease surface; we don't want to double-count.
     if basename.starts_with("longhouse-") {
@@ -429,10 +458,24 @@ mod tests {
             is_provider_process("/usr/local/bin/codex --tui"),
             Some("codex")
         );
+        assert_eq!(
+            is_provider_process("node /opt/homebrew/bin/codex --tui"),
+            Some("codex")
+        );
+        assert_eq!(
+            is_provider_process(
+                "/opt/homebrew/opt/node/bin/node /opt/homebrew/lib/node_modules/@openai/codex/bin/codex.js --tui"
+            ),
+            Some("codex")
+        );
         assert_eq!(is_provider_process("claude"), Some("claude"));
         assert_eq!(is_provider_process("gemini chat"), Some("gemini"));
         assert_eq!(is_provider_process("longhouse-codex --attach"), None);
         assert_eq!(is_provider_process("/usr/local/bin/longhouse-claude"), None);
+        assert_eq!(
+            is_provider_process("node /usr/local/bin/longhouse-codex --attach"),
+            None
+        );
         assert_eq!(is_provider_process("node server.js"), None);
     }
 
@@ -493,6 +536,65 @@ mod tests {
         );
         assert!(b.source_inode.is_some());
         assert_eq!(b.source_offset, Some(3));
+    }
+
+    #[test]
+    fn scanner_matches_node_wrapped_homebrew_codex_to_transcript() {
+        let now = t("2026-04-27T12:00:00Z");
+        let tmp = tempfile::tempdir().unwrap();
+        let transcript = tmp.path().join("abc.jsonl");
+        std::fs::write(&transcript, "{}\n").unwrap();
+
+        let scanner = FakeScanner {
+            processes: vec![ProcessInfo {
+                pid: 1234,
+                start_time: t("2026-04-27T10:00:00Z"),
+                command: "node /opt/homebrew/bin/codex --tui".into(),
+            }],
+            open_files: RefCell::new({
+                let mut m = HashMap::new();
+                m.insert(1234u32, vec![transcript.clone()]);
+                m
+            }),
+        };
+
+        let bindings =
+            collect_from_transcripts("mac", &[(transcript.clone(), "codex")], &scanner, now);
+
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].provider, "codex");
+        assert_eq!(bindings[0].provider_session_id, "abc");
+        assert_eq!(bindings[0].pid, Some(1234));
+    }
+
+    #[test]
+    fn scanner_matches_node_wrapped_npm_codex_js_to_transcript() {
+        let now = t("2026-04-27T12:00:00Z");
+        let tmp = tempfile::tempdir().unwrap();
+        let transcript = tmp.path().join("abc.jsonl");
+        std::fs::write(&transcript, "{}\n").unwrap();
+
+        let scanner = FakeScanner {
+            processes: vec![ProcessInfo {
+                pid: 1234,
+                start_time: t("2026-04-27T10:00:00Z"),
+                command: "node /opt/homebrew/lib/node_modules/@openai/codex/bin/codex.js --tui"
+                    .into(),
+            }],
+            open_files: RefCell::new({
+                let mut m = HashMap::new();
+                m.insert(1234u32, vec![transcript.clone()]);
+                m
+            }),
+        };
+
+        let bindings =
+            collect_from_transcripts("mac", &[(transcript.clone(), "codex")], &scanner, now);
+
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].provider, "codex");
+        assert_eq!(bindings[0].provider_session_id, "abc");
+        assert_eq!(bindings[0].pid, Some(1234));
     }
 
     #[test]
