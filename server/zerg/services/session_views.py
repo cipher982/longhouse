@@ -30,6 +30,7 @@ from zerg.services.session_runner_state import managed_runner_host_state
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_runtime import should_include_runtime_view
 from zerg.services.session_runtime_display import build_session_runtime_display
+from zerg.services.session_timeline_card import build_timeline_card_presentation
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_loop_mode import SessionLoopMode
 from zerg.session_loop_mode import coerce_session_loop_mode
@@ -115,6 +116,55 @@ def build_session_runtime_display_response(
         lifecycle=display.lifecycle,
         host_state=display.host_state,
         terminal_reason=display.terminal_reason,
+    )
+
+
+def build_session_timeline_card_response(
+    *,
+    runtime_overlay: SessionRuntimeView | None,
+    capability_flags,
+    ended_at: datetime | None,
+    last_activity_at: datetime | None,
+    binding_host_state: str | None = None,
+    binding_terminal_reason: str | None = None,
+) -> TimelineCardPresentationResponse:
+    runtime_display = (
+        build_session_runtime_display(
+            runtime_view=runtime_overlay,
+            capabilities=capability_flags,
+            ended_at=ended_at,
+            binding_host_state=binding_host_state,
+            binding_terminal_reason=binding_terminal_reason,
+        )
+        if runtime_overlay is not None
+        else None
+    )
+    managed_fallback = bool(
+        getattr(capability_flags, "live_control_available", False)
+        or getattr(capability_flags, "host_reattach_available", False)
+        or getattr(capability_flags, "reply_to_live_session_available", False)
+    )
+    card = build_timeline_card_presentation(
+        runtime_display=runtime_display,
+        last_live_at=(runtime_overlay.last_live_at if runtime_overlay is not None else None),
+        last_activity_at=last_activity_at,
+        managed_fallback=managed_fallback,
+    )
+    return TimelineCardPresentationResponse(
+        ownership=TimelineBadgePresentationResponse(
+            label=card.ownership.label,
+            tone=card.ownership.tone,
+        ),
+        status=(
+            TimelineStatusPresentationResponse(
+                label=card.status.label,
+                tone=card.status.tone,
+                seen_at=card.status.seen_at,
+            )
+            if card.status is not None
+            else None
+        ),
+        border_tone=card.border_tone,
     )
 
 
@@ -224,6 +274,21 @@ class SessionRuntimeDisplayResponse(BaseModel):
     )
 
 
+class TimelineBadgePresentationResponse(UTCBaseModel):
+    label: str = Field(..., description="Stable user-facing badge label")
+    tone: str = Field(..., description="Stable visual tone token for clients")
+
+
+class TimelineStatusPresentationResponse(TimelineBadgePresentationResponse):
+    seen_at: Optional[datetime] = Field(None, description="Signal timestamp for stale status copy")
+
+
+class TimelineCardPresentationResponse(UTCBaseModel):
+    ownership: TimelineBadgePresentationResponse = Field(..., description="Managed/unmanaged badge")
+    status: Optional[TimelineStatusPresentationResponse] = Field(None, description="Primary timeline status badge")
+    border_tone: str = Field("inactive", description="Stable tone token for the card edge/outline")
+
+
 class SessionResponse(UTCBaseModel):
     """Response for a single session."""
 
@@ -276,6 +341,7 @@ class SessionResponse(UTCBaseModel):
     control: Optional[SessionControlResponse] = Field(None, description="Host-control and managed-launch debugging detail")
     capabilities: SessionCapabilitiesResponse = Field(..., description="Canonical session capability flags")
     runtime_display: Optional[SessionRuntimeDisplayResponse] = Field(None, description="Server-derived display state for clients")
+    timeline_card: TimelineCardPresentationResponse = Field(..., description="Server-derived timeline-card presentation")
     loop_mode: SessionLoopMode = Field(SessionLoopMode.ASSIST, description="Session loop mode: assist|autopilot")
     user_state: str = Field("active", description="User classification: active|parked|snoozed|archived")
 
@@ -825,6 +891,14 @@ def build_session_response(
             runtime_display=runtime_display,
         ),
         runtime_display=runtime_display,
+        timeline_card=build_session_timeline_card_response(
+            runtime_overlay=runtime_overlay if include_runtime else None,
+            capability_flags=capability_flags,
+            ended_at=session.ended_at,
+            last_activity_at=last_activity_at,
+            binding_host_state=binding_host_state,
+            binding_terminal_reason=binding_terminal_reason,
+        ),
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
         user_state=session.user_state or "active",
     )

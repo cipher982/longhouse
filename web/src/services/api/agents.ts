@@ -42,6 +42,7 @@ export interface AgentSession {
   active_tool?: string | null;
   confidence?: string | null;
   runtime_display?: SessionRuntimeDisplay | null;
+  timeline_card?: TimelineCardPresentation | null;
   user_messages: number;
   assistant_messages: number;
   tool_calls: number;
@@ -99,6 +100,21 @@ export interface SessionRuntimeDisplay {
   lifecycle?: "open" | "closed" | "unknown" | (string & {});
   host_state?: "online" | "stale" | "offline" | "unknown" | (string & {});
   terminal_reason?: "provider_signal" | "process_gone" | "host_expired" | "user_closed" | "host_reported" | null | (string & {});
+}
+
+export interface TimelineBadgePresentation {
+  label: string;
+  tone: "neutral" | "inactive" | "active" | "thinking" | "running" | "blocked" | "stalled" | "idle" | "inferred" | "closed" | (string & {});
+}
+
+export interface TimelineStatusPresentation extends TimelineBadgePresentation {
+  seen_at?: string | null;
+}
+
+export interface TimelineCardPresentation {
+  ownership: TimelineBadgePresentation;
+  status?: TimelineStatusPresentation | null;
+  border_tone: "inactive" | "active" | "thinking" | "running" | "blocked" | "stalled" | "idle" | "inferred" | "closed" | (string & {});
 }
 
 export interface SessionControl {

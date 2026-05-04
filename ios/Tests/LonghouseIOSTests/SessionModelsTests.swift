@@ -572,6 +572,103 @@ struct SessionModelsTests {
     }
 
     @Test
+    func timelineCardPresentationOverridesLocalRuntimeDerivation() {
+        let summary = SessionSummary(
+            id: "session-backend-card",
+            title: "Backend-owned card",
+            presenceState: "needs_user",
+            provider: "claude",
+            project: "zerg",
+            lastActivityAt: "2026-04-25T20:00:00Z",
+            status: "idle",
+            displayPhase: "Ready",
+            runtimeDisplay: SessionRuntimeDisplay(
+                truthTier: "managed-local",
+                state: "needs_user",
+                tone: "idle",
+                headline: "Ready",
+                detail: nil,
+                phaseLabel: "Ready",
+                compactToolLabel: nil,
+                isLive: false,
+                isExecuting: false,
+                needsAttention: false,
+                isIdle: true,
+                heuristicActive: false,
+                isManagedLocalTruth: true,
+                hasSignal: true,
+                controlPath: "managed",
+                activityRecency: "live",
+                lifecycle: "open",
+                hostState: "online",
+                terminalReason: nil
+            ),
+            timelineCard: TimelineCardPresentation(
+                ownership: TimelineBadgePresentation(label: "Unmanaged", tone: "neutral"),
+                status: TimelineStatusPresentation(label: "Stale", tone: "inactive", seenAt: "2026-04-25T19:00:00Z"),
+                borderTone: "inactive"
+            )
+        )
+
+        #expect(summary.managementLabel == "Unmanaged")
+        #expect(summary.timelineStatusLabel == "Stale")
+        #expect(summary.timelineStatusSeenAt == "2026-04-25T19:00:00Z")
+        #expect(summary.timelineStatusTone == "inactive")
+        #expect(summary.timelineBorderTone == "inactive")
+    }
+
+    @Test
+    func sessionsResponseDecodesTimelineCardContract() throws {
+        let json = """
+        {
+          "sessions": [
+            {
+              "head_origin_label": "On this Mac",
+              "head": {
+                "id": "session-card-contract",
+                "summary_title": "Timeline contract",
+                "summary": "Backend emits card presentation.",
+                "status": "idle",
+                "presence_state": "needs_user",
+                "presence_tool": null,
+                "active_tool": null,
+                "display_phase": "Ready",
+                "user_state": "active",
+                "provider": "claude",
+                "project": "zerg",
+                "git_branch": "main",
+                "home_label": "On this Mac",
+                "timeline_anchor_at": "2026-04-25T20:00:00Z",
+                "last_activity_at": "2026-04-25T20:00:00Z",
+                "user_messages": 3,
+                "tool_calls": 4,
+                "capabilities": {
+                  "live_control_available": true,
+                  "host_reattach_available": true,
+                  "reply_to_live_session_available": true
+                },
+                "loop_mode": "assist",
+                "runtime_display": null,
+                "timeline_card": {
+                  "ownership": {"label": "Managed", "tone": "neutral"},
+                  "status": {"label": "Ready", "tone": "idle", "seen_at": null},
+                  "border_tone": "idle"
+                }
+              }
+            }
+          ]
+        }
+        """
+
+        let decoded = try JSONDecoder.snakeCase.decode(SessionsResponse.self, from: Data(json.utf8))
+        let session = try #require(decoded.sessions.first?.head)
+
+        #expect(session.timelineCard?.ownership.label == "Managed")
+        #expect(session.timelineCard?.status?.label == "Ready")
+        #expect(session.timelineCard?.borderTone == "idle")
+    }
+
+    @Test
     func sessionSummaryShowsManagedAxisNotLiveControlCapability() {
         let summary = SessionSummary(
             id: "session-control-offline",

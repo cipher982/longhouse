@@ -1682,6 +1682,42 @@ describe("SessionsPage", () => {
     expect(await within(card).findByTestId("session-card-runtime")).toHaveTextContent("Stale");
   });
 
+  it("renders backend timeline_card labels before client runtime derivation", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            runtime_display: makeRuntimeDisplay({
+              control_path: "managed",
+              activity_recency: "live",
+              state: "needs_user",
+              tone: "idle",
+              is_idle: true,
+            }),
+            timeline_card: {
+              ownership: { label: "Unmanaged", tone: "neutral" },
+              status: { label: "Stale", tone: "inactive", seen_at: "2026-03-21T11:00:00Z" },
+              border_tone: "inactive",
+            },
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline");
+
+    const card = await screen.findByTestId("session-card");
+    expect(await within(card).findByTestId("session-card-ownership")).toHaveTextContent("Unmanaged");
+    const runtime = await within(card).findByTestId("session-card-runtime");
+    expect(runtime).toHaveTextContent("Stale");
+    expect(runtime).toHaveTextContent("Seen ");
+  });
+
   it("prefers lifecycle=='closed' over stale managed presence", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {

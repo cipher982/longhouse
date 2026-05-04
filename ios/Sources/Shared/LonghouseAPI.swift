@@ -111,7 +111,8 @@ struct LonghouseAPI: Sendable {
                 liveControlAvailable: session.capabilities?.liveControlAvailable,
                 hostReattachAvailable: session.capabilities?.hostReattachAvailable,
                 replyToLiveSessionAvailable: session.capabilities?.replyToLiveSessionAvailable,
-                runtimeDisplay: session.runtimeDisplay
+                runtimeDisplay: session.runtimeDisplay,
+                timelineCard: session.timelineCard
             )
         }
     }

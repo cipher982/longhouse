@@ -64,11 +64,16 @@ export function SessionCard({
   const turnCount = session.user_messages;
   const toolCount = session.tool_calls;
   const runtime = resolveSessionRuntimeState(session);
-  const runtimeMetaLabel = getRuntimeMetaLabel(runtime);
+  const timelineCard = session.timeline_card ?? null;
+  const timelineCardStatus = timelineCard?.status ?? null;
+  const runtimeMetaLabel = timelineCardStatus?.seen_at
+    ? `Seen ${formatRelativeTime(timelineCardStatus.seen_at, relativeNowMs)}`
+    : getRuntimeMetaLabel(runtime);
   const fallbackOwnershipLabel = interaction.isManagedLocalSession ? "Managed" : "Unmanaged";
-  const ownershipLabel = resolveSessionOwnershipLabel(runtime, fallbackOwnershipLabel);
+  const ownershipLabel = timelineCard?.ownership.label || resolveSessionOwnershipLabel(runtime, fallbackOwnershipLabel);
   const fallbackControlPath = ownershipLabel === "Managed" ? "managed" : "unmanaged";
-  const runtimePhaseLabel = resolveSessionStatusLabel(runtime, fallbackControlPath);
+  const runtimePhaseLabel = timelineCardStatus?.label || resolveSessionStatusLabel(runtime, fallbackControlPath);
+  const cardRuntimeTone = timelineCard?.border_tone ?? runtime.tone;
 
   const projectLabel = getProjectLabel(session);
   const title = getSessionTitle(session);
@@ -101,27 +106,29 @@ export function SessionCard({
   const lifecycle = runtime.runtimeDisplay?.lifecycle ?? null;
   const hasCurrentControlledPresence = hasControlPath && runtime.presenceState != null;
   const isClosedSession =
-    lifecycle != null
+    timelineCardStatus?.tone === "closed" ||
+    timelineCardStatus?.label === "Closed" ||
+    (lifecycle != null
       ? lifecycle === "closed"
-      : isSessionClosed(session) && !hasCurrentControlledPresence;
+      : isSessionClosed(session) && !hasCurrentControlledPresence);
   // Phase 3: always render the runtime pill for unmanaged sessions so the
   // card states "Stale" / "Unknown" honestly instead of hiding them.
   const hasRuntimeAxes =
     runtime.runtimeDisplay?.control_path === "managed" ||
     runtime.runtimeDisplay?.control_path === "unmanaged";
-  const showRuntimePill = !isClosedSession && (runtime.hasSignal || hasRuntimeAxes);
+  const showRuntimePill = !isClosedSession && (timelineCardStatus != null || runtime.hasSignal || hasRuntimeAxes);
   // Outcome labels are semantic summaries; keep their chips neutral across runtime sources.
-  const runtimePillTone = runtimePhaseLabel === "Active" ? "active" : runtime.tone;
+  const runtimePillTone = timelineCardStatus?.tone || (runtimePhaseLabel === "Active" ? "active" : runtime.tone);
   const cardClassName = [
     "session-card",
     confirming ? "session-card--confirming" : "",
     isClosedSession ? "session-card--closed" : "",
     !isClosedSession && runtime.isExecuting ? "session-card--live" : "",
     !isClosedSession && runtime.isIdle ? "session-card--idle" : "",
-    !isClosedSession && runtime.tone === "inferred" ? "session-card--inferred" : "",
-    !isClosedSession && runtime.tone === "thinking" ? "session-card--thinking" : "",
-    !isClosedSession && runtime.tone === "running" ? "session-card--running" : "",
-    !isClosedSession && runtime.tone === "blocked" ? "session-card--blocked" : "",
+    !isClosedSession && cardRuntimeTone === "inferred" ? "session-card--inferred" : "",
+    !isClosedSession && cardRuntimeTone === "thinking" ? "session-card--thinking" : "",
+    !isClosedSession && cardRuntimeTone === "running" ? "session-card--running" : "",
+    !isClosedSession && cardRuntimeTone === "blocked" ? "session-card--blocked" : "",
   ].filter(Boolean).join(" ");
 
   const clearHoverPrefetchTimer = useCallback(() => {

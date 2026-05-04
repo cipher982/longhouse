@@ -407,19 +407,23 @@ private func nonEmpty(_ value: String?) -> String? {
 }
 
 private func runtimeColor(_ session: SessionSummary) -> Color {
-    switch session.runtimeTone {
+    switch session.timelineBorderTone {
+    case "active": return .blue
     case "running": return .green
     case "thinking", "blocked", "stalled": return .orange
     case "inferred": return .blue
+    case "closed": return .secondary
     default: return .secondary
     }
 }
 
 private func timelineStatusColor(_ session: SessionSummary) -> Color {
     switch session.timelineStatusTone {
+    case "active": return .blue
     case "running": return .green
     case "thinking", "blocked", "stalled": return .orange
     case "inferred": return .blue
+    case "closed": return .secondary
     default: return .secondary
     }
 }
