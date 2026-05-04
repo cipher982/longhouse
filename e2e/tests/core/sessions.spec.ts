@@ -710,10 +710,10 @@ test.describe("Sessions Page", () => {
       },
     ]);
 
-    await expect(olderCard).toHaveAttribute("data-runtime-tone", "inactive", {
+    await expect(olderCard).toContainText("Observed Running Shell", {
       timeout: 15000,
     });
-    await expect(olderCard).toContainText("Observed Running Shell");
+    await expect(olderCard).toHaveAttribute("data-runtime-tone", "inactive");
     await expect(olderCard).toHaveAttribute("data-card-state", "actionable");
     await expect(olderCard).not.toHaveClass(/session-card--closed/);
     await expect(olderCard).not.toHaveClass(/session-card--live/);
