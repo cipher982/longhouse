@@ -1028,7 +1028,8 @@ final class SessionViewModel: ObservableObject {
     }
 
     func start(sessionId: String, appState: AppState) async {
-        if activeSessionId != sessionId {
+        let sessionChanged = activeSessionId != sessionId
+        if sessionChanged {
             activeSessionId = sessionId
             isInitialLoading = true
             detail = nil
@@ -1040,8 +1041,15 @@ final class SessionViewModel: ObservableObject {
             await reload(sessionId: sessionId, appState: appState)
         }
         guard enableRealtime else { return }
-        startStream(sessionId: sessionId, appState: appState)
-        startVisiblePolling(sessionId: sessionId, appState: appState)
+        // Re-attach only when the session changed or the stream was torn down
+        // (e.g. scenePhase != .active called stop()). Otherwise a scenePhase
+        // flap would churn URLSessions and polling tasks.
+        if sessionChanged || streamTask == nil {
+            startStream(sessionId: sessionId, appState: appState)
+        }
+        if sessionChanged || pollTask == nil {
+            startVisiblePolling(sessionId: sessionId, appState: appState)
+        }
     }
 
     func stop() {
@@ -1155,7 +1163,14 @@ final class SessionViewModel: ObservableObject {
     }
 
     private func startStream(sessionId: String, appState: AppState) {
+        // A prior stream actor may still own a URLSession + draining task.
+        // Stop it before replacing the reference — otherwise it leaks until
+        // timeoutIntervalForResource (1h) expires on its own.
         streamTask?.cancel()
+        if let prior = stream {
+            Task { await prior.stop() }
+        }
+        streamConnected = false
         guard let base = URL(string: appState.serverURL) else { return }
         let s = SessionWorkspaceStream(baseURL: base, sessionId: sessionId)
         stream = s
@@ -1205,11 +1220,7 @@ final class SessionViewModel: ObservableObject {
 
     private func reportRenderBeacon(api: SessionWorkspaceClient, sessionId: String, events: [SessionEvent]) async {
         guard let latest = events.last else { return }
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let isoFallback = ISO8601DateFormatter()
-        isoFallback.formatOptions = [.withInternetDateTime]
-        guard let emittedAt = iso.date(from: latest.timestamp) ?? isoFallback.date(from: latest.timestamp) else { return }
+        guard let emittedAt = LonghouseDateParser.parse(latest.timestamp) else { return }
         let caps = detail?.capabilities
         let managed = (caps?.liveControlAvailable == true) || (caps?.hostReattachAvailable == true)
         if let payload = await RenderBeaconReporter.shared.payload(
