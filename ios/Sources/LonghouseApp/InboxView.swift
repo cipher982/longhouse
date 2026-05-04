@@ -236,18 +236,25 @@ private struct RuntimeBadge: View {
     let session: SessionSummary
 
     var body: some View {
+        let color = timelineStatusColor(session)
         HStack(spacing: 5) {
             Circle()
-                .fill(runtimeColor(session))
+                .fill(color)
                 .frame(width: 7, height: 7)
-            Text(session.displayPhaseLabel)
+            Text(session.timelineStatusLabel)
                 .font(.caption.weight(.semibold))
                 .lineLimit(1)
+            if let seenAt = session.timelineStatusSeenAt {
+                Text("Seen \(relativeTime(seenAt))")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
         }
-        .foregroundStyle(runtimeColor(session))
+        .foregroundStyle(color)
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
-        .background(runtimeColor(session).opacity(0.14), in: Capsule())
+        .background(color.opacity(0.14), in: Capsule())
     }
 }
 
@@ -401,6 +408,15 @@ private func nonEmpty(_ value: String?) -> String? {
 
 private func runtimeColor(_ session: SessionSummary) -> Color {
     switch session.runtimeTone {
+    case "running": return .green
+    case "thinking", "blocked", "stalled": return .orange
+    case "inferred": return .blue
+    default: return .secondary
+    }
+}
+
+private func timelineStatusColor(_ session: SessionSummary) -> Color {
+    switch session.timelineStatusTone {
     case "running": return .green
     case "thinking", "blocked", "stalled": return .orange
     case "inferred": return .blue

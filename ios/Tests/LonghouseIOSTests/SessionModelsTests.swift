@@ -465,6 +465,113 @@ struct SessionModelsTests {
     }
 
     @Test
+    func timelineStatusMatchesUnmanagedRuntimeRecency() {
+        let stale = SessionSummary(
+            id: "session-stale-unmanaged",
+            title: "Imported session",
+            presenceState: "idle",
+            provider: "codex",
+            project: "zerg",
+            lastActivityAt: "2026-04-25T20:00:00Z",
+            status: "idle",
+            displayPhase: "Idle",
+            runtimeDisplay: SessionRuntimeDisplay(
+                truthTier: "stale",
+                state: nil,
+                tone: "inactive",
+                headline: "Inactive",
+                detail: nil,
+                phaseLabel: "Inactive",
+                compactToolLabel: nil,
+                isLive: false,
+                isExecuting: false,
+                needsAttention: false,
+                isIdle: true,
+                heuristicActive: false,
+                isManagedLocalTruth: false,
+                hasSignal: true,
+                controlPath: "unmanaged",
+                activityRecency: "stale",
+                lifecycle: "open",
+                hostState: "unknown",
+                terminalReason: nil
+            )
+        )
+        let live = SessionSummary(
+            id: "session-live-unmanaged",
+            title: "Imported session",
+            presenceState: "needs_user",
+            provider: "claude",
+            project: "sauron",
+            lastActivityAt: "2026-04-25T20:00:00Z",
+            status: "idle",
+            displayPhase: "Ready",
+            runtimeDisplay: SessionRuntimeDisplay(
+                truthTier: "fresh",
+                state: "needs_user",
+                tone: "idle",
+                headline: "Inactive",
+                detail: nil,
+                phaseLabel: "Ready",
+                compactToolLabel: nil,
+                isLive: false,
+                isExecuting: false,
+                needsAttention: false,
+                isIdle: true,
+                heuristicActive: false,
+                isManagedLocalTruth: false,
+                hasSignal: true,
+                controlPath: "unmanaged",
+                activityRecency: "live",
+                lifecycle: "open",
+                hostState: "unknown",
+                terminalReason: nil
+            )
+        )
+
+        #expect(stale.timelineStatusLabel == "Stale")
+        #expect(stale.timelineStatusSeenAt == "2026-04-25T20:00:00Z")
+        #expect(live.timelineStatusLabel == "Active")
+    }
+
+    @Test
+    func timelineStatusKeepsManagedReadySeparateFromUnmanagedActivity() {
+        let summary = SessionSummary(
+            id: "session-managed-ready",
+            title: "Managed session",
+            presenceState: "needs_user",
+            provider: "claude",
+            project: "zerg",
+            lastActivityAt: "2026-04-25T20:00:00Z",
+            status: "idle",
+            displayPhase: "Ready",
+            runtimeDisplay: SessionRuntimeDisplay(
+                truthTier: "managed-local",
+                state: "needs_user",
+                tone: "idle",
+                headline: "Inactive",
+                detail: nil,
+                phaseLabel: "Ready",
+                compactToolLabel: nil,
+                isLive: false,
+                isExecuting: false,
+                needsAttention: false,
+                isIdle: true,
+                heuristicActive: false,
+                isManagedLocalTruth: true,
+                hasSignal: true,
+                controlPath: "managed",
+                activityRecency: "live",
+                lifecycle: "open",
+                hostState: "online",
+                terminalReason: nil
+            )
+        )
+
+        #expect(summary.timelineStatusLabel == "Ready")
+    }
+
+    @Test
     func sessionSummaryShowsManagedAxisNotLiveControlCapability() {
         let summary = SessionSummary(
             id: "session-control-offline",

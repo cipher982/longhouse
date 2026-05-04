@@ -1651,6 +1651,7 @@ describe("SessionsPage", () => {
     const card = await screen.findByTestId("session-card");
     expect(card).toHaveAttribute("data-card-state", "actionable");
     expect(await within(card).findByTestId("session-card-ownership")).toHaveTextContent("Unmanaged");
+    expect(await within(card).findByTestId("session-card-branch")).toHaveTextContent("main");
     const runtime = await within(card).findByTestId("session-card-runtime");
     expect(runtime).toHaveTextContent("Unknown");
     expect(screen.queryByTestId("session-card-closed-state")).not.toBeInTheDocument();
