@@ -460,6 +460,7 @@ struct SessionModelsTests {
         #expect(!summary.isBlocked)
         #expect(!summary.needsAttention)
         #expect(!summary.isExecuting)
+        #expect(summary.runtimeTone == "inactive")
         #expect(summary.displayPhaseLabel == "Recent")
     }
 

@@ -151,6 +151,19 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         if let runtimeDisplay { return runtimeDisplay.isIdle }
         return presenceState == "idle" || status == "idle"
     }
+    var runtimeTone: String {
+        if isClosed { return "idle" }
+        if let tone = runtimeDisplay?.tone { return tone }
+        switch presenceState {
+        case "running": return "running"
+        case "thinking": return "thinking"
+        case "needs_user", "idle": return "idle"
+        case "blocked": return "blocked"
+        default:
+            if status == "working" || status == "active" { return "inferred" }
+            return "inactive"
+        }
+    }
     var attentionLabel: String { isBlocked ? "Needs permission" : "Ready" }
     var timelineAnchor: String? { timelineAnchorAt ?? lastActivityAt }
     var timelineBranchBadgeLabel: String? {
