@@ -696,6 +696,48 @@ def _migrate_agents_columns(engine: Engine) -> None:
         logger.debug("sessions table migration skipped (table may not exist yet)", exc_info=True)
 
     try:
+        with engine.begin() as conn:
+            runtime_state_exists = conn.execute(
+                text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_runtime_state'")
+            ).fetchone()
+            if runtime_state_exists:
+                columns = {row[1] for row in conn.execute(text("PRAGMA table_info(session_runtime_state)"))}
+                if {
+                    "phase",
+                    "phase_source",
+                    "active_tool",
+                    "last_runtime_signal_at",
+                    "last_live_at",
+                    "freshness_expires_at",
+                    "terminal_state",
+                    "updated_at",
+                }.issubset(columns):
+                    conn.execute(
+                        text(
+                            """
+                            UPDATE session_runtime_state
+                            SET phase = 'idle',
+                                active_tool = NULL,
+                                last_runtime_signal_at = NULL,
+                                last_live_at = NULL,
+                                freshness_expires_at = NULL,
+                                updated_at = CURRENT_TIMESTAMP
+                            WHERE phase_source = 'progress'
+                              AND (terminal_state IS NULL OR terminal_state = '')
+                              AND (
+                                  phase <> 'idle'
+                                  OR active_tool IS NOT NULL
+                                  OR last_runtime_signal_at IS NOT NULL
+                                  OR last_live_at IS NOT NULL
+                                  OR freshness_expires_at IS NOT NULL
+                              )
+                            """
+                        )
+                    )
+    except Exception:
+        logger.debug("session runtime state truth normalization skipped (table may not exist yet)", exc_info=True)
+
+    try:
         with engine.connect() as conn:
             columns = {row[1] for row in conn.execute(text("PRAGMA table_info(agent_heartbeats)"))}
             if columns and "spool_dead" not in columns:

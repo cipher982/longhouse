@@ -310,6 +310,82 @@ def test_startup_migration_adds_session_loop_mode_and_backfills_assist(tmp_path)
     assert rows == [("00000000-0000-0000-0000-000000000123", "assist", None)]
 
 
+def test_startup_migration_clears_progress_only_runtime_live_timestamps(tmp_path):
+    db_path = tmp_path / "runtime_state_truth.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE session_runtime_state (
+                runtime_key VARCHAR(255) PRIMARY KEY,
+                session_id CHAR(36),
+                provider VARCHAR(64) NOT NULL,
+                device_id VARCHAR(255),
+                phase VARCHAR(32) NOT NULL,
+                phase_source VARCHAR(32) NOT NULL,
+                active_tool VARCHAR(128),
+                phase_started_at DATETIME,
+                last_runtime_signal_at DATETIME,
+                last_progress_at DATETIME,
+                last_live_at DATETIME,
+                timeline_anchor_at DATETIME NOT NULL,
+                freshness_expires_at DATETIME,
+                terminal_state VARCHAR(32),
+                terminal_at DATETIME,
+                runtime_version INTEGER NOT NULL DEFAULT 0,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.exec_driver_sql(
+            """
+            INSERT INTO session_runtime_state (
+                runtime_key, provider, phase, phase_source, active_tool,
+                last_runtime_signal_at, last_progress_at, last_live_at,
+                timeline_anchor_at, freshness_expires_at, terminal_state
+            ) VALUES
+              (
+                'opencode:progress-only', 'opencode', 'running', 'progress', 'bash',
+                '2026-05-04 17:40:44', '2026-05-04 17:40:44', '2026-05-04 17:40:44',
+                '2026-05-04 17:40:44', '2026-05-04 17:41:44', NULL
+              ),
+              (
+                'codex:phase-truth', 'codex', 'running', 'semantic', 'edit',
+                '2026-05-04 18:00:00', '2026-05-04 18:00:00', '2026-05-04 18:00:00',
+                '2026-05-04 18:00:00', '2026-05-04 18:01:00', NULL
+              )
+            """
+        )
+
+    _migrate_agents_columns(engine)
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT runtime_key, phase, active_tool, last_runtime_signal_at,
+                       last_progress_at, last_live_at, freshness_expires_at
+                FROM session_runtime_state
+                ORDER BY runtime_key
+                """
+            )
+        ).fetchall()
+
+    assert rows == [
+        (
+            "codex:phase-truth",
+            "running",
+            "edit",
+            "2026-05-04 18:00:00",
+            "2026-05-04 18:00:00",
+            "2026-05-04 18:00:00",
+            "2026-05-04 18:01:00",
+        ),
+        ("opencode:progress-only", "idle", None, None, "2026-05-04 17:40:44", None, None),
+    ]
+
+
 def test_heavy_migration_plan_detects_legacy_pending(tmp_path):
     db_path = tmp_path / "legacy_pending.db"
     engine = make_engine(f"sqlite:///{db_path}")
