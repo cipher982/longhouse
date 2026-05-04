@@ -62,7 +62,8 @@
 
   .sessions-llm-hint a {
     color: var(--color-brand-primary);
-    text-decoration: none;
+    text-decoration: underline;
+    text-underline-offset: 2px;
   }
 
   .sessions-llm-hint a:hover {
