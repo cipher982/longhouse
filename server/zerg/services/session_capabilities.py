@@ -11,6 +11,12 @@ from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_execution_home import infer_execution_home
 
 STEERABLE_RUNTIME_STATES = frozenset({"thinking", "running"})
+_LIVE_CONTROL_TRANSPORTS = frozenset(
+    {
+        ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE,
+        ManagedSessionTransport.CODEX_APP_SERVER,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -207,8 +213,8 @@ def resolve_managed_transport(session: AgentSession | None) -> ManagedSessionTra
     return _coerce_managed_transport(getattr(session, "managed_transport", None))
 
 
-def _has_supported_managed_transport(session: AgentSession | None) -> bool:
-    return resolve_managed_transport(session) is not None
+def _has_live_control_transport(session: AgentSession | None) -> bool:
+    return resolve_managed_transport(session) in _LIVE_CONTROL_TRANSPORTS
 
 
 def supports_live_control(session: AgentSession | None) -> bool:
@@ -216,7 +222,7 @@ def supports_live_control(session: AgentSession | None) -> bool:
         return False
     return (
         resolve_execution_home(session) == SessionExecutionHome.MANAGED_LOCAL
-        and _has_supported_managed_transport(session)
+        and _has_live_control_transport(session)
         and getattr(session, "source_runner_id", None) is not None
     )
 
@@ -224,7 +230,7 @@ def supports_live_control(session: AgentSession | None) -> bool:
 def supports_host_reattach(session: AgentSession | None) -> bool:
     if session is None:
         return False
-    return resolve_execution_home(session) == SessionExecutionHome.MANAGED_LOCAL and _has_supported_managed_transport(session)
+    return resolve_execution_home(session) == SessionExecutionHome.MANAGED_LOCAL and _has_live_control_transport(session)
 
 
 def build_session_capabilities(session: AgentSession | None) -> SessionCapabilityFlags:

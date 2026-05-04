@@ -80,6 +80,8 @@ def _resolve_transport(value: str | ManagedSessionTransport | None) -> ManagedSe
 
 def build_managed_local_attach_command(*, session: AgentSession) -> str | None:
     transport = _resolve_transport(getattr(session, "managed_transport", None))
+    if transport == ManagedSessionTransport.OPENCODE_PROCESS:
+        return None
     if transport == ManagedSessionTransport.CODEX_APP_SERVER:
         session_id = str(getattr(session, "id", "") or "").strip()
         if not session_id:
@@ -106,6 +108,8 @@ def build_managed_local_attach_command(*, session: AgentSession) -> str | None:
 def build_managed_local_interrupt_command(*, session: AgentSession) -> str:
     """Build a command to interrupt the active turn on a managed-local session."""
     transport = _resolve_transport(getattr(session, "managed_transport", None))
+    if transport == ManagedSessionTransport.OPENCODE_PROCESS:
+        raise ManagedLocalTransportError("opencode_process does not support remote interrupts yet")
     session_id = str(getattr(session, "id", "") or "").strip()
     if not session_id:
         raise ManagedLocalTransportError("Managed local session is missing session ID")
@@ -122,6 +126,8 @@ def build_managed_local_interrupt_command(*, session: AgentSession) -> str:
 
 def build_managed_local_send_text_command(*, session: AgentSession, text: str) -> str:
     transport = _resolve_transport(getattr(session, "managed_transport", None))
+    if transport == ManagedSessionTransport.OPENCODE_PROCESS:
+        raise ManagedLocalTransportError("opencode_process does not support remote text sends yet")
     session_id = str(getattr(session, "id", "") or "").strip()
     if not session_id:
         raise ManagedLocalTransportError("Managed local session is missing session ID")
@@ -141,6 +147,8 @@ def build_managed_local_steer_text_command(*, session: AgentSession, text: str) 
     """Build a mid-turn steer command. Codex-only this batch; Claude channel
     has no equivalent first-class primitive yet."""
     transport = _resolve_transport(getattr(session, "managed_transport", None))
+    if transport == ManagedSessionTransport.OPENCODE_PROCESS:
+        raise ManagedLocalTransportError("Mid-turn steer is not supported on opencode_process transports")
     if transport != ManagedSessionTransport.CODEX_APP_SERVER:
         raise ManagedLocalTransportError(
             "Mid-turn steer is only supported on codex_app_server transports",

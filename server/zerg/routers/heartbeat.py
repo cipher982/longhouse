@@ -59,7 +59,7 @@ DEFAULT_MANAGED_SESSION_LEASE_TTL_MS = 15 * 60 * 1000
 MAX_MANAGED_SESSION_LEASE_TTL_MS = 60 * 60 * 1000
 MANAGED_SESSION_LEASE_STATES = {"attached", "detached", "degraded"}
 MANAGED_SESSION_LEASE_PHASES = {"idle", "thinking", "running", "blocked", "needs_user", "none"}
-MANAGED_SESSION_LEASE_PROVIDERS = {"codex", "claude", "gemini"}
+MANAGED_SESSION_LEASE_PROVIDERS = {"codex", "claude", "gemini", "opencode"}
 CODEX_ROLLOUT_ID_RE = re.compile(r"^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-(.+)$")
 
 

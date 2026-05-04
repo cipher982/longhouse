@@ -86,7 +86,7 @@ class ManagedLocalThisDeviceLaunchRequest(BaseModel):
     """Request to start a managed local AI agent session on the calling device."""
 
     cwd: str = Field(..., min_length=1, description="Working directory on this device")
-    provider: str = Field("claude", description="AI provider CLI to launch (claude or codex)")
+    provider: str = Field("claude", description="AI provider CLI to launch (claude, codex, or opencode)")
     project: str | None = Field(None, description="Optional project label")
     git_repo: str | None = Field(None, description="Optional git repository path")
     git_branch: str | None = Field(None, description="Optional git branch name")

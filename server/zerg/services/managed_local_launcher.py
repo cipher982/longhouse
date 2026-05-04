@@ -20,7 +20,7 @@ from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_loop_mode import coerce_session_loop_mode
 
-_VALID_PROVIDERS = {"claude", "codex"}
+_VALID_PROVIDERS = {"claude", "codex", "opencode"}
 _MANAGED_LOCAL_NAME_SAFE_CHARS = re.compile(r"[^A-Za-z0-9_.-]+")
 _MANAGED_LOCAL_NAME_MAX = 64
 
@@ -116,7 +116,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
     if not str(params.machine_name or "").strip():
         raise ManagedLocalLaunchError(
             "Browser-launched managed-local sessions were removed. Launch from the target machine with "
-            "`longhouse claude` or `longhouse codex`.",
+            "`longhouse claude`, `longhouse codex`, or `longhouse opencode`.",
             status_code=410,
         )
 

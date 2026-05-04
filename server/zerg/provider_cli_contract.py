@@ -1,9 +1,11 @@
 """Provider CLI ownership constants shared by CLI and local health surfaces."""
 
 CODEX_BIN_ENV = "LONGHOUSE_CODEX_BIN"
+OPENCODE_BIN_ENV = "LONGHOUSE_OPENCODE_BIN"
 LEGACY_MANAGED_CODEX_LAUNCHER_MARKER = "# longhouse-managed-codex-launcher"
 PROVIDER_CLI_SOURCE_BRIDGE_STATE = "bridge_state"
 PROVIDER_CLI_SOURCE_CODEX_BIN_FLAG = "--codex-bin"
+PROVIDER_CLI_SOURCE_OPENCODE_BIN_FLAG = "--opencode-bin"
 PROVIDER_CLI_SOURCE_MISSING = "missing"
 PROVIDER_CLI_SOURCE_PATH = "PATH"
 PROVIDER_CLI_SOURCE_PROCESS = "process"

@@ -27,7 +27,7 @@ def _cwd_tmp(tmp_path: Path) -> Path:
     return d
 
 
-@pytest.mark.parametrize("provider", ["claude", "codex"])
+@pytest.mark.parametrize("provider", ["claude", "codex", "opencode"])
 @pytest.mark.parametrize("loop_mode", list(SessionLoopMode))
 def test_managed_local_launch_payload_matches_server_schema(tmp_path, provider, loop_mode):
     """Every CLI-defaulted payload must validate against the server model.

@@ -25,6 +25,7 @@ from zerg.cli.local_health import app as local_health_app
 from zerg.cli.machine import app as machine_app
 from zerg.cli.mcp_serve import mcp_server
 from zerg.cli.onboard import onboard
+from zerg.cli.opencode import opencode
 from zerg.cli.runtime_artifact_smoke import runtime_artifact_install_command
 from zerg.cli.runtime_artifact_smoke import runtime_artifact_smoke_command
 from zerg.cli.serve import serve
@@ -127,6 +128,7 @@ app.add_typer(machine_app, name="machine", help="Machine runtime repair and reco
 for command in (serve, status, claude, wall, peers, message, tail, auth, ship, recall):
     app.command()(command)
 
+app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})(opencode)
 app.command(name="continue")(continue_session)
 app.command(name="connect")(connect_command)
 app.command(name="version")(version_command)
