@@ -185,7 +185,7 @@ struct SessionLiveActivityModelsTests {
             "process": {"status": "unknown", "pid": null, "process_start_time": null, "observed_at": null, "last_seen_at": null, "source_mtime": null, "source_path": null, "reason": null, "source": null},
             "phase": {"kind": "running", "tool": "shell", "source": "managed_local_transport", "observed_at": "2026-04-25T20:00:00Z", "expires_at": "2026-04-25T20:15:00Z"},
             "activity": {"last_transcript_at": "2026-04-25T20:00:00Z", "last_runtime_signal_at": "2026-04-25T20:00:00Z", "last_progress_at": null},
-            "lifecycle": {"state": "open", "reason": "managed_phase_observed", "observed_at": "2026-04-25T20:00:00Z"}
+            "lifecycle": {"state": "open", "reason": "phase_observed", "observed_at": "2026-04-25T20:00:00Z"}
           },
           "loop_mode": "assist"
         }
@@ -195,7 +195,7 @@ struct SessionLiveActivityModelsTests {
         let state = detail.liveActivityContentState(updatedAt: Date(timeIntervalSince1970: 1_777_140_000))
 
         #expect(state.presenceState == "unknown")
-        #expect(state.displayPhase == "Observed Running Shell")
+        #expect(state.displayPhase == "Running Shell")
         #expect(state.activeTool == nil)
         #expect(state.isAttention == false)
     }

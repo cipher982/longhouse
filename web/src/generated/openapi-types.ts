@@ -8392,7 +8392,7 @@ export interface components {
             truth_tier: string;
             /**
              * Signal Tier
-             * @description Strongest source signal tier: managed_phase|unmanaged_binding|transcript_progress|none
+             * @description Strongest source signal tier: phase_signal|process_binding|transcript_progress|none
              * @default none
              */
             signal_tier: string;

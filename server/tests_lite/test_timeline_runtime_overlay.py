@@ -180,7 +180,7 @@ def test_sessions_list_uses_recent_activity_anchor_for_old_live_session(tmp_path
         assert top["confidence"] == "live"
         assert top["runtime_display"] == {
                 "truth_tier": "fresh",
-                "signal_tier": "managed_phase",
+                "signal_tier": "phase_signal",
                 "state": "running",
             "tone": "running",
             "headline": "Active",
@@ -649,15 +649,15 @@ def test_sessions_list_marks_materialized_needs_user_as_ready(tmp_path):
         assert row["runtime_source"] == "managed_local_transport"
         assert row["confidence"] == "live"
         assert row["runtime_display"]["truth_tier"] == "managed-local"
-        assert row["runtime_display"]["signal_tier"] == "managed_phase"
+        assert row["runtime_display"]["signal_tier"] == "phase_signal"
         assert row["runtime_display"]["headline"] == "Ready"
         assert row["runtime_display"]["detail"] == "Ready for next prompt"
         assert row["runtime_display"]["tone"] == "idle"
         assert row["runtime_display"]["needs_attention"] is False
 
 
-def test_active_sessions_online_unmanaged_binding_keeps_needs_user_ready(tmp_path):
-    factory = _make_db(tmp_path, "active_unmanaged_binding_attention.db")
+def test_active_sessions_online_process_binding_keeps_needs_user_ready(tmp_path):
+    factory = _make_db(tmp_path, "active_process_binding_attention.db")
     now = datetime.now(timezone.utc)
 
     db = factory()
@@ -705,7 +705,7 @@ def test_active_sessions_online_unmanaged_binding_keeps_needs_user_ready(tmp_pat
         assert resp.status_code == 200, resp.text
         row = next(item for item in resp.json()["sessions"] if item["id"] == str(session.id))
         assert row["runtime_display"]["control_path"] == "unmanaged"
-        assert row["runtime_display"]["signal_tier"] == "unmanaged_binding"
+        assert row["runtime_display"]["signal_tier"] == "process_binding"
         assert row["runtime_display"]["host_state"] == "online"
         assert row["runtime_display"]["state"] == "needs_user"
         assert row["runtime_display"]["phase_label"] == "Ready"

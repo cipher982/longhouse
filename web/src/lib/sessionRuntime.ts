@@ -83,7 +83,7 @@ export interface SessionFactStatus {
   label: string;
   tone: RuntimeTone;
   seenAt: string | null;
-  seenAtPrefix: "Observed" | "Seen" | "Transcript";
+  seenAtPrefix: "Closed" | "Checked" | "Seen" | "Transcript";
 }
 
 export function resolveSessionOwnershipLabel(
@@ -217,7 +217,7 @@ function compactFactToolLabel(toolName: string | null | undefined): string | nul
   return titleCaseWords(normalized);
 }
 
-function formatObservedPhase(kind: string, tool: string | null | undefined): string {
+function formatPhaseStatus(kind: string, tool: string | null | undefined): string {
   const phase = kind === "needs_user" ? "ready" : kind.replace(/[-_]+/g, " ");
   const compactTool = compactFactToolLabel(tool);
   if (compactTool && (kind === "running" || kind === "blocked")) {
@@ -237,35 +237,35 @@ function resolveSessionFactStatus(facts: SessionLivenessFacts | null): SessionFa
       label: "Closed",
       tone: "closed",
       seenAt: facts.lifecycle?.observed_at ?? facts.phase?.observed_at ?? facts.activity?.last_transcript_at ?? null,
-      seenAtPrefix: "Observed",
+      seenAtPrefix: "Closed",
     };
   }
 
   const phaseKind = facts.phase?.kind?.trim();
   if (phaseKind) {
     return {
-      label: `Observed ${formatObservedPhase(phaseKind, facts.phase?.tool)}`,
+      label: formatPhaseStatus(phaseKind, facts.phase?.tool),
       tone: "inactive",
       seenAt: facts.phase?.observed_at ?? null,
-      seenAtPrefix: "Observed",
+      seenAtPrefix: "Seen",
     };
   }
 
   if (facts.process?.status === "observed") {
     return {
-      label: "Process observed",
+      label: "Process visible",
       tone: "inactive",
       seenAt: facts.process?.observed_at ?? facts.process?.last_seen_at ?? null,
-      seenAtPrefix: "Observed",
+      seenAtPrefix: "Seen",
     };
   }
 
   if (facts.process?.status === "not_observed") {
     return {
-      label: "Process not observed",
+      label: "Process not visible",
       tone: "inactive",
       seenAt: facts.process?.last_seen_at ?? facts.process?.observed_at ?? null,
-      seenAtPrefix: "Observed",
+      seenAtPrefix: "Checked",
     };
   }
 
@@ -306,7 +306,7 @@ function resolveSessionFactStatus(facts: SessionLivenessFacts | null): SessionFa
   }
 
   return {
-    label: "Host unverified",
+    label: "Runtime unverified",
     tone: "inactive",
     seenAt: null,
     seenAtPrefix: "Seen",

@@ -518,7 +518,7 @@ describe("resolveSessionRuntimeState", () => {
     });
   });
 
-  it("renders managed phase facts as observed facts, not current work claims", () => {
+  it("renders managed phase facts as evidence facts, not current work claims", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({
         presence_state: "running",
@@ -544,7 +544,7 @@ describe("resolveSessionRuntimeState", () => {
           },
           lifecycle: {
             state: "open",
-            reason: "managed_phase_observed",
+            reason: "phase_observed",
             observed_at: "2026-03-21T12:00:05Z",
           },
         }),
@@ -552,9 +552,9 @@ describe("resolveSessionRuntimeState", () => {
     );
 
     expect(resolveSessionOwnershipLabel(runtime)).toBe("Managed");
-    expect(resolveSessionStatusLabel(runtime)).toBe("Observed Running Shell");
+    expect(resolveSessionStatusLabel(runtime)).toBe("Running Shell");
     expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
-      headline: "Observed Running Shell",
+      headline: "Running Shell",
       detail: null,
     });
   });
@@ -595,8 +595,8 @@ describe("resolveSessionRuntimeState", () => {
     );
 
     expect(resolveSessionOwnershipLabel(runtime)).toBe("Unmanaged");
-    expect(resolveSessionStatusLabel(runtime)).toBe("Process observed");
-    expect(getRuntimeOutcomeLabel(runtime)).toBe("Process observed");
+    expect(resolveSessionStatusLabel(runtime)).toBe("Process visible");
+    expect(getRuntimeOutcomeLabel(runtime)).toBe("Process visible");
   });
 
   it("renders transcript-only facts as transcript-only", () => {
@@ -651,7 +651,7 @@ describe("resolveSessionRuntimeState", () => {
       }),
     );
 
-    expect(resolveSessionStatusLabel(runtime)).toBe("Host unverified");
+    expect(resolveSessionStatusLabel(runtime)).toBe("Runtime unverified");
   });
 
   it("renders closed facts as closed rather than completed", () => {

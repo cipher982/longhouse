@@ -1,7 +1,7 @@
 # Session Signal Tier Model
 
-Status: Draft / implementation starting
-Last updated: 2026-05-03
+Status: Implemented / keep in sync
+Last updated: 2026-05-04
 Related:
 - `session-runtime-display-contract.md`
 - `session-liveness-honesty.md`
@@ -10,7 +10,7 @@ Related:
 ## Summary
 
 Session state must be derived from the kind of truth Longhouse actually has.
-The Runtime Host currently lets transcript progress, managed phase signals, and
+The Runtime Host used to let transcript progress, semantic phase signals, and
 machine binding observations collapse into the same runtime phase shape. That
 is why generic imported sessions can look `Running`, and why a provider prompt
 can look like a durable `Needs you` state hours later.
@@ -29,8 +29,8 @@ session from raw fields when `runtime_display` exists.
 
 | Tier | Meaning | Examples | May set live phase? |
 | --- | --- | --- | --- |
-| `managed_phase` | Longhouse owns the control path and received a semantic phase signal. | `longhouse codex`, `longhouse claude`, bridge/hook phase events. | Yes |
-| `unmanaged_binding` | Machine Agent observed a bare provider process or confirmed it disappeared. | Bare CLI binding, process-gone observation. | No |
+| `phase_signal` | Longhouse received a semantic phase signal from a managed control path or runtime hook. | `longhouse codex`, `longhouse claude`, bridge/hook phase events. | Yes |
+| `process_binding` | Machine Agent observed a bare provider process or confirmed it disappeared. | Bare CLI binding, process-gone observation. | No |
 | `transcript_progress` | A transcript or imported session appended content. | `agents_ingest`, generic `opencode`/Sauron-email imports. | No |
 | `none` | No usable runtime signal. | Cold imported or incomplete session. | No |
 
@@ -42,15 +42,15 @@ phase/lifecycle changes.
 
 | Control path | Signal tier | Raw phase / recency | Lifecycle | UI label | Tone | Action surface |
 | --- | --- | --- | --- | --- | --- | --- |
-| managed | managed_phase | `thinking` / `running`, fresh | open | `Working` or `Running <tool>` | running | Send / steer / queue |
-| managed | managed_phase | `blocked`, fresh | open | `Needs permission` or `Blocked on <tool>` | blocked | Approve / send / queue |
-| managed | managed_phase | `needs_user`, fresh | open | `Ready` | idle | Send |
-| managed | managed_phase | `idle`, fresh | open | `Ready` | idle | Send |
-| managed | managed_phase | `thinking` / `running`, stale | open | `Stalled` | stalled | Reattach |
+| managed | phase_signal | `thinking` / `running`, fresh | open | `Working` or `Running <tool>` | running | Send / steer / queue |
+| managed | phase_signal | `blocked`, fresh | open | `Needs permission` or `Blocked on <tool>` | blocked | Approve / send / queue |
+| managed | phase_signal | `needs_user`, fresh | open | `Ready` | idle | Send |
+| managed | phase_signal | `idle`, fresh | open | `Ready` | idle | Send |
+| managed | phase_signal | `thinking` / `running`, stale | open | `Stalled` | stalled | Reattach |
 | managed | none | no fresh bridge truth | open | `Disconnected` | inactive | Reattach or control offline |
 | managed | any | explicit terminal signal | closed | `Closed` | inactive | Read-only |
-| unmanaged | unmanaged_binding | online process observed | open | `Active` | inferred | Read-only |
-| unmanaged | unmanaged_binding | process gone / host expired | closed | `Closed` | inactive | Read-only |
+| unmanaged | process_binding | online process visible | open | `Active` | active | Read-only |
+| unmanaged | process_binding | process gone / host expired | closed | `Closed` | inactive | Read-only |
 | unmanaged | transcript_progress | last progress within window | open | `Recent activity` | inferred | Read-only |
 | unmanaged | transcript_progress | stale progress | open | `Inactive` | inactive | Read-only |
 | unmanaged | transcript_progress | explicit terminal signal | closed | `Closed` | inactive | Read-only |
@@ -78,8 +78,8 @@ Git metadata is independent of runtime state.
 Tests first in `server/tests_lite/test_session_runtime.py`:
 
 - progress-only ingest never sets phase to `running`
-- progress after managed phase preserves existing managed phase while fresh
-- progress after stale managed phase does not revive phase truth
+- progress after a semantic phase signal preserves existing phase truth while fresh
+- progress after stale phase truth does not revive phase truth
 - `needs_user` freshness is not extended by progress-only activity
 - opencode-like transcript ingest renders as recent/inactive, not running
 
@@ -97,8 +97,8 @@ for clients at first.
 
 Tests:
 
-- managed live phase -> `managed_phase`
-- unmanaged online binding -> `unmanaged_binding`
+- managed live phase -> `phase_signal`
+- unmanaged online binding -> `process_binding`
 - progress-only ingest -> `transcript_progress`
 - cold session -> `none`
 
@@ -127,8 +127,9 @@ Display policy:
 
 ### Phase 4 - Web Consumption
 
-Web timeline/detail should render `runtime_display` directly. Any fallback
-logic is compatibility-only and must stay smaller than the server contract.
+Web timeline/detail should render `runtime_display` and `timeline_card`
+directly. Local derived helpers are last-resort guardrails for incomplete dev
+fixtures, not an alternate truth model for supported API responses.
 
 ### Phase 5 - iOS Consumption
 

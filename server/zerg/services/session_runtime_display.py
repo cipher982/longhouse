@@ -258,7 +258,7 @@ def build_session_runtime_display(
     )
     process_observed = (
         control_path == "unmanaged"
-        and signal_tier == "unmanaged_binding"
+        and signal_tier == "process_binding"
         and host_state == "online"
         and binding_terminal_reason is None
         and presence_state is None
@@ -426,11 +426,11 @@ def _derive_signal_tier(
     binding_terminal_reason: str | None,
 ) -> str:
     if control_path == "unmanaged" and binding_terminal_reason in {"process_gone", "host_expired"}:
-        return "unmanaged_binding"
+        return "process_binding"
     if control_path == "unmanaged" and binding_host_state == "online":
-        return "unmanaged_binding"
+        return "process_binding"
     tier = (runtime_view.signal_tier or "").strip()
-    if tier in {"managed_phase", "transcript_progress", "none"}:
+    if tier in {"phase_signal", "transcript_progress", "none"}:
         return tier
     return "none"
 

@@ -74,12 +74,25 @@ enum RuntimeDisplayText {
         }
     }
 
-    static func observedPhaseLabel(kind: String, tool: String?) -> String {
+    static func phaseStatusLabel(kind: String, tool: String?) -> String {
         let phase = kind == "needs_user" ? "ready" : kind.replacingOccurrences(of: #"[-_]+"#, with: " ", options: .regularExpression)
         if let compactTool = compactFactToolLabel(tool), kind == "running" || kind == "blocked" {
             return "\(phase.capitalized) \(compactTool)"
         }
         return phase.capitalized
+    }
+
+    static func statusSeenAtPrefix(label: String) -> String {
+        switch label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "closed":
+            return "Closed"
+        case "transcript only":
+            return "Transcript"
+        case "process not visible":
+            return "Checked"
+        default:
+            return "Seen"
+        }
     }
 }
 
@@ -144,31 +157,31 @@ func sessionFactStatus(_ facts: SessionLivenessFacts?) -> SessionFactStatus? {
             label: "Closed",
             tone: "closed",
             seenAt: facts.lifecycle.observedAt ?? facts.phase.observedAt ?? facts.activity.lastTranscriptAt,
-            seenAtPrefix: "Observed"
+            seenAtPrefix: "Closed"
         )
     }
     if let kind = facts.phase.kind?.trimmingCharacters(in: .whitespacesAndNewlines), !kind.isEmpty {
         return SessionFactStatus(
-            label: "Observed \(RuntimeDisplayText.observedPhaseLabel(kind: kind, tool: facts.phase.tool))",
+            label: RuntimeDisplayText.phaseStatusLabel(kind: kind, tool: facts.phase.tool),
             tone: "inactive",
             seenAt: facts.phase.observedAt,
-            seenAtPrefix: "Observed"
+            seenAtPrefix: "Seen"
         )
     }
     if facts.process.status == "observed" {
         return SessionFactStatus(
-            label: "Process observed",
+            label: "Process visible",
             tone: "inactive",
             seenAt: facts.process.observedAt ?? facts.process.lastSeenAt,
-            seenAtPrefix: "Observed"
+            seenAtPrefix: "Seen"
         )
     }
     if facts.process.status == "not_observed" {
         return SessionFactStatus(
-            label: "Process not observed",
+            label: "Process not visible",
             tone: "inactive",
             seenAt: facts.process.lastSeenAt ?? facts.process.observedAt,
-            seenAtPrefix: "Observed"
+            seenAtPrefix: "Checked"
         )
     }
     switch facts.host.state {
@@ -184,7 +197,7 @@ func sessionFactStatus(_ facts: SessionLivenessFacts?) -> SessionFactStatus? {
     if let transcriptAt = facts.activity.lastTranscriptAt {
         return SessionFactStatus(label: "Transcript only", tone: "inactive", seenAt: transcriptAt, seenAtPrefix: "Transcript")
     }
-    return SessionFactStatus(label: "Host unverified", tone: "inactive", seenAt: nil, seenAtPrefix: "Seen")
+    return SessionFactStatus(label: "Runtime unverified", tone: "inactive", seenAt: nil, seenAtPrefix: "Seen")
 }
 
 struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
@@ -387,11 +400,11 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     }
 
     var timelineStatusLabel: String {
-        if let factStatus = sessionFactStatus(runtimeFacts) {
-            return factStatus.label
-        }
         if let label = timelineCard?.status?.label.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
             return label
+        }
+        if let factStatus = sessionFactStatus(runtimeFacts) {
+            return factStatus.label
         }
         if isClosed {
             return "Closed"
@@ -444,10 +457,10 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     }
 
     var timelineStatusSeenAt: String? {
-        if let seenAt = sessionFactStatus(runtimeFacts)?.seenAt?.trimmingCharacters(in: .whitespacesAndNewlines), !seenAt.isEmpty {
+        if let seenAt = timelineCard?.status?.seenAt?.trimmingCharacters(in: .whitespacesAndNewlines), !seenAt.isEmpty {
             return seenAt
         }
-        if let seenAt = timelineCard?.status?.seenAt?.trimmingCharacters(in: .whitespacesAndNewlines), !seenAt.isEmpty {
+        if let seenAt = sessionFactStatus(runtimeFacts)?.seenAt?.trimmingCharacters(in: .whitespacesAndNewlines), !seenAt.isEmpty {
             return seenAt
         }
         guard runtimeDisplay?.activityRecency == "stale" else { return nil }
@@ -455,15 +468,18 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     }
 
     var timelineStatusSeenAtPrefix: String {
-        sessionFactStatus(runtimeFacts)?.seenAtPrefix ?? "Seen"
+        if let label = timelineCard?.status?.label.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
+            return RuntimeDisplayText.statusSeenAtPrefix(label: label)
+        }
+        return sessionFactStatus(runtimeFacts)?.seenAtPrefix ?? "Seen"
     }
 
     var timelineStatusTone: String {
-        if let factStatus = sessionFactStatus(runtimeFacts) {
-            return factStatus.tone
-        }
         if let tone = timelineCard?.status?.tone.trimmingCharacters(in: .whitespacesAndNewlines), !tone.isEmpty {
             return tone
+        }
+        if let factStatus = sessionFactStatus(runtimeFacts) {
+            return factStatus.tone
         }
         if timelineStatusLabel == "Active" {
             return "active"
@@ -472,11 +488,11 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     }
 
     var timelineBorderTone: String {
-        if let factStatus = sessionFactStatus(runtimeFacts) {
-            return factStatus.tone
-        }
         if let tone = timelineCard?.borderTone.trimmingCharacters(in: .whitespacesAndNewlines), !tone.isEmpty {
             return tone
+        }
+        if let factStatus = sessionFactStatus(runtimeFacts) {
+            return factStatus.tone
         }
         return runtimeTone
     }

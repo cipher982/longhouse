@@ -58,7 +58,7 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
             "id": "managed-running-live",
             "managed": True,
             "view": {
-                "signal_tier": "managed_phase",
+                "signal_tier": "phase_signal",
                 "runtime_phase": "running",
                 "runtime_source": "managed_local_transport",
                 "status": "working",
@@ -70,7 +70,7 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
             },
             "expect": {
                 "control_path": "managed",
-                "signal_tier": "managed_phase",
+                "signal_tier": "phase_signal",
                 "lifecycle": "open",
                 "state": "running",
                 "tone": "running",
@@ -84,7 +84,7 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
             "id": "managed-blocked-live",
             "managed": True,
             "view": {
-                "signal_tier": "managed_phase",
+                "signal_tier": "phase_signal",
                 "runtime_phase": "blocked",
                 "runtime_source": "managed_local_transport",
                 "status": "active",
@@ -96,7 +96,7 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
             },
             "expect": {
                 "control_path": "managed",
-                "signal_tier": "managed_phase",
+                "signal_tier": "phase_signal",
                 "lifecycle": "open",
                 "state": "blocked",
                 "tone": "blocked",
@@ -110,7 +110,7 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
             "id": "managed-needs-user-live",
             "managed": True,
             "view": {
-                "signal_tier": "managed_phase",
+                "signal_tier": "phase_signal",
                 "runtime_phase": "needs_user",
                 "runtime_source": "managed_local_transport",
                 "status": "idle",
@@ -120,7 +120,7 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
             },
             "expect": {
                 "control_path": "managed",
-                "signal_tier": "managed_phase",
+                "signal_tier": "phase_signal",
                 "lifecycle": "open",
                 "state": "needs_user",
                 "tone": "idle",
@@ -134,7 +134,7 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
             "id": "managed-stale-running",
             "managed": True,
             "view": {
-                "signal_tier": "managed_phase",
+                "signal_tier": "phase_signal",
                 "runtime_phase": "running",
                 "runtime_source": "managed_local_transport",
                 "status": "idle",
@@ -145,7 +145,7 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
             },
             "expect": {
                 "control_path": "managed",
-                "signal_tier": "managed_phase",
+                "signal_tier": "phase_signal",
                 "lifecycle": "open",
                 "state": "stalled",
                 "tone": "stalled",
@@ -175,7 +175,7 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
             "id": "managed-terminal",
             "managed": True,
             "view": {
-                "signal_tier": "managed_phase",
+                "signal_tier": "phase_signal",
                 "runtime_phase": "finished",
                 "terminal_state": "session_ended",
                 "status": "completed",
@@ -183,7 +183,7 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
             },
             "expect": {
                 "control_path": "managed",
-                "signal_tier": "managed_phase",
+                "signal_tier": "phase_signal",
                 "lifecycle": "closed",
                 "state": None,
                 "tone": "inactive",
@@ -200,7 +200,7 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
             "view": {"signal_tier": "none", "runtime_source": "fallback", "display_phase": "Idle"},
             "expect": {
                 "control_path": "unmanaged",
-                "signal_tier": "unmanaged_binding",
+                "signal_tier": "process_binding",
                 "lifecycle": "open",
                 "state": None,
                 "tone": "active",
@@ -217,7 +217,7 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
             "view": {"signal_tier": "none", "runtime_source": "fallback", "display_phase": "Idle"},
             "expect": {
                 "control_path": "unmanaged",
-                "signal_tier": "unmanaged_binding",
+                "signal_tier": "process_binding",
                 "lifecycle": "closed",
                 "state": None,
                 "tone": "inactive",
@@ -384,7 +384,7 @@ def test_stale_progress_source_is_inactive():
 def test_managed_running_has_renderable_runtime_signal():
     display = build_session_runtime_display(
         runtime_view=_runtime_view(
-            signal_tier="managed_phase",
+            signal_tier="phase_signal",
             runtime_phase="running",
             runtime_source="managed_local_transport",
             status="working",
@@ -399,7 +399,7 @@ def test_managed_running_has_renderable_runtime_signal():
     )
 
     assert display.truth_tier == "managed-local"
-    assert display.signal_tier == "managed_phase"
+    assert display.signal_tier == "phase_signal"
     assert display.headline == "Working"
     assert display.detail == "Running Shell"
     assert display.has_signal is True
@@ -467,7 +467,7 @@ def test_three_axis_fields_managed_hosted_without_transport():
 def test_three_axis_fields_managed_live_running():
     display = build_session_runtime_display(
         runtime_view=_runtime_view(
-            signal_tier="managed_phase",
+            signal_tier="phase_signal",
             runtime_phase="running",
             runtime_source="managed_local_transport",
             status="working",
@@ -482,7 +482,7 @@ def test_three_axis_fields_managed_live_running():
     )
 
     assert display.control_path == "managed"
-    assert display.signal_tier == "managed_phase"
+    assert display.signal_tier == "phase_signal"
     assert display.activity_recency == "live"
     assert display.lifecycle == "open"
 
@@ -502,7 +502,7 @@ def test_unmanaged_online_binding_promotes_signal_tier():
     )
 
     assert display.control_path == "unmanaged"
-    assert display.signal_tier == "unmanaged_binding"
+    assert display.signal_tier == "process_binding"
     assert display.host_state == "online"
 
 

@@ -142,11 +142,11 @@ def test_host_expired_means_unverified_not_closed():
     assert facts.lifecycle.state == "unknown"
 
 
-def test_stale_managed_phase_is_timestamped_not_current_lifecycle_truth():
+def test_stale_phase_signal_is_timestamped_not_current_lifecycle_truth():
     observed_at = NOW - timedelta(minutes=30)
     facts = build_session_liveness_facts(
         runtime_view=_runtime_view(
-            signal_tier="managed_phase",
+            signal_tier="phase_signal",
             runtime_phase="thinking",
             runtime_source="managed_local_transport",
             phase_started_at=observed_at,
@@ -170,7 +170,7 @@ def test_explicit_provider_terminal_closes_session():
     terminal_at = NOW - timedelta(minutes=2)
     facts = build_session_liveness_facts(
         runtime_view=_runtime_view(
-            signal_tier="managed_phase",
+            signal_tier="phase_signal",
             runtime_phase="finished",
             runtime_source="semantic",
             terminal_state="session_ended",
