@@ -1,8 +1,8 @@
-"""Timeline-card presentation contract.
+"""Legacy timeline-card presentation contract.
 
-``runtime_display`` exposes the runtime truth axes.  This module collapses
-those axes into the small set of labels and tones that every timeline client
-should render consistently.
+Current session responses render timeline cards from ``runtime_facts`` in
+``session_views.py``. This module is kept only as a compatibility mapper for
+older tests and any pre-facts callers.
 """
 
 from __future__ import annotations

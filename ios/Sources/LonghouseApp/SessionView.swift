@@ -1235,12 +1235,11 @@ final class SessionViewModel: ObservableObject {
         ].joined(separator: "|")
     }
 
-    /// Prefer the backend fact lifecycle when it is open/closed. Unknown facts
-    /// stay unknown and fall through to legacy hints.
+    /// Runtime facts are authoritative when present. Unknown facts stay
+    /// unknown instead of falling through to legacy lifecycle hints.
     var isSessionEnded: Bool {
         guard let detail else { return false }
-        if detail.runtimeFacts?.lifecycle.state == "closed" { return true }
-        if detail.runtimeFacts?.lifecycle.state == "open" { return false }
+        if let runtimeFacts = detail.runtimeFacts { return runtimeFacts.lifecycle.state == "closed" }
         if let lifecycle = detail.runtimeDisplay?.lifecycle {
             return lifecycle == "closed"
         }
