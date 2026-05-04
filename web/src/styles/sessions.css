@@ -684,11 +684,6 @@
     border-color: color-mix(in srgb, #38bdf8 28%, transparent);
   }
 
-  .session-card-runtime--needs-user {
-    background: color-mix(in srgb, #fbbf24 12%, transparent);
-    border-color: color-mix(in srgb, #fbbf24 30%, transparent);
-  }
-
   .session-card-runtime--blocked {
     background: color-mix(in srgb, #f87171 12%, transparent);
     border-color: color-mix(in srgb, #f87171 32%, transparent);

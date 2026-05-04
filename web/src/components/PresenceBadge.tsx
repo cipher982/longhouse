@@ -482,7 +482,6 @@ export function PresenceHero({ state, tool, className }: PresenceHeroProps) {
 
   const isThinking = normalizedState === "thinking";
   const isRunning = normalizedState === "running";
-  const isNeedsUser = false;
   const isBlocked = normalizedState === "blocked";
   const isStalled = normalizedState === "stalled";
 
@@ -490,24 +489,20 @@ export function PresenceHero({ state, tool, className }: PresenceHeroProps) {
     ? "rgba(251, 146, 60, 0.4)"
     : isRunning
       ? "rgba(56, 189, 248, 0.4)"
-      : isNeedsUser
-        ? "rgba(251, 191, 36, 0.4)"
-        : isBlocked
-          ? "rgba(248, 113, 113, 0.4)"
-          : isStalled
-            ? "rgba(245, 158, 11, 0.36)"
+      : isBlocked
+        ? "rgba(248, 113, 113, 0.4)"
+        : isStalled
+          ? "rgba(245, 158, 11, 0.36)"
           : "rgba(107, 114, 128, 0.2)";
 
   const bgColor = isThinking
     ? "rgba(251, 146, 60, 0.08)"
     : isRunning
       ? "rgba(56, 189, 248, 0.08)"
-      : isNeedsUser
-        ? "rgba(251, 191, 36, 0.06)"
-        : isBlocked
-          ? "rgba(248, 113, 113, 0.06)"
-          : isStalled
-            ? "rgba(245, 158, 11, 0.08)"
+      : isBlocked
+        ? "rgba(248, 113, 113, 0.06)"
+        : isStalled
+          ? "rgba(245, 158, 11, 0.08)"
           : "rgba(107, 114, 128, 0.04)";
 
   return (

@@ -418,7 +418,6 @@ struct SessionModelsTests {
 
         #expect(summary.isClosed)
         #expect(!summary.needsAttention)
-        #expect(!summary.isNeedsUser)
         #expect(!summary.isExecuting)
         #expect(summary.isIdle)
         #expect(summary.displayPhaseLabel == "Completed")
@@ -458,7 +457,6 @@ struct SessionModelsTests {
             )
         )
 
-        #expect(!summary.isNeedsUser)
         #expect(!summary.isBlocked)
         #expect(!summary.needsAttention)
         #expect(!summary.isExecuting)

@@ -222,11 +222,6 @@
     animation: session-runtime-strip-pulse 2.4s ease-in-out infinite;
   }
 
-  .session-runtime-strip--tone-needs-user {
-    border-color: rgba(212, 168, 67, 0.28);
-    background: rgba(52, 33, 14, 0.56);
-  }
-
   .session-runtime-strip--tone-blocked {
     border-color: rgba(196, 80, 64, 0.28);
     background: rgba(54, 22, 18, 0.56);
