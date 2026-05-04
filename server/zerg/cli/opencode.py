@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import shutil
 import subprocess
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
+from urllib.error import HTTPError
+from urllib.error import URLError
+from urllib.request import Request
+from urllib.request import urlopen
 
 import typer
 
@@ -22,6 +29,10 @@ from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_OPENCODE_BIN_FLAG
 from zerg.services.session_continuity import get_machine_name_label
 from zerg.session_loop_mode import SessionLoopMode
 
+_OPENCODE_RUNTIME_SOURCE = "opencode_event"
+_OPENCODE_RUNTIME_PLUGIN_FILENAME = "longhouse-opencode-runtime.mjs"
+_OPENCODE_RUNTIME_EVENT_TIMEOUT_SECONDS = 5
+_OPENCODE_RUNTIME_PLUGIN_POST_TIMEOUT_MS = 2_000
 _OPENCODE_BIN_OPTION_HELP = " ".join(
     [
         "Debug override for the OpenCode executable used by managed sessions",
@@ -32,6 +43,155 @@ _OPENCODE_BIN_OPTION_HELP = " ".join(
 
 class _OpenCodeLaunchError(Exception):
     """Raised when native OpenCode launch preparation fails."""
+
+
+_OPENCODE_RUNTIME_PLUGIN = r"""
+const SOURCE = "opencode_event"
+const POST_TIMEOUT_MS = __LONGHOUSE_POST_TIMEOUT_MS__
+
+function requireOption(options, name) {
+  const value = options && typeof options[name] === "string" ? options[name].trim() : ""
+  if (!value) throw new Error(`Longhouse OpenCode plugin missing ${name}`)
+  return value
+}
+
+function phaseForStatus(status) {
+  const type = status && typeof status.type === "string" ? status.type : ""
+  if (type === "busy") return { phase: "running" }
+  if (type === "retry") return { phase: "blocked", toolName: "retry" }
+  return { phase: "idle" }
+}
+
+function buildEvent(ctx, kind, phase, toolName, payload) {
+  const occurredAt = new Date().toISOString()
+  ctx.seq += 1
+  return {
+    runtime_key: `opencode:${ctx.sessionID}`,
+    session_id: ctx.sessionID,
+    provider: "opencode",
+    device_id: ctx.deviceID,
+    source: SOURCE,
+    kind,
+    phase,
+    tool_name: toolName || null,
+    occurred_at: occurredAt,
+    dedupe_key: `${ctx.sessionID}:${SOURCE}:${ctx.seq}:${payload && payload.eventID ? payload.eventID : occurredAt}`,
+    payload: payload || {},
+  }
+}
+
+async function postEvents(ctx, events) {
+  if (!events.length) return
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), POST_TIMEOUT_MS)
+  try {
+    const response = await fetch(ctx.runtimeEventsUrl, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "content-type": "application/json",
+        "x-agents-token": ctx.token,
+      },
+      body: JSON.stringify({ events }),
+    })
+    if (!response.ok) {
+      const body = await response.text().catch(() => "")
+      console.warn(`Longhouse runtime ingest failed: ${response.status} ${body.slice(0, 200)}`)
+    }
+  } catch (error) {
+    console.warn(`Longhouse runtime ingest failed: ${error && error.message ? error.message : error}`)
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+export default {
+  id: "longhouse-runtime",
+  async server(_input, options) {
+    const ctx = {
+      runtimeEventsUrl: requireOption(options, "runtimeEventsUrl"),
+      token: requireOption(options, "token"),
+      sessionID: requireOption(options, "longhouseSessionID"),
+      deviceID: requireOption(options, "deviceID"),
+      seq: 0,
+    }
+
+    return {
+      async event({ event }) {
+        const type = event && event.type
+        const props = (event && event.properties) || {}
+        if (type === "session.status") {
+          const mapped = phaseForStatus(props.status)
+          await postEvents(ctx, [
+            buildEvent(ctx, "phase_signal", mapped.phase, mapped.toolName, {
+              eventID: event.id,
+              opencodeSessionID: props.sessionID,
+              opencodeStatus: props.status,
+            }),
+          ])
+        }
+        if (type === "session.idle") {
+          await postEvents(ctx, [
+            buildEvent(ctx, "phase_signal", "idle", null, {
+              eventID: event.id,
+              opencodeSessionID: props.sessionID,
+            }),
+          ])
+        }
+        if (type === "permission.asked") {
+          await postEvents(ctx, [
+            buildEvent(ctx, "phase_signal", "blocked", "permission", {
+              eventID: event.id,
+              opencodeSessionID: props.sessionID,
+              permission: props,
+            }),
+          ])
+        }
+        if (type === "permission.replied") {
+          await postEvents(ctx, [
+            buildEvent(ctx, "phase_signal", "running", null, {
+              eventID: event.id,
+              opencodeSessionID: props.sessionID,
+              permission: props,
+            }),
+          ])
+        }
+      },
+      async "chat.message"(input) {
+        await postEvents(ctx, [
+          buildEvent(ctx, "phase_signal", "running", null, {
+            hook: "chat.message",
+            opencodeSessionID: input.sessionID,
+            opencodeMessageID: input.messageID,
+            agent: input.agent,
+            model: input.model,
+          }),
+        ])
+      },
+      async "tool.execute.before"(input) {
+        await postEvents(ctx, [
+          buildEvent(ctx, "phase_signal", "running", input.tool, {
+            hook: "tool.execute.before",
+            opencodeSessionID: input.sessionID,
+            opencodeCallID: input.callID,
+            tool: input.tool,
+          }),
+        ])
+      },
+      async "tool.execute.after"(input) {
+        await postEvents(ctx, [
+          buildEvent(ctx, "phase_signal", "running", null, {
+            hook: "tool.execute.after",
+            opencodeSessionID: input.sessionID,
+            opencodeCallID: input.callID,
+            tool: input.tool,
+          }),
+        ])
+      },
+    }
+  },
+}
+""".strip().replace("__LONGHOUSE_POST_TIMEOUT_MS__", str(_OPENCODE_RUNTIME_PLUGIN_POST_TIMEOUT_MS))
 
 
 def _resolve_explicit_opencode_binary(candidate: str, *, source: str) -> str:
@@ -82,6 +242,199 @@ def _launch_managed_local_from_api(
     )
 
 
+def _managed_runtime_events_url(base_url: str) -> str:
+    return f"{base_url.rstrip('/')}/api/agents/runtime/events/batch"
+
+
+def _opencode_runtime_dir(config_dir: Path | None = None) -> Path:
+    return (config_dir or (Path.home() / ".claude")) / "managed-local" / "opencode"
+
+
+def _ensure_opencode_runtime_plugin(config_dir: Path | None = None) -> Path:
+    runtime_dir = _opencode_runtime_dir(config_dir)
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    plugin_path = runtime_dir / _OPENCODE_RUNTIME_PLUGIN_FILENAME
+    plugin_path.write_text(_OPENCODE_RUNTIME_PLUGIN + "\n", encoding="utf-8")
+    return plugin_path
+
+
+def _opencode_config_content_with_longhouse_plugin(
+    *,
+    existing_content: str | None,
+    plugin_path: Path,
+    runtime_events_url: str,
+    token: str,
+    session_id: str,
+    device_id: str,
+) -> str:
+    if existing_content and existing_content.strip():
+        try:
+            config = json.loads(existing_content)
+        except json.JSONDecodeError as exc:
+            raise _OpenCodeLaunchError("OPENCODE_CONFIG_CONTENT is set but is not valid JSON") from exc
+        if not isinstance(config, dict):
+            raise _OpenCodeLaunchError("OPENCODE_CONFIG_CONTENT must be a JSON object")
+    else:
+        config = {}
+
+    plugins = config.get("plugin")
+    if plugins is None:
+        plugins = []
+    if not isinstance(plugins, list):
+        raise _OpenCodeLaunchError("OPENCODE_CONFIG_CONTENT plugin field must be an array")
+    plugins = list(plugins)
+    plugins.append(
+        [
+            plugin_path.resolve().as_uri(),
+            {
+                "runtimeEventsUrl": runtime_events_url,
+                "token": token,
+                "longhouseSessionID": session_id,
+                "deviceID": device_id,
+            },
+        ]
+    )
+    config["plugin"] = plugins
+    return json.dumps(config, separators=(",", ":"))
+
+
+def _write_opencode_runtime_config_content(
+    *,
+    config_dir: Path | None,
+    runtime_events_url: str,
+    token: str,
+    session_id: str,
+    device_id: str,
+) -> Path:
+    plugin_path = _ensure_opencode_runtime_plugin(config_dir)
+    content = _opencode_config_content_with_longhouse_plugin(
+        existing_content=os.environ.get("OPENCODE_CONFIG_CONTENT"),
+        plugin_path=plugin_path,
+        runtime_events_url=runtime_events_url,
+        token=token,
+        session_id=session_id,
+        device_id=device_id,
+    )
+    runtime_dir = _opencode_runtime_dir(config_dir)
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    config_path = runtime_dir / f"{session_id}.config-content.json"
+    fd = os.open(config_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as file:
+        file.write(content + "\n")
+    return config_path
+
+
+def _write_opencode_launch_script(
+    *,
+    config_dir: Path | None,
+    session_id: str,
+    device_id: str,
+    opencode_bin: str,
+    cwd: Path,
+    runtime_events_url: str,
+    token: str,
+    config_content_path: Path,
+) -> Path:
+    runtime_dir = _opencode_runtime_dir(config_dir)
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    script_path = runtime_dir / f"{session_id}.launch.sh"
+    script = f"""#!/bin/sh
+export LONGHOUSE_MANAGED_SESSION_ID={shlex.quote(session_id)}
+export LONGHOUSE_DEVICE_ID={shlex.quote(device_id)}
+export OPENCODE_CONFIG_CONTENT="$(cat {shlex.quote(str(config_content_path))})"
+cd {shlex.quote(str(cwd))} || exit 1
+{shlex.quote(opencode_bin)} "$@"
+status=$?
+LONGHOUSE_RUNTIME_STATUS="$status" \\
+LONGHOUSE_RUNTIME_EVENTS_URL={shlex.quote(runtime_events_url)} \\
+LONGHOUSE_RUNTIME_TOKEN={shlex.quote(token)} \\
+LONGHOUSE_RUNTIME_SESSION_ID={shlex.quote(session_id)} \\
+LONGHOUSE_RUNTIME_DEVICE_ID={shlex.quote(device_id)} \\
+/usr/bin/env python3 - <<'PY' >/dev/null 2>&1 || true
+from datetime import datetime, timezone
+import json
+import os
+import urllib.request
+
+status = int(os.environ.get("LONGHOUSE_RUNTIME_STATUS") or "1")
+session_id = os.environ["LONGHOUSE_RUNTIME_SESSION_ID"]
+event = {{
+    "runtime_key": f"opencode:{{session_id}}",
+    "session_id": session_id,
+    "provider": "opencode",
+    "device_id": os.environ["LONGHOUSE_RUNTIME_DEVICE_ID"],
+    "source": "opencode_event",
+    "kind": "terminal_signal",
+    "phase": "finished",
+    "occurred_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    "dedupe_key": f"{{session_id}}:opencode_event:terminal:{{status}}",
+    "payload": {{"terminal_state": "session_ended", "exit_code": status}},
+}}
+request = urllib.request.Request(
+    os.environ["LONGHOUSE_RUNTIME_EVENTS_URL"],
+    data=json.dumps({{"events": [event]}}).encode("utf-8"),
+    method="POST",
+    headers={{
+        "Content-Type": "application/json",
+        "X-Agents-Token": os.environ["LONGHOUSE_RUNTIME_TOKEN"],
+    }},
+)
+urllib.request.urlopen(request, timeout=5).read()
+PY
+exit "$status"
+"""
+    fd = os.open(script_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o700)
+    with os.fdopen(fd, "w", encoding="utf-8") as file:
+        file.write(script)
+    return script_path
+
+
+def _runtime_event_payload(
+    *,
+    session_id: str,
+    device_id: str,
+    kind: str,
+    phase: str | None,
+    dedupe_key: str,
+    payload: dict,
+) -> dict:
+    return {
+        "runtime_key": f"opencode:{session_id}",
+        "session_id": session_id,
+        "provider": "opencode",
+        "device_id": device_id,
+        "source": _OPENCODE_RUNTIME_SOURCE,
+        "kind": kind,
+        "phase": phase,
+        "occurred_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "dedupe_key": dedupe_key,
+        "payload": payload,
+    }
+
+
+def _post_opencode_runtime_event(
+    *,
+    url: str,
+    token: str,
+    event: dict,
+) -> None:
+    data = json.dumps({"events": [event]}).encode("utf-8")
+    request = Request(
+        _managed_runtime_events_url(url),
+        data=data,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "X-Agents-Token": token,
+        },
+    )
+    try:
+        with urlopen(request, timeout=_OPENCODE_RUNTIME_EVENT_TIMEOUT_SECONDS) as response:
+            response.read()
+    except (HTTPError, URLError, TimeoutError, OSError) as exc:
+        raise _OpenCodeLaunchError(f"Could not send OpenCode runtime event to Longhouse: {exc}") from exc
+
+
 def _build_opencode_command(
     *,
     session_id: str,
@@ -89,13 +442,20 @@ def _build_opencode_command(
     opencode_bin: str,
     cwd: Path,
     opencode_args: tuple[str, ...],
+    config_content_path: Path | None = None,
+    launch_script_path: Path | None = None,
 ) -> str:
-    env_prefix = " ".join(
-        [
-            f"LONGHOUSE_MANAGED_SESSION_ID={shlex.quote(session_id)}",
-            f"LONGHOUSE_DEVICE_ID={shlex.quote(machine_name)}",
-        ]
-    )
+    if launch_script_path is not None:
+        command = " ".join([shlex.quote(str(launch_script_path)), *(shlex.quote(arg) for arg in opencode_args)])
+        return f"cd {shlex.quote(str(cwd))} && {command}"
+
+    env_items = [
+        f"LONGHOUSE_MANAGED_SESSION_ID={shlex.quote(session_id)}",
+        f"LONGHOUSE_DEVICE_ID={shlex.quote(machine_name)}",
+    ]
+    if config_content_path is not None:
+        env_items.append(f'OPENCODE_CONFIG_CONTENT="$(cat {shlex.quote(str(config_content_path))})"')
+    env_prefix = " ".join(env_items)
     command = " ".join([shlex.quote(opencode_bin), *(shlex.quote(arg) for arg in opencode_args)])
     return f"cd {shlex.quote(str(cwd))} && {env_prefix} {command}"
 
@@ -107,13 +467,44 @@ def _run_native_opencode(
     opencode_bin: str,
     cwd: Path,
     opencode_args: tuple[str, ...],
+    url: str,
+    token: str,
+    config_dir: Path | None = None,
 ) -> int:
     cmd = [opencode_bin, *opencode_args]
     env = os.environ.copy()
     env["LONGHOUSE_MANAGED_SESSION_ID"] = session_id
     env["LONGHOUSE_DEVICE_ID"] = machine_name
-    completed = subprocess.run(cmd, check=False, cwd=str(cwd), env=env)
-    return int(completed.returncode)
+    plugin_path = _ensure_opencode_runtime_plugin(config_dir)
+    env["OPENCODE_CONFIG_CONTENT"] = _opencode_config_content_with_longhouse_plugin(
+        existing_content=env.get("OPENCODE_CONFIG_CONTENT"),
+        plugin_path=plugin_path,
+        runtime_events_url=_managed_runtime_events_url(url),
+        token=token,
+        session_id=session_id,
+        device_id=machine_name,
+    )
+    returncode = 1
+    try:
+        completed = subprocess.run(cmd, check=False, cwd=str(cwd), env=env)
+        returncode = int(completed.returncode)
+        return returncode
+    finally:
+        try:
+            _post_opencode_runtime_event(
+                url=url,
+                token=token,
+                event=_runtime_event_payload(
+                    session_id=session_id,
+                    device_id=machine_name,
+                    kind="terminal_signal",
+                    phase="finished",
+                    dedupe_key=f"{session_id}:{_OPENCODE_RUNTIME_SOURCE}:terminal:{returncode}",
+                    payload={"terminal_state": "session_ended", "exit_code": returncode},
+                ),
+            )
+        except _OpenCodeLaunchError as exc:
+            typer.secho(f"Longhouse runtime event warning: {exc}", fg=typer.colors.YELLOW, err=True)
 
 
 def opencode(
@@ -222,17 +613,44 @@ def opencode(
             typer.secho(f"Could not open browser automatically. Visit: {session_url}", fg=typer.colors.YELLOW)
 
     opencode_args = tuple(str(arg) for arg in (ctx.args or ()))
+    is_interactive = _interactive_stdio()
+    command_config_content_path: Path | None = None
+    command_launch_script_path: Path | None = None
+    if not attach or not is_interactive:
+        try:
+            command_config_content_path = _write_opencode_runtime_config_content(
+                config_dir=resolved_config_dir,
+                runtime_events_url=_managed_runtime_events_url(resolved_url),
+                token=resolved_token,
+                session_id=result.session_id,
+                device_id=machine_name,
+            )
+            command_launch_script_path = _write_opencode_launch_script(
+                config_dir=resolved_config_dir,
+                session_id=result.session_id,
+                device_id=machine_name,
+                opencode_bin=resolved_opencode_bin,
+                cwd=cwd,
+                runtime_events_url=_managed_runtime_events_url(resolved_url),
+                token=resolved_token,
+                config_content_path=command_config_content_path,
+            )
+        except _OpenCodeLaunchError as exc:
+            typer.secho(str(exc), fg=typer.colors.RED)
+            raise typer.Exit(code=1) from exc
     command = _build_opencode_command(
         session_id=result.session_id,
         machine_name=machine_name,
         opencode_bin=resolved_opencode_bin,
         cwd=cwd,
         opencode_args=opencode_args,
+        config_content_path=command_config_content_path,
+        launch_script_path=command_launch_script_path,
     )
     if not attach:
         typer.echo(f"Run: {command}")
         return
-    if not _interactive_stdio():
+    if not is_interactive:
         typer.secho("Skipping OpenCode launch because stdin/stdout are not TTYs.", fg=typer.colors.YELLOW)
         typer.echo(f"Run: {command}")
         return
@@ -244,6 +662,9 @@ def opencode(
         opencode_bin=resolved_opencode_bin,
         cwd=cwd,
         opencode_args=opencode_args,
+        url=resolved_url,
+        token=resolved_token,
+        config_dir=resolved_config_dir,
     )
     if exit_code != 0:
         typer.secho(f"OpenCode exited with code {exit_code}.", fg=typer.colors.YELLOW)
