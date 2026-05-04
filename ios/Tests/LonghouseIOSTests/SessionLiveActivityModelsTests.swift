@@ -138,6 +138,71 @@ struct SessionLiveActivityModelsTests {
     }
 
     @Test
+    func contentStatePrefersRuntimeFactsOverRuntimeDisplay() throws {
+        let json = """
+        {
+          "id": "session-runtime-facts",
+          "provider": "codex",
+          "project": "zerg",
+          "cwd": "/Users/davidrose/git/zerg",
+          "git_branch": "main",
+          "summary": "Run checks",
+          "summary_title": "Run Checks",
+          "presence_state": "running",
+          "presence_tool": "bash",
+          "user_state": "active",
+          "status": "working",
+          "last_activity_at": "2026-04-25T20:00:00Z",
+          "display_phase": "Running bash",
+          "active_tool": "bash",
+          "home_label": "On this Mac",
+          "origin_label": "On this Mac",
+          "capabilities": {
+            "live_control_available": true,
+            "host_reattach_available": true,
+            "reply_to_live_session_available": true,
+            "display_label": "Live on this Mac",
+            "display_detail": "Longhouse can send prompts into this live session.",
+            "display_tone": "success"
+          },
+          "runtime_display": {
+            "truth_tier": "managed-local",
+            "state": "running",
+            "tone": "running",
+            "headline": "Working",
+            "detail": "Running Shell",
+            "phase_label": "Running Shell",
+            "compact_tool_label": "Shell",
+            "is_live": true,
+            "is_executing": true,
+            "needs_attention": true,
+            "is_idle": false,
+            "heuristic_active": false,
+            "is_managed_local_truth": true,
+            "has_signal": true
+          },
+          "runtime_facts": {
+            "control_path": "managed",
+            "host": {"state": "online", "last_seen_at": "2026-04-25T20:00:00Z", "source": "machine_heartbeat"},
+            "process": {"status": "unknown", "pid": null, "process_start_time": null, "observed_at": null, "last_seen_at": null, "source_mtime": null, "source_path": null, "reason": null, "source": null},
+            "phase": {"kind": "running", "tool": "shell", "source": "managed_local_transport", "observed_at": "2026-04-25T20:00:00Z", "expires_at": "2026-04-25T20:15:00Z"},
+            "activity": {"last_transcript_at": "2026-04-25T20:00:00Z", "last_runtime_signal_at": "2026-04-25T20:00:00Z", "last_progress_at": null},
+            "lifecycle": {"state": "open", "reason": "managed_phase_observed", "observed_at": "2026-04-25T20:00:00Z"}
+          },
+          "loop_mode": "assist"
+        }
+        """.data(using: .utf8)!
+
+        let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
+        let state = detail.liveActivityContentState(updatedAt: Date(timeIntervalSince1970: 1_777_140_000))
+
+        #expect(state.presenceState == "unknown")
+        #expect(state.displayPhase == "Observed Running Shell")
+        #expect(state.activeTool == nil)
+        #expect(state.isAttention == false)
+    }
+
+    @Test
     func contentStateDoesNotFallbackToStaleTopLevelProgressWhenRuntimeDisplayHasNoState() throws {
         let json = """
         {

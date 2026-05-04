@@ -51,6 +51,140 @@ enum RuntimeDisplayText {
         }
         return nil
     }
+
+    static func compactFactToolLabel(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+        let canonical = value.split(separator: "__").last.map(String.init) ?? value
+        let withoutPrefixes = canonical
+            .replacingOccurrences(of: #"^(hatch_|tool_|mcp_)"#, with: "", options: .regularExpression)
+        let normalized = withoutPrefixes
+            .replacingOccurrences(of: #"[-_.]+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return nil }
+        switch normalized.lowercased() {
+        case "codex": return "Codex"
+        case "claude": return "Claude"
+        case "gemini": return "Gemini"
+        case "default": return "Z.ai"
+        case "shell", "bash", "terminal": return "Shell"
+        case "edit", "write", "patch", "apply patch", "file change", "filechange": return "Edit"
+        default: return normalized.capitalized
+        }
+    }
+
+    static func observedPhaseLabel(kind: String, tool: String?) -> String {
+        let phase = kind == "needs_user" ? "ready" : kind.replacingOccurrences(of: #"[-_]+"#, with: " ", options: .regularExpression)
+        if let compactTool = compactFactToolLabel(tool), kind == "running" || kind == "blocked" {
+            return "\(phase.capitalized) \(compactTool)"
+        }
+        return phase.capitalized
+    }
+}
+
+struct HostObservation: Codable, Hashable, Sendable {
+    let state: String
+    let lastSeenAt: String?
+    let source: String?
+}
+
+struct ProcessObservation: Codable, Hashable, Sendable {
+    let status: String
+    let pid: Int?
+    let processStartTime: String?
+    let observedAt: String?
+    let lastSeenAt: String?
+    let sourceMtime: String?
+    let sourcePath: String?
+    let reason: String?
+    let source: String?
+}
+
+struct PhaseObservation: Codable, Hashable, Sendable {
+    let kind: String?
+    let tool: String?
+    let source: String?
+    let observedAt: String?
+    let expiresAt: String?
+}
+
+struct ActivityObservation: Codable, Hashable, Sendable {
+    let lastTranscriptAt: String?
+    let lastRuntimeSignalAt: String?
+    let lastProgressAt: String?
+}
+
+struct LifecycleFact: Codable, Hashable, Sendable {
+    let state: String
+    let reason: String?
+    let observedAt: String?
+}
+
+struct SessionLivenessFacts: Codable, Hashable, Sendable {
+    let controlPath: String
+    let host: HostObservation
+    let process: ProcessObservation
+    let phase: PhaseObservation
+    let activity: ActivityObservation
+    let lifecycle: LifecycleFact
+}
+
+struct SessionFactStatus: Hashable, Sendable {
+    let label: String
+    let tone: String
+    let seenAt: String?
+    let seenAtPrefix: String
+}
+
+func sessionFactStatus(_ facts: SessionLivenessFacts?) -> SessionFactStatus? {
+    guard let facts else { return nil }
+    if facts.lifecycle.state == "closed" {
+        return SessionFactStatus(
+            label: "Closed",
+            tone: "inactive",
+            seenAt: facts.lifecycle.observedAt ?? facts.phase.observedAt ?? facts.activity.lastTranscriptAt,
+            seenAtPrefix: "Observed"
+        )
+    }
+    if let kind = facts.phase.kind?.trimmingCharacters(in: .whitespacesAndNewlines), !kind.isEmpty {
+        return SessionFactStatus(
+            label: "Observed \(RuntimeDisplayText.observedPhaseLabel(kind: kind, tool: facts.phase.tool))",
+            tone: "inactive",
+            seenAt: facts.phase.observedAt,
+            seenAtPrefix: "Observed"
+        )
+    }
+    if facts.process.status == "observed" {
+        return SessionFactStatus(
+            label: "Process observed",
+            tone: "inactive",
+            seenAt: facts.process.observedAt ?? facts.process.lastSeenAt,
+            seenAtPrefix: "Observed"
+        )
+    }
+    if facts.process.status == "not_observed" {
+        return SessionFactStatus(
+            label: "Process not observed",
+            tone: "inactive",
+            seenAt: facts.process.lastSeenAt ?? facts.process.observedAt,
+            seenAtPrefix: "Observed"
+        )
+    }
+    switch facts.host.state {
+    case "online":
+        return SessionFactStatus(label: "Host online", tone: "inactive", seenAt: facts.host.lastSeenAt, seenAtPrefix: "Seen")
+    case "stale":
+        return SessionFactStatus(label: "Host last seen", tone: "inactive", seenAt: facts.host.lastSeenAt, seenAtPrefix: "Seen")
+    case "offline":
+        return SessionFactStatus(label: "Host offline", tone: "inactive", seenAt: facts.host.lastSeenAt, seenAtPrefix: "Seen")
+    default:
+        break
+    }
+    if let transcriptAt = facts.activity.lastTranscriptAt {
+        return SessionFactStatus(label: "Transcript only", tone: "inactive", seenAt: transcriptAt, seenAtPrefix: "Transcript")
+    }
+    return SessionFactStatus(label: "Host unverified", tone: "inactive", seenAt: nil, seenAtPrefix: "Seen")
 }
 
 struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
@@ -76,6 +210,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     let hostReattachAvailable: Bool?
     let replyToLiveSessionAvailable: Bool?
     let runtimeDisplay: SessionRuntimeDisplay?
+    let runtimeFacts: SessionLivenessFacts?
     let timelineCard: TimelineCardPresentation?
 
     init(
@@ -101,6 +236,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         hostReattachAvailable: Bool? = nil,
         replyToLiveSessionAvailable: Bool? = nil,
         runtimeDisplay: SessionRuntimeDisplay? = nil,
+        runtimeFacts: SessionLivenessFacts? = nil,
         timelineCard: TimelineCardPresentation? = nil
     ) {
         self.id = id
@@ -125,36 +261,44 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         self.hostReattachAvailable = hostReattachAvailable
         self.replyToLiveSessionAvailable = replyToLiveSessionAvailable
         self.runtimeDisplay = runtimeDisplay
+        self.runtimeFacts = runtimeFacts
         self.timelineCard = timelineCard
     }
 
     var isClosed: Bool {
+        if runtimeFacts?.lifecycle.state == "closed" { return true }
+        if runtimeFacts?.lifecycle.state == "open" { return false }
         if runtimeDisplay?.lifecycle == "closed" { return true }
         if runtimeDisplay?.lifecycle == nil && status == "completed" { return true }
         return false
     }
     private var effectiveRuntimeState: String? {
+        if runtimeFacts != nil { return nil }
         if let runtimeDisplay { return runtimeDisplay.state }
         return presenceState
     }
     var isBlocked: Bool { !isClosed && effectiveRuntimeState == "blocked" }
     var isUserActive: Bool { userState == nil || userState == "active" }
     var needsAttention: Bool {
+        if runtimeFacts != nil { return false }
         if isClosed || !isUserActive { return false }
         if let runtimeDisplay { return runtimeDisplay.needsAttention }
         return isBlocked
     }
     var isExecuting: Bool {
+        if runtimeFacts != nil { return false }
         if isClosed { return false }
         if let runtimeDisplay { return runtimeDisplay.isExecuting }
         return presenceState == "thinking" || presenceState == "running" || status == "working" || status == "active"
     }
     var isIdle: Bool {
+        if runtimeFacts != nil { return false }
         if isClosed { return true }
         if let runtimeDisplay { return runtimeDisplay.isIdle }
         return presenceState == "idle" || status == "idle"
     }
     var runtimeTone: String {
+        if let factStatus = sessionFactStatus(runtimeFacts) { return factStatus.tone }
         if isClosed { return "idle" }
         if let tone = runtimeDisplay?.tone { return tone }
         switch presenceState {
@@ -192,6 +336,8 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     }
 
     var managementLabel: String {
+        if runtimeFacts?.controlPath == "managed" { return "Managed" }
+        if runtimeFacts?.controlPath == "unmanaged" { return "Unmanaged" }
         if let label = timelineCard?.ownership.label.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
             return label
         }
@@ -203,14 +349,19 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     }
 
     private var isManaged: Bool {
+        if runtimeFacts?.controlPath == "managed" { return true }
+        if runtimeFacts?.controlPath == "unmanaged" { return false }
         if runtimeDisplay?.controlPath == "managed" { return true }
         if runtimeDisplay?.controlPath == "unmanaged" { return false }
         return liveControlAvailable == true || hostReattachAvailable == true || replyToLiveSessionAvailable == true
     }
 
     var displayPhaseLabel: String {
+        if let factStatus = sessionFactStatus(runtimeFacts) {
+            return factStatus.label
+        }
         if isClosed {
-            return "Completed"
+            return "Closed"
         }
         if let phaseLabel = runtimeDisplay?.phaseLabel.trimmingCharacters(in: .whitespacesAndNewlines), !phaseLabel.isEmpty {
             return RuntimeDisplayText.canonicalDisplayText(phaseLabel)
@@ -234,14 +385,17 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
             // Phase 3 of session-liveness-honesty: prefer backend lifecycle
             // when available; fall back to status for older payloads only.
             let lifecycle = runtimeDisplay?.lifecycle
-            if lifecycle == "closed" { return "Completed" }
-            if lifecycle == nil && status == "completed" { return "Completed" }
+            if lifecycle == "closed" { return "Closed" }
+            if lifecycle == nil && status == "completed" { return "Closed" }
             if status == "working" || status == "active" { return "Recent progress" }
             return "Recent"
         }
     }
 
     var timelineStatusLabel: String {
+        if let factStatus = sessionFactStatus(runtimeFacts) {
+            return factStatus.label
+        }
         if let label = timelineCard?.status?.label.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
             return label
         }
@@ -296,6 +450,9 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     }
 
     var timelineStatusSeenAt: String? {
+        if let seenAt = sessionFactStatus(runtimeFacts)?.seenAt?.trimmingCharacters(in: .whitespacesAndNewlines), !seenAt.isEmpty {
+            return seenAt
+        }
         if let seenAt = timelineCard?.status?.seenAt?.trimmingCharacters(in: .whitespacesAndNewlines), !seenAt.isEmpty {
             return seenAt
         }
@@ -303,7 +460,14 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         return lastActivityAt ?? timelineAnchorAt
     }
 
+    var timelineStatusSeenAtPrefix: String {
+        sessionFactStatus(runtimeFacts)?.seenAtPrefix ?? "Seen"
+    }
+
     var timelineStatusTone: String {
+        if let factStatus = sessionFactStatus(runtimeFacts) {
+            return factStatus.tone
+        }
         if let tone = timelineCard?.status?.tone.trimmingCharacters(in: .whitespacesAndNewlines), !tone.isEmpty {
             return tone
         }
@@ -314,6 +478,9 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     }
 
     var timelineBorderTone: String {
+        if let factStatus = sessionFactStatus(runtimeFacts) {
+            return factStatus.tone
+        }
         if let tone = timelineCard?.borderTone.trimmingCharacters(in: .whitespacesAndNewlines), !tone.isEmpty {
             return tone
         }
@@ -365,6 +532,7 @@ struct TimelineSession: Codable, Sendable {
     let capabilities: SessionCapabilities?
     let loopMode: SessionLoopMode?
     let runtimeDisplay: SessionRuntimeDisplay?
+    let runtimeFacts: SessionLivenessFacts?
     let timelineCard: TimelineCardPresentation?
 }
 
@@ -490,6 +658,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     let originLabel: String?
     let capabilities: SessionCapabilities
     let runtimeDisplay: SessionRuntimeDisplay?
+    let runtimeFacts: SessionLivenessFacts?
     let loopMode: SessionLoopMode?
 
     var displayTitle: String {
@@ -521,11 +690,18 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     }
 
     var runtimePhaseState: String {
+        if let runtimeFacts {
+            let kind = runtimeFacts.phase.kind?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return kind?.isEmpty == false ? kind! : "unknown"
+        }
         if let runtimeDisplay { return runtimeDisplay.state ?? "idle" }
         return presenceState ?? status ?? "idle"
     }
 
     var runtimePhaseLabel: String {
+        if let factStatus = sessionFactStatus(runtimeFacts) {
+            return factStatus.label
+        }
         if let phaseLabel = runtimeDisplay?.phaseLabel.trimmingCharacters(in: .whitespacesAndNewlines), !phaseLabel.isEmpty {
             return RuntimeDisplayText.canonicalDisplayText(phaseLabel)
         }
@@ -584,6 +760,9 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     }
 
     var runtimeHeadline: String {
+        if let factStatus = sessionFactStatus(runtimeFacts) {
+            return factStatus.label
+        }
         if let headline = runtimeDisplay?.headline.trimmingCharacters(in: .whitespacesAndNewlines), !headline.isEmpty {
             return RuntimeDisplayText.canonicalDisplayText(headline)
         }
@@ -594,6 +773,9 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     }
 
     var runtimeDetail: String? {
+        if runtimeFacts != nil {
+            return nil
+        }
         if let detail = runtimeDisplay?.detail?.trimmingCharacters(in: .whitespacesAndNewlines), !detail.isEmpty {
             return RuntimeDisplayText.canonicalDisplayText(detail)
         }
@@ -610,6 +792,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     }
 
     var runtimeTone: String {
+        if let factStatus = sessionFactStatus(runtimeFacts) { return factStatus.tone }
         if let tone = runtimeDisplay?.tone { return tone }
         switch runtimePhaseState {
         case "running": return "running"
@@ -623,7 +806,10 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     }
 
     var isSessionExecuting: Bool {
-        runtimeDisplay?.isExecuting == true || runtimePhaseState == "running" || runtimePhaseState == "thinking"
+        if runtimeFacts != nil {
+            return runtimePhaseState == "running" || runtimePhaseState == "thinking"
+        }
+        return runtimeDisplay?.isExecuting == true || runtimePhaseState == "running" || runtimePhaseState == "thinking"
     }
 }
 

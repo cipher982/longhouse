@@ -245,7 +245,7 @@ private struct RuntimeBadge: View {
                 .font(.caption.weight(.semibold))
                 .lineLimit(1)
             if let seenAt = session.timelineStatusSeenAt {
-                Text("Seen \(relativeTime(seenAt))")
+                Text("\(session.timelineStatusSeenAtPrefix) \(relativeTime(seenAt))")
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

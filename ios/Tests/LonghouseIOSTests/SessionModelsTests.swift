@@ -3,6 +3,55 @@ import Testing
 @testable import Longhouse
 
 struct SessionModelsTests {
+    private func runtimeFacts(
+        controlPath: String = "managed",
+        hostState: String = "unknown",
+        processStatus: String = "unknown",
+        phaseKind: String? = nil,
+        phaseTool: String? = nil,
+        transcriptAt: String? = nil,
+        lifecycleState: String = "unknown",
+        lifecycleReason: String? = nil,
+        observedAt: String = "2026-04-25T20:00:00Z"
+    ) -> SessionLivenessFacts {
+        SessionLivenessFacts(
+            controlPath: controlPath,
+            host: HostObservation(
+                state: hostState,
+                lastSeenAt: hostState == "unknown" ? nil : observedAt,
+                source: hostState == "unknown" ? nil : "machine_heartbeat"
+            ),
+            process: ProcessObservation(
+                status: processStatus,
+                pid: processStatus == "observed" ? 123 : nil,
+                processStartTime: processStatus == "observed" ? "2026-04-25T19:00:00Z" : nil,
+                observedAt: processStatus == "observed" ? observedAt : nil,
+                lastSeenAt: processStatus == "unknown" ? nil : observedAt,
+                sourceMtime: nil,
+                sourcePath: processStatus == "observed" ? "/tmp/session.jsonl" : nil,
+                reason: nil,
+                source: processStatus == "unknown" ? nil : "machine_process_scan"
+            ),
+            phase: PhaseObservation(
+                kind: phaseKind,
+                tool: phaseTool,
+                source: phaseKind == nil ? nil : "managed_local_transport",
+                observedAt: phaseKind == nil ? nil : observedAt,
+                expiresAt: phaseKind == nil ? nil : "2026-04-25T20:15:00Z"
+            ),
+            activity: ActivityObservation(
+                lastTranscriptAt: transcriptAt,
+                lastRuntimeSignalAt: phaseKind == nil ? nil : observedAt,
+                lastProgressAt: nil
+            ),
+            lifecycle: LifecycleFact(
+                state: lifecycleState,
+                reason: lifecycleReason,
+                observedAt: lifecycleState == "unknown" ? nil : observedAt
+            )
+        )
+    }
+
     @Test
     func sessionWorkspaceDecodesThreadProjectionEventsAndSeams() throws {
         let json = """
@@ -356,6 +405,82 @@ struct SessionModelsTests {
     }
 
     @Test
+    func sessionDetailPrefersRuntimeFactsOverRuntimeDisplay() throws {
+        let jsonString = """
+        {
+          "id": "session-facts-detail",
+          "provider": "codex",
+          "project": "zerg",
+          "cwd": "/Users/davidrose/git/zerg",
+          "git_branch": "main",
+          "summary": "Run live checks",
+          "summary_title": "Live Checks",
+          "presence_state": "running",
+          "presence_tool": "bash",
+          "user_state": "active",
+          "status": "working",
+          "last_activity_at": "2026-04-25T20:00:00Z",
+          "display_phase": "Running bash",
+          "active_tool": "bash",
+          "home_label": "On this Mac",
+          "origin_label": "On this Mac",
+          "capabilities": {
+            "live_control_available": true,
+            "host_reattach_available": true,
+            "reply_to_live_session_available": true,
+            "can_queue_next_input": true,
+            "display_label": "Live on this Mac",
+            "display_detail": "Longhouse can send prompts into this live session.",
+            "display_tone": "success"
+          },
+          "runtime_display": {
+            "truth_tier": "managed-local",
+            "state": "running",
+            "tone": "running",
+            "headline": "Working",
+            "detail": "Running Shell",
+            "phase_label": "Running Shell",
+            "compact_tool_label": "Shell",
+            "is_live": true,
+            "is_executing": true,
+            "needs_attention": false,
+            "is_idle": false,
+            "heuristic_active": false,
+            "is_managed_local_truth": true,
+            "has_signal": true
+          },
+          "runtime_facts": {
+            "control_path": "managed",
+            "host": {"state": "online", "last_seen_at": "2026-04-25T20:00:00Z", "source": "machine_heartbeat"},
+            "process": {"status": "unknown", "pid": null, "process_start_time": null, "observed_at": null, "last_seen_at": null, "source_mtime": null, "source_path": null, "reason": null, "source": null},
+            "phase": {"kind": "running", "tool": "shell", "source": "managed_local_transport", "observed_at": "2026-04-25T20:00:00Z", "expires_at": "2026-04-25T20:15:00Z"},
+            "activity": {"last_transcript_at": "2026-04-25T20:00:00Z", "last_runtime_signal_at": "2026-04-25T20:00:00Z", "last_progress_at": null},
+            "lifecycle": {"state": "open", "reason": "managed_phase_observed", "observed_at": "2026-04-25T20:00:00Z"}
+          },
+          "loop_mode": "assist"
+        }
+        """
+
+        let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: Data(jsonString.utf8))
+
+        #expect(detail.runtimePhaseLabel == "Observed Running Shell")
+        #expect(detail.runtimeHeadline == "Observed Running Shell")
+        #expect(detail.runtimeDetail == nil)
+        #expect(detail.runtimeTone == "inactive")
+        #expect(detail.isSessionExecuting)
+
+        let noPhaseJson = jsonString.replacingOccurrences(
+            of: #""phase": {"kind": "running", "tool": "shell", "source": "managed_local_transport", "observed_at": "2026-04-25T20:00:00Z", "expires_at": "2026-04-25T20:15:00Z"}"#,
+            with: #""phase": {"kind": null, "tool": null, "source": null, "observed_at": null, "expires_at": null}"#
+        )
+        let noPhaseDetail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: Data(noPhaseJson.utf8))
+
+        #expect(noPhaseDetail.runtimePhaseState == "unknown")
+        #expect(noPhaseDetail.runtimePhaseLabel == "Host online")
+        #expect(!noPhaseDetail.isSessionExecuting)
+    }
+
+    @Test
     func runtimeDisplayTextCanonicalizesOnlyBareShellAliases() {
         #expect(RuntimeDisplayText.canonicalDisplayText("Running bash") == "Running Shell")
         #expect(RuntimeDisplayText.canonicalDisplayText("Blocked on terminal") == "Blocked on Shell")
@@ -420,7 +545,7 @@ struct SessionModelsTests {
         #expect(!summary.needsAttention)
         #expect(!summary.isExecuting)
         #expect(summary.isIdle)
-        #expect(summary.displayPhaseLabel == "Completed")
+        #expect(summary.displayPhaseLabel == "Closed")
     }
 
     @Test
@@ -618,6 +743,122 @@ struct SessionModelsTests {
     }
 
     @Test
+    func runtimeFactsOverrideTimelineStatusInference() {
+        let managedPhase = SessionSummary(
+            id: "session-fact-phase",
+            title: "Managed phase",
+            presenceState: "running",
+            provider: "claude",
+            project: "zerg",
+            lastActivityAt: "2026-04-25T20:00:00Z",
+            status: "working",
+            runtimeDisplay: SessionRuntimeDisplay(
+                truthTier: "managed-local",
+                state: "running",
+                tone: "running",
+                headline: "Working",
+                detail: "Running Shell",
+                phaseLabel: "Running Shell",
+                compactToolLabel: "Shell",
+                isLive: true,
+                isExecuting: true,
+                needsAttention: false,
+                isIdle: false,
+                heuristicActive: false,
+                isManagedLocalTruth: true,
+                hasSignal: true,
+                controlPath: "managed",
+                activityRecency: "live",
+                lifecycle: "open",
+                hostState: "online",
+                terminalReason: nil
+            ),
+            runtimeFacts: runtimeFacts(
+                controlPath: "managed",
+                hostState: "online",
+                phaseKind: "running",
+                phaseTool: "mcp__hatch__hatch_codex",
+                transcriptAt: "2026-04-25T20:00:00Z",
+                lifecycleState: "open",
+                lifecycleReason: "managed_phase_observed"
+            )
+        )
+
+        #expect(managedPhase.managementLabel == "Managed")
+        #expect(managedPhase.timelineStatusLabel == "Observed Running Codex")
+        #expect(managedPhase.displayPhaseLabel == "Observed Running Codex")
+        #expect(managedPhase.timelineStatusTone == "inactive")
+        #expect(!managedPhase.isExecuting)
+    }
+
+    @Test
+    func runtimeFactsRenderUnmanagedProcessTranscriptHostAndClosedStates() {
+        let processObserved = SessionSummary(
+            id: "session-process-observed",
+            title: "Unmanaged process",
+            presenceState: "idle",
+            provider: "codex",
+            project: "zerg",
+            lastActivityAt: "2026-04-25T20:00:00Z",
+            status: "working",
+            runtimeFacts: runtimeFacts(
+                controlPath: "unmanaged",
+                hostState: "online",
+                processStatus: "observed",
+                transcriptAt: "2026-04-25T20:00:00Z",
+                lifecycleState: "open",
+                lifecycleReason: "process_observed"
+            )
+        )
+        let transcriptOnly = SessionSummary(
+            id: "session-transcript-only",
+            title: "Transcript only",
+            presenceState: "idle",
+            provider: "claude",
+            project: "zerg",
+            lastActivityAt: "2026-04-25T20:00:00Z",
+            status: "active",
+            runtimeFacts: runtimeFacts(controlPath: "unmanaged", transcriptAt: "2026-04-25T20:00:00Z")
+        )
+        let hostUnverified = SessionSummary(
+            id: "session-host-unverified",
+            title: "Host unverified",
+            presenceState: "idle",
+            provider: "codex",
+            project: "zerg",
+            lastActivityAt: "2026-04-25T20:00:00Z",
+            status: "idle",
+            runtimeFacts: runtimeFacts(controlPath: "managed")
+        )
+        let closed = SessionSummary(
+            id: "session-closed-fact",
+            title: "Closed",
+            presenceState: "running",
+            provider: "codex",
+            project: "zerg",
+            lastActivityAt: "2026-04-25T20:00:00Z",
+            status: "working",
+            runtimeFacts: runtimeFacts(
+                controlPath: "unmanaged",
+                transcriptAt: "2026-04-25T20:00:00Z",
+                lifecycleState: "closed",
+                lifecycleReason: "session_ended"
+            )
+        )
+
+        #expect(processObserved.managementLabel == "Unmanaged")
+        #expect(processObserved.timelineStatusLabel == "Process observed")
+        #expect(processObserved.timelineStatusSeenAtPrefix == "Observed")
+        #expect(transcriptOnly.timelineStatusLabel == "Transcript only")
+        #expect(transcriptOnly.timelineStatusSeenAtPrefix == "Transcript")
+        #expect(hostUnverified.timelineStatusLabel == "Host unverified")
+        #expect(closed.isClosed)
+        #expect(closed.timelineStatusLabel == "Closed")
+        #expect(closed.displayPhaseLabel == "Closed")
+        #expect(!closed.isExecuting)
+    }
+
+    @Test
     func sessionsResponseDecodesTimelineCardContract() throws {
         let json = """
         {
@@ -649,6 +890,14 @@ struct SessionModelsTests {
                 },
                 "loop_mode": "assist",
                 "runtime_display": null,
+                "runtime_facts": {
+                  "control_path": "managed",
+                  "host": {"state": "online", "last_seen_at": "2026-04-25T20:00:00Z", "source": "machine_heartbeat"},
+                  "process": {"status": "unknown", "pid": null, "process_start_time": null, "observed_at": null, "last_seen_at": null, "source_mtime": null, "source_path": null, "reason": null, "source": null},
+                  "phase": {"kind": "needs_user", "tool": null, "source": "managed_local_transport", "observed_at": "2026-04-25T20:00:00Z", "expires_at": "2026-04-25T20:15:00Z"},
+                  "activity": {"last_transcript_at": "2026-04-25T20:00:00Z", "last_runtime_signal_at": "2026-04-25T20:00:00Z", "last_progress_at": null},
+                  "lifecycle": {"state": "open", "reason": "managed_phase_observed", "observed_at": "2026-04-25T20:00:00Z"}
+                },
                 "timeline_card": {
                   "ownership": {"label": "Managed", "tone": "neutral"},
                   "status": {"label": "Ready", "tone": "idle", "seen_at": null},
@@ -666,6 +915,8 @@ struct SessionModelsTests {
         #expect(session.timelineCard?.ownership.label == "Managed")
         #expect(session.timelineCard?.status?.label == "Ready")
         #expect(session.timelineCard?.borderTone == "idle")
+        #expect(session.runtimeFacts?.controlPath == "managed")
+        #expect(session.runtimeFacts?.phase.kind == "needs_user")
     }
 
     @Test

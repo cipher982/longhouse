@@ -112,6 +112,7 @@ struct LonghouseAPI: Sendable {
                 hostReattachAvailable: session.capabilities?.hostReattachAvailable,
                 replyToLiveSessionAvailable: session.capabilities?.replyToLiveSessionAvailable,
                 runtimeDisplay: session.runtimeDisplay,
+                runtimeFacts: session.runtimeFacts,
                 timelineCard: session.timelineCard
             )
         }

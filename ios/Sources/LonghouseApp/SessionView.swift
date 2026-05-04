@@ -1235,14 +1235,12 @@ final class SessionViewModel: ObservableObject {
         ].joined(separator: "|")
     }
 
-    /// Phase 3 of session-liveness-honesty: trust only the backend's
-    /// three-axis lifecycle truth when present. Legacy fallback reads
-    /// presence/status — historically both were set off parser-derived
-    /// ended_at, so they've lied about closure for unmanaged sessions.
-    /// The backend now only emits status="completed" when there's a real
-    /// terminal signal, so this fallback is safe going forward.
+    /// Prefer the backend fact lifecycle when it is open/closed. Unknown facts
+    /// stay unknown and fall through to legacy hints.
     var isSessionEnded: Bool {
         guard let detail else { return false }
+        if detail.runtimeFacts?.lifecycle.state == "closed" { return true }
+        if detail.runtimeFacts?.lifecycle.state == "open" { return false }
         if let lifecycle = detail.runtimeDisplay?.lifecycle {
             return lifecycle == "closed"
         }
