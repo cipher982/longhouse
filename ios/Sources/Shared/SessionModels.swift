@@ -82,18 +82,7 @@ enum RuntimeDisplayText {
         return phase.capitalized
     }
 
-    static func statusSeenAtPrefix(label: String) -> String {
-        switch label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "closed":
-            return "Closed"
-        case "transcript only":
-            return "Transcript"
-        case "process not visible":
-            return "Checked"
-        default:
-            return "Seen"
-        }
-    }
+    static let defaultStatusSeenAtPrefix = "Updated"
 }
 
 struct HostObservation: Codable, Hashable, Sendable {
@@ -165,7 +154,7 @@ func sessionFactStatus(_ facts: SessionLivenessFacts?) -> SessionFactStatus? {
             label: RuntimeDisplayText.phaseStatusLabel(kind: kind, tool: facts.phase.tool),
             tone: "inactive",
             seenAt: facts.phase.observedAt,
-            seenAtPrefix: "Seen"
+            seenAtPrefix: "Updated"
         )
     }
     if facts.process.status == "observed" {
@@ -173,7 +162,7 @@ func sessionFactStatus(_ facts: SessionLivenessFacts?) -> SessionFactStatus? {
             label: "Process visible",
             tone: "inactive",
             seenAt: facts.process.observedAt ?? facts.process.lastSeenAt,
-            seenAtPrefix: "Seen"
+            seenAtPrefix: "Verified"
         )
     }
     if facts.process.status == "not_observed" {
@@ -186,18 +175,18 @@ func sessionFactStatus(_ facts: SessionLivenessFacts?) -> SessionFactStatus? {
     }
     switch facts.host.state {
     case "online":
-        return SessionFactStatus(label: "Host online", tone: "inactive", seenAt: facts.host.lastSeenAt, seenAtPrefix: "Seen")
+        return SessionFactStatus(label: "Host online", tone: "inactive", seenAt: facts.host.lastSeenAt, seenAtPrefix: "Heartbeat")
     case "stale":
-        return SessionFactStatus(label: "Host last seen", tone: "inactive", seenAt: facts.host.lastSeenAt, seenAtPrefix: "Seen")
+        return SessionFactStatus(label: "Host last seen", tone: "inactive", seenAt: facts.host.lastSeenAt, seenAtPrefix: "Heartbeat")
     case "offline":
-        return SessionFactStatus(label: "Host offline", tone: "inactive", seenAt: facts.host.lastSeenAt, seenAtPrefix: "Seen")
+        return SessionFactStatus(label: "Host offline", tone: "inactive", seenAt: facts.host.lastSeenAt, seenAtPrefix: "Heartbeat")
     default:
         break
     }
     if let transcriptAt = facts.activity.lastTranscriptAt {
         return SessionFactStatus(label: "Transcript only", tone: "inactive", seenAt: transcriptAt, seenAtPrefix: "Transcript")
     }
-    return SessionFactStatus(label: "Runtime unverified", tone: "inactive", seenAt: nil, seenAtPrefix: "Seen")
+    return SessionFactStatus(label: "Runtime unverified", tone: "inactive", seenAt: nil, seenAtPrefix: "Checked")
 }
 
 struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
@@ -468,10 +457,10 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     }
 
     var timelineStatusSeenAtPrefix: String {
-        if let label = timelineCard?.status?.label.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
-            return RuntimeDisplayText.statusSeenAtPrefix(label: label)
+        if let prefix = timelineCard?.status?.seenAtPrefix.trimmingCharacters(in: .whitespacesAndNewlines), !prefix.isEmpty {
+            return prefix
         }
-        return sessionFactStatus(runtimeFacts)?.seenAtPrefix ?? "Seen"
+        return sessionFactStatus(runtimeFacts)?.seenAtPrefix ?? RuntimeDisplayText.defaultStatusSeenAtPrefix
     }
 
     var timelineStatusTone: String {
@@ -566,6 +555,7 @@ struct TimelineStatusPresentation: Codable, Hashable, Sendable {
     let label: String
     let tone: String
     let seenAt: String?
+    let seenAtPrefix: String
 }
 
 struct TimelineCardPresentation: Codable, Hashable, Sendable {

@@ -147,10 +147,10 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
                 "control_path": "managed",
                 "signal_tier": "phase_signal",
                 "lifecycle": "open",
-                "state": "stalled",
-                "tone": "stalled",
-                "headline": "Stalled",
-                "phase_label": "Stalled",
+                "state": None,
+                "tone": "inactive",
+                "headline": "Not connected",
+                "phase_label": "Recent",
                 "activity_recency": "stale",
                 "needs_attention": False,
             },
@@ -522,7 +522,7 @@ def test_display_does_not_rederive_signal_tier_from_runtime_source():
     assert display.signal_tier == "none"
 
 
-def test_managed_stale_thinking_without_active_tool_is_stalled():
+def test_managed_stale_thinking_without_active_tool_is_not_current_state():
     display = build_session_runtime_display(
         runtime_view=_runtime_view(
             runtime_phase="thinking",
@@ -540,12 +540,12 @@ def test_managed_stale_thinking_without_active_tool_is_stalled():
     )
 
     assert display.control_path == "managed"
-    assert display.is_stalled is True
-    assert display.state == "stalled"
-    assert display.tone == "stalled"
-    assert display.headline == "Stalled"
-    assert display.detail == "No recent managed-session progress"
-    assert display.phase_label == "Stalled"
+    assert display.is_stalled is False
+    assert display.state is None
+    assert display.tone == "inactive"
+    assert display.headline == "Not connected"
+    assert display.detail is None
+    assert display.phase_label == "Recent"
     assert display.is_executing is False
     assert display.needs_attention is False
     assert display.activity_recency == "stale"
@@ -576,7 +576,7 @@ def test_real_stale_runtime_view_without_presence_is_stalled():
         now=now,
     )
 
-    assert runtime_view.runtime_phase == "thinking"
+    assert runtime_view.runtime_phase is None
     assert runtime_view.presence_state is None
     assert runtime_view.confidence == "stale"
 
@@ -586,8 +586,9 @@ def test_real_stale_runtime_view_without_presence_is_stalled():
         ended_at=None,
     )
 
-    assert display.is_stalled is True
-    assert display.state == "stalled"
+    assert display.is_stalled is False
+    assert display.state is None
+    assert display.headline == "Not connected"
     assert display.needs_attention is False
 
 
@@ -609,9 +610,9 @@ def test_managed_stale_running_with_active_tool_is_not_stalled():
     )
 
     assert display.is_stalled is False
-    assert display.state == "running"
+    assert display.state is None
     assert display.compact_tool_label == "Shell"
-    assert display.is_executing is True
+    assert display.is_executing is False
 
 
 def test_unmanaged_stale_thinking_without_active_tool_is_not_stalled():
@@ -630,7 +631,7 @@ def test_unmanaged_stale_thinking_without_active_tool_is_not_stalled():
 
     assert display.control_path == "unmanaged"
     assert display.is_stalled is False
-    assert display.state == "thinking"
+    assert display.state is None
 
 
 def test_unmanaged_needs_user_without_online_host_renders_ready():
@@ -698,7 +699,7 @@ def test_managed_stale_needs_user_without_presence_is_not_actionable():
 
     assert display.control_path == "managed"
     assert display.state is None
-    assert display.phase_label == "Disconnected"
+    assert display.phase_label == "Recent"
     assert display.headline == "Not connected"
     assert display.needs_attention is False
     assert display.tone == "inactive"

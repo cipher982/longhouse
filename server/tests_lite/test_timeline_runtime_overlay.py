@@ -543,6 +543,7 @@ def test_sessions_list_keeps_progress_runtime_overlay_for_recent_closed_session(
         assert row["last_live_at"] is None
         assert row["confidence"] == "stale"
         assert row["timeline_card"]["status"]["label"] == "Transcript only"
+        assert row["timeline_card"]["status"]["seen_at_prefix"] == "Transcript"
 
 
 def test_sessions_list_suppresses_stale_progress_running_phase(tmp_path):
@@ -595,6 +596,64 @@ def test_sessions_list_suppresses_stale_progress_running_phase(tmp_path):
         assert row["runtime_display"]["state"] is None
         assert row["runtime_display"]["activity_recency"] == "stale"
         assert row["runtime_display"]["tone"] == "inactive"
+
+
+def test_sessions_list_suppresses_stale_phase_signal_from_timeline_status(tmp_path):
+    factory = _make_db(tmp_path, "stale_phase_signal_timeline_status.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            started_at=now - timedelta(hours=2),
+            project="stale-phase-signal",
+            execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
+            managed_transport="claude_channel_bridge",
+            source_runner_id=1,
+            managed_session_name="claude",
+        )
+        db.add(
+            AgentHeartbeat(
+                device_id="timeline-runtime",
+                received_at=now,
+            )
+        )
+        db.add(
+            SessionRuntimeState(
+                runtime_key=f"claude:{session.id}",
+                session_id=session.id,
+                provider="claude",
+                device_id="timeline-runtime",
+                phase="thinking",
+                phase_source="managed_local_transport",
+                active_tool=None,
+                phase_started_at=now - timedelta(minutes=30),
+                last_runtime_signal_at=now - timedelta(minutes=30),
+                last_progress_at=now - timedelta(minutes=30),
+                last_live_at=now - timedelta(minutes=30),
+                timeline_anchor_at=now - timedelta(minutes=30),
+                freshness_expires_at=now - timedelta(minutes=15),
+                terminal_state=None,
+                terminal_at=None,
+                runtime_version=1,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    for client in _client(factory):
+        resp = client.get("/agents/sessions?days_back=7&limit=1", headers={"X-Agents-Token": "dev"})
+        assert resp.status_code == 200, resp.text
+        row = resp.json()["sessions"][0]
+        assert row["id"] == str(session.id)
+        assert row["confidence"] == "stale"
+        assert row["runtime_phase"] is None
+        assert row["runtime_facts"]["phase"]["kind"] is None
+        assert row["runtime_facts"]["activity"]["last_runtime_signal_at"] is not None
+        assert row["timeline_card"]["status"]["label"] == "Transcript only"
+        assert row["timeline_card"]["status"]["seen_at_prefix"] == "Transcript"
 
 
 def test_sessions_list_marks_materialized_needs_user_as_ready(tmp_path):

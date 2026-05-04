@@ -106,7 +106,7 @@ def _explicit_lifecycle(runtime_view: SessionRuntimeView) -> LifecycleFact | Non
 
 def _phase_observation(runtime_view: SessionRuntimeView) -> PhaseObservation:
     source = _normalized(runtime_view.runtime_source)
-    if source in {None, "fallback", "progress"}:
+    if source in {None, "fallback", "progress"} or runtime_view.confidence != "live":
         return PhaseObservation(
             kind=None,
             tool=None,

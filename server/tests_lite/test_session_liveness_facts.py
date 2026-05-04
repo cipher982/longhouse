@@ -160,9 +160,10 @@ def test_stale_phase_signal_is_timestamped_not_current_lifecycle_truth():
     )
 
     assert facts.control_path == "managed"
-    assert facts.phase.kind == "thinking"
-    assert facts.phase.observed_at == observed_at
-    assert facts.phase.expires_at == observed_at + timedelta(seconds=90)
+    assert facts.phase.kind is None
+    assert facts.phase.observed_at is None
+    assert facts.phase.expires_at is None
+    assert facts.activity.last_runtime_signal_at == observed_at
     assert facts.lifecycle.state == "unknown"
 
 

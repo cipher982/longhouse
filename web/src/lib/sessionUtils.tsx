@@ -172,7 +172,7 @@ export function getRuntimeMetaLabel(
   }
   if (runtime.lastLiveAt) {
     if (runtime.truthTier === "stale" || runtime.confidence === "stale") {
-      return `Seen ${formatRelativeTime(runtime.lastLiveAt, relativeNowMs)}`;
+      return `Updated ${formatRelativeTime(runtime.lastLiveAt, relativeNowMs)}`;
     }
   }
   return null;
