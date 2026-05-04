@@ -1,0 +1,130 @@
+from __future__ import annotations
+
+import os
+
+from cryptography.fernet import Fernet
+from typer.testing import CliRunner
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
+os.environ.setdefault("AUTH_DISABLED", "1")
+os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
+os.environ.setdefault("JWT_SECRET", "test-jwt-secret-value")
+os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-value")
+
+from zerg.cli import opencode as opencode_cli
+from zerg.cli.main import app
+from zerg.cli._common import ManagedLocalLaunchResponse
+
+
+def test_opencode_command_launches_managed_session_and_passes_extra_args(monkeypatch, tmp_path):
+    runner = CliRunner()
+    launch_calls: list[dict] = []
+    run_calls: list[dict] = []
+
+    monkeypatch.setattr(
+        opencode_cli,
+        "_load_api_credentials",
+        lambda **_kwargs: ("https://longhouse.test", "zdt_test_token"),
+    )
+    monkeypatch.setattr(opencode_cli, "_resolve_opencode_binary", lambda explicit=None: "/opt/homebrew/bin/opencode")
+    monkeypatch.setattr(opencode_cli, "_ensure_managed_launch_preflight", lambda **_kwargs: None)
+    monkeypatch.setattr(opencode_cli, "get_machine_name_label", lambda: "work-laptop")
+
+    def fake_launch(**kwargs):
+        launch_calls.append(kwargs)
+        return ManagedLocalLaunchResponse(
+            session_id="session-123",
+            provider_session_id="provider-123",
+            attach_command="",
+            source_runner_name="work-laptop",
+            managed_transport="opencode_process",
+        )
+
+    monkeypatch.setattr(opencode_cli, "_launch_managed_local_from_api", fake_launch)
+    monkeypatch.setattr(opencode_cli, "_interactive_stdio", lambda: True)
+    monkeypatch.setattr(opencode_cli, "_run_native_opencode", lambda **kwargs: run_calls.append(kwargs) or 0)
+
+    result = runner.invoke(
+        app,
+        [
+            "opencode",
+            "--cwd",
+            str(tmp_path),
+            "--project",
+            "demo",
+            "--",
+            "serve",
+            "--port",
+            "0",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert launch_calls[0]["cwd"] == tmp_path
+    assert launch_calls[0]["machine_name"] == "work-laptop"
+    assert run_calls == [
+        {
+            "session_id": "session-123",
+            "machine_name": "work-laptop",
+            "opencode_bin": "/opt/homebrew/bin/opencode",
+            "cwd": tmp_path,
+            "opencode_args": ("serve", "--port", "0"),
+        }
+    ]
+
+
+def test_opencode_launch_api_wrapper_sets_provider(monkeypatch, tmp_path):
+    calls: list[dict] = []
+
+    def fake_launch(**kwargs):
+        calls.append(kwargs)
+        return ManagedLocalLaunchResponse(
+            session_id="session-123",
+            provider_session_id="provider-123",
+            attach_command="",
+            source_runner_name="work-laptop",
+            managed_transport="opencode_process",
+        )
+
+    monkeypatch.setattr(opencode_cli.managed_local_cli, "_launch_managed_local_from_api", fake_launch)
+
+    opencode_cli._launch_managed_local_from_api(
+        url="https://longhouse.test",
+        token="zdt_test_token",
+        cwd=tmp_path,
+        project="demo",
+        loop_mode=opencode_cli.SessionLoopMode.ASSIST,
+        name=None,
+        machine_name="work-laptop",
+    )
+
+    assert calls[0]["provider"] == "opencode"
+
+
+def test_run_native_opencode_exports_managed_session_env(monkeypatch, tmp_path):
+    calls: list[dict] = []
+
+    def fake_run(cmd, *, check, cwd, env):
+        calls.append({"cmd": cmd, "check": check, "cwd": cwd, "env": env})
+
+        class Completed:
+            returncode = 0
+
+        return Completed()
+
+    monkeypatch.setattr(opencode_cli.subprocess, "run", fake_run)
+
+    exit_code = opencode_cli._run_native_opencode(
+        session_id="session-123",
+        machine_name="work-laptop",
+        opencode_bin="/opt/homebrew/bin/opencode",
+        cwd=tmp_path,
+        opencode_args=("serve",),
+    )
+
+    assert exit_code == 0
+    assert calls[0]["cmd"] == ["/opt/homebrew/bin/opencode", "serve"]
+    assert calls[0]["cwd"] == str(tmp_path)
+    assert calls[0]["env"]["LONGHOUSE_MANAGED_SESSION_ID"] == "session-123"
+    assert calls[0]["env"]["LONGHOUSE_DEVICE_ID"] == "work-laptop"

@@ -25,6 +25,7 @@ from typing import Any
 from zerg.managed_phase_contract import display_label_for_phase
 from zerg.managed_phase_contract import is_known_raw_phase
 from zerg.provider_cli_contract import CODEX_BIN_ENV
+from zerg.provider_cli_contract import OPENCODE_BIN_ENV
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_BRIDGE_STATE
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_MISSING
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PATH
@@ -226,7 +227,15 @@ def _collect_provider_clis() -> dict[str, Any]:
         codex_path = shutil.which("codex")
         codex_source = PROVIDER_CLI_SOURCE_PATH if codex_path else PROVIDER_CLI_SOURCE_MISSING
         codex_resolution_error = None if codex_path else "`codex` not found on PATH"
-    opencode_path = shutil.which("opencode")
+    opencode_env_candidate = _normalize_optional_string(os.environ.get(OPENCODE_BIN_ENV))
+    if opencode_env_candidate:
+        opencode_path = _resolve_provider_cli_candidate(opencode_env_candidate)
+        opencode_source = OPENCODE_BIN_ENV
+        opencode_resolution_error = None if opencode_path else f"{OPENCODE_BIN_ENV} did not resolve to an executable"
+    else:
+        opencode_path = shutil.which("opencode")
+        opencode_source = PROVIDER_CLI_SOURCE_PATH if opencode_path else PROVIDER_CLI_SOURCE_MISSING
+        opencode_resolution_error = None if opencode_path else "`opencode` not found on PATH"
     return {
         "codex": {
             "path": codex_path,
@@ -236,9 +245,9 @@ def _collect_provider_clis() -> dict[str, Any]:
         },
         "opencode": {
             "path": opencode_path,
-            "source": PROVIDER_CLI_SOURCE_PATH if opencode_path else PROVIDER_CLI_SOURCE_MISSING,
-            "resolution_error": None if opencode_path else "`opencode` not found on PATH",
-            "env_override": None,
+            "source": opencode_source,
+            "resolution_error": opencode_resolution_error,
+            "env_override": opencode_env_candidate,
         },
     }
 
@@ -1535,7 +1544,7 @@ def _session_id_from_argv(cmdline: list[str]) -> str | None:
 
 
 def _scan_provider_processes() -> list[dict[str, Any]]:
-    """Collect live Claude/Codex CLI processes owned by the current user."""
+    """Collect live provider CLI processes owned by the current user."""
     _, provider_processes = _collect_process_snapshot()
     return provider_processes
 

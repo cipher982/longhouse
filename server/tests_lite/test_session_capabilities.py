@@ -33,6 +33,7 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionRuntimeState
+from zerg.session_execution_home import ManagedSessionTransport
 
 NOW = datetime(2026, 5, 4, 15, 0, tzinfo=timezone.utc)
 
@@ -135,6 +136,24 @@ def _runtime_display(**overrides):
     }
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
+def test_opencode_process_transport_is_managed_but_not_remote_controllable():
+    session = _make_session(
+        provider="opencode",
+        execution_home="managed_local",
+        managed_transport=ManagedSessionTransport.OPENCODE_PROCESS.value,
+        source_runner_id=17,
+    )
+
+    capabilities = build_session_capabilities(session)
+
+    assert capabilities.managed_transport == ManagedSessionTransport.OPENCODE_PROCESS
+    assert capabilities.live_control_available is False
+    assert capabilities.host_reattach_available is False
+    assert capabilities.reply_to_live_session_available is False
+    assert capabilities.can_queue_next_input is False
+    assert capabilities.can_steer_active_turn is False
 
 
 def _liveness_facts(

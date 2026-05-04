@@ -424,6 +424,25 @@ def test_collect_local_health_surfaces_missing_opencode_provider_cli(monkeypatch
     }
 
 
+def test_collect_local_health_surfaces_opencode_env_override(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    opencode_bin = tmp_path / "opencode"
+    opencode_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+    opencode_bin.chmod(0o755)
+    monkeypatch.setenv(local_health_service.OPENCODE_BIN_ENV, str(opencode_bin))
+    _write_engine_status(tmp_path, age_seconds=5)
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["provider_clis"]["opencode"] == {
+        "path": str(opencode_bin),
+        "source": local_health_service.OPENCODE_BIN_ENV,
+        "resolution_error": None,
+        "env_override": str(opencode_bin),
+    }
+
+
 def test_collect_local_health_surfaces_missing_codex_env_override(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
@@ -2158,6 +2177,34 @@ def test_process_scan_detects_claude_via_env(monkeypatch, tmp_path: Path):
     blob = json.dumps(row)
     assert "zdt_secret_do_not_leak" not in blob
     assert "LONGHOUSE_HOOK_TOKEN" not in blob
+
+
+def test_process_scan_detects_managed_opencode_via_env(monkeypatch):
+    now = datetime(2026, 4, 19, 0, 0, 0, tzinfo=timezone.utc)
+    proc = _FakeProc(
+        pid=55508,
+        cmdline=["/opt/homebrew/bin/opencode", "serve"],
+        create_time=now.timestamp(),
+        env={
+            "LONGHOUSE_MANAGED_SESSION_ID": "bfb567fb-7e0f-4552-8411-24f682751484",
+            "LONGHOUSE_DEVICE_ID": "device-opencode",
+        },
+        cwd="/Users/test/git/zerg",
+    )
+    _patch_process_iter(monkeypatch, [proc])
+
+    rows = local_health_service._collect_managed_sessions_by_process(existing_session_ids=set())
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["session_id"] == "bfb567fb-7e0f-4552-8411-24f682751484"
+    assert row["provider"] == "opencode"
+    assert row["pid"] == 55508
+    assert row["cwd"] == "/Users/test/git/zerg"
+    assert row["device_id"] == "device-opencode"
+    assert row["state"] == "attached"
+    assert row["raw_phase"] is None
+    assert row["phase"] is None
 
 
 def test_process_scan_uses_phase_overlay_when_available(monkeypatch, tmp_path: Path):
