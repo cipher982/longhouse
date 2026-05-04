@@ -3,6 +3,8 @@ from datetime import timedelta
 from datetime import timezone
 from types import SimpleNamespace
 
+import pytest
+
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.session_capabilities import SessionCapabilityFlags
 from zerg.services.session_capabilities import build_session_capability_display
@@ -47,6 +49,281 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
     }
     values.update(overrides)
     return SessionRuntimeView(**values)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        {
+            "id": "managed-running-live",
+            "managed": True,
+            "view": {
+                "signal_tier": "managed_phase",
+                "runtime_phase": "running",
+                "runtime_source": "managed_local_transport",
+                "status": "working",
+                "presence_state": "running",
+                "presence_tool": "bash",
+                "active_tool": "bash",
+                "confidence": "live",
+                "display_phase": "Running bash",
+            },
+            "expect": {
+                "control_path": "managed",
+                "signal_tier": "managed_phase",
+                "lifecycle": "open",
+                "state": "running",
+                "tone": "running",
+                "headline": "Working",
+                "phase_label": "Running Shell",
+                "activity_recency": "live",
+                "needs_attention": False,
+            },
+        },
+        {
+            "id": "managed-blocked-live",
+            "managed": True,
+            "view": {
+                "signal_tier": "managed_phase",
+                "runtime_phase": "blocked",
+                "runtime_source": "managed_local_transport",
+                "status": "active",
+                "presence_state": "blocked",
+                "presence_tool": "bash",
+                "active_tool": "bash",
+                "confidence": "live",
+                "display_phase": "Blocked on bash",
+            },
+            "expect": {
+                "control_path": "managed",
+                "signal_tier": "managed_phase",
+                "lifecycle": "open",
+                "state": "blocked",
+                "tone": "blocked",
+                "headline": "Needs permission",
+                "phase_label": "Blocked on Shell",
+                "activity_recency": "live",
+                "needs_attention": True,
+            },
+        },
+        {
+            "id": "managed-needs-user-live",
+            "managed": True,
+            "view": {
+                "signal_tier": "managed_phase",
+                "runtime_phase": "needs_user",
+                "runtime_source": "managed_local_transport",
+                "status": "idle",
+                "presence_state": "needs_user",
+                "confidence": "live",
+                "display_phase": "Ready",
+            },
+            "expect": {
+                "control_path": "managed",
+                "signal_tier": "managed_phase",
+                "lifecycle": "open",
+                "state": "needs_user",
+                "tone": "idle",
+                "headline": "Ready",
+                "phase_label": "Ready",
+                "activity_recency": "live",
+                "needs_attention": False,
+            },
+        },
+        {
+            "id": "managed-stale-running",
+            "managed": True,
+            "view": {
+                "signal_tier": "managed_phase",
+                "runtime_phase": "running",
+                "runtime_source": "managed_local_transport",
+                "status": "idle",
+                "presence_state": None,
+                "confidence": "stale",
+                "display_phase": "Recent",
+                "last_live_at": datetime(2026, 4, 26, 11, 0, tzinfo=timezone.utc),
+            },
+            "expect": {
+                "control_path": "managed",
+                "signal_tier": "managed_phase",
+                "lifecycle": "open",
+                "state": "stalled",
+                "tone": "stalled",
+                "headline": "Stalled",
+                "phase_label": "Stalled",
+                "activity_recency": "stale",
+                "needs_attention": False,
+            },
+        },
+        {
+            "id": "managed-disconnected",
+            "managed": True,
+            "view": {"signal_tier": "none", "runtime_source": "fallback", "display_phase": "Idle"},
+            "expect": {
+                "control_path": "managed",
+                "signal_tier": "none",
+                "lifecycle": "open",
+                "state": None,
+                "tone": "inactive",
+                "headline": "Not connected",
+                "phase_label": "Idle",
+                "activity_recency": "none",
+                "needs_attention": False,
+            },
+        },
+        {
+            "id": "managed-terminal",
+            "managed": True,
+            "view": {
+                "signal_tier": "managed_phase",
+                "runtime_phase": "finished",
+                "terminal_state": "session_ended",
+                "status": "completed",
+                "display_phase": "Completed",
+            },
+            "expect": {
+                "control_path": "managed",
+                "signal_tier": "managed_phase",
+                "lifecycle": "closed",
+                "state": None,
+                "tone": "inactive",
+                "headline": "Completed",
+                "phase_label": "Completed",
+                "activity_recency": "none",
+                "needs_attention": False,
+            },
+        },
+        {
+            "id": "unmanaged-binding-online",
+            "managed": False,
+            "binding_host_state": "online",
+            "view": {"signal_tier": "none", "runtime_source": "fallback", "display_phase": "Idle"},
+            "expect": {
+                "control_path": "unmanaged",
+                "signal_tier": "unmanaged_binding",
+                "lifecycle": "open",
+                "state": None,
+                "tone": "inferred",
+                "headline": "Active",
+                "phase_label": "Idle",
+                "activity_recency": "recent",
+                "needs_attention": False,
+            },
+        },
+        {
+            "id": "unmanaged-binding-process-gone",
+            "managed": False,
+            "binding_terminal_reason": "process_gone",
+            "view": {"signal_tier": "none", "runtime_source": "fallback", "display_phase": "Idle"},
+            "expect": {
+                "control_path": "unmanaged",
+                "signal_tier": "unmanaged_binding",
+                "lifecycle": "closed",
+                "state": None,
+                "tone": "inactive",
+                "headline": "Completed",
+                "phase_label": "Completed",
+                "activity_recency": "none",
+                "needs_attention": False,
+            },
+        },
+        {
+            "id": "unmanaged-recent-progress",
+            "managed": False,
+            "view": {
+                "signal_tier": "transcript_progress",
+                "runtime_source": "progress",
+                "status": "active",
+                "confidence": "inferred",
+                "display_phase": "Recent progress",
+            },
+            "expect": {
+                "control_path": "unmanaged",
+                "signal_tier": "transcript_progress",
+                "lifecycle": "open",
+                "state": None,
+                "tone": "inferred",
+                "headline": "Active",
+                "phase_label": "Recent progress",
+                "activity_recency": "recent",
+                "needs_attention": False,
+            },
+        },
+        {
+            "id": "unmanaged-stale-progress",
+            "managed": False,
+            "view": {
+                "signal_tier": "transcript_progress",
+                "runtime_source": "progress",
+                "status": "idle",
+                "confidence": "stale",
+                "display_phase": "Recent",
+                "last_live_at": datetime(2026, 4, 26, 11, 0, tzinfo=timezone.utc),
+            },
+            "expect": {
+                "control_path": "unmanaged",
+                "signal_tier": "transcript_progress",
+                "lifecycle": "open",
+                "state": None,
+                "tone": "inactive",
+                "headline": "Inactive",
+                "phase_label": "Recent",
+                "activity_recency": "stale",
+                "needs_attention": False,
+            },
+        },
+        {
+            "id": "unmanaged-terminal",
+            "managed": False,
+            "view": {
+                "signal_tier": "transcript_progress",
+                "runtime_phase": "finished",
+                "terminal_state": "session_ended",
+                "status": "completed",
+                "display_phase": "Completed",
+            },
+            "expect": {
+                "control_path": "unmanaged",
+                "signal_tier": "transcript_progress",
+                "lifecycle": "closed",
+                "state": None,
+                "tone": "inactive",
+                "headline": "Completed",
+                "phase_label": "Completed",
+                "activity_recency": "none",
+                "needs_attention": False,
+            },
+        },
+        {
+            "id": "unmanaged-no-signal",
+            "managed": False,
+            "view": {"signal_tier": "none", "runtime_source": "fallback", "display_phase": "Idle"},
+            "expect": {
+                "control_path": "unmanaged",
+                "signal_tier": "none",
+                "lifecycle": "open",
+                "state": None,
+                "tone": "inactive",
+                "headline": "Inactive",
+                "phase_label": "Idle",
+                "activity_recency": "none",
+                "needs_attention": False,
+            },
+        },
+    ],
+    ids=lambda case: case["id"],
+)
+def test_session_runtime_display_matrix(case):
+    display = build_session_runtime_display(
+        runtime_view=_runtime_view(**case["view"]),
+        capabilities=_capabilities(managed=case["managed"]),
+        ended_at=None,
+        binding_host_state=case.get("binding_host_state"),
+        binding_terminal_reason=case.get("binding_terminal_reason"),
+    )
+
+    for field, expected in case["expect"].items():
+        assert getattr(display, field) == expected
 
 
 def test_fallback_idle_has_no_renderable_runtime_signal():

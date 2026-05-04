@@ -308,6 +308,14 @@ def build_session_runtime_display(
     )
     if unmanaged_attention_unverified or stale_attention_phase:
         heuristic_active = False
+    binding_live = (
+        control_path == "unmanaged"
+        and signal_tier == "unmanaged_binding"
+        and host_state == "online"
+        and binding_terminal_reason is None
+        and presence_state is None
+        and runtime_source == "fallback"
+    )
     is_executing = presence_state in LIVE_EXECUTION_STATES
     needs_attention = presence_state in ATTENTION_STATES
     is_idle = presence_state in {"idle", "needs_user"} or (
@@ -348,7 +356,7 @@ def build_session_runtime_display(
         headline = _outcome_label(
             is_executing=is_executing,
             needs_attention=needs_attention,
-            heuristic_active=heuristic_active,
+            heuristic_active=heuristic_active or binding_live,
             status=status,
             terminal_state=runtime_view.terminal_state,
         )
@@ -358,7 +366,7 @@ def build_session_runtime_display(
         truth_tier=truth_tier,
         runtime_source=runtime_source,
         presence_state=presence_state,
-        heuristic_active=heuristic_active,
+        heuristic_active=heuristic_active or binding_live,
         last_live_at=runtime_view.last_live_at,
     )
 
@@ -383,7 +391,7 @@ def build_session_runtime_display(
         presence_state=presence_state,
         confidence=confidence,
         runtime_source=runtime_source,
-        heuristic_active=heuristic_active,
+        heuristic_active=heuristic_active or binding_live,
         has_signal=has_signal,
     )
     # Phase 6: machine-agent observed unmanaged binding terminal reasons
@@ -410,9 +418,15 @@ def build_session_runtime_display(
         is_idle = True
         heuristic_active = False
         is_stalled = False
+    no_runtime_signal = signal_tier == "none" and presence_state is None and not heuristic_active
     tone = (
         "inactive"
-        if lifecycle == "closed" or unmanaged_attention_unverified
+        if lifecycle == "closed"
+        or unmanaged_attention_unverified
+        or no_runtime_signal
+        or (presence_state is None and confidence == "stale")
+        else "inferred"
+        if binding_live
         else _tone(
             presence_state=presence_state,
             heuristic_active=heuristic_active,
