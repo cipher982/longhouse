@@ -388,6 +388,26 @@ def test_collect_local_health_surfaces_codex_provider_cli(monkeypatch, tmp_path:
     }
 
 
+def test_collect_local_health_surfaces_opencode_provider_cli(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr(
+        local_health_service.shutil,
+        "which",
+        lambda name: "/opt/homebrew/bin/opencode" if name == "opencode" else None,
+    )
+    _write_engine_status(tmp_path, age_seconds=5)
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["provider_clis"]["opencode"] == {
+        "path": "/opt/homebrew/bin/opencode",
+        "source": "PATH",
+        "resolution_error": None,
+        "env_override": None,
+    }
+
+
 def test_collect_local_health_surfaces_missing_codex_env_override(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
@@ -2552,11 +2572,31 @@ def test_collect_unmanaged_processes_reports_live_bare_provider_clis(monkeypatch
         env={},
         cwd="/Users/test/git/me/myagents",
     )
-    _patch_process_iter(monkeypatch, [managed_claude, unmanaged_zerg_codex, unmanaged_myagents_codex])
+    unmanaged_opencode = _FakeProc(
+        pid=11470,
+        cmdline=["/opt/homebrew/bin/opencode", "serve", "--port", "41967"],
+        create_time=(now + timedelta(seconds=90)).timestamp(),
+        env={},
+        cwd="/Users/test/git/open-source-widget",
+    )
+    _patch_process_iter(
+        monkeypatch, [managed_claude, unmanaged_zerg_codex, unmanaged_myagents_codex, unmanaged_opencode]
+    )
 
     rows = local_health_service._collect_unmanaged_processes()
 
     assert rows == [
+        {
+            "provider": "opencode",
+            "control_path": "unmanaged",
+            "liveness_model": "process_scan",
+            "provider_cli": {"path": "/opt/homebrew/bin/opencode", "source": "process"},
+            "pid": 11470,
+            "workspace_label": "open-source-widget",
+            "cwd": "/Users/test/git/open-source-widget",
+            "branch": None,
+            "started_at": "2026-04-19T00:01:30Z",
+        },
         {
             "provider": "codex",
             "control_path": "unmanaged",
@@ -2620,6 +2660,24 @@ def test_collect_unmanaged_processes_skips_managed_codex_remote_tui(monkeypatch)
     rows = local_health_service._collect_unmanaged_processes()
 
     assert rows == []
+
+
+def test_collect_unmanaged_processes_detects_node_wrapped_opencode(monkeypatch):
+    now = datetime(2026, 4, 19, 0, 0, 0, tzinfo=timezone.utc)
+    proc = _FakeProc(
+        pid=11472,
+        cmdline=["node", "/opt/homebrew/bin/opencode", "serve"],
+        create_time=now.timestamp(),
+        env={},
+        cwd="/Users/test/git/zerg",
+    )
+    _patch_process_iter(monkeypatch, [proc])
+
+    rows = local_health_service._collect_unmanaged_processes()
+
+    assert len(rows) == 1
+    assert rows[0]["provider"] == "opencode"
+    assert rows[0]["provider_cli"] == {"path": "node", "source": "process"}
 
 
 def test_process_scan_skips_other_user_processes(monkeypatch):
