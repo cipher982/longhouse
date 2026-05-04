@@ -459,8 +459,8 @@ test.describe("Sessions Page", () => {
     await expect(card).toHaveAttribute("data-thread-id", rootId);
     await expect(card).toHaveAttribute("data-session-id", matchedId);
     await expect(card.locator(".session-card-snippet")).toContainText(token);
-    await expect(card).toContainText("Active");
-    await expect(card).not.toContainText("Running Pytest");
+    await expect(card).toContainText("Observed Running Pytest");
+    await expect(card).toHaveAttribute("data-runtime-tone", "inactive");
     await expect(card).not.toContainText(
       "Newest writable head is just housekeeping without the search token",
     );
@@ -491,7 +491,7 @@ test.describe("Sessions Page", () => {
     await expect(page).toHaveURL("/timeline");
   });
 
-  test("Timeline distinguishes executing, attention, and inferred runtime states", async ({
+  test("Timeline renders observed runtime facts without inferred active states", async ({
     page,
     request,
   }) => {
@@ -609,31 +609,30 @@ test.describe("Sessions Page", () => {
       .locator('[data-testid="session-card"]', { hasText: `running-state-${suffix}` })
       .first();
     await expect(runningCard).toBeVisible();
-    await expect(runningCard).toContainText("Active");
-    await expect(runningCard).not.toContainText("Running Shell");
-    await expect(runningCard).toHaveAttribute("data-runtime-tone", "active");
-    await expect(runningCard).toHaveClass(/session-card--live/);
-    await expect(runningCard).toHaveClass(/session-card--running/);
+    await expect(runningCard).toContainText("Observed Running Shell");
+    await expect(runningCard).toHaveAttribute("data-runtime-tone", "inactive");
+    await expect(runningCard).not.toHaveClass(/session-card--live/);
+    await expect(runningCard).not.toHaveClass(/session-card--running/);
 
     const needsUserCard = page
       .locator('[data-testid="session-card"]', { hasText: `needs-user-state-${suffix}` })
       .first();
     await expect(needsUserCard).toBeVisible();
-    await expect(needsUserCard).toContainText("Active");
+    await expect(needsUserCard).toContainText("Observed Ready");
     await expect(needsUserCard).not.toContainText("Needs you");
-    await expect(needsUserCard).toHaveAttribute("data-runtime-tone", "active");
+    await expect(needsUserCard).toHaveAttribute("data-runtime-tone", "inactive");
     await expect(needsUserCard).not.toHaveClass(/session-card--live/);
-    await expect(needsUserCard).toHaveClass(/session-card--idle/);
+    await expect(needsUserCard).not.toHaveClass(/session-card--idle/);
 
     const inferredCard = page
       .locator('[data-testid="session-card"]', { hasText: `inferred-state-${suffix}` })
       .first();
     await expect(inferredCard).toBeVisible();
-    await expect(inferredCard).toContainText("Active");
+    await expect(inferredCard).toContainText("Transcript only");
     await expect(inferredCard).not.toContainText("Recent progress");
-    await expect(inferredCard).toHaveAttribute("data-runtime-tone", "active");
+    await expect(inferredCard).toHaveAttribute("data-runtime-tone", "inactive");
     await expect(inferredCard).not.toHaveClass(/session-card--live/);
-    await expect(inferredCard).toHaveClass(/session-card--inferred/);
+    await expect(inferredCard).not.toHaveClass(/session-card--inferred/);
   });
 
   test("Timeline live stream updates a visible card in place without duplication", async ({
@@ -711,13 +710,14 @@ test.describe("Sessions Page", () => {
       },
     ]);
 
-    await expect(olderCard).toHaveAttribute("data-runtime-tone", "active", {
+    await expect(olderCard).toHaveAttribute("data-runtime-tone", "inactive", {
       timeout: 15000,
     });
-    await expect(olderCard).toContainText("Active");
-    await expect(olderCard).not.toContainText("Running Shell");
+    await expect(olderCard).toContainText("Observed Running Shell");
     await expect(olderCard).toHaveAttribute("data-card-state", "actionable");
     await expect(olderCard).not.toHaveClass(/session-card--closed/);
+    await expect(olderCard).not.toHaveClass(/session-card--live/);
+    await expect(olderCard).not.toHaveClass(/session-card--running/);
     await expect(cards.first()).toHaveAttribute("data-session-id", olderId);
     await expect(olderCard).toHaveCount(1);
     await expect(recentCard).toHaveCount(1);
