@@ -7642,7 +7642,7 @@ export interface components {
             /**
              * Display Label
              * @description User-facing capability label
-             * @default Search only
+             * @default Read only
              */
             display_label: string;
             /**
@@ -8212,6 +8212,8 @@ export interface components {
             capabilities: components["schemas"]["SessionCapabilitiesResponse"];
             /** @description Server-derived display state for clients */
             runtime_display?: components["schemas"]["SessionRuntimeDisplayResponse"] | null;
+            /** @description Server-derived timeline-card presentation */
+            timeline_card: components["schemas"]["TimelineCardPresentationResponse"];
             /**
              * @description Session loop mode: assist|autopilot
              * @default assist
@@ -8231,6 +8233,12 @@ export interface components {
              * @description Runtime truth tier: none|stale|inferred|fresh|managed-local
              */
             truth_tier: string;
+            /**
+             * Signal Tier
+             * @description Strongest source signal tier: managed_phase|unmanaged_binding|transcript_progress|none
+             * @default none
+             */
+            signal_tier: string;
             /**
              * State
              * @description Canonical presence state when known
@@ -9082,6 +9090,32 @@ export interface components {
             /** Series */
             series: components["schemas"]["OpsSeriesPoint"][];
         };
+        /** TimelineBadgePresentationResponse */
+        TimelineBadgePresentationResponse: {
+            /**
+             * Label
+             * @description Stable user-facing badge label
+             */
+            label: string;
+            /**
+             * Tone
+             * @description Stable visual tone token for clients
+             */
+            tone: string;
+        };
+        /** TimelineCardPresentationResponse */
+        TimelineCardPresentationResponse: {
+            /** @description Managed/unmanaged badge */
+            ownership: components["schemas"]["TimelineBadgePresentationResponse"];
+            /** @description Primary timeline status badge */
+            status?: components["schemas"]["TimelineStatusPresentationResponse"] | null;
+            /**
+             * Border Tone
+             * @description Stable tone token for the card edge/outline
+             * @default inactive
+             */
+            border_tone: string;
+        };
         /** TimelineSessionCardResponse */
         TimelineSessionCardResponse: {
             /**
@@ -9124,6 +9158,24 @@ export interface components {
              * @default true
              */
             has_real_sessions: boolean;
+        };
+        /** TimelineStatusPresentationResponse */
+        TimelineStatusPresentationResponse: {
+            /**
+             * Label
+             * @description Stable user-facing badge label
+             */
+            label: string;
+            /**
+             * Tone
+             * @description Stable visual tone token for clients
+             */
+            tone: string;
+            /**
+             * Seen At
+             * @description Signal timestamp for stale status copy
+             */
+            seen_at?: string | null;
         };
         /**
          * TokenBreakdown

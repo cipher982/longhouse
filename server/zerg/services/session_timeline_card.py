@@ -39,6 +39,7 @@ def build_timeline_card_presentation(
     last_live_at: datetime | None,
     last_activity_at: datetime | None,
     managed_fallback: bool,
+    terminal_reason: str | None = None,
 ) -> TimelineCardPresentation:
     control_path = runtime_display.control_path if runtime_display is not None else ("managed" if managed_fallback else "unmanaged")
     ownership = TimelineBadgePresentation(
@@ -47,6 +48,12 @@ def build_timeline_card_presentation(
     )
 
     if runtime_display is None:
+        if terminal_reason:
+            return TimelineCardPresentation(
+                ownership=ownership,
+                status=TimelineStatusPresentation(label="Closed", tone="closed"),
+                border_tone="closed",
+            )
         return TimelineCardPresentation(
             ownership=ownership,
             status=TimelineStatusPresentation(label="Unknown", tone="inactive"),

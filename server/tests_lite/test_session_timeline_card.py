@@ -300,3 +300,34 @@ def test_timeline_card_uses_last_activity_when_stale_live_signal_missing():
     )
 
     assert card["status"] == {"label": "Stale", "tone": "inactive", "seen_at": last_activity_at}
+
+
+def test_timeline_card_marks_closed_when_runtime_display_is_suppressed_for_terminal_signal():
+    card = build_timeline_card_presentation(
+        runtime_display=None,
+        last_live_at=None,
+        last_activity_at=SEEN_AT,
+        managed_fallback=False,
+        terminal_reason="provider_signal",
+    )
+
+    assert asdict(card) == {
+        "ownership": {"label": "Unmanaged", "tone": "neutral"},
+        "status": {"label": "Closed", "tone": "closed", "seen_at": None},
+        "border_tone": "closed",
+    }
+
+
+def test_timeline_card_keeps_unknown_when_no_runtime_or_terminal_truth_exists():
+    card = build_timeline_card_presentation(
+        runtime_display=None,
+        last_live_at=None,
+        last_activity_at=SEEN_AT,
+        managed_fallback=True,
+    )
+
+    assert asdict(card) == {
+        "ownership": {"label": "Managed", "tone": "neutral"},
+        "status": {"label": "Unknown", "tone": "inactive", "seen_at": None},
+        "border_tone": "inactive",
+    }
