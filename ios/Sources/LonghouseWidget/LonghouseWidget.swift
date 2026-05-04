@@ -208,6 +208,8 @@ private func shortState(_ state: String) -> String {
     switch state {
     case "needs_user":
         return "Idle"
+    case "unknown":
+        return "Recent"
     case "blocked":
         return "Hold"
     case "running":
@@ -232,6 +234,8 @@ private func liveActivityStateColor(_ state: String) -> Color {
     case "needs_user":
         return .secondary
     case "idle":
+        return .secondary
+    case "unknown":
         return .secondary
     default:
         return .blue
