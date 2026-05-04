@@ -75,7 +75,6 @@ export interface SessionRuntimeDisplay {
     | "inactive"
     | "thinking"
     | "running"
-    | "needs-user"
     | "blocked"
     | "stalled"
     | "idle"

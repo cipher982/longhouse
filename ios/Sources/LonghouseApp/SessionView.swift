@@ -466,7 +466,7 @@ struct SessionRuntimeDock: View {
     private var iconName: String {
         switch detail.runtimeTone {
         case "blocked": return "lock.circle"
-        case "idle", "needs-user": return "checkmark.circle"
+        case "idle": return "checkmark.circle"
         case "inferred": return "waveform.path"
         default: return "circle"
         }
@@ -476,7 +476,7 @@ struct SessionRuntimeDock: View {
         switch detail.runtimeTone {
         case "running", "thinking": return .green
         case "blocked": return .orange
-        case "idle", "needs-user": return .gray
+        case "idle": return .gray
         case "inferred": return .blue
         default: return .gray
         }

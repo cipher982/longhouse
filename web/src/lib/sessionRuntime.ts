@@ -6,7 +6,7 @@ import type {
 
 export type KnownPresenceState = "thinking" | "running" | "idle" | "needs_user" | "blocked" | "stalled";
 export type RuntimeTruthTier = "none" | "stale" | "inferred" | "fresh" | "managed-local";
-export type RuntimeTone = "inactive" | "thinking" | "running" | "needs-user" | "blocked" | "stalled" | "idle" | "inferred";
+export type RuntimeTone = "inactive" | "thinking" | "running" | "blocked" | "stalled" | "idle" | "inferred";
 
 type TimelineRuntimeOverlay = {
   timeline_anchor_at?: string | null;
@@ -397,7 +397,6 @@ function normalizeRuntimeTone(value: string | null | undefined): RuntimeTone | n
     value === "inactive" ||
     value === "thinking" ||
     value === "running" ||
-    value === "needs-user" ||
     value === "blocked" ||
     value === "stalled" ||
     value === "idle" ||
