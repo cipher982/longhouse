@@ -26,6 +26,7 @@ from zerg.services.managed_local_transport import build_managed_local_attach_com
 from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_capabilities import build_session_capability_display
 from zerg.services.session_capabilities import project_current_session_capabilities
+from zerg.services.session_capabilities import project_current_session_capabilities_from_facts
 from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_runner_state import managed_runner_host_state
 from zerg.services.session_runtime import SessionRuntimeView
@@ -58,13 +59,23 @@ def build_session_capabilities_response(
     *,
     capability_flags=None,
     runtime_display=None,
+    runtime_facts=None,
 ) -> SessionCapabilitiesResponse:
     capability_flags = capability_flags or build_session_capabilities(session)
-    capability_flags = project_current_session_capabilities(capability_flags, runtime_display=runtime_display)
+    if runtime_facts is not None:
+        capability_flags = project_current_session_capabilities_from_facts(
+            capability_flags,
+            liveness_facts=runtime_facts,
+        )
+    else:
+        capability_flags = project_current_session_capabilities(capability_flags, runtime_display=runtime_display)
     host_label = None
     if session is not None:
         host_label = str(getattr(session, "source_runner_name", "") or "").strip() or None
-    lifecycle = str(getattr(runtime_display, "lifecycle", "") or "").strip() if runtime_display is not None else ""
+    runtime_facts_lifecycle = getattr(runtime_facts, "lifecycle", None)
+    lifecycle = str(getattr(runtime_facts_lifecycle, "state", "") or "").strip()
+    if not lifecycle and runtime_display is not None:
+        lifecycle = str(getattr(runtime_display, "lifecycle", "") or "").strip()
     capability_display = build_session_capability_display(capability_flags, host_label=host_label, lifecycle=lifecycle)
     return SessionCapabilitiesResponse(
         live_control_available=capability_flags.live_control_available,
@@ -968,7 +979,10 @@ def build_session_response(
         if runtime_overlay is not None
         else None
     )
-    effective_capability_flags = project_current_session_capabilities(capability_flags, runtime_display=runtime_display)
+    effective_capability_flags = project_current_session_capabilities_from_facts(
+        capability_flags,
+        liveness_facts=runtime_facts,
+    )
     return SessionResponse(
         id=str(session.id),
         provider=session.provider,
@@ -1021,6 +1035,7 @@ def build_session_response(
             session=session,
             capability_flags=capability_flags,
             runtime_display=runtime_display,
+            runtime_facts=runtime_facts,
         ),
         runtime_display=runtime_display,
         runtime_facts=runtime_facts,
@@ -1076,7 +1091,10 @@ def build_active_session_response(
         binding_host_state=binding_host_state,
         binding_terminal_reason=binding_terminal_reason,
     )
-    effective_capability_flags = project_current_session_capabilities(capability_flags, runtime_display=runtime_display)
+    effective_capability_flags = project_current_session_capabilities_from_facts(
+        capability_flags,
+        liveness_facts=runtime_facts,
+    )
 
     return ActiveSessionResponse(
         id=str(session.id),
@@ -1115,6 +1133,7 @@ def build_active_session_response(
             session=session,
             capability_flags=capability_flags,
             runtime_display=runtime_display,
+            runtime_facts=runtime_facts,
         ),
         runtime_display=runtime_display,
         runtime_facts=runtime_facts,
