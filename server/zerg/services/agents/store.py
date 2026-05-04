@@ -95,8 +95,8 @@ class AgentsStore:
             session.continuation_kind = _infer_continuation_kind_from_session(session)
         if not normalize_session_label(session.origin_label):
             session.origin_label = _infer_origin_label_from_session(session)
-        if _infer_execution_home_from_session(session) != SessionExecutionHome.LEGACY and (
-            coerce_execution_home(getattr(session, "execution_home", None)) in {None, SessionExecutionHome.LEGACY}
+        if _infer_execution_home_from_session(session) != SessionExecutionHome.UNMANAGED_LOCAL and (
+            coerce_execution_home(getattr(session, "execution_home", None)) in {None, SessionExecutionHome.UNMANAGED_LOCAL}
         ):
             session.execution_home = _infer_execution_home_from_session(session).value
         if session.is_writable_head is None:
@@ -419,7 +419,7 @@ class AgentsStore:
             tool_calls=0,
             is_writable_head=1,
             is_sidechain=1 if parent.is_sidechain else 0,
-            execution_home=(execution_home_for_continuation_kind(continuation_kind) or SessionExecutionHome.LEGACY).value,
+            execution_home=(execution_home_for_continuation_kind(continuation_kind) or SessionExecutionHome.UNMANAGED_LOCAL).value,
         )
         self.db.add(session)
         self.db.flush()
@@ -494,9 +494,11 @@ class AgentsStore:
             session.continuation_kind = data.continuation_kind
         if data.origin_label and not session.origin_label:
             session.origin_label = data.origin_label
-        if incoming_execution_home != SessionExecutionHome.LEGACY and coerce_execution_home(getattr(session, "execution_home", None)) in {
+        if incoming_execution_home != SessionExecutionHome.UNMANAGED_LOCAL and coerce_execution_home(
+            getattr(session, "execution_home", None)
+        ) in {
             None,
-            SessionExecutionHome.LEGACY,
+            SessionExecutionHome.UNMANAGED_LOCAL,
         }:
             session.execution_home = incoming_execution_home.value
         if data.branched_from_event_id and not session.branched_from_event_id:

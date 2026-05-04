@@ -467,7 +467,6 @@ struct SessionRuntimeDock: View {
         switch detail.runtimeTone {
         case "blocked": return "lock.circle"
         case "idle": return "checkmark.circle"
-        case "inferred": return "waveform.path"
         default: return "circle"
         }
     }
@@ -477,7 +476,6 @@ struct SessionRuntimeDock: View {
         case "running", "thinking": return .green
         case "blocked": return .orange
         case "idle": return .gray
-        case "inferred": return .blue
         default: return .gray
         }
     }
@@ -1247,7 +1245,7 @@ final class SessionViewModel: ObservableObject {
     }
 
     /// Runtime facts are authoritative when present. Unknown facts stay
-    /// unknown instead of falling through to legacy lifecycle hints.
+    /// unknown instead of falling through to transcript-derived hints.
     var isSessionEnded: Bool {
         guard let detail else { return false }
         if let runtimeFacts = detail.runtimeFacts { return runtimeFacts.lifecycle.state == "closed" }

@@ -4,7 +4,7 @@ from zerg.session_execution_home import infer_execution_home
 from zerg.session_execution_home import infer_origin_label
 
 
-def test_infer_execution_home_prefers_explicit_non_legacy_value() -> None:
+def test_infer_execution_home_prefers_explicit_non_unmanaged_value() -> None:
     assert (
         infer_execution_home(
             execution_home=SessionExecutionHome.MANAGED_LOCAL.value,

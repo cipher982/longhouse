@@ -411,7 +411,7 @@ def test_managed_local_draft_reply_requires_live_control(tmp_path):
     with session_local() as db:
         user, runner = _seed_user_and_runner(db)
         source_session = _seed_managed_local_session(db, runner=runner, provider="codex")
-        source_session.execution_home = SessionExecutionHome.LEGACY.value
+        source_session.execution_home = SessionExecutionHome.UNMANAGED_LOCAL.value
         source_session.managed_transport = None
         source_session.source_runner_id = None
         db.commit()

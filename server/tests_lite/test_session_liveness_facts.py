@@ -14,7 +14,7 @@ NOW = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
 
 def _capabilities(*, managed: bool = False) -> SessionCapabilityFlags:
     return SessionCapabilityFlags(
-        execution_home=SessionExecutionHome.MANAGED_LOCAL if managed else SessionExecutionHome.LEGACY,
+        execution_home=SessionExecutionHome.MANAGED_LOCAL if managed else SessionExecutionHome.UNMANAGED_LOCAL,
         managed_transport=None,
         live_control_available=managed,
         host_reattach_available=managed,
@@ -57,7 +57,7 @@ def test_transcript_activity_does_not_create_phase_or_lifecycle_truth():
             runtime_phase=None,
             runtime_source="progress",
             last_progress_at=last_activity,
-            confidence="inferred",
+            confidence="stale",
         ),
         capabilities=_capabilities(),
         last_activity_at=last_activity,

@@ -10,10 +10,10 @@ _GENERIC_ENVIRONMENT_LABELS = {"production", "development", "dev", "test", "e2e"
 class SessionExecutionHome(str, Enum):
     """Where a coding session currently lives."""
 
-    LEGACY = "legacy"
+    UNMANAGED_LOCAL = "unmanaged_local"
     MANAGED_LOCAL = "managed_local"
     MANAGED_HOSTED = "managed_hosted"
-    CLOUD_TAKEOVER = "cloud_takeover"  # legacy — no new sessions use this
+    CLOUD_TAKEOVER = "cloud_takeover"  # frozen — no new sessions use this
 
 
 class ManagedSessionTransport(str, Enum):
@@ -89,7 +89,7 @@ def origin_label_for_execution_home(execution_home: SessionExecutionHome | None)
     return None
 
 
-def _legacy_execution_home_from_labels(
+def _execution_home_from_labels(
     *,
     origin_label: str | None,
     environment: str | None,
@@ -103,7 +103,7 @@ def _legacy_execution_home_from_labels(
     return None
 
 
-def _legacy_origin_label_from_context(
+def _origin_label_from_context(
     *,
     environment: str | None,
     device_id: str | None,
@@ -127,18 +127,18 @@ def infer_execution_home(
     environment: str | None,
 ) -> SessionExecutionHome:
     explicit = coerce_execution_home(execution_home)
-    if explicit is not None and explicit != SessionExecutionHome.LEGACY:
+    if explicit is not None and explicit != SessionExecutionHome.UNMANAGED_LOCAL:
         return explicit
 
     from_kind = execution_home_for_continuation_kind(continuation_kind)
     if from_kind is not None:
         return from_kind
 
-    legacy = _legacy_execution_home_from_labels(origin_label=origin_label, environment=environment)
-    if legacy is not None:
-        return legacy
+    from_labels = _execution_home_from_labels(origin_label=origin_label, environment=environment)
+    if from_labels is not None:
+        return from_labels
 
-    return explicit or SessionExecutionHome.LEGACY
+    return explicit or SessionExecutionHome.UNMANAGED_LOCAL
 
 
 def infer_continuation_kind(
@@ -188,7 +188,7 @@ def infer_origin_label(
     if from_home:
         return from_home
 
-    legacy = _legacy_origin_label_from_context(environment=environment, device_id=device_id)
-    if legacy:
-        return legacy
+    from_context = _origin_label_from_context(environment=environment, device_id=device_id)
+    if from_context:
+        return from_context
     return "Local"

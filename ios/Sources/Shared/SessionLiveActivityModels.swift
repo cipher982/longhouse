@@ -65,7 +65,7 @@ extension SessionDetail {
         case "idle":
             return "Idle"
         default:
-            return status == "completed" ? "Closed" : "Recent progress"
+            return status == "completed" ? "Closed" : "Unknown"
         }
     }
 }

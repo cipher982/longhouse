@@ -6,8 +6,8 @@ import type {
 } from "../services/api/agents";
 
 export type KnownPresenceState = "thinking" | "running" | "idle" | "needs_user" | "blocked" | "stalled";
-export type RuntimeTruthTier = "none" | "stale" | "inferred" | "fresh" | "managed-local";
-export type RuntimeTone = "inactive" | "thinking" | "running" | "blocked" | "stalled" | "idle" | "inferred" | "closed";
+export type RuntimeTruthTier = "none" | "stale" | "fresh" | "managed-local";
+export type RuntimeTone = "inactive" | "active" | "thinking" | "running" | "blocked" | "stalled" | "idle" | "closed";
 
 type TimelineRuntimeOverlay = {
   timeline_anchor_at?: string | null;
@@ -31,19 +31,7 @@ export type TimelineRuntimeSession = Pick<
 > &
   Partial<TimelineRuntimeOverlay>;
 
-/**
- * Phase 3 of session-liveness-honesty: a single place for deciding whether
- * a session is closed. Callers that previously gated on `session.ended_at`
- * or `session.terminal_state` should use this instead.
- *
- * Contract:
- * - When `runtime_facts.lifecycle` is open/closed, it is the ground truth.
- *   Backend only emits `closed` on explicit terminal signals.
- * - Unknown facts stay unknown. Do not promote old display hints into truth
- *   when a fact payload exists.
- * - Older payloads without facts can use `runtime_display.lifecycle`.
- * - Older payloads without the axis fall back to `terminal_state`.
- */
+/** Decide closed/open only from explicit lifecycle or terminal facts. */
 export function isSessionClosed(
   session: Pick<AgentSession, "terminal_state"> & {
     runtime_display?: SessionRuntimeDisplay | null;
@@ -81,7 +69,6 @@ export interface SessionRuntimeState {
   needsAttention: boolean;
   isIdle: boolean;
   isStalled: boolean;
-  heuristicActive: boolean;
   isManagedLocalTruth: boolean;
   hasSignal: boolean;
   tone: RuntimeTone;
@@ -149,7 +136,7 @@ export function resolveSessionStatusLabel(
     if (runtime.presenceState === "idle" || runtime.isIdle) {
       return "Ready";
     }
-    if (display?.activity_recency === "live" || display?.activity_recency === "recent" || runtime.heuristicActive) {
+    if (display?.activity_recency === "live" || display?.activity_recency === "recent") {
       return "Recent activity";
     }
     if (display?.activity_recency === "none") {
@@ -159,7 +146,7 @@ export function resolveSessionStatusLabel(
   }
 
   if (controlPath === "unmanaged") {
-    if (display?.activity_recency === "live" || runtime.isExecuting || runtime.needsAttention || runtime.heuristicActive) {
+    if (display?.activity_recency === "live" || runtime.isExecuting || runtime.needsAttention) {
       return "Active";
     }
     if (display?.activity_recency === "recent") {
@@ -174,7 +161,7 @@ export function resolveSessionStatusLabel(
     return "Unknown";
   }
 
-  if (runtime.isExecuting || runtime.needsAttention || runtime.heuristicActive) {
+  if (runtime.isExecuting || runtime.needsAttention) {
     return "Active";
   }
   if (runtime.isIdle) {
@@ -345,27 +332,6 @@ function normalizeRuntimeSource(source: string | null | undefined): string | nul
   return trimmed ? trimmed : null;
 }
 
-function isLegacyProgressStatus(status: string | null): boolean {
-  return status === "working" || status === "active";
-}
-
-function isProgressFallback({
-  status,
-  confidence,
-  runtimeSource,
-  presenceState,
-}: {
-  status: string | null;
-  confidence: string | null;
-  runtimeSource: string | null;
-  presenceState: KnownPresenceState | null;
-}): boolean {
-  if (presenceState != null) {
-    return false;
-  }
-  return confidence === "inferred" || runtimeSource === "progress" || isLegacyProgressStatus(status);
-}
-
 function hasFreshRuntimeSignal({
   confidence,
   runtimeSource,
@@ -386,7 +352,6 @@ function hasFreshRuntimeSignal({
 function getRuntimeTruthTier(
   overlay: Partial<TimelineRuntimeOverlay> | null | undefined,
 ): RuntimeTruthTier {
-  const status = overlay?.status ?? null;
   const confidence = overlay?.confidence ?? null;
   const presenceState = normalizePresenceState(overlay?.presence_state ?? null);
   const runtimeSource = normalizeRuntimeSource(overlay?.runtime_source ?? null);
@@ -399,9 +364,6 @@ function getRuntimeTruthTier(
   if (hasFreshSignal && confidence !== "stale") {
     return "fresh";
   }
-  if (isProgressFallback({ status, confidence, runtimeSource, presenceState })) {
-    return "inferred";
-  }
   if (confidence === "stale" || runtimeSource === "fallback") {
     return "stale";
   }
@@ -412,7 +374,6 @@ function getDisplayPhase(
   presenceState: KnownPresenceState | null,
   presenceTool: string | null,
   status: string | null,
-  fallbackEndedAt: string | null,
   explicitDisplayPhase?: string | null,
 ): string {
   if (explicitDisplayPhase?.trim()) {
@@ -438,12 +399,7 @@ function getDisplayPhase(
     return "Idle";
   }
 
-  if (isLegacyProgressStatus(status)) return "Recent progress";
   if (status === "idle") return "Idle";
-  // Phase 1 of session-liveness-honesty: do not treat fallbackEndedAt as
-  // Completed — that field is just the last-activity timestamp for unmanaged
-  // sessions. Only an explicit "completed" status (which the backend now
-  // gates on terminal_state) means the process is actually closed.
   if (status === "completed") return "Completed";
   return "Recent";
 }
@@ -451,10 +407,8 @@ function getDisplayPhase(
 function getTone(
   presenceState: KnownPresenceState | null,
   {
-    heuristicActive,
     isIdle,
   }: {
-    heuristicActive: boolean;
     isIdle: boolean;
   },
 ): SessionRuntimeState["tone"] {
@@ -472,9 +426,6 @@ function getTone(
   }
   if (presenceState === "thinking") {
     return "thinking";
-  }
-  if (heuristicActive) {
-    return "inferred";
   }
   if (isIdle) {
     return "idle";
@@ -505,9 +456,6 @@ export function resolveSessionRuntimeState(
   const confidence = hasFacts ? null : (session.confidence ?? null);
   const truthTier = hasFacts ? "none" : (normalizeRuntimeTruthTier(serverDisplay?.truth_tier) ?? sessionTruthTier);
 
-  const heuristicActive = hasFacts || isClosed
-    ? false
-    : (serverDisplay?.heuristic_active ?? isProgressFallback({ status, confidence, runtimeSource, presenceState }));
   const isExecuting = hasFacts || isClosed
     ? false
     : (serverDisplay?.is_executing ?? (presenceState === "thinking" || presenceState === "running"));
@@ -520,7 +468,7 @@ export function resolveSessionRuntimeState(
     ? true
     : hasFacts
     ? false
-    : (serverDisplay?.is_idle ?? (presenceState === "idle" || (!isExecuting && !needsAttention && !heuristicActive && status === "idle")));
+    : (serverDisplay?.is_idle ?? (presenceState === "idle" || (!isExecuting && !needsAttention && status === "idle")));
   const isStalled = hasFacts || isClosed ? false : (serverDisplay?.is_stalled ?? presenceState === "stalled");
   const hasSignal = hasFacts
     ? factStatus != null
@@ -535,11 +483,9 @@ export function resolveSessionRuntimeState(
             presenceState,
             presenceTool,
             status,
-            // Phase 1: do not feed ended_at as a terminal hint. See getDisplayPhase.
-            null,
             session.display_phase ?? null,
           )));
-  const tone = factStatus?.tone ?? (isClosed ? "closed" : (normalizeRuntimeTone(serverDisplay?.tone) ?? getTone(presenceState, { heuristicActive, isIdle })));
+  const tone = factStatus?.tone ?? (isClosed ? "closed" : (normalizeRuntimeTone(serverDisplay?.tone) ?? getTone(presenceState, { isIdle })));
 
   return {
     status,
@@ -555,7 +501,6 @@ export function resolveSessionRuntimeState(
     needsAttention,
     isIdle,
     isStalled,
-    heuristicActive,
     isManagedLocalTruth: hasFacts ? false : (serverDisplay?.is_managed_local_truth ?? truthTier === "managed-local"),
     hasSignal,
     tone,
@@ -569,7 +514,6 @@ function normalizeRuntimeTruthTier(value: string | null | undefined): RuntimeTru
   if (
     value === "none" ||
     value === "stale" ||
-    value === "inferred" ||
     value === "fresh" ||
     value === "managed-local"
   ) {
@@ -581,12 +525,12 @@ function normalizeRuntimeTruthTier(value: string | null | undefined): RuntimeTru
 function normalizeRuntimeTone(value: string | null | undefined): RuntimeTone | null {
   if (
     value === "inactive" ||
+    value === "active" ||
     value === "thinking" ||
     value === "running" ||
     value === "blocked" ||
     value === "stalled" ||
     value === "idle" ||
-    value === "inferred" ||
     value === "closed"
   ) {
     return value;

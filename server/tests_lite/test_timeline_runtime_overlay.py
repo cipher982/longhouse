@@ -192,7 +192,6 @@ def test_sessions_list_uses_recent_activity_anchor_for_old_live_session(tmp_path
             "needs_attention": False,
             "is_idle": False,
             "is_stalled": False,
-            "heuristic_active": False,
             "is_managed_local_truth": False,
             "has_signal": True,
             "control_path": "unmanaged",
@@ -237,11 +236,11 @@ def test_sessions_list_exposes_home_label_from_existing_session_metadata(tmp_pat
 
     db = factory()
     try:
-        legacy = _seed_session(
+        unmanaged = _seed_session(
             db,
             started_at=now - timedelta(hours=4),
             ended_at=now - timedelta(hours=3),
-            project="legacy-local",
+            project="unmanaged-local",
             origin_label="cinder",
             environment="production",
         )
@@ -261,8 +260,8 @@ def test_sessions_list_exposes_home_label_from_existing_session_metadata(tmp_pat
         resp = client.get("/agents/sessions?days_back=7&limit=10", headers={"X-Agents-Token": "dev"})
         assert resp.status_code == 200, resp.text
         rows = {row["project"]: row for row in resp.json()["sessions"]}
-        assert rows["legacy-local"]["id"] == str(legacy.id)
-        assert rows["legacy-local"]["home_label"] is None
+        assert rows["unmanaged-local"]["id"] == str(unmanaged.id)
+        assert rows["unmanaged-local"]["home_label"] is None
         assert rows["cloud-branch"]["id"] == str(cloud.id)
         assert rows["cloud-branch"]["home_label"] is None  # cloud labels hidden for launch
 
@@ -536,13 +535,14 @@ def test_sessions_list_keeps_progress_runtime_overlay_for_recent_closed_session(
         assert resp.status_code == 200, resp.text
         row = resp.json()["sessions"][0]
         assert row["id"] == str(session.id)
-        assert row["status"] == "active"
-        assert row["display_phase"] == "Recent progress"
+        assert row["status"] == "idle"
+        assert row["display_phase"] == "Inactive"
         assert row["runtime_phase"] is None
         assert row["runtime_source"] == "progress"
         assert row["presence_state"] is None
-        assert row["last_live_at"] is not None
-        assert row["confidence"] == "inferred"
+        assert row["last_live_at"] is None
+        assert row["confidence"] == "stale"
+        assert row["timeline_card"]["status"]["label"] == "Transcript only"
 
 
 def test_sessions_list_suppresses_stale_progress_running_phase(tmp_path):
@@ -732,15 +732,15 @@ def test_active_sessions_recent_progress_fallback_is_non_executing(tmp_path):
         assert resp.status_code == 200, resp.text
         rows = resp.json()["sessions"]
         row = next(item for item in rows if item["id"] == str(session.id))
-        assert row["status"] == "active"
+        assert row["status"] == "idle"
         assert row["presence_state"] is None
-        assert row["display_phase"] == "Recent progress"
+        assert row["display_phase"] == "Idle"
         assert row["runtime_phase"] == "idle"
-        assert row["confidence"] == "inferred"
-        assert row["runtime_display"]["truth_tier"] == "inferred"
-        assert row["runtime_display"]["headline"] == "Active"
-        assert row["runtime_display"]["phase_label"] == "Recent progress"
-        assert row["runtime_display"]["heuristic_active"] is True
+        assert row["confidence"] is None
+        assert row["runtime_display"]["truth_tier"] == "stale"
+        assert row["runtime_display"]["headline"] == "Inactive"
+        assert row["runtime_display"]["phase_label"] == "Idle"
+        assert row["runtime_facts"]["activity"]["last_transcript_at"] is not None
 
 
 def test_sessions_surfaces_ignore_stale_presence_payload_after_newer_blocked_signal(tmp_path):

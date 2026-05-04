@@ -122,7 +122,7 @@ def test_managed_local_launch_response_requires_managed_local_execution_home():
             id=uuid4(),
             provider="claude",
             provider_session_id="provider-session",
-            execution_home="legacy",
+            execution_home="unmanaged_local",
             managed_transport="claude_channel_bridge",
             loop_mode="assist",
             source_runner_id=1,

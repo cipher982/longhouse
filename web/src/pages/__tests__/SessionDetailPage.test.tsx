@@ -798,7 +798,7 @@ describe("SessionDetailPage", () => {
       "Read only",
     );
     expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
-      "Active",
+      "Inactive",
     );
   });
 

@@ -261,12 +261,9 @@ export function getRuntimeOutcomeLabel(
   ) {
     return runtime.runtimeDisplay.headline;
   }
-  if (runtime.isExecuting || runtime.needsAttention || runtime.heuristicActive) {
+  if (runtime.isExecuting || runtime.needsAttention) {
     return "Active";
   }
-  // Phase 1 of session-liveness-honesty: `ended_at` is a last-activity
-  // timestamp for unmanaged sessions, not a closure signal. Only
-  // status==="completed" (backend-gated on terminal_state) means Completed.
   if (runtime.status === "completed") {
     return "Completed";
   }
@@ -341,21 +338,9 @@ export function getRuntimeDisplayCopy(
     };
   }
   if (runtime.presenceState == null && runtime.truthTier !== "managed-local") {
-    if (runtime.heuristicActive) {
-      return {
-        headline: "Active",
-        detail: "Last known activity",
-      };
-    }
     return {
       headline: "Not connected",
       detail: null,
-    };
-  }
-  if (runtime.presenceState == null && runtime.heuristicActive) {
-    return {
-      headline: "Working",
-      detail: runtimePhaseLabel,
     };
   }
   if (runtime.presenceState == null && runtime.truthTier === "managed-local") {
