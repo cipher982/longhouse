@@ -35,6 +35,7 @@ from zerg.services.apns_sender import build_session_attention_payload
 from zerg.services.apns_sender import build_session_attention_resolution_payload
 from zerg.services.apns_sender import build_session_live_activity_payload
 from zerg.services.apns_sender import build_widget_timeline_payload
+from zerg.services.apns_sender import prepare_session_attention_resolution_push
 
 
 def _make_db(tmp_path, name: str = "test_apns.db"):
@@ -355,42 +356,34 @@ def test_presence_attention_transition_sends_and_debounces_push(tmp_path):
             )
             assert fifth.status_code == 204, fifth.text
 
-    assert send_mock.await_count == 3
-    assert resolution_send_mock.await_count == 2
-    first_notification = send_mock.await_args_list[0].args[0]
-    second_notification = send_mock.await_args_list[1].args[0]
-    third_notification = send_mock.await_args_list[2].args[0]
-    first_resolution = resolution_send_mock.await_args_list[0].args[0]
-    second_resolution = resolution_send_mock.await_args_list[1].args[0]
-    assert first_notification.session_id == session_id
-    assert first_notification.state == "needs_user"
-    assert first_notification.alert_title == "Claude needs you"
-    assert first_notification.alert_body == "zerg · Fix failing build"
-    assert first_notification.collapse_id == f"lh-attn-{session_id}"
-    assert second_notification.state == "blocked"
-    assert second_notification.alert_title == "Needs permission"
-    assert second_notification.alert_body == "zerg · Blocked on Bash · Fix failing build"
-    assert third_notification.state == "needs_user"
-    assert first_resolution.session_id == session_id
-    assert first_resolution.previous_state == "needs_user"
-    assert first_resolution.current_state == "idle"
-    assert first_resolution.collapse_id == f"lh-attn-resolved-{session_id}"
-    assert second_resolution.previous_state == "blocked"
-    resolution_payload = build_session_attention_resolution_payload(first_resolution)
+    assert send_mock.await_count == 1
+    assert resolution_send_mock.await_count == 1
+    notification = send_mock.await_args_list[0].args[0]
+    resolution = resolution_send_mock.await_args_list[0].args[0]
+    assert notification.session_id == session_id
+    assert notification.state == "blocked"
+    assert notification.alert_title == "Needs permission"
+    assert notification.alert_body == "zerg · Blocked on Bash · Fix failing build"
+    assert notification.collapse_id == f"lh-attn-{session_id}"
+    assert resolution.session_id == session_id
+    assert resolution.previous_state == "blocked"
+    assert resolution.current_state == "idle"
+    assert resolution.collapse_id == f"lh-attn-resolved-{session_id}"
+    resolution_payload = build_session_attention_resolution_payload(resolution)
     assert resolution_payload["aps"] == {"content-available": 1}
     assert resolution_payload["event"] == "attention_resolved"
     assert resolution_payload["attention_state"] == "resolved"
-    payload = build_session_attention_payload(first_notification)
+    payload = build_session_attention_payload(notification)
     assert payload["aps"]["category"] == ATTENTION_NOTIFICATION_CATEGORY
     assert payload["aps"]["thread-id"] == f"{ATTENTION_NOTIFICATION_THREAD_PREFIX}-{session_id}"
-    assert payload["attention_state"] == "needs_user"
+    assert payload["attention_state"] == "blocked"
     assert payload["project"] == "zerg"
     assert payload["provider"] == "claude"
 
     with SessionLocal() as db:
         session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
         assert session is not None
-        assert session.last_attention_push_state == "needs_user"
+        assert session.last_attention_push_state == "blocked:resolved"
         assert session.last_attention_push_at is not None
 
     _cleanup_overrides()
@@ -449,11 +442,11 @@ def test_presence_resolution_push_requires_unresolved_attention_push(tmp_path):
     ):
         with TestClient(api_app) as client:
             for state, seconds in [
-                ("needs_user", 0),
+                ("blocked", 0),
                 ("idle", 5),
-                ("needs_user", 10),
+                ("blocked", 10),
                 ("idle", 15),
-                ("needs_user", 35),
+                ("blocked", 35),
                 ("idle", 36),
             ]:
                 response = client.post(
@@ -476,7 +469,7 @@ def test_presence_resolution_push_requires_unresolved_attention_push(tmp_path):
     with SessionLocal() as db:
         session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
         assert session is not None
-        assert session.last_attention_push_state == "needs_user:resolved"
+        assert session.last_attention_push_state == "blocked:resolved"
         last_push_at = session.last_attention_push_at
         assert last_push_at is not None
         if last_push_at.tzinfo is None:
@@ -484,6 +477,57 @@ def test_presence_resolution_push_requires_unresolved_attention_push(tmp_path):
         assert last_push_at == t0 + timedelta(seconds=35)
 
     _cleanup_overrides()
+    engine.dispose()
+
+
+def test_attention_resolution_clears_legacy_needs_user_push(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+    t0 = datetime.now(timezone.utc).replace(microsecond=0)
+
+    with SessionLocal() as db:
+        db.add(User(id=1, email="user@example.com", role="ADMIN"))
+        db.commit()
+        db.add(
+            APNSDeviceRegistration(
+                owner_id=1,
+                platform="ios",
+                device_token="d" * 64,
+                push_environment="sandbox",
+                app_build_id="0.1.0-dev+aaaa1111",
+            )
+        )
+        db.add(
+            AgentSession(
+                id=session_id,
+                provider="codex",
+                environment="test",
+                project="zerg",
+                started_at=t0,
+                loop_mode="assist",
+                summary_title="Legacy ready notification",
+                last_attention_push_state="needs_user",
+                last_attention_push_at=t0,
+            )
+        )
+        db.commit()
+
+        resolution = prepare_session_attention_resolution_push(
+            db,
+            owner_id=1,
+            session_id=session_id,
+            previous_state="needs_user",
+            current_state="idle",
+            occurred_at=t0 + timedelta(seconds=5),
+        )
+
+        assert resolution is not None
+        assert resolution.previous_state == "needs_user"
+        assert resolution.current_state == "idle"
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+        assert session is not None
+        assert session.last_attention_push_state == "needs_user:resolved"
+
     engine.dispose()
 
 
@@ -845,16 +889,87 @@ def test_presence_live_activity_pushes_session_state_and_debounces(tmp_path):
     assert len(second_pushes) == 2
     assert {push.activity_id for push in first_pushes} == {"activity-1", "activity-2"}
     assert {push.push_token for push in first_pushes} == {"a" * 64, "b" * 64}
-    assert all(push.display_phase == "Running bash" for push in second_pushes)
+    assert all(push.display_phase == "Running Shell" for push in second_pushes)
     payload = build_session_live_activity_payload(second_pushes[0])
     assert payload["aps"]["event"] == "update"
     assert payload["aps"]["content-state"]["presenceState"] == "running"
-    assert payload["aps"]["content-state"]["displayPhase"] == "Running bash"
-    assert payload["aps"]["content-state"]["activeTool"] == "bash"
+    assert payload["aps"]["content-state"]["displayPhase"] == "Running Shell"
+    assert payload["aps"]["content-state"]["activeTool"] == "Shell"
 
     with SessionLocal() as db:
         rows = db.query(APNSLiveActivityRegistration).all()
         assert {row.last_state_hash for row in rows} == {push.state_hash for push in second_pushes}
+
+    _cleanup_overrides()
+    engine.dispose()
+
+
+def test_presence_live_activity_renders_needs_user_as_ready(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+
+    with SessionLocal() as db:
+        db.add(User(id=1, email="user@example.com", role="ADMIN"))
+        db.commit()
+        db.add(
+            APNSLiveActivityRegistration(
+                owner_id=1,
+                session_id=session_id,
+                activity_id="activity-1",
+                push_token="a" * 64,
+                push_environment="sandbox",
+                app_build_id="0.1.0-dev+aaaa1111",
+            )
+        )
+        db.add(
+            AgentSession(
+                id=session_id,
+                provider="codex",
+                environment="test",
+                project="zerg",
+                started_at=datetime.now(timezone.utc),
+                loop_mode="assist",
+                summary_title="Watched ready session",
+            )
+        )
+        db.commit()
+
+    def override_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    def override_verify_agents_token():
+        return SimpleNamespace(device_id="devbox", id="token-1", owner_id=1)
+
+    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+
+    live_send_mock = AsyncMock(return_value=True)
+    with patch("zerg.routers.presence.send_session_live_activity_push", live_send_mock):
+        with TestClient(api_app) as client:
+            response = client.post(
+                "/agents/presence",
+                json={
+                    "session_id": session_id,
+                    "state": "needs_user",
+                    "occurred_at": datetime.now(timezone.utc).isoformat(),
+                },
+                headers={"X-Agents-Token": "device-token"},
+            )
+            assert response.status_code == 204, response.text
+
+    live_send_mock.assert_awaited_once()
+    push = live_send_mock.await_args.args[0]
+    assert push.presence_state == "needs_user"
+    assert push.display_phase == "Ready"
+    assert push.is_attention is False
+    payload = build_session_live_activity_payload(push)
+    assert payload["aps"]["content-state"]["presenceState"] == "needs_user"
+    assert payload["aps"]["content-state"]["displayPhase"] == "Ready"
+    assert payload["aps"]["content-state"]["isAttention"] is False
 
     _cleanup_overrides()
     engine.dispose()
@@ -982,7 +1097,7 @@ def test_presence_attention_send_failure_clears_debounce_stamp(tmp_path):
                 "/agents/presence",
                 json={
                     "session_id": session_id,
-                    "state": "needs_user",
+                    "state": "blocked",
                     "occurred_at": t0.isoformat(),
                 },
                 headers={"X-Agents-Token": "device-token"},
@@ -1004,7 +1119,7 @@ def test_presence_attention_send_failure_clears_debounce_stamp(tmp_path):
                 "/agents/presence",
                 json={
                     "session_id": session_id,
-                    "state": "needs_user",
+                    "state": "blocked",
                     "occurred_at": (t0 + timedelta(seconds=10)).isoformat(),
                 },
                 headers={"X-Agents-Token": "device-token"},
@@ -1090,15 +1205,15 @@ def test_attention_payload_bounds_long_title_and_collapse_id():
     long_title = "Investigate " + ("very " * 100) + "long session"
     notification = SessionAttentionPush(
         session_id=long_session_id,
-        state="needs_user",
+        state="blocked",
         occurred_at=datetime.now(timezone.utc),
         title=long_title,
         summary=long_title,
         project=None,
         provider="codex",
         tool_name=None,
-        alert_title="Codex needs you",
-        alert_body="Waiting for you",
+        alert_title="Needs permission",
+        alert_body=f"Blocked · {long_title}",
         collapse_id=_attention_collapse_id(long_session_id),
         targets=(),
     )

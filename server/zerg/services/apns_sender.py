@@ -22,12 +22,15 @@ from zerg.models.apns_device_registration import APNSDeviceRegistration
 from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration
 from zerg.models.apns_widget_push_state import APNSWidgetPushState
 from zerg.models.user import User
+from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
+from zerg.services.session_runtime_display import build_session_runtime_display
 
 logger = logging.getLogger(__name__)
 
-ATTENTION_PUSH_STATES = {"needs_user", "blocked"}
+ATTENTION_PUSH_STATES = {"blocked"}
+RESOLVABLE_ATTENTION_PUSH_STATES = ATTENTION_PUSH_STATES | {"needs_user"}
 ATTENTION_PUSH_DEBOUNCE = timedelta(seconds=30)
 WIDGET_PUSH_DEBOUNCE = timedelta(seconds=30)
 WIDGET_PUSH_PLATFORM = "ios_widget"
@@ -58,7 +61,7 @@ class APNSDeviceTarget:
 @dataclass(frozen=True)
 class SessionAttentionPush:
     session_id: str
-    state: Literal["needs_user", "blocked"]
+    state: Literal["blocked"]
     occurred_at: datetime
     title: str
     summary: str
@@ -275,7 +278,12 @@ def prepare_session_attention_resolution_push(
     current_state: str | None,
     occurred_at: datetime,
 ) -> SessionAttentionResolutionPush | None:
-    if owner_id is None or session_id is None or previous_state not in ATTENTION_PUSH_STATES or current_state in ATTENTION_PUSH_STATES:
+    if (
+        owner_id is None
+        or session_id is None
+        or previous_state not in RESOLVABLE_ATTENTION_PUSH_STATES
+        or current_state in ATTENTION_PUSH_STATES
+    ):
         return None
 
     session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
@@ -396,12 +404,23 @@ def prepare_session_live_activity_pushes(
         return ()
 
     provider = str(getattr(session, "provider", None) or "Session")
-    presence_state = str(current_state or getattr(session, "status", None) or "unknown")
-    active_tool = str(current_tool_name or "").strip() or None
-    display_phase = _live_activity_display_phase(presence_state, active_tool)
+    runtime_overlay = resolve_runtime_overlay(
+        session,
+        last_activity_at=session.last_activity_at,
+        runtime_state_map=load_runtime_state_map(db, [session.id]),
+        now=occurred_at,
+    )
+    runtime_display = build_session_runtime_display(
+        runtime_view=runtime_overlay,
+        capabilities=build_session_capabilities(session),
+        ended_at=session.ended_at,
+    )
+    presence_state = runtime_display.state or str(current_state or getattr(session, "status", None) or "unknown")
+    active_tool = runtime_display.compact_tool_label or str(current_tool_name or "").strip() or None
+    display_phase = runtime_display.phase_label or _live_activity_display_phase(presence_state, active_tool)
     title = _session_title(session)
     project = _session_project(session)
-    is_attention = presence_state in ATTENTION_PUSH_STATES
+    is_attention = runtime_display.needs_attention
     state_hash = _live_activity_state_hash(
         title=title,
         provider=provider,
@@ -874,7 +893,7 @@ def _live_activity_display_phase(presence_state: str, active_tool: str | None) -
         case "thinking":
             return "Thinking"
         case "needs_user":
-            return "Waiting on you"
+            return "Ready"
         case "blocked":
             return f"Blocked on {active_tool}" if active_tool else "Needs permission"
         case "idle":
@@ -899,11 +918,7 @@ def _session_project(session: AgentSession) -> str | None:
 
 
 def _attention_alert_title(*, state: str, provider: str | None) -> str:
-    if state == "blocked":
-        return "Needs permission"
-    if provider:
-        return f"{_provider_display_name(provider)} needs you"
-    return "Needs you"
+    return "Needs permission"
 
 
 def _attention_alert_body(*, state: str, project: str | None, title: str, tool_name: str | None) -> str:
@@ -912,8 +927,6 @@ def _attention_alert_body(*, state: str, project: str | None, title: str, tool_n
         parts.append(project)
     if state == "blocked":
         parts.append(f"Blocked on {tool_name}" if tool_name else "Blocked")
-    elif not project:
-        parts.append("Waiting for you")
     parts.append(title)
     return _trim_alert_text(" · ".join(parts))
 
