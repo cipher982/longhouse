@@ -274,7 +274,7 @@ def build_runtime_view(
         presence_tool = active_tool if runtime_phase in {"running", "blocked"} else None
 
     exposed_runtime_phase = runtime_phase
-    if confidence == "inferred":
+    if confidence == "inferred" or (phase_source == "progress" and terminal_state is None):
         exposed_runtime_phase = ""
 
     display_phase = _display_phase_for_state(

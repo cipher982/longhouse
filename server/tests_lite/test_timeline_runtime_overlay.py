@@ -545,6 +545,58 @@ def test_sessions_list_keeps_progress_runtime_overlay_for_recent_closed_session(
         assert row["confidence"] == "inferred"
 
 
+def test_sessions_list_suppresses_stale_progress_running_phase(tmp_path):
+    factory = _make_db(tmp_path, "stale_progress_running_overlay.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            started_at=now - timedelta(hours=2),
+            project="stale-opencode",
+        )
+        db.add(
+            SessionRuntimeState(
+                runtime_key=f"opencode:{session.id}",
+                session_id=session.id,
+                provider="opencode",
+                device_id="cinder",
+                phase="running",
+                phase_source="progress",
+                active_tool=None,
+                phase_started_at=now - timedelta(hours=2),
+                last_runtime_signal_at=None,
+                last_progress_at=now - timedelta(hours=2),
+                last_live_at=now - timedelta(hours=2),
+                timeline_anchor_at=now - timedelta(hours=2),
+                freshness_expires_at=None,
+                terminal_state=None,
+                terminal_at=None,
+                runtime_version=1,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    for client in _client(factory):
+        resp = client.get("/agents/sessions?days_back=7&limit=1", headers={"X-Agents-Token": "dev"})
+        assert resp.status_code == 200, resp.text
+        row = resp.json()["sessions"][0]
+        assert row["id"] == str(session.id)
+        assert row["status"] == "idle"
+        assert row["presence_state"] is None
+        assert row["display_phase"] == "Inactive"
+        assert row["runtime_phase"] is None
+        assert row["runtime_source"] == "progress"
+        assert row["runtime_display"]["headline"] == "Inactive"
+        assert row["runtime_display"]["phase_label"] == "Inactive"
+        assert row["runtime_display"]["state"] is None
+        assert row["runtime_display"]["activity_recency"] == "stale"
+        assert row["runtime_display"]["tone"] == "inactive"
+
+
 def test_sessions_list_marks_materialized_needs_user_as_ready(tmp_path):
     factory = _make_db(tmp_path, "materialized_runtime_needs_user.db")
     now = datetime.now(timezone.utc)
