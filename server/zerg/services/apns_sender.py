@@ -899,7 +899,7 @@ def _live_activity_display_phase(presence_state: str, active_tool: str | None) -
         case "idle":
             return "Idle"
         case _:
-            return "Recent progress"
+            return "Unknown"
 
 
 def _session_title(session: AgentSession) -> str:

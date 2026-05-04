@@ -52,7 +52,7 @@ def _seed_session(
     project: str = "zerg",
     git_repo: str = "git@github.com:cipher982/longhouse.git",
     git_branch: str = "main",
-    execution_home: str = "legacy",
+    execution_home: str = "unmanaged_local",
     device_id: str = "shipper-laptop",
     device_name: str = "laptop",
 ) -> AgentSession:

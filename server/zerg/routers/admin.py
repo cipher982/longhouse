@@ -521,7 +521,7 @@ async def fix_database_schema():
 class ConfigureTestSessionRuntimeRequest(BaseModel):
     """Test-only session runtime override for Playwright coverage."""
 
-    execution_home: Literal["legacy", "managed_local", "managed_hosted", "cloud_takeover"] = "managed_local"
+    execution_home: Literal["unmanaged_local", "managed_local", "managed_hosted", "cloud_takeover"] = "managed_local"
     managed_transport: Optional[Literal["claude_channel_bridge", "codex_app_server"]] = None
     source_runner_id: Optional[int] = None
     source_runner_name: Optional[str] = None

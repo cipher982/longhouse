@@ -312,7 +312,7 @@ describe("SessionsPage", () => {
     });
   });
 
-  it("maps legacy environment URLs into the machine filter", async () => {
+  it("maps environment URLs into the machine filter", async () => {
     renderSessionsPage("/timeline?environment=laptop");
 
     await waitFor(() => {
@@ -529,7 +529,7 @@ describe("SessionsPage", () => {
     expect(screen.queryByText("Active")).not.toBeInTheDocument();
   });
 
-  it("uses the same neutral timeline treatment for active sessions across providers", async () => {
+  it("only marks sessions active when runtime evidence is present", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
@@ -554,9 +554,9 @@ describe("SessionsPage", () => {
             summary_title: "Claude active",
             ended_at: null,
             status: "active",
-            confidence: "inferred",
+            confidence: "stale",
             runtime_source: "progress",
-            display_phase: "Recent progress",
+            display_phase: "Recent",
             thread_root_session_id: "thread-active-claude",
             thread_head_session_id: "thread-active-claude",
           }),
@@ -571,12 +571,14 @@ describe("SessionsPage", () => {
 
     const { container } = renderSessionsPage("/timeline");
 
-    expect(await screen.findAllByText("Active")).toHaveLength(2);
+    expect(await screen.findByText("Active")).toBeInTheDocument();
+    expect(screen.getByText("Unknown")).toBeInTheDocument();
 
     const runtimePills = screen.getAllByTestId("session-card-runtime");
     expect(runtimePills).toHaveLength(2);
-    expect(runtimePills.every((pill) => pill.classList.contains("session-card-runtime--active"))).toBe(true);
-    expect(container.querySelectorAll(".session-card-runtime-dot")).toHaveLength(2);
+    expect(runtimePills[0]).toHaveClass("session-card-runtime--active");
+    expect(runtimePills[1]).toHaveClass("session-card-runtime--inactive");
+    expect(container.querySelectorAll(".session-card-runtime-dot")).toHaveLength(1);
 
     const cards = screen.getAllByTestId("session-card");
     expect((within(cards[0]).getByText("codex") as HTMLElement).style.color).toBe("");
@@ -584,16 +586,13 @@ describe("SessionsPage", () => {
   });
 
   it("does not mark ended imports closed without an explicit terminal_state", async () => {
-    // Phase 1 of session-liveness-honesty: `ended_at` is a last-activity
-    // timestamp for unmanaged sessions, not a closure signal. Without an
-    // explicit terminal_state, the card must remain actionable.
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
           makeTimelineCard({
             ended_at: "2026-03-21T12:10:00Z",
             status: "active",
-            confidence: "inferred",
+            confidence: "stale",
             runtime_source: "progress",
             presence_state: null,
           }),
@@ -778,30 +777,30 @@ describe("SessionsPage", () => {
     expect(screen.queryByRole("button", { name: "Continue here: Cleanup sessions page" })).not.toBeInTheDocument();
   });
 
-  it("uses honest grouped-results copy in query compatibility mode", async () => {
+  it("uses honest grouped-results copy in grouped query mode", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
           makeTimelineCard({
             id: "session-root",
-            project: "compat",
-            summary_title: "compat root",
+            project: "query-root",
+            summary_title: "query root",
             thread_root_session_id: "thread-1",
             thread_head_session_id: "thread-2",
           }),
           makeTimelineCard({
             id: "session-other",
-            project: "compat-2",
-            summary_title: "compat other",
+            project: "query-other",
+            summary_title: "query other",
             thread_root_session_id: "thread-3",
             thread_head_session_id: "thread-3",
           }),
         ],
         total: 3,
         has_real_sessions: true,
-        compatibility_mode: "query_grouped",
-        compatibility_has_more: false,
-        compatibility_source_count: 3,
+        query_grouping_mode: "grouped_results",
+        query_grouping_has_more: false,
+        query_grouping_source_count: 3,
       },
       isLoading: false,
       error: null,
@@ -816,22 +815,22 @@ describe("SessionsPage", () => {
     expect(screen.queryByRole("button", { name: "Load More" })).not.toBeInTheDocument();
   });
 
-  it("keeps query compatibility load-more tied to raw matching-session exhaustion", async () => {
+  it("keeps grouped query load-more tied to raw matching-session exhaustion", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
           makeTimelineCard({
             id: "session-root",
-            project: "compat",
+            project: "query-root",
             thread_root_session_id: "thread-1",
             thread_head_session_id: "thread-2",
           }),
         ],
         total: 5,
         has_real_sessions: true,
-        compatibility_mode: "query_grouped",
-        compatibility_has_more: true,
-        compatibility_source_count: 2,
+        query_grouping_mode: "grouped_results",
+        query_grouping_has_more: true,
+        query_grouping_source_count: 2,
       },
       isLoading: false,
       error: null,
@@ -900,7 +899,7 @@ describe("SessionsPage", () => {
     expect(screen.getByText(/launch managed sessions with Longhouse when you want control after launch/i)).toBeInTheDocument();
   });
 
-  it("renders query compatibility cards from the matched detail session instead of speculative head state", async () => {
+  it("renders grouped query cards from the matched detail session instead of speculative head state", async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-03-21T12:45:00Z"));
@@ -963,9 +962,9 @@ describe("SessionsPage", () => {
           ],
           total: 1,
           has_real_sessions: true,
-          compatibility_mode: "query_grouped",
-          compatibility_has_more: false,
-          compatibility_source_count: 1,
+          query_grouping_mode: "grouped_results",
+          query_grouping_has_more: false,
+          query_grouping_source_count: 1,
         },
         isLoading: false,
         error: null,
@@ -1241,15 +1240,15 @@ describe("SessionsPage", () => {
     expect(screen.getByText(/Started .+ \u2022 3 continuations/)).toBeInTheDocument();
   });
 
-  it("marks recent-progress sessions without semantic live signals honestly", async () => {
+  it("marks transcript-only sessions without semantic live signals honestly", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
           makeTimelineCard({
             ended_at: null,
             status: "active",
-            confidence: "inferred",
-            display_phase: "Recent progress",
+            confidence: "stale",
+            display_phase: "Recent",
           }),
         ],
         total: 1,
@@ -1262,20 +1261,20 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
-    expect(await screen.findByText("Active")).toBeInTheDocument();
-    expect(screen.queryByText("Recent progress")).not.toBeInTheDocument();
+    expect(await screen.findByText("Unknown")).toBeInTheDocument();
+    expect(screen.queryByText("Working")).not.toBeInTheDocument();
     expect(screen.queryByText("In progress")).not.toBeInTheDocument();
   });
 
-  it("does not style inferred recent progress as currently executing", async () => {
+  it("does not style transcript-only progress as currently executing", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
           makeTimelineCard({
             ended_at: null,
             status: "active",
-            confidence: "inferred",
-            display_phase: "Recent progress",
+            confidence: "stale",
+            display_phase: "Recent",
           }),
         ],
         total: 1,
@@ -1288,10 +1287,9 @@ describe("SessionsPage", () => {
 
     const { container } = renderSessionsPage();
 
-    await screen.findByText("Active");
+    await screen.findByText("Unknown");
 
     const card = container.querySelector(".session-card");
-    expect(card).toHaveClass("session-card--inferred");
     expect(card).toHaveAttribute("data-card-state", "actionable");
     expect(card).not.toHaveClass("session-card--closed");
     expect(card).not.toHaveClass("session-card--live");
@@ -1430,20 +1428,20 @@ describe("SessionsPage", () => {
     expect(card).not.toHaveClass("session-card--running");
   });
 
-  it("shows managed-local inferred progress as working instead of ready", async () => {
+  it("shows managed-local progress without phase as disconnected", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
           makeTimelineCard({
             ended_at: null,
             status: "active",
-            confidence: "inferred",
+            confidence: "stale",
             runtime_source: "semantic",
             presence_state: null,
             last_live_at: "2026-03-21T12:04:00Z",
             last_activity_at: "2026-03-21T12:04:00Z",
             timeline_anchor_at: "2026-03-21T12:04:00Z",
-            display_phase: "Recent progress",
+            display_phase: "Recent",
             capabilities: makeCapabilities({
               live_control_available: true,
               host_reattach_available: true,
@@ -1460,9 +1458,9 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
-    expect(await screen.findByText("Recent activity")).toBeInTheDocument();
+    expect(await screen.findByText("Disconnected")).toBeInTheDocument();
     expect(screen.getByTestId("session-card-ownership")).toHaveTextContent("Managed");
-    expect(screen.queryByText(/Recent progress .* Live on laptop/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Recent .* Live on laptop/)).not.toBeInTheDocument();
     expect(screen.queryByText("Ready")).not.toBeInTheDocument();
   });
 
@@ -1493,7 +1491,6 @@ describe("SessionsPage", () => {
 
     expect(await screen.findByText("Cleanup sessions page")).toBeInTheDocument();
     expect(screen.queryByText("Working")).not.toBeInTheDocument();
-    expect(screen.queryByText("Recent progress")).not.toBeInTheDocument();
     expect(screen.queryByText("Fresh signal")).not.toBeInTheDocument();
   });
 
@@ -1617,7 +1614,6 @@ describe("SessionsPage", () => {
       is_executing: false,
       needs_attention: false,
       is_idle: false,
-      heuristic_active: false,
       is_managed_local_truth: false,
       has_signal: false,
       control_path: "unmanaged",

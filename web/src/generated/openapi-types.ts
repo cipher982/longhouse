@@ -4682,7 +4682,7 @@ export interface components {
             active_tool?: string | null;
             /**
              * Confidence
-             * @description Runtime confidence: live|inferred|stale
+             * @description Runtime confidence: live|stale
              */
             confidence?: string | null;
             /**
@@ -5156,7 +5156,7 @@ export interface components {
              * @default managed_local
              * @enum {string}
              */
-            execution_home: "legacy" | "managed_local" | "managed_hosted" | "cloud_takeover";
+            execution_home: "unmanaged_local" | "managed_local" | "managed_hosted" | "cloud_takeover";
             /** Managed Transport */
             managed_transport?: ("claude_channel_bridge" | "codex_app_server") | null;
             /** Source Runner Id */
@@ -7847,7 +7847,7 @@ export interface components {
          * @description Where a coding session currently lives.
          * @enum {string}
          */
-        SessionExecutionHome: "legacy" | "managed_local" | "managed_hosted" | "cloud_takeover";
+        SessionExecutionHome: "unmanaged_local" | "managed_local" | "managed_hosted" | "cloud_takeover";
         /**
          * SessionInputRequest
          * @description User input targeted at a managed session.
@@ -8271,7 +8271,7 @@ export interface components {
             active_tool?: string | null;
             /**
              * Confidence
-             * @description Runtime confidence: live|inferred|stale
+             * @description Runtime confidence: live|stale
              */
             confidence?: string | null;
             /**
@@ -8387,7 +8387,7 @@ export interface components {
         SessionRuntimeDisplayResponse: {
             /**
              * Truth Tier
-             * @description Runtime truth tier: none|stale|inferred|fresh|managed-local
+             * @description Runtime truth tier: none|stale|fresh|managed-local
              */
             truth_tier: string;
             /**
@@ -8456,12 +8456,6 @@ export interface components {
              * @default false
              */
             is_stalled: boolean;
-            /**
-             * Heuristic Active
-             * @description True when activity is inferred from recent progress
-             * @default false
-             */
-            heuristic_active: boolean;
             /**
              * Is Managed Local Truth
              * @description True when runtime truth is from a managed-local control path

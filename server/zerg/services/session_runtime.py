@@ -43,7 +43,6 @@ PHASE_FRESHNESS = {
     "needs_user": timedelta(minutes=10),
 }
 MANAGED_CODEX_FRESHNESS = timedelta(minutes=15)
-INFERRED_PROGRESS_WINDOW = timedelta(minutes=5)
 LIVE_EXECUTION_PHASES = {"thinking", "running"}
 ATTENTION_PHASES = {"blocked"}
 KNOWN_PHASES = {"thinking", "running", "blocked", "needs_user", "idle", "finished"}
@@ -175,11 +174,6 @@ def _confidence_for_state(state: SessionRuntimeState, *, now: datetime) -> str:
     freshness_expires_at = normalize_utc(state.freshness_expires_at)
     if freshness_expires_at is not None and freshness_expires_at > now:
         return "live"
-
-    last_progress_at = normalize_utc(state.last_progress_at)
-    if state.terminal_state is None and last_progress_at is not None and (now - last_progress_at) <= INFERRED_PROGRESS_WINDOW:
-        return "inferred"
-
     return "stale"
 
 
@@ -193,8 +187,6 @@ def _display_phase_for_state(
 ) -> str:
     if terminal_state is not None or phase == "finished" or status == "completed":
         return "Completed"
-    if confidence == "inferred":
-        return "Recent progress"
     if confidence == "stale" and phase in LIVE_EXECUTION_PHASES:
         return "Recent"
     if confidence == "stale" and phase in ATTENTION_PHASES:
@@ -219,15 +211,8 @@ def _status_for_state(
     terminal_state: str | None,
     ended_at: datetime | None,
 ) -> str:
-    # Phase 1 of session-liveness-honesty: do NOT return "completed" just
-    # because the session has a non-null `ended_at`. For unmanaged ingest
-    # sources, `ended_at` is just the last event timestamp, not a terminal
-    # signal. Only `terminal_state` (or phase=="finished", which the reducer
-    # only sets alongside a real terminal_state) counts as closed.
     if terminal_state is not None or phase == "finished":
         return "completed"
-    if confidence == "inferred":
-        return "active"
     if confidence == "live":
         if phase in LIVE_EXECUTION_PHASES:
             return "working"
@@ -238,8 +223,6 @@ def _status_for_state(
 
 
 def _signal_tier_for_state(*, phase_source: str, confidence: str | None) -> str:
-    if confidence == "inferred":
-        return "transcript_progress"
     if phase_source == "progress":
         return "transcript_progress"
     if phase_source not in {"fallback", ""}:
@@ -269,13 +252,16 @@ def build_runtime_view(
     presence_state: str | None = None
     presence_tool: str | None = None
     presence_updated_at = normalize_utc(state.last_runtime_signal_at)
+    last_live_at = normalize_utc(state.last_live_at)
+    if phase_source == "progress" and terminal_state is None:
+        last_live_at = None
 
     if confidence == "live" and runtime_phase in KNOWN_PHASES:
         presence_state = runtime_phase
         presence_tool = active_tool if runtime_phase in {"running", "blocked"} else None
 
     exposed_runtime_phase = runtime_phase
-    if confidence == "inferred" or (phase_source == "progress" and terminal_state is None):
+    if phase_source == "progress" and terminal_state is None:
         exposed_runtime_phase = ""
 
     display_phase = _display_phase_for_state(
@@ -300,7 +286,7 @@ def build_runtime_view(
         presence_state=presence_state,
         presence_tool=presence_tool,
         presence_updated_at=presence_updated_at,
-        last_live_at=normalize_utc(state.last_live_at) or normalize_utc(state.last_progress_at) or presence_updated_at,
+        last_live_at=last_live_at or presence_updated_at,
         display_phase=display_phase,
         active_tool=active_tool,
         confidence=confidence,
@@ -315,10 +301,6 @@ def build_fallback_runtime_view(
     last_activity_at: datetime | None,
     now: datetime,
 ) -> SessionRuntimeView:
-    # Phase 1 of session-liveness-honesty: parser-derived `ended_at` is a
-    # last-activity timestamp for unmanaged sessions, not a terminal signal.
-    # Only promote to terminal when we have explicit truth in
-    # `session.terminal_state` (from a real terminal_signal ingest).
     normalized_now = normalize_utc(now) or datetime.now(timezone.utc)
     started_at = normalize_utc(session.started_at) or normalized_now
     last_activity = normalize_utc(last_activity_at) or normalize_utc(session.ended_at)
@@ -335,21 +317,16 @@ def build_fallback_runtime_view(
         runtime_phase = "finished"
         terminal_state: str | None = explicit_terminal
     else:
-        if (normalized_now - progress_at) <= INFERRED_PROGRESS_WINDOW:
-            status = "active"
-            confidence = "inferred"
-            last_live_at = progress_at
-        else:
-            status = "idle"
+        status = "idle"
         runtime_phase = "idle"
         terminal_state = None
 
     return SessionRuntimeView(
-        signal_tier="transcript_progress" if confidence == "inferred" else "none",
+        signal_tier="none",
         runtime_phase=runtime_phase,
         phase_started_at=progress_at,
         last_progress_at=progress_at,
-        runtime_source=("progress" if confidence == "inferred" else "fallback"),
+        runtime_source="fallback",
         terminal_state=terminal_state,
         runtime_version=0,
         status=status,
@@ -376,10 +353,6 @@ def should_include_runtime_view(
     session: AgentSession,
     runtime_view: SessionRuntimeView | None,
 ) -> bool:
-    # Phase 1: `ended_at` alone is not a closure signal for unmanaged sessions.
-    # Only an explicit terminal_state suppresses the runtime view's activity
-    # hints; otherwise keep the view so the client can render "Active
-    # (inferred)" rather than falling back to a silent card.
     if runtime_view is None:
         return False
     has_explicit_terminal = bool((getattr(session, "terminal_state", None) or "").strip())
@@ -717,7 +690,6 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
         if latest_progress_related_at is not None and occurred_at < latest_progress_related_at:
             return "ignored"
         state.last_progress_at = occurred_at
-        state.last_live_at = occurred_at
         state.timeline_anchor_at = occurred_at
         if state.terminal_state is not None and (
             normalize_utc(state.terminal_at) is None or occurred_at >= normalize_utc(state.terminal_at)

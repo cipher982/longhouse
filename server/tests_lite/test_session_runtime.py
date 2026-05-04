@@ -1569,7 +1569,7 @@ def test_runtime_reducer_ignores_out_of_order_events(tmp_path):
     engine.dispose()
 
 
-def test_runtime_view_hides_semantic_phase_for_inferred_progress(tmp_path):
+def test_runtime_view_keeps_progress_as_transcript_only_signal(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "runtime_inferred_phase_view.db")
     now = datetime.now(timezone.utc)
 
@@ -1600,11 +1600,12 @@ def test_runtime_view_hides_semantic_phase_for_inferred_progress(tmp_path):
 
         assert state.phase == "idle"
         assert state.phase_source == "progress"
+        assert state.last_live_at is None
         assert view.runtime_phase is None
         assert view.signal_tier == "transcript_progress"
-        assert view.status == "active"
-        assert view.display_phase == "Recent progress"
-        assert view.confidence == "inferred"
+        assert view.status == "idle"
+        assert view.display_phase == "Inactive"
+        assert view.confidence == "stale"
 
     engine.dispose()
 
@@ -1640,6 +1641,7 @@ def test_runtime_view_does_not_keep_stale_progress_running(tmp_path):
 
         assert state.phase == "idle"
         assert state.phase_source == "progress"
+        assert state.last_live_at is None
         assert view.presence_state is None
         assert view.signal_tier == "transcript_progress"
         assert view.status == "idle"
@@ -1755,12 +1757,12 @@ def test_progress_signal_after_stale_managed_phase_does_not_revive_phase_truth(t
 
         assert state.phase == "running"
         assert state.phase_source == "semantic"
-        assert view.runtime_phase is None
+        assert view.runtime_phase == "running"
         assert view.presence_state is None
-        assert view.signal_tier == "transcript_progress"
-        assert view.status == "active"
-        assert view.display_phase == "Recent progress"
-        assert view.confidence == "inferred"
+        assert view.signal_tier == "managed_phase"
+        assert view.status == "idle"
+        assert view.display_phase == "Recent"
+        assert view.confidence == "stale"
 
     engine.dispose()
 
@@ -1810,12 +1812,12 @@ def test_needs_user_freshness_is_not_extended_by_progress(tmp_path):
         assert state.phase == "needs_user"
         assert state.phase_source == "semantic"
         assert state.freshness_expires_at == (now - timedelta(minutes=10)).replace(tzinfo=None)
-        assert view.runtime_phase is None
+        assert view.runtime_phase == "needs_user"
         assert view.presence_state is None
-        assert view.signal_tier == "transcript_progress"
-        assert view.status == "active"
-        assert view.display_phase == "Recent progress"
-        assert view.confidence == "inferred"
+        assert view.signal_tier == "managed_phase"
+        assert view.status == "idle"
+        assert view.display_phase == "Ready"
+        assert view.confidence == "stale"
 
     engine.dispose()
 
@@ -1906,9 +1908,9 @@ def test_newer_progress_reopens_finished_runtime_state(tmp_path):
 
         view = build_runtime_view(state=state, session=session, now=now)
         assert view.runtime_phase is None
-        assert view.status == "active"
-        assert view.display_phase == "Recent progress"
-        assert view.confidence == "inferred"
+        assert view.status == "idle"
+        assert view.display_phase == "Inactive"
+        assert view.confidence == "stale"
 
     engine.dispose()
 
@@ -2065,8 +2067,8 @@ def test_older_phase_signal_does_not_override_newer_progress(tmp_path):
         assert state.last_progress_at == now.replace(tzinfo=None)
         assert state.last_runtime_signal_at is None
         assert view.runtime_phase is None
-        assert view.display_phase == "Recent progress"
-        assert view.confidence == "inferred"
+        assert view.display_phase == "Inactive"
+        assert view.confidence == "stale"
 
     engine.dispose()
 
@@ -2117,7 +2119,7 @@ def test_older_terminal_signal_does_not_override_newer_progress(tmp_path):
         assert state.terminal_at is None
         assert state.last_progress_at == now.replace(tzinfo=None)
         assert view.runtime_phase is None
-        assert view.display_phase == "Recent progress"
-        assert view.confidence == "inferred"
+        assert view.display_phase == "Inactive"
+        assert view.confidence == "stale"
 
     engine.dispose()

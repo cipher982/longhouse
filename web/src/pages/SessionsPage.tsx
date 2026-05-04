@@ -108,7 +108,7 @@ interface SessionGroupProps {
   onSessionArchive: (thread: TimelineSessionCard) => void;
   highlightQuery?: string;
   isSemanticResult?: boolean;
-  compatibilityMode?: boolean;
+  groupedQueryMode?: boolean;
   relativeNowMs: number;
 }
 
@@ -121,7 +121,7 @@ function SessionGroup({
   onSessionArchive,
   highlightQuery,
   isSemanticResult,
-  compatibilityMode,
+  groupedQueryMode,
   relativeNowMs,
 }: SessionGroupProps) {
   return (
@@ -141,7 +141,7 @@ function SessionGroup({
             onArchive={() => onSessionArchive(thread)}
             highlightQuery={highlightQuery}
             isSemanticResult={isSemanticResult}
-            compatibilityMode={compatibilityMode}
+            groupedQueryMode={groupedQueryMode}
             relativeNowMs={relativeNowMs}
           />
         ))}
@@ -310,8 +310,8 @@ export default function SessionsPage() {
   const sessions = useMemo(() => data?.sessions || [], [data?.sessions]);
   const total = data?.total || 0;
   const hasRealSessions = data?.has_real_sessions ?? true;
-  const compatibilityMode = data?.compatibility_mode === "query_grouped";
-  const hasMore = compatibilityMode ? (data?.compatibility_has_more ?? false) : sessions.length < total;
+  const groupedQueryMode = data?.query_grouping_mode === "grouped_results";
+  const hasMore = groupedQueryMode ? (data?.query_grouping_has_more ?? false) : sessions.length < total;
 
   useTimelineSessionStream(filters, {
     enabled: timelineStreamEnabled,
@@ -364,7 +364,7 @@ export default function SessionsPage() {
     <div className="sessions-header-actions">
       {threadCards.length > 0 && (
         <span className="sessions-header-count">
-          {compatibilityMode ? `${threadCards.length} results` : `${threadCards.length} tasks`}
+          {groupedQueryMode ? `${threadCards.length} results` : `${threadCards.length} tasks`}
         </span>
       )}
     </div>
@@ -794,7 +794,7 @@ export default function SessionsPage() {
                 onSessionArchive={handleSessionArchive}
                 highlightQuery={debouncedQuery}
                 isSemanticResult={aiSearch}
-                compatibilityMode={compatibilityMode}
+                groupedQueryMode={groupedQueryMode}
                 relativeNowMs={relativeNowMs}
               />
             ))}
@@ -805,7 +805,7 @@ export default function SessionsPage() {
         {total > 0 && (
           <div className="sessions-footer">
             <span className="sessions-count">
-              {compatibilityMode
+              {groupedQueryMode
                 ? `Showing ${threadCards.length} grouped results from ${total} matching sessions`
                 : `Showing ${threadCards.length} of ${total} task threads`}
             </span>

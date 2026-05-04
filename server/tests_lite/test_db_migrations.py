@@ -262,7 +262,7 @@ def test_startup_migration_adds_session_execution_home_columns(tmp_path):
     assert "managed_session_name" in columns
     assert "managed_tmux_tmpdir" not in columns
     assert "managed_launch_profile" not in columns
-    assert row == ("legacy", None, None, None, None)
+    assert row == ("unmanaged_local", None, None, None, None)
 
 
 def test_startup_migration_adds_session_loop_mode_and_backfills_assist(tmp_path):

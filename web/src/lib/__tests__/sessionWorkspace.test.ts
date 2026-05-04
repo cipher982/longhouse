@@ -185,7 +185,6 @@ describe("getSessionInteractionCapabilities", () => {
           is_executing: false,
           needs_attention: false,
           is_idle: true,
-          heuristic_active: false,
           is_managed_local_truth: true,
           has_signal: true,
           control_path: "managed",

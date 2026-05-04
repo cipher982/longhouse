@@ -41,7 +41,7 @@ export interface SessionCardProps {
   onArchive?: () => void;
   highlightQuery?: string;
   isSemanticResult?: boolean;
-  compatibilityMode?: boolean;
+  groupedQueryMode?: boolean;
   relativeNowMs: number;
 }
 
@@ -53,13 +53,13 @@ export function SessionCard({
   onArchive,
   highlightQuery,
   isSemanticResult,
-  compatibilityMode = false,
+  groupedQueryMode = false,
   relativeNowMs,
 }: SessionCardProps) {
   const [confirming, setConfirming] = useState(false);
   const hoverPrefetchTimerRef = useRef<number | null>(null);
   const detailSession = thread.detail;
-  const session = compatibilityMode ? detailSession : thread.head;
+  const session = groupedQueryMode ? detailSession : thread.head;
   const interaction = getSessionInteractionCapabilities({ session });
   const turnCount = session.user_messages;
   const toolCount = session.tool_calls;
@@ -81,8 +81,8 @@ export function SessionCard({
   const title = getSessionTitle(session);
   const branchLabel = getBranchLabel(session.git_branch);
   const cardRuntimeMetaParts = [runtimeMetaLabel].filter(Boolean);
-  const showContinuationCount = !compatibilityMode && thread.continuation_count > 1;
-  const secondaryStatsLabel = compatibilityMode
+  const showContinuationCount = !groupedQueryMode && thread.continuation_count > 1;
+  const secondaryStatsLabel = groupedQueryMode
     ? `Matched ${formatRelativeTime(detailSession.started_at, relativeNowMs)}`
     : [
         `Started ${formatRelativeTime(thread.root.started_at, relativeNowMs)}`,
@@ -93,18 +93,10 @@ export function SessionCard({
   const showSemanticSnippet = isSemanticResult && !!detailSession.match_snippet;
   const showSummary = !showKeywordSnippet && !showSemanticSnippet && !!session.summary;
   const showGenerating = !showKeywordSnippet && !showSemanticSnippet && !session.summary && !session.summary_title;
-  const cardActionLabel = compatibilityMode ? "Open match" : "Open session";
+  const cardActionLabel = groupedQueryMode ? "Open match" : "Open session";
   const hasControlPath = interaction.liveControlAvailable || interaction.hostReattachAvailable;
-  // Phase 3 of session-liveness-honesty: lifecycle=="closed" is the new
-  // ground-truth signal. The backend only emits it when we have an
-  // explicit terminal_signal (Phase 6 will also emit it on confirmed
-  // process-gone via machine-agent bindings). Legacy fallback: accept
-  // explicit terminal_state for older payloads that predate the axis.
-  // Phase 3: lifecycle is the closure axis. When the backend tells us it
-  // is "closed" that wins unconditionally (the reducer only closes on
-  // ground truth). Legacy payloads without the axis fall back via
-  // isSessionClosed's terminal_state path, plus a presence guard so an
-  // actively-controlled session is not misreported.
+  // Lifecycle is the closure axis. The reducer only closes on explicit
+  // terminal or process-gone facts.
   const lifecycle = runtime.runtimeFacts?.lifecycle?.state ?? runtime.runtimeDisplay?.lifecycle ?? null;
   const hasCurrentControlledPresence = hasControlPath && runtime.presenceState != null;
   const isClosedSession =
@@ -113,8 +105,8 @@ export function SessionCard({
     (lifecycle != null
       ? lifecycle === "closed"
       : isSessionClosed(session) && !hasCurrentControlledPresence);
-  // Phase 3: always render the runtime pill for unmanaged sessions so the
-  // card states "Stale" / "Unknown" honestly instead of hiding them.
+  // Always render the runtime pill for unmanaged sessions so unknown or
+  // transcript-only state is visible instead of hidden.
   const hasRuntimeAxes =
     runtime.runtimeFacts?.control_path === "managed" ||
     runtime.runtimeFacts?.control_path === "unmanaged" ||
@@ -129,7 +121,6 @@ export function SessionCard({
     isClosedSession ? "session-card--closed" : "",
     !isClosedSession && runtime.isExecuting ? "session-card--live" : "",
     !isClosedSession && runtime.isIdle ? "session-card--idle" : "",
-    !isClosedSession && cardRuntimeTone === "inferred" ? "session-card--inferred" : "",
     !isClosedSession && cardRuntimeTone === "thinking" ? "session-card--thinking" : "",
     !isClosedSession && cardRuntimeTone === "running" ? "session-card--running" : "",
     !isClosedSession && cardRuntimeTone === "blocked" ? "session-card--blocked" : "",
@@ -257,7 +248,6 @@ export function SessionCard({
                     state={runtime.factStatus ? null : runtime.presenceState}
                     tool={runtime.factStatus ? null : runtime.presenceTool}
                     compact
-                    heuristicActive={runtime.factStatus ? false : runtime.heuristicActive}
                     showUnknown={runtime.factStatus != null || runtime.truthTier === "stale"}
                   />
                 )}

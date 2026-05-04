@@ -116,7 +116,7 @@ class AgentSession(AgentsBase):
     execution_home = Column(
         String(32),
         nullable=False,
-        server_default=text(f"'{SessionExecutionHome.LEGACY.value}'"),
+        server_default=text(f"'{SessionExecutionHome.UNMANAGED_LOCAL.value}'"),
         index=True,
     )
     managed_transport = Column(String(32), nullable=True)

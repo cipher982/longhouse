@@ -122,7 +122,6 @@ struct SessionLiveActivityModelsTests {
             "is_executing": true,
             "needs_attention": false,
             "is_idle": false,
-            "heuristic_active": false,
             "is_managed_local_truth": true,
             "has_signal": true
           },
@@ -177,7 +176,6 @@ struct SessionLiveActivityModelsTests {
             "is_executing": true,
             "needs_attention": true,
             "is_idle": false,
-            "heuristic_active": false,
             "is_managed_local_truth": true,
             "has_signal": true
           },
@@ -242,7 +240,6 @@ struct SessionLiveActivityModelsTests {
             "is_executing": false,
             "needs_attention": false,
             "is_idle": false,
-            "heuristic_active": false,
             "is_managed_local_truth": true,
             "has_signal": true
           },

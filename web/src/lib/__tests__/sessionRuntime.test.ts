@@ -33,7 +33,6 @@ function makeRuntimeDisplay(
     is_executing: false,
     needs_attention: false,
     is_idle: false,
-    heuristic_active: false,
     is_managed_local_truth: true,
     has_signal: true,
     control_path: "managed",
@@ -109,7 +108,6 @@ describe("resolveSessionRuntimeState", () => {
           is_executing: true,
           needs_attention: false,
           is_idle: false,
-          heuristic_active: false,
           is_managed_local_truth: true,
           has_signal: true,
         },
@@ -154,7 +152,7 @@ describe("resolveSessionRuntimeState", () => {
     expect(resolveSessionStatusLabel(runtime)).toBe("Disconnected");
   });
 
-  it("treats legacy working-without-presence as inferred progress", () => {
+  it("does not convert status-only progress into liveness", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({
         ended_at: null,
@@ -166,11 +164,10 @@ describe("resolveSessionRuntimeState", () => {
       }),
     );
 
-    expect(runtime.truthTier).toBe("inferred");
-    expect(runtime.heuristicActive).toBe(true);
+    expect(runtime.truthTier).toBe("none");
     expect(runtime.isLive).toBe(false);
-    expect(runtime.displayPhase).toBe("Recent progress");
-    expect(runtime.tone).toBe("inferred");
+    expect(runtime.displayPhase).toBe("Recent");
+    expect(runtime.tone).toBe("inactive");
   });
 
   it("treats managed-local needs-user as ready, not attention or execution", () => {
@@ -193,7 +190,6 @@ describe("resolveSessionRuntimeState", () => {
     expect(runtime.needsAttention).toBe(false);
     expect(runtime.isLive).toBe(false);
     expect(runtime.isExecuting).toBe(false);
-    expect(runtime.heuristicActive).toBe(false);
     expect(runtime.tone).toBe("idle");
     expect(runtime.displayPhase).toBe("Ready");
   });
@@ -216,7 +212,6 @@ describe("resolveSessionRuntimeState", () => {
     );
 
     expect(runtime.truthTier).toBe("managed-local");
-    expect(runtime.heuristicActive).toBe(false);
     expect(runtime.isIdle).toBe(true);
     expect(runtime.tone).toBe("idle");
     expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
@@ -287,8 +282,7 @@ describe("resolveSessionRuntimeState", () => {
     });
   });
 
-  it("treats managed-local inferred progress as working instead of ready", () => {
-    // heuristicActive=true case: confidence=inferred triggers the heuristic path
+  it("treats managed-local progress without a phase as not connected", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({
         ended_at: null,
@@ -298,25 +292,21 @@ describe("resolveSessionRuntimeState", () => {
           reply_to_live_session_available: true,
         },
         status: "active",
-        confidence: "inferred",
+        confidence: "stale",
         runtime_source: "managed_local_transport",
         presence_state: null,
-        display_phase: "Recent progress",
+        display_phase: "Recent",
       }),
     );
 
-    expect(runtime.truthTier).toBe("managed-local");
-    expect(runtime.heuristicActive).toBe(true);
+    expect(runtime.truthTier).toBe("stale");
     expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
-      headline: "Working",
-      detail: "Recent progress",
+      headline: "Not connected",
+      detail: null,
     });
   });
 
-  it("shows not connected for managed-local with no presence and no heuristic signal", () => {
-    // truthTier=managed-local but heuristicActive=false:
-    // host_reattach_available + live confidence + managed_local_transport → managed-local tier
-    // status=null avoids legacy progress status trigger, so heuristicActive stays false
+  it("shows not connected for managed-local with no presence signal", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({
         ended_at: null,
@@ -334,7 +324,6 @@ describe("resolveSessionRuntimeState", () => {
     );
 
     expect(runtime.truthTier).toBe("managed-local");
-    expect(runtime.heuristicActive).toBe(false);
     expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
       headline: "Not connected",
       detail: null,
@@ -378,7 +367,6 @@ describe("resolveSessionRuntimeState", () => {
           is_executing: false,
           needs_attention: false,
           is_idle: false,
-          heuristic_active: false,
           is_managed_local_truth: false,
           has_signal: true,
           control_path: "managed",
@@ -411,7 +399,6 @@ describe("resolveSessionRuntimeState", () => {
           needs_attention: true,
           is_idle: false,
           is_stalled: true,
-          heuristic_active: false,
           is_managed_local_truth: false,
           has_signal: true,
           control_path: "managed",
@@ -449,7 +436,6 @@ describe("resolveSessionRuntimeState", () => {
           is_executing: false,
           needs_attention: false,
           is_idle: false,
-          heuristic_active: false,
           is_managed_local_truth: false,
           has_signal: true,
           control_path: "unmanaged",
@@ -480,7 +466,6 @@ describe("resolveSessionRuntimeState", () => {
           is_executing: false,
           needs_attention: false,
           is_idle: false,
-          heuristic_active: false,
           is_managed_local_truth: false,
           has_signal: true,
           control_path: "unmanaged",
@@ -510,7 +495,6 @@ describe("resolveSessionRuntimeState", () => {
           needs_attention: true,
           is_live: true,
           is_executing: true,
-          heuristic_active: true,
           is_stalled: true,
           lifecycle: "closed",
           terminal_reason: "process_gone",
@@ -522,7 +506,6 @@ describe("resolveSessionRuntimeState", () => {
     expect(runtime.isLive).toBe(false);
     expect(runtime.isExecuting).toBe(false);
     expect(runtime.needsAttention).toBe(false);
-    expect(runtime.heuristicActive).toBe(false);
     expect(runtime.isStalled).toBe(false);
     expect(runtime.isIdle).toBe(true);
     expect(runtime.displayPhase).toBe("Closed");

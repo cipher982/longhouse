@@ -18,7 +18,6 @@ from zerg.session_execution_home import SessionExecutionHome
 KNOWN_PRESENCE_STATES = {"thinking", "running", "idle", "needs_user", "blocked", "stalled"}
 LIVE_EXECUTION_STATES = {"thinking", "running"}
 ATTENTION_STATES = {"blocked"}
-LEGACY_PROGRESS_STATUSES = {"working", "active"}
 
 
 @dataclass(frozen=True)
@@ -36,11 +35,8 @@ class SessionRuntimeDisplay:
     needs_attention: bool
     is_idle: bool
     is_stalled: bool
-    heuristic_active: bool
     is_managed_local_truth: bool
     has_signal: bool
-    # Phase 2 of session-liveness-honesty: three orthogonal axes that
-    # clients render verbatim. See docs/specs/session-liveness-honesty.md.
     control_path: str  # "managed" | "unmanaged"
     activity_recency: str  # "live" | "recent" | "stale" | "none"
     lifecycle: str  # "open" | "closed" | "unknown"
@@ -55,26 +51,6 @@ def _normalize_presence_state(state: str | None) -> str | None:
 def _normalize_source(source: str | None) -> str | None:
     source = (source or "").strip()
     return source or None
-
-
-def _is_legacy_progress_status(status: str | None) -> bool:
-    return status in LEGACY_PROGRESS_STATUSES
-
-
-def _is_progress_fallback(
-    *,
-    status: str | None,
-    confidence: str | None,
-    runtime_source: str | None,
-    presence_state: str | None,
-) -> bool:
-    if presence_state is not None:
-        return False
-    if confidence == "inferred":
-        return True
-    if confidence == "stale":
-        return False
-    return runtime_source == "progress" or _is_legacy_progress_status(status)
 
 
 def _has_fresh_signal(
@@ -93,7 +69,6 @@ def _has_fresh_signal(
 def _truth_tier(
     *,
     capabilities: SessionCapabilityFlags,
-    status: str | None,
     confidence: str | None,
     runtime_source: str | None,
     presence_state: str | None,
@@ -107,13 +82,6 @@ def _truth_tier(
         return "managed-local"
     if has_fresh_signal and confidence != "stale":
         return "fresh"
-    if _is_progress_fallback(
-        status=status,
-        confidence=confidence,
-        runtime_source=runtime_source,
-        presence_state=presence_state,
-    ):
-        return "inferred"
     if confidence == "stale" or runtime_source == "fallback":
         return "stale"
     return "none"
@@ -124,12 +92,12 @@ def _has_renderable_signal(
     truth_tier: str,
     runtime_source: str | None,
     presence_state: str | None,
-    heuristic_active: bool,
+    process_observed: bool,
     last_live_at: datetime | None,
 ) -> bool:
-    if presence_state is not None or heuristic_active or last_live_at is not None:
+    if presence_state is not None or process_observed or last_live_at is not None:
         return True
-    if truth_tier in {"fresh", "managed-local", "inferred"}:
+    if truth_tier in {"fresh", "managed-local"}:
         return True
     return truth_tier == "stale" and runtime_source != "fallback"
 
@@ -190,7 +158,7 @@ def _phase_label(
 def _tone(
     *,
     presence_state: str | None,
-    heuristic_active: bool,
+    process_observed: bool,
     is_idle: bool,
 ) -> str:
     if presence_state == "stalled":
@@ -203,8 +171,8 @@ def _tone(
         return "running"
     if presence_state == "thinking":
         return "thinking"
-    if heuristic_active:
-        return "inferred"
+    if process_observed:
+        return "active"
     if is_idle:
         return "idle"
     return "inactive"
@@ -214,15 +182,11 @@ def _outcome_label(
     *,
     is_executing: bool,
     needs_attention: bool,
-    heuristic_active: bool,
+    process_observed: bool,
     status: str | None,
     terminal_state: str | None,
 ) -> str:
-    # Phase 1 of session-liveness-honesty: do not collapse on `ended_at`
-    # alone. Only explicit terminal_state (from real terminal_signal ingest)
-    # or runtime-view status=="completed" (which in fallback now requires
-    # terminal_state too) means Completed.
-    if is_executing or needs_attention or heuristic_active:
+    if is_executing or needs_attention or process_observed:
         return "Active"
     if terminal_state or status == "completed":
         return "Completed"
@@ -235,7 +199,6 @@ def _managed_copy(
     phase_label: str,
     compact_tool: str | None,
     truth_tier: str,
-    heuristic_active: bool,
     is_idle: bool,
 ) -> tuple[str, str | None]:
     if presence_state == "thinking":
@@ -247,11 +210,7 @@ def _managed_copy(
     if presence_state == "blocked":
         return "Needs permission", f"Approval needed • {compact_tool}" if compact_tool else "Approval needed"
     if presence_state is None and truth_tier != "managed-local":
-        if heuristic_active:
-            return "Active", "Last known activity"
         return "Not connected", None
-    if presence_state is None and heuristic_active:
-        return "Working", phase_label
     if presence_state is None and truth_tier == "managed-local":
         return "Not connected", None
     if presence_state in {"idle", "needs_user"} or is_idle:
@@ -281,8 +240,6 @@ def build_session_runtime_display(
         binding_host_state=binding_host_state,
         binding_terminal_reason=binding_terminal_reason,
     )
-    # Phase 5c: host_state comes from heartbeat+binding freshness when a
-    # binding overlay is supplied. Otherwise we honestly say "unknown".
     host_state = binding_host_state if binding_host_state else "unknown"
     unmanaged_attention_unverified = control_path == "unmanaged" and presence_state in ATTENTION_STATES and host_state != "online"
     if unmanaged_attention_unverified:
@@ -295,20 +252,11 @@ def build_session_runtime_display(
     stale_ready_phase = presence_state is None and runtime_phase == "needs_user" and confidence == "stale"
     truth_tier = _truth_tier(
         capabilities=capabilities,
-        status=status,
         confidence=confidence,
         runtime_source=runtime_source,
         presence_state=presence_state,
     )
-    heuristic_active = _is_progress_fallback(
-        status=status,
-        confidence=confidence,
-        runtime_source=runtime_source,
-        presence_state=presence_state,
-    )
-    if unmanaged_attention_unverified or stale_attention_phase:
-        heuristic_active = False
-    binding_live = (
+    process_observed = (
         control_path == "unmanaged"
         and signal_tier == "unmanaged_binding"
         and host_state == "online"
@@ -323,7 +271,7 @@ def build_session_runtime_display(
         and not stale_ready_phase
         and not is_executing
         and not needs_attention
-        and not heuristic_active
+        and not process_observed
         and status == "idle"
     )
     if unmanaged_attention_unverified:
@@ -349,14 +297,13 @@ def build_session_runtime_display(
             phase_label=phase_label,
             compact_tool=compact_tool,
             truth_tier=truth_tier,
-            heuristic_active=heuristic_active,
             is_idle=is_idle,
         )
     else:
         headline = _outcome_label(
             is_executing=is_executing,
             needs_attention=needs_attention,
-            heuristic_active=heuristic_active or binding_live,
+            process_observed=process_observed,
             status=status,
             terminal_state=runtime_view.terminal_state,
         )
@@ -366,11 +313,10 @@ def build_session_runtime_display(
         truth_tier=truth_tier,
         runtime_source=runtime_source,
         presence_state=presence_state,
-        heuristic_active=heuristic_active or binding_live,
+        process_observed=process_observed,
         last_live_at=runtime_view.last_live_at,
     )
 
-    # Phase 2 of session-liveness-honesty: three-axis projection.
     terminal_state = runtime_view.terminal_state
     is_stalled = (
         control_path == "managed"
@@ -391,14 +337,10 @@ def build_session_runtime_display(
         presence_state=presence_state,
         confidence=confidence,
         runtime_source=runtime_source,
-        heuristic_active=heuristic_active or binding_live,
+        process_observed=process_observed,
         has_signal=has_signal,
     )
-    # Phase 6: machine-agent observed unmanaged binding terminal reasons
-    # promote lifecycle to closed without an explicit provider terminal_signal.
-    # `process_gone` is confirmed local process disappearance; `host_expired`
-    # is a long-unverified host cleanup and must stay distinguishable.
-    binding_closed = binding_terminal_reason in {"process_gone", "host_expired"} and control_path == "unmanaged"
+    binding_closed = binding_terminal_reason == "process_gone" and control_path == "unmanaged"
     if terminal_state:
         lifecycle = "closed"
         terminal_reason = _derive_terminal_reason(terminal_state)
@@ -416,20 +358,18 @@ def build_session_runtime_display(
         is_executing = False
         needs_attention = False
         is_idle = True
-        heuristic_active = False
+        process_observed = False
         is_stalled = False
-    no_runtime_signal = signal_tier == "none" and presence_state is None and not heuristic_active
+    no_runtime_signal = signal_tier == "none" and presence_state is None and not process_observed
     tone = (
         "inactive"
         if lifecycle == "closed"
         or unmanaged_attention_unverified
         or no_runtime_signal
         or (presence_state is None and confidence == "stale")
-        else "inferred"
-        if binding_live
         else _tone(
             presence_state=presence_state,
-            heuristic_active=heuristic_active,
+            process_observed=process_observed,
             is_idle=is_idle,
         )
     )
@@ -447,7 +387,6 @@ def build_session_runtime_display(
         needs_attention=needs_attention,
         is_idle=is_idle,
         is_stalled=is_stalled,
-        heuristic_active=heuristic_active,
         is_managed_local_truth=truth_tier == "managed-local",
         has_signal=has_signal,
         control_path=control_path,
@@ -461,7 +400,7 @@ def build_session_runtime_display(
 _MANAGED_EXECUTION_HOMES = {
     SessionExecutionHome.MANAGED_LOCAL,
     SessionExecutionHome.MANAGED_HOSTED,
-    SessionExecutionHome.CLOUD_TAKEOVER,  # legacy managed shape; no new sessions
+    SessionExecutionHome.CLOUD_TAKEOVER,
 }
 
 
@@ -501,28 +440,24 @@ def _derive_activity_recency(
     presence_state: str | None,
     confidence: str | None,
     runtime_source: str | None,
-    heuristic_active: bool,
+    process_observed: bool,
     has_signal: bool,
 ) -> str:
     """How recently did we hear something real from this session?
 
     - `live`: presence signal within its phase freshness window
-    - `recent`: inferred/progress within ~5 min
+    - `recent`: current control path signal without a specific live phase
     - `stale`: had signal once, nothing fresh
     - `none`: never observed activity
     """
     if presence_state is not None and confidence == "live":
         return "live"
-    if heuristic_active or confidence == "inferred":
-        return "recent"
+    if process_observed:
+        return "live"
     if has_signal:
         return "stale"
     if confidence == "stale":
         return "stale"
-    # "Had signal once" means we have a real progress timestamp. The
-    # fallback view sets last_progress_at to a session's started_at when no
-    # activity was ever observed, so require something renderable alongside
-    # the timestamp before promoting to "stale".
     return "none"
 
 

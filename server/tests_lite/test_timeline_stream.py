@@ -455,7 +455,7 @@ def test_list_timeline_sessions_default_cards_open_writable_head_and_keep_thread
     assert response.sessions[1].thread_id == str(recent_single.id)
 
 
-def test_list_timeline_sessions_query_path_stays_raw_session_compatibility(tmp_path):
+def test_list_timeline_sessions_query_path_stays_raw_session_hits(tmp_path):
     session_local = _make_db(tmp_path, "timeline_thread_cards_lexical.db")
     now = datetime.now(timezone.utc)
     magic = "thread-card-needle"
@@ -547,7 +547,7 @@ def test_list_timeline_sessions_query_path_stays_raw_session_compatibility(tmp_p
         (None, None, "hybrid"),
     ],
 )
-def test_timeline_stream_rejects_compatibility_contracts(tmp_path, query, sort, mode):
+def test_timeline_stream_rejects_non_threaded_query_contracts(tmp_path, query, sort, mode):
     session_local = _make_db(tmp_path, "timeline_stream_reject_contract.db")
     now = datetime.now(timezone.utc)
 

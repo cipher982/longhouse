@@ -46,7 +46,6 @@ private extension SessionDetail {
             "isExecuting": \(executing),
             "needsAttention": false,
             "isIdle": \(!executing),
-            "heuristicActive": false,
             "isManagedLocalTruth": true,
             "hasSignal": true
           },

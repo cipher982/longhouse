@@ -693,11 +693,6 @@
     opacity: 0.84;
   }
 
-  .session-card-runtime--inferred {
-    background: color-mix(in srgb, #94a3b8 12%, transparent);
-    border-color: color-mix(in srgb, #94a3b8 22%, transparent);
-  }
-
   .session-card-runtime--active {
     background: color-mix(in srgb, var(--color-text-secondary) 12%, transparent);
     border-color: color-mix(in srgb, var(--color-text-secondary) 30%, transparent);

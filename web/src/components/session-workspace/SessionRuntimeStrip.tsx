@@ -114,7 +114,6 @@ export function SessionRuntimeStrip({
           tool={runtime.factStatus ? null : runtime.presenceTool}
           compact
           animateCompact={interaction.isManagedLocalSession}
-          heuristicActive={runtime.factStatus ? false : runtime.heuristicActive}
           showUnknown={runtime.factStatus != null || interaction.isManagedLocalSession}
         />
         <div className="session-runtime-strip__copy">

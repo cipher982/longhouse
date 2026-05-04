@@ -16,7 +16,7 @@ from zerg.session_execution_home import SessionExecutionHome
 
 def _capabilities(*, managed: bool = False) -> SessionCapabilityFlags:
     return SessionCapabilityFlags(
-        execution_home=SessionExecutionHome.MANAGED_LOCAL if managed else SessionExecutionHome.LEGACY,
+        execution_home=SessionExecutionHome.MANAGED_LOCAL if managed else SessionExecutionHome.UNMANAGED_LOCAL,
         managed_transport=None,
         live_control_available=managed,
         host_reattach_available=managed,
@@ -203,10 +203,10 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
                 "signal_tier": "unmanaged_binding",
                 "lifecycle": "open",
                 "state": None,
-                "tone": "inferred",
+                "tone": "active",
                 "headline": "Active",
                 "phase_label": "Idle",
-                "activity_recency": "recent",
+                "activity_recency": "live",
                 "needs_attention": False,
             },
         },
@@ -228,24 +228,24 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
             },
         },
         {
-            "id": "unmanaged-recent-progress",
+            "id": "unmanaged-transcript-progress",
             "managed": False,
             "view": {
                 "signal_tier": "transcript_progress",
                 "runtime_source": "progress",
-                "status": "active",
-                "confidence": "inferred",
-                "display_phase": "Recent progress",
+                "status": "idle",
+                "confidence": "stale",
+                "display_phase": "Inactive",
             },
             "expect": {
                 "control_path": "unmanaged",
                 "signal_tier": "transcript_progress",
                 "lifecycle": "open",
                 "state": None,
-                "tone": "inferred",
-                "headline": "Active",
-                "phase_label": "Recent progress",
-                "activity_recency": "recent",
+                "tone": "inactive",
+                "headline": "Inactive",
+                "phase_label": "Inactive",
+                "activity_recency": "stale",
                 "needs_attention": False,
             },
         },
@@ -339,23 +339,22 @@ def test_fallback_idle_has_no_renderable_runtime_signal():
     assert display.has_signal is False
 
 
-def test_inferred_progress_has_renderable_runtime_signal():
+def test_transcript_progress_does_not_create_active_display():
     display = build_session_runtime_display(
         runtime_view=_runtime_view(
             signal_tier="transcript_progress",
             runtime_source="progress",
-            status="active",
-            confidence="inferred",
-            display_phase="Recent progress",
+            status="idle",
+            confidence="stale",
+            display_phase="Inactive",
         ),
         capabilities=_capabilities(),
         ended_at=None,
     )
 
-    assert display.truth_tier == "inferred"
+    assert display.truth_tier == "stale"
     assert display.signal_tier == "transcript_progress"
-    assert display.headline == "Active"
-    assert display.heuristic_active is True
+    assert display.headline == "Inactive"
     assert display.has_signal is True
 
 
@@ -378,7 +377,6 @@ def test_stale_progress_source_is_inactive():
     assert display.signal_tier == "transcript_progress"
     assert display.headline == "Inactive"
     assert display.phase_label == "Recent"
-    assert display.heuristic_active is False
     assert display.is_idle is True
     assert display.activity_recency == "stale"
 
@@ -514,8 +512,8 @@ def test_display_does_not_rederive_signal_tier_from_runtime_source():
             signal_tier="none",
             runtime_source="progress",
             status="active",
-            confidence="inferred",
-            display_phase="Recent progress",
+            confidence="stale",
+            display_phase="Recent",
         ),
         capabilities=_capabilities(managed=False),
         ended_at=None,
@@ -702,7 +700,6 @@ def test_managed_stale_needs_user_without_presence_is_not_actionable():
     assert display.state is None
     assert display.phase_label == "Disconnected"
     assert display.headline == "Not connected"
-    assert display.heuristic_active is False
     assert display.needs_attention is False
     assert display.tone == "inactive"
 
@@ -727,7 +724,6 @@ def test_unmanaged_stale_needs_user_phase_without_presence_is_recent():
     assert display.state is None
     assert display.phase_label == "Recent"
     assert display.headline == "Inactive"
-    assert display.heuristic_active is False
     assert display.needs_attention is False
 
 
@@ -824,24 +820,22 @@ def test_host_expired_closure_suppresses_stale_attention_copy_without_process_go
         binding_terminal_reason="host_expired",
     )
 
-    assert display.lifecycle == "closed"
+    assert display.lifecycle == "open"
     assert display.host_state == "offline"
-    assert display.terminal_reason == "host_expired"
-    assert display.state is None
+    assert display.terminal_reason is None
+    assert display.state == "needs_user"
     assert display.needs_attention is False
     assert display.is_idle is True
 
 
 def test_three_axis_fields_ended_at_without_terminal_stays_open():
-    # Phase 1 contract: ended_at alone no longer implies closure. Phase 2
-    # three-axis projection must agree.
     display = build_session_runtime_display(
         runtime_view=_runtime_view(
             signal_tier="transcript_progress",
             runtime_source="progress",
             status="active",
-            confidence="inferred",
-            display_phase="Recent progress",
+            confidence="stale",
+            display_phase="Recent",
         ),
         capabilities=_capabilities(),
         ended_at=datetime(2026, 4, 26, 11, 30, tzinfo=timezone.utc),

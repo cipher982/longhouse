@@ -17,15 +17,8 @@ export interface PresenceBadgeProps {
   animateCompact?: boolean;
   className?: string;
   /**
-   * heuristicActive=true — when state is null, show a dim pulsing green dot
-   * with label "Recent progress". Weaker signal than a real presence state but
-   * still shows that this session appears active from recent progress alone.
-   */
-  heuristicActive?: boolean;
-  /**
-   * showUnknown=true — when state is null and heuristicActive is false,
-   * show a dim gray dot with label "Unknown" instead of rendering nothing.
-   * Use this for active sessions that have never emitted a presence signal.
+   * showUnknown=true — when state is null, show a dim gray dot with label
+   * "Unknown" instead of rendering nothing.
    */
   showUnknown?: boolean;
 }
@@ -242,75 +235,31 @@ export function PresenceBadge({
   compact = false,
   animateCompact = false,
   className,
-  heuristicActive = false,
   showUnknown = false,
 }: PresenceBadgeProps) {
   const normalizedState = normalizePresenceState(state);
   const hasUnknownState = state != null && normalizedState == null;
 
-  // null/no signal (or unsupported state) — fall back to heuristic active or unknown indicator
+  // null/no signal (or unsupported state) — render only an explicit unknown indicator.
   if (normalizedState === null) {
-    if (!heuristicActive || hasUnknownState) {
-      if (!showUnknown && !hasUnknownState) return null;
+    if (!showUnknown && !hasUnknownState) return null;
 
-      const unknownLabel = hasUnknownState ? `Unknown (${state})` : "Unknown";
+    const unknownLabel = hasUnknownState ? `Unknown (${state})` : "Unknown";
 
-      // Unknown state: dim gray dot — session appears active but has never emitted signals
-      const unknownDotStyle: React.CSSProperties = {
-        display: "inline-block",
-        width: compact ? 8 : 10,
-        height: compact ? 8 : 10,
-        borderRadius: "50%",
-        flexShrink: 0,
-        background: "var(--text-tertiary, #6b7280)",
-        opacity: 0.5,
-      };
-
-      if (compact) {
-        return (
-          <span className={className} title={unknownLabel} style={{ display: "inline-flex", alignItems: "center" }}>
-            <span style={unknownDotStyle} />
-          </span>
-        );
-      }
-
-      return (
-        <span
-          className={className}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-            fontSize: 12,
-            fontFamily: "var(--font-mono, 'JetBrains Mono', 'Fira Code', monospace)",
-            userSelect: "none",
-          }}
-        >
-          <span style={unknownDotStyle} />
-          <span style={{ color: "var(--text-tertiary, #6b7280)", fontWeight: 400 }}>{unknownLabel}</span>
-        </span>
-      );
-    }
-
-    // Steady muted dot — recent progress is weaker than a real live signal.
-    const heuristicDotStyle: React.CSSProperties = {
+    const unknownDotStyle: React.CSSProperties = {
       display: "inline-block",
       width: compact ? 8 : 10,
       height: compact ? 8 : 10,
       borderRadius: "50%",
       flexShrink: 0,
-      background: "radial-gradient(circle, #94a3b8 35%, #64748b 100%)",
-      opacity: 0.72,
+      background: "var(--text-tertiary, #6b7280)",
+      opacity: 0.5,
     };
 
     if (compact) {
       return (
-        <span
-          className={className}
-          title="Recent progress"
-          style={{ display: "inline-flex", alignItems: "center" }}
-        >
-          <span style={heuristicDotStyle} />
+        <span className={className} title={unknownLabel} style={{ display: "inline-flex", alignItems: "center" }}>
+          <span style={unknownDotStyle} />
         </span>
       );
     }
@@ -327,8 +276,8 @@ export function PresenceBadge({
           userSelect: "none",
         }}
       >
-        <span style={heuristicDotStyle} />
-        <span style={{ color: "#4ade80", fontWeight: 400, opacity: 0.8 }}>Recent progress</span>
+        <span style={unknownDotStyle} />
+        <span style={{ color: "var(--text-tertiary, #6b7280)", fontWeight: 400 }}>{unknownLabel}</span>
       </span>
     );
   }

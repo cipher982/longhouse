@@ -120,7 +120,6 @@ def build_session_runtime_display_response(
         needs_attention=display.needs_attention,
         is_idle=display.is_idle,
         is_stalled=display.is_stalled,
-        heuristic_active=display.heuristic_active,
         is_managed_local_truth=display.is_managed_local_truth,
         has_signal=display.has_signal,
         control_path=display.control_path,
@@ -350,7 +349,7 @@ class SessionCapabilitiesResponse(BaseModel):
 
 
 class SessionRuntimeDisplayResponse(BaseModel):
-    truth_tier: str = Field(..., description="Runtime truth tier: none|stale|inferred|fresh|managed-local")
+    truth_tier: str = Field(..., description="Runtime truth tier: none|stale|fresh|managed-local")
     signal_tier: str = Field(
         "none",
         description="Strongest source signal tier: managed_phase|unmanaged_binding|transcript_progress|none",
@@ -366,10 +365,8 @@ class SessionRuntimeDisplayResponse(BaseModel):
     needs_attention: bool = Field(False, description="True when the user should respond or approve")
     is_idle: bool = Field(False, description="True when the runtime is ready for the next prompt")
     is_stalled: bool = Field(False, description="True when a managed live phase has gone stale without an active tool")
-    heuristic_active: bool = Field(False, description="True when activity is inferred from recent progress")
     is_managed_local_truth: bool = Field(False, description="True when runtime truth is from a managed-local control path")
     has_signal: bool = Field(False, description="True when clients should render runtime state")
-    # Phase 2 of session-liveness-honesty: three orthogonal axes.
     control_path: str = Field(
         "unmanaged",
         description="Does Longhouse own a control path? 'managed' or 'unmanaged'",
@@ -492,7 +489,7 @@ class SessionResponse(UTCBaseModel):
     last_live_at: Optional[datetime] = Field(None, description="Most recent live-signal timestamp")
     display_phase: Optional[str] = Field(None, description="User-facing runtime phase label")
     active_tool: Optional[str] = Field(None, description="Active tool label for runtime display")
-    confidence: Optional[str] = Field(None, description="Runtime confidence: live|inferred|stale")
+    confidence: Optional[str] = Field(None, description="Runtime confidence: live|stale")
     summary: Optional[str] = Field(None, description="Session summary")
     summary_title: Optional[str] = Field(None, description="Short session title")
     first_user_message: Optional[str] = Field(None, description="First user message (truncated)")
@@ -629,7 +626,7 @@ class ActiveSessionResponse(UTCBaseModel):
     last_live_at: Optional[datetime] = Field(None, description="Most recent live-signal timestamp")
     display_phase: Optional[str] = Field(None, description="User-facing runtime phase label")
     active_tool: Optional[str] = Field(None, description="Active tool label for runtime display")
-    confidence: Optional[str] = Field(None, description="Runtime confidence: live|inferred|stale")
+    confidence: Optional[str] = Field(None, description="Runtime confidence: live|stale")
     user_state: str = Field("active", description="User classification: active|parked|snoozed|archived")
     home_label: Optional[str] = Field(None, description="User-facing home label, e.g. On this Mac|Hosted|Moved to cloud")
     control: Optional[SessionControlResponse] = Field(None, description="Host-control and managed-launch debugging detail")
@@ -989,9 +986,6 @@ def build_session_response(
     thread_head_session_id, thread_continuation_count = get_thread_meta(store, session, cache)
     include_runtime = should_include_runtime_view(session=session, runtime_view=runtime_overlay)
     capability_flags = build_session_capabilities(session)
-    # Phase 5c/6: pass machine-agent binding overlay through to the
-    # display builder so host_state reflects real heartbeat freshness
-    # and lifecycle=closed can promote on confirmed process-gone.
     binding_host_state = None
     binding_terminal_reason = None
     if binding_overlay is not None:

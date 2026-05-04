@@ -228,7 +228,7 @@ def supports_host_reattach(session: AgentSession | None) -> bool:
 
 
 def build_session_capabilities(session: AgentSession | None) -> SessionCapabilityFlags:
-    execution_home = resolve_execution_home(session) if session is not None else SessionExecutionHome.LEGACY
+    execution_home = resolve_execution_home(session) if session is not None else SessionExecutionHome.UNMANAGED_LOCAL
     managed_transport = resolve_managed_transport(session)
     live_control_available = supports_live_control(session)
     can_steer = live_control_available and managed_transport == ManagedSessionTransport.CODEX_APP_SERVER

@@ -65,15 +65,13 @@ function shouldRefreshWorkspaceSession(
     return false;
   }
 
-  // Phase 3 of session-liveness-honesty: lifecycle==='closed' is the
-  // ground-truth closure signal. Older payloads fall back to terminal_state.
-  // Keep polling while the session is open, or when there's live/inferred
-  // activity even on a closed card (rare, but tolerated).
+  // lifecycle==='closed' is the ground-truth closure signal. Keep polling
+  // while the session is open, or when a live/attention signal is still present.
   const runtime = resolveSessionRuntimeState(session);
   if (!isSessionClosed(session)) {
     return true;
   }
-  return runtime.isLive || runtime.needsAttention || runtime.heuristicActive;
+  return runtime.isLive || runtime.needsAttention;
 }
 
 export function useSessionWorkspace(

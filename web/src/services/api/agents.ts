@@ -70,7 +70,7 @@ export interface AgentSession {
 }
 
 export interface SessionRuntimeDisplay {
-  truth_tier: "none" | "stale" | "inferred" | "fresh" | "managed-local" | (string & {});
+  truth_tier: "none" | "stale" | "fresh" | "managed-local" | (string & {});
   signal_tier?: "managed_phase" | "unmanaged_binding" | "transcript_progress" | "none" | (string & {});
   state: PresenceState | null;
   tone:
@@ -80,7 +80,7 @@ export interface SessionRuntimeDisplay {
     | "blocked"
     | "stalled"
     | "idle"
-    | "inferred"
+    | "active"
     | (string & {});
   headline: string;
   detail: string | null;
@@ -91,11 +91,8 @@ export interface SessionRuntimeDisplay {
   needs_attention: boolean;
   is_idle: boolean;
   is_stalled?: boolean;
-  heuristic_active: boolean;
   is_managed_local_truth: boolean;
   has_signal: boolean;
-  // Phase 2/3 of session-liveness-honesty: three orthogonal axes.
-  // Older payloads may omit these — treat as optional for forward compat.
   control_path?: "managed" | "unmanaged" | (string & {});
   activity_recency?: "live" | "recent" | "stale" | "none" | (string & {});
   lifecycle?: "open" | "closed" | "unknown" | (string & {});
@@ -152,7 +149,7 @@ export interface SessionLivenessFacts {
 
 export interface TimelineBadgePresentation {
   label: string;
-  tone: "neutral" | "inactive" | "active" | "thinking" | "running" | "blocked" | "stalled" | "idle" | "inferred" | "closed" | (string & {});
+  tone: "neutral" | "inactive" | "active" | "thinking" | "running" | "blocked" | "stalled" | "idle" | "closed" | (string & {});
 }
 
 export interface TimelineStatusPresentation extends TimelineBadgePresentation {
@@ -162,7 +159,7 @@ export interface TimelineStatusPresentation extends TimelineBadgePresentation {
 export interface TimelineCardPresentation {
   ownership: TimelineBadgePresentation;
   status?: TimelineStatusPresentation | null;
-  border_tone: "inactive" | "active" | "thinking" | "running" | "blocked" | "stalled" | "idle" | "inferred" | "closed" | (string & {});
+  border_tone: "inactive" | "active" | "thinking" | "running" | "blocked" | "stalled" | "idle" | "closed" | (string & {});
 }
 
 export interface SessionControl {
@@ -204,9 +201,9 @@ export interface TimelineSessionsListResponse {
   sessions: TimelineSessionCard[];
   total: number;
   has_real_sessions: boolean;
-  compatibility_mode?: "query_grouped";
-  compatibility_has_more?: boolean;
-  compatibility_source_count?: number;
+  query_grouping_mode?: "grouped_results";
+  query_grouping_has_more?: boolean;
+  query_grouping_source_count?: number;
 }
 
 export interface AgentSessionThreadResponse {
@@ -330,7 +327,7 @@ export type PresenceState =
 export type UserStateAction = "park" | "snooze" | "archive" | "resume";
 export type SessionLoopMode = "assist" | "autopilot";
 export type SessionExecutionHome =
-  | "legacy"
+  | "unmanaged_local"
   | "managed_local"
   | "managed_hosted"
   | "cloud_takeover";
@@ -427,7 +424,7 @@ export function getTimelineCardAnchor(
   return card.timeline_anchor_at || getTimelineSessionAnchor(card.head);
 }
 
-function buildCompatibilityTimelineCards(sessions: AgentSession[]): TimelineSessionCard[] {
+function buildGroupedQueryTimelineCards(sessions: AgentSession[]): TimelineSessionCard[] {
   const cardsByThread = new Map<string, TimelineSessionCard>();
   const orderedThreadIds: string[] = [];
 
@@ -514,18 +511,18 @@ export async function fetchAgentSessions(
   const queryString = params.toString();
   const path = `${TIMELINE_SESSIONS_PREFIX}${queryString ? `?${queryString}` : ""}`;
 
-  const compatibilityMode = !!filters.query || (filters.mode != null && filters.mode !== "lexical");
-  if (compatibilityMode) {
+  const groupedQueryMode = !!filters.query || (filters.mode != null && filters.mode !== "lexical");
+  if (groupedQueryMode) {
     // Query-driven search still comes back as raw session hits today; collapse
     // those client-side until thread-aware query paging/ranking is designed cleanly.
     const rawResponse = await request<AgentSessionsListResponse>(path, { method: "GET" });
     return {
-      sessions: buildCompatibilityTimelineCards(rawResponse.sessions),
+      sessions: buildGroupedQueryTimelineCards(rawResponse.sessions),
       total: rawResponse.total,
       has_real_sessions: rawResponse.has_real_sessions,
-      compatibility_mode: "query_grouped",
-      compatibility_has_more: (filters.offset || 0) + rawResponse.sessions.length < rawResponse.total,
-      compatibility_source_count: rawResponse.sessions.length,
+      query_grouping_mode: "grouped_results",
+      query_grouping_has_more: (filters.offset || 0) + rawResponse.sessions.length < rawResponse.total,
+      query_grouping_source_count: rawResponse.sessions.length,
     };
   }
 

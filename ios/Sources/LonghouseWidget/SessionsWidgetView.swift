@@ -184,7 +184,6 @@ private func widgetRuntimeColor(_ session: SessionSummary) -> Color {
     switch session.runtimeTone {
     case "running": return .green
     case "thinking", "blocked", "stalled": return .orange
-    case "inferred": return .blue
     default: return .secondary
     }
 }

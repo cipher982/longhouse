@@ -41,7 +41,7 @@ def _make_session(**overrides):
     values = {
         "id": uuid4(),
         "provider": "claude",
-        "execution_home": "legacy",
+        "execution_home": "unmanaged_local",
         "continuation_kind": None,
         "origin_label": None,
         "environment": "development",

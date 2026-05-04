@@ -612,16 +612,24 @@ def _migrate_agents_columns(engine: Engine) -> None:
             if "execution_home" not in columns:
                 conn.execute(
                     text(
-                        f"ALTER TABLE sessions ADD COLUMN execution_home VARCHAR(32) DEFAULT '{SessionExecutionHome.LEGACY.value}' NOT NULL"
+                        f"ALTER TABLE sessions ADD COLUMN execution_home VARCHAR(32) DEFAULT '{SessionExecutionHome.UNMANAGED_LOCAL.value}' NOT NULL"
                     )
                 )
-            conn.execute(text(f"UPDATE sessions SET execution_home = '{SessionExecutionHome.LEGACY.value}' WHERE execution_home IS NULL"))
             conn.execute(
                 text(
-                    """
+                    f"""
                     UPDATE sessions
-                    SET execution_home = 'legacy'
-                    WHERE execution_home NOT IN ('legacy', 'managed_local', 'managed_hosted', 'cloud_takeover')
+                    SET execution_home = '{SessionExecutionHome.UNMANAGED_LOCAL.value}'
+                    WHERE execution_home IS NULL OR execution_home = 'legacy'
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    f"""
+                    UPDATE sessions
+                    SET execution_home = '{SessionExecutionHome.UNMANAGED_LOCAL.value}'
+                    WHERE execution_home NOT IN ('unmanaged_local', 'managed_local', 'managed_hosted', 'cloud_takeover')
                     """
                 )
             )

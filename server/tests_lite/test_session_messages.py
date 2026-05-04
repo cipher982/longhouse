@@ -59,7 +59,7 @@ def _seed_session(
     db,
     *,
     provider: str = "claude",
-    execution_home: str = "legacy",
+    execution_home: str = "unmanaged_local",
     managed_transport: str | None = None,
     source_runner_id: int | None = None,
     source_runner_name: str | None = None,
@@ -162,7 +162,7 @@ def test_create_message_delivers_immediately_for_safe_managed_local(monkeypatch,
     send_calls: list[dict[str, object]] = []
 
     with session_local() as db:
-        from_session = _seed_session(db, execution_home="legacy")
+        from_session = _seed_session(db, execution_home="unmanaged_local")
         to_session = _seed_session(
             db,
             execution_home="managed_local",
@@ -227,7 +227,7 @@ def test_create_message_queues_when_target_is_running(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
-        from_session = _seed_session(db, execution_home="legacy")
+        from_session = _seed_session(db, execution_home="unmanaged_local")
         to_session = _seed_session(
             db,
             execution_home="managed_local",
@@ -271,7 +271,7 @@ def test_create_message_uses_runtime_state_when_presence_missing(monkeypatch, tm
     send_calls: list[dict[str, object]] = []
 
     with session_local() as db:
-        from_session = _seed_session(db, execution_home="legacy")
+        from_session = _seed_session(db, execution_home="unmanaged_local")
         to_session = _seed_session(
             db,
             provider="codex",
@@ -329,7 +329,7 @@ def test_presence_safe_transition_delivers_oldest_queued_message(monkeypatch, tm
     send_calls: list[str] = []
 
     with session_local() as db:
-        from_session = _seed_session(db, execution_home="legacy")
+        from_session = _seed_session(db, execution_home="unmanaged_local")
         to_session = _seed_session(
             db,
             execution_home="managed_local",
@@ -392,7 +392,7 @@ def test_runtime_safe_transition_delivers_queued_message_without_presence(monkey
     send_calls: list[str] = []
 
     with session_local() as db:
-        from_session = _seed_session(db, execution_home="legacy")
+        from_session = _seed_session(db, execution_home="unmanaged_local")
         to_session = _seed_session(
             db,
             provider="codex",
@@ -467,7 +467,7 @@ def test_presence_safe_transition_drains_multiple_queued_messages(monkeypatch, t
     send_calls: list[str] = []
 
     with session_local() as db:
-        from_session = _seed_session(db, execution_home="legacy")
+        from_session = _seed_session(db, execution_home="unmanaged_local")
         to_session = _seed_session(
             db,
             execution_home="managed_local",
@@ -543,7 +543,7 @@ def test_presence_safe_transition_stops_drain_when_session_leaves_safe_boundary(
     send_calls: list[str] = []
 
     with session_local() as db:
-        from_session = _seed_session(db, execution_home="legacy")
+        from_session = _seed_session(db, execution_home="unmanaged_local")
         to_session = _seed_session(
             db,
             execution_home="managed_local",
@@ -613,7 +613,7 @@ def test_presence_stale_safe_payload_does_not_deliver_when_canonical_state_is_bu
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
-        from_session = _seed_session(db, execution_home="legacy")
+        from_session = _seed_session(db, execution_home="unmanaged_local")
         to_session = _seed_session(
             db,
             execution_home="managed_local",
@@ -685,8 +685,8 @@ def test_create_message_stored_only_for_unmanaged_target(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
-        from_session = _seed_session(db, execution_home="legacy")
-        to_session = _seed_session(db, execution_home="legacy", device_id="shipper-cube", device_name="cube")
+        from_session = _seed_session(db, execution_home="unmanaged_local")
+        to_session = _seed_session(db, execution_home="unmanaged_local", device_id="shipper-cube", device_name="cube")
 
     async def fail_if_called(**_kwargs):
         raise AssertionError("send_text_to_managed_local_session should not be called for unmanaged sessions")
@@ -719,8 +719,8 @@ def test_list_messages_returns_inbound_rows_without_mutation(tmp_path):
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
-        from_session = _seed_session(db, execution_home="legacy")
-        to_session = _seed_session(db, execution_home="legacy", device_id="shipper-cube", device_name="cube")
+        from_session = _seed_session(db, execution_home="unmanaged_local")
+        to_session = _seed_session(db, execution_home="unmanaged_local", device_id="shipper-cube", device_name="cube")
         db.add(
             SessionMessage(
                 from_session_id=from_session.id,
@@ -751,8 +751,8 @@ def test_create_message_uses_current_session_header_when_body_omitted(tmp_path):
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
-        from_session = _seed_session(db, execution_home="legacy")
-        to_session = _seed_session(db, execution_home="legacy", device_id="shipper-cube", device_name="cube")
+        from_session = _seed_session(db, execution_home="unmanaged_local")
+        to_session = _seed_session(db, execution_home="unmanaged_local", device_id="shipper-cube", device_name="cube")
 
     client, api_app_ref = _make_client(session_local)
     try:
@@ -776,9 +776,9 @@ def test_create_message_rejects_header_body_mismatch(tmp_path):
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
-        from_session = _seed_session(db, execution_home="legacy")
-        other_session = _seed_session(db, execution_home="legacy")
-        to_session = _seed_session(db, execution_home="legacy", device_id="shipper-cube", device_name="cube")
+        from_session = _seed_session(db, execution_home="unmanaged_local")
+        other_session = _seed_session(db, execution_home="unmanaged_local")
+        to_session = _seed_session(db, execution_home="unmanaged_local", device_id="shipper-cube", device_name="cube")
 
     client, api_app_ref = _make_client(session_local)
     try:
@@ -801,8 +801,8 @@ def test_list_messages_rejects_device_session_mismatch(tmp_path):
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
-        from_session = _seed_session(db, execution_home="legacy")
-        to_session = _seed_session(db, execution_home="legacy", device_id="shipper-cube", device_name="cube")
+        from_session = _seed_session(db, execution_home="unmanaged_local")
+        to_session = _seed_session(db, execution_home="unmanaged_local", device_id="shipper-cube", device_name="cube")
         db.add(
             SessionMessage(
                 from_session_id=from_session.id,
@@ -826,8 +826,8 @@ def test_acknowledge_message_sets_acknowledged_at_and_filters_unacknowledged(tmp
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
-        from_session = _seed_session(db, execution_home="legacy")
-        to_session = _seed_session(db, execution_home="legacy", device_id="shipper-cube", device_name="cube")
+        from_session = _seed_session(db, execution_home="unmanaged_local")
+        to_session = _seed_session(db, execution_home="unmanaged_local", device_id="shipper-cube", device_name="cube")
         db.add(
             SessionMessage(
                 from_session_id=from_session.id,
@@ -864,7 +864,7 @@ def test_acknowledge_message_rejects_queued_delivery(tmp_path):
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
-        from_session = _seed_session(db, execution_home="legacy")
+        from_session = _seed_session(db, execution_home="unmanaged_local")
         to_session = _seed_session(db, execution_home="managed_local", device_id="shipper-cube", device_name="cube")
         db.add(
             SessionMessage(

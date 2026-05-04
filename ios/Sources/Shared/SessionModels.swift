@@ -288,7 +288,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         if runtimeFacts != nil { return false }
         if isClosed { return false }
         if let runtimeDisplay { return runtimeDisplay.isExecuting }
-        return presenceState == "thinking" || presenceState == "running" || status == "working" || status == "active"
+        return presenceState == "thinking" || presenceState == "running"
     }
     var isIdle: Bool {
         if runtimeFacts != nil { return false }
@@ -305,9 +305,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         case "thinking": return "thinking"
         case "needs_user", "idle": return "idle"
         case "blocked": return "blocked"
-        default:
-            if status == "working" || status == "active" { return "inferred" }
-            return "inactive"
+        default: return "inactive"
         }
     }
     var attentionLabel: String { isBlocked ? "Needs permission" : "Ready" }
@@ -381,12 +379,9 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         case "idle":
             return "Idle"
         default:
-            // Phase 3 of session-liveness-honesty: prefer backend lifecycle
-            // when available; fall back to status for older payloads only.
             let lifecycle = runtimeDisplay?.lifecycle
             if lifecycle == "closed" { return "Closed" }
             if lifecycle == nil && status == "completed" { return "Closed" }
-            if status == "working" || status == "active" { return "Recent progress" }
             return "Recent"
         }
     }
@@ -430,7 +425,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
             default:
                 break
             }
-            if isExecuting || needsAttention || runtimeDisplay?.heuristicActive == true {
+            if isExecuting || needsAttention {
                 return "Active"
             }
             if runtimeDisplay?.hostState == "online" {
@@ -439,7 +434,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
             return "Unknown"
         }
 
-        if isExecuting || needsAttention || runtimeDisplay?.heuristicActive == true {
+        if isExecuting || needsAttention {
             return "Active"
         }
         if isIdle {
@@ -612,11 +607,8 @@ struct SessionRuntimeDisplay: Codable, Hashable, Sendable {
     let isExecuting: Bool
     let needsAttention: Bool
     let isIdle: Bool
-    let heuristicActive: Bool
     let isManagedLocalTruth: Bool
     let hasSignal: Bool
-    // Phase 2/3 of session-liveness-honesty: three orthogonal axes.
-    // Optional so older backend payloads still decode cleanly.
     let controlPath: String?
     let activityRecency: String?
     let lifecycle: String?
@@ -799,7 +791,6 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         case "needs_user": return "idle"
         case "blocked": return "blocked"
         case "idle", "completed": return "idle"
-        case "working", "active": return "inferred"
         default: return "inactive"
         }
     }
