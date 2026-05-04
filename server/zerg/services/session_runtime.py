@@ -187,9 +187,7 @@ def _display_phase_for_state(
 ) -> str:
     if terminal_state is not None or phase == "finished" or status == "completed":
         return "Completed"
-    if confidence == "stale" and phase in LIVE_EXECUTION_PHASES:
-        return "Recent"
-    if confidence == "stale" and phase in ATTENTION_PHASES:
+    if confidence == "stale" and phase in KNOWN_PHASES:
         return "Recent"
     if phase == "running":
         return f"Running {active_tool}" if active_tool else "Running"
@@ -317,10 +315,12 @@ def build_fallback_runtime_view(
     if explicit_terminal is not None:
         status = "completed"
         runtime_phase = "finished"
+        display_phase_input = runtime_phase
         terminal_state: str | None = explicit_terminal
     else:
         status = "idle"
-        runtime_phase = "idle"
+        runtime_phase = None
+        display_phase_input = "idle"
         terminal_state = None
 
     return SessionRuntimeView(
@@ -337,7 +337,7 @@ def build_fallback_runtime_view(
         presence_updated_at=None,
         last_live_at=last_live_at,
         display_phase=_display_phase_for_state(
-            phase=runtime_phase,
+            phase=display_phase_input,
             active_tool=None,
             confidence=confidence or "stale",
             terminal_state=terminal_state,

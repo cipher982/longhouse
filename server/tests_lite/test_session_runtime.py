@@ -1819,7 +1819,7 @@ def test_progress_signal_after_stale_phase_signal_does_not_revive_phase_truth(tm
 
         assert state.phase == "running"
         assert state.phase_source == "semantic"
-        assert view.runtime_phase == "running"
+        assert view.runtime_phase is None
         assert view.presence_state is None
         assert view.signal_tier == "phase_signal"
         assert view.status == "idle"
@@ -1874,11 +1874,11 @@ def test_needs_user_freshness_is_not_extended_by_progress(tmp_path):
         assert state.phase == "needs_user"
         assert state.phase_source == "semantic"
         assert state.freshness_expires_at == (now - timedelta(minutes=10)).replace(tzinfo=None)
-        assert view.runtime_phase == "needs_user"
+        assert view.runtime_phase is None
         assert view.presence_state is None
         assert view.signal_tier == "phase_signal"
         assert view.status == "idle"
-        assert view.display_phase == "Ready"
+        assert view.display_phase == "Recent"
         assert view.confidence == "stale"
 
     engine.dispose()
@@ -1916,10 +1916,10 @@ def test_runtime_view_hides_stale_attention_phase(tmp_path):
         state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
         view = build_runtime_view(state=state, session=session, now=now)
 
-        assert view.runtime_phase == "needs_user"
+        assert view.runtime_phase is None
         assert view.status == "idle"
         assert view.presence_state is None
-        assert view.display_phase == "Ready"
+        assert view.display_phase == "Recent"
         assert view.confidence == "stale"
 
     engine.dispose()
