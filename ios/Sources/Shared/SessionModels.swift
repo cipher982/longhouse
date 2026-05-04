@@ -142,7 +142,7 @@ func sessionFactStatus(_ facts: SessionLivenessFacts?) -> SessionFactStatus? {
     if facts.lifecycle.state == "closed" {
         return SessionFactStatus(
             label: "Closed",
-            tone: "inactive",
+            tone: "closed",
             seenAt: facts.lifecycle.observedAt ?? facts.phase.observedAt ?? facts.activity.lastTranscriptAt,
             seenAtPrefix: "Observed"
         )
@@ -266,8 +266,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     }
 
     var isClosed: Bool {
-        if runtimeFacts?.lifecycle.state == "closed" { return true }
-        if runtimeFacts?.lifecycle.state == "open" { return false }
+        if let runtimeFacts { return runtimeFacts.lifecycle.state == "closed" }
         if runtimeDisplay?.lifecycle == "closed" { return true }
         if runtimeDisplay?.lifecycle == nil && status == "completed" { return true }
         return false

@@ -525,8 +525,8 @@ describe("resolveSessionRuntimeState", () => {
     expect(runtime.heuristicActive).toBe(false);
     expect(runtime.isStalled).toBe(false);
     expect(runtime.isIdle).toBe(true);
-    expect(runtime.displayPhase).toBe("Completed");
-    expect(runtime.tone).toBe("inactive");
+    expect(runtime.displayPhase).toBe("Closed");
+    expect(runtime.tone).toBe("closed");
     expect(resolveSessionStatusLabel(runtime)).toBe("Closed");
     expect(getRuntimeOutcomeLabel(runtime)).toBe("Closed");
     expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
@@ -691,6 +691,7 @@ describe("resolveSessionRuntimeState", () => {
     );
 
     expect(resolveSessionStatusLabel(runtime)).toBe("Closed");
+    expect(runtime.tone).toBe("closed");
     expect(getRuntimeOutcomeLabel(runtime)).toBe("Closed");
     expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
       headline: "Closed",
@@ -698,7 +699,7 @@ describe("resolveSessionRuntimeState", () => {
     });
   });
 
-  it("lets unknown facts fall through to legacy terminal hints", () => {
+  it("does not promote unknown facts through legacy terminal hints", () => {
     expect(
       isSessionClosed({
         terminal_state: "finished",
@@ -710,6 +711,6 @@ describe("resolveSessionRuntimeState", () => {
           },
         }),
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 });

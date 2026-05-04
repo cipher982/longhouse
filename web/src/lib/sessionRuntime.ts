@@ -7,7 +7,7 @@ import type {
 
 export type KnownPresenceState = "thinking" | "running" | "idle" | "needs_user" | "blocked" | "stalled";
 export type RuntimeTruthTier = "none" | "stale" | "inferred" | "fresh" | "managed-local";
-export type RuntimeTone = "inactive" | "thinking" | "running" | "blocked" | "stalled" | "idle" | "inferred";
+export type RuntimeTone = "inactive" | "thinking" | "running" | "blocked" | "stalled" | "idle" | "inferred" | "closed";
 
 type TimelineRuntimeOverlay = {
   timeline_anchor_at?: string | null;
@@ -39,8 +39,9 @@ export type TimelineRuntimeSession = Pick<
  * Contract:
  * - When `runtime_facts.lifecycle` is open/closed, it is the ground truth.
  *   Backend only emits `closed` on explicit terminal signals.
- * - Unknown facts stay unknown and fall through to older payload hints.
- * - Older payloads can use `runtime_display.lifecycle`.
+ * - Unknown facts stay unknown. Do not promote old display hints into truth
+ *   when a fact payload exists.
+ * - Older payloads without facts can use `runtime_display.lifecycle`.
  * - Older payloads without the axis fall back to `terminal_state`.
  */
 export function isSessionClosed(
@@ -54,6 +55,9 @@ export function isSessionClosed(
     return true;
   }
   if (factsLifecycle === "open") {
+    return false;
+  }
+  if (factsLifecycle != null) {
     return false;
   }
   const lifecycle = session.runtime_display?.lifecycle;
@@ -244,7 +248,7 @@ function resolveSessionFactStatus(facts: SessionLivenessFacts | null): SessionFa
   if (lifecycle === "closed") {
     return {
       label: "Closed",
-      tone: "inactive",
+      tone: "closed",
       seenAt: facts.lifecycle?.observed_at ?? facts.phase?.observed_at ?? facts.activity?.last_transcript_at ?? null,
       seenAtPrefix: "Observed",
     };
@@ -484,53 +488,58 @@ export function resolveSessionRuntimeState(
   const serverDisplay = session.runtime_display ?? null;
   const runtimeFacts = session.runtime_facts ?? null;
   const factStatus = resolveSessionFactStatus(runtimeFacts);
-  const sessionTruthTier = getRuntimeTruthTier(session);
+  const hasFacts = runtimeFacts != null;
+  const sessionTruthTier = hasFacts ? "none" : getRuntimeTruthTier(session);
   const status = session.status ?? null;
-  const isClosed = runtimeFacts?.lifecycle?.state === "closed" || serverDisplay?.lifecycle === "closed";
-  const rawPresenceState = normalizePresenceState(serverDisplay ? serverDisplay.state : session.presence_state ?? null);
+  const isClosed = hasFacts ? runtimeFacts?.lifecycle?.state === "closed" : serverDisplay?.lifecycle === "closed";
+  const rawPresenceState = hasFacts ? null : normalizePresenceState(serverDisplay ? serverDisplay.state : session.presence_state ?? null);
   const presenceState = isClosed ? null : rawPresenceState;
-  const presenceTool =
-    session.active_tool ??
-    session.presence_tool ??
-    null;
+  const presenceTool = hasFacts ? null : (session.active_tool ?? session.presence_tool ?? null);
   const lastLiveAt =
-    session.last_live_at ??
-    session.presence_updated_at ??
-    (presenceState ? session.last_activity_at ?? null : null);
-  const runtimeSource = normalizeRuntimeSource(session.runtime_source ?? null);
-  const confidence = session.confidence ?? null;
-  const truthTier = normalizeRuntimeTruthTier(serverDisplay?.truth_tier) ?? sessionTruthTier;
+    hasFacts
+      ? null
+      : (session.last_live_at ??
+        session.presence_updated_at ??
+        (presenceState ? session.last_activity_at ?? null : null));
+  const runtimeSource = hasFacts ? null : normalizeRuntimeSource(session.runtime_source ?? null);
+  const confidence = hasFacts ? null : (session.confidence ?? null);
+  const truthTier = hasFacts ? "none" : (normalizeRuntimeTruthTier(serverDisplay?.truth_tier) ?? sessionTruthTier);
 
-  const heuristicActive = isClosed
+  const heuristicActive = hasFacts || isClosed
     ? false
     : (serverDisplay?.heuristic_active ?? isProgressFallback({ status, confidence, runtimeSource, presenceState }));
-  const isExecuting = isClosed
+  const isExecuting = hasFacts || isClosed
     ? false
     : (serverDisplay?.is_executing ?? (presenceState === "thinking" || presenceState === "running"));
-  const needsAttention = isClosed
+  const needsAttention = hasFacts || isClosed
     ? false
     : (serverDisplay?.needs_attention ?? (presenceState === "blocked" || presenceState === "stalled"));
 
-  const isLive = isClosed ? false : (serverDisplay?.is_live ?? isExecuting);
+  const isLive = hasFacts || isClosed ? false : (serverDisplay?.is_live ?? isExecuting);
   const isIdle = isClosed
     ? true
+    : hasFacts
+    ? false
     : (serverDisplay?.is_idle ?? (presenceState === "idle" || (!isExecuting && !needsAttention && !heuristicActive && status === "idle")));
-  const isStalled = isClosed ? false : (serverDisplay?.is_stalled ?? presenceState === "stalled");
-  const hasSignal = serverDisplay?.has_signal ?? (truthTier !== "none" || presenceState != null || status != null || lastLiveAt != null);
+  const isStalled = hasFacts || isClosed ? false : (serverDisplay?.is_stalled ?? presenceState === "stalled");
+  const hasSignal = hasFacts
+    ? factStatus != null
+    : (serverDisplay?.has_signal ?? (truthTier !== "none" || presenceState != null || status != null || lastLiveAt != null));
 
   const displayPhase =
-    isClosed
-      ? "Completed"
+    factStatus?.label ??
+    (isClosed
+      ? "Closed"
       : (serverDisplay?.phase_label ??
-        getDisplayPhase(
-          presenceState,
-          presenceTool,
-          status,
-          // Phase 1: do not feed ended_at as a terminal hint. See getDisplayPhase.
-          null,
-          session.display_phase ?? null,
-        ));
-  const tone = isClosed ? "inactive" : (normalizeRuntimeTone(serverDisplay?.tone) ?? getTone(presenceState, { heuristicActive, isIdle }));
+          getDisplayPhase(
+            presenceState,
+            presenceTool,
+            status,
+            // Phase 1: do not feed ended_at as a terminal hint. See getDisplayPhase.
+            null,
+            session.display_phase ?? null,
+          )));
+  const tone = factStatus?.tone ?? (isClosed ? "closed" : (normalizeRuntimeTone(serverDisplay?.tone) ?? getTone(presenceState, { heuristicActive, isIdle })));
 
   return {
     status,
@@ -547,7 +556,7 @@ export function resolveSessionRuntimeState(
     isIdle,
     isStalled,
     heuristicActive,
-    isManagedLocalTruth: serverDisplay?.is_managed_local_truth ?? truthTier === "managed-local",
+    isManagedLocalTruth: hasFacts ? false : (serverDisplay?.is_managed_local_truth ?? truthTier === "managed-local"),
     hasSignal,
     tone,
     runtimeDisplay: serverDisplay,
@@ -577,7 +586,8 @@ function normalizeRuntimeTone(value: string | null | undefined): RuntimeTone | n
     value === "blocked" ||
     value === "stalled" ||
     value === "idle" ||
-    value === "inferred"
+    value === "inferred" ||
+    value === "closed"
   ) {
     return value;
   }

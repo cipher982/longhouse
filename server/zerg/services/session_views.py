@@ -32,7 +32,7 @@ from zerg.services.session_runner_state import managed_runner_host_state
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_runtime import should_include_runtime_view
 from zerg.services.session_runtime_display import build_session_runtime_display
-from zerg.services.session_timeline_card import build_timeline_card_presentation
+from zerg.services.session_runtime_display import compact_runtime_tool_label
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_loop_mode import SessionLoopMode
 from zerg.session_loop_mode import coerce_session_loop_mode
@@ -190,57 +190,100 @@ def build_session_liveness_facts_response(
 
 def build_session_timeline_card_response(
     *,
-    runtime_overlay: SessionRuntimeView | None,
+    runtime_facts: SessionLivenessFactsResponse | None,
     capability_flags,
-    ended_at: datetime | None,
-    last_activity_at: datetime | None,
-    binding_host_state: str | None = None,
-    binding_terminal_reason: str | None = None,
 ) -> TimelineCardPresentationResponse:
-    runtime_display = (
-        build_session_runtime_display(
-            runtime_view=runtime_overlay,
-            capabilities=capability_flags,
-            ended_at=ended_at,
-            binding_host_state=binding_host_state,
-            binding_terminal_reason=binding_terminal_reason,
+    if runtime_facts is not None:
+        control_path = runtime_facts.control_path
+    else:
+        has_managed_control_path = (
+            getattr(capability_flags, "live_control_available", False)
+            or getattr(capability_flags, "host_reattach_available", False)
+            or getattr(capability_flags, "reply_to_live_session_available", False)
         )
-        if runtime_overlay is not None
-        else None
+        control_path = "managed" if has_managed_control_path else "unmanaged"
+    ownership = TimelineBadgePresentationResponse(
+        label="Managed" if control_path == "managed" else "Unmanaged",
+        tone="neutral",
     )
-    managed_fallback = bool(
-        getattr(capability_flags, "live_control_available", False)
-        or getattr(capability_flags, "host_reattach_available", False)
-        or getattr(capability_flags, "reply_to_live_session_available", False)
-    )
-    terminal_reason = None
-    if runtime_overlay is not None and runtime_overlay.terminal_state:
-        terminal_reason = runtime_overlay.terminal_state
-    elif binding_terminal_reason in {"process_gone", "host_expired"}:
-        terminal_reason = binding_terminal_reason
-    card = build_timeline_card_presentation(
-        runtime_display=runtime_display,
-        last_live_at=(runtime_overlay.last_live_at if runtime_overlay is not None else None),
-        last_activity_at=last_activity_at,
-        managed_fallback=managed_fallback,
-        terminal_reason=terminal_reason,
-    )
+    status = _timeline_status_from_liveness_facts(runtime_facts)
     return TimelineCardPresentationResponse(
-        ownership=TimelineBadgePresentationResponse(
-            label=card.ownership.label,
-            tone=card.ownership.tone,
-        ),
-        status=(
-            TimelineStatusPresentationResponse(
-                label=card.status.label,
-                tone=card.status.tone,
-                seen_at=card.status.seen_at,
-            )
-            if card.status is not None
-            else None
-        ),
-        border_tone=card.border_tone,
+        ownership=ownership,
+        status=status,
+        border_tone=status.tone if status is not None else "inactive",
     )
+
+
+def _timeline_status_from_liveness_facts(runtime_facts: SessionLivenessFactsResponse | None) -> TimelineStatusPresentationResponse:
+    if runtime_facts is None:
+        return TimelineStatusPresentationResponse(label="Unknown", tone="inactive", seen_at=None)
+
+    lifecycle = runtime_facts.lifecycle
+    if lifecycle.state == "closed":
+        return TimelineStatusPresentationResponse(
+            label="Closed",
+            tone="closed",
+            seen_at=lifecycle.observed_at or runtime_facts.phase.observed_at or runtime_facts.activity.last_transcript_at,
+        )
+
+    phase = runtime_facts.phase
+    phase_kind = str(phase.kind or "").strip()
+    if phase_kind:
+        return TimelineStatusPresentationResponse(
+            label=f"Observed {_observed_phase_label(phase_kind, phase.tool)}",
+            tone="inactive",
+            seen_at=phase.observed_at,
+        )
+
+    process = runtime_facts.process
+    if process.status == "observed":
+        return TimelineStatusPresentationResponse(
+            label="Process observed",
+            tone="inactive",
+            seen_at=process.observed_at or process.last_seen_at,
+        )
+    if process.status == "not_observed":
+        return TimelineStatusPresentationResponse(
+            label="Process not observed",
+            tone="inactive",
+            seen_at=process.last_seen_at or process.observed_at,
+        )
+
+    host = runtime_facts.host
+    if host.state == "online":
+        return TimelineStatusPresentationResponse(label="Host online", tone="inactive", seen_at=host.last_seen_at)
+    if host.state == "stale":
+        return TimelineStatusPresentationResponse(label="Host last seen", tone="inactive", seen_at=host.last_seen_at)
+    if host.state == "offline":
+        return TimelineStatusPresentationResponse(label="Host offline", tone="inactive", seen_at=host.last_seen_at)
+
+    if runtime_facts.activity.last_transcript_at is not None:
+        return TimelineStatusPresentationResponse(
+            label="Transcript only",
+            tone="inactive",
+            seen_at=runtime_facts.activity.last_transcript_at,
+        )
+
+    return TimelineStatusPresentationResponse(label="Host unverified", tone="inactive", seen_at=None)
+
+
+def _observed_phase_label(kind: str, tool_name: str | None) -> str:
+    phase = "ready" if kind == "needs_user" else kind.replace("_", " ").replace("-", " ")
+    compact_tool = compact_runtime_tool_label(tool_name)
+    if compact_tool and kind in {"running", "blocked"}:
+        return f"{_title_case_words(phase)} {compact_tool}"
+    return _title_case_words(phase)
+
+
+def _title_case_words(value: str) -> str:
+    words = [word for word in value.split() if word]
+    out: list[str] = []
+    for word in words:
+        if len(word) <= 3 and word == word.upper():
+            out.append(word)
+        else:
+            out.append(word[:1].upper() + word[1:])
+    return " ".join(out)
 
 
 def build_session_control_response(
@@ -1040,12 +1083,8 @@ def build_session_response(
         runtime_display=runtime_display,
         runtime_facts=runtime_facts,
         timeline_card=build_session_timeline_card_response(
-            runtime_overlay=runtime_overlay,
+            runtime_facts=runtime_facts,
             capability_flags=capability_flags,
-            ended_at=session.ended_at,
-            last_activity_at=last_activity_at,
-            binding_host_state=binding_host_state,
-            binding_terminal_reason=binding_terminal_reason,
         ),
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
         user_state=session.user_state or "active",

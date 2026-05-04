@@ -845,6 +845,37 @@ struct SessionModelsTests {
                 lifecycleReason: "session_ended"
             )
         )
+        let unknownWithClosedLegacy = SessionSummary(
+            id: "session-unknown-fact",
+            title: "Unknown fact",
+            presenceState: "idle",
+            provider: "codex",
+            project: "zerg",
+            lastActivityAt: "2026-04-25T20:00:00Z",
+            status: "completed",
+            runtimeDisplay: SessionRuntimeDisplay(
+                truthTier: "stale",
+                state: nil,
+                tone: "inactive",
+                headline: "Closed",
+                detail: nil,
+                phaseLabel: "Closed",
+                compactToolLabel: nil,
+                isLive: false,
+                isExecuting: false,
+                needsAttention: false,
+                isIdle: true,
+                heuristicActive: false,
+                isManagedLocalTruth: false,
+                hasSignal: true,
+                controlPath: "unmanaged",
+                activityRecency: "stale",
+                lifecycle: "closed",
+                hostState: "unknown",
+                terminalReason: "process_gone"
+            ),
+            runtimeFacts: runtimeFacts(controlPath: "unmanaged", transcriptAt: "2026-04-25T20:00:00Z")
+        )
 
         #expect(processObserved.managementLabel == "Unmanaged")
         #expect(processObserved.timelineStatusLabel == "Process observed")
@@ -854,8 +885,11 @@ struct SessionModelsTests {
         #expect(hostUnverified.timelineStatusLabel == "Host unverified")
         #expect(closed.isClosed)
         #expect(closed.timelineStatusLabel == "Closed")
+        #expect(closed.timelineStatusTone == "closed")
         #expect(closed.displayPhaseLabel == "Closed")
         #expect(!closed.isExecuting)
+        #expect(!unknownWithClosedLegacy.isClosed)
+        #expect(unknownWithClosedLegacy.timelineStatusLabel == "Transcript only")
     }
 
     @Test
