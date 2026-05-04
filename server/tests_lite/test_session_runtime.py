@@ -354,6 +354,68 @@ def test_runtime_batch_endpoint_is_idempotent(tmp_path):
     engine.dispose()
 
 
+def test_opencode_runtime_events_materialize_live_and_terminal_state(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_opencode_endpoint.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, provider="opencode", started_at=now - timedelta(minutes=20))
+        runtime_key = runtime_key_for_session("opencode", str(session.id))
+
+    for client in _client(SessionLocal):
+        response = client.post(
+            "/agents/runtime/events/batch",
+            json={
+                "events": [
+                    {
+                        "runtime_key": runtime_key,
+                        "session_id": str(session.id),
+                        "provider": "opencode",
+                        "device_id": "work-laptop",
+                        "source": "opencode_event",
+                        "kind": "phase_signal",
+                        "phase": "running",
+                        "tool_name": "bash",
+                        "occurred_at": (now - timedelta(seconds=10)).isoformat(),
+                        "dedupe_key": "opencode-running-1",
+                        "payload": {"opencodeStatus": {"type": "busy"}},
+                    },
+                    {
+                        "runtime_key": runtime_key,
+                        "session_id": str(session.id),
+                        "provider": "opencode",
+                        "device_id": "work-laptop",
+                        "source": "opencode_event",
+                        "kind": "terminal_signal",
+                        "phase": "finished",
+                        "occurred_at": now.isoformat(),
+                        "dedupe_key": "opencode-terminal-1",
+                        "payload": {"terminal_state": "session_ended", "exit_code": 0},
+                    },
+                ]
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json() == {
+            "accepted": 2,
+            "duplicates": 0,
+            "updated_runtime_keys": [runtime_key],
+        }
+
+    with SessionLocal() as db:
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        stored_session = db.query(AgentSession).filter(AgentSession.id == session.id).one()
+        assert state.provider == "opencode"
+        assert state.phase == "finished"
+        assert state.terminal_state == "session_ended"
+        assert state.active_tool is None
+        assert stored_session.ended_at is not None
+        assert stored_session.ended_at.replace(tzinfo=timezone.utc) == now
+
+    engine.dispose()
+
+
 def test_presence_endpoint_mirrors_into_runtime_state(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "runtime_presence_mirror.db")
     now = datetime.now(timezone.utc)
