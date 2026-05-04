@@ -419,7 +419,7 @@ export function buildTimelineCardStressFixture(): {
     last_live_at: "2026-04-15T16:04:00Z",
     runtime_source: "managed_local_transport",
     confidence: "live",
-    display_phase: "Needs you",
+    display_phase: "Ready",
     thread_root_session_id: "thread-mobile-layout",
     thread_head_session_id: "continuation-head",
     thread_continuation_count: 3,

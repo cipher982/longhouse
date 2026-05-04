@@ -935,7 +935,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         case "thread_subscription_failed":
             return "Transcript shipping stalled"
         case "live_control_unavailable":
-            return "Live control unavailable"
+            return "Control path unavailable"
         default:
             return humanizeReason(raw)
         }

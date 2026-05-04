@@ -607,7 +607,7 @@ public struct MenuBarPanelView: View {
         case "degraded":
             let reasons = (session.reasonCodes ?? []).prefix(2).map { HealthSnapshot.humanizeManagedReason($0) }
             if reasons.isEmpty {
-                return "Live control degraded."
+                return "Control path degraded."
             }
             return reasons.joined(separator: " · ")
         case "unknown":

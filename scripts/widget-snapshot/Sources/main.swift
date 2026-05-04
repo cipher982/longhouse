@@ -12,16 +12,15 @@ struct SessionSummary: Identifiable {
     let provider: String?
     let project: String?
     var isBlocked: Bool { presenceState == "blocked" }
-    var isNeedsUser: Bool { presenceState == "needs_user" }
     var isUserActive: Bool { true }
-    var needsAttention: Bool { (isBlocked || isNeedsUser) && isUserActive }
+    var needsAttention: Bool { isBlocked && isUserActive }
     var isExecuting: Bool { presenceState == "thinking" || presenceState == "running" || status == "working" || status == "active" }
     var isIdle: Bool { presenceState == "idle" || status == "idle" }
     var displayPhaseLabel: String {
         switch presenceState {
         case "running": return "Running"
         case "thinking": return "Thinking"
-        case "needs_user": return "Needs you"
+        case "needs_user": return "Ready"
         case "blocked": return "Needs permission"
         case "idle": return "Idle"
         default:
@@ -136,8 +135,8 @@ private func buildWidgetMetric(sessions: [SessionSummary], totalActive: Int) -> 
     if attentionCount > 0 {
         return WidgetMetric(
             count: attentionCount,
-            label: attentionCount == 1 ? "needs you" : "need you",
-            shortLabel: attentionCount == 1 ? "needs you" : "need you",
+            label: attentionCount == 1 ? "needs permission" : "need permission",
+            shortLabel: "permission",
             color: .orange
         )
     }
@@ -151,7 +150,6 @@ private func buildWidgetMetric(sessions: [SessionSummary], totalActive: Int) -> 
 
 private func widgetRuntimeColor(_ session: SessionSummary) -> Color {
     if session.isBlocked { return .orange }
-    if session.isNeedsUser { return .yellow }
     if session.presenceState == "running" { return .green }
     if session.presenceState == "thinking" { return .orange }
     if session.isExecuting { return .orange }

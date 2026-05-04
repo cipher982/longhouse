@@ -1938,7 +1938,7 @@ def _classify_health(
 
     if managed_degraded > 0:
         reasons.append("managed_session_control_degraded")
-        _with_action(actions, "Inspect degraded managed sessions in Longhouse.app before trusting live control")
+        _with_action(actions, "Inspect degraded managed sessions in Longhouse.app before sending input")
 
     if managed_detached > 0:
         reasons.append("managed_session_detached")

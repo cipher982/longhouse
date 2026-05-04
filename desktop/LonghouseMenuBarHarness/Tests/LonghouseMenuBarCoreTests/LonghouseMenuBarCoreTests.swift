@@ -286,7 +286,7 @@ struct LonghouseMenuBarCoreTests {
             severity: "red",
             headline: "Longhouse lost managed session control",
             reasons: ["managed_session_control_degraded"],
-            suggestedActions: ["Inspect degraded managed sessions in Longhouse.app before trusting live control"],
+            suggestedActions: ["Inspect degraded managed sessions in Longhouse.app before sending input"],
             service: nil,
             engineStatus: nil,
             outbox: nil,
