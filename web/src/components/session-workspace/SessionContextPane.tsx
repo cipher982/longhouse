@@ -3,6 +3,7 @@ import type { AgentSession, SessionLoopMode } from "../../services/api/agents";
 import { config } from "../../lib/config";
 import { normalizeExecutionVenueLabel } from "../../lib/sessionExecutionHome";
 import { isSessionClosed } from "../../lib/sessionRuntime";
+import { getBranchLabel } from "../../lib/sessionUtils";
 import {
   formatContinuationStamp,
   formatDuration,
@@ -99,7 +100,8 @@ export function SessionContextPane({
     toolCallLabel,
     durationStr,
   ].join(" \u00b7 ");
-  const metadataMeta = session.git_branch || session.project || null;
+  const branchLabel = getBranchLabel(session.git_branch);
+  const metadataMeta = branchLabel || session.project || null;
 
   return (
     <div className="session-context-pane">
@@ -209,8 +211,8 @@ export function SessionContextPane({
               value={formatFullDate(session.started_at)}
             />
             <MetaRow label="Duration" value={durationStr} />
-            {session.git_branch ? (
-              <MetaRow label="Branch" value={session.git_branch} />
+            {branchLabel ? (
+              <MetaRow label="Branch" value={branchLabel} />
             ) : null}
             {session.cwd ? (
               <MetaRow

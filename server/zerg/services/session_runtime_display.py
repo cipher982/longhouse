@@ -478,14 +478,7 @@ def _derive_signal_tier(
         return "unmanaged_binding"
     tier = (runtime_view.signal_tier or "").strip()
     if tier in {"managed_phase", "transcript_progress", "none"}:
-        if tier != "none":
-            return tier
-        runtime_source = _normalize_source(runtime_view.runtime_source)
-        if runtime_view.confidence == "inferred" or runtime_source == "progress":
-            return "transcript_progress"
-        if runtime_source not in {None, "fallback"}:
-            return "managed_phase"
-        return "none"
+        return tier
     return "none"
 
 

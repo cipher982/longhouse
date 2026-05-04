@@ -1185,7 +1185,7 @@ fn collect_metadata(
     }
     if meta.git_branch.is_none() {
         if let Some(ref branch) = obj.git_branch {
-            meta.git_branch = Some(branch.clone());
+            meta.git_branch = normalize_git_branch(branch);
         }
     }
     if meta.version.is_none() {
@@ -1229,7 +1229,7 @@ fn collect_metadata(
             if let Some(ref git) = payload.git {
                 if meta.git_branch.is_none() {
                     if let Some(ref branch) = git.branch {
-                        meta.git_branch = Some(branch.clone());
+                        meta.git_branch = normalize_git_branch(branch);
                     }
                 }
                 if meta.git_repo.is_none() {
@@ -1258,6 +1258,14 @@ fn collect_metadata(
             _ => {}
         }
     }
+}
+
+fn normalize_git_branch(branch: &str) -> Option<String> {
+    let trimmed = branch.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("HEAD") {
+        return None;
+    }
+    Some(trimmed.to_string())
 }
 
 fn extract_events(
@@ -2108,6 +2116,21 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_user_message_filters_head_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "test-session.jsonl",
+            &[
+                r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:00Z","message":{"content":"Hello world"},"cwd":"/home/user/project","gitBranch":"HEAD"}"#,
+            ],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.metadata.git_branch, None);
+    }
+
+    #[test]
     fn test_parse_assistant_text_and_tool() {
         let dir = tempfile::tempdir().unwrap();
         let path = make_jsonl_file(
@@ -2474,6 +2497,26 @@ mod tests {
         );
         // project derived from cwd basename
         assert_eq!(result.metadata.project.as_deref(), Some("zorb"));
+    }
+
+    #[test]
+    fn test_codex_session_meta_filters_head_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "rollout-2026-01-10T11-00-00-019c638d-ea04-7983-a845-d0b68a77fa62.jsonl",
+            &[
+                r#"{"timestamp":"2026-01-10T11:00:00.000Z","type":"session_meta","payload":{"id":"019c638d-ea04-7983-a845-d0b68a77fa62","cwd":"/Users/test/zorb","cli_version":"0.105.0","git":{"commit_hash":"abc123","branch":"HEAD","repository_url":"git@github.com:org/zorb.git"}}}"#,
+                r#"{"timestamp":"2026-01-10T11:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}}"#,
+            ],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.metadata.git_branch, None);
+        assert_eq!(
+            result.metadata.git_repo.as_deref(),
+            Some("git@github.com:org/zorb.git")
+        );
     }
 
     // -----------------------------------------------------------------------

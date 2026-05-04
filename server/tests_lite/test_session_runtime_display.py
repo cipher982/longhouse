@@ -65,6 +65,7 @@ def test_fallback_idle_has_no_renderable_runtime_signal():
 def test_inferred_progress_has_renderable_runtime_signal():
     display = build_session_runtime_display(
         runtime_view=_runtime_view(
+            signal_tier="transcript_progress",
             runtime_source="progress",
             status="active",
             confidence="inferred",
@@ -84,6 +85,7 @@ def test_inferred_progress_has_renderable_runtime_signal():
 def test_stale_progress_source_is_inactive():
     display = build_session_runtime_display(
         runtime_view=_runtime_view(
+            signal_tier="transcript_progress",
             runtime_phase="running",
             runtime_source="progress",
             status="idle",
@@ -107,6 +109,7 @@ def test_stale_progress_source_is_inactive():
 def test_managed_running_has_renderable_runtime_signal():
     display = build_session_runtime_display(
         runtime_view=_runtime_view(
+            signal_tier="managed_phase",
             runtime_phase="running",
             runtime_source="managed_local_transport",
             status="working",
@@ -189,6 +192,7 @@ def test_three_axis_fields_managed_hosted_without_transport():
 def test_three_axis_fields_managed_live_running():
     display = build_session_runtime_display(
         runtime_view=_runtime_view(
+            signal_tier="managed_phase",
             runtime_phase="running",
             runtime_source="managed_local_transport",
             status="working",
@@ -225,6 +229,22 @@ def test_unmanaged_online_binding_promotes_signal_tier():
     assert display.control_path == "unmanaged"
     assert display.signal_tier == "unmanaged_binding"
     assert display.host_state == "online"
+
+
+def test_display_does_not_rederive_signal_tier_from_runtime_source():
+    display = build_session_runtime_display(
+        runtime_view=_runtime_view(
+            signal_tier="none",
+            runtime_source="progress",
+            status="active",
+            confidence="inferred",
+            display_phase="Recent progress",
+        ),
+        capabilities=_capabilities(managed=False),
+        ended_at=None,
+    )
+
+    assert display.signal_tier == "none"
 
 
 def test_managed_stale_thinking_without_active_tool_is_stalled():
@@ -540,6 +560,7 @@ def test_three_axis_fields_ended_at_without_terminal_stays_open():
     # three-axis projection must agree.
     display = build_session_runtime_display(
         runtime_view=_runtime_view(
+            signal_tier="transcript_progress",
             runtime_source="progress",
             status="active",
             confidence="inferred",
