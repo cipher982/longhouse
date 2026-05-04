@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
+from datetime import timezone
+from typing import Any
 
 from zerg.models.agents import AgentSession
 from zerg.session_execution_home import ManagedSessionTransport
@@ -113,6 +116,69 @@ def project_current_session_capabilities(
     )
     reattach_available = capability_flags.host_reattach_available and lifecycle != "closed" and not currently_live
     can_steer = currently_live and capability_flags.can_steer_active_turn and runtime_state in STEERABLE_RUNTIME_STATES
+
+    return SessionCapabilityFlags(
+        execution_home=capability_flags.execution_home,
+        managed_transport=capability_flags.managed_transport,
+        live_control_available=currently_live,
+        host_reattach_available=reattach_available,
+        reply_to_live_session_available=currently_live,
+        can_queue_next_input=currently_live,
+        can_steer_active_turn=can_steer,
+        home_label=capability_flags.home_label,
+    )
+
+
+def _read_attr(value: Any, name: str, default: Any = None) -> Any:
+    return getattr(value, name, default) if value is not None else default
+
+
+def _normalized_fact(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _phase_is_current(*, phase: Any, now: datetime) -> bool:
+    kind = _normalized_fact(_read_attr(phase, "kind"))
+    if not kind:
+        return False
+    expires_at = _read_attr(phase, "expires_at")
+    if expires_at is None:
+        return False
+    return _utc(expires_at) > _utc(now)
+
+
+def project_current_session_capabilities_from_facts(
+    capability_flags: SessionCapabilityFlags,
+    *,
+    liveness_facts,
+    now: datetime | None = None,
+) -> SessionCapabilityFlags:
+    """Project durable control metadata into current actions from facts only.
+
+    ``liveness_facts`` may be the internal dataclass model or the Pydantic API
+    response model. The projection intentionally avoids display labels such as
+    "recent", "stale", or "Control offline"; it only gates actions on observed
+    host, phase, and lifecycle facts.
+    """
+
+    lifecycle = _read_attr(liveness_facts, "lifecycle")
+    host = _read_attr(liveness_facts, "host")
+    phase = _read_attr(liveness_facts, "phase")
+    lifecycle_state = _normalized_fact(_read_attr(lifecycle, "state"))
+    host_state = _normalized_fact(_read_attr(host, "state"))
+    current_now = now or datetime.now(timezone.utc)
+    phase_current = _phase_is_current(phase=phase, now=current_now)
+
+    currently_live = capability_flags.live_control_available and lifecycle_state == "open" and host_state == "online" and phase_current
+    reattach_available = capability_flags.host_reattach_available and lifecycle_state != "closed" and not currently_live
+    phase_kind = _normalized_fact(_read_attr(phase, "kind"))
+    can_steer = currently_live and capability_flags.can_steer_active_turn and phase_kind in STEERABLE_RUNTIME_STATES
 
     return SessionCapabilityFlags(
         execution_home=capability_flags.execution_home,

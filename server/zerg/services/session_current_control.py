@@ -8,11 +8,11 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import AgentSession
 from zerg.services.session_capabilities import SessionCapabilityFlags
 from zerg.services.session_capabilities import build_session_capabilities
-from zerg.services.session_capabilities import project_current_session_capabilities
+from zerg.services.session_capabilities import project_current_session_capabilities_from_facts
+from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_runner_state import managed_runner_host_state
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
-from zerg.services.session_runtime_display import build_session_runtime_display
 
 
 def current_session_capabilities(db: Session, session: AgentSession) -> SessionCapabilityFlags:
@@ -32,10 +32,10 @@ def current_session_capabilities(db: Session, session: AgentSession) -> SessionC
     binding_host_state = None
     if capability_flags.live_control_available or capability_flags.host_reattach_available:
         binding_host_state = managed_runner_host_state(db, session)
-    runtime_display = build_session_runtime_display(
+    liveness_facts = build_session_liveness_facts(
         runtime_view=runtime_overlay,
         capabilities=capability_flags,
-        ended_at=getattr(session, "ended_at", None),
+        last_activity_at=last_activity_at,
         binding_host_state=binding_host_state,
     )
-    return project_current_session_capabilities(capability_flags, runtime_display=runtime_display)
+    return project_current_session_capabilities_from_facts(capability_flags, liveness_facts=liveness_facts, now=now)
