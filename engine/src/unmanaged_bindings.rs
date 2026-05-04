@@ -16,8 +16,8 @@
 //!      roots via `discovery::discover_all_files`, filtered by mtime.
 //!   2. Enumerate candidate provider-CLI processes with
 //!      `ps -axo pid=,lstart=,command=`. Filter by command basename
-//!      (`claude`, `codex`, `gemini`) plus the stock Node-backed Codex
-//!      launcher shape (`node .../codex` / `node .../codex.js`) — never
+//!      (`claude`, `codex`, `gemini`, `opencode`) plus the stock Node-backed
+//!      launcher shapes (`node .../codex`, `node .../opencode`, etc.) — never
 //!      `longhouse-*` wrappers (those are managed sessions and get their
 //!      own lease surface).
 //!   3. For each candidate pid, ask `lsof -F n -p <pid>` which regular
@@ -185,10 +185,10 @@ fn is_provider_process(command: &str) -> Option<&'static str> {
         return Some(provider);
     }
 
-    // Homebrew/npm Codex commonly appears in `ps` as
-    // `node /opt/homebrew/bin/codex ...`; the provider executable is still
-    // the user's stock Codex launcher, not a Longhouse-owned runtime.
-    if !matches!(basename, "node" | "nodejs") {
+    // Homebrew/npm CLIs can appear in `ps` as `node /opt/homebrew/bin/<cli> ...`;
+    // the provider executable is still the user's stock launcher, not a
+    // Longhouse-owned runtime.
+    if !matches!(basename, "node" | "nodejs" | "bun") {
         return None;
     }
     let script = argv.next().unwrap_or("");
@@ -202,6 +202,7 @@ fn is_provider_process(command: &str) -> Option<&'static str> {
     // Claude and Gemini are not Node-launched on supported installs today.
     match script_basename {
         "codex" | "codex.js" => Some("codex"),
+        "opencode" | "opencode.js" => Some("opencode"),
         _ => None,
     }
 }
@@ -216,6 +217,7 @@ fn provider_from_argv0_basename(basename: &str) -> Option<&'static str> {
         "claude" => Some("claude"),
         "codex" => Some("codex"),
         "gemini" => Some("gemini"),
+        "opencode" => Some("opencode"),
         _ => None,
     }
 }
@@ -468,12 +470,29 @@ mod tests {
             ),
             Some("codex")
         );
+        assert_eq!(
+            is_provider_process("/opt/homebrew/bin/opencode serve --port 41967"),
+            Some("opencode")
+        );
+        assert_eq!(
+            is_provider_process("node /opt/homebrew/bin/opencode serve"),
+            Some("opencode")
+        );
+        assert_eq!(
+            is_provider_process("bun /opt/homebrew/bin/opencode serve"),
+            Some("opencode")
+        );
         assert_eq!(is_provider_process("claude"), Some("claude"));
         assert_eq!(is_provider_process("gemini chat"), Some("gemini"));
         assert_eq!(is_provider_process("longhouse-codex --attach"), None);
+        assert_eq!(is_provider_process("longhouse-opencode serve"), None);
         assert_eq!(is_provider_process("/usr/local/bin/longhouse-claude"), None);
         assert_eq!(
             is_provider_process("node /usr/local/bin/longhouse-codex --attach"),
+            None
+        );
+        assert_eq!(
+            is_provider_process("node /usr/local/bin/longhouse-opencode serve"),
             None
         );
         assert_eq!(is_provider_process("node server.js"), None);

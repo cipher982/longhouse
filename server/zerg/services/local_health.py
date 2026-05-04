@@ -226,13 +226,20 @@ def _collect_provider_clis() -> dict[str, Any]:
         codex_path = shutil.which("codex")
         codex_source = PROVIDER_CLI_SOURCE_PATH if codex_path else PROVIDER_CLI_SOURCE_MISSING
         codex_resolution_error = None if codex_path else "`codex` not found on PATH"
+    opencode_path = shutil.which("opencode")
     return {
         "codex": {
             "path": codex_path,
             "source": codex_source,
             "resolution_error": codex_resolution_error,
             "env_override": env_candidate,
-        }
+        },
+        "opencode": {
+            "path": opencode_path,
+            "source": PROVIDER_CLI_SOURCE_PATH if opencode_path else PROVIDER_CLI_SOURCE_MISSING,
+            "resolution_error": None if opencode_path else "`opencode` not found on PATH",
+            "env_override": None,
+        },
     }
 
 
@@ -1493,11 +1500,27 @@ def _is_codex_cmdline(cmdline: list[str]) -> bool:
     return "/codex/codex" in joined or "codex-darwin" in joined
 
 
+def _is_opencode_cmdline(cmdline: list[str]) -> bool:
+    if not cmdline:
+        return False
+    exe = cmdline[0].rsplit("/", 1)[-1]
+    if exe == "opencode":
+        return True
+    if exe.startswith("longhouse-"):
+        return False
+    if exe not in {"node", "nodejs", "bun"}:
+        return False
+    script = cmdline[1].rsplit("/", 1)[-1] if len(cmdline) > 1 else ""
+    return script in {"opencode", "opencode.js"}
+
+
 def _provider_for_cmdline(cmdline: list[str]) -> str | None:
     if _is_claude_cmdline(cmdline):
         return "claude"
     if _is_codex_cmdline(cmdline):
         return "codex"
+    if _is_opencode_cmdline(cmdline):
+        return "opencode"
     return None
 
 
