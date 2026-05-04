@@ -110,12 +110,12 @@ export function SessionRuntimeStrip({
     >
       <div className="session-runtime-strip__presence">
         <PresenceBadge
-          state={runtime.presenceState}
-          tool={runtime.presenceTool}
+          state={runtime.factStatus ? null : runtime.presenceState}
+          tool={runtime.factStatus ? null : runtime.presenceTool}
           compact
           animateCompact={interaction.isManagedLocalSession}
-          heuristicActive={runtime.heuristicActive}
-          showUnknown={interaction.isManagedLocalSession}
+          heuristicActive={runtime.factStatus ? false : runtime.heuristicActive}
+          showUnknown={runtime.factStatus != null || interaction.isManagedLocalSession}
         />
         <div className="session-runtime-strip__copy">
           <span className="session-runtime-strip__headline">{runtimePhase}</span>

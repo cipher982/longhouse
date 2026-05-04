@@ -4,6 +4,43 @@ type SessionCapabilities = {
   reply_to_live_session_available: boolean;
 };
 
+type SessionLivenessFacts = {
+  control_path: "managed" | "unmanaged";
+  host: {
+    state: "online" | "stale" | "offline" | "unknown";
+    last_seen_at?: string | null;
+    source?: string | null;
+  };
+  process: {
+    status: "observed" | "not_observed" | "unknown";
+    pid?: number | null;
+    process_start_time?: string | null;
+    observed_at?: string | null;
+    last_seen_at?: string | null;
+    source_mtime?: string | null;
+    source_path?: string | null;
+    reason?: string | null;
+    source?: string | null;
+  };
+  phase: {
+    kind?: string | null;
+    tool?: string | null;
+    source?: string | null;
+    observed_at?: string | null;
+    expires_at?: string | null;
+  };
+  activity: {
+    last_transcript_at?: string | null;
+    last_runtime_signal_at?: string | null;
+    last_progress_at?: string | null;
+  };
+  lifecycle: {
+    state: "open" | "closed" | "unknown";
+    reason?: string | null;
+    observed_at?: string | null;
+  };
+};
+
 type AgentSession = {
   id: string;
   provider: string;
@@ -31,6 +68,7 @@ type AgentSession = {
   display_phase?: string | null;
   active_tool?: string | null;
   confidence?: string | null;
+  runtime_facts?: SessionLivenessFacts | null;
   user_messages: number;
   assistant_messages: number;
   tool_calls: number;
@@ -93,6 +131,46 @@ function makeCapabilities(overrides: Partial<SessionCapabilities> = {}): Session
   };
 }
 
+function makeRuntimeFacts(overrides: Partial<SessionLivenessFacts> = {}): SessionLivenessFacts {
+  return {
+    control_path: "unmanaged",
+    host: {
+      state: "unknown",
+      last_seen_at: null,
+      source: null,
+    },
+    process: {
+      status: "unknown",
+      pid: null,
+      process_start_time: null,
+      observed_at: null,
+      last_seen_at: null,
+      source_mtime: null,
+      source_path: null,
+      reason: null,
+      source: null,
+    },
+    phase: {
+      kind: null,
+      tool: null,
+      source: null,
+      observed_at: null,
+      expires_at: null,
+    },
+    activity: {
+      last_transcript_at: null,
+      last_runtime_signal_at: null,
+      last_progress_at: null,
+    },
+    lifecycle: {
+      state: "unknown",
+      reason: null,
+      observed_at: null,
+    },
+    ...overrides,
+  };
+}
+
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
   const now = "2026-04-15T16:12:00Z";
   return {
@@ -122,6 +200,7 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     display_phase: null,
     active_tool: null,
     confidence: null,
+    runtime_facts: null,
     user_messages: 10,
     assistant_messages: 10,
     tool_calls: 6,
@@ -211,6 +290,31 @@ export function buildTimelineCardStressFixture(): {
       runtime_source: "managed_local_transport",
       confidence: "live",
       display_phase: "Running mcp__hatch__hatch_codex",
+      runtime_facts: makeRuntimeFacts({
+        control_path: "managed",
+        host: {
+          state: "online",
+          last_seen_at: "2026-04-15T16:11:35Z",
+          source: "machine_heartbeat",
+        },
+        phase: {
+          kind: "running",
+          tool: "mcp__hatch__hatch_codex",
+          source: "managed_local_transport",
+          observed_at: "2026-04-15T16:11:35Z",
+          expires_at: "2026-04-15T16:26:35Z",
+        },
+        activity: {
+          last_transcript_at: "2026-04-15T16:11:35Z",
+          last_runtime_signal_at: "2026-04-15T16:11:35Z",
+          last_progress_at: null,
+        },
+        lifecycle: {
+          state: "open",
+          reason: "managed_phase_observed",
+          observed_at: "2026-04-15T16:11:35Z",
+        },
+      }),
       origin_label: "cinder",
       home_label: "On this Mac",
       capabilities: makeCapabilities({
@@ -255,6 +359,31 @@ export function buildTimelineCardStressFixture(): {
       runtime_source: "managed_local_transport",
       confidence: "live",
       display_phase: "Idle",
+      runtime_facts: makeRuntimeFacts({
+        control_path: "managed",
+        host: {
+          state: "online",
+          last_seen_at: "2026-04-15T16:10:00Z",
+          source: "machine_heartbeat",
+        },
+        phase: {
+          kind: "idle",
+          tool: null,
+          source: "managed_local_transport",
+          observed_at: "2026-04-15T16:10:00Z",
+          expires_at: "2026-04-15T16:25:00Z",
+        },
+        activity: {
+          last_transcript_at: "2026-04-15T16:10:00Z",
+          last_runtime_signal_at: "2026-04-15T16:10:00Z",
+          last_progress_at: null,
+        },
+        lifecycle: {
+          state: "open",
+          reason: "managed_phase_observed",
+          observed_at: "2026-04-15T16:10:00Z",
+        },
+      }),
       origin_label: "cinder",
       home_label: "On this Mac",
       capabilities: makeCapabilities({
@@ -297,6 +426,35 @@ export function buildTimelineCardStressFixture(): {
       confidence: "inferred",
       last_progress_at: "2026-04-15T16:09:00Z",
       display_phase: "Recent progress",
+      runtime_facts: makeRuntimeFacts({
+        control_path: "unmanaged",
+        host: {
+          state: "online",
+          last_seen_at: "2026-04-15T16:09:00Z",
+          source: "machine_heartbeat",
+        },
+        process: {
+          status: "observed",
+          pid: 4321,
+          process_start_time: "2026-04-15T15:09:00Z",
+          observed_at: "2026-04-15T16:09:00Z",
+          last_seen_at: "2026-04-15T16:09:00Z",
+          source_mtime: "2026-04-15T16:09:00Z",
+          source_path: "/Users/davidrose/.codex/sessions/vpn-codex.jsonl",
+          reason: null,
+          source: "machine_process_scan",
+        },
+        activity: {
+          last_transcript_at: "2026-04-15T16:09:00Z",
+          last_runtime_signal_at: null,
+          last_progress_at: "2026-04-15T16:09:00Z",
+        },
+        lifecycle: {
+          state: "open",
+          reason: "process_observed",
+          observed_at: "2026-04-15T16:09:00Z",
+        },
+      }),
       origin_label: "cinder",
       home_label: null,
       capabilities: makeCapabilities(),
@@ -330,6 +488,19 @@ export function buildTimelineCardStressFixture(): {
       confidence: "inferred",
       last_progress_at: "2026-04-15T16:08:00Z",
       display_phase: "Recent progress",
+      runtime_facts: makeRuntimeFacts({
+        control_path: "unmanaged",
+        activity: {
+          last_transcript_at: "2026-04-15T16:08:00Z",
+          last_runtime_signal_at: null,
+          last_progress_at: "2026-04-15T16:08:00Z",
+        },
+        lifecycle: {
+          state: "unknown",
+          reason: null,
+          observed_at: null,
+        },
+      }),
       origin_label: "cinder",
       home_label: null,
       capabilities: makeCapabilities(),
@@ -366,6 +537,19 @@ export function buildTimelineCardStressFixture(): {
       runtime_source: null,
       confidence: null,
       display_phase: null,
+      runtime_facts: makeRuntimeFacts({
+        control_path: "unmanaged",
+        activity: {
+          last_transcript_at: "2026-04-15T15:20:00Z",
+          last_runtime_signal_at: null,
+          last_progress_at: null,
+        },
+        lifecycle: {
+          state: "closed",
+          reason: "session_ended",
+          observed_at: "2026-04-15T15:20:00Z",
+        },
+      }),
       origin_label: "cinder",
       home_label: null,
       capabilities: makeCapabilities(),
@@ -420,6 +604,24 @@ export function buildTimelineCardStressFixture(): {
     runtime_source: "managed_local_transport",
     confidence: "live",
     display_phase: "Ready",
+    runtime_facts: makeRuntimeFacts({
+      control_path: "managed",
+      host: {
+        state: "unknown",
+        last_seen_at: null,
+        source: null,
+      },
+      activity: {
+        last_transcript_at: null,
+        last_runtime_signal_at: null,
+        last_progress_at: null,
+      },
+      lifecycle: {
+        state: "unknown",
+        reason: null,
+        observed_at: null,
+      },
+    }),
     thread_root_session_id: "thread-mobile-layout",
     thread_head_session_id: "continuation-head",
     thread_continuation_count: 3,
@@ -500,6 +702,31 @@ export function buildTimelineCardStressFixture(): {
       runtime_source: "managed_local_transport",
       confidence: "live",
       display_phase: "Blocked on write_stdin",
+      runtime_facts: makeRuntimeFacts({
+        control_path: "managed",
+        host: {
+          state: "online",
+          last_seen_at: "2026-04-15T15:58:00Z",
+          source: "machine_heartbeat",
+        },
+        phase: {
+          kind: "blocked",
+          tool: "write_stdin",
+          source: "managed_local_transport",
+          observed_at: "2026-04-15T15:58:00Z",
+          expires_at: "2026-04-15T16:13:00Z",
+        },
+        activity: {
+          last_transcript_at: "2026-04-15T15:58:00Z",
+          last_runtime_signal_at: "2026-04-15T15:58:00Z",
+          last_progress_at: null,
+        },
+        lifecycle: {
+          state: "open",
+          reason: "managed_phase_observed",
+          observed_at: "2026-04-15T15:58:00Z",
+        },
+      }),
       origin_label: "studio",
       home_label: "On this Mac",
       capabilities: makeCapabilities({

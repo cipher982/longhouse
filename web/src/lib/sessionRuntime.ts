@@ -1,6 +1,7 @@
 import type {
   AgentSession,
   AgentSessionStatus,
+  SessionLivenessFacts,
   SessionRuntimeDisplay,
 } from "../services/api/agents";
 
@@ -20,6 +21,7 @@ type TimelineRuntimeOverlay = {
   active_tool?: string | null;
   confidence?: string | null;
   runtime_display?: SessionRuntimeDisplay | null;
+  runtime_facts?: SessionLivenessFacts | null;
   capabilities?: AgentSession["capabilities"] | null;
 };
 
@@ -35,16 +37,25 @@ export type TimelineRuntimeSession = Pick<
  * or `session.terminal_state` should use this instead.
  *
  * Contract:
- * - When `runtime_display.lifecycle` is present, it is the ground truth.
- *   Backend only emits `closed` on explicit terminal signals (Phase 6 adds
- *   process-gone).
+ * - When `runtime_facts.lifecycle` is open/closed, it is the ground truth.
+ *   Backend only emits `closed` on explicit terminal signals.
+ * - Unknown facts stay unknown and fall through to older payload hints.
+ * - Older payloads can use `runtime_display.lifecycle`.
  * - Older payloads without the axis fall back to `terminal_state`.
  */
 export function isSessionClosed(
   session: Pick<AgentSession, "terminal_state"> & {
     runtime_display?: SessionRuntimeDisplay | null;
+    runtime_facts?: SessionLivenessFacts | null;
   },
 ): boolean {
+  const factsLifecycle = session.runtime_facts?.lifecycle?.state;
+  if (factsLifecycle === "closed") {
+    return true;
+  }
+  if (factsLifecycle === "open") {
+    return false;
+  }
   const lifecycle = session.runtime_display?.lifecycle;
   if (lifecycle != null) {
     return lifecycle === "closed";
@@ -71,14 +82,30 @@ export interface SessionRuntimeState {
   hasSignal: boolean;
   tone: RuntimeTone;
   runtimeDisplay: SessionRuntimeDisplay | null;
+  runtimeFacts: SessionLivenessFacts | null;
+  factStatus: SessionFactStatus | null;
 }
 
 export type SessionControlPathLabel = "Managed" | "Unmanaged";
+
+export interface SessionFactStatus {
+  label: string;
+  tone: RuntimeTone;
+  seenAt: string | null;
+  seenAtPrefix: "Observed" | "Seen" | "Transcript";
+}
 
 export function resolveSessionOwnershipLabel(
   runtime: SessionRuntimeState,
   fallback: SessionControlPathLabel = "Unmanaged",
 ): SessionControlPathLabel {
+  const factControlPath = runtime.runtimeFacts?.control_path;
+  if (factControlPath === "managed") {
+    return "Managed";
+  }
+  if (factControlPath === "unmanaged") {
+    return "Unmanaged";
+  }
   const controlPath = runtime.runtimeDisplay?.control_path;
   if (controlPath === "managed") {
     return "Managed";
@@ -93,6 +120,9 @@ export function resolveSessionStatusLabel(
   runtime: SessionRuntimeState,
   fallbackControlPath: "managed" | "unmanaged" = "unmanaged",
 ): string {
+  if (runtime.factStatus) {
+    return runtime.factStatus.label;
+  }
   const display = runtime.runtimeDisplay;
   if (display?.lifecycle === "closed") {
     return "Closed";
@@ -147,6 +177,149 @@ export function resolveSessionStatusLabel(
     return "Ready";
   }
   return "Unknown";
+}
+
+function titleCaseWords(value: string): string {
+  return value
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => {
+      if (word.length <= 3 && word === word.toUpperCase()) {
+        return word;
+      }
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    })
+    .join(" ");
+}
+
+function compactFactToolLabel(toolName: string | null | undefined): string | null {
+  const raw = toolName?.trim();
+  if (!raw) {
+    return null;
+  }
+  const canonical = raw.split("__").pop() ?? raw;
+  const normalized = canonical
+    .replace(/^hatch_/, "")
+    .replace(/^tool_/, "")
+    .replace(/^mcp_/, "")
+    .replace(/[-_.]+/g, " ")
+    .trim();
+  if (!normalized) {
+    return null;
+  }
+  const lower = normalized.toLowerCase();
+  if (lower === "codex") return "Codex";
+  if (lower === "claude") return "Claude";
+  if (lower === "gemini") return "Gemini";
+  if (lower === "default") return "Z.ai";
+  if (lower === "shell" || lower === "bash" || lower === "terminal") return "Shell";
+  if (
+    lower === "edit" ||
+    lower === "write" ||
+    lower === "patch" ||
+    lower === "apply patch" ||
+    lower === "file change" ||
+    lower === "filechange"
+  ) {
+    return "Edit";
+  }
+  return titleCaseWords(normalized);
+}
+
+function formatObservedPhase(kind: string, tool: string | null | undefined): string {
+  const phase = kind === "needs_user" ? "ready" : kind.replace(/[-_]+/g, " ");
+  const compactTool = compactFactToolLabel(tool);
+  if (compactTool && (kind === "running" || kind === "blocked")) {
+    return `${titleCaseWords(phase)} ${compactTool}`;
+  }
+  return titleCaseWords(phase);
+}
+
+function resolveSessionFactStatus(facts: SessionLivenessFacts | null): SessionFactStatus | null {
+  if (!facts) {
+    return null;
+  }
+
+  const lifecycle = facts.lifecycle?.state;
+  if (lifecycle === "closed") {
+    return {
+      label: "Closed",
+      tone: "inactive",
+      seenAt: facts.lifecycle?.observed_at ?? facts.phase?.observed_at ?? facts.activity?.last_transcript_at ?? null,
+      seenAtPrefix: "Observed",
+    };
+  }
+
+  const phaseKind = facts.phase?.kind?.trim();
+  if (phaseKind) {
+    return {
+      label: `Observed ${formatObservedPhase(phaseKind, facts.phase?.tool)}`,
+      tone: "inactive",
+      seenAt: facts.phase?.observed_at ?? null,
+      seenAtPrefix: "Observed",
+    };
+  }
+
+  if (facts.process?.status === "observed") {
+    return {
+      label: "Process observed",
+      tone: "inactive",
+      seenAt: facts.process?.observed_at ?? facts.process?.last_seen_at ?? null,
+      seenAtPrefix: "Observed",
+    };
+  }
+
+  if (facts.process?.status === "not_observed") {
+    return {
+      label: "Process not observed",
+      tone: "inactive",
+      seenAt: facts.process?.last_seen_at ?? facts.process?.observed_at ?? null,
+      seenAtPrefix: "Observed",
+    };
+  }
+
+  if (facts.host?.state === "online") {
+    return {
+      label: "Host online",
+      tone: "inactive",
+      seenAt: facts.host?.last_seen_at ?? null,
+      seenAtPrefix: "Seen",
+    };
+  }
+
+  if (facts.host?.state === "stale") {
+    return {
+      label: "Host last seen",
+      tone: "inactive",
+      seenAt: facts.host?.last_seen_at ?? null,
+      seenAtPrefix: "Seen",
+    };
+  }
+
+  if (facts.host?.state === "offline") {
+    return {
+      label: "Host offline",
+      tone: "inactive",
+      seenAt: facts.host?.last_seen_at ?? null,
+      seenAtPrefix: "Seen",
+    };
+  }
+
+  if (facts.activity?.last_transcript_at) {
+    return {
+      label: "Transcript only",
+      tone: "inactive",
+      seenAt: facts.activity.last_transcript_at,
+      seenAtPrefix: "Transcript",
+    };
+  }
+
+  return {
+    label: "Host unverified",
+    tone: "inactive",
+    seenAt: null,
+    seenAtPrefix: "Seen",
+  };
 }
 
 export function normalizePresenceState(state: string | null | undefined): KnownPresenceState | null {
@@ -309,9 +482,11 @@ export function resolveSessionRuntimeState(
   session: TimelineRuntimeSession,
 ): SessionRuntimeState {
   const serverDisplay = session.runtime_display ?? null;
+  const runtimeFacts = session.runtime_facts ?? null;
+  const factStatus = resolveSessionFactStatus(runtimeFacts);
   const sessionTruthTier = getRuntimeTruthTier(session);
   const status = session.status ?? null;
-  const isClosed = serverDisplay?.lifecycle === "closed";
+  const isClosed = runtimeFacts?.lifecycle?.state === "closed" || serverDisplay?.lifecycle === "closed";
   const rawPresenceState = normalizePresenceState(serverDisplay ? serverDisplay.state : session.presence_state ?? null);
   const presenceState = isClosed ? null : rawPresenceState;
   const presenceTool =
@@ -376,6 +551,8 @@ export function resolveSessionRuntimeState(
     hasSignal,
     tone,
     runtimeDisplay: serverDisplay,
+    runtimeFacts,
+    factStatus,
   };
 }
 

@@ -4,6 +4,7 @@ import {
   resolveSessionOwnershipLabel,
   resolveSessionRuntimeState,
   resolveSessionStatusLabel,
+  isSessionClosed,
 } from "../sessionRuntime";
 import { getRuntimeDisplayCopy, getRuntimeOutcomeLabel } from "../sessionUtils";
 
@@ -40,6 +41,48 @@ function makeRuntimeDisplay(
     lifecycle: "open",
     host_state: "unknown",
     terminal_reason: null,
+    ...overrides,
+  };
+}
+
+function makeRuntimeFacts(
+  overrides: Partial<NonNullable<TimelineRuntimeSession["runtime_facts"]>> = {},
+): NonNullable<TimelineRuntimeSession["runtime_facts"]> {
+  return {
+    control_path: "managed",
+    host: {
+      state: "unknown",
+      last_seen_at: null,
+      source: null,
+    },
+    process: {
+      status: "unknown",
+      pid: null,
+      process_start_time: null,
+      observed_at: null,
+      last_seen_at: null,
+      source_mtime: null,
+      source_path: null,
+      reason: null,
+      source: null,
+    },
+    phase: {
+      kind: null,
+      tool: null,
+      source: null,
+      observed_at: null,
+      expires_at: null,
+    },
+    activity: {
+      last_transcript_at: null,
+      last_runtime_signal_at: null,
+      last_progress_at: null,
+    },
+    lifecycle: {
+      state: "unknown",
+      reason: null,
+      observed_at: null,
+    },
     ...overrides,
   };
 }
@@ -485,10 +528,188 @@ describe("resolveSessionRuntimeState", () => {
     expect(runtime.displayPhase).toBe("Completed");
     expect(runtime.tone).toBe("inactive");
     expect(resolveSessionStatusLabel(runtime)).toBe("Closed");
-    expect(getRuntimeOutcomeLabel(runtime)).toBe("Completed");
+    expect(getRuntimeOutcomeLabel(runtime)).toBe("Closed");
     expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
-      headline: "Completed",
+      headline: "Closed",
       detail: null,
     });
+  });
+
+  it("renders managed phase facts as observed facts, not current work claims", () => {
+    const runtime = resolveSessionRuntimeState(
+      makeSession({
+        presence_state: "running",
+        runtime_display: makeRuntimeDisplay({
+          state: "running",
+          headline: "Working",
+          phase_label: "Running Shell",
+          activity_recency: "live",
+        }),
+        runtime_facts: makeRuntimeFacts({
+          control_path: "managed",
+          host: {
+            state: "online",
+            last_seen_at: "2026-03-21T12:00:00Z",
+            source: "machine_heartbeat",
+          },
+          phase: {
+            kind: "running",
+            tool: "shell",
+            source: "codex_bridge",
+            observed_at: "2026-03-21T12:00:05Z",
+            expires_at: "2026-03-21T12:15:05Z",
+          },
+          lifecycle: {
+            state: "open",
+            reason: "managed_phase_observed",
+            observed_at: "2026-03-21T12:00:05Z",
+          },
+        }),
+      }),
+    );
+
+    expect(resolveSessionOwnershipLabel(runtime)).toBe("Managed");
+    expect(resolveSessionStatusLabel(runtime)).toBe("Observed Running Shell");
+    expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
+      headline: "Observed Running Shell",
+      detail: null,
+    });
+  });
+
+  it("renders unmanaged process observations without calling them active", () => {
+    const runtime = resolveSessionRuntimeState(
+      makeSession({
+        runtime_display: makeRuntimeDisplay({
+          control_path: "unmanaged",
+          activity_recency: "live",
+          headline: "Active",
+        }),
+        runtime_facts: makeRuntimeFacts({
+          control_path: "unmanaged",
+          host: {
+            state: "online",
+            last_seen_at: "2026-03-21T12:00:00Z",
+            source: "machine_heartbeat",
+          },
+          process: {
+            status: "observed",
+            pid: 123,
+            process_start_time: null,
+            observed_at: "2026-03-21T12:00:05Z",
+            last_seen_at: "2026-03-21T12:00:06Z",
+            source_mtime: null,
+            source_path: "/tmp/session.jsonl",
+            reason: null,
+            source: "machine_process_scan",
+          },
+          lifecycle: {
+            state: "open",
+            reason: "process_observed",
+            observed_at: "2026-03-21T12:00:05Z",
+          },
+        }),
+      }),
+    );
+
+    expect(resolveSessionOwnershipLabel(runtime)).toBe("Unmanaged");
+    expect(resolveSessionStatusLabel(runtime)).toBe("Process observed");
+    expect(getRuntimeOutcomeLabel(runtime)).toBe("Process observed");
+  });
+
+  it("renders transcript-only facts as transcript-only", () => {
+    const runtime = resolveSessionRuntimeState(
+      makeSession({
+        runtime_display: makeRuntimeDisplay({
+          control_path: "unmanaged",
+          activity_recency: "recent",
+          headline: "Active",
+        }),
+        runtime_facts: makeRuntimeFacts({
+          control_path: "unmanaged",
+          activity: {
+            last_transcript_at: "2026-03-21T12:00:00Z",
+            last_runtime_signal_at: null,
+            last_progress_at: null,
+          },
+          lifecycle: {
+            state: "unknown",
+            reason: null,
+            observed_at: null,
+          },
+        }),
+      }),
+    );
+
+    expect(resolveSessionStatusLabel(runtime)).toBe("Transcript only");
+    expect(getRuntimeOutcomeLabel(runtime)).toBe("Transcript only");
+  });
+
+  it("renders unknown host facts as unverified", () => {
+    const runtime = resolveSessionRuntimeState(
+      makeSession({
+        runtime_display: makeRuntimeDisplay({
+          control_path: "managed",
+          activity_recency: "stale",
+          headline: "Disconnected",
+        }),
+        runtime_facts: makeRuntimeFacts({
+          control_path: "managed",
+          host: {
+            state: "unknown",
+            last_seen_at: null,
+            source: null,
+          },
+          lifecycle: {
+            state: "unknown",
+            reason: null,
+            observed_at: null,
+          },
+        }),
+      }),
+    );
+
+    expect(resolveSessionStatusLabel(runtime)).toBe("Host unverified");
+  });
+
+  it("renders closed facts as closed rather than completed", () => {
+    const runtime = resolveSessionRuntimeState(
+      makeSession({
+        runtime_display: makeRuntimeDisplay({
+          lifecycle: "open",
+          headline: "Working",
+          phase_label: "Running Shell",
+        }),
+        runtime_facts: makeRuntimeFacts({
+          control_path: "managed",
+          lifecycle: {
+            state: "closed",
+            reason: "session_ended",
+            observed_at: "2026-03-21T12:00:00Z",
+          },
+        }),
+      }),
+    );
+
+    expect(resolveSessionStatusLabel(runtime)).toBe("Closed");
+    expect(getRuntimeOutcomeLabel(runtime)).toBe("Closed");
+    expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
+      headline: "Closed",
+      detail: null,
+    });
+  });
+
+  it("lets unknown facts fall through to legacy terminal hints", () => {
+    expect(
+      isSessionClosed({
+        terminal_state: "finished",
+        runtime_facts: makeRuntimeFacts({
+          lifecycle: {
+            state: "unknown",
+            reason: null,
+            observed_at: null,
+          },
+        }),
+      }),
+    ).toBe(true);
   });
 });

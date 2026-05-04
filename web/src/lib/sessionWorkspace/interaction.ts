@@ -42,7 +42,7 @@ export function getSessionInteractionCapabilities({
     live_control_available: liveControlAvailable,
     host_reattach_available: hostReattachAvailable,
   } = session.capabilities;
-  const controlPath = session.runtime_display?.control_path;
+  const controlPath = session.runtime_facts?.control_path ?? session.runtime_display?.control_path;
   const isManagedLocalSession =
     controlPath === "managed"
       ? true
