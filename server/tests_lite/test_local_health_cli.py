@@ -2199,7 +2199,7 @@ def test_process_scan_humanizes_needs_user_phase(monkeypatch, tmp_path: Path):
     )
 
     assert len(rows) == 1
-    assert rows[0]["phase"] == "needs you"
+    assert rows[0]["phase"] == "ready"
     assert rows[0]["phase_observed_at"] == "2026-04-19T00:04:30Z"
     assert rows[0]["last_activity_at"] == "2026-04-19T00:04:30Z"
 

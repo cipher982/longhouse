@@ -19,8 +19,8 @@
     },
     {
       "raw_phase": "needs_user",
-      "display_label": "needs you",
-      "attention": "needsYou"
+      "display_label": "ready",
+      "attention": "idle"
     },
     {
       "raw_phase": "idle",
