@@ -160,13 +160,19 @@ export function renderHighlightedText(text: string, query: string) {
 // Runtime display helpers
 // ---------------------------------------------------------------------------
 
-export function getRuntimeMetaLabel(runtime: ReturnType<typeof resolveSessionRuntimeState>): string | null {
+export function getRuntimeMetaLabel(
+  runtime: ReturnType<typeof resolveSessionRuntimeState>,
+  relativeNowMs?: number,
+): string | null {
+  if (runtime.factStatus?.seenAt) {
+    return `${runtime.factStatus.seenAtPrefix} ${formatRelativeTime(runtime.factStatus.seenAt, relativeNowMs)}`;
+  }
   if (runtime.truthTier === "managed-local") {
     return "Live on host";
   }
   if (runtime.lastLiveAt) {
     if (runtime.truthTier === "stale" || runtime.confidence === "stale") {
-      return `Seen ${formatRelativeTime(runtime.lastLiveAt)}`;
+      return `Seen ${formatRelativeTime(runtime.lastLiveAt, relativeNowMs)}`;
     }
   }
   return null;
@@ -242,8 +248,11 @@ export function getCardRuntimePhaseLabel(runtime: ReturnType<typeof resolveSessi
 export function getRuntimeOutcomeLabel(
   runtime: ReturnType<typeof resolveSessionRuntimeState>,
 ): string {
+  if (runtime.factStatus) {
+    return runtime.factStatus.label;
+  }
   if (runtime.runtimeDisplay?.lifecycle === "closed") {
-    return "Completed";
+    return "Closed";
   }
   if (
     runtime.runtimeDisplay?.headline === "Active" ||
@@ -277,10 +286,17 @@ export function getRuntimeDisplayCopy(
     managedLocal?: boolean;
   } = {},
 ): RuntimeDisplayCopy {
+  if (runtime.factStatus) {
+    return {
+      headline: runtime.factStatus.label,
+      detail: null,
+    };
+  }
+
   if (runtime.runtimeDisplay) {
     if (runtime.runtimeDisplay.lifecycle === "closed") {
       return {
-        headline: "Completed",
+        headline: "Closed",
         detail: null,
       };
     }

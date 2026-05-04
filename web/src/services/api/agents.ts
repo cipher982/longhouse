@@ -42,6 +42,7 @@ export interface AgentSession {
   active_tool?: string | null;
   confidence?: string | null;
   runtime_display?: SessionRuntimeDisplay | null;
+  runtime_facts?: SessionLivenessFacts | null;
   timeline_card?: TimelineCardPresentation | null;
   user_messages: number;
   assistant_messages: number;
@@ -100,6 +101,53 @@ export interface SessionRuntimeDisplay {
   lifecycle?: "open" | "closed" | "unknown" | (string & {});
   host_state?: "online" | "stale" | "offline" | "unknown" | (string & {});
   terminal_reason?: "provider_signal" | "process_gone" | "host_expired" | "user_closed" | "host_reported" | null | (string & {});
+}
+
+export interface HostObservation {
+  state: "online" | "stale" | "offline" | "unknown" | (string & {});
+  last_seen_at?: string | null;
+  source?: string | null;
+}
+
+export interface ProcessObservation {
+  status: "observed" | "not_observed" | "unknown" | (string & {});
+  pid?: number | null;
+  process_start_time?: string | null;
+  observed_at?: string | null;
+  last_seen_at?: string | null;
+  source_mtime?: string | null;
+  source_path?: string | null;
+  reason?: string | null;
+  source?: string | null;
+}
+
+export interface PhaseObservation {
+  kind?: string | null;
+  tool?: string | null;
+  source?: string | null;
+  observed_at?: string | null;
+  expires_at?: string | null;
+}
+
+export interface ActivityObservation {
+  last_transcript_at?: string | null;
+  last_runtime_signal_at?: string | null;
+  last_progress_at?: string | null;
+}
+
+export interface LifecycleFact {
+  state: "open" | "closed" | "unknown" | (string & {});
+  reason?: string | null;
+  observed_at?: string | null;
+}
+
+export interface SessionLivenessFacts {
+  control_path: "managed" | "unmanaged" | (string & {});
+  host: HostObservation;
+  process: ProcessObservation;
+  phase: PhaseObservation;
+  activity: ActivityObservation;
+  lifecycle: LifecycleFact;
 }
 
 export interface TimelineBadgePresentation {

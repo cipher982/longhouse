@@ -65,15 +65,17 @@ export function SessionCard({
   const toolCount = session.tool_calls;
   const runtime = resolveSessionRuntimeState(session);
   const timelineCard = session.timeline_card ?? null;
-  const timelineCardStatus = timelineCard?.status ?? null;
-  const runtimeMetaLabel = timelineCardStatus?.seen_at
-    ? `Seen ${formatRelativeTime(timelineCardStatus.seen_at, relativeNowMs)}`
-    : getRuntimeMetaLabel(runtime);
+  const timelineCardStatus = runtime.factStatus ? null : (timelineCard?.status ?? null);
+  const runtimeMetaLabel =
+    getRuntimeMetaLabel(runtime, relativeNowMs) ??
+    (timelineCardStatus?.seen_at
+      ? `Seen ${formatRelativeTime(timelineCardStatus.seen_at, relativeNowMs)}`
+      : null);
   const fallbackOwnershipLabel = interaction.isManagedLocalSession ? "Managed" : "Unmanaged";
   const ownershipLabel = timelineCard?.ownership.label || resolveSessionOwnershipLabel(runtime, fallbackOwnershipLabel);
   const fallbackControlPath = ownershipLabel === "Managed" ? "managed" : "unmanaged";
-  const runtimePhaseLabel = timelineCardStatus?.label || resolveSessionStatusLabel(runtime, fallbackControlPath);
-  const cardRuntimeTone = timelineCard?.border_tone ?? runtime.tone;
+  const runtimePhaseLabel = runtime.factStatus?.label || timelineCardStatus?.label || resolveSessionStatusLabel(runtime, fallbackControlPath);
+  const cardRuntimeTone = runtime.factStatus?.tone ?? timelineCard?.border_tone ?? runtime.tone;
 
   const projectLabel = getProjectLabel(session);
   const title = getSessionTitle(session);
@@ -103,7 +105,7 @@ export function SessionCard({
   // ground truth). Legacy payloads without the axis fall back via
   // isSessionClosed's terminal_state path, plus a presence guard so an
   // actively-controlled session is not misreported.
-  const lifecycle = runtime.runtimeDisplay?.lifecycle ?? null;
+  const lifecycle = runtime.runtimeFacts?.lifecycle?.state ?? runtime.runtimeDisplay?.lifecycle ?? null;
   const hasCurrentControlledPresence = hasControlPath && runtime.presenceState != null;
   const isClosedSession =
     timelineCardStatus?.tone === "closed" ||
@@ -114,11 +116,13 @@ export function SessionCard({
   // Phase 3: always render the runtime pill for unmanaged sessions so the
   // card states "Stale" / "Unknown" honestly instead of hiding them.
   const hasRuntimeAxes =
+    runtime.runtimeFacts?.control_path === "managed" ||
+    runtime.runtimeFacts?.control_path === "unmanaged" ||
     runtime.runtimeDisplay?.control_path === "managed" ||
     runtime.runtimeDisplay?.control_path === "unmanaged";
-  const showRuntimePill = !isClosedSession && (timelineCardStatus != null || runtime.hasSignal || hasRuntimeAxes);
+  const showRuntimePill = !isClosedSession && (runtime.factStatus != null || timelineCardStatus != null || runtime.hasSignal || hasRuntimeAxes);
   // Outcome labels are semantic summaries; keep their chips neutral across runtime sources.
-  const runtimePillTone = timelineCardStatus?.tone || (runtimePhaseLabel === "Active" ? "active" : runtime.tone);
+  const runtimePillTone = runtime.factStatus?.tone || timelineCardStatus?.tone || (runtimePhaseLabel === "Active" ? "active" : runtime.tone);
   const cardClassName = [
     "session-card",
     confirming ? "session-card--confirming" : "",
@@ -250,11 +254,11 @@ export function SessionCard({
                   <span className="session-card-runtime-dot" aria-hidden="true" />
                 ) : (
                   <PresenceBadge
-                    state={runtime.presenceState}
-                    tool={runtime.presenceTool}
+                    state={runtime.factStatus ? null : runtime.presenceState}
+                    tool={runtime.factStatus ? null : runtime.presenceTool}
                     compact
-                    heuristicActive={runtime.heuristicActive}
-                    showUnknown={runtime.truthTier === "stale"}
+                    heuristicActive={runtime.factStatus ? false : runtime.heuristicActive}
+                    showUnknown={runtime.factStatus != null || runtime.truthTier === "stale"}
                   />
                 )}
                 <span className="session-card-runtime-phase">{runtimePhaseLabel}</span>

@@ -4702,6 +4702,8 @@ export interface components {
             capabilities: components["schemas"]["SessionCapabilitiesResponse"];
             /** @description Server-derived display state for clients */
             runtime_display?: components["schemas"]["SessionRuntimeDisplayResponse"] | null;
+            /** @description Observed liveness facts with timestamps and sources */
+            runtime_facts?: components["schemas"]["SessionLivenessFactsResponse"] | null;
             /**
              * @description Session loop mode: assist|autopilot
              * @default assist
@@ -4722,6 +4724,24 @@ export interface components {
              * Format: date-time
              */
             last_refresh: string;
+        };
+        /** ActivityObservationResponse */
+        ActivityObservationResponse: {
+            /**
+             * Last Transcript At
+             * @description Last transcript event/activity timestamp
+             */
+            last_transcript_at?: string | null;
+            /**
+             * Last Runtime Signal At
+             * @description Last semantic runtime signal timestamp
+             */
+            last_runtime_signal_at?: string | null;
+            /**
+             * Last Progress At
+             * @description Last progress-only signal timestamp
+             */
+            last_progress_at?: string | null;
         };
         /**
          * AdminUserDetailResponse
@@ -5878,6 +5898,25 @@ export interface components {
             /** Unmanaged Session Bindings */
             unmanaged_session_bindings?: components["schemas"]["UnmanagedSessionBindingIn"][];
         };
+        /** HostObservationResponse */
+        HostObservationResponse: {
+            /**
+             * State
+             * @description Observed host state: online|stale|offline|unknown
+             * @default unknown
+             */
+            state: string;
+            /**
+             * Last Seen At
+             * @description When the host last heartbeated, when known
+             */
+            last_seen_at?: string | null;
+            /**
+             * Source
+             * @description Observation source, e.g. machine_heartbeat
+             */
+            source?: string | null;
+        };
         /**
          * HostedGmailConnectHandoffPayload
          * @description Payload the control plane sends after Gmail OAuth succeeds.
@@ -6037,6 +6076,25 @@ export interface components {
             p50: number;
             /** P95 */
             p95: number;
+        };
+        /** LifecycleFactResponse */
+        LifecycleFactResponse: {
+            /**
+             * State
+             * @description Observed lifecycle state: open|closed|unknown
+             * @default unknown
+             */
+            state: string;
+            /**
+             * Reason
+             * @description Reason for the lifecycle state when known
+             */
+            reason?: string | null;
+            /**
+             * Observed At
+             * @description When the lifecycle fact was observed
+             */
+            observed_at?: string | null;
         };
         /** LlmProviderInfo */
         LlmProviderInfo: {
@@ -6628,6 +6686,34 @@ export interface components {
              */
             runs: number;
         };
+        /** PhaseObservationResponse */
+        PhaseObservationResponse: {
+            /**
+             * Kind
+             * @description Observed phase kind, when a semantic phase signal exists
+             */
+            kind?: string | null;
+            /**
+             * Tool
+             * @description Observed active tool for the phase, when known
+             */
+            tool?: string | null;
+            /**
+             * Source
+             * @description Phase observation source
+             */
+            source?: string | null;
+            /**
+             * Observed At
+             * @description When the phase was observed
+             */
+            observed_at?: string | null;
+            /**
+             * Expires At
+             * @description Producer/debouncer freshness budget, not lifecycle truth
+             */
+            expires_at?: string | null;
+        };
         /**
          * PhoneContactCreate
          * @description Schema for creating a phone contact.
@@ -6707,6 +6793,55 @@ export interface components {
             occurred_at?: string | null;
             /** Dedupe Key */
             dedupe_key?: string | null;
+        };
+        /** ProcessObservationResponse */
+        ProcessObservationResponse: {
+            /**
+             * Status
+             * @description Observed process state: observed|not_observed|unknown
+             * @default unknown
+             */
+            status: string;
+            /**
+             * Pid
+             * @description Observed process id, when known
+             */
+            pid?: number | null;
+            /**
+             * Process Start Time
+             * @description Observed process start time, when known
+             */
+            process_start_time?: string | null;
+            /**
+             * Observed At
+             * @description When this process binding was observed
+             */
+            observed_at?: string | null;
+            /**
+             * Last Seen At
+             * @description Server time when this binding was last reported
+             */
+            last_seen_at?: string | null;
+            /**
+             * Source Mtime
+             * @description Transcript mtime seen with the process observation
+             */
+            source_mtime?: string | null;
+            /**
+             * Source Path
+             * @description Transcript path tied to this observation
+             */
+            source_path?: string | null;
+            /**
+             * Reason
+             * @description Why the status is not observed or unknown
+             */
+            reason?: string | null;
+            /**
+             * Source
+             * @description Observation source, e.g. machine_process_scan
+             */
+            source?: string | null;
         };
         /** QueuedInputSummary */
         QueuedInputSummary: {
@@ -7766,6 +7901,26 @@ export interface components {
             released_lock: boolean;
         };
         /**
+         * SessionLivenessFactsResponse
+         * @description Observed facts only.
+         *
+         *     This contract is intentionally orthogonal to ``runtime_display``. Clients
+         *     should render these facts with timestamps/sources, not reconcile them with
+         *     display labels or use them as a second display state machine.
+         */
+        SessionLivenessFactsResponse: {
+            /**
+             * Control Path
+             * @description Does Longhouse own a control path? managed|unmanaged
+             */
+            control_path: string;
+            host: components["schemas"]["HostObservationResponse"];
+            process: components["schemas"]["ProcessObservationResponse"];
+            phase: components["schemas"]["PhaseObservationResponse"];
+            activity: components["schemas"]["ActivityObservationResponse"];
+            lifecycle: components["schemas"]["LifecycleFactResponse"];
+        };
+        /**
          * SessionLockInfo
          * @description Information about a session lock.
          */
@@ -8212,6 +8367,8 @@ export interface components {
             capabilities: components["schemas"]["SessionCapabilitiesResponse"];
             /** @description Server-derived display state for clients */
             runtime_display?: components["schemas"]["SessionRuntimeDisplayResponse"] | null;
+            /** @description Observed liveness facts with timestamps and sources */
+            runtime_facts?: components["schemas"]["SessionLivenessFactsResponse"] | null;
             /** @description Server-derived timeline-card presentation */
             timeline_card: components["schemas"]["TimelineCardPresentationResponse"];
             /**
