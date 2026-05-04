@@ -623,7 +623,7 @@ test.describe("Sessions Page", () => {
     await expect(needsUserCard).not.toContainText("Needs you");
     await expect(needsUserCard).toHaveAttribute("data-runtime-tone", "active");
     await expect(needsUserCard).not.toHaveClass(/session-card--live/);
-    await expect(needsUserCard).toHaveClass(/session-card--needs-user/);
+    await expect(needsUserCard).toHaveClass(/session-card--idle/);
 
     const inferredCard = page
       .locator('[data-testid="session-card"]', { hasText: `inferred-state-${suffix}` })
@@ -718,10 +718,10 @@ test.describe("Sessions Page", () => {
     await expect(olderCard).not.toContainText("Running Shell");
     await expect(olderCard).toHaveAttribute("data-card-state", "actionable");
     await expect(olderCard).not.toHaveClass(/session-card--closed/);
-    await expect(cards.first()).toHaveAttribute("data-session-id", recentId);
+    await expect(cards.first()).toHaveAttribute("data-session-id", olderId);
     await expect(olderCard).toHaveCount(1);
     await expect(recentCard).toHaveCount(1);
-    await expect(cards.nth(1)).toHaveAttribute("data-session-id", olderId);
+    await expect(cards.nth(1)).toHaveAttribute("data-session-id", recentId);
   });
 });
 
