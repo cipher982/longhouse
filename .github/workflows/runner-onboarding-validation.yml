@@ -132,7 +132,7 @@ jobs:
             runner-onboarding-playwright-${{ runner.os }}-
 
       - name: Ensure make available
-        run: command -v make || (sudo apt-get update && sudo apt-get install -y make)
+        run: ./scripts/ci/ensure-make.sh
 
       - name: Install Playwright browsers
         run: |
@@ -214,7 +214,7 @@ jobs:
             runner-onboarding-playwright-${{ runner.os }}-
 
       - name: Ensure make available
-        run: command -v make || (sudo apt-get update && sudo apt-get install -y make)
+        run: ./scripts/ci/ensure-make.sh
 
       - name: Install Playwright browsers
         run: |
