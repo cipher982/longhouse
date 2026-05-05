@@ -89,13 +89,14 @@ def test_unmanaged_process_observation_is_a_fact_not_active_copy():
     )
 
     assert facts.process.status == "observed"
+    assert facts.process_state == "running"
     assert facts.process.pid == 20293
     assert facts.process.observed_at == observed_at
     assert facts.lifecycle.state == "open"
     assert facts.lifecycle.reason == "process_observed"
 
 
-def test_missing_unmanaged_process_scan_does_not_close_session():
+def test_missing_unmanaged_process_scan_marks_process_closed():
     facts = build_session_liveness_facts(
         runtime_view=_runtime_view(),
         capabilities=_capabilities(),
@@ -115,7 +116,9 @@ def test_missing_unmanaged_process_scan_does_not_close_session():
 
     assert facts.process.status == "not_observed"
     assert facts.process.reason == "process_gone"
-    assert facts.lifecycle.state == "unknown"
+    assert facts.process_state == "closed"
+    assert facts.lifecycle.state == "closed"
+    assert facts.lifecycle.reason == "process_gone"
 
 
 def test_host_expired_means_unverified_not_closed():
@@ -139,6 +142,7 @@ def test_host_expired_means_unverified_not_closed():
     assert facts.host.state == "offline"
     assert facts.process.status == "unknown"
     assert facts.process.reason == "host_expired"
+    assert facts.process_state == "unknown"
     assert facts.lifecycle.state == "unknown"
 
 
@@ -160,6 +164,7 @@ def test_stale_phase_signal_is_timestamped_not_current_lifecycle_truth():
     )
 
     assert facts.control_path == "managed"
+    assert facts.process_state == "unknown"
     assert facts.phase.kind is None
     assert facts.phase.observed_at is None
     assert facts.phase.expires_at is None
@@ -185,5 +190,59 @@ def test_explicit_provider_terminal_closes_session():
     )
 
     assert facts.lifecycle.state == "closed"
+    assert facts.process_state == "closed"
     assert facts.lifecycle.reason == "session_ended"
     assert facts.lifecycle.observed_at == terminal_at
+
+
+def test_managed_fresh_phase_marks_process_running_without_process_scan():
+    observed_at = NOW - timedelta(seconds=10)
+    facts = build_session_liveness_facts(
+        runtime_view=_runtime_view(
+            signal_tier="phase_signal",
+            runtime_phase="thinking",
+            runtime_source="managed_local_transport",
+            phase_started_at=observed_at,
+            presence_updated_at=observed_at,
+            last_live_at=observed_at,
+            confidence="live",
+            freshness_expires_at=NOW + timedelta(minutes=1),
+        ),
+        capabilities=_capabilities(managed=True),
+        last_activity_at=observed_at,
+        binding_host_state="online",
+    )
+
+    assert facts.control_path == "managed"
+    assert facts.process.status == "unknown"
+    assert facts.phase.kind == "thinking"
+    assert facts.lifecycle.state == "open"
+    assert facts.lifecycle.reason == "phase_observed"
+    assert facts.process_state == "running"
+
+
+def test_unmanaged_fresh_phase_marks_process_running_without_process_scan():
+    observed_at = NOW - timedelta(seconds=10)
+    facts = build_session_liveness_facts(
+        runtime_view=_runtime_view(
+            signal_tier="phase_signal",
+            runtime_phase="running",
+            runtime_source="semantic",
+            active_tool="bash",
+            phase_started_at=observed_at,
+            presence_updated_at=observed_at,
+            last_live_at=observed_at,
+            confidence="live",
+            freshness_expires_at=NOW + timedelta(minutes=1),
+        ),
+        capabilities=_capabilities(managed=False),
+        last_activity_at=observed_at,
+    )
+
+    assert facts.control_path == "unmanaged"
+    assert facts.process.status == "unknown"
+    assert facts.phase.kind == "running"
+    assert facts.phase.tool == "bash"
+    assert facts.lifecycle.state == "open"
+    assert facts.lifecycle.reason == "phase_observed"
+    assert facts.process_state == "running"

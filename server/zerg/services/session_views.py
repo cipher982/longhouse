@@ -151,6 +151,7 @@ def build_session_liveness_facts_response(
     )
     return SessionLivenessFactsResponse(
         control_path=facts.control_path,
+        process_state=facts.process_state,
         host=HostObservationResponse(
             state=facts.host.state,
             last_seen_at=facts.host.last_seen_at,
@@ -217,8 +218,9 @@ def _timeline_status_from_liveness_facts(runtime_facts: SessionLivenessFactsResp
     if runtime_facts is None:
         return TimelineStatusPresentationResponse(label="Unknown", tone="inactive", seen_at=None, seen_at_prefix="Checked")
 
+    process_state = str(runtime_facts.process_state or "").strip()
     lifecycle = runtime_facts.lifecycle
-    if lifecycle.state == "closed":
+    if process_state == "closed" or lifecycle.state == "closed":
         return TimelineStatusPresentationResponse(
             label="Closed",
             tone="closed",
@@ -236,55 +238,17 @@ def _timeline_status_from_liveness_facts(runtime_facts: SessionLivenessFactsResp
             seen_at_prefix="Updated",
         )
 
-    process = runtime_facts.process
-    if process.status == "observed":
+    if process_state == "running":
+        process = runtime_facts.process
         return TimelineStatusPresentationResponse(
-            label="Process visible",
-            tone="active",
+            label="Running",
+            tone="inactive",
             seen_at=process.observed_at or process.last_seen_at,
             seen_at_prefix="Verified",
         )
-    if process.status == "not_observed":
-        return TimelineStatusPresentationResponse(
-            label="Process not visible",
-            tone="inactive",
-            seen_at=process.last_seen_at or process.observed_at,
-            seen_at_prefix="Checked",
-        )
-
-    host = runtime_facts.host
-    if host.state == "online":
-        return TimelineStatusPresentationResponse(
-            label="Host online",
-            tone="inactive",
-            seen_at=host.last_seen_at,
-            seen_at_prefix="Heartbeat",
-        )
-    if host.state == "stale":
-        return TimelineStatusPresentationResponse(
-            label="Host last seen",
-            tone="inactive",
-            seen_at=host.last_seen_at,
-            seen_at_prefix="Heartbeat",
-        )
-    if host.state == "offline":
-        return TimelineStatusPresentationResponse(
-            label="Host offline",
-            tone="inactive",
-            seen_at=host.last_seen_at,
-            seen_at_prefix="Heartbeat",
-        )
-
-    if runtime_facts.activity.last_transcript_at is not None:
-        return TimelineStatusPresentationResponse(
-            label="Transcript only",
-            tone="inactive",
-            seen_at=runtime_facts.activity.last_transcript_at,
-            seen_at_prefix="Transcript",
-        )
 
     return TimelineStatusPresentationResponse(
-        label="Runtime unverified",
+        label="Unknown",
         tone="inactive",
         seen_at=None,
         seen_at_prefix="Checked",
@@ -294,7 +258,9 @@ def _timeline_status_from_liveness_facts(runtime_facts: SessionLivenessFactsResp
 def _phase_status_label(kind: str, tool_name: str | None) -> str:
     phase = "ready" if kind == "needs_user" else kind.replace("_", " ").replace("-", " ")
     compact_tool = compact_runtime_tool_label(tool_name)
-    if compact_tool and kind in {"running", "blocked"}:
+    if compact_tool and kind == "running":
+        return f"Using {compact_tool}"
+    if compact_tool and kind == "blocked":
         return f"{_title_case_words(phase)} {compact_tool}"
     return _title_case_words(phase)
 
@@ -469,6 +435,7 @@ class SessionLivenessFactsResponse(UTCBaseModel):
     """
 
     control_path: str = Field(..., description="Does Longhouse own a control path? managed|unmanaged")
+    process_state: str = Field(..., description="Observed provider-process state: running|closed|unknown")
     host: HostObservationResponse
     process: ProcessObservationResponse
     phase: PhaseObservationResponse
