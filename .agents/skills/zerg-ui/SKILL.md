@@ -22,6 +22,7 @@ make ui-capture PAGE=health               # Runtime health page
 make ui-capture SCENE=empty               # Empty state
 make ui-capture SCENE=onboarding-modal    # With modal visible
 make ui-capture SCENE=timeline-card-stress VIEWPORT=mobile  # Mobile card layout fixture
+make ui-capture PAGE=session-detail SCENE=session-detail-stress  # Session workspace fixture
 make ui-capture ALL=1                     # All pages
 ```
 
@@ -54,6 +55,7 @@ Read(file_path="artifacts/ui-capture/<timestamp>/timeline-a11y.yml")
 | `onboarding-modal` | Shows first-time setup modal |
 | `missing-api-key` | API key required modal visible |
 | `timeline-card-stress` | Fixture-backed timeline API responses for card layout QA without relying on live demo DB shape |
+| `session-detail-stress` | Fixture-backed managed session workspace with branch seam, tool rows, active runtime strip, and dock controls |
 
 ## Visual Regression (CI)
 ```bash

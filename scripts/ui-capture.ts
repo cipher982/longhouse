@@ -16,6 +16,7 @@
  *   bunx tsx scripts/ui-capture.ts timeline
  *   bunx tsx scripts/ui-capture.ts --scene=empty
  *   bunx tsx scripts/ui-capture.ts timeline --scene=timeline-card-stress --viewport=mobile
+ *   bunx tsx scripts/ui-capture.ts session-detail --scene=session-detail-stress
  *   bunx tsx scripts/ui-capture.ts machines
  *   bunx tsx scripts/ui-capture.ts --all
  */
@@ -24,10 +25,16 @@ import { chromium, type BrowserContext, type Page } from "playwright";
 import { execSync } from "child_process";
 import { mkdirSync, writeFileSync } from "fs";
 import path from "path";
+import {
+  buildSessionDetailStressFixture,
+  SESSION_DETAIL_STRESS_NOW,
+  SESSION_DETAIL_STRESS_SESSION_ID,
+} from "./ui-fixtures/sessionDetailStress";
 import { buildTimelineCardStressFixture } from "./ui-fixtures/timelineCardStress";
 
 const PAGE_DEFINITIONS = {
   timeline: { path: "/timeline" },
+  "session-detail": { path: `/timeline/${SESSION_DETAIL_STRESS_SESSION_ID}` },
   machines: { path: "/runners" },
   health: { path: "/health" },
   settings: { path: "/settings" },
@@ -38,6 +45,7 @@ const PAGE_DEFINITIONS = {
 } as const;
 type PageName = keyof typeof PAGE_DEFINITIONS;
 const PAGES = Object.keys(PAGE_DEFINITIONS) as PageName[];
+const ALL_CAPTURE_PAGES = PAGES.filter((pageName) => pageName !== "session-detail");
 
 const SCENES = [
   "empty",
@@ -45,6 +53,7 @@ const SCENES = [
   "onboarding-modal",
   "missing-api-key",
   "timeline-card-stress",
+  "session-detail-stress",
 ] as const;
 type SceneName = (typeof SCENES)[number];
 
@@ -171,7 +180,27 @@ function parseViewport(value: string | undefined): ViewportConfig {
 }
 
 function sceneUsesMockApi(scene: SceneName): boolean {
-  return scene === "timeline-card-stress";
+  return scene === "timeline-card-stress" || scene === "session-detail-stress";
+}
+
+function validateOptions(opts: Options): void {
+  if (opts.page === "session-detail" && opts.scene !== "session-detail-stress") {
+    throw new Error(
+      "session-detail requires --scene=session-detail-stress (or PAGE=session-detail SCENE=session-detail-stress through make).",
+    );
+  }
+  if (opts.all && opts.scene === "session-detail-stress") {
+    throw new Error("SCENE=session-detail-stress captures PAGE=session-detail only; omit ALL=1.");
+  }
+}
+
+function getPagesToCapture(opts: Options): PageName[] {
+  if (!opts.all) {
+    return [opts.page];
+  }
+  // Session detail needs a concrete session ID and fixture; keep it explicit
+  // instead of smuggling a synthetic route into the generic app sweep.
+  return [...ALL_CAPTURE_PAGES];
 }
 
 async function checkDevRunning(backendUrl: string): Promise<boolean> {
@@ -256,12 +285,104 @@ async function installSceneMocks(
   scene: SceneName,
   baseUrl: string,
 ): Promise<void> {
-  if (scene !== "timeline-card-stress") {
+  if (!sceneUsesMockApi(scene)) {
+    return;
+  }
+
+  const appOrigin = new URL(baseUrl).origin;
+
+  if (scene === "session-detail-stress") {
+    const fixture = buildSessionDetailStressFixture();
+    const sessionBasePath = `/api/timeline/sessions/${fixture.session.id}`;
+
+    await context.route(`${appOrigin}/api/**`, async (route) => {
+      const pathname = new URL(route.request().url()).pathname;
+
+      if (pathname === sessionBasePath) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(fixture.session),
+        });
+        return;
+      }
+
+      if (pathname === `${sessionBasePath}/thread`) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(fixture.thread),
+        });
+        return;
+      }
+
+      if (pathname === `${sessionBasePath}/workspace`) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(fixture.workspace),
+        });
+        return;
+      }
+
+      if (pathname === `${sessionBasePath}/projection`) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(fixture.projection),
+        });
+        return;
+      }
+
+      if (pathname === `${sessionBasePath}/turns`) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(fixture.turns),
+        });
+        return;
+      }
+
+      if (pathname === `${sessionBasePath}/workspace/stream`) {
+        await route.fulfill({
+          status: 204,
+          body: "",
+        });
+        return;
+      }
+
+      if (pathname === `/api/sessions/${fixture.session.id}/lock`) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ locked: false }),
+        });
+        return;
+      }
+
+      if (pathname === `/api/sessions/${fixture.session.id}/inputs`) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            {
+              id: 9001,
+              text: "Tighten the transcript rows first; the side pane can wait.",
+              intent: "queue",
+              status: "queued",
+              created_at: "2026-04-15T16:10:50Z",
+            },
+          ]),
+        });
+        return;
+      }
+
+      await route.fallback();
+    });
     return;
   }
 
   const fixture = buildTimelineCardStressFixture();
-  const appOrigin = new URL(baseUrl).origin;
 
   await context.route(`${appOrigin}/api/**`, async (route) => {
     const pathname = new URL(route.request().url()).pathname;
@@ -319,15 +440,20 @@ async function installScenePageOverrides(page: Page, scene: SceneName, pageName:
     return;
   }
 
-  await page.addInitScript(() => {
-    const fixtureNow = Date.parse("2026-04-15T16:12:00Z");
+  const fixtureNowIso = scene === "session-detail-stress" ? SESSION_DETAIL_STRESS_NOW : "2026-04-15T16:12:00Z";
+  await page.addInitScript((nowIso) => {
+    const fixtureNow = Date.parse(nowIso);
     Date.now = () => fixtureNow;
+  }, fixtureNowIso);
 
-    Object.defineProperty(window, "EventSource", {
-      configurable: true,
-      value: undefined,
+  if (scene === "timeline-card-stress") {
+    await page.addInitScript(() => {
+      Object.defineProperty(window, "EventSource", {
+        configurable: true,
+        value: undefined,
+      });
     });
-  });
+  }
 }
 
 async function captureBundle(
@@ -412,6 +538,7 @@ function getGitInfo(): { sha: string; branch: string; dirty: boolean } {
 
 async function main() {
   const opts = parseArgs();
+  validateOptions(opts);
 
   console.log("UI Capture - Debug Bundle Generator");
   console.log("====================================\n");
@@ -425,7 +552,7 @@ async function main() {
   }
   console.log(`Backend healthy at ${opts.backendUrl}`);
 
-  const pagesToCapture = opts.all ? [...PAGES] : [opts.page];
+  const pagesToCapture = getPagesToCapture(opts);
 
   // Seed scene
   console.log(`\nSeeding scene: ${opts.scene}`);
