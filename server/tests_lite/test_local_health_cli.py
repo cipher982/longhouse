@@ -13,6 +13,7 @@ from datetime import timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from cryptography.fernet import Fernet
 from typer.testing import CliRunner
 
@@ -31,8 +32,14 @@ from zerg.services.longhouse_paths import get_agent_status_path
 from zerg.services.machine_state import MachineState
 from zerg.services.machine_state import machine_state_source_hash
 
+_REAL_COMPUTE_PROCESS_SNAPSHOT = local_health_service._compute_process_snapshot
 _REAL_SCAN_PROVIDER_PROCESSES = local_health_service._scan_provider_processes
 _REAL_COLLECT_MANAGED_SESSIONS_BY_PROCESS = local_health_service._collect_managed_sessions_by_process
+
+
+@pytest.fixture(autouse=True)
+def _stub_process_snapshot_by_default(monkeypatch):
+    monkeypatch.setattr(local_health_service, "_compute_process_snapshot", lambda: ([], []))
 
 
 def _service_info(
@@ -196,6 +203,7 @@ def _disable_real_runner_env(monkeypatch, tmp_path: Path) -> None:
     # Stub the live process scan by default so tests don't pick up the dev
     # box's real Claude/Codex processes. Tests that want process-scan output
     # override this explicitly.
+    monkeypatch.setattr(local_health_service, "_compute_process_snapshot", lambda: ([], []))
     monkeypatch.setattr(local_health_service, "_scan_provider_processes", lambda: [])
     monkeypatch.setattr(
         local_health_service,
@@ -2189,6 +2197,7 @@ def _patch_process_iter(monkeypatch, procs: list[_FakeProc]) -> None:
     def fake_iter(_attrs=None):
         return iter(procs)
 
+    monkeypatch.setattr(local_health_service, "_compute_process_snapshot", _REAL_COMPUTE_PROCESS_SNAPSHOT)
     monkeypatch.setattr(psutil, "process_iter", fake_iter)
 
 

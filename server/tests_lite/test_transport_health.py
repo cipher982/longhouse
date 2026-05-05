@@ -99,7 +99,7 @@ def test_local_health_cli_does_not_require_database_url(tmp_path):
 
     try:
         completed = subprocess.run(
-            [sys.executable, "-m", "zerg.cli.main", "local-health", "--json"],
+            [sys.executable, "-m", "zerg.cli.main", "local-health", "--fast", "--json"],
             capture_output=True,
             text=True,
             cwd=repo_server_dir,
