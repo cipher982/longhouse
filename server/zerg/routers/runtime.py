@@ -140,28 +140,23 @@ async def ingest_runtime_event_batch(
         result, prepared_per_session = await ws.execute_or_direct(_do, db, label="runtime-events")
 
         # Publish per-session after a successful write; SSE subscribers wake directly.
-        if events:
-            from zerg.services.session_pubsub import TOPIC_TIMELINE
-            from zerg.services.session_pubsub import get_pubsub
-            from zerg.services.session_pubsub import topic_session
+        updated_runtime_keys = set(result.updated_runtime_keys)
+        if updated_runtime_keys:
+            from zerg.services.session_pubsub import publish_session_runtime_update
 
-            bus = get_pubsub()
             session_ids_published: set[str] = set()
             for ev in events:
-                if ev.session_id is None:
+                if ev.session_id is None or ev.runtime_key not in updated_runtime_keys:
                     continue
                 sid = str(ev.session_id)
                 if sid in session_ids_published:
                     continue
                 session_ids_published.add(sid)
-                payload = {
-                    "kind": "runtime",
-                    "session_id": sid,
-                    "provider": ev.provider,
-                    "source": ev.source,
-                }
-                bus.publish(topic_session(sid), payload)
-                bus.publish(TOPIC_TIMELINE, payload)
+                publish_session_runtime_update(
+                    session_id=sid,
+                    provider=ev.provider,
+                    source=ev.source,
+                )
 
         # Send pre-prepared APNs pushes + deliver queued messages, per session.
         # Per-session exception fence so one bad dispatch doesn't skip the rest.

@@ -188,3 +188,21 @@ def topic_session(session_id: str) -> str:
 
 
 TOPIC_TIMELINE = "timeline"
+
+
+def publish_session_runtime_update(
+    *,
+    session_id: str,
+    provider: str | None,
+    source: str | None,
+) -> None:
+    """Wake session and timeline subscribers after persisted runtime state changes."""
+    payload = {
+        "kind": "runtime",
+        "session_id": session_id,
+        "provider": provider,
+        "source": source,
+    }
+    bus = get_pubsub()
+    bus.publish(topic_session(session_id), payload)
+    bus.publish(TOPIC_TIMELINE, payload)

@@ -27,6 +27,7 @@ Authentication: same X-Agents-Token / device token as ingest.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from datetime import timezone
 from typing import Optional
@@ -79,6 +80,13 @@ VALID_STATES = {"thinking", "running", "idle", "needs_user", "blocked"}
 _AUTO_RESUME_STATES = {"thinking", "running"}
 
 
+def _source_for_provider_hook(provider: str | None) -> str:
+    normalized = re.sub(r"[^a-z0-9_]+", "_", (provider or "claude").strip().lower()).strip("_")
+    if not normalized:
+        normalized = "claude"
+    return f"{normalized[:58]}_hook"
+
+
 class PresenceIn(UTCBaseModel):
     """Payload from a Claude Code hook."""
 
@@ -127,7 +135,7 @@ async def upsert_presence(
         session_id=coerce_session_uuid(payload.session_id),
         provider=runtime_provider,
         device_id=getattr(_token, "device_id", None),
-        source="claude_hook",
+        source=_source_for_provider_hook(runtime_provider),
         kind="phase_signal",
         phase=payload.state,
         tool_name=runtime_tool_name,
@@ -199,14 +207,38 @@ async def upsert_presence(
             current_tool_name=runtime_tool_name,
             occurred_at=_now,
         )
-        return canonical_presence_state, attention_push, attention_resolution_push, widget_push, live_activity_pushes
+        should_publish_runtime_update = runtime_key in ingest_result.updated_runtime_keys
+        return (
+            canonical_presence_state,
+            should_publish_runtime_update,
+            attention_push,
+            attention_resolution_push,
+            widget_push,
+            live_activity_pushes,
+        )
 
     ws = get_write_serializer()
-    canonical_presence_state, attention_push, attention_resolution_push, widget_push, live_activity_pushes = await ws.execute_or_direct(
+    (
+        canonical_presence_state,
+        should_publish_runtime_update,
+        attention_push,
+        attention_resolution_push,
+        widget_push,
+        live_activity_pushes,
+    ) = await ws.execute_or_direct(
         _do_presence_writes,
         db,
         label="presence",
     )
+
+    if session_uuid is not None and should_publish_runtime_update:
+        from zerg.services.session_pubsub import publish_session_runtime_update
+
+        publish_session_runtime_update(
+            session_id=str(session_uuid),
+            provider=runtime_event.provider,
+            source=runtime_event.source,
+        )
 
     if session_uuid is not None and is_session_message_deliverable_state(canonical_presence_state):
         await deliver_queued_session_messages(
