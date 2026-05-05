@@ -39,6 +39,7 @@ use chrono::Utc;
 
 use crate::discovery;
 use crate::heartbeat::UnmanagedSessionBinding;
+use crate::state::unmanaged_process_binding::UnmanagedProcessBindingStore;
 
 /// Cap the number of bindings emitted per heartbeat. Provider roots with
 /// thousands of stale transcripts shouldn't inflate the payload.
@@ -49,17 +50,86 @@ const MAX_BINDINGS: usize = 128;
 /// for liveness decisions.
 const TRANSCRIPT_MTIME_WINDOW: chrono::Duration = chrono::Duration::hours(24);
 
-/// Extracts one row per alive unmanaged provider CLI process holding a
-/// recent transcript file. Callers pass this straight through on the
-/// heartbeat.
-pub fn collect_unmanaged_session_bindings(machine_id: &str) -> Vec<UnmanagedSessionBinding> {
-    collect_with_scanner(machine_id, &SystemScanner, Utc::now())
+/// Merge fd-scanned bindings with hook-observed unmanaged provider bindings.
+///
+/// Claude does not reliably keep its JSONL transcript open between writes, so
+/// the fd scanner can see the process but miss the session identity. The Claude
+/// hook writes the provider pid + session id locally; this function validates
+/// that the same pid/start-time is still alive before emitting the normal
+/// heartbeat binding shape.
+pub fn collect_unmanaged_session_bindings_with_store(
+    conn: &rusqlite::Connection,
+    machine_id: &str,
+    now: DateTime<Utc>,
+) -> Vec<UnmanagedSessionBinding> {
+    let mut out = collect_with_scanner(machine_id, &SystemScanner, now);
+    let store = UnmanagedProcessBindingStore::new(conn);
+    if let Err(err) = store.prune_older_than(now - chrono::Duration::days(30)) {
+        tracing::warn!("pruning unmanaged process binding state failed: {err}");
+    }
+    let hook_rows = match store.load_all() {
+        Ok(rows) => rows,
+        Err(err) => {
+            tracing::warn!("reading unmanaged process binding state failed: {err}");
+            return out;
+        }
+    };
+    let processes = run_ps();
+
+    for row in hook_rows {
+        let Some(process) = processes.iter().find(|proc| proc.pid == row.pid) else {
+            continue;
+        };
+        if process.start_time_key != row.process_start_time_key {
+            continue;
+        }
+        if is_provider_process(&process.command) != Some(row.provider.as_str()) {
+            continue;
+        }
+
+        let (source_inode, source_device, source_offset, source_mtime) = row
+            .source_path
+            .as_ref()
+            .and_then(|path| std::fs::metadata(path).ok())
+            .map(|meta| {
+                (
+                    inode_of(&meta),
+                    device_of(&meta),
+                    Some(meta.len()),
+                    meta.modified().ok().map(DateTime::<Utc>::from),
+                )
+            })
+            .unwrap_or((None, None, None, None));
+
+        let binding = UnmanagedSessionBinding {
+            machine_id: machine_id.to_string(),
+            provider: row.provider,
+            provider_session_id: row.provider_session_id,
+            source_path: row
+                .source_path
+                .as_ref()
+                .and_then(|path| path.to_str().map(str::to_string)),
+            source_inode,
+            source_device,
+            pid: Some(process.pid),
+            process_start_time: Some(process.start_time.to_rfc3339()),
+            cwd: row.cwd,
+            source_offset,
+            source_mtime: source_mtime.map(|mtime| mtime.to_rfc3339()),
+            observed_at: now.to_rfc3339(),
+        };
+
+        upsert_newer_binding(&mut out, binding);
+    }
+
+    out
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProcessInfo {
     pub pid: u32,
     pub start_time: DateTime<Utc>,
+    pub start_time_key: String,
     pub command: String,
 }
 
@@ -137,6 +207,7 @@ fn parse_ps(text: &str) -> Vec<ProcessInfo> {
         out.push(ProcessInfo {
             pid,
             start_time,
+            start_time_key: lstart.to_string(),
             command,
         });
     }
@@ -204,6 +275,34 @@ fn is_provider_process(command: &str) -> Option<&'static str> {
         "opencode" | "opencode.js" => Some("opencode"),
         "codex" | "codex.js" if matches!(basename, "node" | "nodejs") => Some("codex"),
         _ => None,
+    }
+}
+
+pub fn process_info_for_pid(pid: u32, provider: &str) -> Option<ProcessInfo> {
+    run_ps()
+        .into_iter()
+        .find(|proc| proc.pid == pid && is_provider_process(&proc.command) == Some(provider))
+}
+
+fn upsert_newer_binding(
+    bindings: &mut Vec<UnmanagedSessionBinding>,
+    next: UnmanagedSessionBinding,
+) {
+    let Some(existing) = bindings.iter_mut().find(|binding| {
+        binding.provider == next.provider && binding.provider_session_id == next.provider_session_id
+    }) else {
+        bindings.push(next);
+        return;
+    };
+
+    let existing_observed = DateTime::parse_from_rfc3339(&existing.observed_at)
+        .ok()
+        .map(|value| value.with_timezone(&Utc));
+    let next_observed = DateTime::parse_from_rfc3339(&next.observed_at)
+        .ok()
+        .map(|value| value.with_timezone(&Utc));
+    if next_observed >= existing_observed {
+        *existing = next;
     }
 }
 
@@ -430,6 +529,15 @@ mod tests {
         DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
     }
 
+    fn proc_info(pid: u32, start: &str, command: &str) -> ProcessInfo {
+        ProcessInfo {
+            pid,
+            start_time: t(start),
+            start_time_key: start.to_string(),
+            command: command.to_string(),
+        }
+    }
+
     #[test]
     fn parses_ps_output() {
         // Apr 27 2026 is a Monday. ps emits local weekday abbreviation; we
@@ -482,7 +590,10 @@ mod tests {
             is_provider_process("bun /opt/homebrew/bin/opencode serve"),
             Some("opencode")
         );
-        assert_eq!(is_provider_process("bun /opt/homebrew/bin/codex --tui"), None);
+        assert_eq!(
+            is_provider_process("bun /opt/homebrew/bin/codex --tui"),
+            None
+        );
         assert_eq!(is_provider_process("claude"), Some("claude"));
         assert_eq!(is_provider_process("gemini chat"), Some("gemini"));
         assert_eq!(is_provider_process("longhouse-codex --attach"), None);
@@ -529,11 +640,11 @@ mod tests {
         std::fs::write(&transcript, "{}\n").unwrap();
 
         let scanner = FakeScanner {
-            processes: vec![ProcessInfo {
-                pid: 1234,
-                start_time: t("2026-04-27T10:00:00Z"),
-                command: "/usr/local/bin/codex --tui".into(),
-            }],
+            processes: vec![proc_info(
+                1234,
+                "2026-04-27T10:00:00Z",
+                "/usr/local/bin/codex --tui",
+            )],
             open_files: RefCell::new({
                 let mut m = HashMap::new();
                 m.insert(1234u32, vec![transcript.clone()]);
@@ -566,11 +677,11 @@ mod tests {
         std::fs::write(&transcript, "{}\n").unwrap();
 
         let scanner = FakeScanner {
-            processes: vec![ProcessInfo {
-                pid: 1234,
-                start_time: t("2026-04-27T10:00:00Z"),
-                command: "node /opt/homebrew/bin/codex --tui".into(),
-            }],
+            processes: vec![proc_info(
+                1234,
+                "2026-04-27T10:00:00Z",
+                "node /opt/homebrew/bin/codex --tui",
+            )],
             open_files: RefCell::new({
                 let mut m = HashMap::new();
                 m.insert(1234u32, vec![transcript.clone()]);
@@ -595,12 +706,11 @@ mod tests {
         std::fs::write(&transcript, "{}\n").unwrap();
 
         let scanner = FakeScanner {
-            processes: vec![ProcessInfo {
-                pid: 1234,
-                start_time: t("2026-04-27T10:00:00Z"),
-                command: "node /opt/homebrew/lib/node_modules/@openai/codex/bin/codex.js --tui"
-                    .into(),
-            }],
+            processes: vec![proc_info(
+                1234,
+                "2026-04-27T10:00:00Z",
+                "node /opt/homebrew/lib/node_modules/@openai/codex/bin/codex.js --tui",
+            )],
             open_files: RefCell::new({
                 let mut m = HashMap::new();
                 m.insert(1234u32, vec![transcript.clone()]);
@@ -627,11 +737,11 @@ mod tests {
         std::fs::write(&transcript, "{}\n").unwrap();
 
         let scanner = FakeScanner {
-            processes: vec![ProcessInfo {
-                pid: 1234,
-                start_time: t("2026-04-27T10:00:00Z"),
-                command: "/usr/local/bin/codex --tui".into(),
-            }],
+            processes: vec![proc_info(
+                1234,
+                "2026-04-27T10:00:00Z",
+                "/usr/local/bin/codex --tui",
+            )],
             open_files: RefCell::new({
                 let mut m = HashMap::new();
                 m.insert(1234u32, vec![transcript.clone()]);
@@ -656,16 +766,8 @@ mod tests {
         let transcript = tmp.path().join("abc.jsonl");
         std::fs::write(&transcript, "{}\n").unwrap();
 
-        let older = ProcessInfo {
-            pid: 1000,
-            start_time: t("2026-04-27T09:00:00Z"),
-            command: "/usr/local/bin/codex".into(),
-        };
-        let newer = ProcessInfo {
-            pid: 2000,
-            start_time: t("2026-04-27T11:00:00Z"),
-            command: "/usr/local/bin/codex".into(),
-        };
+        let older = proc_info(1000, "2026-04-27T09:00:00Z", "/usr/local/bin/codex");
+        let newer = proc_info(2000, "2026-04-27T11:00:00Z", "/usr/local/bin/codex");
 
         let mut open_files = HashMap::new();
         open_files.insert(1000u32, vec![transcript.clone()]);
@@ -690,11 +792,11 @@ mod tests {
         std::fs::write(&transcript, "").unwrap();
 
         let scanner = FakeScanner {
-            processes: vec![ProcessInfo {
-                pid: 1234,
-                start_time: t("2026-04-27T10:00:00Z"),
-                command: "/usr/local/bin/codex".into(),
-            }],
+            processes: vec![proc_info(
+                1234,
+                "2026-04-27T10:00:00Z",
+                "/usr/local/bin/codex",
+            )],
             open_files: RefCell::new(HashMap::new()),
         };
 

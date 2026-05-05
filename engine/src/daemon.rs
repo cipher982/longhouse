@@ -510,7 +510,11 @@ fn write_local_status_snapshot(
     let mut payload = heartbeat::HeartbeatPayload::build(&stats);
     payload.managed_sessions =
         heartbeat::leases_from_observations(conn, machine_id, observations, chrono::Utc::now());
-    payload.unmanaged_session_bindings = heartbeat::collect_unmanaged_session_bindings(machine_id);
+    payload.unmanaged_session_bindings = heartbeat::collect_unmanaged_session_bindings_with_store(
+        conn,
+        machine_id,
+        chrono::Utc::now(),
+    );
     // Compute the fresh ledger view up front so a read failure is both
     // logged and encoded in the status file as `phase_ledger_status`.
     // Downstream readers (verify-runtime-truth, local-health) can then

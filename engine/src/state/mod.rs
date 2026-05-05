@@ -4,3 +4,4 @@ pub mod managed_session_state;
 pub mod session_binding;
 pub mod session_phase;
 pub mod spool;
+pub mod unmanaged_process_binding;

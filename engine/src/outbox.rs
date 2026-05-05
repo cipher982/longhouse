@@ -21,6 +21,9 @@ use tracing::warn;
 use crate::shipping::client::ShipperClient;
 use crate::state::managed_session_state::{ManagedSessionPhaseSignal, ManagedSessionStateStore};
 use crate::state::session_phase::{PhaseSource, SessionPhaseSignal, SessionPhaseStore};
+use crate::state::unmanaged_process_binding::{
+    UnmanagedProcessBindingSignal, UnmanagedProcessBindingStore,
+};
 
 /// Maximum age for an outbox file before it is considered stale and deleted.
 const STALE_SECS: u64 = 600; // 10 minutes
@@ -37,6 +40,10 @@ struct PresenceOutboxPayload {
     transcript_path: Option<String>,
     #[serde(default)]
     provider: Option<String>,
+    #[serde(default)]
+    control_path: Option<String>,
+    #[serde(default)]
+    provider_pid: Option<u32>,
     #[serde(default)]
     occurred_at: Option<String>,
 }
@@ -268,6 +275,16 @@ async fn drain_outbox_impl(
                     managed_signal.session_id
                 );
             }
+            if let Some(binding_signal) =
+                unmanaged_binding_signal_for_payload(&payload, &provider, &session_id, observed_at)
+            {
+                if let Err(err) = UnmanagedProcessBindingStore::new(conn).record(&binding_signal) {
+                    warn!(
+                        "persisting unmanaged process binding failed for session {}: {err}",
+                        binding_signal.provider_session_id
+                    );
+                }
+            }
         }
 
         match client.post_json("/api/agents/presence", bytes).await {
@@ -320,6 +337,31 @@ fn normalize_transcript_path(path: Option<&str>) -> Option<PathBuf> {
     path.map(str::trim)
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
+}
+
+fn unmanaged_binding_signal_for_payload(
+    payload: &PresenceOutboxPayload,
+    provider: &str,
+    session_id: &str,
+    observed_at: DateTime<Utc>,
+) -> Option<UnmanagedProcessBindingSignal> {
+    if payload.control_path.as_deref().map(str::trim) != Some("unmanaged") {
+        return None;
+    }
+    let pid = payload.provider_pid?;
+    let process = crate::unmanaged_bindings::process_info_for_pid(pid, provider)?;
+    let source_path = normalize_transcript_path(payload.transcript_path.as_deref());
+
+    Some(UnmanagedProcessBindingSignal {
+        provider: provider.to_string(),
+        provider_session_id: session_id.to_string(),
+        source_path,
+        pid,
+        process_start_time: process.start_time,
+        process_start_time_key: process.start_time_key,
+        cwd: payload.cwd.clone(),
+        observed_at,
+    })
 }
 
 #[cfg(test)]

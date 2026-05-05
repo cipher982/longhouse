@@ -30,6 +30,7 @@ from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_runtime import managed_codex_liveness_invariant_counts
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
+from zerg.services.unmanaged_bindings import load_binding_overlay
 
 
 def _make_db(tmp_path, name="session_runtime.db"):
@@ -847,6 +848,213 @@ def test_heartbeat_empty_unmanaged_snapshot_keeps_fresh_unbound_codex_session_op
     engine.dispose()
 
 
+def test_heartbeat_claude_binding_marks_process_running(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_claude_process_binding.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, provider="claude", started_at=now - timedelta(minutes=5))
+        session.execution_home = "unmanaged_local"
+        session.provider_session_id = str(session.id)
+        session.last_activity_at = now - timedelta(seconds=30)
+        runtime_key = runtime_key_for_session("claude", str(session.id))
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="runtime-device",
+                    source="claude_hook",
+                    kind="phase_signal",
+                    phase="thinking",
+                    occurred_at=now - timedelta(seconds=30),
+                    freshness_ms=90 * 1000,
+                    dedupe_key="claude-binding-phase",
+                    payload={},
+                )
+            ],
+        )
+        db.commit()
+        session_id = session.id
+
+    for client in _client(SessionLocal):
+        response = client.post(
+            "/agents/heartbeat",
+            json={
+                "version": "test",
+                "daemon_pid": 123,
+                "unmanaged_session_bindings": [
+                    {
+                        "machine_id": "cinder",
+                        "provider": "claude",
+                        "provider_session_id": str(session_id),
+                        "source_path": f"/tmp/{session_id}.jsonl",
+                        "pid": 69257,
+                        "process_start_time": (now - timedelta(minutes=3)).isoformat(),
+                        "cwd": "/tmp/runtime",
+                        "source_mtime": (now - timedelta(seconds=5)).isoformat(),
+                        "observed_at": now.isoformat(),
+                    }
+                ],
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert response.status_code == 204, response.text
+
+    with SessionLocal() as db:
+        stored_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session_id).one()
+        overlay = load_binding_overlay(db, [session_id], now=now)[session_id]
+        view = build_runtime_view(state=state, session=stored_session, now=now)
+        facts = build_session_liveness_facts(
+            runtime_view=view,
+            capabilities=build_session_capabilities(stored_session),
+            last_activity_at=stored_session.last_activity_at,
+            binding_overlay=overlay,
+        )
+
+        assert facts.control_path == "unmanaged"
+        assert facts.process_state == "running"
+        assert facts.process.pid == 69257
+        assert facts.lifecycle.state == "open"
+        assert facts.lifecycle.reason == "process_observed"
+
+    engine.dispose()
+
+
+def test_heartbeat_empty_unmanaged_snapshot_does_not_close_unbound_claude_session(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_claude_unbound_missing.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, provider="claude", started_at=now - timedelta(minutes=20))
+        session.execution_home = "unmanaged_local"
+        session.provider_session_id = str(session.id)
+        session.last_activity_at = now - timedelta(minutes=10)
+        runtime_key = runtime_key_for_session("claude", str(session.id))
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="runtime-device",
+                    source="claude_hook",
+                    kind="phase_signal",
+                    phase="thinking",
+                    occurred_at=now - timedelta(minutes=10),
+                    freshness_ms=90 * 1000,
+                    dedupe_key="unbound-claude-phase",
+                    payload={},
+                )
+            ],
+        )
+        db.commit()
+        session_id = session.id
+
+    for client in _client(SessionLocal):
+        response = client.post(
+            "/agents/heartbeat",
+            json={
+                "version": "test",
+                "daemon_pid": 123,
+                "unmanaged_session_bindings": [],
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert response.status_code == 204, response.text
+
+    with SessionLocal() as db:
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session_id).one()
+        assert state.terminal_state is None
+
+    engine.dispose()
+
+
+def test_heartbeat_empty_unmanaged_snapshot_closes_previously_bound_claude_session(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_claude_bound_missing.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, provider="claude", started_at=now - timedelta(minutes=5))
+        session.execution_home = "unmanaged_local"
+        session.provider_session_id = str(session.id)
+        runtime_key = runtime_key_for_session("claude", str(session.id))
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="runtime-device",
+                    source="claude_hook",
+                    kind="phase_signal",
+                    phase="thinking",
+                    occurred_at=now - timedelta(minutes=2),
+                    freshness_ms=90 * 1000,
+                    dedupe_key="bound-claude-phase",
+                    payload={},
+                )
+            ],
+        )
+        db.commit()
+        session_id = session.id
+
+    for client in _client(SessionLocal):
+        observed = client.post(
+            "/agents/heartbeat",
+            json={
+                "version": "test",
+                "daemon_pid": 123,
+                "unmanaged_session_bindings": [
+                    {
+                        "machine_id": "cinder",
+                        "provider": "claude",
+                        "provider_session_id": str(session_id),
+                        "pid": 69257,
+                        "process_start_time": (now - timedelta(minutes=3)).isoformat(),
+                        "observed_at": (now - timedelta(minutes=1)).isoformat(),
+                    }
+                ],
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert observed.status_code == 204, observed.text
+
+        missing = client.post(
+            "/agents/heartbeat",
+            json={
+                "version": "test",
+                "daemon_pid": 123,
+                "unmanaged_session_bindings": [],
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert missing.status_code == 204, missing.text
+
+    with SessionLocal() as db:
+        stored_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session_id).one()
+        overlay = load_binding_overlay(db, [session_id], now=now)[session_id]
+        view = build_runtime_view(state=state, session=stored_session, now=now)
+        facts = build_session_liveness_facts(
+            runtime_view=view,
+            capabilities=build_session_capabilities(stored_session),
+            last_activity_at=stored_session.last_activity_at,
+            binding_overlay=overlay,
+        )
+
+        assert overlay.terminal_reason == "process_gone"
+        assert facts.process_state == "closed"
+        assert facts.lifecycle.state == "closed"
+
+    engine.dispose()
+
+
 def test_heartbeat_missing_managed_lease_closes_immediately_with_stable_anchor(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_managed_missing_detached.db")
     now = datetime.now(timezone.utc)
@@ -1065,7 +1273,7 @@ def test_heartbeat_missing_managed_lease_closes_existing_synthetic_missing_state
                     freshness_ms=24 * 60 * 60 * 1000,
                     dedupe_key="managed-lease-bad-synthetic-missing",
                     payload={"state": "missing"},
-                )
+                ),
             ],
         )
         db.commit()
