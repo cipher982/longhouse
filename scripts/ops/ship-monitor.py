@@ -12,6 +12,8 @@ import sys
 import time
 from dataclasses import asdict
 from dataclasses import dataclass
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 
 
@@ -26,8 +28,10 @@ CONTROL_PLANE_HEALTH = {"ok", "healthy"}
 RUNTIME_HEALTH = {"healthy"}
 DEPLOY_AND_VERIFY = "Deploy and Verify"
 DEPLOY_CONTROL_PLANE = "Deploy Control Plane"
+CI_WORKFLOW = "CI"
 DEPLOY_AND_VERIFY_JOB = "Deploy demo + canary + hosted live QA"
 DEPLOY_CONTROL_PLANE_JOB = "Deploy Control Plane"
+DEPLOY_GATE_JOB = "Queue deploy behind earlier main SHAs + green CI"
 RUNTIME_IMAGE_WORKFLOW = "Publish Runtime Image"
 RUNTIME_IMAGE_JOB = "build-and-push"
 CANARY_SURFACE = "Canary"
@@ -208,6 +212,23 @@ def fetch_run_jobs(repo: str, run_id: int) -> list[dict]:
     return payload.get("jobs") or []
 
 
+def fetch_first_parent_sha(repo: str, sha: str) -> str | None:
+    proc = run(
+        [
+            "gh",
+            "api",
+            f"repos/{repo}/commits/{sha}",
+            "--jq",
+            ".parents[0].sha // empty",
+        ],
+        check=False,
+    )
+    if proc.returncode != 0:
+        return None
+    value = proc.stdout.strip()
+    return value or None
+
+
 def print_ci_profile(root: Path, repo: str, runs: list[RunInfo]) -> None:
     """Print best-effort deterministic job/step timings for completed runs."""
     if not runs:
@@ -298,7 +319,168 @@ def format_elapsed(seconds: float) -> str:
     return f"{minutes}m{seconds:02d}s"
 
 
-def summarize_incomplete_runs(runs: list[RunInfo]) -> str:
+def parse_github_timestamp(value: str | None) -> datetime | None:
+    if not value or value.startswith("0001-01-01"):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def current_duration_suffix(started_at: str | None) -> str:
+    started = parse_github_timestamp(started_at)
+    if started is None:
+        return ""
+    elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+    if elapsed < 1:
+        return ""
+    return f", {format_elapsed(elapsed)}"
+
+
+def field(item: dict, snake_name: str, camel_name: str | None = None) -> str | None:
+    value = item.get(snake_name)
+    if value is None and camel_name:
+        value = item.get(camel_name)
+    if value is None:
+        return None
+    return str(value)
+
+
+def active_step(job: dict) -> dict | None:
+    steps = job.get("steps") or []
+    for step in steps:
+        if field(step, "status") == "in_progress":
+            return step
+    for step in steps:
+        if field(step, "status") not in {None, "completed"}:
+            return step
+    return None
+
+
+def active_job(jobs: list[dict]) -> dict | None:
+    for job in jobs:
+        if field(job, "status") == "in_progress":
+            return job
+    for job in jobs:
+        if field(job, "status") not in {None, "completed"}:
+            return job
+    return None
+
+
+def describe_run_progress(repo: str, run_info: RunInfo) -> str:
+    try:
+        jobs = fetch_run_jobs(repo, run_info.databaseId)
+    except RuntimeError:
+        return f"{run_info.workflowName} #{run_info.databaseId}: {run_info.status}/{run_info.conclusion or '-'}"
+
+    job = active_job(jobs)
+    if job is None:
+        return f"{run_info.workflowName} #{run_info.databaseId}: {run_info.status}/{run_info.conclusion or '-'}"
+
+    job_name = field(job, "name") or f"job-{field(job, 'databaseId', 'databaseId') or '?'}"
+    step = active_step(job)
+    if step is None:
+        status = field(job, "status") or "unknown"
+        return f"{run_info.workflowName} #{run_info.databaseId} / {job_name}: {status}"
+
+    step_name = field(step, "name") or "current step"
+    status = field(step, "status") or "unknown"
+    started_at = field(step, "started_at", "startedAt")
+    return (
+        f"{run_info.workflowName} #{run_info.databaseId} / {job_name} / "
+        f"{step_name}: {status}{current_duration_suffix(started_at)}"
+    )
+
+
+def find_run(runs: list[RunInfo], workflow_name: str) -> RunInfo | None:
+    matches = [run_info for run_info in runs if run_info.workflowName == workflow_name]
+    if not matches:
+        return None
+    matches.sort(key=lambda run_info: run_info.databaseId, reverse=True)
+    return matches[0]
+
+
+def describe_blocking_workflow(repo: str, workflow_name: str, sha: str, runs: list[RunInfo] | None = None) -> str:
+    candidate_runs = runs if runs is not None else fetch_runs(repo, sha)
+    run_info = find_run(candidate_runs, workflow_name)
+    if run_info is None:
+        return f"{workflow_name}: no exact-SHA run found for {sha[:10]}"
+    if run_info.status == "completed":
+        return f"{workflow_name} #{run_info.databaseId}: completed/{run_info.conclusion or '-'}"
+    return describe_run_progress(repo, run_info)
+
+
+def describe_deploy_run_blocker(repo: str, sha: str, runs: list[RunInfo], deploy_run: RunInfo) -> str | None:
+    try:
+        jobs = fetch_run_jobs(repo, deploy_run.databaseId)
+    except RuntimeError:
+        return None
+
+    gate_job = next((job for job in jobs if field(job, "name") == DEPLOY_GATE_JOB), None)
+    if gate_job and field(gate_job, "status") == "in_progress":
+        step = active_step(gate_job)
+        if step is None:
+            return f"{DEPLOY_AND_VERIFY} #{deploy_run.databaseId} / {DEPLOY_GATE_JOB}: in_progress"
+
+        step_name = field(step, "name") or "current gate step"
+        status = field(step, "status") or "unknown"
+        started_at = field(step, "started_at", "startedAt")
+
+        if step_name == "Wait for full CI gate":
+            blocker = describe_blocking_workflow(repo, CI_WORKFLOW, sha, runs)
+            return f"{DEPLOY_AND_VERIFY} #{deploy_run.databaseId} / gate -> {blocker}"
+
+        if step_name == "Wait for runtime image publish":
+            blocker = describe_blocking_workflow(repo, RUNTIME_IMAGE_WORKFLOW, sha, runs)
+            return f"{DEPLOY_AND_VERIFY} #{deploy_run.databaseId} / gate -> {blocker}"
+
+        if step_name == "Wait for previous main deploy to clear":
+            parent_sha = fetch_first_parent_sha(repo, sha)
+            if parent_sha:
+                blocker = describe_blocking_workflow(repo, DEPLOY_AND_VERIFY, parent_sha)
+                return f"{DEPLOY_AND_VERIFY} #{deploy_run.databaseId} / gate -> previous main {blocker}"
+
+        return (
+            f"{DEPLOY_AND_VERIFY} #{deploy_run.databaseId} / {DEPLOY_GATE_JOB} / "
+            f"{step_name}: {status}{current_duration_suffix(started_at)}"
+        )
+
+    active = active_job(jobs)
+    if active is None:
+        return None
+    job_name = field(active, "name") or "active job"
+    step = active_step(active)
+    if step is None:
+        return f"{DEPLOY_AND_VERIFY} #{deploy_run.databaseId} / {job_name}: {field(active, 'status') or 'unknown'}"
+    step_name = field(step, "name") or "current step"
+    status = field(step, "status") or "unknown"
+    started_at = field(step, "started_at", "startedAt")
+    return (
+        f"{DEPLOY_AND_VERIFY} #{deploy_run.databaseId} / {job_name} / "
+        f"{step_name}: {status}{current_duration_suffix(started_at)}"
+    )
+
+
+def describe_ship_blocker(repo: str, sha: str, runs: list[RunInfo]) -> str | None:
+    for run_info in runs:
+        if run_info.status != "completed" and run_info.workflowName == DEPLOY_AND_VERIFY:
+            blocker = describe_deploy_run_blocker(repo, sha, runs, run_info)
+            if blocker:
+                return blocker
+
+    for run_info in runs:
+        if run_info.status == "completed":
+            continue
+        return describe_run_progress(repo, run_info)
+    return None
+
+
+def summarize_incomplete_runs(repo: str, sha: str, runs: list[RunInfo]) -> str:
+    blocker = describe_ship_blocker(repo, sha, runs)
+    if blocker:
+        return blocker
+
     parts: list[str] = []
     for run in runs:
         if run.status == "completed":
@@ -391,7 +573,7 @@ def wait_for_workflows(args: argparse.Namespace, sha: str) -> list[RunInfo]:
         if next_heartbeat is not None and now >= next_heartbeat:
             print(
                 f"Still waiting on {sha[:10]} after {format_elapsed(now - start)}: "
-                f"{summarize_incomplete_runs(monitored_runs)}",
+                f"{summarize_incomplete_runs(args.repo, sha, runs)}",
                 file=sys.stderr,
             )
             next_heartbeat = now + max(args.heartbeat, 1)

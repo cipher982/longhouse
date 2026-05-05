@@ -30,12 +30,18 @@ Local HEAD           ac77b06d72
 """
 
 
-def run_info(workflow_name: str, run_id: int) -> object:
+def run_info(
+    workflow_name: str,
+    run_id: int,
+    *,
+    status: str = "completed",
+    conclusion: str | None = "success",
+) -> object:
     return ship_monitor.RunInfo(
         databaseId=run_id,
         workflowName=workflow_name,
-        status="completed",
-        conclusion="success",
+        status=status,
+        conclusion=conclusion,
         url=f"https://example.test/runs/{run_id}",
     )
 
@@ -91,7 +97,74 @@ def test_runtime_publish_requires_exact_live_sha() -> None:
     assert "Canary is on latest, expected ac77b06d72" in errors
 
 
+def test_gate_heartbeat_names_blocking_ci_job_and_step() -> None:
+    def fake_fetch_run_jobs(repo: str, run_id: int) -> list[dict[str, object]]:
+        if run_id == 1:
+            return [
+                {
+                    "name": ship_monitor.DEPLOY_GATE_JOB,
+                    "status": "in_progress",
+                    "steps": [
+                        {"name": "Wait for full CI gate", "status": "in_progress"},
+                    ],
+                }
+            ]
+        if run_id == 2:
+            return [
+                {
+                    "name": "iOS tests",
+                    "status": "in_progress",
+                    "steps": [
+                        {"name": "Run iOS tests", "status": "in_progress"},
+                    ],
+                }
+            ]
+        return []
+
+    ship_monitor.fetch_run_jobs = fake_fetch_run_jobs
+    runs = [
+        run_info(ship_monitor.DEPLOY_AND_VERIFY, 1, status="in_progress", conclusion=None),
+        run_info(ship_monitor.CI_WORKFLOW, 2, status="in_progress", conclusion=None),
+    ]
+
+    summary = ship_monitor.summarize_incomplete_runs("cipher982/longhouse", "abc123", runs)
+
+    assert "Deploy and Verify #1 / gate -> CI #2 / iOS tests / Run iOS tests: in_progress" in summary
+
+
+def test_deploy_heartbeat_names_active_deploy_step() -> None:
+    def fake_fetch_run_jobs(repo: str, run_id: int) -> list[dict[str, object]]:
+        return [
+            {
+                "name": ship_monitor.DEPLOY_GATE_JOB,
+                "status": "completed",
+                "steps": [],
+            },
+            {
+                "name": ship_monitor.DEPLOY_AND_VERIFY_JOB,
+                "status": "in_progress",
+                "steps": [
+                    {"name": "Deploy public demo runtime", "status": "in_progress"},
+                ],
+            },
+        ]
+
+    ship_monitor.fetch_run_jobs = fake_fetch_run_jobs
+    runs = [
+        run_info(ship_monitor.DEPLOY_AND_VERIFY, 1, status="in_progress", conclusion=None),
+    ]
+
+    summary = ship_monitor.summarize_incomplete_runs("cipher982/longhouse", "abc123", runs)
+
+    assert (
+        "Deploy and Verify #1 / Deploy demo + canary + hosted live QA / "
+        "Deploy public demo runtime: in_progress"
+    ) in summary
+
+
 if __name__ == "__main__":
     test_runtime_reuse_does_not_require_exact_live_sha()
     test_runtime_publish_requires_exact_live_sha()
+    test_gate_heartbeat_names_blocking_ci_job_and_step()
+    test_deploy_heartbeat_names_active_deploy_step()
     print("ship-monitor tests passed")
