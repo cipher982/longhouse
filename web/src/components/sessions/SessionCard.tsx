@@ -113,16 +113,34 @@ export function SessionCard({
     hasProcessAxis &&
     phaseKind == null &&
     rawCardStatus != null &&
-    (rawCardStatus.label === "Running" || rawCardStatus.label === "Unknown" || rawCardStatus.label === "Closed");
+    (rawCardStatus.tone === "inactive" || rawCardStatus.tone === "closed");
   const cardStatus = cardStatusIsProcessOnly ? null : rawCardStatus;
   const runtimeMetaLabel =
     formatTimelineStatusMeta(cardStatus === timelineCardStatus ? timelineCardStatus : null, relativeNowMs) ??
     getRuntimeMetaLabel(runtime, relativeNowMs);
   const fallbackOwnershipLabel = interaction.isManagedLocalSession ? "Managed" : "Unmanaged";
   const ownershipLabel = timelineCard?.ownership.label || resolveSessionOwnershipLabel(runtime, fallbackOwnershipLabel);
-  const fallbackControlPath = ownershipLabel === "Managed" ? "managed" : "unmanaged";
-  const ownershipTone = fallbackControlPath === "managed" ? "managed" : "unmanaged";
-  const runtimePhaseLabel = cardStatus?.label || resolveSessionStatusLabel(runtime, fallbackControlPath);
+  const fallbackControlPath: "managed" | "unmanaged" = ownershipLabel === "Managed" ? "managed" : "unmanaged";
+  const factControlPath =
+    runtime.runtimeFacts?.control_path === "managed"
+      ? "managed"
+      : runtime.runtimeFacts?.control_path === "unmanaged"
+        ? "unmanaged"
+        : null;
+  const displayControlPath =
+    runtime.runtimeDisplay?.control_path === "managed"
+      ? "managed"
+      : runtime.runtimeDisplay?.control_path === "unmanaged"
+        ? "unmanaged"
+        : null;
+  const controlPath: "managed" | "unmanaged" =
+    factControlPath != null
+      ? factControlPath
+      : displayControlPath != null
+        ? displayControlPath
+        : fallbackControlPath;
+  const ownershipTone = controlPath === "managed" ? "managed" : "unmanaged";
+  const runtimePhaseLabel = cardStatus?.label || resolveSessionStatusLabel(runtime, controlPath);
   const cardRuntimeTone = cardStatus?.tone ?? timelineCard?.border_tone ?? runtime.tone;
   const runtimeFreshnessTone = runtimeFreshness(timelineCardStatus, relativeNowMs);
   const processPillLabel =
@@ -141,7 +159,6 @@ export function SessionCard({
         : processState === "closed"
           ? "The provider process is closed."
           : undefined;
-
   const projectLabel = getProjectLabel(session);
   const title = getSessionTitle(session);
   const branchLabel = getBranchLabel(session.git_branch);
@@ -170,6 +187,8 @@ export function SessionCard({
     (lifecycle != null
       ? lifecycle === "closed"
       : isSessionClosed(session) && !hasCurrentControlledPresence);
+  const showProcessPill =
+    !isClosedSession && processPillLabel != null && (controlPath === "unmanaged" || processState === "running");
   // Always render the runtime pill for unmanaged sessions so unknown or
   // transcript-only state is visible instead of hidden.
   const hasRuntimeAxes =
@@ -181,7 +200,7 @@ export function SessionCard({
   // Outcome labels are semantic summaries; keep their chips neutral across runtime sources.
   const runtimePillTone = cardStatus?.tone || (runtimePhaseLabel === "Active" ? "active" : runtime.tone);
   const useToneRuntimeDot = cardStatus != null || runtimePhaseLabel === "Active";
-  const animateRuntimeDot = fallbackControlPath === "managed" && isAnimatedRuntimeTone(runtimePillTone);
+  const animateRuntimeDot = controlPath === "managed" && isAnimatedRuntimeTone(runtimePillTone);
   const cardClassName = [
     "session-card",
     `session-card--${ownershipTone}`,
@@ -242,7 +261,7 @@ export function SessionCard({
       data-thread-id={thread.thread_id}
       data-runtime-tone={isClosedSession ? "closed" : runtimePillTone}
       data-runtime-freshness={runtimeFreshnessTone}
-      data-control-path={fallbackControlPath}
+      data-control-path={controlPath}
       data-card-state={isClosedSession ? "closed" : "actionable"}
     >
       {!confirming && (
@@ -298,7 +317,7 @@ export function SessionCard({
             >
               {ownershipLabel}
             </span>
-            {!isClosedSession && processPillLabel ? (
+            {showProcessPill ? (
               <span
                 className={`session-card-process-pill session-card-process-pill--${processState}`}
                 data-testid="session-card-process-state"
