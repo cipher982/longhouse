@@ -354,3 +354,31 @@ jobs:
           EOF_BODY
           )" \
             --label "deploy-failure"
+
+  profile-deploy:
+    name: "Profile deploy wall time"
+    runs-on: ubuntu-latest
+    needs: [changes, deploy-and-verify]
+    if: ${{ always() && needs.changes.outputs.deploy_verify == 'true' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: scripts/ops/ci-profile.py
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+
+      - name: Write deploy wall-time summary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "## Deploy Wall Time"
+            echo ""
+            echo '```text'
+            python3 scripts/ops/ci-profile.py \
+              --run-id "${{ github.run_id }}" \
+              --top 12 \
+              --exclude-job "Profile deploy wall time" || echo "Profile unavailable"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
