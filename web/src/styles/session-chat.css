@@ -638,3 +638,44 @@
 .session-chat--dock .session-chat-message--assistant .session-chat-message-content {
   max-width: min(100%, 92ch);
 }
+
+@media (max-width: 900px) {
+  .session-chat--dock {
+    gap: 6px;
+  }
+
+  .session-chat-draft-row {
+    min-height: 0;
+    gap: 6px;
+    padding: 0;
+    background: transparent;
+  }
+
+  .session-chat-draft-row .ui-button {
+    height: 28px;
+    padding-inline: 10px;
+  }
+
+  .session-chat-draft-row__copy {
+    display: none;
+  }
+
+  .session-chat-composer-row {
+    gap: 6px;
+  }
+
+  .session-chat-composer--dock .session-chat-composer-row > .ui-button {
+    height: 32px;
+    padding-inline: 10px;
+  }
+
+  .session-chat-composer textarea {
+    border-radius: 10px;
+    padding: 7px 9px;
+    font-size: 13px;
+  }
+
+  .session-chat-pending-message {
+    padding: 4px 0;
+  }
+}

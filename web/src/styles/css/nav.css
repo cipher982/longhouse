@@ -615,7 +615,24 @@
   }
 
   .main-header {
-    padding: var(--space-2) var(--space-3);
+    min-height: 52px;
+    padding: 8px 10px;
+  }
+
+  .brand-logo-wrapper,
+  .brand-logo {
+    width: 32px;
+    height: 32px;
+  }
+
+  .brand-logo-glow {
+    inset: -3px;
+  }
+
+  .mobile-menu-toggle,
+  .header-button.shelf-toggle {
+    width: 34px;
+    height: 34px;
   }
 
   .header-brand {
