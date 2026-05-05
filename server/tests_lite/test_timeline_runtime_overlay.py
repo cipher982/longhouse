@@ -185,7 +185,7 @@ def test_sessions_list_uses_recent_activity_anchor_for_old_live_session(tmp_path
             "tone": "running",
             "headline": "Active",
             "detail": None,
-            "phase_label": "Running Shell",
+            "phase_label": "Using Shell",
             "compact_tool_label": "Shell",
             "is_live": True,
             "is_executing": True,

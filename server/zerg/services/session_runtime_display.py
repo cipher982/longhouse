@@ -149,7 +149,7 @@ def _phase_label(
     if presence_state == "needs_user":
         return "Ready"
     if presence_state == "running" and compact_tool:
-        return f"Running {compact_tool}"
+        return f"Using {compact_tool}"
     if presence_state == "blocked" and compact_tool:
         return f"Blocked on {compact_tool}"
     return (display_phase or "").strip() or "Recent"
@@ -204,7 +204,7 @@ def _managed_copy(
     if presence_state == "thinking":
         return "Working", "Thinking"
     if presence_state == "running":
-        return "Working", f"Running {compact_tool}" if compact_tool else phase_label
+        return "Working", f"Using {compact_tool}" if compact_tool else phase_label
     if presence_state == "needs_user":
         return "Ready", "Ready for next prompt"
     if presence_state == "blocked":

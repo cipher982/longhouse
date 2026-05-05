@@ -889,11 +889,11 @@ def test_presence_live_activity_pushes_session_state_and_debounces(tmp_path):
     assert len(second_pushes) == 2
     assert {push.activity_id for push in first_pushes} == {"activity-1", "activity-2"}
     assert {push.push_token for push in first_pushes} == {"a" * 64, "b" * 64}
-    assert all(push.display_phase == "Running Shell" for push in second_pushes)
+    assert all(push.display_phase == "Using Shell" for push in second_pushes)
     payload = build_session_live_activity_payload(second_pushes[0])
     assert payload["aps"]["event"] == "update"
     assert payload["aps"]["content-state"]["presenceState"] == "running"
-    assert payload["aps"]["content-state"]["displayPhase"] == "Running Shell"
+    assert payload["aps"]["content-state"]["displayPhase"] == "Using Shell"
     assert payload["aps"]["content-state"]["activeTool"] == "Shell"
 
     with SessionLocal() as db:

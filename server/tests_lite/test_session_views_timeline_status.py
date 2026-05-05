@@ -21,6 +21,7 @@ def _facts(
     now = datetime(2026, 3, 21, 12, 0, tzinfo=timezone.utc)
     return SessionLivenessFactsResponse(
         control_path="managed",
+        process_state="running" if process_status == "observed" else "unknown",
         host=HostObservationResponse(state="unknown", last_seen_at=None, source=None),
         process=ProcessObservationResponse(
             status=process_status,
@@ -43,7 +44,7 @@ def _facts(
     ("phase_kind", "expected_label", "expected_tone"),
     [
         ("thinking", "Thinking", "thinking"),
-        ("running", "Running Shell", "running"),
+        ("running", "Using Shell", "running"),
         ("blocked", "Blocked Shell", "blocked"),
         ("stalled", "Stalled", "stalled"),
         ("idle", "Idle", "idle"),
@@ -70,6 +71,6 @@ def test_timeline_status_marks_process_observed_active_without_phase_claim():
     status = _timeline_status_from_liveness_facts(_facts(process_status="observed"))
 
     assert status is not None
-    assert status.label == "Process visible"
-    assert status.tone == "active"
+    assert status.label == "Running"
+    assert status.tone == "inactive"
     assert status.seen_at_prefix == "Verified"
