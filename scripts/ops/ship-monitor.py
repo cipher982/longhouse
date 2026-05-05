@@ -206,6 +206,27 @@ def fetch_run_jobs(repo: str, run_id: int) -> list[dict]:
     return payload.get("jobs") or []
 
 
+def print_ci_profile(root: Path, repo: str, runs: list[RunInfo]) -> None:
+    """Print best-effort deterministic job/step timings for completed runs."""
+    if not runs:
+        return
+    profiler = root / "scripts" / "ops" / "ci-profile.py"
+    if not profiler.exists():
+        return
+    cmd = [str(profiler), "--repo", repo, "--top", "12"]
+    for run_info in runs:
+        cmd.extend(["--run-id", str(run_info.databaseId)])
+    proc = run(cmd, cwd=root, check=False)
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout).strip()
+        if detail:
+            print(f"CI profile unavailable: {detail}", file=sys.stderr)
+        return
+    if proc.stdout.strip():
+        print("", file=sys.stderr)
+        print(proc.stdout.rstrip(), file=sys.stderr)
+
+
 def fetch_remote_head(repo: str, branch: str = "main") -> str | None:
     proc = run(
         [
@@ -544,6 +565,7 @@ def main() -> int:
                 print(f"  - {run.workflowName} #{run.databaseId}: {conclusion}", file=sys.stderr)
                 print(f"    {run.url}", file=sys.stderr)
                 print(f"    Inspect logs: gh run view {run.databaseId} --log-failed", file=sys.stderr)
+            print_ci_profile(root, args.repo, monitored_runs)
         return EXIT_WORKFLOW_FAILURE
 
     live_surfaces: dict[str, dict] | None = None
@@ -587,6 +609,7 @@ def main() -> int:
         emit_json(payload)
     else:
         print(f"Ship verification passed for {short_sha}.", file=sys.stderr)
+        print_ci_profile(root, args.repo, monitored_runs)
         if live_output:
             print("", file=sys.stderr)
             print(live_output.rstrip(), file=sys.stderr)
