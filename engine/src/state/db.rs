@@ -92,8 +92,32 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             phase_observed_at TEXT,
             last_activity_at TEXT,
             updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS unmanaged_process_binding_state (
+            provider TEXT NOT NULL,
+            provider_session_id TEXT NOT NULL,
+            source_path TEXT,
+            pid INTEGER NOT NULL,
+            process_start_time TEXT NOT NULL,
+            process_start_time_key TEXT NOT NULL,
+            cwd TEXT,
+            observed_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (provider, provider_session_id)
         );",
     )?;
+
+    let unmanaged_binding_columns: std::collections::HashSet<String> = conn
+        .prepare("PRAGMA table_info(unmanaged_process_binding_state)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<_, _>>()?;
+    if !unmanaged_binding_columns.contains("process_start_time_key") {
+        conn.execute_batch(
+            "ALTER TABLE unmanaged_process_binding_state
+             ADD COLUMN process_start_time_key TEXT NOT NULL DEFAULT '';",
+        )?;
+    }
 
     // Old builds could create duplicate pending pointers for the same file/range.
     // Collapse those rows before enforcing uniqueness so restart recovery becomes idempotent.
@@ -118,7 +142,10 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
          ON session_phase_state(provider, observed_at DESC);
 
          CREATE INDEX IF NOT EXISTS idx_managed_session_state_provider_updated
-         ON managed_session_state(provider, updated_at DESC);",
+         ON managed_session_state(provider, updated_at DESC);
+
+         CREATE INDEX IF NOT EXISTS idx_unmanaged_process_binding_observed
+         ON unmanaged_process_binding_state(provider, observed_at DESC);",
     )?;
 
     tracing::debug!("Opened shipper DB: {}", path.display());

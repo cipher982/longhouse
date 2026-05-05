@@ -96,6 +96,20 @@ write_presence_outbox() {
   mv "$TMPFILE" "${TMPFILE/\\.tmp\\./prs.}.json"
 }
 
+find_provider_pid() {
+  pid="$$"
+  while [[ -n "$pid" && "$pid" != "0" ]]; do
+    comm="$(ps -p "$pid" -o comm= 2>/dev/null | awk '{print $1}')"
+    base="${comm##*/}"
+    if [[ "$base" == "claude" ]]; then
+      printf '%s' "$pid"
+      return 0
+    fi
+    pid="$(ps -p "$pid" -o ppid= 2>/dev/null | awk '{print $1}')"
+  done
+  return 1
+}
+
 # Map event → presence state
 case "$EVENT" in
   SessionStart)                    STATE="idle" ;;
@@ -115,9 +129,20 @@ case "$EVENT" in
 esac
 
 if [[ -n "$STATE" ]] && [[ -n "$SESSION_ID" ]]; then
+  CONTROL_PATH="unmanaged"
+  PROVIDER_PID=""
+  if [[ -n "$MANAGED_SESSION_ID" ]]; then
+    CONTROL_PATH="managed"
+  else
+    PROVIDER_PID="$(find_provider_pid || true)"
+  fi
+
   PAYLOAD=$(jq -n --arg sid "$SESSION_ID" --arg st "$STATE" \\
         --arg tool "$TOOL" --arg cwd "$CWD" --arg transcript "$TRANSCRIPT" \\
-    '{session_id: $sid, state: $st, tool_name: $tool, cwd: $cwd, transcript_path: $transcript}')
+        --arg provider "claude" --arg control_path "$CONTROL_PATH" \\
+        --arg provider_pid "$PROVIDER_PID" \\
+    '{session_id: $sid, state: $st, tool_name: $tool, cwd: $cwd, provider: $provider, transcript_path: $transcript, control_path: $control_path}
+      + (if $provider_pid == "" then {} else {provider_pid: ($provider_pid | tonumber)} end)')
 
   # Seed session binding so the daemon ships with the correct managed session ID.
   # The daemon (longhouse-engine connect) handles all transcript shipping via its

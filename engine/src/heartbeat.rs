@@ -100,7 +100,7 @@ pub struct UnmanagedSessionBinding {
     pub observed_at: String,
 }
 
-pub use crate::unmanaged_bindings::collect_unmanaged_session_bindings;
+pub use crate::unmanaged_bindings::collect_unmanaged_session_bindings_with_store;
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct ManagedSessionLease {
