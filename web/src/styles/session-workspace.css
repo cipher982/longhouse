@@ -4,6 +4,10 @@
     --session-energy-border: rgba(212, 184, 122, 0.22);
     --session-energy-soft: rgba(212, 184, 122, 0.1);
     --session-energy-wash: rgba(50, 34, 20, 0.26);
+    --session-mobile-gap: 6px;
+    --session-mobile-inset: 8px;
+    --session-mobile-control-size: 34px;
+    --session-mobile-radius: 12px;
     width: 100%;
     height: 100%;
     min-height: 0;
@@ -1815,15 +1819,15 @@
 
   @media (max-width: 900px) {
     .session-workspace-route {
-      gap: 6px;
-      padding: 6px;
+      gap: var(--session-mobile-gap);
+      padding: var(--session-mobile-gap);
       overflow-y: auto;
       overflow-x: hidden;
     }
 
     .workspace-shell {
       flex: none;
-      gap: 6px;
+      gap: var(--session-mobile-gap);
       min-height: auto;
     }
 
@@ -1834,7 +1838,7 @@
         "main"
         "sidebar"
         "inspector";
-      gap: 8px;
+      gap: var(--session-mobile-inset);
       overflow: visible;
     }
 
@@ -1863,15 +1867,15 @@
       flex-direction: row;
       align-items: center;
       flex-wrap: nowrap;
-      gap: 6px;
-      padding: 6px 8px;
+      gap: var(--session-mobile-gap);
+      padding: var(--session-mobile-gap) var(--session-mobile-inset);
     }
 
     .timeline-pane__header-actions {
       flex-direction: row;
       align-items: center;
       justify-content: flex-end;
-      gap: 6px;
+      gap: var(--session-mobile-gap);
     }
 
     .event-inspector__header {
@@ -1899,12 +1903,12 @@
     }
 
     .session-workspace-header__left {
-      gap: 6px;
+      gap: var(--session-mobile-gap);
     }
 
     .session-workspace-header__left .ui-button {
-      width: 34px;
-      height: 34px;
+      width: var(--session-mobile-control-size);
+      height: var(--session-mobile-control-size);
       padding: 0;
       flex-shrink: 0;
     }
@@ -1936,17 +1940,17 @@
     .session-runtime-strip--dock {
       flex-direction: row;
       align-items: center;
-      gap: 8px;
-      padding: 6px 8px;
-      border-radius: 12px;
+      gap: var(--session-mobile-inset);
+      padding: var(--session-mobile-gap) var(--session-mobile-inset);
+      border-radius: var(--session-mobile-radius);
     }
 
     .session-runtime-strip__presence {
-      gap: 6px;
+      gap: var(--session-mobile-gap);
     }
 
     .session-runtime-strip__copy {
-      gap: 6px;
+      gap: var(--session-mobile-gap);
     }
 
     .session-runtime-strip__headline {
@@ -1969,7 +1973,7 @@
       justify-content: flex-start;
       align-items: center;
       flex-wrap: nowrap;
-      gap: 6px;
+      gap: var(--session-mobile-gap);
     }
 
     .timeline-pane__summary {
@@ -1982,8 +1986,8 @@
 
     .timeline-pane__header-actions > .ui-button,
     .timeline-pane__header-right > .ui-button {
-      width: 34px;
-      height: 34px;
+      width: var(--session-mobile-control-size);
+      height: var(--session-mobile-control-size);
       padding: 0;
       gap: 0;
       font-size: 0;
@@ -1996,16 +2000,16 @@
 
     .timeline-pane__filters {
       width: 100%;
-      gap: 6px;
+      gap: var(--session-mobile-gap);
     }
 
     .timeline-pane__filter-toggle {
-      width: 34px;
-      height: 34px;
+      width: var(--session-mobile-control-size);
+      height: var(--session-mobile-control-size);
     }
 
     .timeline-pane__header-expandable {
-      padding: 4px 8px 6px;
+      padding: 4px var(--session-mobile-inset) var(--session-mobile-gap);
     }
 
     .timeline-pane__filter {
@@ -2014,8 +2018,8 @@
     }
 
     .timeline-pane__status-row {
-      gap: 6px;
-      padding: 6px 8px;
+      gap: var(--session-mobile-gap);
+      padding: var(--session-mobile-gap) var(--session-mobile-inset);
     }
 
     .timeline-pane__status-chip {
@@ -2025,12 +2029,12 @@
 
     .timeline-pane__list {
       min-height: min(44svh, 340px);
-      padding: 6px 8px 10px;
+      padding: var(--session-mobile-gap) var(--session-mobile-inset) 10px;
     }
 
     .timeline-pane__list.timeline-events {
       gap: 1px;
-      padding-inline: 8px;
+      padding-inline: var(--session-mobile-inset);
     }
 
     .timeline-pane--with-dock .timeline-pane__list {
@@ -2072,7 +2076,7 @@
     }
 
     .tl-action__head {
-      gap: 6px;
+      gap: var(--session-mobile-gap);
       padding: 6px 8px 6px 12px;
     }
 
@@ -2094,7 +2098,7 @@
     }
 
     .timeline-pane__dock {
-      gap: 6px;
+      gap: var(--session-mobile-gap);
       padding: 6px 8px 8px;
     }
   }

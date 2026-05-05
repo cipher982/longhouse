@@ -50,7 +50,7 @@ jobs:
           bun-version: '1.2.20'
 
       - name: Ensure make available
-        run: command -v make || (sudo apt-get update && sudo apt-get install -y make)
+        run: ./scripts/ci/ensure-make.sh
 
       - name: Install Claude Code CLI
         run: |
