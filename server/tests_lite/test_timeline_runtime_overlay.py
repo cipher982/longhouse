@@ -200,8 +200,8 @@ def test_sessions_list_uses_recent_activity_anchor_for_old_live_session(tmp_path
             "host_state": "unknown",
             "terminal_reason": None,
         }
-        assert top["runtime_facts"]["process_state"] == "running"
-        assert top["timeline_card"]["status"]["label"] == "Running · Using Shell"
+        assert top["runtime_facts"]["process_state"] == "unknown"
+        assert top["timeline_card"]["status"]["label"] == "Using Shell"
         assert top["timeline_card"]["status"]["tone"] == "running"
         assert top["timeline_anchor_at"] is not None
         assert top["timeline_anchor_at"] >= recent_idle.started_at.isoformat().replace("+00:00", "Z")
@@ -397,8 +397,8 @@ def test_sessions_list_uses_runtime_anchor_for_old_runtime_only_session(tmp_path
         assert row["status"] == "working"
         assert row["display_phase"] == "Running bash"
         assert row["timeline_anchor_at"] is not None
-        assert row["runtime_facts"]["process_state"] == "running"
-        assert row["timeline_card"]["status"]["label"] == "Running · Using Shell"
+        assert row["runtime_facts"]["process_state"] == "unknown"
+        assert row["timeline_card"]["status"]["label"] == "Using Shell"
 
 
 def test_active_sessions_uses_runtime_anchor_for_old_runtime_only_session(tmp_path):
@@ -447,7 +447,7 @@ def test_active_sessions_uses_runtime_anchor_for_old_runtime_only_session(tmp_pa
         assert row["status"] == "working"
         assert row["presence_state"] == "thinking"
         assert row["display_phase"] == "Thinking"
-        assert row["runtime_facts"]["process_state"] == "running"
+        assert row["runtime_facts"]["process_state"] == "unknown"
 
 
 def test_sessions_list_prefers_materialized_runtime_state_when_present(tmp_path):
@@ -498,8 +498,8 @@ def test_sessions_list_prefers_materialized_runtime_state_when_present(tmp_path)
         assert row["runtime_source"] == "semantic"
         assert row["runtime_version"] == 3
         assert row["confidence"] == "live"
-        assert row["runtime_facts"]["process_state"] == "running"
-        assert row["timeline_card"]["status"]["label"] == "Running · Using Shell"
+        assert row["runtime_facts"]["process_state"] == "unknown"
+        assert row["timeline_card"]["status"]["label"] == "Using Shell"
 
 
 def test_sessions_list_keeps_progress_runtime_overlay_for_recent_closed_session(tmp_path):
@@ -779,6 +779,61 @@ def test_active_sessions_online_process_binding_keeps_needs_user_ready(tmp_path)
         assert row["runtime_display"]["state"] == "needs_user"
         assert row["runtime_display"]["phase_label"] == "Ready"
         assert row["runtime_display"]["needs_attention"] is False
+        assert row["runtime_facts"]["process_state"] == "running"
+
+        list_resp = client.get("/agents/sessions?days_back=14&limit=5", headers={"X-Agents-Token": "dev"})
+        assert list_resp.status_code == 200, list_resp.text
+        list_row = next(item for item in list_resp.json()["sessions"] if item["id"] == str(session.id))
+        assert list_row["runtime_facts"]["process_state"] == "running"
+        assert list_row["timeline_card"]["status"]["label"] == "Ready"
+
+
+def test_sessions_list_process_observed_without_phase_renders_running_process(tmp_path):
+    factory = _make_db(tmp_path, "process_observed_without_phase.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            started_at=now - timedelta(hours=1),
+            ended_at=None,
+            project="process-only",
+        )
+        db.add(
+            AgentHeartbeat(
+                device_id="timeline-runtime",
+                received_at=now,
+            )
+        )
+        db.add(
+            UnmanagedSessionBinding(
+                machine_id="dev-machine",
+                device_id="timeline-runtime",
+                provider="claude",
+                provider_session_id=str(session.id),
+                session_id=session.id,
+                source_path="/tmp/session.jsonl",
+                pid=1234,
+                process_start_time=now - timedelta(hours=1),
+                observed_at=now,
+                last_seen_at=now,
+                source_mtime=now,
+                binding_state="observed",
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    for client in _client(factory):
+        resp = client.get("/agents/sessions?days_back=14&limit=5", headers={"X-Agents-Token": "dev"})
+        assert resp.status_code == 200, resp.text
+        row = next(item for item in resp.json()["sessions"] if item["id"] == str(session.id))
+        assert row["runtime_facts"]["phase"]["kind"] is None
+        assert row["runtime_facts"]["process_state"] == "running"
+        assert row["timeline_card"]["status"]["label"] == "Running"
+        assert row["timeline_card"]["status"]["seen_at_prefix"] == "Verified"
 
 
 def test_active_sessions_recent_progress_fallback_is_non_executing(tmp_path):
