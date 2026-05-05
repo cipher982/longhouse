@@ -282,7 +282,7 @@ describe("SessionDetailPage", () => {
       "Working",
     );
     expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
-      "Using Shell",
+      "Running Shell",
     );
     expect(document.querySelector(".session-workspace-route")).toHaveClass(
       "session-workspace-route--managed",
@@ -752,7 +752,7 @@ describe("SessionDetailPage", () => {
     renderSessionDetailPage();
 
     expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
-      "Running Shell",
+      "Using Shell",
     );
     expect(screen.getByTitle("Running: shell")).toBeInTheDocument();
   });
