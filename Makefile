@@ -8,7 +8,7 @@ COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/dock
 E2E_BACKEND_PORT ?=
 E2E_FRONTEND_PORT ?=
 
-.PHONY: help dev dev-demo stop test test-ios test-ios-helper test-frontend test-engine test-runner test-control-plane test-e2e test-e2e-core test-e2e-a11y test-e2e-cp test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-sdk validate-makefile validate-build-identity validate-managed-codex-contract validate-ship-monitor regen-ws generate-sdk qa-live render-canary reprovision deploy-status ship-watch ship release ui-capture qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-e2e-continuation-provider test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest eval dogfood dogfood-refresh dogfood-check
+.PHONY: help dev dev-demo stop test test-ios test-ios-helper test-frontend test-engine test-runner test-control-plane test-e2e test-e2e-core test-e2e-a11y test-e2e-cp test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-sdk validate-makefile validate-build-identity validate-managed-codex-contract validate-ship-monitor regen-ws generate-sdk qa-live render-canary reprovision deploy-status ship-watch ship release ui-capture qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-e2e-continuation-provider test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest eval dogfood dogfood-refresh dogfood-check
 
 # ---------------------------------------------------------------------------
 # Help
@@ -308,6 +308,16 @@ release: ## Cut a stable release (usage: make release VERSION=v0.1.13)
 # ---------------------------------------------------------------------------
 ui-capture: ## Capture local dev UI debug bundle
 	@bunx tsx scripts/ui-capture.ts $(PAGE) $(if $(SCENE),--scene=$(SCENE),) $(if $(VIEWPORT),--viewport=$(VIEWPORT),) $(if $(OUTPUT),--output=$(OUTPUT),) $(if $(ALL),--all,) $(if $(NO_TRACE),--no-trace,)
+
+qa-ui-workbench: ## Capture fixture-backed timeline/session workbench screenshots
+	@set -e; \
+	RUN_DIR="artifacts/ui-capture/workbench-$$(date -u +%Y%m%dT%H%M%SZ)"; \
+	echo "Output: $$RUN_DIR"; \
+	$(MAKE) ui-capture PAGE=timeline SCENE=timeline-card-stress VIEWPORT=desktop NO_TRACE=1 OUTPUT=$$RUN_DIR/timeline-desktop; \
+	$(MAKE) ui-capture PAGE=timeline SCENE=timeline-card-stress VIEWPORT=mobile NO_TRACE=1 OUTPUT=$$RUN_DIR/timeline-mobile; \
+	$(MAKE) ui-capture PAGE=session-detail SCENE=session-detail-stress VIEWPORT=desktop NO_TRACE=1 OUTPUT=$$RUN_DIR/session-detail-desktop; \
+	$(MAKE) ui-capture PAGE=session-detail SCENE=session-detail-stress VIEWPORT=mobile NO_TRACE=1 OUTPUT=$$RUN_DIR/session-detail-mobile; \
+	echo "Workbench bundle: $$RUN_DIR"
 
 qa-ui-baseline: ## Visual baseline check for current app and public pages
 	@$(MAKE) ensure-playwright-browser
