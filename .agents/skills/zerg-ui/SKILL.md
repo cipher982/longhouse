@@ -24,6 +24,7 @@ make ui-capture SCENE=onboarding-modal    # With modal visible
 make ui-capture SCENE=timeline-card-stress VIEWPORT=mobile  # Mobile card layout fixture
 make ui-capture PAGE=session-detail SCENE=session-detail-stress  # Session workspace fixture
 make ui-capture ALL=1                     # All pages
+make qa-ui-workbench                      # Timeline + session fixture set, desktop and mobile
 ```
 
 **Output:** `artifacts/ui-capture/<timestamp>/`
