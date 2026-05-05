@@ -55,7 +55,7 @@ extension SessionDetail {
     private func liveActivityPhaseLabel(state: String, tool: String?) -> String {
         switch state {
         case "running":
-            return tool.map { "Running \($0)" } ?? "Running"
+            return tool.map { "Using \($0)" } ?? "Running"
         case "thinking":
             return "Thinking"
         case "needs_user":
