@@ -41,7 +41,7 @@ jobs:
 
   deploy:
     name: "Deploy Control Plane"
-    runs-on: cube
+    runs-on: cube-deploy
     timeout-minutes: 20
     needs: gate
 
