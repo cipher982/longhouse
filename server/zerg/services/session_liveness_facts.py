@@ -143,21 +143,29 @@ def _process_observation(
     if binding_overlay is None:
         return ProcessObservation(status="unknown", reason=None, source=None)
 
+    binding_state = _normalized(getattr(binding_overlay, "binding_state", None)) or "observed"
+    pid = getattr(binding_overlay, "pid", None)
+    process_start_time = getattr(binding_overlay, "process_start_time", None)
     if control_path == "managed":
         status = "unknown"
     elif reason == "process_gone":
         status = "not_observed"
     elif reason == "host_expired":
         status = "unknown"
-    elif _normalized(getattr(binding_overlay, "host_state", None)) == "online":
+    elif (
+        binding_state == "observed"
+        and _normalized(getattr(binding_overlay, "host_state", None)) == "online"
+        and pid is not None
+        and process_start_time is not None
+    ):
         status = "observed"
     else:
         status = "unknown"
 
     return ProcessObservation(
         status=status,
-        pid=getattr(binding_overlay, "pid", None),
-        process_start_time=getattr(binding_overlay, "process_start_time", None),
+        pid=pid,
+        process_start_time=process_start_time,
         observed_at=getattr(binding_overlay, "observed_at", None),
         last_seen_at=getattr(binding_overlay, "last_seen_at", None),
         source_mtime=getattr(binding_overlay, "source_mtime", None),
@@ -170,6 +178,7 @@ def _process_observation(
 def _lifecycle(
     *,
     explicit: LifecycleFact | None,
+    control_path: str,
     process: ProcessObservation,
     phase: PhaseObservation,
 ) -> LifecycleFact:
@@ -177,7 +186,7 @@ def _lifecycle(
         return explicit
     if process.status == "observed":
         return LifecycleFact(state="open", reason="process_observed", observed_at=process.observed_at or process.last_seen_at)
-    if process.status == "not_observed" and process.reason == "process_gone":
+    if control_path == "unmanaged" and process.status == "not_observed" and process.reason == "process_gone":
         return LifecycleFact(state="closed", reason="process_gone", observed_at=process.last_seen_at or process.observed_at)
     if phase.kind is not None:
         return LifecycleFact(state="open", reason="phase_observed", observed_at=phase.observed_at)
@@ -187,14 +196,11 @@ def _lifecycle(
 def _process_state(
     *,
     process: ProcessObservation,
-    phase: PhaseObservation,
     lifecycle: LifecycleFact,
 ) -> str:
     if lifecycle.state == "closed":
         return "closed"
     if process.status == "observed":
-        return "running"
-    if lifecycle.state == "open" and phase.kind is not None:
         return "running"
     return "unknown"
 
@@ -223,12 +229,12 @@ def build_session_liveness_facts(
     )
     lifecycle = _lifecycle(
         explicit=_explicit_lifecycle(runtime_view),
+        control_path=control_path,
         process=process,
         phase=phase,
     )
     process_state = _process_state(
         process=process,
-        phase=phase,
         lifecycle=lifecycle,
     )
     return SessionLivenessFacts(

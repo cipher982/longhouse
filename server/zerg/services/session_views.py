@@ -13,6 +13,7 @@ from datetime import timezone
 from typing import Any
 from typing import Dict
 from typing import List
+from typing import Literal
 from typing import Optional
 
 from pydantic import BaseModel
@@ -435,7 +436,10 @@ class SessionLivenessFactsResponse(UTCBaseModel):
     """
 
     control_path: str = Field(..., description="Does Longhouse own a control path? managed|unmanaged")
-    process_state: str = Field(..., description="Observed provider-process state: running|closed|unknown")
+    process_state: Literal["running", "closed", "unknown"] = Field(
+        ...,
+        description="Observed provider-process state",
+    )
     host: HostObservationResponse
     process: ProcessObservationResponse
     phase: PhaseObservationResponse

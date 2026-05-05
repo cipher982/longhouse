@@ -174,7 +174,6 @@ def _liveness_facts(
         if lifecycle_state == "closed"
         else "running"
         if process_status == "observed"
-        or (lifecycle_state == "open" and phase_kind is not None)
         else "unknown"
     )
     return SessionLivenessFacts(

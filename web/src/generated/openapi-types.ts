@@ -7914,6 +7914,12 @@ export interface components {
              * @description Does Longhouse own a control path? managed|unmanaged
              */
             control_path: string;
+            /**
+             * Process State
+             * @description Observed provider-process state
+             * @enum {string}
+             */
+            process_state: "running" | "closed" | "unknown";
             host: components["schemas"]["HostObservationResponse"];
             process: components["schemas"]["ProcessObservationResponse"];
             phase: components["schemas"]["PhaseObservationResponse"];

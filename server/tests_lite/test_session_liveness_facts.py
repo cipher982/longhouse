@@ -96,6 +96,31 @@ def test_unmanaged_process_observation_is_a_fact_not_active_copy():
     assert facts.lifecycle.reason == "process_observed"
 
 
+def test_online_host_without_pid_does_not_observe_process():
+    facts = build_session_liveness_facts(
+        runtime_view=_runtime_view(),
+        capabilities=_capabilities(),
+        last_activity_at=NOW - timedelta(hours=11),
+        binding_overlay=SimpleNamespace(
+            host_state="online",
+            terminal_reason=None,
+            host_last_seen_at=NOW,
+            pid=None,
+            process_start_time=None,
+            observed_at=NOW,
+            last_seen_at=NOW,
+            source_mtime=NOW - timedelta(hours=11),
+            source_path="/Users/david/.codex/sessions/rollout.jsonl",
+            binding_state="observed",
+        ),
+    )
+
+    assert facts.host.state == "online"
+    assert facts.process.status == "unknown"
+    assert facts.process_state == "unknown"
+    assert facts.lifecycle.state == "unknown"
+
+
 def test_missing_unmanaged_process_scan_marks_process_closed():
     facts = build_session_liveness_facts(
         runtime_view=_runtime_view(),
@@ -119,6 +144,32 @@ def test_missing_unmanaged_process_scan_marks_process_closed():
     assert facts.process_state == "closed"
     assert facts.lifecycle.state == "closed"
     assert facts.lifecycle.reason == "process_gone"
+
+
+def test_managed_process_gone_binding_does_not_close_without_terminal_signal():
+    facts = build_session_liveness_facts(
+        runtime_view=_runtime_view(),
+        capabilities=_capabilities(managed=True),
+        last_activity_at=NOW - timedelta(hours=3),
+        binding_overlay=SimpleNamespace(
+            host_state="online",
+            terminal_reason="process_gone",
+            host_last_seen_at=NOW,
+            pid=20293,
+            process_start_time=NOW - timedelta(hours=4),
+            observed_at=NOW - timedelta(hours=4),
+            last_seen_at=NOW - timedelta(minutes=20),
+            source_mtime=NOW - timedelta(hours=3),
+            source_path="/Users/david/.codex/sessions/rollout.jsonl",
+            binding_state="stale",
+        ),
+    )
+
+    assert facts.control_path == "managed"
+    assert facts.process.status == "unknown"
+    assert facts.process.reason == "process_gone"
+    assert facts.process_state == "unknown"
+    assert facts.lifecycle.state == "unknown"
 
 
 def test_host_expired_means_unverified_not_closed():
@@ -195,7 +246,7 @@ def test_explicit_provider_terminal_closes_session():
     assert facts.lifecycle.observed_at == terminal_at
 
 
-def test_managed_fresh_phase_marks_process_running_without_process_scan():
+def test_managed_fresh_phase_marks_lifecycle_open_without_process_scan():
     observed_at = NOW - timedelta(seconds=10)
     facts = build_session_liveness_facts(
         runtime_view=_runtime_view(
@@ -218,10 +269,10 @@ def test_managed_fresh_phase_marks_process_running_without_process_scan():
     assert facts.phase.kind == "thinking"
     assert facts.lifecycle.state == "open"
     assert facts.lifecycle.reason == "phase_observed"
-    assert facts.process_state == "running"
+    assert facts.process_state == "unknown"
 
 
-def test_unmanaged_fresh_phase_marks_process_running_without_process_scan():
+def test_unmanaged_fresh_phase_marks_lifecycle_open_without_process_scan():
     observed_at = NOW - timedelta(seconds=10)
     facts = build_session_liveness_facts(
         runtime_view=_runtime_view(
@@ -245,4 +296,4 @@ def test_unmanaged_fresh_phase_marks_process_running_without_process_scan():
     assert facts.phase.tool == "bash"
     assert facts.lifecycle.state == "open"
     assert facts.lifecycle.reason == "phase_observed"
-    assert facts.process_state == "running"
+    assert facts.process_state == "unknown"
