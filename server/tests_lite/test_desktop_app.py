@@ -34,7 +34,7 @@ def test_build_snapshot_command_includes_current_python_and_claude_dir():
     command = desktop_app.build_snapshot_command(claude_dir="/tmp/claude")
     arguments = desktop_app.build_snapshot_arguments(claude_dir="/tmp/claude")
 
-    assert "zerg.cli.main local-health --json" in command
+    assert "zerg.cli.main local-health --fast --json" in command
     assert arguments[:4] == [arguments[0], "-m", "zerg.cli.main", "local-health"]
     assert arguments[-2:] == ["--claude-dir", "/tmp/claude"]
 

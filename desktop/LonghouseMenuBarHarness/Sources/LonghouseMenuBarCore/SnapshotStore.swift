@@ -28,17 +28,24 @@ public final class SnapshotStore: ObservableObject {
     private var queuedManualRefresh = false
     private var presentationTimer: Timer?
     private var presentationConsumerCount = 0
+    private let cacheURL: URL?
     private static let historyRetentionSeconds: TimeInterval = Double(historyRetentionMinutes * 60)
     private static let maxHistorySamples = 180
 
-    public init(source: any HealthSnapshotSource) {
+    public init(source: any HealthSnapshotSource, cacheURL: URL? = nil) {
         self.source = source
+        self.cacheURL = cacheURL ?? Self.defaultCacheURL(for: source)
         self.history = []
         self.isInitialLoading = false
         self.isManualRefreshActive = false
         self.isBooting = false
         self.presentationDate = Date()
         self.feedback = nil
+        if let cachedSnapshot = Self.loadCachedSnapshot(from: self.cacheURL) {
+            snapshot = cachedSnapshot
+            appendHistorySample(for: cachedSnapshot)
+            loadError = nil
+        }
         if source is CLIHealthSnapshotSource {
             isBooting = true
             scheduleBootGraceTimeout()
@@ -48,6 +55,7 @@ public final class SnapshotStore: ObservableObject {
                 let loadedSnapshot = try source.load()
                 snapshot = loadedSnapshot
                 appendHistorySample(for: loadedSnapshot)
+                persistCachedSnapshot(loadedSnapshot)
                 loadError = nil
             } catch {
                 loadError = error.localizedDescription
@@ -152,6 +160,7 @@ public final class SnapshotStore: ObservableObject {
             case let .success(snapshot):
                 self.snapshot = snapshot
                 self.appendHistorySample(for: snapshot)
+                self.persistCachedSnapshot(snapshot)
                 self.loadError = nil
                 self.exitBootingIfReady(for: snapshot)
             case let .failure(message):
@@ -211,6 +220,47 @@ public final class SnapshotStore: ObservableObject {
         history.removeAll { $0.capturedAt < cutoff }
         if history.count > Self.maxHistorySamples {
             history.removeFirst(history.count - Self.maxHistorySamples)
+        }
+    }
+
+    private static func defaultCacheURL(for source: any HealthSnapshotSource) -> URL? {
+        guard source is CLIHealthSnapshotSource else {
+            return nil
+        }
+        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        return appSupport
+            .appendingPathComponent("Longhouse", isDirectory: true)
+            .appendingPathComponent("MenuBar", isDirectory: true)
+            .appendingPathComponent("last-good-snapshot.json")
+    }
+
+    private static func loadCachedSnapshot(from cacheURL: URL?) -> HealthSnapshot? {
+        guard let cacheURL else {
+            return nil
+        }
+        guard let data = try? Data(contentsOf: cacheURL) else {
+            return nil
+        }
+        return try? HealthSnapshotDecoder.decode(data: data)
+    }
+
+    private func persistCachedSnapshot(_ snapshot: HealthSnapshot) {
+        guard let cacheURL else {
+            return
+        }
+        do {
+            try FileManager.default.createDirectory(
+                at: cacheURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            let encoder = JSONEncoder()
+            encoder.keyEncodingStrategy = .convertToSnakeCase
+            let data = try encoder.encode(snapshot)
+            try data.write(to: cacheURL, options: [.atomic])
+        } catch {
+            // Cache failures should never make the menu bar look unhealthy.
         }
     }
 }

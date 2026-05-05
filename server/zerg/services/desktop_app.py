@@ -40,6 +40,7 @@ def build_snapshot_arguments(*, claude_dir: str | None = None) -> list[str]:
         "-m",
         "zerg.cli.main",
         "local-health",
+        "--fast",
         "--json",
     ]
     if claude_dir:

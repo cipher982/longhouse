@@ -111,10 +111,6 @@ final class MenuBarStatusController: NSObject {
     private func openPanel(relativeTo button: NSStatusBarButton) {
         panelGeneration &+= 1
         store.beginPresentationUpdates()
-        // Kick a fresh fetch so "RESTART PENDING" clears promptly after
-        // the shipper daemon restarts. Non-blocking: cached snapshot
-        // renders immediately underneath.
-        store.refresh(reason: .manual)
         panelController.show(relativeTo: button)
         installEventMonitors(for: panelGeneration)
     }

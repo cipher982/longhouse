@@ -138,9 +138,9 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
             typer.echo(f"  - {action}")
 
 
-def _collect_snapshot(claude_dir: str | None) -> dict[str, object]:
+def _collect_snapshot(claude_dir: str | None, *, fast: bool = False) -> dict[str, object]:
     state_root = resolve_longhouse_home_from_provider_home(claude_dir) if claude_dir else None
-    return collect_local_health(state_root)
+    return collect_local_health(state_root, fast=fast)
 
 
 def _repo_root() -> Path:
@@ -268,6 +268,16 @@ def _launch_desktop_surface(
 def local_health_callback(
     ctx: typer.Context,
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+    fast: bool = typer.Option(
+        False,
+        "--fast",
+        help="Use the menu-bar fast path. Avoid broad process scans and deep diagnostics.",
+    ),
+    deep: bool = typer.Option(
+        False,
+        "--deep",
+        help="Force the deep diagnostic path. This is the default for CLI compatibility.",
+    ),
     claude_dir: str | None = typer.Option(
         None,
         "--claude-dir",
@@ -275,10 +285,12 @@ def local_health_callback(
     ),
 ) -> None:
     """Show local Longhouse shipping health for this machine."""
+    if fast and deep:
+        raise typer.BadParameter("Use only one of --fast or --deep.")
     if ctx.invoked_subcommand:
         ctx.obj = {"claude_dir": claude_dir}
         return
-    _render_snapshot(_collect_snapshot(claude_dir), json_output=json_output)
+    _render_snapshot(_collect_snapshot(claude_dir, fast=fast), json_output=json_output)
 
 
 @app.command("window", hidden=True)
