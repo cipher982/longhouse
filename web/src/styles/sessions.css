@@ -904,6 +904,30 @@
     box-shadow: inset 0 1px 0 rgba(243, 234, 217, 0.05);
   }
 
+  .session-card-process-pill {
+    font-size: 10px;
+    font-weight: var(--font-weight-semibold);
+    line-height: 1;
+    padding: 3px 7px;
+    border-radius: var(--radius-full);
+    white-space: nowrap;
+    color: color-mix(in srgb, var(--color-text-secondary) 88%, transparent);
+    background: color-mix(in srgb, var(--color-text-secondary) 9%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-text-secondary) 24%, transparent);
+  }
+
+  .session-card-process-pill--unknown {
+    color: var(--color-text-muted);
+    background: color-mix(in srgb, var(--surface-glass-2) 86%, transparent);
+    border-color: color-mix(in srgb, var(--border-glass-1) 82%, transparent);
+  }
+
+  .session-card-process-pill--closed {
+    color: var(--color-text-primary);
+    background: color-mix(in srgb, var(--color-text-primary) 15%, rgba(0, 0, 0, 0.18));
+    border-color: color-mix(in srgb, var(--color-text-secondary) 46%, transparent);
+  }
+
   .session-card-ownership-pill--success {
     background: color-mix(in srgb, var(--color-intent-success) 13%, transparent);
     color: color-mix(in srgb, var(--color-intent-success) 88%, var(--color-text-primary));
@@ -1220,6 +1244,7 @@
     }
 
     .session-card-ownership-pill,
+    .session-card-process-pill,
     .session-card-closed-pill,
     .session-card-branch-pill {
       font-size: 9px;

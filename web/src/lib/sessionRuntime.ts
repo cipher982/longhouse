@@ -155,9 +155,6 @@ export function resolveSessionStatusLabel(
     if (display?.activity_recency === "stale") {
       return "Stale";
     }
-    if (display?.host_state === "online") {
-      return "Host online";
-    }
     return "Unknown";
   }
 
@@ -220,7 +217,10 @@ function compactFactToolLabel(toolName: string | null | undefined): string | nul
 function formatPhaseStatus(kind: string, tool: string | null | undefined): string {
   const phase = kind === "needs_user" ? "ready" : kind.replace(/[-_]+/g, " ");
   const compactTool = compactFactToolLabel(tool);
-  if (compactTool && (kind === "running" || kind === "blocked")) {
+  if (compactTool && kind === "running") {
+    return `Using ${compactTool}`;
+  }
+  if (compactTool && kind === "blocked") {
     return `${titleCaseWords(phase)} ${compactTool}`;
   }
   return titleCaseWords(phase);
@@ -242,7 +242,8 @@ function resolveSessionFactStatus(facts: SessionLivenessFacts | null): SessionFa
   }
 
   const lifecycle = facts.lifecycle?.state;
-  if (lifecycle === "closed") {
+  const processState = facts.process_state;
+  if (lifecycle === "closed" || processState === "closed") {
     return {
       label: "Closed",
       tone: "closed",
@@ -261,62 +262,17 @@ function resolveSessionFactStatus(facts: SessionLivenessFacts | null): SessionFa
     };
   }
 
-  if (facts.process?.status === "observed") {
+  if (processState === "running" || facts.process?.status === "observed") {
     return {
-      label: "Process visible",
-      tone: "active",
+      label: "Running",
+      tone: "inactive",
       seenAt: facts.process?.observed_at ?? facts.process?.last_seen_at ?? null,
       seenAtPrefix: "Verified",
     };
   }
 
-  if (facts.process?.status === "not_observed") {
-    return {
-      label: "Process not visible",
-      tone: "inactive",
-      seenAt: facts.process?.last_seen_at ?? facts.process?.observed_at ?? null,
-      seenAtPrefix: "Checked",
-    };
-  }
-
-  if (facts.host?.state === "online") {
-    return {
-      label: "Host online",
-      tone: "inactive",
-      seenAt: facts.host?.last_seen_at ?? null,
-      seenAtPrefix: "Heartbeat",
-    };
-  }
-
-  if (facts.host?.state === "stale") {
-    return {
-      label: "Host last seen",
-      tone: "inactive",
-      seenAt: facts.host?.last_seen_at ?? null,
-      seenAtPrefix: "Heartbeat",
-    };
-  }
-
-  if (facts.host?.state === "offline") {
-    return {
-      label: "Host offline",
-      tone: "inactive",
-      seenAt: facts.host?.last_seen_at ?? null,
-      seenAtPrefix: "Heartbeat",
-    };
-  }
-
-  if (facts.activity?.last_transcript_at) {
-    return {
-      label: "Transcript only",
-      tone: "inactive",
-      seenAt: facts.activity.last_transcript_at,
-      seenAtPrefix: "Transcript",
-    };
-  }
-
   return {
-    label: "Runtime unverified",
+    label: "Unknown",
     tone: "inactive",
     seenAt: null,
     seenAtPrefix: "Checked",
