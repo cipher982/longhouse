@@ -136,6 +136,11 @@ Path:
 - Existing `~/.longhouse/agent/engine-status.json` remains available for broad
   engine health/build/spool data. The fast status file can embed or reference
   the cheap fields from engine status.
+- Phase 2 interim: until the Rust engine writes `fast-status.json`, the menu bar
+  fast tier reads the existing `managed_sessions` and
+  `unmanaged_session_bindings` arrays from `engine-status.json`. Phase 3 either
+  introduces `fast-status.json` or explicitly blesses `engine-status.json` as
+  the stable fast snapshot path.
 
 Required fields:
 
@@ -273,6 +278,9 @@ Deliverables:
 
 - Rust engine emits targeted session process/control observations through the
   fast runtime path, not only the five-minute heartbeat.
+- Rust engine emits orphan bridge observations in the same fast snapshot/event
+  family; fast local-health must not need a deep bridge/process scan to show
+  orphan bridges.
 - Engine observation cadence is transition-oriented: emit immediately when a
   binding is created, disappears, reappears, or a managed bridge changes state;
   keep a low-frequency reconciliation sweep for missed transitions. Do not scan
