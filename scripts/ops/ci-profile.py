@@ -72,6 +72,12 @@ def parse_args() -> argparse.Namespace:
         help="GitHub Actions run ID. Repeat to profile multiple runs.",
     )
     parser.add_argument("--top", type=int, default=12, help="Number of slowest steps to print. Default: 12.")
+    parser.add_argument(
+        "--exclude-job",
+        action="append",
+        default=[],
+        help="Job name to omit from printed output. Repeatable.",
+    )
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     return parser.parse_args()
 
@@ -183,6 +189,23 @@ def all_steps(profiles: list[RunProfile]) -> list[StepProfile]:
     return steps
 
 
+def filtered_profile(profile: RunProfile, excluded_jobs: set[str]) -> RunProfile:
+    if not excluded_jobs:
+        return profile
+    return RunProfile(
+        run_id=profile.run_id,
+        repo=profile.repo,
+        html_url=profile.html_url,
+        head_sha=profile.head_sha,
+        status=profile.status,
+        conclusion=profile.conclusion,
+        created_at=profile.created_at,
+        updated_at=profile.updated_at,
+        duration_seconds=profile.duration_seconds,
+        jobs=[job for job in profile.jobs if job.name not in excluded_jobs],
+    )
+
+
 def print_text(profiles: list[RunProfile], *, top: int) -> None:
     for profile in profiles:
         short_sha = (profile.head_sha or "")[:10] or "unknown"
@@ -229,7 +252,8 @@ def main() -> int:
         json.dump([asdict(profile) for profile in profiles], sys.stdout, indent=2, sort_keys=True)
         sys.stdout.write("\n")
     else:
-        print_text(profiles, top=args.top)
+        excluded_jobs = set(args.exclude_job or [])
+        print_text([filtered_profile(profile, excluded_jobs) for profile in profiles], top=args.top)
     return 0
 
 
