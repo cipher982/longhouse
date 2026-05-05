@@ -126,7 +126,7 @@ test.describe("Managed Codex liveness", () => {
     await expect(card).toContainText("Idle");
     await expect(card).not.toContainText("State unavailable");
     await expect(card).not.toContainText("Not connected");
-    await expect(card).toHaveAttribute("data-runtime-tone", "inactive");
+    await expect(card).toHaveAttribute("data-runtime-tone", "idle");
     await expect(card).not.toHaveClass(/session-card--idle/);
     await expect(card).not.toHaveClass(/session-card--live/);
   });

@@ -518,7 +518,7 @@ describe("resolveSessionRuntimeState", () => {
     });
   });
 
-  it("renders managed phase facts as evidence facts, not current work claims", () => {
+  it("renders managed phase facts with the observed phase tone", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({
         presence_state: "running",
@@ -553,13 +553,54 @@ describe("resolveSessionRuntimeState", () => {
 
     expect(resolveSessionOwnershipLabel(runtime)).toBe("Managed");
     expect(resolveSessionStatusLabel(runtime)).toBe("Running Shell");
+    expect(runtime.factStatus).toMatchObject({
+      label: "Running Shell",
+      tone: "running",
+      seenAtPrefix: "Updated",
+    });
     expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
       headline: "Running Shell",
       detail: null,
     });
   });
 
-  it("renders unmanaged process observations without calling them active", () => {
+  it("maps runtime fact phases to visual tones without timestamp inference", () => {
+    const cases: Array<[string, string, string]> = [
+      ["thinking", "Thinking", "thinking"],
+      ["running", "Running Shell", "running"],
+      ["blocked", "Blocked Shell", "blocked"],
+      ["stalled", "Stalled", "stalled"],
+      ["idle", "Idle", "idle"],
+      ["needs_user", "Ready", "idle"],
+      ["reviewing", "Reviewing", "inactive"],
+    ];
+
+    for (const [kind, label, tone] of cases) {
+      const runtime = resolveSessionRuntimeState(
+        makeSession({
+          runtime_facts: makeRuntimeFacts({
+            phase: {
+              kind,
+              tool: "bash",
+              source: "managed_local_transport",
+              observed_at: "2026-03-21T12:00:05Z",
+              expires_at: "2026-03-21T12:15:05Z",
+            },
+          }),
+        }),
+      );
+
+      expect(runtime.factStatus).toMatchObject({
+        label,
+        tone,
+        seenAtPrefix: "Updated",
+      });
+      expect(runtime.isExecuting).toBe(false);
+      expect(runtime.isLive).toBe(false);
+    }
+  });
+
+  it("renders unmanaged process observations as process-visible facts", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({
         runtime_display: makeRuntimeDisplay({
@@ -597,6 +638,11 @@ describe("resolveSessionRuntimeState", () => {
     expect(resolveSessionOwnershipLabel(runtime)).toBe("Unmanaged");
     expect(resolveSessionStatusLabel(runtime)).toBe("Process visible");
     expect(getRuntimeOutcomeLabel(runtime)).toBe("Process visible");
+    expect(runtime.factStatus).toMatchObject({
+      label: "Process visible",
+      tone: "active",
+      seenAtPrefix: "Verified",
+    });
   });
 
   it("renders transcript-only facts as transcript-only", () => {

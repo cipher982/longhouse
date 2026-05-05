@@ -43,6 +43,31 @@ function formatTimelineStatusMeta(status: TimelineStatusLike | null, relativeNow
   return `${prefix} ${formatRelativeTime(status.seen_at, relativeNowMs)}`;
 }
 
+function runtimeFreshness(status: TimelineStatusLike | null, relativeNowMs: number): "fresh" | "warm" | "stale" | "old" | "unknown" {
+  if (!status?.seen_at) {
+    return "unknown";
+  }
+  const seenAtMs = Date.parse(status.seen_at);
+  if (!Number.isFinite(seenAtMs)) {
+    return "unknown";
+  }
+  const ageMs = Math.max(0, relativeNowMs - seenAtMs);
+  if (ageMs <= 5 * 60 * 1000) {
+    return "fresh";
+  }
+  if (ageMs <= 60 * 60 * 1000) {
+    return "warm";
+  }
+  if (ageMs <= 6 * 60 * 60 * 1000) {
+    return "stale";
+  }
+  return "old";
+}
+
+function isAnimatedRuntimeTone(tone: string): boolean {
+  return tone === "thinking" || tone === "running";
+}
+
 // ---------------------------------------------------------------------------
 // SessionCard
 // ---------------------------------------------------------------------------
@@ -87,8 +112,10 @@ export function SessionCard({
   const fallbackOwnershipLabel = interaction.isManagedLocalSession ? "Managed" : "Unmanaged";
   const ownershipLabel = timelineCard?.ownership.label || resolveSessionOwnershipLabel(runtime, fallbackOwnershipLabel);
   const fallbackControlPath = ownershipLabel === "Managed" ? "managed" : "unmanaged";
+  const ownershipTone = fallbackControlPath === "managed" ? "managed" : "unmanaged";
   const runtimePhaseLabel = cardStatus?.label || resolveSessionStatusLabel(runtime, fallbackControlPath);
   const cardRuntimeTone = timelineCard?.border_tone ?? cardStatus?.tone ?? runtime.tone;
+  const runtimeFreshnessTone = runtimeFreshness(timelineCardStatus, relativeNowMs);
 
   const projectLabel = getProjectLabel(session);
   const title = getSessionTitle(session);
@@ -126,10 +153,14 @@ export function SessionCard({
     runtime.runtimeDisplay?.control_path === "managed" ||
     runtime.runtimeDisplay?.control_path === "unmanaged";
   const showRuntimePill = !isClosedSession && (cardStatus != null || runtime.hasSignal || hasRuntimeAxes);
-  // Outcome labels are semantic summaries; keep their chips neutral across runtime sources.
+  // Runtime facts should keep their tone. Transcript-only and unknown states stay muted.
   const runtimePillTone = cardStatus?.tone || (runtimePhaseLabel === "Active" ? "active" : runtime.tone);
+  const useToneRuntimeDot = cardStatus != null || runtimePhaseLabel === "Active";
+  const animateRuntimeDot = fallbackControlPath === "managed" && isAnimatedRuntimeTone(runtimePillTone);
   const cardClassName = [
     "session-card",
+    `session-card--${ownershipTone}`,
+    `session-card--runtime-${runtimeFreshnessTone}`,
     confirming ? "session-card--confirming" : "",
     isClosedSession ? "session-card--closed" : "",
     !isClosedSession && runtime.isExecuting ? "session-card--live" : "",
@@ -185,6 +216,8 @@ export function SessionCard({
       data-session-id={detailSession.id}
       data-thread-id={thread.thread_id}
       data-runtime-tone={isClosedSession ? "closed" : runtimePillTone}
+      data-runtime-freshness={runtimeFreshnessTone}
+      data-control-path={fallbackControlPath}
       data-card-state={isClosedSession ? "closed" : "actionable"}
     >
       {!confirming && (
@@ -230,7 +263,7 @@ export function SessionCard({
 
           <div className="session-card-status">
             <span
-              className="session-card-ownership-pill session-card-ownership-pill--neutral"
+              className={`session-card-ownership-pill session-card-ownership-pill--${ownershipTone}`}
               data-testid="session-card-ownership"
               title={
                 ownershipLabel === "Managed"
@@ -254,13 +287,17 @@ export function SessionCard({
                 className={`session-card-runtime session-card-runtime--${runtimePillTone}`}
                 data-testid="session-card-runtime"
               >
-                {runtimePhaseLabel === "Active" ? (
-                  <span className="session-card-runtime-dot" aria-hidden="true" />
+                {useToneRuntimeDot ? (
+                  <span
+                    className={`session-card-runtime-dot${animateRuntimeDot ? " session-card-runtime-dot--animated" : ""}`}
+                    aria-hidden="true"
+                  />
                 ) : (
                   <PresenceBadge
                     state={cardStatus ? null : runtime.presenceState}
                     tool={cardStatus ? null : runtime.presenceTool}
                     compact
+                    animateCompact={animateRuntimeDot}
                     showUnknown={cardStatus != null || runtime.truthTier === "stale"}
                   />
                 )}

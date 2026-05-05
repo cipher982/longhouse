@@ -438,11 +438,13 @@
    * ---------------------------------------------------------------------------*/
 
   .session-card {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
     padding: var(--space-4);
     cursor: pointer;
+    overflow: hidden;
     background: color-mix(in srgb, var(--surface-glass-1) 84%, #2a2118 16%);
     border-color: color-mix(in srgb, var(--border-glass-1) 62%, var(--color-text-muted) 38%);
     transition:
@@ -451,6 +453,45 @@
       opacity var(--motion-duration-fast) var(--motion-easing-standard),
       box-shadow var(--motion-duration-fast) var(--motion-easing-standard),
       transform var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .session-card::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 4px;
+    z-index: 0;
+    opacity: 0.78;
+    pointer-events: none;
+  }
+
+  .session-card--managed::before {
+    background: linear-gradient(180deg, #5eead4 0%, #22c55e 58%, #84cc16 100%);
+    box-shadow: 0 0 18px color-mix(in srgb, #22c55e 34%, transparent);
+  }
+
+  .session-card--unmanaged::before {
+    background:
+      repeating-linear-gradient(
+        180deg,
+        rgba(251, 191, 36, 0.95) 0 9px,
+        rgba(146, 64, 14, 0.92) 9px 15px
+      );
+    box-shadow: 0 0 16px color-mix(in srgb, #f59e0b 28%, transparent);
+  }
+
+  .session-card--managed:not(.session-card--closed) {
+    border-color: color-mix(in srgb, #5eead4 34%, var(--border-glass-1));
+    background:
+      linear-gradient(90deg, rgba(20, 184, 166, 0.08), transparent 34%),
+      color-mix(in srgb, var(--surface-glass-1) 84%, #17211b 16%);
+  }
+
+  .session-card--unmanaged:not(.session-card--closed) {
+    border-color: color-mix(in srgb, #f59e0b 38%, var(--border-glass-1));
+    background:
+      linear-gradient(90deg, rgba(245, 158, 11, 0.1), transparent 36%),
+      color-mix(in srgb, var(--surface-glass-1) 82%, #2a1c11 18%);
   }
 
   .session-card:not(.session-card--closed) {
@@ -482,6 +523,28 @@
     transform: translateY(-2px);
     box-shadow: var(--shadow-lg);
     border-color: var(--color-border-primary);
+  }
+
+  .session-card--managed:not(.session-card--closed):hover,
+  .session-card--managed:not(.session-card--closed):focus-within {
+    border-color: color-mix(in srgb, #5eead4 62%, var(--color-border-primary));
+    box-shadow:
+      0 18px 44px rgba(0, 0, 0, 0.35),
+      0 0 0 1px color-mix(in srgb, #5eead4 30%, transparent);
+  }
+
+  .session-card--unmanaged:not(.session-card--closed):hover,
+  .session-card--unmanaged:not(.session-card--closed):focus-within {
+    border-color: color-mix(in srgb, #fbbf24 68%, var(--color-border-primary));
+    box-shadow:
+      0 18px 44px rgba(0, 0, 0, 0.35),
+      0 0 0 1px color-mix(in srgb, #f59e0b 34%, transparent);
+  }
+
+  .session-card--runtime-fresh:not(.session-card--closed) {
+    box-shadow:
+      inset 0 1px 0 rgba(243, 234, 217, 0.06),
+      0 0 0 1px color-mix(in srgb, var(--color-text-primary) 4%, transparent);
   }
 
   .session-card--closed {
@@ -656,6 +719,10 @@
   }
 
   .session-card-runtime {
+    --runtime-accent: var(--color-text-secondary);
+    --runtime-fill: 12%;
+    --runtime-border: 30%;
+    --runtime-glow: 0%;
     display: inline-flex;
     align-items: center;
     gap: var(--space-2);
@@ -665,38 +732,75 @@
     min-height: 22px;
     padding: 4px 8px;
     border-radius: var(--radius-full);
-    background: color-mix(in srgb, var(--surface-glass-2) 88%, transparent);
-    border: 1px solid color-mix(in srgb, var(--border-glass-1) 82%, transparent);
+    background:
+      linear-gradient(
+        90deg,
+        color-mix(in srgb, var(--runtime-accent) var(--runtime-fill), transparent),
+        color-mix(in srgb, var(--runtime-accent) 4%, transparent)
+      ),
+      color-mix(in srgb, var(--surface-glass-2) 88%, transparent);
+    border: 1px solid color-mix(in srgb, var(--runtime-accent) var(--runtime-border), var(--border-glass-1));
     color: var(--color-text-secondary);
+    box-shadow:
+      inset 0 1px 0 rgba(243, 234, 217, 0.06),
+      0 0 14px color-mix(in srgb, var(--runtime-accent) var(--runtime-glow), transparent);
   }
 
   .session-card-runtime--live {
-    background: color-mix(in srgb, var(--color-intent-success) 10%, transparent);
-    border-color: color-mix(in srgb, var(--color-intent-success) 28%, transparent);
+    --runtime-accent: var(--color-intent-success);
   }
 
   .session-card-runtime--thinking {
-    background: color-mix(in srgb, #fb923c 12%, transparent);
-    border-color: color-mix(in srgb, #fb923c 28%, transparent);
+    --runtime-accent: #fb923c;
   }
 
   .session-card-runtime--running {
-    background: color-mix(in srgb, #38bdf8 10%, transparent);
-    border-color: color-mix(in srgb, #38bdf8 28%, transparent);
+    --runtime-accent: #38bdf8;
   }
 
   .session-card-runtime--blocked {
-    background: color-mix(in srgb, #f87171 12%, transparent);
-    border-color: color-mix(in srgb, #f87171 32%, transparent);
+    --runtime-accent: #f87171;
+  }
+
+  .session-card-runtime--stalled {
+    --runtime-accent: #f59e0b;
   }
 
   .session-card-runtime--idle {
-    opacity: 0.84;
+    --runtime-accent: #a3e635;
   }
 
   .session-card-runtime--active {
-    background: color-mix(in srgb, var(--color-text-secondary) 12%, transparent);
-    border-color: color-mix(in srgb, var(--color-text-secondary) 30%, transparent);
+    --runtime-accent: #34d399;
+  }
+
+  .session-card-runtime--inactive {
+    --runtime-accent: #9f8f78;
+  }
+
+  .session-card--runtime-fresh .session-card-runtime {
+    --runtime-fill: 30%;
+    --runtime-border: 58%;
+    --runtime-glow: 22%;
+  }
+
+  .session-card--runtime-warm .session-card-runtime {
+    --runtime-fill: 22%;
+    --runtime-border: 46%;
+    --runtime-glow: 12%;
+  }
+
+  .session-card--runtime-stale .session-card-runtime {
+    --runtime-fill: 14%;
+    --runtime-border: 32%;
+    --runtime-glow: 0%;
+  }
+
+  .session-card--runtime-old .session-card-runtime,
+  .session-card--runtime-unknown .session-card-runtime {
+    --runtime-fill: 8%;
+    --runtime-border: 22%;
+    --runtime-glow: 0%;
   }
 
   .session-card-runtime-dot {
@@ -705,12 +809,34 @@
     height: 8px;
     border-radius: var(--radius-full);
     flex-shrink: 0;
-    background: color-mix(in srgb, var(--color-text-secondary) 82%, transparent);
-    opacity: 0.78;
+    background: var(--runtime-accent);
+    opacity: 0.92;
+    box-shadow: 0 0 8px color-mix(in srgb, var(--runtime-accent) 44%, transparent);
+  }
+
+  .session-card-runtime--inactive .session-card-runtime-dot,
+  .session-card-runtime--closed .session-card-runtime-dot {
+    opacity: 0.56;
+    box-shadow: none;
+  }
+
+  .session-card-runtime-dot--animated {
+    animation: session-runtime-dot-pulse 1.35s ease-in-out infinite;
+  }
+
+  @keyframes session-runtime-dot-pulse {
+    0%, 100% {
+      transform: scale(1);
+      box-shadow: 0 0 0 0 color-mix(in srgb, var(--runtime-accent) 54%, transparent);
+    }
+    50% {
+      transform: scale(1.18);
+      box-shadow: 0 0 0 7px color-mix(in srgb, var(--runtime-accent) 0%, transparent);
+    }
   }
 
   .session-card-runtime-phase {
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1;
     font-weight: var(--font-weight-semibold);
     color: var(--color-text-primary);
@@ -722,9 +848,9 @@
   }
 
   .session-card-runtime-meta {
-    font-size: 10px;
+    font-size: 11px;
     line-height: 1;
-    color: var(--color-text-muted);
+    color: color-mix(in srgb, var(--runtime-accent) 38%, var(--color-text-muted));
     white-space: nowrap;
     min-width: 0;
     overflow: hidden;
@@ -741,10 +867,10 @@
     background: var(--surface-glass-2);
     color: var(--color-text-muted);
     border: 1px solid var(--border-glass-1);
+    box-shadow: inset 0 1px 0 rgba(243, 234, 217, 0.06);
   }
 
   .session-card-ownership-pill {
-    color: color-mix(in srgb, var(--color-text-secondary) 88%, transparent);
     letter-spacing: 0;
   }
 
@@ -788,6 +914,31 @@
     background: color-mix(in srgb, var(--color-text-secondary) 10%, transparent);
     color: color-mix(in srgb, var(--color-text-secondary) 84%, transparent);
     border-color: color-mix(in srgb, var(--color-text-secondary) 24%, transparent);
+  }
+
+  .session-card-ownership-pill--managed {
+    background:
+      linear-gradient(180deg, color-mix(in srgb, #22c55e 24%, transparent), color-mix(in srgb, #14b8a6 14%, transparent));
+    color: #d9f99d;
+    border-color: color-mix(in srgb, #86efac 56%, transparent);
+    box-shadow:
+      inset 0 1px 0 rgba(236, 253, 245, 0.16),
+      0 0 10px color-mix(in srgb, #22c55e 16%, transparent);
+  }
+
+  .session-card-ownership-pill--unmanaged {
+    background:
+      repeating-linear-gradient(
+        135deg,
+        color-mix(in srgb, #f59e0b 24%, transparent) 0 6px,
+        color-mix(in srgb, #92400e 18%, transparent) 6px 12px
+      );
+    color: #fde68a;
+    border-color: color-mix(in srgb, #fbbf24 58%, transparent);
+    border-style: dashed;
+    box-shadow:
+      inset 0 1px 0 rgba(254, 243, 199, 0.12),
+      0 0 10px color-mix(in srgb, #f59e0b 16%, transparent);
   }
 
   /* Secondary: what was done — summary title or first user message */
@@ -1988,15 +2139,23 @@
    * ---------------------------------------------------------------------------*/
 
   /* Working: agent is actively thinking or making tool calls */
-  .session-card--thinking:not(.session-card--closed),
-  .session-card--running:not(.session-card--closed),
-  .session-card--live:not(.session-card--closed) {
-    animation: card-working-pulse 2.5s ease-in-out infinite;
+  .session-card--thinking:not(.session-card--closed) {
+    animation: card-thinking-pulse 2.4s ease-in-out infinite;
   }
 
-  @keyframes card-working-pulse {
+  .session-card--running:not(.session-card--closed),
+  .session-card--live:not(.session-card--closed) {
+    animation: card-running-pulse 2.2s ease-in-out infinite;
+  }
+
+  @keyframes card-thinking-pulse {
     0%, 100% { outline: 1px solid transparent; outline-offset: -1px; }
     50% { outline: 1px solid color-mix(in srgb, #fb923c 55%, transparent); outline-offset: -1px; }
+  }
+
+  @keyframes card-running-pulse {
+    0%, 100% { outline: 1px solid transparent; outline-offset: -1px; }
+    50% { outline: 1px solid color-mix(in srgb, #38bdf8 54%, transparent); outline-offset: -1px; }
   }
 
   .page-shell--scrolling .session-card--thinking,

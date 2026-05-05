@@ -226,6 +226,16 @@ function formatPhaseStatus(kind: string, tool: string | null | undefined): strin
   return titleCaseWords(phase);
 }
 
+function phaseTone(kind: string): RuntimeTone {
+  if (kind === "thinking" || kind === "running" || kind === "blocked" || kind === "stalled") {
+    return kind;
+  }
+  if (kind === "idle" || kind === "needs_user") {
+    return "idle";
+  }
+  return "inactive";
+}
+
 function resolveSessionFactStatus(facts: SessionLivenessFacts | null): SessionFactStatus | null {
   if (!facts) {
     return null;
@@ -245,7 +255,7 @@ function resolveSessionFactStatus(facts: SessionLivenessFacts | null): SessionFa
   if (phaseKind) {
     return {
       label: formatPhaseStatus(phaseKind, facts.phase?.tool),
-      tone: "inactive",
+      tone: phaseTone(phaseKind),
       seenAt: facts.phase?.observed_at ?? null,
       seenAtPrefix: "Updated",
     };
@@ -254,7 +264,7 @@ function resolveSessionFactStatus(facts: SessionLivenessFacts | null): SessionFa
   if (facts.process?.status === "observed") {
     return {
       label: "Process visible",
-      tone: "inactive",
+      tone: "active",
       seenAt: facts.process?.observed_at ?? facts.process?.last_seen_at ?? null,
       seenAtPrefix: "Verified",
     };

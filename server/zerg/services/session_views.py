@@ -231,7 +231,7 @@ def _timeline_status_from_liveness_facts(runtime_facts: SessionLivenessFactsResp
     if phase_kind:
         return TimelineStatusPresentationResponse(
             label=_phase_status_label(phase_kind, phase.tool),
-            tone="inactive",
+            tone=_phase_tone(phase_kind),
             seen_at=phase.observed_at,
             seen_at_prefix="Updated",
         )
@@ -240,7 +240,7 @@ def _timeline_status_from_liveness_facts(runtime_facts: SessionLivenessFactsResp
     if process.status == "observed":
         return TimelineStatusPresentationResponse(
             label="Process visible",
-            tone="inactive",
+            tone="active",
             seen_at=process.observed_at or process.last_seen_at,
             seen_at_prefix="Verified",
         )
@@ -297,6 +297,14 @@ def _phase_status_label(kind: str, tool_name: str | None) -> str:
     if compact_tool and kind in {"running", "blocked"}:
         return f"{_title_case_words(phase)} {compact_tool}"
     return _title_case_words(phase)
+
+
+def _phase_tone(kind: str) -> str:
+    if kind in {"thinking", "running", "blocked", "stalled"}:
+        return kind
+    if kind in {"idle", "needs_user"}:
+        return "idle"
+    return "inactive"
 
 
 def _title_case_words(value: str) -> str:
