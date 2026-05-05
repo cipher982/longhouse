@@ -63,15 +63,13 @@ pub struct HeartbeatPayload {
     pub ship_latency_p95_ms_1h: Option<u64>,
     pub disk_free_bytes: u64,
     pub is_offline: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub managed_sessions: Vec<ManagedSessionLease>,
     /// Phase 5 of session-liveness-honesty: machine-observed pid/cwd
-    /// bindings for unmanaged provider-CLI sessions. Populated by
-    /// `collect_unmanaged_session_bindings()` — currently a stub that
-    /// returns no observations. The full process/fd scanner will
-    /// populate this and Phase 6 will consume it to drive
-    /// `lifecycle=closed` when processes are confirmed gone.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// bindings for unmanaged provider-CLI sessions. Empty arrays are a
+    /// complete snapshot too: the Runtime Host consumes them to close sessions
+    /// whose provider process is confirmed gone.
+    #[serde(default)]
     pub unmanaged_session_bindings: Vec<UnmanagedSessionBinding>,
 }
 
@@ -543,6 +541,8 @@ mod tests {
         assert_eq!(parsed["ship_attempts_1h"], 7);
         assert_eq!(parsed["ship_successes_1h"], 5);
         assert_eq!(parsed["is_offline"], false);
+        assert_eq!(parsed["managed_sessions"], serde_json::json!([]));
+        assert_eq!(parsed["unmanaged_session_bindings"], serde_json::json!([]));
         assert!(parsed["last_ship_at"].is_string());
         assert!(parsed["last_ship_attempt_at"].is_string());
         assert_eq!(parsed["last_ship_result"], "ok");

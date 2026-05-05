@@ -21,6 +21,8 @@ from zerg.models.agents import SessionRuntimeEvent
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import SessionIngest
+from zerg.services.session_capabilities import build_session_capabilities
+from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import build_runtime_view
 from zerg.services.session_runtime import current_presence_state_for_session
@@ -730,6 +732,121 @@ def test_phase_signal_same_blocked_phase_with_new_tool_resets_phase_started_at(t
     engine.dispose()
 
 
+def test_heartbeat_empty_unmanaged_snapshot_closes_stale_unbound_codex_session(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_unmanaged_unbound_missing.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, provider="codex", started_at=now - timedelta(minutes=20))
+        session.execution_home = "unmanaged_local"
+        session.provider_session_id = str(session.id)
+        session.last_activity_at = now - timedelta(minutes=10)
+        runtime_key = runtime_key_for_session("codex", str(session.id))
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="codex",
+                    device_id="runtime-device",
+                    source="codex_hook",
+                    kind="phase_signal",
+                    phase="thinking",
+                    occurred_at=now - timedelta(minutes=10),
+                    freshness_ms=90 * 1000,
+                    dedupe_key="unbound-codex-phase",
+                    payload={},
+                )
+            ],
+        )
+        db.commit()
+        session_id = session.id
+
+    for client in _client(SessionLocal):
+        response = client.post(
+            "/agents/heartbeat",
+            json={
+                "version": "test",
+                "daemon_pid": 123,
+                "unmanaged_session_bindings": [],
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert response.status_code == 204, response.text
+
+    with SessionLocal() as db:
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session_id).one()
+        stored_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        view = build_runtime_view(state=state, session=stored_session, now=datetime.now(timezone.utc))
+        facts = build_session_liveness_facts(
+            runtime_view=view,
+            capabilities=build_session_capabilities(stored_session),
+            last_activity_at=stored_session.last_activity_at,
+        )
+
+        assert state.phase == "finished"
+        assert state.terminal_state == "process_gone"
+        assert view.status == "completed"
+        assert facts.control_path == "unmanaged"
+        assert facts.lifecycle.state == "closed"
+        assert facts.lifecycle.reason == "process_gone"
+        assert facts.process_state == "closed"
+
+    engine.dispose()
+
+
+def test_heartbeat_empty_unmanaged_snapshot_keeps_fresh_unbound_codex_session_open(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_unmanaged_unbound_fresh.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, provider="codex", started_at=now - timedelta(minutes=5))
+        session.execution_home = "unmanaged_local"
+        session.provider_session_id = str(session.id)
+        session.last_activity_at = now - timedelta(seconds=20)
+        runtime_key = runtime_key_for_session("codex", str(session.id))
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="codex",
+                    device_id="runtime-device",
+                    source="codex_hook",
+                    kind="phase_signal",
+                    phase="thinking",
+                    occurred_at=now - timedelta(seconds=20),
+                    freshness_ms=90 * 1000,
+                    dedupe_key="fresh-unbound-codex-phase",
+                    payload={},
+                )
+            ],
+        )
+        db.commit()
+        session_id = session.id
+
+    for client in _client(SessionLocal):
+        response = client.post(
+            "/agents/heartbeat",
+            json={
+                "version": "test",
+                "daemon_pid": 123,
+                "unmanaged_session_bindings": [],
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert response.status_code == 204, response.text
+
+    with SessionLocal() as db:
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session_id).one()
+        assert state.phase == "thinking"
+        assert state.terminal_state is None
+
+    engine.dispose()
+
+
 def test_heartbeat_missing_managed_lease_closes_immediately_with_stable_anchor(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_managed_missing_detached.db")
     now = datetime.now(timezone.utc)
@@ -781,6 +898,11 @@ def test_heartbeat_missing_managed_lease_closes_immediately_with_stable_anchor(t
         state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
         stored_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         view = build_runtime_view(state=state, session=stored_session, now=datetime.now(timezone.utc))
+        facts = build_session_liveness_facts(
+            runtime_view=view,
+            capabilities=build_session_capabilities(stored_session),
+            last_activity_at=stored_session.last_activity_at,
+        )
 
         assert state.phase == "finished"
         assert state.active_tool is None
@@ -789,6 +911,10 @@ def test_heartbeat_missing_managed_lease_closes_immediately_with_stable_anchor(t
         assert view.status == "completed"
         assert view.presence_state is None
         assert view.display_phase == "Completed"
+        assert facts.control_path == "managed"
+        assert facts.lifecycle.state == "closed"
+        assert facts.lifecycle.reason == "process_gone"
+        assert facts.process_state == "closed"
 
     engine.dispose()
 

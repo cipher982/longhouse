@@ -55,12 +55,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/agents", tags=["agents"])
 
 MANAGED_SESSION_LEASE_SOURCE = "engine_attached_lease"
+UNMANAGED_PROCESS_SNAPSHOT_SOURCE = "engine_process_snapshot"
 DEFAULT_MANAGED_SESSION_LEASE_TTL_MS = 15 * 60 * 1000
 MAX_MANAGED_SESSION_LEASE_TTL_MS = 60 * 60 * 1000
 MANAGED_SESSION_LEASE_STATES = {"attached", "detached", "degraded"}
 MANAGED_SESSION_LEASE_PHASES = {"idle", "thinking", "running", "blocked", "needs_user", "none"}
 MANAGED_SESSION_LEASE_PROVIDERS = {"codex", "claude", "gemini", "opencode"}
 CODEX_ROLLOUT_ID_RE = re.compile(r"^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-(.+)$")
+# One Codex phase freshness window. A complete process snapshot can close
+# unbound sessions only after their last phase/progress signal is no longer
+# current.
+MISSING_UNBOUND_UNMANAGED_PROVIDERS = {"codex"}
+UNBOUND_UNMANAGED_CLOSE_GRACE = timedelta(seconds=90)
 
 
 class UnmanagedSessionBindingIn(UTCBaseModel):
@@ -530,6 +536,130 @@ def _mark_missing_unmanaged_session_bindings_stale(
             row.binding_state = "stale"
 
 
+def _runtime_events_for_missing_unbound_unmanaged_sessions(
+    db: Session,
+    bindings: list[UnmanagedSessionBindingIn],
+    *,
+    device_id: str,
+    received_at: datetime,
+) -> list[RuntimeEventIngest]:
+    """Close stale local Codex sessions absent from a complete process snapshot.
+
+    Most unmanaged lifecycle truth flows through ``unmanaged_session_bindings``:
+    once a binding has ever been observed, omission from a later complete
+    snapshot marks that binding stale. Very short aborted Codex sessions can
+    produce transcript/phase events without ever being caught by the fd scan.
+    When the engine explicitly sends a complete snapshot and that stale session
+    is absent, close it instead of leaving it "unknown" forever.
+    """
+    observed_keys: set[tuple[str, str]] = set()
+    for binding in bindings:
+        provider = (binding.provider or "").strip().lower()
+        session_key = _normalize_unmanaged_provider_session_id(
+            provider,
+            (binding.provider_session_id or "").strip(),
+        )
+        if provider in MISSING_UNBOUND_UNMANAGED_PROVIDERS and session_key:
+            observed_keys.add((provider, session_key))
+
+    # Any existing binding for this device/provider/session is handled by the
+    # binding-overlay path, including stale rows. This function only covers
+    # sessions that never had a binding row.
+    existing_binding_keys = {
+        (
+            str(row.provider or "").strip().lower(),
+            _normalize_unmanaged_provider_session_id(
+                str(row.provider or "").strip().lower(),
+                str(row.provider_session_id or "").strip(),
+            ),
+        )
+        for row in (
+            db.query(UnmanagedSessionBinding.provider, UnmanagedSessionBinding.provider_session_id)
+            .filter(UnmanagedSessionBinding.device_id == device_id)
+            .filter(UnmanagedSessionBinding.provider.in_(MISSING_UNBOUND_UNMANAGED_PROVIDERS))
+            .all()
+        )
+    }
+
+    rows = (
+        db.query(SessionRuntimeState, AgentSession)
+        .join(AgentSession, SessionRuntimeState.session_id == AgentSession.id)
+        .filter(SessionRuntimeState.device_id == device_id)
+        .filter(SessionRuntimeState.session_id.isnot(None))
+        .filter(SessionRuntimeState.terminal_state.is_(None))
+        .filter(AgentSession.provider.in_(MISSING_UNBOUND_UNMANAGED_PROVIDERS))
+        .all()
+    )
+
+    events: list[RuntimeEventIngest] = []
+    for state, session in rows:
+        if _is_managed_session(session):
+            continue
+        provider = str(session.provider or state.provider or "").strip().lower()
+        if not str(session.provider_session_id or "").strip():
+            continue
+        session_key = _normalize_unmanaged_provider_session_id(
+            provider,
+            str(session.provider_session_id or "").strip(),
+        )
+        if not provider or not session_key:
+            continue
+        key = (provider, session_key)
+        if key in observed_keys or key in existing_binding_keys:
+            continue
+
+        freshness_expires_at = normalize_utc(state.freshness_expires_at)
+        if freshness_expires_at is not None and freshness_expires_at > received_at:
+            continue
+
+        latest_signal_at = max(
+            (
+                ts
+                for ts in (
+                    normalize_utc(session.last_activity_at),
+                    normalize_utc(state.last_progress_at),
+                    normalize_utc(state.last_runtime_signal_at),
+                )
+                if ts is not None
+            ),
+            default=None,
+        )
+        if latest_signal_at is not None and received_at - latest_signal_at < UNBOUND_UNMANAGED_CLOSE_GRACE:
+            continue
+
+        timeline_anchor_at = (
+            normalize_utc(state.timeline_anchor_at)
+            or latest_signal_at
+            or normalize_utc(session.last_activity_at)
+            or normalize_utc(session.started_at)
+            or received_at
+        )
+        session_id = state.session_id
+        if session_id is None:
+            continue
+        events.append(
+            RuntimeEventIngest(
+                runtime_key=state.runtime_key,
+                session_id=session_id,
+                provider=provider,
+                device_id=device_id,
+                source=UNMANAGED_PROCESS_SNAPSHOT_SOURCE,
+                kind="terminal_signal",
+                occurred_at=received_at,
+                dedupe_key=(
+                    f"engine-unmanaged-unbound-missing-terminal:{device_id}:{session_id}:"
+                    f"{int(state.runtime_version or 0)}:{timeline_anchor_at.isoformat()}"
+                ),
+                payload={
+                    "terminal_state": "process_gone",
+                    "timeline_anchor_at": timeline_anchor_at.isoformat(),
+                },
+            )
+        )
+
+    return events
+
+
 @router.post("/heartbeat", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
 async def ingest_heartbeat(
     payload: HeartbeatIn,
@@ -690,6 +820,15 @@ async def ingest_heartbeat(
                         _runtime_events_for_missing_managed_leases(
                             write_db,
                             _managed_leases,
+                            device_id=_device_id,
+                            received_at=_now,
+                        )
+                    )
+                if _unmanaged_bindings_present:
+                    runtime_events.extend(
+                        _runtime_events_for_missing_unbound_unmanaged_sessions(
+                            write_db,
+                            _unmanaged_bindings,
                             device_id=_device_id,
                             received_at=_now,
                         )

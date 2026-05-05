@@ -76,8 +76,10 @@ _MANAGED_EXECUTION_HOMES = {
     SessionExecutionHome.CLOUD_TAKEOVER,
 }
 
-_EXPLICIT_CLOSED_TERMINAL_STATES = {"session_ended", "finished", "user_closed"}
-_PROCESS_OBSERVATION_TERMINAL_REASONS = {"process_gone", "host_expired"}
+# `process_gone` is an explicit engine-snapshot terminal fact: the process is
+# gone, not merely unverifiable.
+_EXPLICIT_CLOSED_TERMINAL_STATES = {"session_ended", "finished", "user_closed", "process_gone"}
+_UNVERIFIED_TERMINAL_STATES = {"host_expired"}
 
 
 def _control_path(capabilities: SessionCapabilityFlags) -> str:
@@ -100,7 +102,7 @@ def _explicit_lifecycle(runtime_view: SessionRuntimeView) -> LifecycleFact | Non
     observed_at = runtime_view.presence_updated_at or runtime_view.last_live_at
     if terminal_state in _EXPLICIT_CLOSED_TERMINAL_STATES:
         return LifecycleFact(state="closed", reason=terminal_state, observed_at=observed_at)
-    if terminal_state in _PROCESS_OBSERVATION_TERMINAL_REASONS:
+    if terminal_state in _UNVERIFIED_TERMINAL_STATES:
         return LifecycleFact(state="unknown", reason=terminal_state, observed_at=observed_at)
     return LifecycleFact(state="closed", reason="provider_signal", observed_at=observed_at)
 
