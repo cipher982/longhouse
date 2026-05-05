@@ -363,6 +363,13 @@ function ActionCard({
     isOutsideActiveContext(interaction.callEvent) || isOutsideActiveContext(interaction.resultEvent);
 
   const statusTone = dropped ? "error" : pending ? "pending" : exitCode != null && exitCode !== 0 ? "error" : "ok";
+  const statusClass = pending
+    ? " tl-action--pending"
+    : dropped
+      ? " tl-action--dropped"
+      : exitCode != null && exitCode !== 0
+        ? " tl-action--error"
+        : "";
 
   const detailId = `${rowId}-detail`;
 
@@ -372,7 +379,8 @@ function ActionCard({
       data-testid="session-timeline-row"
       data-row-kind="tool"
       data-tool-tier="action"
-      className={`tl-action${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}${isAgent ? " tl-action--agent" : ""}`}
+      data-status={statusTone}
+      className={`tl-action${statusClass}${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}${isAgent ? " tl-action--agent" : ""}`}
     >
       <button
         type="button"
@@ -430,6 +438,12 @@ function ContextLine({
   const awaitingResult = !interaction.resultEvent && interaction.pairing !== "orphan";
   const dropped = awaitingResult && isToolInteractionDropped(interaction, sessionEnded);
   const pending = awaitingResult && !dropped;
+  const statusTone = dropped ? "error" : pending ? "pending" : "ok";
+  const statusClass = pending
+    ? " tl-context--pending"
+    : dropped
+      ? " tl-context--dropped"
+      : "";
 
   const detailId = `${rowId}-detail`;
   return (
@@ -438,7 +452,8 @@ function ContextLine({
       data-testid="session-timeline-row"
       data-row-kind="tool"
       data-tool-tier="context"
-      className={`tl-context${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}`}
+      data-status={statusTone}
+      className={`tl-context${statusClass}${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}`}
     >
       <button
         type="button"

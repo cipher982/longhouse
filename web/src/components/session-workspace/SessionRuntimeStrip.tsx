@@ -6,7 +6,11 @@ import {
   getRuntimeMetaLabel,
   getRuntimeOutcomeLabel,
 } from "../../lib/sessionUtils";
-import { resolveSessionRuntimeState } from "../../lib/sessionRuntime";
+import {
+  resolveSessionRuntimeState,
+  type KnownPresenceState,
+  type SessionRuntimeState,
+} from "../../lib/sessionRuntime";
 
 interface SessionRuntimeStripProps {
   session: AgentSession;
@@ -42,6 +46,36 @@ function getFallbackCapabilityLabel({
   return "Read only";
 }
 
+function getRuntimeBadgeState(runtime: SessionRuntimeState): KnownPresenceState | null {
+  if (!runtime.factStatus) {
+    return runtime.presenceState;
+  }
+
+  const phaseKind = runtime.runtimeFacts?.phase?.kind;
+  if (
+    phaseKind === "thinking" ||
+    phaseKind === "running" ||
+    phaseKind === "needs_user" ||
+    phaseKind === "blocked" ||
+    phaseKind === "stalled" ||
+    phaseKind === "idle"
+  ) {
+    return phaseKind;
+  }
+
+  const { tone } = runtime.factStatus;
+  if (
+    tone === "thinking" ||
+    tone === "running" ||
+    tone === "blocked" ||
+    tone === "stalled" ||
+    tone === "idle"
+  ) {
+    return tone;
+  }
+  return null;
+}
+
 export function SessionRuntimeStrip({
   session,
   interaction,
@@ -52,6 +86,10 @@ export function SessionRuntimeStrip({
   testId,
 }: SessionRuntimeStripProps) {
   const runtime = resolveSessionRuntimeState(session);
+  const runtimeBadgeState = getRuntimeBadgeState(runtime);
+  const runtimeBadgeTool = runtime.factStatus
+    ? (runtime.runtimeFacts?.phase?.tool ?? null)
+    : runtime.presenceTool;
   const runtimeDisplay = getRuntimeDisplayCopy(runtime, {
     managedLocal: interaction.isManagedLocalSession,
   });
@@ -110,11 +148,14 @@ export function SessionRuntimeStrip({
     >
       <div className="session-runtime-strip__presence">
         <PresenceBadge
-          state={runtime.factStatus ? null : runtime.presenceState}
-          tool={runtime.factStatus ? null : runtime.presenceTool}
+          state={runtimeBadgeState}
+          tool={runtimeBadgeTool}
           compact
           animateCompact={interaction.isManagedLocalSession}
-          showUnknown={runtime.factStatus != null || interaction.isManagedLocalSession}
+          showUnknown={
+            runtimeBadgeState == null &&
+            (runtime.factStatus != null || interaction.isManagedLocalSession)
+          }
         />
         <div className="session-runtime-strip__copy">
           <span className="session-runtime-strip__headline">{runtimePhase}</span>

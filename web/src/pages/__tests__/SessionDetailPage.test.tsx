@@ -284,6 +284,10 @@ describe("SessionDetailPage", () => {
     expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
       "Running Shell",
     );
+    expect(document.querySelector(".session-workspace-route")).toHaveClass(
+      "session-workspace-route--managed",
+      "session-workspace-route--tone-running",
+    );
     expect(
       screen.getByRole("group", { name: "Primary loop modes" }),
     ).toBeInTheDocument();
@@ -706,6 +710,88 @@ describe("SessionDetailPage", () => {
     );
   });
 
+  it("uses explicit runtime facts for the dock presence marker", () => {
+    const session = makeSession({
+      ended_at: null,
+      status: "working",
+      presence_state: null,
+      active_tool: null,
+      runtime_source: null,
+      confidence: null,
+      display_phase: null,
+      last_live_at: null,
+      runtime_facts: {
+        control_path: "managed",
+        host: {
+          state: "online",
+          last_seen_at: "2026-03-22T22:04:30Z",
+        },
+        process: {
+          status: "observed",
+          observed_at: "2026-03-22T22:04:30Z",
+          last_seen_at: "2026-03-22T22:04:30Z",
+        },
+        phase: {
+          kind: "running",
+          tool: "shell",
+          observed_at: "2026-03-22T22:04:30Z",
+        },
+        activity: {
+          last_transcript_at: "2026-03-22T22:04:30Z",
+          last_runtime_signal_at: "2026-03-22T22:04:30Z",
+          last_progress_at: "2026-03-22T22:04:30Z",
+        },
+        lifecycle: {
+          state: "open",
+          observed_at: "2026-03-22T22:04:30Z",
+        },
+      },
+    });
+    mockWorkspaceState({ session, model: buildTimelineModel([]) });
+
+    renderSessionDetailPage();
+
+    expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
+      "Running Shell",
+    );
+    expect(screen.getByTitle("Running: shell")).toBeInTheDocument();
+  });
+
+  it("does not promote recent transcript timestamps into live runtime tone", () => {
+    const session = makeSession({
+      home_label: null,
+      control: null,
+      ended_at: null,
+      last_activity_at: "2026-03-22T22:04:29Z",
+      timeline_anchor_at: "2026-03-22T22:04:29Z",
+      status: null,
+      presence_state: null,
+      active_tool: null,
+      runtime_source: null,
+      confidence: null,
+      display_phase: null,
+      last_live_at: null,
+      runtime_display: null,
+      runtime_facts: null,
+      capabilities: makeCapabilities({
+        live_control_available: false,
+        host_reattach_available: false,
+        reply_to_live_session_available: false,
+      }),
+    });
+    mockWorkspaceState({ session, model: buildTimelineModel([]) });
+
+    renderSessionDetailPage();
+
+    expect(document.querySelector(".session-workspace-route")).toHaveClass(
+      "session-workspace-route--unmanaged",
+      "session-workspace-route--tone-inactive",
+    );
+    expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
+      "Inactive",
+    );
+  });
+
   it("keeps the dock visible for searchable-only sessions and explains the search-only state", () => {
     const session = makeSession({
       provider: "gemini",
@@ -799,6 +885,10 @@ describe("SessionDetailPage", () => {
     );
     expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
       "Inactive",
+    );
+    expect(document.querySelector(".session-workspace-route")).toHaveClass(
+      "session-workspace-route--unmanaged",
+      "session-workspace-route--tone-inactive",
     );
   });
 
