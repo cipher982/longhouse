@@ -28,6 +28,8 @@ DEPLOY_AND_VERIFY = "Deploy and Verify"
 DEPLOY_CONTROL_PLANE = "Deploy Control Plane"
 DEPLOY_AND_VERIFY_JOB = "Deploy demo + canary + hosted live QA"
 DEPLOY_CONTROL_PLANE_JOB = "Deploy Control Plane"
+RUNTIME_IMAGE_WORKFLOW = "Publish Runtime Image"
+RUNTIME_IMAGE_JOB = "build-and-push"
 CANARY_SURFACE = "Canary"
 DEFAULT_CANARY_CONTAINER_NAME = "longhouse-david010"
 DEFAULT_CANARY_HEALTH_URL = "https://david010.longhouse.ai/api/health"
@@ -436,7 +438,7 @@ def verify_live_state(root: Path, repo: str, sha: str, runs: list[RunInfo]) -> t
     errors: list[str] = []
     jobs_by_run_id: dict[int, list[dict]] = {}
 
-    def deploy_job_succeeded(run: RunInfo, expected_job_name: str) -> bool:
+    def job_succeeded(run: RunInfo, expected_job_name: str) -> bool:
         if run.status != "completed" or run.conclusion != "success":
             return False
         jobs = jobs_by_run_id.get(run.databaseId)
@@ -448,28 +450,37 @@ def verify_live_state(root: Path, repo: str, sha: str, runs: list[RunInfo]) -> t
                 return True
         return False
 
-    def require_surface(surface_name: str, allowed_health: set[str]) -> None:
+    runtime_image_published = any(
+        run.workflowName == RUNTIME_IMAGE_WORKFLOW and job_succeeded(run, RUNTIME_IMAGE_JOB)
+        for run in runs
+    )
+    if not runtime_image_published:
+        raw = "\n".join(
+            line for line in raw.splitlines() if not line.strip().startswith("⚠")
+        ).rstrip() + "\n"
+
+    def require_surface(surface_name: str, allowed_health: set[str], *, check_sha: bool) -> None:
         surface = surfaces.get(surface_name)
         if surface is None:
             errors.append(f"Missing {surface_name!r} in deploy-status output")
             return
-        if surface.sha != short_sha:
+        if check_sha and surface.sha != short_sha:
             errors.append(f"{surface_name} is on {surface.sha}, expected {short_sha}")
         if surface.health not in allowed_health:
             errors.append(f"{surface_name} health is {surface.health}, expected one of {sorted(allowed_health)}")
 
     if any(
-        run.workflowName == DEPLOY_AND_VERIFY and deploy_job_succeeded(run, DEPLOY_AND_VERIFY_JOB)
+        run.workflowName == DEPLOY_AND_VERIFY and job_succeeded(run, DEPLOY_AND_VERIFY_JOB)
         for run in runs
     ):
-        require_surface("Demo runtime", RUNTIME_HEALTH)
-        require_surface(CANARY_SURFACE, RUNTIME_HEALTH)
+        require_surface("Demo runtime", RUNTIME_HEALTH, check_sha=runtime_image_published)
+        require_surface(CANARY_SURFACE, RUNTIME_HEALTH, check_sha=runtime_image_published)
 
     if any(
-        run.workflowName == DEPLOY_CONTROL_PLANE and deploy_job_succeeded(run, DEPLOY_CONTROL_PLANE_JOB)
+        run.workflowName == DEPLOY_CONTROL_PLANE and job_succeeded(run, DEPLOY_CONTROL_PLANE_JOB)
         for run in runs
     ):
-        require_surface("Control plane", CONTROL_PLANE_HEALTH)
+        require_surface("Control plane", CONTROL_PLANE_HEALTH, check_sha=True)
 
     return surfaces, errors, raw
 
