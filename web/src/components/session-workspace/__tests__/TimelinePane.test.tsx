@@ -39,6 +39,29 @@ function makeMessageItem(content: string): TimelineItem {
   };
 }
 
+const pendingToolItem: TimelineItem = {
+  kind: "tool",
+  interaction: {
+    key: "tool:pending",
+    toolName: "Bash",
+    callEvent: {
+      id: 2,
+      role: "assistant",
+      content_text: null,
+      tool_name: "Bash",
+      tool_input_json: { command: "sleep 10; make dogfood-check" },
+      tool_output_text: null,
+      tool_call_id: "tool-pending",
+      timestamp: "2026-03-19T16:47:00Z",
+      in_active_context: true,
+    },
+    resultEvent: null,
+    pairing: "pending",
+    anchorId: 2,
+    timestamp: "2026-03-19T16:47:00Z",
+  },
+};
+
 describe("TimelinePane", () => {
   it("renders seam items inline in the timeline list", () => {
     render(
@@ -121,5 +144,61 @@ describe("TimelinePane", () => {
     expect(timeline).toHaveTextContent("Dump line 350");
     expect(timeline).not.toHaveTextContent("... 400 lines hidden ...");
     expect(screen.getByRole("button", { name: "Collapse message" })).toBeInTheDocument();
+  });
+
+  it("marks unresolved open-session tools as pending rows", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-03-19T16:48:00Z"));
+      render(
+        <TimelinePane
+          items={[pendingToolItem]}
+          totalEntries={1}
+          loadedEntries={1}
+          abandonedEvents={0}
+          showAbandonedBranches={false}
+          onShowAbandonedBranchesChange={vi.fn()}
+          hasPreviousPage={false}
+          isFetchingPreviousPage={false}
+          onFetchPreviousPage={vi.fn()}
+          loading={false}
+          error={null}
+          selectedKey={null}
+          onSelectKey={vi.fn()}
+          sessionEnded={false}
+        />,
+      );
+
+      const row = screen.getByTestId("session-timeline-row");
+      expect(row).toHaveAttribute("data-status", "pending");
+      expect(row).toHaveClass("tl-action--pending");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("marks unresolved ended-session tools as dropped/error rows", () => {
+    render(
+      <TimelinePane
+        items={[pendingToolItem]}
+        totalEntries={1}
+        loadedEntries={1}
+        abandonedEvents={0}
+        showAbandonedBranches={false}
+        onShowAbandonedBranchesChange={vi.fn()}
+        hasPreviousPage={false}
+        isFetchingPreviousPage={false}
+        onFetchPreviousPage={vi.fn()}
+        loading={false}
+        error={null}
+        selectedKey={null}
+        onSelectKey={vi.fn()}
+        sessionEnded
+      />,
+    );
+
+    const row = screen.getByTestId("session-timeline-row");
+    expect(row).toHaveAttribute("data-status", "error");
+    expect(row).toHaveClass("tl-action--dropped");
   });
 });

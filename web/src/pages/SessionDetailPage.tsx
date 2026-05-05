@@ -22,7 +22,7 @@ import { TrashIcon } from "../components/icons";
 import { SessionChat, type SessionChatTarget } from "../components/SessionChat";
 import { SessionContextPane } from "../components/session-workspace/SessionContextPane";
 import { SessionRuntimeStrip } from "../components/session-workspace/SessionRuntimeStrip";
-import { isSessionClosed } from "../lib/sessionRuntime";
+import { isSessionClosed, resolveSessionRuntimeState } from "../lib/sessionRuntime";
 import { TimelinePane } from "../components/session-workspace/TimelinePane";
 import { WorkspaceShell } from "../components/workspace/WorkspaceShell";
 import { useLoopModeChange } from "../hooks/useLoopModeChange";
@@ -209,9 +209,21 @@ function SessionDetailWorkspaceRoute({
     interaction.sourceOriginLabel ||
     displaySession.home_label ||
     "host";
+  const runtime = resolveSessionRuntimeState(displaySession);
+  const workspaceClassName = [
+    "session-workspace-route",
+    `session-workspace-route--tone-${runtime.tone}`,
+    interaction.isManagedLocalSession
+      ? "session-workspace-route--managed"
+      : "session-workspace-route--unmanaged",
+  ].join(" ");
 
   return (
-    <div className="session-workspace-route">
+    <div
+      className={workspaceClassName}
+      data-control-path={interaction.isManagedLocalSession ? "managed" : "unmanaged"}
+      data-runtime-tone={runtime.tone}
+    >
       <WorkspaceShell
         sidebar={
           <SessionContextPane
