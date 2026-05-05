@@ -83,7 +83,7 @@ export interface SessionFactStatus {
   label: string;
   tone: RuntimeTone;
   seenAt: string | null;
-  seenAtPrefix: "Closed" | "Checked" | "Updated" | "Verified" | "Heartbeat" | "Transcript";
+  seenAtPrefix: "Closed" | "Checked" | "Updated" | "Verified";
 }
 
 export function resolveSessionOwnershipLabel(
