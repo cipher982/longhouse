@@ -33,6 +33,7 @@ make qa-ui-workbench                      # Timeline + session fixture set, desk
 - `trace.zip` - Playwright trace (open with `bunx playwright show-trace`)
 - `console.log` - Console output
 - `manifest.json` - Metadata + paths
+- Workbench runs also write `index.html` at the run root for one-page screenshot review
 
 ## Reading Bundle Artifacts
 ```python

@@ -317,6 +317,7 @@ qa-ui-workbench: ## Capture fixture-backed timeline/session workbench screenshot
 	$(MAKE) ui-capture PAGE=timeline SCENE=timeline-card-stress VIEWPORT=mobile NO_TRACE=1 OUTPUT=$$RUN_DIR/timeline-mobile; \
 	$(MAKE) ui-capture PAGE=session-detail SCENE=session-detail-stress VIEWPORT=desktop NO_TRACE=1 OUTPUT=$$RUN_DIR/session-detail-desktop; \
 	$(MAKE) ui-capture PAGE=session-detail SCENE=session-detail-stress VIEWPORT=mobile NO_TRACE=1 OUTPUT=$$RUN_DIR/session-detail-mobile; \
+	bunx tsx scripts/ui-workbench-report.ts $$RUN_DIR; \
 	echo "Workbench bundle: $$RUN_DIR"
 
 qa-ui-baseline: ## Visual baseline check for current app and public pages
