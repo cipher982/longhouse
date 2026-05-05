@@ -95,10 +95,6 @@ async function findSessionIdViaAgentsApi(request: APIRequestContext): Promise<st
   return null;
 }
 
-function isLoopPath(pathname: string): boolean {
-  return /^\/loop(?:\/.*)?$/.test(pathname);
-}
-
 // ---------------------------------------------------------------------------
 // Test 1: Auth + Timeline loads
 // ---------------------------------------------------------------------------
@@ -182,10 +178,10 @@ test("auth + timeline loads with session rows", async ({ context }) => {
 });
 
 // ---------------------------------------------------------------------------
-// Test 2: Legacy forum route redirects to timeline
+// Test 2: Removed routes resolve to timeline
 // ---------------------------------------------------------------------------
 
-test("loop login round-trip preserves loop destination", async ({
+test("removed loop login handoff resolves to timeline", async ({
   browser,
   frontendBaseUrl,
 }) => {
@@ -238,22 +234,22 @@ test("loop login round-trip preserves loop destination", async ({
     // Clean up route handler before continuing
     await page.unroute("**/*");
 
-    // --- Part 2: accept-token with return_to=/loop lands on /loop ---
+    // --- Part 2: accept-token with return_to=/loop lands on the supported home route ---
     await page.goto(
       `${baseOrigin}/api/auth/accept-token?token=${encodeURIComponent(loginToken)}&return_to=%2Floop`,
       { waitUntil: "domcontentloaded" },
     );
-    await page.waitForURL((url) => isLoopPath(url.pathname), {
+    await page.waitForURL((url) => url.pathname === "/timeline", {
       timeout: 20_000,
     });
 
     const finalPath = new URL(page.url()).pathname;
     expect(
-      isLoopPath(finalPath),
-      `Expected hosted handoff to land on /loop or a loop child path, got ${finalPath}`,
-    ).toBe(true);
-    expect(finalPath, "Hosted handoff should not dump users on /timeline").not.toContain(
-      "/timeline",
+      finalPath,
+      `Expected removed /loop handoff to resolve to /timeline, got ${finalPath}`,
+    ).toBe("/timeline");
+    expect(finalPath, "Removed /loop should not remain a visible destination").not.toContain(
+      "/loop",
     );
   } catch (error) {
     await failWithScreenshot(
