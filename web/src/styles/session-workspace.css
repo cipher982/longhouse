@@ -1815,13 +1815,15 @@
 
   @media (max-width: 900px) {
     .session-workspace-route {
-      padding: var(--space-3);
+      gap: 6px;
+      padding: 6px;
       overflow-y: auto;
       overflow-x: hidden;
     }
 
     .workspace-shell {
       flex: none;
+      gap: 6px;
       min-height: auto;
     }
 
@@ -1832,6 +1834,7 @@
         "main"
         "sidebar"
         "inspector";
+      gap: 8px;
       overflow: visible;
     }
 
@@ -1843,8 +1846,12 @@
         "sidebar";
     }
 
+    .workspace-shell__pane {
+      border-radius: 14px;
+    }
+
     .workspace-shell__pane--main {
-      min-height: min(78svh, 560px);
+      min-height: min(82svh, 620px);
     }
 
     .workspace-shell__pane--sidebar,
@@ -1852,8 +1859,21 @@
       max-height: min(40svh, 420px);
     }
 
-    .timeline-pane__header,
-    .timeline-pane__header-actions,
+    .timeline-pane__header {
+      flex-direction: row;
+      align-items: center;
+      flex-wrap: nowrap;
+      gap: 6px;
+      padding: 6px 8px;
+    }
+
+    .timeline-pane__header-actions {
+      flex-direction: row;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 6px;
+    }
+
     .event-inspector__header {
       flex-direction: column;
       align-items: stretch;
@@ -1861,8 +1881,32 @@
 
     .timeline-pane__header-main,
     .timeline-pane__header-actions {
-      flex: 0 1 auto;
-      width: 100%;
+      width: auto;
+    }
+
+    .timeline-pane__header-main {
+      flex: 1 1 auto;
+      flex-wrap: nowrap;
+    }
+
+    .timeline-pane__header-actions {
+      flex: 0 0 auto;
+      margin-left: 0;
+    }
+
+    .timeline-pane__header-right {
+      flex: 0 0 auto;
+    }
+
+    .session-workspace-header__left {
+      gap: 6px;
+    }
+
+    .session-workspace-header__left .ui-button {
+      width: 34px;
+      height: 34px;
+      padding: 0;
+      flex-shrink: 0;
     }
 
     .session-workspace-header__context {
@@ -1870,16 +1914,48 @@
       flex-wrap: wrap;
     }
 
-    .session-workspace-header__title-stack,
+    .session-workspace-header__title-stack {
+      min-width: 0;
+    }
+
+    .session-workspace-header__name {
+      font-size: 12.5px;
+      line-height: 1.2;
+    }
+
     .session-runtime-strip--inline,
     .session-runtime-strip--dock {
       width: 100%;
     }
 
-    .session-runtime-strip--dock,
     .session-pane-disclosure__summary {
       align-items: flex-start;
       flex-direction: column;
+    }
+
+    .session-runtime-strip--dock {
+      flex-direction: row;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 8px;
+      border-radius: 12px;
+    }
+
+    .session-runtime-strip__presence {
+      gap: 6px;
+    }
+
+    .session-runtime-strip__copy {
+      gap: 6px;
+    }
+
+    .session-runtime-strip__headline {
+      font-size: 12px;
+    }
+
+    .session-runtime-strip__detail,
+    .session-runtime-strip__meta {
+      font-size: 10.5px;
     }
 
     .timeline-pane__search {
@@ -1888,31 +1964,137 @@
     }
 
     .timeline-pane__title-group {
-      width: 100%;
-      justify-content: space-between;
-      align-items: flex-start;
-      flex-wrap: wrap;
+      width: auto;
+      min-width: 0;
+      justify-content: flex-start;
+      align-items: center;
+      flex-wrap: nowrap;
+      gap: 6px;
+    }
+
+    .timeline-pane__summary {
+      max-width: 122px;
+      padding: 2px 6px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-size: 10.5px;
+    }
+
+    .timeline-pane__header-actions > .ui-button,
+    .timeline-pane__header-right > .ui-button {
+      width: 34px;
+      height: 34px;
+      padding: 0;
+      gap: 0;
+      font-size: 0;
+    }
+
+    .timeline-pane__header-actions > .ui-button svg,
+    .timeline-pane__header-right > .ui-button svg {
+      margin: 0;
     }
 
     .timeline-pane__filters {
       width: 100%;
+      gap: 6px;
+    }
+
+    .timeline-pane__filter-toggle {
+      width: 34px;
+      height: 34px;
+    }
+
+    .timeline-pane__header-expandable {
+      padding: 4px 8px 6px;
+    }
+
+    .timeline-pane__filter {
+      padding: 4px 8px;
+      font-size: 11px;
+    }
+
+    .timeline-pane__status-row {
+      gap: 6px;
+      padding: 6px 8px;
+    }
+
+    .timeline-pane__status-chip {
+      padding: 4px 8px;
+      font-size: 11px;
     }
 
     .timeline-pane__list {
-      min-height: min(32svh, 260px);
+      min-height: min(44svh, 340px);
+      padding: 6px 8px 10px;
+    }
+
+    .timeline-pane__list.timeline-events {
+      gap: 1px;
+      padding-inline: 8px;
     }
 
     .timeline-pane--with-dock .timeline-pane__list {
       /* Cap list height on mobile so the chat dock stays visible without scrolling
          past hundreds of events. The list scrolls internally instead. */
-      max-height: min(52svh, 420px);
+      max-height: min(64svh, 520px);
     }
 
     .timeline-row--message {
       max-width: 100%;
     }
 
+    .tl-msg {
+      gap: 3px;
+      padding: 8px 0;
+    }
+
+    .tl-msg__head,
+    .tl-msg__time {
+      font-size: 10px;
+    }
+
+    .tl-msg__body {
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .tl-msg__body p {
+      margin-bottom: 0.45em;
+    }
+
+    .tl-chip {
+      padding: 1px 5px;
+      font-size: 10px;
+    }
+
+    .tl-action {
+      border-radius: 10px;
+    }
+
+    .tl-action__head {
+      gap: 6px;
+      padding: 6px 8px 6px 12px;
+    }
+
+    .tl-action__name {
+      font-size: 11.5px;
+    }
+
+    .tl-action__ns,
+    .tl-action__time {
+      font-size: 10px;
+    }
+
+    .tl-action__summary {
+      font-size: 11px;
+    }
+
+    .tl-action__meta {
+      gap: 4px;
+    }
+
     .timeline-pane__dock {
-      padding: var(--space-3);
+      gap: 6px;
+      padding: 6px 8px 8px;
     }
   }

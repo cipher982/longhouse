@@ -1095,13 +1095,75 @@
   }
 
   @media (max-width: 560px) {
+    .sessions-page {
+      gap: var(--space-4);
+    }
+
+    .sessions-llm-hint,
+    .sessions-demo-banner,
+    .sessions-stale-banner {
+      margin-bottom: 0;
+      padding: 6px 8px;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .sessions-toolbar {
+      gap: var(--space-2);
+      row-gap: 8px;
+    }
+
+    .sessions-search-row {
+      gap: var(--space-1);
+    }
+
+    .sessions-search-row .sessions-search-input {
+      padding: 8px 10px;
+      border-radius: 10px;
+      font-size: 14px;
+      line-height: 1.2;
+    }
+
+    .sessions-ai-toggle {
+      min-height: 38px;
+      padding: 0 10px;
+    }
+
+    .sessions-toolbar-actions {
+      width: 100%;
+      justify-content: flex-end;
+      gap: 6px;
+    }
+
+    .sessions-header-count {
+      font-size: 12px;
+    }
+
+    .sessions-recall-toggle,
+    .sessions-filter-toggle {
+      min-height: 34px;
+      padding: 0 9px;
+    }
+
+    .session-group {
+      gap: var(--space-3);
+    }
+
+    .session-group-header {
+      gap: var(--space-2);
+    }
+
+    .session-group-list {
+      gap: var(--space-3);
+    }
+
     .session-card {
-      padding: var(--space-3);
+      padding: 10px 12px 10px 14px;
       gap: 0;
     }
 
     .session-card-content {
-      gap: 10px;
+      gap: 8px;
     }
 
     .session-card-header {
@@ -1119,6 +1181,16 @@
 
     .session-card-project {
       font-size: var(--font-size-sm);
+    }
+
+    .session-card-title,
+    .session-card-summary {
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .session-card-summary {
+      -webkit-line-clamp: 2;
     }
 
     .session-card-identity-primary,
@@ -1157,7 +1229,8 @@
     .session-card-footer {
       grid-template-columns: 1fr;
       align-items: start;
-      gap: var(--space-2);
+      gap: 6px;
+      padding-top: 6px;
     }
 
     .session-card-actions {
