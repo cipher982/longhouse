@@ -6,6 +6,7 @@ type SessionCapabilities = {
 
 type SessionLivenessFacts = {
   control_path: "managed" | "unmanaged";
+  process_state: "running" | "closed" | "unknown";
   host: {
     state: "online" | "stale" | "offline" | "unknown";
     last_seen_at?: string | null;
@@ -134,6 +135,7 @@ function makeCapabilities(overrides: Partial<SessionCapabilities> = {}): Session
 function makeRuntimeFacts(overrides: Partial<SessionLivenessFacts> = {}): SessionLivenessFacts {
   return {
     control_path: "unmanaged",
+    process_state: "unknown",
     host: {
       state: "unknown",
       last_seen_at: null,
@@ -428,6 +430,7 @@ export function buildTimelineCardStressFixture(): {
       display_phase: "Recent progress",
       runtime_facts: makeRuntimeFacts({
         control_path: "unmanaged",
+        process_state: "running",
         host: {
           state: "online",
           last_seen_at: "2026-04-15T16:09:00Z",
@@ -490,6 +493,7 @@ export function buildTimelineCardStressFixture(): {
       display_phase: "Recent progress",
       runtime_facts: makeRuntimeFacts({
         control_path: "unmanaged",
+        process_state: "closed",
         activity: {
           last_transcript_at: "2026-04-15T16:08:00Z",
           last_runtime_signal_at: null,

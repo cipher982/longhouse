@@ -1625,6 +1625,49 @@ describe("SessionsPage", () => {
     } as agentsApi.SessionRuntimeDisplay;
   }
 
+  function makeRuntimeFacts(
+    overrides: Partial<NonNullable<agentsApi.AgentSession["runtime_facts"]>> = {},
+  ): NonNullable<agentsApi.AgentSession["runtime_facts"]> {
+    return {
+      control_path: "unmanaged",
+      process_state: "unknown",
+      host: {
+        state: "unknown",
+        last_seen_at: null,
+        source: null,
+      },
+      process: {
+        status: "unknown",
+        pid: null,
+        process_start_time: null,
+        observed_at: null,
+        last_seen_at: null,
+        source_mtime: null,
+        source_path: null,
+        reason: null,
+        source: null,
+      },
+      phase: {
+        kind: null,
+        tool: null,
+        source: null,
+        observed_at: null,
+        expires_at: null,
+      },
+      activity: {
+        last_transcript_at: null,
+        last_runtime_signal_at: null,
+        last_progress_at: null,
+      },
+      lifecycle: {
+        state: "unknown",
+        reason: null,
+        observed_at: null,
+      },
+      ...overrides,
+    };
+  }
+
   it("renders Unknown for unmanaged cards with no activity signal", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
@@ -1712,6 +1755,110 @@ describe("SessionsPage", () => {
     const runtime = await within(card).findByTestId("session-card-runtime");
     expect(runtime).toHaveTextContent("Stale");
     expect(runtime).toHaveTextContent("Updated ");
+  });
+
+  it("renders process and phase as separate card axes", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            runtime_display: makeRuntimeDisplay({
+              control_path: "unmanaged",
+              activity_recency: "live",
+              state: "running",
+              tone: "running",
+              is_executing: true,
+            }),
+            runtime_facts: makeRuntimeFacts({
+              control_path: "unmanaged",
+              process_state: "unknown",
+              phase: {
+                kind: "running",
+                tool: "bash",
+                source: "semantic",
+                observed_at: "2026-03-21T12:00:00Z",
+                expires_at: "2026-03-21T12:10:00Z",
+              },
+              lifecycle: {
+                state: "open",
+                reason: "phase_observed",
+                observed_at: "2026-03-21T12:00:00Z",
+              },
+            }),
+            timeline_card: {
+              ownership: { label: "Unmanaged", tone: "neutral" },
+              status: { label: "Using Shell", tone: "running", seen_at: "2026-03-21T12:00:00Z", seen_at_prefix: "Updated" },
+              border_tone: "running",
+            },
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline");
+
+    const card = await screen.findByTestId("session-card");
+    expect(await within(card).findByTestId("session-card-ownership")).toHaveTextContent("Unmanaged");
+    expect(await within(card).findByTestId("session-card-process-state")).toHaveTextContent("Process unknown");
+    const runtime = await within(card).findByTestId("session-card-runtime");
+    expect(runtime).toHaveTextContent("Using Shell");
+    expect(runtime).not.toHaveTextContent("Running ·");
+  });
+
+  it("uses the process pill for process-only running state", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            runtime_display: makeRuntimeDisplay({
+              control_path: "unmanaged",
+              activity_recency: "live",
+            }),
+            runtime_facts: makeRuntimeFacts({
+              control_path: "unmanaged",
+              process_state: "running",
+              process: {
+                status: "observed",
+                pid: 1234,
+                process_start_time: "2026-03-21T11:00:00Z",
+                observed_at: "2026-03-21T12:00:00Z",
+                last_seen_at: "2026-03-21T12:00:00Z",
+                source_mtime: "2026-03-21T12:00:00Z",
+                source_path: "/tmp/session.jsonl",
+                reason: null,
+                source: "machine_process_scan",
+              },
+              lifecycle: {
+                state: "open",
+                reason: "process_observed",
+                observed_at: "2026-03-21T12:00:00Z",
+              },
+            }),
+            timeline_card: {
+              ownership: { label: "Unmanaged", tone: "neutral" },
+              status: { label: "Running", tone: "inactive", seen_at: "2026-03-21T12:00:00Z", seen_at_prefix: "Verified" },
+              border_tone: "inactive",
+            },
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline");
+
+    const card = await screen.findByTestId("session-card");
+    expect(await within(card).findByTestId("session-card-process-state")).toHaveTextContent("Process running");
+    expect(within(card).queryByTestId("session-card-runtime")).not.toBeInTheDocument();
   });
 
   it("prefers lifecycle=='closed' over stale managed presence", async () => {

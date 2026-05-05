@@ -49,6 +49,7 @@ function makeRuntimeFacts(
 ): NonNullable<TimelineRuntimeSession["runtime_facts"]> {
   return {
     control_path: "managed",
+    process_state: "unknown",
     host: {
       state: "unknown",
       last_seen_at: null,
@@ -451,7 +452,7 @@ describe("resolveSessionRuntimeState", () => {
     expect(resolveSessionStatusLabel(runtime)).toBe("Stale");
   });
 
-  it("labels unmanaged online hosts without session activity as host online", () => {
+  it("does not promote unmanaged online hosts into session status", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({
         runtime_display: {
@@ -478,7 +479,7 @@ describe("resolveSessionRuntimeState", () => {
     );
 
     expect(resolveSessionOwnershipLabel(runtime)).toBe("Unmanaged");
-    expect(resolveSessionStatusLabel(runtime)).toBe("Host online");
+    expect(resolveSessionStatusLabel(runtime)).toBe("Unknown");
   });
 
   it("lets closed lifecycle suppress stale attention flags everywhere", () => {
@@ -552,14 +553,14 @@ describe("resolveSessionRuntimeState", () => {
     );
 
     expect(resolveSessionOwnershipLabel(runtime)).toBe("Managed");
-    expect(resolveSessionStatusLabel(runtime)).toBe("Running Shell");
+    expect(resolveSessionStatusLabel(runtime)).toBe("Using Shell");
     expect(runtime.factStatus).toMatchObject({
-      label: "Running Shell",
+      label: "Using Shell",
       tone: "running",
       seenAtPrefix: "Updated",
     });
     expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
-      headline: "Running Shell",
+      headline: "Using Shell",
       detail: null,
     });
   });
@@ -567,7 +568,7 @@ describe("resolveSessionRuntimeState", () => {
   it("maps runtime fact phases to visual tones without timestamp inference", () => {
     const cases: Array<[string, string, string]> = [
       ["thinking", "Thinking", "thinking"],
-      ["running", "Running Shell", "running"],
+      ["running", "Using Shell", "running"],
       ["blocked", "Blocked Shell", "blocked"],
       ["stalled", "Stalled", "stalled"],
       ["idle", "Idle", "idle"],
@@ -610,6 +611,7 @@ describe("resolveSessionRuntimeState", () => {
         }),
         runtime_facts: makeRuntimeFacts({
           control_path: "unmanaged",
+          process_state: "running",
           host: {
             state: "online",
             last_seen_at: "2026-03-21T12:00:00Z",
@@ -636,16 +638,16 @@ describe("resolveSessionRuntimeState", () => {
     );
 
     expect(resolveSessionOwnershipLabel(runtime)).toBe("Unmanaged");
-    expect(resolveSessionStatusLabel(runtime)).toBe("Process visible");
-    expect(getRuntimeOutcomeLabel(runtime)).toBe("Process visible");
+    expect(resolveSessionStatusLabel(runtime)).toBe("Running");
+    expect(getRuntimeOutcomeLabel(runtime)).toBe("Running");
     expect(runtime.factStatus).toMatchObject({
-      label: "Process visible",
-      tone: "active",
+      label: "Running",
+      tone: "inactive",
       seenAtPrefix: "Verified",
     });
   });
 
-  it("renders transcript-only facts as transcript-only", () => {
+  it("renders transcript-only facts as unknown process state", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({
         runtime_display: makeRuntimeDisplay({
@@ -669,11 +671,11 @@ describe("resolveSessionRuntimeState", () => {
       }),
     );
 
-    expect(resolveSessionStatusLabel(runtime)).toBe("Transcript only");
-    expect(getRuntimeOutcomeLabel(runtime)).toBe("Transcript only");
+    expect(resolveSessionStatusLabel(runtime)).toBe("Unknown");
+    expect(getRuntimeOutcomeLabel(runtime)).toBe("Unknown");
   });
 
-  it("renders unknown host facts as unverified", () => {
+  it("renders unknown host facts as unknown", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({
         runtime_display: makeRuntimeDisplay({
@@ -697,7 +699,7 @@ describe("resolveSessionRuntimeState", () => {
       }),
     );
 
-    expect(resolveSessionStatusLabel(runtime)).toBe("Runtime unverified");
+    expect(resolveSessionStatusLabel(runtime)).toBe("Unknown");
   });
 
   it("renders closed facts as closed rather than completed", () => {

@@ -140,6 +140,7 @@ export interface LifecycleFact {
 
 export interface SessionLivenessFacts {
   control_path: "managed" | "unmanaged" | (string & {});
+  process_state: "running" | "closed" | "unknown" | (string & {});
   host: HostObservation;
   process: ProcessObservation;
   phase: PhaseObservation;
