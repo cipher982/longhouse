@@ -200,6 +200,9 @@ def test_sessions_list_uses_recent_activity_anchor_for_old_live_session(tmp_path
             "host_state": "unknown",
             "terminal_reason": None,
         }
+        assert top["runtime_facts"]["process_state"] == "running"
+        assert top["timeline_card"]["status"]["label"] == "Running · Using Shell"
+        assert top["timeline_card"]["status"]["tone"] == "running"
         assert top["timeline_anchor_at"] is not None
         assert top["timeline_anchor_at"] >= recent_idle.started_at.isoformat().replace("+00:00", "Z")
 
@@ -394,6 +397,8 @@ def test_sessions_list_uses_runtime_anchor_for_old_runtime_only_session(tmp_path
         assert row["status"] == "working"
         assert row["display_phase"] == "Running bash"
         assert row["timeline_anchor_at"] is not None
+        assert row["runtime_facts"]["process_state"] == "running"
+        assert row["timeline_card"]["status"]["label"] == "Running · Using Shell"
 
 
 def test_active_sessions_uses_runtime_anchor_for_old_runtime_only_session(tmp_path):
@@ -442,6 +447,7 @@ def test_active_sessions_uses_runtime_anchor_for_old_runtime_only_session(tmp_pa
         assert row["status"] == "working"
         assert row["presence_state"] == "thinking"
         assert row["display_phase"] == "Thinking"
+        assert row["runtime_facts"]["process_state"] == "running"
 
 
 def test_sessions_list_prefers_materialized_runtime_state_when_present(tmp_path):
@@ -492,6 +498,8 @@ def test_sessions_list_prefers_materialized_runtime_state_when_present(tmp_path)
         assert row["runtime_source"] == "semantic"
         assert row["runtime_version"] == 3
         assert row["confidence"] == "live"
+        assert row["runtime_facts"]["process_state"] == "running"
+        assert row["timeline_card"]["status"]["label"] == "Running · Using Shell"
 
 
 def test_sessions_list_keeps_progress_runtime_overlay_for_recent_closed_session(tmp_path):
@@ -542,8 +550,9 @@ def test_sessions_list_keeps_progress_runtime_overlay_for_recent_closed_session(
         assert row["presence_state"] is None
         assert row["last_live_at"] is None
         assert row["confidence"] == "stale"
-        assert row["timeline_card"]["status"]["label"] == "Transcript only"
-        assert row["timeline_card"]["status"]["seen_at_prefix"] == "Transcript"
+        assert row["runtime_facts"]["process_state"] == "unknown"
+        assert row["timeline_card"]["status"]["label"] == "Unknown"
+        assert row["timeline_card"]["status"]["seen_at_prefix"] == "Checked"
 
 
 def test_sessions_list_suppresses_stale_progress_running_phase(tmp_path):
@@ -652,8 +661,9 @@ def test_sessions_list_suppresses_stale_phase_signal_from_timeline_status(tmp_pa
         assert row["runtime_phase"] is None
         assert row["runtime_facts"]["phase"]["kind"] is None
         assert row["runtime_facts"]["activity"]["last_runtime_signal_at"] is not None
-        assert row["timeline_card"]["status"]["label"] == "Transcript only"
-        assert row["timeline_card"]["status"]["seen_at_prefix"] == "Transcript"
+        assert row["runtime_facts"]["process_state"] == "unknown"
+        assert row["timeline_card"]["status"]["label"] == "Unknown"
+        assert row["timeline_card"]["status"]["seen_at_prefix"] == "Checked"
 
 
 def test_sessions_list_marks_materialized_needs_user_as_ready(tmp_path):

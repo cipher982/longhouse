@@ -169,8 +169,17 @@ def _liveness_facts(
 ) -> SessionLivenessFacts:
     phase_source = "semantic" if phase_kind is not None else None
     process_source = "machine_process_scan" if process_status != "unknown" else None
+    process_state = (
+        "closed"
+        if lifecycle_state == "closed"
+        else "running"
+        if process_status == "observed"
+        or (lifecycle_state == "open" and phase_kind is not None)
+        else "unknown"
+    )
     return SessionLivenessFacts(
         control_path=control_path,
+        process_state=process_state,
         host=HostObservation(
             state=host_state,
             last_seen_at=NOW if host_state != "unknown" else None,

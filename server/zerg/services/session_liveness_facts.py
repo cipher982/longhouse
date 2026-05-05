@@ -62,6 +62,7 @@ class LifecycleFact:
 @dataclass(frozen=True)
 class SessionLivenessFacts:
     control_path: str
+    process_state: str
     host: HostObservation
     process: ProcessObservation
     phase: PhaseObservation
@@ -169,18 +170,33 @@ def _process_observation(
 def _lifecycle(
     *,
     explicit: LifecycleFact | None,
-    control_path: str,
     process: ProcessObservation,
     phase: PhaseObservation,
-    host: HostObservation,
 ) -> LifecycleFact:
     if explicit is not None:
         return explicit
     if process.status == "observed":
         return LifecycleFact(state="open", reason="process_observed", observed_at=process.observed_at or process.last_seen_at)
-    if control_path == "managed" and host.state == "online" and phase.kind is not None:
+    if process.status == "not_observed" and process.reason == "process_gone":
+        return LifecycleFact(state="closed", reason="process_gone", observed_at=process.last_seen_at or process.observed_at)
+    if phase.kind is not None:
         return LifecycleFact(state="open", reason="phase_observed", observed_at=phase.observed_at)
     return LifecycleFact(state="unknown", reason=None, observed_at=None)
+
+
+def _process_state(
+    *,
+    process: ProcessObservation,
+    phase: PhaseObservation,
+    lifecycle: LifecycleFact,
+) -> str:
+    if lifecycle.state == "closed":
+        return "closed"
+    if process.status == "observed":
+        return "running"
+    if lifecycle.state == "open" and phase.kind is not None:
+        return "running"
+    return "unknown"
 
 
 def build_session_liveness_facts(
@@ -207,13 +223,17 @@ def build_session_liveness_facts(
     )
     lifecycle = _lifecycle(
         explicit=_explicit_lifecycle(runtime_view),
-        control_path=control_path,
         process=process,
         phase=phase,
-        host=host,
+    )
+    process_state = _process_state(
+        process=process,
+        phase=phase,
+        lifecycle=lifecycle,
     )
     return SessionLivenessFacts(
         control_path=control_path,
+        process_state=process_state,
         host=host,
         process=process,
         phase=phase,
