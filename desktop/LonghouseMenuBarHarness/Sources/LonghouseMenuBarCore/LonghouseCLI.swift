@@ -69,10 +69,10 @@ enum LonghouseCLI {
         pathEnvironment: String?
     ) -> (launchPath: String, arguments: [String]) {
         if let executable = resolveExecutable(homeDirectory: homeDirectory, pathEnvironment: pathEnvironment) {
-            return (executable.path, ["local-health", "--json"])
+            return (executable.path, ["local-health", "--fast", "--json"])
         }
 
-        return ("/bin/zsh", ["-lc", "longhouse local-health --json"])
+        return ("/bin/zsh", ["-lc", "longhouse local-health --fast --json"])
     }
 
     static func repairInstallInvocation(snapshot: HealthSnapshot) -> (launchPath: String, arguments: [String])? {

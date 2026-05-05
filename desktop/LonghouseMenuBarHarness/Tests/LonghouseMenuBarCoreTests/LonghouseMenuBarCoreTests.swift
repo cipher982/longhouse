@@ -15,6 +15,20 @@ private struct ManagedPhaseContractCase: Decodable {
     let attention: String
 }
 
+private struct StaticHealthSnapshotSource: HealthSnapshotSource {
+    let snapshot: HealthSnapshot
+
+    func load() throws -> HealthSnapshot {
+        snapshot
+    }
+}
+
+private struct ThrowingHealthSnapshotSource: HealthSnapshotSource {
+    func load() throws -> HealthSnapshot {
+        throw SnapshotSourceError.commandFailed("boom")
+    }
+}
+
 struct LonghouseMenuBarCoreTests {
     @Test
     func statusItemSourceIconHasZeroPadding() throws {
@@ -370,7 +384,66 @@ struct LonghouseMenuBarCoreTests {
         )
 
         #expect(invocation.launchPath == executableURL.path)
-        #expect(invocation.arguments == ["local-health", "--json"])
+        #expect(invocation.arguments == ["local-health", "--fast", "--json"])
+    }
+
+    @Test
+    @MainActor
+    func snapshotStorePersistsLastGoodSnapshot() throws {
+        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let cacheURL = tempDir.appendingPathComponent("last-good.json")
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-05-05T12:00:00Z",
+            healthState: "healthy",
+            severity: "green",
+            headline: "Longhouse shipping healthy",
+            reasons: [],
+            suggestedActions: [],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: nil
+        )
+
+        _ = SnapshotStore(source: StaticHealthSnapshotSource(snapshot: snapshot), cacheURL: cacheURL)
+
+        let cached = try HealthSnapshotDecoder.decode(data: Data(contentsOf: cacheURL))
+        #expect(cached.headline == "Longhouse shipping healthy")
+    }
+
+    @Test
+    @MainActor
+    func snapshotStoreLoadsLastGoodSnapshotBeforeRefresh() throws {
+        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let cacheURL = tempDir.appendingPathComponent("last-good.json")
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-05-05T12:00:00Z",
+            healthState: "degraded",
+            severity: "yellow",
+            headline: "Cached Longhouse status",
+            reasons: [],
+            suggestedActions: [],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: nil
+        )
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        try encoder.encode(snapshot).write(to: cacheURL)
+
+        let store = SnapshotStore(source: ThrowingHealthSnapshotSource(), cacheURL: cacheURL)
+
+        #expect(store.snapshot?.headline == "Cached Longhouse status")
+        #expect(store.loadError == "boom")
     }
 
     @Test

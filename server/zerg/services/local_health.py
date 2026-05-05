@@ -69,6 +69,7 @@ CONTROL_PATH_MANAGED = "managed"
 CONTROL_PATH_UNMANAGED = "unmanaged"
 LIVENESS_MODEL_CODEX_BRIDGE = "codex_bridge"
 LIVENESS_MODEL_PROCESS_SCAN = "process_scan"
+LIVENESS_MODEL_ENGINE_STATUS = "engine_status"
 
 
 def _utc_now() -> datetime:
@@ -1664,6 +1665,104 @@ def _collect_unmanaged_processes(
     return processes
 
 
+def _engine_status_payload(engine_status: dict[str, Any]) -> Mapping[str, Any]:
+    raw_payload = engine_status.get("payload") if engine_status else None
+    return raw_payload if isinstance(raw_payload, Mapping) else {}
+
+
+def _collect_managed_sessions_from_engine_status(
+    engine_status: dict[str, Any],
+    *,
+    phase_overlay: dict[str, dict[str, str | None]] | None = None,
+) -> list[dict[str, Any]]:
+    payload = _engine_status_payload(engine_status)
+    raw_rows = payload.get("managed_sessions")
+    if not isinstance(raw_rows, list):
+        return []
+
+    sessions: list[dict[str, Any]] = []
+    for raw_row in raw_rows:
+        if not isinstance(raw_row, Mapping):
+            continue
+        session_id = _normalize_optional_string(raw_row.get("session_id"))
+        provider = _normalize_optional_string(raw_row.get("provider")) or "unknown"
+        state = _normalize_optional_string(raw_row.get("state")) or "unknown"
+        observed_at = _normalize_optional_string(raw_row.get("observed_at"))
+        raw_phase = _normalize_optional_string(raw_row.get("phase"))
+        tool_name = _normalize_optional_string(raw_row.get("tool_name"))
+        phase_state = phase_overlay.get(session_id or "") if phase_overlay else None
+        overlay_phase = _normalize_optional_string(phase_state.get("phase")) if phase_state else None
+        overlay_tool = _normalize_optional_string(phase_state.get("tool_name")) if phase_state else None
+        phase_observed_at = _normalize_optional_string(phase_state.get("observed_at")) if phase_state else None
+        phase_last_activity_at = _normalize_optional_string(phase_state.get("last_activity_at")) if phase_state else None
+        workspace_label = _normalize_optional_string(phase_state.get("workspace_label")) if phase_state else None
+        workspace_path = _normalize_optional_string(phase_state.get("workspace_path")) if phase_state else None
+        display_phase = overlay_phase if overlay_phase is not None else raw_phase
+        display_tool = overlay_tool if overlay_phase is not None else tool_name
+
+        sessions.append(
+            {
+                "session_id": session_id,
+                "provider": provider,
+                "control_path": CONTROL_PATH_MANAGED,
+                "liveness_model": LIVENESS_MODEL_ENGINE_STATUS,
+                "provider_cli": None,
+                "workspace_label": workspace_label,
+                "cwd": workspace_path,
+                "branch": None,
+                "state": state,
+                "raw_phase": display_phase,
+                "phase": _phase_display_label(display_phase, display_tool),
+                "phase_observed_at": phase_observed_at or observed_at,
+                "last_activity_at": _max_rfc3339(observed_at, phase_last_activity_at, phase_observed_at),
+                "bridge_status": _normalize_optional_string(raw_row.get("bridge_status")),
+                "bridge_pid": None,
+                "bridge_heartbeat_at": observed_at,
+                "thread_subscription_status": _normalize_optional_string(raw_row.get("thread_subscription_status")),
+                "reason_codes": [],
+            }
+        )
+
+    return sessions
+
+
+def _collect_unmanaged_processes_from_engine_status(engine_status: dict[str, Any]) -> list[dict[str, Any]]:
+    payload = _engine_status_payload(engine_status)
+    raw_rows = payload.get("unmanaged_session_bindings")
+    if not isinstance(raw_rows, list):
+        return []
+
+    processes: list[dict[str, Any]] = []
+    for raw_row in raw_rows:
+        if not isinstance(raw_row, Mapping):
+            continue
+        cwd = _normalize_optional_string(raw_row.get("cwd"))
+        observed_at = _normalize_optional_string(raw_row.get("observed_at"))
+        started_at = _normalize_optional_string(raw_row.get("process_start_time")) or observed_at
+        processes.append(
+            {
+                "provider": _normalize_optional_string(raw_row.get("provider")),
+                "control_path": CONTROL_PATH_UNMANAGED,
+                "liveness_model": LIVENESS_MODEL_ENGINE_STATUS,
+                "provider_cli": None,
+                "pid": _normalize_optional_int(raw_row.get("pid")),
+                "workspace_label": Path(cwd).name if cwd else None,
+                "cwd": cwd,
+                "branch": None,
+                "started_at": started_at,
+                "provider_session_id": _normalize_optional_string(raw_row.get("provider_session_id")),
+                "source_path": _normalize_optional_string(raw_row.get("source_path")),
+                "observed_at": observed_at,
+            }
+        )
+
+    processes.sort(
+        key=lambda row: _parse_rfc3339(row.get("started_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    return processes
+
+
 def _merge_managed_sessions(
     *,
     bridge_sessions: list[dict[str, Any]],
@@ -2151,7 +2250,7 @@ def _serialize_transport_health(
     }
 
 
-def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]:
+def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = False) -> dict[str, Any]:
     now = _utc_now()
     resolved_base_dir = _coerce_path(claude_dir)
     phase_overlay = _load_managed_session_phase_state(resolved_base_dir, now=now)
@@ -2160,19 +2259,28 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
     outbox = _collect_outbox(resolved_base_dir, now=now)
     provider_clis = _collect_provider_clis()
     activity_summary = _collect_activity_summary(resolved_base_dir, now=now)
-    with _process_snapshot_scope():
-        provider_processes = _scan_provider_processes()
-        bridge_sessions, orphan_bridges = _collect_managed_codex_sessions(
-            resolved_base_dir,
+    if fast:
+        bridge_sessions = []
+        orphan_bridges = []
+        process_sessions = _collect_managed_sessions_from_engine_status(
+            engine_status,
             phase_overlay=phase_overlay,
         )
-        bridge_session_ids = {row.get("session_id") for row in bridge_sessions if row.get("session_id")}
-        process_sessions = _collect_managed_sessions_by_process(
-            existing_session_ids=bridge_session_ids,
-            phase_overlay=phase_overlay,
-            scanned_processes=provider_processes,
-        )
-        unmanaged_processes = _collect_unmanaged_processes(scanned_processes=provider_processes)
+        unmanaged_processes = _collect_unmanaged_processes_from_engine_status(engine_status)
+    else:
+        with _process_snapshot_scope():
+            provider_processes = _scan_provider_processes()
+            bridge_sessions, orphan_bridges = _collect_managed_codex_sessions(
+                resolved_base_dir,
+                phase_overlay=phase_overlay,
+            )
+            bridge_session_ids = {row.get("session_id") for row in bridge_sessions if row.get("session_id")}
+            process_sessions = _collect_managed_sessions_by_process(
+                existing_session_ids=bridge_session_ids,
+                phase_overlay=phase_overlay,
+                scanned_processes=provider_processes,
+            )
+            unmanaged_processes = _collect_unmanaged_processes(scanned_processes=provider_processes)
     managed_summary, managed_sessions, orphan_bridges = _merge_managed_sessions(
         bridge_sessions=bridge_sessions,
         bridge_orphans=orphan_bridges,
@@ -2194,6 +2302,7 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
 
     return {
         "schema_version": SCHEMA_VERSION,
+        "collection_tier": "fast" if fast else "deep",
         "collected_at": _to_rfc3339(now),
         "health_state": health_state,
         "severity": severity,

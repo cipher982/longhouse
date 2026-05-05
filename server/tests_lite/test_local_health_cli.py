@@ -1562,6 +1562,33 @@ def test_local_health_command_json_output(monkeypatch, tmp_path: Path):
     assert payload["launch_readiness"]["state"] == "unconfigured"
 
 
+def test_local_health_command_fast_json_uses_fast_tier(monkeypatch, tmp_path: Path):
+    runner = CliRunner()
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr(
+        local_health_service,
+        "_compute_process_snapshot",
+        lambda: (_ for _ in ()).throw(AssertionError("fast local-health must not scan processes")),
+    )
+    _write_engine_status(tmp_path / ".longhouse", age_seconds=2)
+
+    result = runner.invoke(app, ["local-health", "--fast", "--json", "--claude-dir", str(tmp_path / ".claude")])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["collection_tier"] == "fast"
+
+
+def test_local_health_command_rejects_fast_and_deep(tmp_path: Path):
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["local-health", "--fast", "--deep", "--json", "--claude-dir", str(tmp_path / ".claude")])
+
+    assert result.exit_code != 0
+    assert "Use only one of --fast or --deep" in result.output
+
+
 def test_local_health_command_prints_launch_warnings(monkeypatch, tmp_path: Path):
     runner = CliRunner()
     longhouse_home = tmp_path / ".longhouse"
@@ -1855,6 +1882,65 @@ def test_collect_local_health_surfaces_live_unmanaged_processes_separately_from_
     assert {row["provider"] for row in snapshot["unmanaged_processes"]} == {"codex"}
     assert {row["session_id"] for row in snapshot["managed_sessions"]} == {managed_a, managed_b}
     assert snapshot["activity_summary"]["provider_counts_recent"] == {"claude": 2, "codex": 1}
+
+
+def test_collect_local_health_fast_uses_engine_status_without_process_scan(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr(
+        local_health_service,
+        "_compute_process_snapshot",
+        lambda: (_ for _ in ()).throw(AssertionError("fast local-health must not scan processes")),
+    )
+    now = datetime(2026, 5, 5, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(local_health_service, "_utc_now", lambda: now)
+    managed_id = "55c61956-7554-4713-8c9b-fb0fa6164c2c"
+    unmanaged_id = "019dcac2-fd02-7a97-85b8-6f725b9d6252"
+    _write_engine_status(
+        tmp_path,
+        age_seconds=1,
+        payload={
+            "managed_sessions": [
+                {
+                    "session_id": managed_id,
+                    "provider": "codex",
+                    "machine_id": "david010",
+                    "sequence": 4,
+                    "state": "attached",
+                    "phase": "thinking",
+                    "tool_name": None,
+                    "bridge_status": "ready",
+                    "thread_subscription_status": "subscribed",
+                    "observed_at": "2026-05-05T11:59:58Z",
+                    "lease_ttl_ms": 900000,
+                }
+            ],
+            "unmanaged_session_bindings": [
+                {
+                    "machine_id": "david010",
+                    "provider": "claude",
+                    "provider_session_id": unmanaged_id,
+                    "pid": 48145,
+                    "process_start_time": "2026-05-05T11:45:00Z",
+                    "cwd": "/Users/test/git/zerg",
+                    "source_path": "/Users/test/.claude/projects/zerg/session.jsonl",
+                    "observed_at": "2026-05-05T11:59:59Z",
+                }
+            ],
+        },
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path, fast=True)
+
+    assert snapshot["collection_tier"] == "fast"
+    assert snapshot["managed_sessions"][0]["session_id"] == managed_id
+    assert snapshot["managed_sessions"][0]["provider"] == "codex"
+    assert snapshot["managed_sessions"][0]["liveness_model"] == "engine_status"
+    assert snapshot["managed_sessions"][0]["phase"] == "thinking"
+    assert snapshot["unmanaged_processes"][0]["provider"] == "claude"
+    assert snapshot["unmanaged_processes"][0]["pid"] == 48145
+    assert snapshot["unmanaged_processes"][0]["workspace_label"] == "zerg"
+    assert snapshot["unmanaged_processes"][0]["liveness_model"] == "engine_status"
 
 
 def test_local_health_menubar_requires_installed_app(monkeypatch, tmp_path: Path):
