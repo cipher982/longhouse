@@ -16,6 +16,7 @@
  *   bunx tsx scripts/ui-capture.ts timeline
  *   bunx tsx scripts/ui-capture.ts --scene=empty
  *   bunx tsx scripts/ui-capture.ts timeline --scene=timeline-card-stress --viewport=mobile
+ *   bunx tsx scripts/ui-capture.ts machines
  *   bunx tsx scripts/ui-capture.ts --all
  */
 
@@ -25,8 +26,18 @@ import { mkdirSync, writeFileSync } from "fs";
 import path from "path";
 import { buildTimelineCardStressFixture } from "./ui-fixtures/timelineCardStress";
 
-const PAGES = ["timeline", "chat", "dashboard", "settings", "health"] as const;
-type PageName = (typeof PAGES)[number];
+const PAGE_DEFINITIONS = {
+  timeline: { path: "/timeline" },
+  machines: { path: "/runners" },
+  health: { path: "/health" },
+  settings: { path: "/settings" },
+  profile: { path: "/profile" },
+  integrations: { path: "/settings/integrations" },
+  devices: { path: "/settings/devices" },
+  admin: { path: "/admin" },
+} as const;
+type PageName = keyof typeof PAGE_DEFINITIONS;
+const PAGES = Object.keys(PAGE_DEFINITIONS) as PageName[];
 
 const SCENES = [
   "empty",
@@ -102,9 +113,9 @@ function parseArgs(): Options {
   const args = process.argv.slice(2);
 
   // Find page argument (positional, not prefixed with --)
-  const pageArg = args.find(
-    (a) => !a.startsWith("--") && PAGES.includes(a as PageName)
-  );
+  const pageArg = args.find((a): a is PageName => {
+    return !a.startsWith("--") && a in PAGE_DEFINITIONS;
+  });
 
   // Parse named arguments
   const sceneArg = args
@@ -172,13 +183,21 @@ async function checkDevRunning(backendUrl: string): Promise<boolean> {
   }
 }
 
-async function seedScene(scene: SceneName, backendUrl: string): Promise<void> {
+async function seedScene(
+  scene: SceneName,
+  backendUrl: string,
+  pagesToCapture: PageName[],
+): Promise<void> {
   if (sceneUsesMockApi(scene)) {
     return;
   }
 
+  const capturesTimeline = pagesToCapture.includes("timeline");
+
   switch (scene) {
     case "empty":
+      // Session seeding/resetting only applies to captures that include timeline.
+      if (!capturesTimeline) return;
       // Clear all sessions for true empty state
       try {
         const response = await fetch(`${backendUrl}/api/system/reset-sessions`, {
@@ -195,6 +214,7 @@ async function seedScene(scene: SceneName, backendUrl: string): Promise<void> {
       }
       break;
     case "demo":
+      if (!capturesTimeline) return;
       try {
         const response = await fetch(`${backendUrl}/api/system/seed-demo-sessions`, {
           method: "POST",
@@ -318,7 +338,7 @@ async function captureBundle(
   baseUrl: string,
   scene: SceneName,
 ): Promise<CaptureResult> {
-  const url = `${baseUrl}/${pageName}`;
+  const url = `${baseUrl}${PAGE_DEFINITIONS[pageName].path}`;
   console.log(`  Navigating to ${url}...`);
 
   await installScenePageOverrides(page, scene, pageName);
@@ -405,9 +425,11 @@ async function main() {
   }
   console.log(`Backend healthy at ${opts.backendUrl}`);
 
+  const pagesToCapture = opts.all ? [...PAGES] : [opts.page];
+
   // Seed scene
   console.log(`\nSeeding scene: ${opts.scene}`);
-  await seedScene(opts.scene, opts.backendUrl);
+  await seedScene(opts.scene, opts.backendUrl, pagesToCapture);
 
   // Setup output directory
   const outputDir = opts.output;
@@ -420,7 +442,6 @@ async function main() {
   const consoleLogs: string[] = [];
   const errors: string[] = [];
   const artifacts: Record<string, CaptureResult> = {};
-  const pagesToCapture = opts.all ? [...PAGES] : [opts.page];
   let tracePath: string | undefined;
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
   let context: BrowserContext | undefined;

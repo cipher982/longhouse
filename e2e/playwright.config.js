@@ -149,9 +149,8 @@ const config = {
     actionTimeout: 10_000,
   },
 
-  // Canonical visual baselines in this repo use the darwin suffix.
-  // Keep Playwright's screenshot assertions aligned with the committed
-  // snapshot convention and the visual_compare spec.
+  // Canonical visual baselines use one committed Chromium snapshot set.
+  // Keep screenshot assertions aligned with the visual_compare spec.
   expect: {
     toHaveScreenshot: {
       pathTemplate: '{testDir}/{testFilePath}-snapshots/{arg}{-projectName}-darwin{ext}',

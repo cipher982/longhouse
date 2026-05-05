@@ -17,7 +17,8 @@ Requires `make dev` running. Produces a full debug bundle:
 
 ```bash
 make ui-capture                           # Timeline + demo data
-make ui-capture PAGE=chat                 # Chat page
+make ui-capture PAGE=machines             # Machines page
+make ui-capture PAGE=health               # Runtime health page
 make ui-capture SCENE=empty               # Empty state
 make ui-capture SCENE=onboarding-modal    # With modal visible
 make ui-capture SCENE=timeline-card-stress VIEWPORT=mobile  # Mobile card layout fixture
@@ -49,7 +50,7 @@ Read(file_path="artifacts/ui-capture/<timestamp>/timeline-a11y.yml")
 | Scene | What it sets up |
 |-------|-----------------|
 | `demo` | Seeds 2 demo sessions (default) |
-| `empty` | No data, empty state UI — calls `DELETE /api/agents/demo` to remove demo sessions (requires AUTH_DISABLED=1) |
+| `empty` | No data, empty state UI — calls the dev-only session reset endpoint (requires AUTH_DISABLED=1) |
 | `onboarding-modal` | Shows first-time setup modal |
 | `missing-api-key` | API key required modal visible |
 | `timeline-card-stress` | Fixture-backed timeline API responses for card layout QA without relying on live demo DB shape |
@@ -58,6 +59,8 @@ Read(file_path="artifacts/ui-capture/<timestamp>/timeline-a11y.yml")
 ```bash
 make qa-ui-baseline           # Run visual baseline tests
 make qa-ui-baseline-update    # Update baselines
+make qa-ui-baseline-mobile    # Run mobile visual baseline tests
+SKIP_LLM=1 make qa-visual-compare  # Desktop app pixel diff against baselines without LLM triage
 ```
 
 ## iOS Layout QA (No Simulator)

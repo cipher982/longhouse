@@ -17,7 +17,6 @@ async function waitForAppReady(page: Page, mode: PageDef['ready']) {
   if (mode === 'settings') {
     await waitForPageReady(page, { timeout: 20000 });
     await expect(page.locator('.settings-page-container')).toBeVisible();
-    await expect(page.locator('form.profile-form')).toBeVisible();
   }
 }
 

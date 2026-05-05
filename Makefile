@@ -8,7 +8,7 @@ COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/dock
 E2E_BACKEND_PORT ?=
 E2E_FRONTEND_PORT ?=
 
-.PHONY: help dev dev-demo stop test test-ios test-ios-helper test-frontend test-engine test-runner test-control-plane test-e2e test-e2e-core test-e2e-a11y test-e2e-cp test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-sdk validate-makefile validate-build-identity validate-managed-codex-contract validate-ship-monitor regen-ws generate-sdk qa-live render-canary reprovision deploy-status ship-watch ship release ui-capture test-shipper-e2e test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-e2e-continuation-provider test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest eval dogfood dogfood-refresh dogfood-check
+.PHONY: help dev dev-demo stop test test-ios test-ios-helper test-frontend test-engine test-runner test-control-plane test-e2e test-e2e-core test-e2e-a11y test-e2e-cp test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-sdk validate-makefile validate-build-identity validate-managed-codex-contract validate-ship-monitor regen-ws generate-sdk qa-live render-canary reprovision deploy-status ship-watch ship release ui-capture qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-e2e-continuation-provider test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest eval dogfood dogfood-refresh dogfood-check
 
 # ---------------------------------------------------------------------------
 # Help
@@ -308,6 +308,28 @@ release: ## Cut a stable release (usage: make release VERSION=v0.1.13)
 # ---------------------------------------------------------------------------
 ui-capture: ## Capture local dev UI debug bundle
 	@bunx tsx scripts/ui-capture.ts $(PAGE) $(if $(SCENE),--scene=$(SCENE),) $(if $(VIEWPORT),--viewport=$(VIEWPORT),) $(if $(OUTPUT),--output=$(OUTPUT),) $(if $(ALL),--all,) $(if $(NO_TRACE),--no-trace,)
+
+qa-ui-baseline: ## Visual baseline check for current app and public pages
+	@$(MAKE) ensure-playwright-browser
+	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
+		bunx playwright test --project=chromium tests/ui_baseline_app.spec.ts tests/ui_baseline_public.spec.ts --workers=1
+
+qa-ui-baseline-update: ## Update visual baselines for current app, public, and mobile pages
+	@$(MAKE) ensure-playwright-browser
+	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
+		bunx playwright test --project=chromium tests/ui_baseline_app.spec.ts tests/ui_baseline_public.spec.ts --update-snapshots --workers=1
+	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
+		bunx playwright test --project=chromium tests/mobile/ui_baseline_mobile.spec.ts --update-snapshots --workers=1
+
+qa-ui-baseline-mobile: ## Visual baseline check for mobile app pages
+	@$(MAKE) ensure-playwright-browser
+	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
+		bunx playwright test --project=chromium tests/mobile/ui_baseline_mobile.spec.ts --workers=1
+
+qa-visual-compare: ## Compare current app screenshots against baselines; set SKIP_LLM=1 to skip LLM triage
+	@$(MAKE) ensure-playwright-browser
+	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
+		bunx playwright test --project=chromium tests/visual_compare.spec.ts --workers=1
 
 menubar-harness: ## macOS menu bar harness (MODE=test|fixtures|live|smoke|full|window|menubar)
 	@./scripts/qa/menubar-harness.sh $(or $(MODE),test)
