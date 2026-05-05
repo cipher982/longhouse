@@ -47,7 +47,7 @@ const INITIAL_SPOOL_PATH_LIMIT: usize = 100;
 const PERIODIC_SPOOL_PATH_LIMIT: usize = 50;
 const PATH_SPOOL_REPLAY_LIMIT: usize = 50;
 const LOCAL_RETRY_DELAY_SECS: u64 = 5;
-const LOCAL_STATUS_INTERVAL_SECS: u64 = 2;
+const LOCAL_STATUS_INTERVAL_SECS: u64 = 1;
 const SERVER_HEARTBEAT_INTERVAL_SECS: u64 = 5 * 60;
 const ACTIVE_TRANSCRIPT_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const ACTIVE_TRANSCRIPT_POLL_TTL: Duration = Duration::from_secs(2 * 60 * 60);
@@ -249,6 +249,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut offline = OfflineState::new();
     let mut last_ship_at: Option<String> = None;
     let mut last_runtime_truth_signature: Option<String> = None;
+    let mut runtime_truth_bootstrapped = false;
     let mut bridge_reaper = ManagedBridgeReaper::from_env();
 
     let outbox_dir = config::get_agent_outbox_dir()?;
@@ -333,6 +334,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 match client.health_check().await {
                     Ok(true) => {
                         if let Some(duration) = offline.mark_online() {
+                            last_runtime_truth_signature = None;
                             tracing::info!(
                                 "Back online after {:.0}s — resuming shipping",
                                 duration.as_secs_f64()
@@ -460,13 +462,21 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 );
                 bridge_reaper.tick(&observations);
                 let signature = runtime_truth_signature(&payload);
+                if !runtime_truth_bootstrapped {
+                    last_runtime_truth_signature = Some(signature);
+                    runtime_truth_bootstrapped = true;
+                    continue;
+                }
                 if !offline.is_offline && last_runtime_truth_signature.as_deref() != Some(signature.as_str()) {
                     match heartbeat::send_heartbeat(&client, &payload).await {
                         Ok(()) => {
                             tracing::debug!("Runtime truth snapshot sent after local process/control change");
                             last_runtime_truth_signature = Some(signature);
                         }
-                        Err(e) => tracing::debug!("Runtime truth snapshot send failed: {}", e),
+                        Err(e) => {
+                            last_runtime_truth_signature = None;
+                            tracing::debug!("Runtime truth snapshot send failed: {}", e);
+                        }
                     }
                 }
             }
@@ -486,7 +496,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &observations,
                 );
                 if !offline.is_offline {
+                    runtime_truth_bootstrapped = true;
                     if let Err(e) = heartbeat::send_heartbeat(&client, &payload).await {
+                        last_runtime_truth_signature = None;
                         tracing::debug!("Heartbeat send failed: {}", e);
                     } else {
                         last_runtime_truth_signature = Some(runtime_truth_signature(&payload));
@@ -1216,6 +1228,31 @@ mod tests {
             });
         let mut second = first.clone();
         second.unmanaged_session_bindings[0].pid = Some(43);
+
+        assert_ne!(
+            runtime_truth_signature(&first),
+            runtime_truth_signature(&second)
+        );
+    }
+
+    #[test]
+    fn test_runtime_truth_signature_changes_on_managed_lease_state() {
+        let mut first = empty_heartbeat_payload();
+        first.managed_sessions.push(heartbeat::ManagedSessionLease {
+            session_id: "managed-session".to_string(),
+            provider: "codex".to_string(),
+            machine_id: "cinder".to_string(),
+            sequence: 10,
+            state: "attached".to_string(),
+            phase: Some("idle".to_string()),
+            tool_name: None,
+            bridge_status: Some("healthy".to_string()),
+            thread_subscription_status: None,
+            observed_at: "2026-05-05T12:00:02Z".to_string(),
+            lease_ttl_ms: 900_000,
+        });
+        let mut second = first.clone();
+        second.managed_sessions[0].state = "detached".to_string();
 
         assert_ne!(
             runtime_truth_signature(&first),

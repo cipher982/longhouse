@@ -1044,6 +1044,72 @@ def test_heartbeat_claude_binding_marks_process_running(tmp_path):
     engine.dispose()
 
 
+def test_heartbeat_repeat_unmanaged_binding_does_not_republish(tmp_path):
+    reset_pubsub_for_test()
+    engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_claude_process_binding_noop.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, provider="claude", started_at=now - timedelta(minutes=5))
+        session.execution_home = "unmanaged_local"
+        session.provider_session_id = str(session.id)
+        session_id = session.id
+        db.commit()
+
+    binding = {
+        "machine_id": "cinder",
+        "provider": "claude",
+        "provider_session_id": str(session_id),
+        "source_path": f"/tmp/{session_id}.jsonl",
+        "pid": 69257,
+        "process_start_time": (now - timedelta(minutes=3)).isoformat(),
+        "cwd": "/tmp/runtime",
+        "source_mtime": (now - timedelta(seconds=5)).isoformat(),
+        "source_offset": 100,
+        "observed_at": now.isoformat(),
+    }
+    for client in _client(SessionLocal):
+        first = client.post(
+            "/agents/heartbeat",
+            json={
+                "version": "test",
+                "daemon_pid": 123,
+                "unmanaged_session_bindings": [binding],
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert first.status_code == 204, first.text
+
+        bus = get_pubsub()
+        topic = topic_session(str(session_id))
+        first_seq = bus.peek_latest_seq(topic)
+        assert first_seq > 0
+
+        repeat_binding = {
+            **binding,
+            "source_mtime": (now + timedelta(seconds=1)).isoformat(),
+            "source_offset": 200,
+            "observed_at": (now + timedelta(seconds=2)).isoformat(),
+        }
+        repeat = client.post(
+            "/agents/heartbeat",
+            json={
+                "version": "test",
+                "daemon_pid": 123,
+                "unmanaged_session_bindings": [repeat_binding],
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert repeat.status_code == 204, repeat.text
+
+    with get_pubsub().subscribe(topic_session(str(session_id)), since_seq=first_seq) as session_sub:
+        msg = asyncio.run(session_sub.next_message(timeout=0.05))
+        assert msg is None
+
+    reset_pubsub_for_test()
+    engine.dispose()
+
+
 def test_heartbeat_empty_unmanaged_snapshot_does_not_close_unbound_claude_session(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_claude_unbound_missing.db")
     now = datetime.now(timezone.utc)

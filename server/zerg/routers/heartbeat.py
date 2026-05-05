@@ -469,7 +469,6 @@ def _upsert_unmanaged_session_bindings(
             )
             if linked is not None:
                 linked_session_id = linked[0]
-                touched_session_ids.add(linked_session_id)
 
         fields = dict(
             machine_id=machine,
@@ -490,11 +489,34 @@ def _upsert_unmanaged_session_bindings(
             binding_state="observed",
         )
 
+        publish_keys = {
+            "device_id",
+            "session_id",
+            "source_path",
+            "source_inode",
+            "source_device",
+            "pid",
+            "process_start_time",
+            "cwd",
+            "binding_state",
+        }
+
+        def _publish_value(key: str, value: object) -> object:
+            if key == "process_start_time":
+                return normalize_utc(value) if isinstance(value, datetime) else value
+            return value
+
+        should_publish = existing is None or any(
+            _publish_value(key, getattr(existing, key)) != _publish_value(key, fields[key]) for key in publish_keys
+        )
+
         if existing is None:
             db.add(UnmanagedSessionBinding(**fields))
         else:
             for key, value in fields.items():
                 setattr(existing, key, value)
+        if should_publish and linked_session_id is not None:
+            touched_session_ids.add(linked_session_id)
     return touched_session_ids
 
 
@@ -855,6 +877,8 @@ async def ingest_heartbeat(
                     updated_runtime_keys = set(ingest_result.updated_runtime_keys)
                     for event in runtime_events:
                         if event.session_id is not None and event.runtime_key in updated_runtime_keys:
+                            # Runtime state is the more specific signal when both runtime and binding snapshots touch
+                            # the same session in one heartbeat.
                             publish_sessions[event.session_id] = (event.provider, event.source)
                     for lease in _managed_leases:
                         if (lease.state or "").strip().lower() != "attached":
