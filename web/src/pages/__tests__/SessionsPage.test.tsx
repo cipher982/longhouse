@@ -1810,6 +1810,56 @@ describe("SessionsPage", () => {
     expect(runtime).not.toHaveTextContent("Running ·");
   });
 
+  it("does not render unverified managed process state as a separate chip", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            runtime_display: makeRuntimeDisplay({
+              control_path: "managed",
+              activity_recency: "live",
+              state: "thinking",
+              tone: "thinking",
+              is_executing: true,
+            }),
+            runtime_facts: makeRuntimeFacts({
+              control_path: "managed",
+              process_state: "unknown",
+              phase: {
+                kind: "thinking",
+                tool: null,
+                source: "managed_local_transport",
+                observed_at: "2026-03-21T12:00:00Z",
+                expires_at: "2026-03-21T12:10:00Z",
+              },
+              lifecycle: {
+                state: "open",
+                reason: "phase_observed",
+                observed_at: "2026-03-21T12:00:00Z",
+              },
+            }),
+            timeline_card: {
+              ownership: { label: "Managed", tone: "neutral" },
+              status: { label: "Thinking", tone: "thinking", seen_at: "2026-03-21T12:00:00Z", seen_at_prefix: "Updated" },
+              border_tone: "thinking",
+            },
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline");
+
+    const card = await screen.findByTestId("session-card");
+    expect(within(card).queryByTestId("session-card-process-state")).not.toBeInTheDocument();
+    expect(await within(card).findByTestId("session-card-runtime")).toHaveTextContent("Thinking");
+  });
+
   it("uses the process pill for process-only running state", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
@@ -1859,6 +1909,7 @@ describe("SessionsPage", () => {
     const card = await screen.findByTestId("session-card");
     expect(await within(card).findByTestId("session-card-process-state")).toHaveTextContent("Process running");
     expect(within(card).queryByTestId("session-card-runtime")).not.toBeInTheDocument();
+    expect(card).toHaveAttribute("data-runtime-tone", "inactive");
   });
 
   it("prefers lifecycle=='closed' over stale managed presence", async () => {
