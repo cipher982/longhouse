@@ -246,6 +246,30 @@ def test_explicit_provider_terminal_closes_session():
     assert facts.lifecycle.observed_at == terminal_at
 
 
+def test_explicit_process_gone_terminal_closes_managed_session():
+    terminal_at = NOW - timedelta(minutes=2)
+    facts = build_session_liveness_facts(
+        runtime_view=_runtime_view(
+            signal_tier="phase_signal",
+            runtime_phase="finished",
+            runtime_source="semantic",
+            terminal_state="process_gone",
+            phase_started_at=terminal_at,
+            presence_updated_at=terminal_at,
+            last_live_at=terminal_at,
+            status="completed",
+        ),
+        capabilities=_capabilities(managed=True),
+        last_activity_at=terminal_at,
+    )
+
+    assert facts.control_path == "managed"
+    assert facts.lifecycle.state == "closed"
+    assert facts.process_state == "closed"
+    assert facts.lifecycle.reason == "process_gone"
+    assert facts.lifecycle.observed_at == terminal_at
+
+
 def test_managed_fresh_phase_marks_lifecycle_open_without_process_scan():
     observed_at = NOW - timedelta(seconds=10)
     facts = build_session_liveness_facts(
