@@ -322,7 +322,7 @@ export function getRuntimeDisplayCopy(
   if (runtime.presenceState === "running") {
     return {
       headline: "Working",
-      detail: compactTool ? `Running ${compactTool}` : runtimePhaseLabel,
+      detail: compactTool ? `Using ${compactTool}` : runtimePhaseLabel,
     };
   }
   if (runtime.presenceState === "needs_user") {

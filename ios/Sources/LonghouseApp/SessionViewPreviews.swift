@@ -133,7 +133,7 @@ private struct ComposerPreviewChrome: View {
 #Preview("Running · can steer + queue · Dark") {
     ComposerPreviewChrome(detail: .mock(
         headline: "Working",
-        runtimeDetail: "Running Shell",
+        runtimeDetail: "Using Shell",
         tone: "running",
         canSteer: true,
         canQueue: true,

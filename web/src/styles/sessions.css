@@ -466,32 +466,32 @@
   }
 
   .session-card--managed::before {
-    background: linear-gradient(180deg, #5eead4 0%, #22c55e 58%, #84cc16 100%);
-    box-shadow: 0 0 18px color-mix(in srgb, #22c55e 34%, transparent);
+    background: linear-gradient(180deg, #93c5fd 0%, #60a5fa 58%, #818cf8 100%);
+    box-shadow: 0 0 14px color-mix(in srgb, #60a5fa 24%, transparent);
   }
 
   .session-card--unmanaged::before {
     background:
       repeating-linear-gradient(
         180deg,
-        rgba(251, 191, 36, 0.95) 0 9px,
-        rgba(146, 64, 14, 0.92) 9px 15px
+        rgba(156, 163, 175, 0.82) 0 9px,
+        rgba(75, 85, 99, 0.82) 9px 15px
       );
-    box-shadow: 0 0 16px color-mix(in srgb, #f59e0b 28%, transparent);
+    box-shadow: 0 0 12px color-mix(in srgb, #94a3b8 18%, transparent);
   }
 
   .session-card--managed:not(.session-card--closed) {
-    border-color: color-mix(in srgb, #5eead4 34%, var(--border-glass-1));
+    border-color: color-mix(in srgb, #60a5fa 34%, var(--border-glass-1));
     background:
-      linear-gradient(90deg, rgba(20, 184, 166, 0.08), transparent 34%),
-      color-mix(in srgb, var(--surface-glass-1) 84%, #17211b 16%);
+      linear-gradient(90deg, rgba(96, 165, 250, 0.08), transparent 34%),
+      color-mix(in srgb, var(--surface-glass-1) 84%, #172033 16%);
   }
 
   .session-card--unmanaged:not(.session-card--closed) {
-    border-color: color-mix(in srgb, #f59e0b 38%, var(--border-glass-1));
+    border-color: color-mix(in srgb, #94a3b8 34%, var(--border-glass-1));
     background:
-      linear-gradient(90deg, rgba(245, 158, 11, 0.1), transparent 36%),
-      color-mix(in srgb, var(--surface-glass-1) 82%, #2a1c11 18%);
+      linear-gradient(90deg, rgba(148, 163, 184, 0.08), transparent 36%),
+      color-mix(in srgb, var(--surface-glass-1) 82%, #20242b 18%);
   }
 
   .session-card:not(.session-card--closed) {
@@ -527,18 +527,18 @@
 
   .session-card--managed:not(.session-card--closed):hover,
   .session-card--managed:not(.session-card--closed):focus-within {
-    border-color: color-mix(in srgb, #5eead4 62%, var(--color-border-primary));
+    border-color: color-mix(in srgb, #60a5fa 58%, var(--color-border-primary));
     box-shadow:
       0 18px 44px rgba(0, 0, 0, 0.35),
-      0 0 0 1px color-mix(in srgb, #5eead4 30%, transparent);
+      0 0 0 1px color-mix(in srgb, #60a5fa 24%, transparent);
   }
 
   .session-card--unmanaged:not(.session-card--closed):hover,
   .session-card--unmanaged:not(.session-card--closed):focus-within {
-    border-color: color-mix(in srgb, #fbbf24 68%, var(--color-border-primary));
+    border-color: color-mix(in srgb, #94a3b8 56%, var(--color-border-primary));
     box-shadow:
       0 18px 44px rgba(0, 0, 0, 0.35),
-      0 0 0 1px color-mix(in srgb, #f59e0b 34%, transparent);
+      0 0 0 1px color-mix(in srgb, #94a3b8 22%, transparent);
   }
 
   .session-card--runtime-fresh:not(.session-card--closed) {
@@ -942,27 +942,27 @@
 
   .session-card-ownership-pill--managed {
     background:
-      linear-gradient(180deg, color-mix(in srgb, #22c55e 24%, transparent), color-mix(in srgb, #14b8a6 14%, transparent));
-    color: #d9f99d;
-    border-color: color-mix(in srgb, #86efac 56%, transparent);
+      linear-gradient(180deg, color-mix(in srgb, #60a5fa 20%, transparent), color-mix(in srgb, #818cf8 12%, transparent));
+    color: #dbeafe;
+    border-color: color-mix(in srgb, #93c5fd 48%, transparent);
     box-shadow:
-      inset 0 1px 0 rgba(236, 253, 245, 0.16),
-      0 0 10px color-mix(in srgb, #22c55e 16%, transparent);
+      inset 0 1px 0 rgba(219, 234, 254, 0.14),
+      0 0 8px color-mix(in srgb, #60a5fa 12%, transparent);
   }
 
   .session-card-ownership-pill--unmanaged {
     background:
       repeating-linear-gradient(
         135deg,
-        color-mix(in srgb, #f59e0b 24%, transparent) 0 6px,
-        color-mix(in srgb, #92400e 18%, transparent) 6px 12px
+        color-mix(in srgb, #94a3b8 20%, transparent) 0 6px,
+        color-mix(in srgb, #475569 16%, transparent) 6px 12px
       );
-    color: #fde68a;
-    border-color: color-mix(in srgb, #fbbf24 58%, transparent);
+    color: #cbd5e1;
+    border-color: color-mix(in srgb, #94a3b8 50%, transparent);
     border-style: dashed;
     box-shadow:
-      inset 0 1px 0 rgba(254, 243, 199, 0.12),
-      0 0 10px color-mix(in srgb, #f59e0b 16%, transparent);
+      inset 0 1px 0 rgba(226, 232, 240, 0.1),
+      0 0 8px color-mix(in srgb, #94a3b8 10%, transparent);
   }
 
   /* Secondary: what was done — summary title or first user message */

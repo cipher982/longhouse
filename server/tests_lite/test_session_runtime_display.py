@@ -75,7 +75,7 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
                 "state": "running",
                 "tone": "running",
                 "headline": "Working",
-                "phase_label": "Running Shell",
+                "phase_label": "Using Shell",
                 "activity_recency": "live",
                 "needs_attention": False,
             },
@@ -401,7 +401,7 @@ def test_managed_running_has_renderable_runtime_signal():
     assert display.truth_tier == "managed-local"
     assert display.signal_tier == "phase_signal"
     assert display.headline == "Working"
-    assert display.detail == "Running Shell"
+    assert display.detail == "Using Shell"
     assert display.has_signal is True
 
 

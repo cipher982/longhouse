@@ -102,8 +102,8 @@ describe("resolveSessionRuntimeState", () => {
           state: "running",
           tone: "running",
           headline: "Working",
-          detail: "Running Shell",
-          phase_label: "Running Shell",
+          detail: "Using Shell",
+          phase_label: "Using Shell",
           compact_tool_label: "Shell",
           is_live: true,
           is_executing: true,
@@ -116,12 +116,12 @@ describe("resolveSessionRuntimeState", () => {
     );
 
     expect(runtime.truthTier).toBe("managed-local");
-    expect(runtime.displayPhase).toBe("Running Shell");
+    expect(runtime.displayPhase).toBe("Using Shell");
     expect(runtime.tone).toBe("running");
     expect(runtime.isManagedLocalTruth).toBe(true);
     expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
       headline: "Working",
-      detail: "Running Shell",
+      detail: "Using Shell",
     });
   });
 
@@ -240,7 +240,7 @@ describe("resolveSessionRuntimeState", () => {
 
     expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
       headline: "Working",
-      detail: "Running Shell",
+      detail: "Using Shell",
     });
   });
 
@@ -526,7 +526,7 @@ describe("resolveSessionRuntimeState", () => {
         runtime_display: makeRuntimeDisplay({
           state: "running",
           headline: "Working",
-          phase_label: "Running Shell",
+          phase_label: "Using Shell",
           activity_recency: "live",
         }),
         runtime_facts: makeRuntimeFacts({
@@ -708,7 +708,7 @@ describe("resolveSessionRuntimeState", () => {
         runtime_display: makeRuntimeDisplay({
           lifecycle: "open",
           headline: "Working",
-          phase_label: "Running Shell",
+          phase_label: "Using Shell",
         }),
         runtime_facts: makeRuntimeFacts({
           control_path: "managed",

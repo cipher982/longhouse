@@ -76,6 +76,15 @@ function getRuntimeBadgeState(runtime: SessionRuntimeState): KnownPresenceState 
   return null;
 }
 
+function shouldAnimateRuntimeBadge(state: KnownPresenceState | null): boolean {
+  return (
+    state === "thinking" ||
+    state === "running" ||
+    state === "blocked" ||
+    state === "stalled"
+  );
+}
+
 export function SessionRuntimeStrip({
   session,
   interaction,
@@ -151,7 +160,7 @@ export function SessionRuntimeStrip({
           state={runtimeBadgeState}
           tool={runtimeBadgeTool}
           compact
-          animateCompact={interaction.isManagedLocalSession}
+          animateCompact={shouldAnimateRuntimeBadge(runtimeBadgeState)}
           showUnknown={
             runtimeBadgeState == null &&
             (runtime.factStatus != null || interaction.isManagedLocalSession)
