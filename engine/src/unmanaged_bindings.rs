@@ -332,6 +332,24 @@ fn provider_session_id_from_path(path: &Path, provider: &str) -> Option<String> 
     Some(normalize_provider_session_id(provider, &stem))
 }
 
+fn claude_task_session_id_from_path(path: &Path) -> Option<String> {
+    let mut previous: Option<&str> = None;
+    for component in path
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+    {
+        if previous == Some("tasks") && is_uuidish(component) {
+            return Some(component.to_string());
+        }
+        previous = Some(component);
+    }
+    None
+}
+
+fn is_uuidish(value: &str) -> bool {
+    value.len() == 36 && value.chars().all(|ch| ch.is_ascii_hexdigit() || ch == '-')
+}
+
 fn normalize_provider_session_id(provider: &str, value: &str) -> String {
     let value = value.trim();
     if provider == "codex" && is_codex_rollout_stem(value) {
@@ -404,8 +422,12 @@ pub fn collect_from_transcripts(
 
     // Pre-index transcripts by canonicalized path for fast fd lookup.
     let mut transcript_index: HashMap<PathBuf, (PathBuf, &'static str)> = HashMap::new();
+    let mut transcript_by_session: HashMap<(String, String), PathBuf> = HashMap::new();
     for (path, provider) in transcripts {
         transcript_index.insert(canonicalize(path), (path.clone(), *provider));
+        if let Some(session_id) = provider_session_id_from_path(path, provider) {
+            transcript_by_session.insert((provider.to_string(), session_id), path.clone());
+        }
     }
 
     let mut processes = scanner.list_processes();
@@ -424,16 +446,27 @@ pub fn collect_from_transcripts(
         };
         for open_path in scanner.list_open_files(proc.pid) {
             let canon = canonicalize(&open_path);
-            let Some((_orig, file_provider)) = transcript_index.get(&canon) else {
+            let matched_transcript = transcript_index
+                .get(&canon)
+                .filter(|(_orig, file_provider)| *file_provider == provider)
+                .map(|(orig, _file_provider)| orig.clone())
+                .or_else(|| {
+                    if provider != "claude" {
+                        return None;
+                    }
+                    let session_id = claude_task_session_id_from_path(&open_path)?;
+                    transcript_by_session
+                        .get(&(provider.to_string(), session_id))
+                        .cloned()
+                });
+            let Some(display_path) = matched_transcript else {
                 continue;
             };
-            if *file_provider != provider {
-                continue;
-            }
-            match best_by_transcript.get(&canon) {
+            let display_canon = canonicalize(&display_path);
+            match best_by_transcript.get(&display_canon) {
                 Some((existing, _)) if existing.start_time >= proc.start_time => continue,
                 _ => {
-                    best_by_transcript.insert(canon, (proc.clone(), provider));
+                    best_by_transcript.insert(display_canon, (proc.clone(), provider));
                 }
             }
         }
@@ -756,6 +789,37 @@ mod tests {
         assert_eq!(
             bindings[0].provider_session_id,
             "019dc0f3-fb30-71e3-b0fd-2085e7d045a8",
+        );
+    }
+
+    #[test]
+    fn scanner_matches_claude_task_directory_to_transcript() {
+        let now = t("2026-04-27T12:00:00Z");
+        let tmp = tempfile::tempdir().unwrap();
+        let session_id = "718372e2-248c-48a8-b0e9-0f70cbdce6eb";
+        let transcript = tmp.path().join(format!("{session_id}.jsonl"));
+        let task_dir = tmp.path().join(".claude").join("tasks").join(session_id);
+        std::fs::write(&transcript, "{}\n").unwrap();
+        std::fs::create_dir_all(&task_dir).unwrap();
+
+        let scanner = FakeScanner {
+            processes: vec![proc_info(1234, "2026-04-27T10:00:00Z", "claude")],
+            open_files: RefCell::new({
+                let mut m = HashMap::new();
+                m.insert(1234u32, vec![task_dir]);
+                m
+            }),
+        };
+
+        let bindings =
+            collect_from_transcripts("mac", &[(transcript.clone(), "claude")], &scanner, now);
+
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].provider, "claude");
+        assert_eq!(bindings[0].provider_session_id, session_id);
+        assert_eq!(
+            bindings[0].source_path,
+            transcript.to_str().map(str::to_string)
         );
     }
 
