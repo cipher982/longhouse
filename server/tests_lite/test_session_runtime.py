@@ -24,6 +24,10 @@ from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import SessionIngest
 from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_liveness_facts import build_session_liveness_facts
+from zerg.services.session_pubsub import TOPIC_TIMELINE
+from zerg.services.session_pubsub import get_pubsub
+from zerg.services.session_pubsub import reset_pubsub_for_test
+from zerg.services.session_pubsub import topic_session
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import build_runtime_view
 from zerg.services.session_runtime import current_presence_state_for_session
@@ -31,10 +35,6 @@ from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_runtime import managed_codex_liveness_invariant_counts
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
-from zerg.services.session_pubsub import TOPIC_TIMELINE
-from zerg.services.session_pubsub import get_pubsub
-from zerg.services.session_pubsub import reset_pubsub_for_test
-from zerg.services.session_pubsub import topic_session
 from zerg.services.unmanaged_bindings import load_binding_overlay
 
 
@@ -959,6 +959,7 @@ def test_heartbeat_empty_unmanaged_snapshot_keeps_fresh_unbound_codex_session_op
 
 
 def test_heartbeat_claude_binding_marks_process_running(tmp_path):
+    reset_pubsub_for_test()
     engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_claude_process_binding.db")
     now = datetime.now(timezone.utc)
 
@@ -1013,6 +1014,14 @@ def test_heartbeat_claude_binding_marks_process_running(tmp_path):
         )
         assert response.status_code == 204, response.text
 
+    bus = get_pubsub()
+    with bus.subscribe(topic_session(str(session_id)), since_seq=0) as session_sub:
+        msg = asyncio.run(session_sub.next_message(timeout=0.1))
+        assert msg is not None
+        assert msg.payload["kind"] == "runtime"
+        assert msg.payload["session_id"] == str(session_id)
+        assert msg.payload["source"] == "engine_process_snapshot"
+
     with SessionLocal() as db:
         stored_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session_id).one()
@@ -1031,6 +1040,7 @@ def test_heartbeat_claude_binding_marks_process_running(tmp_path):
         assert facts.lifecycle.state == "open"
         assert facts.lifecycle.reason == "process_observed"
 
+    reset_pubsub_for_test()
     engine.dispose()
 
 
@@ -1085,6 +1095,7 @@ def test_heartbeat_empty_unmanaged_snapshot_does_not_close_unbound_claude_sessio
 
 
 def test_heartbeat_empty_unmanaged_snapshot_closes_previously_bound_claude_session(tmp_path):
+    reset_pubsub_for_test()
     engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_claude_bound_missing.db")
     now = datetime.now(timezone.utc)
 
@@ -1146,6 +1157,19 @@ def test_heartbeat_empty_unmanaged_snapshot_closes_previously_bound_claude_sessi
         )
         assert missing.status_code == 204, missing.text
 
+    bus = get_pubsub()
+    session_messages = []
+    with bus.subscribe(topic_session(str(session_id)), since_seq=0) as session_sub:
+        while True:
+            msg = asyncio.run(session_sub.next_message(timeout=0.01))
+            if msg is None:
+                break
+            session_messages.append(msg.payload)
+    assert any(
+        message.get("session_id") == str(session_id) and message.get("source") == "engine_process_snapshot"
+        for message in session_messages
+    )
+
     with SessionLocal() as db:
         stored_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session_id).one()
@@ -1162,6 +1186,7 @@ def test_heartbeat_empty_unmanaged_snapshot_closes_previously_bound_claude_sessi
         assert facts.process_state == "closed"
         assert facts.lifecycle.state == "closed"
 
+    reset_pubsub_for_test()
     engine.dispose()
 
 

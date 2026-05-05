@@ -47,7 +47,7 @@ const INITIAL_SPOOL_PATH_LIMIT: usize = 100;
 const PERIODIC_SPOOL_PATH_LIMIT: usize = 50;
 const PATH_SPOOL_REPLAY_LIMIT: usize = 50;
 const LOCAL_RETRY_DELAY_SECS: u64 = 5;
-const LOCAL_STATUS_INTERVAL_SECS: u64 = 10;
+const LOCAL_STATUS_INTERVAL_SECS: u64 = 2;
 const SERVER_HEARTBEAT_INTERVAL_SECS: u64 = 5 * 60;
 const ACTIVE_TRANSCRIPT_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const ACTIVE_TRANSCRIPT_POLL_TTL: Duration = Duration::from_secs(2 * 60 * 60);
@@ -248,6 +248,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
     let mut offline = OfflineState::new();
     let mut last_ship_at: Option<String> = None;
+    let mut last_runtime_truth_signature: Option<String> = None;
     let mut bridge_reaper = ManagedBridgeReaper::from_env();
 
     let outbox_dir = config::get_agent_outbox_dir()?;
@@ -446,7 +447,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // Frequent local status file refresh for ambient UX and debugging
             _ = local_status_timer.tick() => {
                 let observations = managed_bridge_scan::collect_observations();
-                write_local_status_snapshot(
+                let payload = write_local_status_snapshot(
                     &conn,
                     &tracker,
                     &parse_tracker,
@@ -458,6 +459,16 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &observations,
                 );
                 bridge_reaper.tick(&observations);
+                let signature = runtime_truth_signature(&payload);
+                if !offline.is_offline && last_runtime_truth_signature.as_deref() != Some(signature.as_str()) {
+                    match heartbeat::send_heartbeat(&client, &payload).await {
+                        Ok(()) => {
+                            tracing::debug!("Runtime truth snapshot sent after local process/control change");
+                            last_runtime_truth_signature = Some(signature);
+                        }
+                        Err(e) => tracing::debug!("Runtime truth snapshot send failed: {}", e),
+                    }
+                }
             }
 
             // Periodic server heartbeat
@@ -477,6 +488,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 if !offline.is_offline {
                     if let Err(e) = heartbeat::send_heartbeat(&client, &payload).await {
                         tracing::debug!("Heartbeat send failed: {}", e);
+                    } else {
+                        last_runtime_truth_signature = Some(runtime_truth_signature(&payload));
                     }
                 }
             }
@@ -538,6 +551,50 @@ fn write_local_status_snapshot(
         };
     heartbeat::write_status_file(&payload, &stats, phase_ledger, ledger_status, status_path);
     payload
+}
+
+fn runtime_truth_signature(payload: &heartbeat::HeartbeatPayload) -> String {
+    let mut managed: Vec<String> = payload
+        .managed_sessions
+        .iter()
+        .map(|lease| {
+            format!(
+                "{}|{}|{}|{}|{}|{}|{}",
+                lease.provider,
+                lease.session_id,
+                lease.machine_id,
+                lease.state,
+                lease.phase.as_deref().unwrap_or(""),
+                lease.tool_name.as_deref().unwrap_or(""),
+                lease.bridge_status.as_deref().unwrap_or("")
+            )
+        })
+        .collect();
+    managed.sort();
+
+    let mut unmanaged: Vec<String> = payload
+        .unmanaged_session_bindings
+        .iter()
+        .map(|binding| {
+            format!(
+                "{}|{}|{}|{}|{}|{}|{}",
+                binding.machine_id,
+                binding.provider,
+                binding.provider_session_id,
+                binding.pid.map(|pid| pid.to_string()).unwrap_or_default(),
+                binding.process_start_time.as_deref().unwrap_or(""),
+                binding.cwd.as_deref().unwrap_or(""),
+                binding.source_path.as_deref().unwrap_or("")
+            )
+        })
+        .collect();
+    unmanaged.sort();
+
+    format!(
+        "managed=[{}];unmanaged=[{}]",
+        managed.join(";"),
+        unmanaged.join(";")
+    )
 }
 
 fn daemon_max_in_flight(config: &ShipperConfig) -> usize {
@@ -1076,6 +1133,95 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn empty_heartbeat_payload() -> heartbeat::HeartbeatPayload {
+        heartbeat::HeartbeatPayload {
+            version: "test".to_string(),
+            daemon_pid: 123,
+            last_ship_at: None,
+            last_ship_attempt_at: None,
+            last_ship_result: None,
+            last_ship_latency_ms: None,
+            last_ship_http_status: None,
+            spool_pending_count: 0,
+            spool_dead_count: 0,
+            parse_error_count_1h: 0,
+            consecutive_ship_failures: 0,
+            ship_attempts_1h: 0,
+            ship_successes_1h: 0,
+            ship_rate_limited_1h: 0,
+            ship_server_errors_1h: 0,
+            ship_payload_rejections_1h: 0,
+            ship_payload_too_large_1h: 0,
+            ship_retryable_client_errors_1h: 0,
+            ship_connect_errors_1h: 0,
+            ship_latency_p50_ms_1h: None,
+            ship_latency_p95_ms_1h: None,
+            disk_free_bytes: 0,
+            is_offline: false,
+            managed_sessions: Vec::new(),
+            unmanaged_session_bindings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_runtime_truth_signature_ignores_observation_timestamps() {
+        let mut first = empty_heartbeat_payload();
+        first
+            .unmanaged_session_bindings
+            .push(heartbeat::UnmanagedSessionBinding {
+                machine_id: "cinder".to_string(),
+                provider: "claude".to_string(),
+                provider_session_id: "sess-1".to_string(),
+                source_path: Some("/tmp/sess-1.jsonl".to_string()),
+                source_inode: None,
+                source_device: None,
+                pid: Some(42),
+                process_start_time: Some("2026-05-05T12:00:00Z".to_string()),
+                cwd: Some("/tmp/project".to_string()),
+                source_offset: Some(100),
+                source_mtime: Some("2026-05-05T12:00:01Z".to_string()),
+                observed_at: "2026-05-05T12:00:02Z".to_string(),
+            });
+        let mut second = first.clone();
+        second.unmanaged_session_bindings[0].source_offset = Some(200);
+        second.unmanaged_session_bindings[0].source_mtime =
+            Some("2026-05-05T12:00:10Z".to_string());
+        second.unmanaged_session_bindings[0].observed_at = "2026-05-05T12:00:11Z".to_string();
+
+        assert_eq!(
+            runtime_truth_signature(&first),
+            runtime_truth_signature(&second)
+        );
+    }
+
+    #[test]
+    fn test_runtime_truth_signature_changes_when_process_identity_changes() {
+        let mut first = empty_heartbeat_payload();
+        first
+            .unmanaged_session_bindings
+            .push(heartbeat::UnmanagedSessionBinding {
+                machine_id: "cinder".to_string(),
+                provider: "claude".to_string(),
+                provider_session_id: "sess-1".to_string(),
+                source_path: Some("/tmp/sess-1.jsonl".to_string()),
+                source_inode: None,
+                source_device: None,
+                pid: Some(42),
+                process_start_time: Some("2026-05-05T12:00:00Z".to_string()),
+                cwd: Some("/tmp/project".to_string()),
+                source_offset: None,
+                source_mtime: None,
+                observed_at: "2026-05-05T12:00:02Z".to_string(),
+            });
+        let mut second = first.clone();
+        second.unmanaged_session_bindings[0].pid = Some(43);
+
+        assert_ne!(
+            runtime_truth_signature(&first),
+            runtime_truth_signature(&second)
+        );
+    }
 
     #[test]
     fn test_terminal_phase_schedules_immediate_and_delayed_catchups() {
