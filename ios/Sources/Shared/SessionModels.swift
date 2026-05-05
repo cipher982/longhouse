@@ -15,7 +15,7 @@ enum RuntimeDisplayText {
 
     static func canonicalDisplayText(_ value: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let running = canonicalPrefixedTool(in: trimmed, prefix: "Running ") {
+        if let running = canonicalPrefixedTool(in: trimmed, prefix: "Running ", outputPrefix: "Using ") {
             return running
         }
         if let blocked = canonicalPrefixedTool(in: trimmed, prefix: "Blocked on ") {
@@ -33,7 +33,7 @@ enum RuntimeDisplayText {
         return normalized.isEmpty ? nil : normalized
     }
 
-    private static func canonicalPrefixedTool(in value: String, prefix: String) -> String? {
+    private static func canonicalPrefixedTool(in value: String, prefix: String, outputPrefix: String? = nil) -> String? {
         guard value.lowercased().hasPrefix(prefix.lowercased()) else {
             return nil
         }
@@ -41,7 +41,7 @@ enum RuntimeDisplayText {
         guard let canonicalTail = canonicalToolPhrase(tail) else {
             return value
         }
-        return "\(prefix)\(canonicalTail)"
+        return "\(outputPrefix ?? prefix)\(canonicalTail)"
     }
 
     private static func canonicalToolPhrase(_ value: String) -> String? {
@@ -366,7 +366,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         let tool = RuntimeDisplayText.canonicalToolLabel(activeTool ?? presenceTool)
         switch presenceState {
         case "running":
-            return tool.map { "Running \($0)" } ?? "Running"
+            return tool.map { "Using \($0)" } ?? "Running"
         case "thinking":
             return "Thinking"
         case "needs_user":
@@ -700,7 +700,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         let tool = RuntimeDisplayText.canonicalToolLabel(activeTool ?? presenceTool)
         switch runtimePhaseState {
         case "running":
-            return tool.map { "Running \($0)" } ?? "Running"
+            return tool.map { "Using \($0)" } ?? "Running"
         case "thinking":
             return "Thinking"
         case "needs_user":

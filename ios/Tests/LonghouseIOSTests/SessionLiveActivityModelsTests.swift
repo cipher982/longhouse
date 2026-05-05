@@ -78,7 +78,7 @@ struct SessionLiveActivityModelsTests {
         let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
         let state = detail.liveActivityContentState(updatedAt: Date(timeIntervalSince1970: 1_777_140_000))
 
-        #expect(state.displayPhase == "Running Shell")
+        #expect(state.displayPhase == "Using Shell")
         #expect(state.activeTool == "Shell")
     }
 
@@ -115,8 +115,8 @@ struct SessionLiveActivityModelsTests {
             "state": "running",
             "tone": "running",
             "headline": "Working",
-            "detail": "Running Shell",
-            "phase_label": "Running Shell",
+            "detail": "Using Shell",
+            "phase_label": "Using Shell",
             "compact_tool_label": "Shell",
             "is_live": true,
             "is_executing": true,
@@ -132,7 +132,7 @@ struct SessionLiveActivityModelsTests {
         let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
         let state = detail.liveActivityContentState(updatedAt: Date(timeIntervalSince1970: 1_777_140_000))
 
-        #expect(state.displayPhase == "Running Shell")
+        #expect(state.displayPhase == "Using Shell")
         #expect(state.activeTool == "Shell")
     }
 
@@ -169,8 +169,8 @@ struct SessionLiveActivityModelsTests {
             "state": "running",
             "tone": "running",
             "headline": "Working",
-            "detail": "Running Shell",
-            "phase_label": "Running Shell",
+            "detail": "Using Shell",
+            "phase_label": "Using Shell",
             "compact_tool_label": "Shell",
             "is_live": true,
             "is_executing": true,

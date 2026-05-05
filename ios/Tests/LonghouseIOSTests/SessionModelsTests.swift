@@ -295,8 +295,8 @@ struct SessionModelsTests {
             "state": "running",
             "tone": "running",
             "headline": "Working",
-            "detail": "Running Shell",
-            "phase_label": "Running Shell",
+            "detail": "Using Shell",
+            "phase_label": "Using Shell",
             "compact_tool_label": "Shell",
             "is_live": true,
             "is_executing": true,
@@ -312,9 +312,9 @@ struct SessionModelsTests {
         let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
 
         #expect(detail.runtimeHeadline == "Working")
-        #expect(detail.runtimeDetail == "Running Shell")
+        #expect(detail.runtimeDetail == "Using Shell")
         #expect(detail.runtimeCapabilityLabel == "Live on this Mac")
-        #expect(detail.runtimePhaseLabel == "Running Shell")
+        #expect(detail.runtimePhaseLabel == "Using Shell")
         #expect(detail.runtimeTone == "running")
         #expect(detail.isSessionExecuting)
     }
@@ -399,8 +399,8 @@ struct SessionModelsTests {
 
         let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
 
-        #expect(detail.runtimePhaseLabel == "Running Shell")
-        #expect(detail.runtimeDetail == "Running Shell")
+        #expect(detail.runtimePhaseLabel == "Using Shell")
+        #expect(detail.runtimeDetail == "Using Shell")
     }
 
     @Test
@@ -437,8 +437,8 @@ struct SessionModelsTests {
             "state": "running",
             "tone": "running",
             "headline": "Working",
-            "detail": "Running Shell",
-            "phase_label": "Running Shell",
+            "detail": "Using Shell",
+            "phase_label": "Using Shell",
             "compact_tool_label": "Shell",
             "is_live": true,
             "is_executing": true,
@@ -480,7 +480,7 @@ struct SessionModelsTests {
 
     @Test
     func runtimeDisplayTextCanonicalizesOnlyBareShellAliases() {
-        #expect(RuntimeDisplayText.canonicalDisplayText("Running bash") == "Running Shell")
+        #expect(RuntimeDisplayText.canonicalDisplayText("Running bash") == "Using Shell")
         #expect(RuntimeDisplayText.canonicalDisplayText("Blocked on terminal") == "Blocked on Shell")
         #expect(RuntimeDisplayText.canonicalDisplayText("Approval needed \u{2022} shell") == "Approval needed \u{2022} Shell")
         #expect(RuntimeDisplayText.canonicalDisplayText("Running bash-runner") == "Running bash-runner")
@@ -502,7 +502,7 @@ struct SessionModelsTests {
             activeTool: "bash"
         )
 
-        #expect(summary.displayPhaseLabel == "Running Shell")
+        #expect(summary.displayPhaseLabel == "Using Shell")
     }
 
     @Test
@@ -749,8 +749,8 @@ struct SessionModelsTests {
                 state: "running",
                 tone: "running",
                 headline: "Working",
-                detail: "Running Shell",
-                phaseLabel: "Running Shell",
+                detail: "Using Shell",
+                phaseLabel: "Using Shell",
                 compactToolLabel: "Shell",
                 isLive: true,
                 isExecuting: true,
