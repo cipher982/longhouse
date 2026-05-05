@@ -417,7 +417,7 @@ def _upsert_unmanaged_session_bindings(
     *,
     device_id: str,
     received_at: datetime,
-) -> None:
+) -> set[UUID]:
     """Upsert unmanaged session bindings reported by the machine agent.
 
     Identity: (machine_id, provider, provider_session_id).
@@ -427,6 +427,7 @@ def _upsert_unmanaged_session_bindings(
     with the new observation and leave binding_state='observed'. Phase 6
     will consume binding_state to drive lifecycle=closed.
     """
+    touched_session_ids: set[UUID] = set()
     for binding in bindings:
         machine = (binding.machine_id or "").strip()
         provider = (binding.provider or "").strip().lower()
@@ -468,6 +469,7 @@ def _upsert_unmanaged_session_bindings(
             )
             if linked is not None:
                 linked_session_id = linked[0]
+                touched_session_ids.add(linked_session_id)
 
         fields = dict(
             machine_id=machine,
@@ -493,6 +495,7 @@ def _upsert_unmanaged_session_bindings(
         else:
             for key, value in fields.items():
                 setattr(existing, key, value)
+    return touched_session_ids
 
 
 def _mark_missing_unmanaged_session_bindings_stale(
@@ -500,7 +503,7 @@ def _mark_missing_unmanaged_session_bindings_stale(
     bindings: list[UnmanagedSessionBindingIn],
     *,
     device_id: str,
-) -> None:
+) -> set[UUID]:
     """Mark previously observed bindings stale when this heartbeat omits them.
 
     The engine sends a full snapshot of currently live unmanaged bindings. If
@@ -517,6 +520,7 @@ def _mark_missing_unmanaged_session_bindings_stale(
         if machine and provider and session_key:
             observed_keys.add((machine, provider, session_key))
 
+    touched_session_ids: set[UUID] = set()
     rows = (
         db.query(UnmanagedSessionBinding)
         .filter(UnmanagedSessionBinding.device_id == device_id)
@@ -533,7 +537,11 @@ def _mark_missing_unmanaged_session_bindings_stale(
             ),
         )
         if key not in observed_keys:
-            row.binding_state = "stale"
+            if row.binding_state != "stale":
+                row.binding_state = "stale"
+                if row.session_id is not None:
+                    touched_session_ids.add(row.session_id)
+    return touched_session_ids
 
 
 def _runtime_events_for_missing_unbound_unmanaged_sessions(
@@ -763,7 +771,8 @@ async def ingest_heartbeat(
             _unmanaged_bindings = payload.unmanaged_session_bindings
             _unmanaged_bindings_present = "unmanaged_session_bindings" in payload.model_fields_set
 
-            def _do_heartbeat(write_db: Session) -> None:
+            def _do_heartbeat(write_db: Session) -> dict[UUID, tuple[str | None, str]]:
+                publish_sessions: dict[UUID, tuple[str | None, str]] = {}
                 hb = AgentHeartbeat(
                     device_id=_device_id,
                     received_at=_now,
@@ -798,18 +807,26 @@ async def ingest_heartbeat(
                     AgentHeartbeat.received_at < cutoff,
                 ).delete()
                 if _unmanaged_bindings:
-                    _upsert_unmanaged_session_bindings(
+                    for session_id in _upsert_unmanaged_session_bindings(
                         write_db,
                         _unmanaged_bindings,
                         device_id=_device_id,
                         received_at=_now,
-                    )
+                    ):
+                        publish_sessions.setdefault(
+                            session_id,
+                            (None, UNMANAGED_PROCESS_SNAPSHOT_SOURCE),
+                        )
                 if _unmanaged_bindings_present:
-                    _mark_missing_unmanaged_session_bindings_stale(
+                    for session_id in _mark_missing_unmanaged_session_bindings_stale(
                         write_db,
                         _unmanaged_bindings,
                         device_id=_device_id,
-                    )
+                    ):
+                        publish_sessions.setdefault(
+                            session_id,
+                            (None, UNMANAGED_PROCESS_SNAPSHOT_SOURCE),
+                        )
                 runtime_events = _runtime_events_for_managed_leases(
                     _managed_leases,
                     device_id=_device_id,
@@ -834,7 +851,11 @@ async def ingest_heartbeat(
                         )
                     )
                 if runtime_events:
-                    ingest_runtime_events(write_db, runtime_events)
+                    ingest_result = ingest_runtime_events(write_db, runtime_events)
+                    updated_runtime_keys = set(ingest_result.updated_runtime_keys)
+                    for event in runtime_events:
+                        if event.session_id is not None and event.runtime_key in updated_runtime_keys:
+                            publish_sessions[event.session_id] = (event.provider, event.source)
                     for lease in _managed_leases:
                         if (lease.state or "").strip().lower() != "attached":
                             continue
@@ -845,11 +866,12 @@ async def ingest_heartbeat(
                             and not _has_final_managed_codex_terminal(write_db, lease.session_id)
                         ):
                             session.ended_at = None
+                return publish_sessions
 
             ws = get_write_serializer()
             with tracer.start_as_current_span("longhouse.heartbeat.write") as write_span:
                 write_started = time.monotonic()
-                await ws.execute_or_direct(_do_heartbeat, db, label="heartbeat")
+                publish_sessions = await ws.execute_or_direct(_do_heartbeat, db, label="heartbeat")
                 write_ms = round((time.monotonic() - write_started) * 1000, 1)
                 agents_heartbeat_write_seconds.observe(write_ms / 1000.0)
                 set_span_attributes(
@@ -859,6 +881,19 @@ async def ingest_heartbeat(
                         "longhouse.heartbeat.write_ms": write_ms,
                     },
                 )
+
+            if publish_sessions:
+                from zerg.services.session_pubsub import publish_session_runtime_update
+
+                for session_id, (provider, source) in sorted(
+                    publish_sessions.items(),
+                    key=lambda item: str(item[0]),
+                ):
+                    publish_session_runtime_update(
+                        session_id=str(session_id),
+                        provider=provider,
+                        source=source,
+                    )
 
             request_status_label = "ok"
             return Response(status_code=status.HTTP_204_NO_CONTENT)
