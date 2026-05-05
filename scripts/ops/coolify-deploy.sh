@@ -15,6 +15,9 @@ Environment:
                      Default: http://localhost:8000/api/v1
   COOLIFY_TIMEOUT    Default timeout in seconds if --timeout is omitted
                      Default: 900
+  COOLIFY_STATUS_NOT_FOUND_GRACE
+                     Seconds to tolerate 404 from deployment status after trigger
+                     Default: 180
 USAGE
 }
 
@@ -31,6 +34,7 @@ COOLIFY_API_HOST="${COOLIFY_API_HOST:-clifford}"
 COOLIFY_API_BASE="${COOLIFY_API_BASE:-http://localhost:8000/api/v1}"
 POLL_INTERVAL=5
 STATUS_POLL_ERROR_BUDGET="${COOLIFY_STATUS_POLL_ERROR_BUDGET:-6}"
+STATUS_NOT_FOUND_GRACE="${COOLIFY_STATUS_NOT_FOUND_GRACE:-180}"
 DOCKER_IMAGE=""
 DOCKER_TAG=""
 
@@ -232,6 +236,12 @@ wait_for_deployment_completion() {
     : >"$status_error_file"
     if ! status_response="$(api_get "/deployments/${deploy_uuid}" 2>"$status_error_file")"; then
       status_error="$(tr '\r\n' '  ' <"$status_error_file" | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
+      if [[ "$status_error" == *"404"* && "$elapsed" -lt "$STATUS_NOT_FOUND_GRACE" ]]; then
+        echo ""
+        echo "Coolify deployment status not found yet for ${deploy_uuid}; still within ${STATUS_NOT_FOUND_GRACE}s grace: ${status_error:-unknown error}" >&2
+        sleep "$POLL_INTERVAL"
+        continue
+      fi
       consecutive_status_errors="$(( consecutive_status_errors + 1 ))"
       echo ""
       echo "Coolify status poll failed (${consecutive_status_errors}/${STATUS_POLL_ERROR_BUDGET}) while waiting for deployment ${deploy_uuid}: ${status_error:-unknown error}" >&2

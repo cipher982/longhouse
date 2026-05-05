@@ -44,6 +44,7 @@ fi
 TIMEOUT=30
 POLL_INTERVAL=0
 STATUS_POLL_ERROR_BUDGET=2
+STATUS_NOT_FOUND_GRACE=180
 api_get_calls_file="$(mktemp)"
 printf '0\n' >"$api_get_calls_file"
 
@@ -75,6 +76,32 @@ if [[ "$(<"$api_get_calls_file")" != "2" ]]; then
   exit 1
 fi
 
+STATUS_POLL_ERROR_BUDGET=1
+STATUS_NOT_FOUND_GRACE=30
+printf '0\n' >"$api_get_calls_file"
+api_get() {
+  local attempt=""
+  attempt="$(( $(<"$api_get_calls_file") + 1 ))"
+  printf '%s\n' "$attempt" >"$api_get_calls_file"
+  if [[ "$attempt" -lt 3 ]]; then
+    echo "curl: (22) The requested URL returned error: 404" >&2
+    return 22
+  fi
+
+  printf '{"status":"finished"}'
+}
+
+if ! wait_for_deployment_completion test-deploy >/dev/null 2>&1; then
+  echo "Expected deployment wait helper to tolerate early 404 status polls"
+  exit 1
+fi
+
+if [[ "$(<"$api_get_calls_file")" != "3" ]]; then
+  echo "Expected deployment wait helper to keep polling during early 404 grace"
+  exit 1
+fi
+
+STATUS_POLL_ERROR_BUDGET=2
 printf '0\n' >"$api_get_calls_file"
 api_get() {
   local attempt=""
