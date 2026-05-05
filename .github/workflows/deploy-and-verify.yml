@@ -170,6 +170,8 @@ jobs:
         with:
           ref: ${{ needs.gate.outputs.head_sha }}
           fetch-depth: 1
+          filter: blob:none
+          show-progress: false
 
       - name: Restore Bun download cache
         uses: actions/cache@v4
