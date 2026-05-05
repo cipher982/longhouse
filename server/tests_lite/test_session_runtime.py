@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -30,6 +31,10 @@ from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_runtime import managed_codex_liveness_invariant_counts
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
+from zerg.services.session_pubsub import TOPIC_TIMELINE
+from zerg.services.session_pubsub import get_pubsub
+from zerg.services.session_pubsub import reset_pubsub_for_test
+from zerg.services.session_pubsub import topic_session
 from zerg.services.unmanaged_bindings import load_binding_overlay
 
 
@@ -357,6 +362,60 @@ def test_runtime_batch_endpoint_is_idempotent(tmp_path):
     engine.dispose()
 
 
+def test_runtime_batch_endpoint_wakes_subscribers_for_applied_event(tmp_path):
+    reset_pubsub_for_test()
+    engine, SessionLocal = _make_db(tmp_path, "runtime_endpoint_pubsub.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=20))
+        runtime_key = runtime_key_for_session("claude", str(session.id))
+
+    for client in _client(SessionLocal):
+        payload = {
+            "events": [
+                {
+                    "runtime_key": runtime_key,
+                    "session_id": str(session.id),
+                    "provider": "claude",
+                    "device_id": "cinder",
+                    "source": "claude_hook",
+                    "kind": "phase_signal",
+                    "phase": "thinking",
+                    "occurred_at": now.isoformat(),
+                    "freshness_ms": phase_freshness_ms("thinking"),
+                    "dedupe_key": "pubsub-1",
+                    "payload": {},
+                }
+            ]
+        }
+
+        first = client.post("/agents/runtime/events/batch", json=payload, headers={"X-Agents-Token": "dev"})
+        assert first.status_code == 200, first.text
+        assert first.json()["updated_runtime_keys"] == [runtime_key]
+
+        bus = get_pubsub()
+        with bus.subscribe(topic_session(str(session.id)), since_seq=0) as session_sub:
+            msg = asyncio.run(session_sub.next_message(timeout=0.1))
+            assert msg is not None
+            assert msg.payload == {
+                "kind": "runtime",
+                "session_id": str(session.id),
+                "provider": "claude",
+                "source": "claude_hook",
+            }
+        timeline_seq = bus.peek_latest_seq(TOPIC_TIMELINE)
+        assert timeline_seq == 1
+
+        second = client.post("/agents/runtime/events/batch", json=payload, headers={"X-Agents-Token": "dev"})
+        assert second.status_code == 200, second.text
+        assert second.json()["updated_runtime_keys"] == []
+        assert bus.peek_latest_seq(TOPIC_TIMELINE) == timeline_seq
+
+    reset_pubsub_for_test()
+    engine.dispose()
+
+
 def test_opencode_runtime_events_materialize_live_and_terminal_state(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "runtime_opencode_endpoint.db")
     now = datetime.now(timezone.utc)
@@ -450,6 +509,57 @@ def test_presence_endpoint_mirrors_into_runtime_state(tmp_path):
         assert state.freshness_expires_at is not None
         assert db.query(SessionRuntimeEvent).filter(SessionRuntimeEvent.runtime_key == runtime_key).count() == 1
 
+    engine.dispose()
+
+
+def test_presence_endpoint_uses_provider_source_and_wakes_subscribers(tmp_path):
+    reset_pubsub_for_test()
+    engine, SessionLocal = _make_db(tmp_path, "runtime_presence_codex_source.db")
+    now = datetime.now(timezone.utc)
+    session_id = uuid4()
+    runtime_key = runtime_key_for_session("codex", str(session_id))
+
+    for client in _client(SessionLocal):
+        response = client.post(
+            "/agents/presence",
+            json={
+                "session_id": str(session_id),
+                "state": "thinking",
+                "provider": "codex",
+                "occurred_at": now.isoformat(),
+                "dedupe_key": "codex-presence-thinking-1",
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert response.status_code == 204, response.text
+
+    with SessionLocal() as db:
+        event = db.query(SessionRuntimeEvent).filter(SessionRuntimeEvent.runtime_key == runtime_key).one()
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        assert event.provider == "codex"
+        assert event.source == "codex_hook"
+        assert state.provider == "codex"
+        assert state.phase == "thinking"
+
+    bus = get_pubsub()
+    with bus.subscribe(topic_session(str(session_id)), since_seq=0) as session_sub:
+        msg = asyncio.run(session_sub.next_message(timeout=0.1))
+        assert msg is not None
+        assert msg.payload == {
+            "kind": "runtime",
+            "session_id": str(session_id),
+            "provider": "codex",
+            "source": "codex_hook",
+        }
+    with bus.subscribe(TOPIC_TIMELINE, since_seq=0) as timeline_sub:
+        msg = asyncio.run(timeline_sub.next_message(timeout=0.1))
+        assert msg is not None
+        assert msg.payload["kind"] == "runtime"
+        assert msg.payload["session_id"] == str(session_id)
+        assert msg.payload["provider"] == "codex"
+        assert msg.payload["source"] == "codex_hook"
+
+    reset_pubsub_for_test()
     engine.dispose()
 
 
