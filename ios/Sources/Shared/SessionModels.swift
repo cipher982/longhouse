@@ -82,6 +82,17 @@ enum RuntimeDisplayText {
         return phase.capitalized
     }
 
+    static func phaseTone(_ kind: String) -> String {
+        switch kind {
+        case "thinking", "running", "blocked", "stalled":
+            return kind
+        case "idle", "needs_user":
+            return "idle"
+        default:
+            return "inactive"
+        }
+    }
+
     static let defaultStatusSeenAtPrefix = "Updated"
 }
 
@@ -152,7 +163,7 @@ func sessionFactStatus(_ facts: SessionLivenessFacts?) -> SessionFactStatus? {
     if let kind = facts.phase.kind?.trimmingCharacters(in: .whitespacesAndNewlines), !kind.isEmpty {
         return SessionFactStatus(
             label: RuntimeDisplayText.phaseStatusLabel(kind: kind, tool: facts.phase.tool),
-            tone: "inactive",
+            tone: RuntimeDisplayText.phaseTone(kind),
             seenAt: facts.phase.observedAt,
             seenAtPrefix: "Updated"
         )
@@ -160,7 +171,7 @@ func sessionFactStatus(_ facts: SessionLivenessFacts?) -> SessionFactStatus? {
     if facts.process.status == "observed" {
         return SessionFactStatus(
             label: "Process visible",
-            tone: "inactive",
+            tone: "active",
             seenAt: facts.process.observedAt ?? facts.process.lastSeenAt,
             seenAtPrefix: "Verified"
         )

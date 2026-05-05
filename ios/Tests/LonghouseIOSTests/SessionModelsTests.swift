@@ -462,7 +462,7 @@ struct SessionModelsTests {
         #expect(detail.runtimePhaseLabel == "Running Shell")
         #expect(detail.runtimeHeadline == "Running Shell")
         #expect(detail.runtimeDetail == nil)
-        #expect(detail.runtimeTone == "inactive")
+        #expect(detail.runtimeTone == "running")
         #expect(detail.isSessionExecuting)
 
         let noPhaseJson = jsonString.replacingOccurrences(
@@ -776,7 +776,7 @@ struct SessionModelsTests {
         #expect(managedPhase.managementLabel == "Managed")
         #expect(managedPhase.timelineStatusLabel == "Running Codex")
         #expect(managedPhase.displayPhaseLabel == "Running Codex")
-        #expect(managedPhase.timelineStatusTone == "inactive")
+        #expect(managedPhase.timelineStatusTone == "running")
         #expect(!managedPhase.isExecuting)
     }
 
@@ -867,6 +867,7 @@ struct SessionModelsTests {
 
         #expect(processObserved.managementLabel == "Unmanaged")
         #expect(processObserved.timelineStatusLabel == "Process visible")
+        #expect(processObserved.timelineStatusTone == "active")
         #expect(processObserved.timelineStatusSeenAtPrefix == "Verified")
         #expect(transcriptOnly.timelineStatusLabel == "Transcript only")
         #expect(transcriptOnly.timelineStatusSeenAtPrefix == "Transcript")
