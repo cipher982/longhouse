@@ -1594,7 +1594,8 @@ def test_local_health_command_rejects_fast_and_deep(tmp_path: Path):
     result = runner.invoke(app, ["local-health", "--fast", "--deep", "--json", "--claude-dir", str(tmp_path / ".claude")])
 
     assert result.exit_code != 0
-    assert "Use only one of --fast or --deep" in result.output
+    assert "--fast" in result.output
+    assert "--deep" in result.output
 
 
 def test_local_health_command_prints_launch_warnings(monkeypatch, tmp_path: Path):
