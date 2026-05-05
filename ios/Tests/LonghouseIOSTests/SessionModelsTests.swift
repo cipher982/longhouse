@@ -5,6 +5,7 @@ import Testing
 struct SessionModelsTests {
     private func runtimeFacts(
         controlPath: String = "managed",
+        processState: String = "unknown",
         hostState: String = "unknown",
         processStatus: String = "unknown",
         phaseKind: String? = nil,
@@ -16,6 +17,7 @@ struct SessionModelsTests {
     ) -> SessionLivenessFacts {
         SessionLivenessFacts(
             controlPath: controlPath,
+            processState: processState,
             host: HostObservation(
                 state: hostState,
                 lastSeenAt: hostState == "unknown" ? nil : observedAt,
@@ -459,8 +461,8 @@ struct SessionModelsTests {
 
         let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: Data(jsonString.utf8))
 
-        #expect(detail.runtimePhaseLabel == "Running Shell")
-        #expect(detail.runtimeHeadline == "Running Shell")
+        #expect(detail.runtimePhaseLabel == "Using Shell")
+        #expect(detail.runtimeHeadline == "Using Shell")
         #expect(detail.runtimeDetail == nil)
         #expect(detail.runtimeTone == "running")
         #expect(detail.isSessionExecuting)
@@ -472,7 +474,7 @@ struct SessionModelsTests {
         let noPhaseDetail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: Data(noPhaseJson.utf8))
 
         #expect(noPhaseDetail.runtimePhaseState == "unknown")
-        #expect(noPhaseDetail.runtimePhaseLabel == "Host online")
+        #expect(noPhaseDetail.runtimePhaseLabel == "Unknown")
         #expect(!noPhaseDetail.isSessionExecuting)
     }
 
@@ -774,8 +776,8 @@ struct SessionModelsTests {
         )
 
         #expect(managedPhase.managementLabel == "Managed")
-        #expect(managedPhase.timelineStatusLabel == "Running Codex")
-        #expect(managedPhase.displayPhaseLabel == "Running Codex")
+        #expect(managedPhase.timelineStatusLabel == "Using Codex")
+        #expect(managedPhase.displayPhaseLabel == "Using Codex")
         #expect(managedPhase.timelineStatusTone == "running")
         #expect(!managedPhase.isExecuting)
     }
@@ -792,6 +794,7 @@ struct SessionModelsTests {
             status: "working",
             runtimeFacts: runtimeFacts(
                 controlPath: "unmanaged",
+                processState: "running",
                 hostState: "online",
                 processStatus: "observed",
                 transcriptAt: "2026-04-25T20:00:00Z",
@@ -866,19 +869,19 @@ struct SessionModelsTests {
         )
 
         #expect(processObserved.managementLabel == "Unmanaged")
-        #expect(processObserved.timelineStatusLabel == "Process visible")
-        #expect(processObserved.timelineStatusTone == "active")
+        #expect(processObserved.timelineStatusLabel == "Running")
+        #expect(processObserved.timelineStatusTone == "inactive")
         #expect(processObserved.timelineStatusSeenAtPrefix == "Verified")
-        #expect(transcriptOnly.timelineStatusLabel == "Transcript only")
-        #expect(transcriptOnly.timelineStatusSeenAtPrefix == "Transcript")
-        #expect(hostUnverified.timelineStatusLabel == "Runtime unverified")
+        #expect(transcriptOnly.timelineStatusLabel == "Unknown")
+        #expect(transcriptOnly.timelineStatusSeenAtPrefix == "Checked")
+        #expect(hostUnverified.timelineStatusLabel == "Unknown")
         #expect(closed.isClosed)
         #expect(closed.timelineStatusLabel == "Closed")
         #expect(closed.timelineStatusTone == "closed")
         #expect(closed.displayPhaseLabel == "Closed")
         #expect(!closed.isExecuting)
         #expect(!unknownWithClosedLegacy.isClosed)
-        #expect(unknownWithClosedLegacy.timelineStatusLabel == "Transcript only")
+        #expect(unknownWithClosedLegacy.timelineStatusLabel == "Unknown")
     }
 
     @Test
@@ -915,6 +918,7 @@ struct SessionModelsTests {
                 "runtime_display": null,
                 "runtime_facts": {
                   "control_path": "managed",
+                  "process_state": "unknown",
                   "host": {"state": "online", "last_seen_at": "2026-04-25T20:00:00Z", "source": "machine_heartbeat"},
                   "process": {"status": "unknown", "pid": null, "process_start_time": null, "observed_at": null, "last_seen_at": null, "source_mtime": null, "source_path": null, "reason": null, "source": null},
                   "phase": {"kind": "needs_user", "tool": null, "source": "managed_local_transport", "observed_at": "2026-04-25T20:00:00Z", "expires_at": "2026-04-25T20:15:00Z"},
@@ -939,6 +943,7 @@ struct SessionModelsTests {
         #expect(session.timelineCard?.status?.label == "Ready")
         #expect(session.timelineCard?.borderTone == "idle")
         #expect(session.runtimeFacts?.controlPath == "managed")
+        #expect(session.runtimeFacts?.processState == "unknown")
         #expect(session.runtimeFacts?.phase.kind == "needs_user")
     }
 
@@ -971,7 +976,7 @@ struct SessionModelsTests {
         #expect(summary.timelineStatusLabel == "Ready")
         #expect(summary.timelineStatusTone == "idle")
         #expect(summary.timelineBorderTone == "idle")
-        #expect(summary.displayPhaseLabel == "Running Shell")
+        #expect(summary.displayPhaseLabel == "Using Shell")
     }
 
     @Test

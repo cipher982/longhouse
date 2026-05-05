@@ -195,7 +195,7 @@ struct SessionLiveActivityModelsTests {
         let state = detail.liveActivityContentState(updatedAt: Date(timeIntervalSince1970: 1_777_140_000))
 
         #expect(state.presenceState == "unknown")
-        #expect(state.displayPhase == "Running Shell")
+        #expect(state.displayPhase == "Using Shell")
         #expect(state.activeTool == nil)
         #expect(state.isAttention == false)
     }

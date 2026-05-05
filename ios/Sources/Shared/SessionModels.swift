@@ -76,7 +76,10 @@ enum RuntimeDisplayText {
 
     static func phaseStatusLabel(kind: String, tool: String?) -> String {
         let phase = kind == "needs_user" ? "ready" : kind.replacingOccurrences(of: #"[-_]+"#, with: " ", options: .regularExpression)
-        if let compactTool = compactFactToolLabel(tool), kind == "running" || kind == "blocked" {
+        if let compactTool = compactFactToolLabel(tool), kind == "running" {
+            return "Using \(compactTool)"
+        }
+        if let compactTool = compactFactToolLabel(tool), kind == "blocked" {
             return "\(phase.capitalized) \(compactTool)"
         }
         return phase.capitalized
@@ -136,6 +139,7 @@ struct LifecycleFact: Codable, Hashable, Sendable {
 
 struct SessionLivenessFacts: Codable, Hashable, Sendable {
     let controlPath: String
+    let processState: String?
     let host: HostObservation
     let process: ProcessObservation
     let phase: PhaseObservation
@@ -152,7 +156,8 @@ struct SessionFactStatus: Hashable, Sendable {
 
 func sessionFactStatus(_ facts: SessionLivenessFacts?) -> SessionFactStatus? {
     guard let facts else { return nil }
-    if facts.lifecycle.state == "closed" {
+    let processState = facts.processState ?? "unknown"
+    if facts.lifecycle.state == "closed" || processState == "closed" {
         return SessionFactStatus(
             label: "Closed",
             tone: "closed",
@@ -168,36 +173,15 @@ func sessionFactStatus(_ facts: SessionLivenessFacts?) -> SessionFactStatus? {
             seenAtPrefix: "Updated"
         )
     }
-    if facts.process.status == "observed" {
+    if processState == "running" || facts.process.status == "observed" {
         return SessionFactStatus(
-            label: "Process visible",
-            tone: "active",
+            label: "Running",
+            tone: "inactive",
             seenAt: facts.process.observedAt ?? facts.process.lastSeenAt,
             seenAtPrefix: "Verified"
         )
     }
-    if facts.process.status == "not_observed" {
-        return SessionFactStatus(
-            label: "Process not visible",
-            tone: "inactive",
-            seenAt: facts.process.lastSeenAt ?? facts.process.observedAt,
-            seenAtPrefix: "Checked"
-        )
-    }
-    switch facts.host.state {
-    case "online":
-        return SessionFactStatus(label: "Host online", tone: "inactive", seenAt: facts.host.lastSeenAt, seenAtPrefix: "Heartbeat")
-    case "stale":
-        return SessionFactStatus(label: "Host last seen", tone: "inactive", seenAt: facts.host.lastSeenAt, seenAtPrefix: "Heartbeat")
-    case "offline":
-        return SessionFactStatus(label: "Host offline", tone: "inactive", seenAt: facts.host.lastSeenAt, seenAtPrefix: "Heartbeat")
-    default:
-        break
-    }
-    if let transcriptAt = facts.activity.lastTranscriptAt {
-        return SessionFactStatus(label: "Transcript only", tone: "inactive", seenAt: transcriptAt, seenAtPrefix: "Transcript")
-    }
-    return SessionFactStatus(label: "Runtime unverified", tone: "inactive", seenAt: nil, seenAtPrefix: "Checked")
+    return SessionFactStatus(label: "Unknown", tone: "inactive", seenAt: nil, seenAtPrefix: "Checked")
 }
 
 struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
@@ -440,9 +424,6 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
             }
             if isExecuting || needsAttention {
                 return "Active"
-            }
-            if runtimeDisplay?.hostState == "online" {
-                return "Host online"
             }
             return "Unknown"
         }
