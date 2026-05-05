@@ -372,13 +372,30 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          mapfile -t RUN_IDS < <(
+            gh run list \
+              --repo "${{ github.repository }}" \
+              --commit "${{ github.sha }}" \
+              --event push \
+              --limit 100 \
+              --json databaseId,headSha \
+              --jq '.[] | select(.headSha == "${{ github.sha }}") | .databaseId'
+          )
+          PROFILE_ARGS=()
+          for run_id in "${RUN_IDS[@]}"; do
+            PROFILE_ARGS+=(--run-id "$run_id")
+          done
+          if [[ "${#PROFILE_ARGS[@]}" -eq 0 ]]; then
+            PROFILE_ARGS=(--run-id "${{ github.run_id }}")
+          fi
+
           {
             echo "## Deploy Wall Time"
             echo ""
             echo '```text'
             python3 scripts/ops/ci-profile.py \
-              --run-id "${{ github.run_id }}" \
-              --top 12 \
+              "${PROFILE_ARGS[@]}" \
+              --top 20 \
               --exclude-job "Profile deploy wall time" || echo "Profile unavailable"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
