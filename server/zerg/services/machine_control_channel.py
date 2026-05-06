@@ -193,12 +193,27 @@ class MachineControlChannelRegistry:
 
         return MachineControlCommandResponse(transport_ok=True, message=message)
 
-    async def complete_command(self, message: Mapping[str, Any]) -> bool:
+    async def complete_command(
+        self,
+        message: Mapping[str, Any],
+        *,
+        owner_id: int | None = None,
+        device_id: str | None = None,
+    ) -> bool:
         command_id = str(message.get("command_id") or "").strip()
         if not command_id:
             return False
         async with self._lock:
-            pending = self._pending.pop(command_id, None)
+            pending = self._pending.get(command_id)
+            if pending is not None and owner_id is not None and device_id is not None:
+                if pending.key != (owner_id, device_id):
+                    logger.warning(
+                        "Received command_result for command_id=%s from wrong owner/device",
+                        command_id,
+                    )
+                    return False
+            if pending is not None:
+                self._pending.pop(command_id, None)
         if pending is None:
             logger.warning("Received command_result for unknown command_id=%s", command_id)
             return False
