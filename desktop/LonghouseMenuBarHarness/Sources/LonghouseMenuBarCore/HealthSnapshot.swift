@@ -650,7 +650,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         if state.lowercased() == "ready",
            let machineName = launchReadiness?.machineName,
            !machineName.isEmpty {
-            return "Launch ready on \(machineName)"
+            return "Launch configured on \(machineName)"
         }
         if state.isEmpty || state == "-" {
             return "Launch state unavailable"
@@ -667,7 +667,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         if state.lowercased() == "ready",
            let machineName = launchReadiness?.machineName,
            !machineName.isEmpty {
-            return "Ready on \(machineName)"
+            return "Configured on \(machineName)"
         }
 
         if state.isEmpty || state == "-" {
