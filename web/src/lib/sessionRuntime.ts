@@ -434,7 +434,7 @@ export function resolveSessionRuntimeState(
     ? true
     : hasFacts
     ? false
-    : (serverDisplay?.is_idle ?? (presenceState === "idle" || (!isExecuting && !needsAttention && status === "idle")));
+    : (serverDisplay?.is_idle ?? (presenceState === "idle" || presenceState === "needs_user"));
   const isStalled = hasFacts || isClosed ? false : (serverDisplay?.is_stalled ?? presenceState === "stalled");
   const hasSignal = hasFacts
     ? factStatus != null
