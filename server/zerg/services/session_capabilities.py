@@ -6,6 +6,7 @@ from datetime import timezone
 from typing import Any
 
 from zerg.models.agents import AgentSession
+from zerg.services.managed_control_dispatcher import select_managed_control_transport
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_execution_home import infer_execution_home
@@ -223,7 +224,7 @@ def supports_live_control(session: AgentSession | None) -> bool:
     return (
         resolve_execution_home(session) == SessionExecutionHome.MANAGED_LOCAL
         and _has_live_control_transport(session)
-        and getattr(session, "source_runner_id", None) is not None
+        and select_managed_control_transport(session) is not None
     )
 
 

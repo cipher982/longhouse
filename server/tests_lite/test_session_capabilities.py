@@ -16,6 +16,11 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret-value")
 os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-value")
 
+from zerg.database import initialize_database
+from zerg.database import make_engine
+from zerg.database import make_sessionmaker
+from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionRuntimeState
 from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_capabilities import project_current_session_capabilities
 from zerg.services.session_capabilities import project_current_session_capabilities_from_facts
@@ -28,11 +33,6 @@ from zerg.services.session_liveness_facts import ProcessObservation
 from zerg.services.session_liveness_facts import SessionLivenessFacts
 from zerg.services.session_runtime import runtime_key_for_session
 from zerg.services.session_views import build_session_capabilities_response
-from zerg.database import initialize_database
-from zerg.database import make_engine
-from zerg.database import make_sessionmaker
-from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionRuntimeState
 from zerg.session_execution_home import ManagedSessionTransport
 
 NOW = datetime(2026, 5, 4, 15, 0, tzinfo=timezone.utc)
@@ -170,11 +170,7 @@ def _liveness_facts(
     phase_source = "semantic" if phase_kind is not None else None
     process_source = "machine_process_scan" if process_status != "unknown" else None
     process_state = (
-        "closed"
-        if lifecycle_state == "closed"
-        else "running"
-        if process_status == "observed"
-        else "unknown"
+        "closed" if lifecycle_state == "closed" else "running" if process_status == "observed" else "unknown"
     )
     return SessionLivenessFacts(
         control_path=control_path,
