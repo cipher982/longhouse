@@ -147,12 +147,12 @@ def _phase_label(
     compact_tool: str | None,
 ) -> str:
     if presence_state == "needs_user":
-        return "Ready"
+        return "Idle"
     if presence_state == "running" and compact_tool:
         return f"Using {compact_tool}"
     if presence_state == "blocked" and compact_tool:
         return f"Blocked on {compact_tool}"
-    return (display_phase or "").strip() or "Recent"
+    return (display_phase or "").strip() or "Inactive"
 
 
 def _tone(
@@ -206,7 +206,7 @@ def _managed_copy(
     if presence_state == "running":
         return "Working", f"Using {compact_tool}" if compact_tool else phase_label
     if presence_state == "needs_user":
-        return "Ready", "Ready for next prompt"
+        return "Idle", "Waiting for next prompt"
     if presence_state == "blocked":
         return "Needs permission", f"Approval needed • {compact_tool}" if compact_tool else "Approval needed"
     if presence_state is None and truth_tier != "managed-local":
@@ -214,8 +214,8 @@ def _managed_copy(
     if presence_state is None and truth_tier == "managed-local":
         return "Not connected", None
     if presence_state in {"idle", "needs_user"} or is_idle:
-        return "Ready", "Ready for next prompt"
-    return "Ready", "Ready for next prompt"
+        return "Idle", "Waiting for next prompt"
+    return "Idle", "Waiting for next prompt"
 
 
 def build_session_runtime_display(
@@ -261,7 +261,6 @@ def build_session_runtime_display(
         and host_state == "online"
         and binding_terminal_reason is None
         and presence_state is None
-        and runtime_source == "fallback"
     )
     is_executing = presence_state in LIVE_EXECUTION_STATES
     needs_attention = presence_state in ATTENTION_STATES
@@ -272,14 +271,16 @@ def build_session_runtime_display(
         is_idle = True
     display_phase = runtime_view.display_phase
     if confidence != "live" and runtime_source not in {"fallback", "progress"} and runtime_view.terminal_state is None:
-        display_phase = "Recent"
+        display_phase = ""
     if unmanaged_attention_unverified:
-        display_phase = "Recent"
+        display_phase = "Inactive"
     phase_label = _phase_label(
         presence_state=presence_state,
         display_phase=display_phase,
         compact_tool=compact_tool,
     )
+    if process_observed and presence_state is None:
+        phase_label = "Process running"
     is_managed_session = (
         capabilities.live_control_available or capabilities.host_reattach_available or capabilities.reply_to_live_session_available
     )

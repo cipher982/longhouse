@@ -188,18 +188,18 @@ def _display_phase_for_state(
     if terminal_state is not None or phase == "finished" or status == "completed":
         return "Completed"
     if confidence == "stale" and phase in KNOWN_PHASES:
-        return "Recent"
+        return ""
     if phase == "running":
         return f"Running {active_tool}" if active_tool else "Running"
     if phase == "thinking":
         return "Thinking"
     if phase == "needs_user":
-        return "Ready"
+        return "Idle"
     if phase == "blocked":
         return f"Blocked on {active_tool}" if active_tool else "Needs permission"
     if phase == "idle":
         return "Idle"
-    return "Recent"
+    return ""
 
 
 def _status_for_state(
@@ -323,6 +323,18 @@ def build_fallback_runtime_view(
         display_phase_input = "idle"
         terminal_state = None
 
+    display_phase = (
+        _display_phase_for_state(
+            phase=display_phase_input,
+            active_tool=None,
+            confidence=confidence or "stale",
+            terminal_state=terminal_state,
+            status=status,
+        )
+        if terminal_state is not None
+        else "Recent"
+    )
+
     return SessionRuntimeView(
         signal_tier="none",
         runtime_phase=runtime_phase,
@@ -336,13 +348,7 @@ def build_fallback_runtime_view(
         presence_tool=None,
         presence_updated_at=None,
         last_live_at=last_live_at,
-        display_phase=_display_phase_for_state(
-            phase=display_phase_input,
-            active_tool=None,
-            confidence=confidence or "stale",
-            terminal_state=terminal_state,
-            status=status,
-        ),
+        display_phase=display_phase,
         active_tool=None,
         confidence=confidence,
         timeline_anchor_at=timeline_anchor_at,

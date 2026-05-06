@@ -48,7 +48,7 @@ def _facts(
         ("blocked", "Blocked Shell", "blocked"),
         ("stalled", "Stalled", "stalled"),
         ("idle", "Idle", "idle"),
-        ("needs_user", "Ready", "idle"),
+        ("needs_user", "Idle", "idle"),
         ("reviewing", "Reviewing", "inactive"),
     ],
 )

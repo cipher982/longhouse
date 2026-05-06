@@ -666,7 +666,7 @@ def test_sessions_list_suppresses_stale_phase_signal_from_timeline_status(tmp_pa
         assert row["timeline_card"]["status"]["seen_at_prefix"] == "Checked"
 
 
-def test_sessions_list_marks_materialized_needs_user_as_ready(tmp_path):
+def test_sessions_list_marks_materialized_needs_user_as_idle(tmp_path):
     factory = _make_db(tmp_path, "materialized_runtime_needs_user.db")
     now = datetime.now(timezone.utc)
 
@@ -713,19 +713,19 @@ def test_sessions_list_marks_materialized_needs_user_as_ready(tmp_path):
         assert row["id"] == str(session.id)
         assert row["status"] == "idle"
         assert row["presence_state"] == "needs_user"
-        assert row["display_phase"] == "Ready"
+        assert row["display_phase"] == "Idle"
         assert row["runtime_phase"] == "needs_user"
         assert row["runtime_source"] == "managed_local_transport"
         assert row["confidence"] == "live"
         assert row["runtime_display"]["truth_tier"] == "managed-local"
         assert row["runtime_display"]["signal_tier"] == "phase_signal"
-        assert row["runtime_display"]["headline"] == "Ready"
-        assert row["runtime_display"]["detail"] == "Ready for next prompt"
+        assert row["runtime_display"]["headline"] == "Idle"
+        assert row["runtime_display"]["detail"] == "Waiting for next prompt"
         assert row["runtime_display"]["tone"] == "idle"
         assert row["runtime_display"]["needs_attention"] is False
 
 
-def test_active_sessions_online_process_binding_keeps_needs_user_ready(tmp_path):
+def test_active_sessions_online_process_binding_keeps_needs_user_idle(tmp_path):
     factory = _make_db(tmp_path, "active_process_binding_attention.db")
     now = datetime.now(timezone.utc)
 
@@ -777,7 +777,7 @@ def test_active_sessions_online_process_binding_keeps_needs_user_ready(tmp_path)
         assert row["runtime_display"]["signal_tier"] == "process_binding"
         assert row["runtime_display"]["host_state"] == "online"
         assert row["runtime_display"]["state"] == "needs_user"
-        assert row["runtime_display"]["phase_label"] == "Ready"
+        assert row["runtime_display"]["phase_label"] == "Idle"
         assert row["runtime_display"]["needs_attention"] is False
         assert row["runtime_facts"]["process_state"] == "running"
 
@@ -785,7 +785,7 @@ def test_active_sessions_online_process_binding_keeps_needs_user_ready(tmp_path)
         assert list_resp.status_code == 200, list_resp.text
         list_row = next(item for item in list_resp.json()["sessions"] if item["id"] == str(session.id))
         assert list_row["runtime_facts"]["process_state"] == "running"
-        assert list_row["timeline_card"]["status"]["label"] == "Ready"
+        assert list_row["timeline_card"]["status"]["label"] == "Idle"
 
 
 def test_sessions_list_process_observed_without_phase_renders_running_process(tmp_path):

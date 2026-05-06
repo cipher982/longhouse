@@ -904,7 +904,7 @@ def test_presence_live_activity_pushes_session_state_and_debounces(tmp_path):
     engine.dispose()
 
 
-def test_presence_live_activity_renders_needs_user_as_ready(tmp_path):
+def test_presence_live_activity_renders_needs_user_as_idle(tmp_path):
     engine, SessionLocal = _make_db(tmp_path)
     session_id = str(uuid4())
 
@@ -964,11 +964,11 @@ def test_presence_live_activity_renders_needs_user_as_ready(tmp_path):
     live_send_mock.assert_awaited_once()
     push = live_send_mock.await_args.args[0]
     assert push.presence_state == "needs_user"
-    assert push.display_phase == "Ready"
+    assert push.display_phase == "Idle"
     assert push.is_attention is False
     payload = build_session_live_activity_payload(push)
     assert payload["aps"]["content-state"]["presenceState"] == "needs_user"
-    assert payload["aps"]["content-state"]["displayPhase"] == "Ready"
+    assert payload["aps"]["content-state"]["displayPhase"] == "Idle"
     assert payload["aps"]["content-state"]["isAttention"] is False
 
     _cleanup_overrides()
