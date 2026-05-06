@@ -21,6 +21,9 @@ from zerg.models.agents import SessionRuntimeEvent
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents_store import AgentsStore
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
+from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_INTERRUPT
+from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
+from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_STEER_TEXT
 from zerg.services.managed_control_dispatcher import MISSING_LEGACY_RUNNER_METADATA_ERROR
 from zerg.services.managed_control_dispatcher import dispatch_managed_control_command
 from zerg.services.managed_control_dispatcher import select_managed_control_transport
@@ -88,8 +91,13 @@ class ManagedLocalTerminalResult:
     occurred_at: datetime | None = None
 
 
-def _managed_control_transport_error(session: AgentSession) -> str | None:
-    if select_managed_control_transport(session) is None:
+def _managed_control_transport_error(
+    session: AgentSession,
+    *,
+    owner_id: int,
+    command_type: str,
+) -> str | None:
+    if select_managed_control_transport(session, owner_id=owner_id, command_type=command_type) is None:
         return MISSING_LEGACY_RUNNER_METADATA_ERROR
     return None
 
@@ -432,7 +440,11 @@ async def interrupt_managed_local_session(
 
     if str(getattr(session, "execution_home", "") or "").strip() != SessionExecutionHome.MANAGED_LOCAL.value:
         return ManagedLocalInterruptResult(ok=False, error="Session is not managed_local")
-    transport_error = _managed_control_transport_error(session)
+    transport_error = _managed_control_transport_error(
+        session,
+        owner_id=owner_id,
+        command_type=MANAGED_CONTROL_COMMAND_INTERRUPT,
+    )
     if transport_error is not None:
         return ManagedLocalInterruptResult(ok=False, error=transport_error)
 
@@ -447,6 +459,8 @@ async def interrupt_managed_local_session(
         session=session,
         command=command,
         timeout_secs=timeout_secs,
+        command_type=MANAGED_CONTROL_COMMAND_INTERRUPT,
+        payload={},
         commis_id=commis_id,
         run_id=None,
         failure_message="Failed to dispatch interrupt command",
@@ -492,7 +506,11 @@ async def send_text_to_managed_local_session(
 
     if str(getattr(session, "execution_home", "") or "").strip() != SessionExecutionHome.MANAGED_LOCAL.value:
         return ManagedLocalSendResult(ok=False, error="Session is not managed_local")
-    transport_error = _managed_control_transport_error(session)
+    transport_error = _managed_control_transport_error(
+        session,
+        owner_id=owner_id,
+        command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+    )
     if transport_error is not None:
         return ManagedLocalSendResult(ok=False, error=transport_error)
 
@@ -515,6 +533,8 @@ async def send_text_to_managed_local_session(
         session=session,
         command=command,
         timeout_secs=timeout_secs,
+        command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+        payload={"text": text},
         commis_id=commis_id,
         run_id=None,
         failure_message="Failed to send text to managed local session",
@@ -620,7 +640,11 @@ async def steer_text_to_managed_local_session(
 
     if str(getattr(session, "execution_home", "") or "").strip() != SessionExecutionHome.MANAGED_LOCAL.value:
         return ManagedLocalSendResult(ok=False, error="Session is not managed_local")
-    transport_error = _managed_control_transport_error(session)
+    transport_error = _managed_control_transport_error(
+        session,
+        owner_id=owner_id,
+        command_type=MANAGED_CONTROL_COMMAND_STEER_TEXT,
+    )
     if transport_error is not None:
         return ManagedLocalSendResult(ok=False, error=transport_error)
 
@@ -635,6 +659,8 @@ async def steer_text_to_managed_local_session(
         session=session,
         command=command,
         timeout_secs=timeout_secs,
+        command_type=MANAGED_CONTROL_COMMAND_STEER_TEXT,
+        payload={"text": text},
         commis_id=commis_id,
         run_id=None,
         failure_message="Failed to dispatch steer command",
