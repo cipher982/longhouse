@@ -1110,7 +1110,7 @@ def test_heartbeat_repeat_unmanaged_binding_does_not_republish(tmp_path):
     engine.dispose()
 
 
-def test_heartbeat_empty_unmanaged_snapshot_does_not_close_unbound_claude_session(tmp_path):
+def test_heartbeat_empty_unmanaged_snapshot_closes_stale_unbound_claude_session(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_claude_unbound_missing.db")
     now = datetime.now(timezone.utc)
 
@@ -1155,7 +1155,18 @@ def test_heartbeat_empty_unmanaged_snapshot_does_not_close_unbound_claude_sessio
 
     with SessionLocal() as db:
         state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session_id).one()
-        assert state.terminal_state is None
+        stored_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        view = build_runtime_view(state=state, session=stored_session, now=datetime.now(timezone.utc))
+        facts = build_session_liveness_facts(
+            runtime_view=view,
+            capabilities=build_session_capabilities(stored_session),
+            last_activity_at=stored_session.last_activity_at,
+        )
+
+        assert state.terminal_state == "process_gone"
+        assert facts.lifecycle.state == "closed"
+        assert facts.lifecycle.reason == "process_gone"
+        assert facts.process_state == "closed"
 
     engine.dispose()
 

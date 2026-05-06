@@ -65,7 +65,7 @@ CODEX_ROLLOUT_ID_RE = re.compile(r"^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-
 # One Codex phase freshness window. A complete process snapshot can close
 # unbound sessions only after their last phase/progress signal is no longer
 # current.
-MISSING_UNBOUND_UNMANAGED_PROVIDERS = {"codex"}
+MISSING_UNBOUND_UNMANAGED_PROVIDERS = {"claude", "codex", "gemini"}
 UNBOUND_UNMANAGED_CLOSE_GRACE = timedelta(seconds=90)
 
 
@@ -573,14 +573,15 @@ def _runtime_events_for_missing_unbound_unmanaged_sessions(
     device_id: str,
     received_at: datetime,
 ) -> list[RuntimeEventIngest]:
-    """Close stale local Codex sessions absent from a complete process snapshot.
+    """Close stale local sessions absent from a complete process snapshot.
 
     Most unmanaged lifecycle truth flows through ``unmanaged_session_bindings``:
     once a binding has ever been observed, omission from a later complete
-    snapshot marks that binding stale. Very short aborted Codex sessions can
-    produce transcript/phase events without ever being caught by the fd scan.
-    When the engine explicitly sends a complete snapshot and that stale session
-    is absent, close it instead of leaving it "unknown" forever.
+    snapshot marks that binding stale. Very short aborted sessions can produce
+    transcript/phase events without ever being caught by the fd scan. When the
+    engine explicitly sends a complete snapshot for providers whose local
+    process identity is covered by the engine, close absent stale sessions
+    instead of leaving them "unknown" forever.
     """
     observed_keys: set[tuple[str, str]] = set()
     for binding in bindings:
