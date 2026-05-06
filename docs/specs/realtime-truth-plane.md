@@ -312,6 +312,25 @@ Web, iOS, and menu bar have historically re-derived state from raw fields and
 overloaded colors/pills. The server must own the display meaning; clients should
 render it.
 
+The most important correction is phase honesty. A provider phase event is an
+observation, not a permanent current-state claim. Freshness windows may affect
+confidence and age, but they must not rewrite the phase into another status.
+For example, an expired `running` observation is "last observed running, now not
+verified"; it is not "idle", "ready", or "recent" unless a newer event says so.
+
+`needs_user` remains a raw provider/runtime phase because hooks, push delivery,
+and managed-control code may need that distinction. Generic session cards should
+not surface it as a separate product state from `idle`. Both mean the agent is
+not currently doing work and is waiting for the next user-driven turn. The only
+place "ready" is allowed is a control-specific affordance where the UI is making
+a literal action claim, such as an enabled message composer. It must not appear
+as the timeline card's runtime status.
+
+Raw/internal fields such as `presence_state`, `runtime_phase`, and
+`runtime_facts.phase.kind` may keep `needs_user`. Presentation fields such as
+`display_phase`, `runtime_display.phase_label`, and `timeline_card.status.label`
+must use the collapsed card vocabulary.
+
 Deliverables:
 
 - `runtime_display` and `timeline_card` expose the axes clients need:
@@ -336,6 +355,23 @@ Client heuristic inventory to remove or demote to compatibility fallback:
   `timeline_card`.
 - Menu bar Swift snapshot presentation: machine health or "host online" used as
   the primary session status instead of the per-session axes.
+- Generic web/iOS timeline copy: `needs_user` mapped to `Ready`, or stale phase
+  mapped to `Recent` as if it were current state.
+
+Truthful status precedence for cards:
+
+1. `lifecycle=closed` renders `Closed`.
+2. A live explicit phase renders its literal work state: `Thinking`, `Using
+   <tool>` / `Running`, `Blocked`, or neutral `Idle`.
+3. Live `idle` and live `needs_user` both render neutral `Idle`.
+4. A visible running process without a live phase renders process truth, for
+   example `Process running`; it does not invent a phase.
+5. A stale last-observed phase may be shown only as history or age copy, never
+   as the primary current status.
+6. Silence alone does not imply `Idle`; `Idle` requires a live explicit
+   `idle`/`needs_user` observation or a surface-specific input affordance.
+7. Missing or unverifiable process/phase truth renders `Unknown` / `Cannot
+   verify`, not `Closed` or `Ready`.
 
 Success criteria:
 
@@ -344,6 +380,9 @@ Success criteria:
 - "Closed" appears only from explicit terminal truth or process-gone truth.
 - "Managed" never implies steerable unless the control-path axis says attached.
 - "Host online" is not shown as a primary session status.
+- "Ready" is absent from generic timeline/session runtime status. It can appear
+  only on an input/control affordance that is literally enabled and steerable.
+- Phase freshness expiry changes confidence/verification, not the phase label.
 - Cross-client fixture tests or snapshots cover the matrix.
 - Cross-client fixtures come from one JSON semantic source, then each client
   renders its own native layout from that source.
@@ -384,12 +423,13 @@ The implementation must preserve or add coverage for:
 | Scenario | Expected label | Fast? |
 | --- | --- | --- |
 | Managed bridge attached and thinking | Working / Thinking | yes |
-| Managed bridge attached and idle/needs user | Ready | yes |
+| Managed bridge attached and idle/needs user | Idle | yes |
 | Managed bridge detached, provider may still exist | Control offline / detached | yes |
 | Managed bridge orphaned without session control | Orphan bridge attention | yes |
 | Unmanaged process observed | Process running / Active | yes |
 | Previously observed unmanaged process gone | Closed / Process ended | yes |
 | Host stale before process-gone proof | Cannot verify | slow/reconcile |
+| Expired running phase with observed process | Process running + last observed phase age | yes/reconcile |
 | Transcript-only recent activity | Recent activity | mixed |
 | Transcript-only stale activity | Inactive / Unknown | mixed |
 | Machine health degraded, sessions still visible | Machine degraded + per-session states | slow |
