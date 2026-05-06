@@ -31,11 +31,19 @@ describe("PresenceBadge styles", () => {
   });
 
   it("keeps compact needs-user badges steady instead of pulsing like execution", () => {
-    render(<PresenceBadge state="needs_user" compact />);
+    render(
+      <>
+        <PresenceBadge state="needs_user" compact />
+        <PresenceBadge state="idle" compact />
+      </>,
+    );
 
     const indicator = screen.getByTitle("Idle").firstElementChild as HTMLElement;
+    const idleIndicator = screen.getByTitle("idle").firstElementChild as HTMLElement;
     expect(indicator).toBeTruthy();
     expect(indicator.style.animation).toBe("");
+    expect(indicator.style.background).toBe(idleIndicator.style.background);
+    expect(indicator.style.opacity).toBe(idleIndicator.style.opacity);
   });
 
   it("keeps compact blocked badges steady instead of pulsing like execution", () => {

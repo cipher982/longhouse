@@ -154,8 +154,8 @@ function Dot({ state, size, compact = false, animateCompact = false }: DotProps)
       <span
         style={{
           ...base,
-          background: compact ? "#6b7280" : "radial-gradient(circle, #9ca3af 30%, #6b7280 100%)",
-          opacity: compact ? 0.72 : 1,
+          background: "#4b5563",
+          opacity: 0.5,
         }}
       />
     );

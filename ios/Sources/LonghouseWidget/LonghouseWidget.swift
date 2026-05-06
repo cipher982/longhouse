@@ -219,7 +219,7 @@ private func shortState(_ state: String) -> String {
     case "idle":
         return "Idle"
     default:
-        return "Live"
+        return "?"
     }
 }
 
