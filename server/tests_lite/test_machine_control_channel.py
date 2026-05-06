@@ -129,6 +129,65 @@ def test_machine_control_registry_rejects_result_from_wrong_connection():
     asyncio.run(_run())
 
 
+def test_machine_control_registry_reuses_inflight_command_id():
+    async def _run():
+        registry = MachineControlChannelRegistry()
+        websocket = _FakeWebSocket()
+        await registry.register(
+            owner_id=7,
+            device_id="cinder",
+            machine_name="cinder",
+            engine_build="abc123",
+            supports=["codex.send"],
+            websocket=websocket,
+        )
+
+        task_one = asyncio.create_task(
+            registry.send_command(
+                owner_id=7,
+                device_id="cinder",
+                session_id="session-1",
+                command_type="session.send_text",
+                payload={"text": "continue"},
+                timeout_secs=1,
+                command_id="cmd-shared",
+            )
+        )
+        task_two = asyncio.create_task(
+            registry.send_command(
+                owner_id=7,
+                device_id="cinder",
+                session_id="session-1",
+                command_type="session.send_text",
+                payload={"text": "continue"},
+                timeout_secs=1,
+                command_id="cmd-shared",
+            )
+        )
+        await _wait_for_sent(websocket)
+        await asyncio.sleep(0)
+        assert len(websocket.sent) == 1
+
+        completed = await registry.complete_command(
+            {
+                "type": "command_result",
+                "command_id": "cmd-shared",
+                "ok": True,
+                "result": {"exit_code": 0},
+            },
+            owner_id=7,
+            device_id="cinder",
+        )
+        response_one, response_two = await asyncio.gather(task_one, task_two)
+
+        assert completed is True
+        assert response_one.transport_ok is True
+        assert response_two.transport_ok is True
+        assert response_one.message == response_two.message
+
+    asyncio.run(_run())
+
+
 def test_machine_control_registry_reports_offline_device():
     async def _run():
         registry = MachineControlChannelRegistry()

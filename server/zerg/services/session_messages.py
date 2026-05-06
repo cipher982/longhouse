@@ -79,7 +79,7 @@ async def deliver_next_queued_session_message(
     target_presence_state: str | None = None,
 ) -> SessionMessageDispatchOutcome | None:
     target_session = db.query(AgentSession).filter(AgentSession.id == target_session_id).first()
-    if target_session is None or not current_session_capabilities(db, target_session).live_control_available:
+    if target_session is None or not current_session_capabilities(db, target_session, owner_id=owner_id).live_control_available:
         return None
 
     current_state = target_presence_state or current_presence_state_for_session(
@@ -226,7 +226,9 @@ async def create_session_message(
         raise ValueError("Cannot send a session message to the same session")
 
     initial_status = (
-        MESSAGE_STATUS_QUEUED if current_session_capabilities(db, to_session).live_control_available else MESSAGE_STATUS_STORED_ONLY
+        MESSAGE_STATUS_QUEUED
+        if current_session_capabilities(db, to_session, owner_id=owner_id).live_control_available
+        else MESSAGE_STATUS_STORED_ONLY
     )
     message = SessionMessage(
         from_session_id=from_session_id,

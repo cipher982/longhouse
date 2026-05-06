@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import datetime
 from datetime import timedelta
@@ -24,6 +25,7 @@ from zerg.models.agents import SessionMessage
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.models import Runner
 from zerg.models.user import User
+from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
@@ -111,7 +113,7 @@ def _seed_session(
     return session
 
 
-def _upsert_runtime_state(db, session: AgentSession, phase: str):
+def _upsert_runtime_state(db, session: AgentSession, phase: str, *, phase_source: str = "semantic"):
     now = datetime.now(timezone.utc)
     runtime_key = runtime_key_for_session(str(session.provider or "claude"), str(session.id))
     state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).first()
@@ -124,7 +126,7 @@ def _upsert_runtime_state(db, session: AgentSession, phase: str):
             provider=str(session.provider or "claude"),
             device_id=session.device_id,
             phase=phase,
-            phase_source="semantic",
+            phase_source=phase_source,
             active_tool=None,
             phase_started_at=now,
             last_runtime_signal_at=now,
@@ -139,7 +141,7 @@ def _upsert_runtime_state(db, session: AgentSession, phase: str):
         db.add(state)
     else:
         state.phase = phase
-        state.phase_source = "semantic"
+        state.phase_source = phase_source
         state.active_tool = None
         state.phase_started_at = now
         state.last_runtime_signal_at = now
@@ -322,6 +324,79 @@ def test_create_message_uses_runtime_state_when_presence_missing(monkeypatch, tm
         assert send_calls[0]["session_id"] == str(to_session.id)
     finally:
         api_app_ref.dependency_overrides = {}
+
+
+def test_create_message_delivers_to_engine_controlled_codex_without_runner(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    send_calls: list[dict[str, object]] = []
+    registry = get_machine_control_channel_registry()
+    asyncio.run(registry.clear_for_tests())
+
+    with session_local() as db:
+        from_session = _seed_session(db, execution_home="unmanaged_local")
+        to_session = _seed_session(
+            db,
+            provider="codex",
+            execution_home="managed_local",
+            managed_transport="codex_app_server",
+            source_runner_id=None,
+            source_runner_name="cinder",
+            device_id="cinder",
+            device_name="cinder",
+        )
+        _upsert_runtime_state(db, to_session, "needs_user", phase_source="codex_bridge")
+
+    asyncio.run(
+        registry.register(
+            owner_id=1,
+            device_id="cinder",
+            machine_name="cinder",
+            engine_build="abc123",
+            supports=["codex.send"],
+            websocket=SimpleNamespace(),
+        )
+    )
+
+    async def fake_send_text(
+        *,
+        db,
+        owner_id,
+        session,
+        text,
+        commis_id=None,
+        timeout_secs=15,
+        verify_turn_started=False,
+        verification_timeout_secs=None,
+    ):
+        send_calls.append(
+            {
+                "owner_id": owner_id,
+                "session_id": str(session.id),
+                "text": text,
+            }
+        )
+        return SimpleNamespace(ok=True, error=None)
+
+    monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
+
+    client, api_app_ref = _make_client(session_local)
+    try:
+        response = client.post(
+            "/api/agents/messages",
+            json={
+                "from_session_id": str(from_session.id),
+                "to_session_id": str(to_session.id),
+                "text": "Engine-channel Codex should receive this.",
+            },
+        )
+        assert response.status_code == 201, response.text
+        assert response.json()["delivery_status"] == "delivered"
+        assert len(send_calls) == 1
+        assert send_calls[0]["owner_id"] == 1
+        assert send_calls[0]["session_id"] == str(to_session.id)
+    finally:
+        api_app_ref.dependency_overrides = {}
+        asyncio.run(registry.clear_for_tests())
 
 
 def test_presence_safe_transition_delivers_oldest_queued_message(monkeypatch, tmp_path):

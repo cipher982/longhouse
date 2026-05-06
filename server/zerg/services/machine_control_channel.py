@@ -145,6 +145,7 @@ class MachineControlChannelRegistry:
         command_id = command_id or str(uuid.uuid4())
         loop = asyncio.get_running_loop()
         future: asyncio.Future[Mapping[str, Any]] = loop.create_future()
+        should_send = True
         async with self._lock:
             connection = self._connections.get(key)
             if connection is None:
@@ -152,7 +153,17 @@ class MachineControlChannelRegistry:
                     transport_ok=False,
                     error="Machine Agent control channel is offline",
                 )
-            self._pending[command_id] = _PendingCommand(key=key, future=future)
+            pending = self._pending.get(command_id)
+            if pending is not None:
+                if pending.key != key:
+                    return MachineControlCommandResponse(
+                        transport_ok=False,
+                        error="Machine Agent control command id is already in flight for another connection",
+                    )
+                future = pending.future
+                should_send = False
+            else:
+                self._pending[command_id] = _PendingCommand(key=key, future=future)
             websocket = connection.websocket
             send_lock = connection.send_lock
 
@@ -163,29 +174,36 @@ class MachineControlChannelRegistry:
             "command_type": command_type,
             "payload": dict(payload or {}),
         }
-        try:
-            async with send_lock:
-                await websocket.send_json(frame)
-        except Exception as exc:
-            async with self._lock:
-                self._pending.pop(command_id, None)
-            logger.warning(
-                "Failed to send machine control command %s to owner=%s device=%s: %s",
-                command_id,
-                owner_id,
-                device_id,
-                exc,
-            )
-            return MachineControlCommandResponse(
-                transport_ok=False,
-                error="Failed to send command to Machine Agent control channel",
-            )
+        if should_send:
+            try:
+                async with send_lock:
+                    await websocket.send_json(frame)
+            except Exception as exc:
+                async with self._lock:
+                    pending = self._pending.pop(command_id, None)
+                if pending is not None and not pending.future.done():
+                    pending.future.set_exception(RuntimeError("Failed to send command to Machine Agent control channel"))
+                    pending.future.exception()
+                logger.warning(
+                    "Failed to send machine control command %s to owner=%s device=%s: %s",
+                    command_id,
+                    owner_id,
+                    device_id,
+                    exc,
+                )
+                return MachineControlCommandResponse(
+                    transport_ok=False,
+                    error="Failed to send command to Machine Agent control channel",
+                )
 
         try:
-            message = await asyncio.wait_for(future, timeout=max(1, int(timeout_secs)))
+            message = await asyncio.wait_for(asyncio.shield(future), timeout=max(1, int(timeout_secs)))
         except asyncio.TimeoutError:
             async with self._lock:
-                self._pending.pop(command_id, None)
+                pending = self._pending.pop(command_id, None)
+            if pending is not None and not pending.future.done():
+                pending.future.set_exception(RuntimeError(f"Machine Agent control command timed out after {timeout_secs} seconds"))
+                pending.future.exception()
             return MachineControlCommandResponse(
                 transport_ok=False,
                 error=f"Machine Agent control command timed out after {timeout_secs} seconds",
