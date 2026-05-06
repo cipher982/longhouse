@@ -228,7 +228,7 @@ def test_sessions_list_marks_old_open_session_idle_without_live_signal(tmp_path)
         data = resp.json()["sessions"][0]
         assert data["id"] == str(session.id)
         assert data["status"] == "idle"
-        assert data["display_phase"] == "Recent"
+        assert data["display_phase"] == "Inactive"
         assert data["presence_state"] is None
         assert data["confidence"] is None
 
@@ -858,12 +858,12 @@ def test_active_sessions_recent_progress_fallback_is_non_executing(tmp_path):
         row = next(item for item in rows if item["id"] == str(session.id))
         assert row["status"] == "idle"
         assert row["presence_state"] is None
-        assert row["display_phase"] == "Recent"
+        assert row["display_phase"] == "Inactive"
         assert row["runtime_phase"] is None
         assert row["confidence"] is None
         assert row["runtime_display"]["truth_tier"] == "stale"
         assert row["runtime_display"]["headline"] == "Inactive"
-        assert row["runtime_display"]["phase_label"] == "Recent"
+        assert row["runtime_display"]["phase_label"] == "Inactive"
         assert row["runtime_facts"]["activity"]["last_transcript_at"] is not None
 
 

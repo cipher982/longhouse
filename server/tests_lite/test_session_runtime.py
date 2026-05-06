@@ -2369,7 +2369,7 @@ def test_progress_signal_after_stale_phase_signal_does_not_revive_phase_truth(tm
         assert view.presence_state is None
         assert view.signal_tier == "phase_signal"
         assert view.status == "idle"
-        assert view.display_phase == ""
+        assert view.display_phase == "Inactive"
         assert view.confidence == "stale"
 
     engine.dispose()
@@ -2424,7 +2424,7 @@ def test_needs_user_freshness_is_not_extended_by_progress(tmp_path):
         assert view.presence_state is None
         assert view.signal_tier == "phase_signal"
         assert view.status == "idle"
-        assert view.display_phase == ""
+        assert view.display_phase == "Inactive"
         assert view.confidence == "stale"
 
     engine.dispose()
@@ -2465,7 +2465,7 @@ def test_runtime_view_hides_stale_attention_phase(tmp_path):
         assert view.runtime_phase is None
         assert view.status == "idle"
         assert view.presence_state is None
-        assert view.display_phase == ""
+        assert view.display_phase == "Inactive"
         assert view.confidence == "stale"
 
     engine.dispose()
