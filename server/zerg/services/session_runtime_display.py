@@ -260,9 +260,7 @@ def build_session_runtime_display(
     )
     is_executing = presence_state in LIVE_EXECUTION_STATES
     needs_attention = presence_state in ATTENTION_STATES
-    is_idle = presence_state in {"idle", "needs_user"} or (
-        not is_executing and not needs_attention and not process_observed and status == "idle"
-    )
+    is_idle = presence_state in {"idle", "needs_user"}
     if unmanaged_attention_unverified:
         is_idle = True
     display_phase = runtime_view.display_phase

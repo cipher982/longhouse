@@ -305,7 +305,6 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         default: return "inactive"
         }
     }
-    var attentionLabel: String { isBlocked ? "Needs permission" : "Ready" }
     var timelineAnchor: String? { timelineAnchorAt ?? lastActivityAt }
     var timelineBranchBadgeLabel: String? {
         guard let branch = gitBranch?.trimmingCharacters(in: .whitespacesAndNewlines), !branch.isEmpty else {

@@ -377,7 +377,7 @@ def test_stale_progress_source_is_inactive():
     assert display.signal_tier == "transcript_progress"
     assert display.headline == "Inactive"
     assert display.phase_label == "Inactive"
-    assert display.is_idle is True
+    assert display.is_idle is False
     assert display.activity_recency == "stale"
 
 
