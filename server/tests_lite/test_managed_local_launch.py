@@ -170,7 +170,7 @@ def test_this_device_launch_rejects_claude_without_native_channels(monkeypatch, 
     SessionLocal = _make_db(tmp_path)
 
     with SessionLocal() as db:
-        user, _runner = _seed_user_and_runner(db)
+        user, runner = _seed_user_and_runner(db)
         device_token = SimpleNamespace(owner_id=user.id, device_id="cinder")
         client, api_app = _make_device_client(db, device_token)
         monkeypatch.setattr(
@@ -285,7 +285,7 @@ def test_this_device_launch_creates_native_codex_session(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path)
 
     with SessionLocal() as db:
-        user, runner = _seed_user_and_runner(db)
+        user, _runner = _seed_user_and_runner(db)
         device_token = SimpleNamespace(owner_id=user.id, device_id="cinder")
         client, api_app = _make_device_client(db, device_token)
         monkeypatch.setattr(
@@ -314,8 +314,8 @@ def test_this_device_launch_creates_native_codex_session(monkeypatch, tmp_path):
 
     assert response.status_code == 200, response.text
     assert payload["managed_transport"] == "codex_app_server"
-    assert payload["source_runner_id"] == runner.id
+    assert payload["source_runner_id"] is None
     assert '"$engine" codex-bridge attach --session-id' in payload["attach_command"]
     assert session.managed_transport == "codex_app_server"
-    assert session.source_runner_id == runner.id
+    assert session.source_runner_id is None
     assert runtime_state.phase == "idle"
