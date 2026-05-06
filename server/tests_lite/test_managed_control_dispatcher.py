@@ -201,7 +201,7 @@ def test_dispatch_managed_control_command_uses_engine_channel_when_connected():
                     websocket,
                     {
                         "ok": True,
-                        "result": {"stdout": "accepted"},
+                        "result": {"exit_code": 0, "stdout": "accepted"},
                     },
                 )
             )
@@ -221,6 +221,44 @@ def test_dispatch_managed_control_command_uses_engine_channel_when_connected():
             assert result.data == {"stdout": "accepted", "exit_code": 0, "stderr": ""}
             assert websocket.sent[0]["command_type"] == MANAGED_CONTROL_COMMAND_SEND_TEXT
             assert websocket.sent[0]["payload"] == {"text": "continue"}
+        finally:
+            await _clear_machine_registry()
+
+    asyncio.run(_run())
+
+
+def test_dispatch_managed_control_command_rejects_malformed_engine_success():
+    async def _run():
+        await _clear_machine_registry()
+        try:
+            websocket = await _connect_fake_engine(owner_id=42, supports=["codex.send"])
+            completer = asyncio.create_task(
+                _complete_first_machine_command(
+                    websocket,
+                    {
+                        "ok": True,
+                        "result": {"stdout": "accepted"},
+                    },
+                )
+            )
+            result = await dispatch_managed_control_command(
+                db=object(),
+                owner_id=42,
+                session=_session(source_runner_id=None),
+                command="legacy command is unused for engine transport",
+                timeout_secs=1,
+                command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+                payload={"text": "continue"},
+            )
+            await completer
+
+            assert result.ok is True
+            assert result.transport == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
+            assert result.data == {
+                "exit_code": 1,
+                "stdout": "",
+                "stderr": "Machine Agent control command returned malformed result",
+            }
         finally:
             await _clear_machine_registry()
 

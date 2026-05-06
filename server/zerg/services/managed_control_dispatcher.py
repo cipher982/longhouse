@@ -178,10 +178,13 @@ def _engine_error_message(error: Any, fallback: str) -> tuple[str | None, str]:
     return None, fallback
 
 
-def _engine_command_result_data(message: Mapping[str, Any]) -> Mapping[str, Any]:
+def _engine_command_result_data(message: Mapping[str, Any]) -> Mapping[str, Any] | None:
     result = message.get("result", {})
-    data = dict(result) if isinstance(result, Mapping) else {}
-    data.setdefault("exit_code", 0)
+    if not isinstance(result, Mapping):
+        return None
+    data = dict(result)
+    if "exit_code" not in data:
+        return None
     data.setdefault("stdout", "")
     data.setdefault("stderr", "")
     return data
@@ -226,10 +229,21 @@ async def _dispatch_engine_channel(
 
     message = response.message or {}
     if message.get("ok") is True:
+        data = _engine_command_result_data(message)
+        if data is None:
+            return ManagedControlDispatchResult(
+                ok=True,
+                transport=MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL,
+                data={
+                    "exit_code": 1,
+                    "stdout": "",
+                    "stderr": "Machine Agent control command returned malformed result",
+                },
+            )
         return ManagedControlDispatchResult(
             ok=True,
             transport=MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL,
-            data=_engine_command_result_data(message),
+            data=data,
         )
 
     code, error = _engine_error_message(message.get("error"), "Machine Agent control command failed")
