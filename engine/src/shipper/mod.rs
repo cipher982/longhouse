@@ -24,6 +24,12 @@ use crate::shipping_stats::{RecentShipStatsTracker, ShipAttemptOutcome};
 use crate::state::file_state::FileState;
 use crate::state::spool::Spool;
 
+const TARGET_BATCH_BYTES: u64 = 512 * 1024;
+
+fn target_batch_bytes(max_batch_bytes: u64) -> u64 {
+    max_batch_bytes.min(TARGET_BATCH_BYTES).max(1)
+}
+
 /// Parse and compress a single file from its current offset.
 ///
 /// Returns `None` if the file has no new content, can't be read, or has no events.
@@ -659,11 +665,12 @@ fn build_prepared_actions(
 
     let mut actions = Vec::new();
     let mut pending_rewind_hint = rewind_hint;
-    for planned in batcher::plan_range_actions(
+    for planned in batcher::plan_range_actions_with_limits(
         &parse_result.source_lines,
         &parse_result.events,
         start_offset,
         end_offset,
+        target_batch_bytes(max_batch_bytes),
         max_batch_bytes,
     )? {
         match planned {
