@@ -767,7 +767,7 @@
   }
 
   .session-card-runtime--idle {
-    --runtime-accent: #a3e635;
+    --runtime-accent: var(--color-text-secondary);
   }
 
   .session-card-runtime--active {
