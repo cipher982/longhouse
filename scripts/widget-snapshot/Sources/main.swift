@@ -25,8 +25,8 @@ struct SessionSummary: Identifiable {
         case "idle": return "Idle"
         default:
             if status == "completed" { return "Completed" }
-            if status == "working" || status == "active" { return "Recent progress" }
-            return "Recent"
+            if status == "working" || status == "active" { return "Progress" }
+            return "Inactive"
         }
     }
 }

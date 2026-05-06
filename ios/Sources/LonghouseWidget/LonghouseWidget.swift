@@ -209,7 +209,7 @@ private func shortState(_ state: String) -> String {
     case "needs_user":
         return "Idle"
     case "unknown":
-        return "Recent"
+        return "Inactive"
     case "blocked":
         return "Hold"
     case "running":
