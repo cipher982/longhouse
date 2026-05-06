@@ -654,7 +654,7 @@ def status(
         runner = launch.get("runner") or {}
         if runner.get("exists"):
             runner_name = runner.get("runner_name") or "(unnamed)"
-            typer.echo(f"  Runner:         {runner_name} ({runner.get('path')})")
+            typer.echo(f"  Remote Runner:  {runner_name} ({runner.get('path')})")
 
         # Reasons and actions
         reasons = health.get("reasons") or []

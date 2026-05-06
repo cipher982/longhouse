@@ -48,6 +48,7 @@ class ManagedLocalLaunchParams:
     machine_name: str | None = None
     native_claude_channels_available: bool | None = None
     claude_launch_env: dict[str, str] | None = None
+    require_runner_ready: bool = False
 
 
 @dataclass(frozen=True)
@@ -56,7 +57,7 @@ class ManagedLocalLaunchResult:
     attach_command: str
 
 
-def _resolve_runner(db: Session, owner_id: int, target: str):
+def _resolve_runner(db: Session, owner_id: int, target: str, *, required: bool = True):
     if not target:
         raise ManagedLocalLaunchError("runner_target is required", status_code=400)
 
@@ -70,29 +71,50 @@ def _resolve_runner(db: Session, owner_id: int, target: str):
             ) from exc
         runner = runner_crud.get_runner(db, runner_id)
         if runner is None or runner.owner_id != owner_id:
+            if not required:
+                return None
             raise ManagedLocalLaunchError(f"Runner '{target}' not found", status_code=404)
         return runner
 
     runner = runner_crud.get_runner_by_name(db, owner_id, target)
     if runner is None:
+        if not required:
+            return None
         raise ManagedLocalLaunchError(f"Runner '{target}' not found", status_code=404)
     return runner
 
 
 def _require_runner_ready(runner, *, owner_id: int) -> None:
     if runner.status == "revoked":
-        raise ManagedLocalLaunchError(f"Runner '{runner.name}' has been revoked", status_code=409)
+        raise ManagedLocalLaunchError(
+            f"Remote command Runner '{runner.name}' has been revoked. This is separate from the Machine Agent " "that ships transcripts.",
+            status_code=409,
+        )
 
     connection_manager = get_runner_connection_manager()
     if not connection_manager.is_online(owner_id, runner.id):
-        raise ManagedLocalLaunchError(f"Runner '{runner.name}' is offline", status_code=409)
+        raise ManagedLocalLaunchError(
+            f"Remote command Runner '{runner.name}' is offline. This blocks browser-launched remote execution, "
+            "not local transcript shipping. Start the Runner or launch from the target machine.",
+            status_code=409,
+        )
 
     capabilities = runner.capabilities or []
     if "exec.full" not in capabilities:
         raise ManagedLocalLaunchError(
-            f"Runner '{runner.name}' must have exec.full capability for managed local launch",
+            f"Remote command Runner '{runner.name}' must have exec.full capability for browser-launched managed sessions",
             status_code=400,
         )
+
+
+def _runner_remote_control_id(runner) -> int | None:
+    if runner is None:
+        return None
+    if runner.status == "revoked":
+        return None
+    if "exec.full" not in (runner.capabilities or []):
+        return None
+    return int(runner.id)
 
 
 def _derive_project(cwd: str, project: str | None) -> str:
@@ -130,8 +152,11 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
     if not cwd:
         raise ManagedLocalLaunchError("cwd is required", status_code=400)
 
-    runner = _resolve_runner(db, params.owner_id, params.runner_target)
-    _require_runner_ready(runner, owner_id=params.owner_id)
+    runner = _resolve_runner(db, params.owner_id, params.runner_target, required=params.require_runner_ready)
+    if params.require_runner_ready:
+        _require_runner_ready(runner, owner_id=params.owner_id)
+    source_name = str(getattr(runner, "name", "") or params.runner_target).strip()
+    source_runner_id = _runner_remote_control_id(runner)
 
     session_uuid = uuid4()
     provider_session_id = str(session_uuid)
@@ -144,7 +169,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         provider=provider,
         environment="development",
         project=project,
-        device_id=runner.name,
+        device_id=source_name,
         cwd=cwd,
         git_repo=params.git_repo,
         git_branch=params.git_branch,
@@ -154,7 +179,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         thread_root_session_id=session_uuid,
         continued_from_session_id=None,
         continuation_kind="local",
-        origin_label=runner.name,
+        origin_label=source_name,
         user_messages=0,
         assistant_messages=0,
         tool_calls=0,
@@ -163,8 +188,8 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         loop_mode=coerce_session_loop_mode(params.loop_mode).value,
         execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
         managed_transport=transport.value,
-        source_runner_id=runner.id,
-        source_runner_name=runner.name,
+        source_runner_id=source_runner_id,
+        source_runner_name=source_name,
         managed_session_name=_build_managed_session_name(display_name, fallback=f"{provider}-{session_uuid.hex[:8]}"),
     )
     db.add(session)

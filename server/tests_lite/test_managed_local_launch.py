@@ -87,13 +87,13 @@ def test_browser_managed_local_launch_route_is_absent():
     assert response.status_code == 404
 
 
-def test_this_device_launch_requires_healthy_runner(monkeypatch, tmp_path):
+def test_this_device_launch_allows_offline_runner_for_local_provider_start(monkeypatch, tmp_path):
     from zerg.services import managed_local_launcher
 
     SessionLocal = _make_db(tmp_path)
 
     with SessionLocal() as db:
-        user, _runner = _seed_user_and_runner(db)
+        user, runner = _seed_user_and_runner(db)
         device_token = SimpleNamespace(owner_id=user.id, device_id="cinder")
         client, api_app = _make_device_client(db, device_token)
         monkeypatch.setattr(
@@ -108,14 +108,60 @@ def test_this_device_launch_requires_healthy_runner(monkeypatch, tmp_path):
                 json={
                     "cwd": "/tmp/demo",
                     "provider": "claude",
+                    "project": "demo",
                     "native_claude_channels_available": True,
                 },
             )
         finally:
             api_app.dependency_overrides = {}
 
-    assert response.status_code == 409
-    assert response.json()["detail"] == "Runner 'cinder' is offline"
+        payload = response.json()
+        session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
+
+    assert response.status_code == 200, response.text
+    assert payload["source_runner_id"] == runner.id
+    assert payload["source_runner_name"] == "cinder"
+    assert session.device_id == "cinder"
+
+
+def test_this_device_launch_does_not_require_runner_record(monkeypatch, tmp_path):
+    from zerg.services import managed_local_launcher
+
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        user = User(email="managed-local@test.local", role=UserRole.USER.value)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        device_token = SimpleNamespace(owner_id=user.id, device_id="cinder")
+        client, api_app = _make_device_client(db, device_token)
+        monkeypatch.setattr(
+            managed_local_launcher,
+            "get_runner_connection_manager",
+            lambda: SimpleNamespace(is_online=lambda *_args: False),
+        )
+
+        try:
+            response = client.post(
+                "/api/sessions/managed-local/this-device",
+                json={
+                    "cwd": "/tmp/demo",
+                    "provider": "codex",
+                    "project": "demo",
+                },
+            )
+        finally:
+            api_app.dependency_overrides = {}
+
+        payload = response.json()
+        session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
+
+    assert response.status_code == 200, response.text
+    assert payload["source_runner_id"] is None
+    assert payload["source_runner_name"] == "cinder"
+    assert session.device_id == "cinder"
+    assert session.source_runner_id is None
 
 
 def test_this_device_launch_rejects_claude_without_native_channels(monkeypatch, tmp_path):
@@ -180,7 +226,9 @@ def test_this_device_launch_creates_native_claude_session(monkeypatch, tmp_path)
 
         payload = response.json()
         session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
-        runtime_state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == payload["session_id"]).one()
+        runtime_state = (
+            db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == payload["session_id"]).one()
+        )
 
     assert response.status_code == 200, response.text
     assert payload["managed_transport"] == "claude_channel_bridge"
@@ -260,7 +308,9 @@ def test_this_device_launch_creates_native_codex_session(monkeypatch, tmp_path):
 
         payload = response.json()
         session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
-        runtime_state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == payload["session_id"]).one()
+        runtime_state = (
+            db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == payload["session_id"]).one()
+        )
 
     assert response.status_code == 200, response.text
     assert payload["managed_transport"] == "codex_app_server"

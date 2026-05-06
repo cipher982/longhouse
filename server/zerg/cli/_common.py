@@ -78,14 +78,15 @@ def ensure_managed_launch_preflight(
     runner_name = str(runner.get("runner_name") or "").strip() or "-"
     stored_url = str(readiness.get("stored_url") or "").strip() or "-"
 
-    typer.secho("Managed launch is misconfigured on this machine.", fg=typer.colors.RED)
+    typer.secho("Managed launch config is inconsistent on this machine.", fg=typer.colors.RED)
     typer.echo(f"  launch target: {readiness.get('control_plane_url') or url}")
     if stored_url != str(readiness.get("control_plane_url") or url):
         typer.echo(f"  stored target: {stored_url}")
-    typer.echo(f"  runner target: {runner_urls}")
+    typer.echo(f"  remote command Runner target: {runner_urls}")
     typer.echo(f"  launch machine: {readiness.get('machine_name') or machine_name}")
-    typer.echo(f"  runner name: {runner_name}")
+    typer.echo(f"  remote command Runner name: {runner_name}")
     typer.echo("  Fix: longhouse machine configure --url <control-plane-url> --machine-name <runner-name>")
+    typer.echo("  Note: this Runner is separate from the Machine Agent that ships transcripts.")
     typer.echo("  Scratch local work: LONGHOUSE_HOME=~/.longhouse-dev ...")
     raise typer.Exit(code=exit_code)
 
