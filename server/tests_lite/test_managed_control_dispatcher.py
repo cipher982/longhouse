@@ -13,6 +13,7 @@ os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
+from zerg.services.live_session_dispatch import supports_live_text_dispatch_metadata
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_LEGACY_RUNNER
@@ -222,5 +223,19 @@ def test_dispatch_managed_control_command_uses_engine_channel_when_connected():
             assert websocket.sent[0]["payload"] == {"text": "continue"}
         finally:
             await _clear_machine_registry()
+
+    asyncio.run(_run())
+
+
+def test_live_text_dispatch_metadata_accepts_engine_channel_without_runner_metadata():
+    async def _run():
+        await _connect_fake_engine(owner_id=42, supports=["codex.send"])
+        assert (
+            supports_live_text_dispatch_metadata(
+                _session(source_runner_id=None),
+                owner_id=42,
+            )
+            is True
+        )
 
     asyncio.run(_run())

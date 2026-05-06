@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSessionBranch
+from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
+from zerg.services.managed_control_dispatcher import select_managed_control_transport
 from zerg.services.managed_local_control import ManagedLocalSendResult
 from zerg.services.managed_local_control import send_text_to_managed_local_session
 from zerg.services.session_capabilities import resolve_execution_home
@@ -22,9 +24,16 @@ def live_text_dispatch_label(session: AgentSession | None) -> str | None:
     return resolve_execution_home(session).value
 
 
-def supports_live_text_dispatch_metadata(session: AgentSession | None) -> bool:
+def supports_live_text_dispatch_metadata(session: AgentSession | None, *, owner_id: int | None = None) -> bool:
     """Structural precondition only; callers must check current liveness first."""
-    return supports_live_control(session)
+    return supports_live_control(session) or (
+        select_managed_control_transport(
+            session,
+            owner_id=owner_id,
+            command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+        )
+        is not None
+    )
 
 
 def _truthy_env(name: str) -> bool:
@@ -103,7 +112,7 @@ async def send_text_to_live_session(
     implemented.
     """
 
-    if supports_live_text_dispatch_metadata(session):
+    if supports_live_text_dispatch_metadata(session, owner_id=owner_id):
         if _use_fake_live_text_dispatch():
             return await _fake_send_text_to_live_session(
                 db=db,
