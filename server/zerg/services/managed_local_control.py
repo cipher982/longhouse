@@ -21,11 +21,13 @@ from zerg.models.agents import SessionRuntimeEvent
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents_store import AgentsStore
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
+from zerg.services.managed_control_dispatcher import MISSING_LEGACY_RUNNER_METADATA_ERROR
+from zerg.services.managed_control_dispatcher import dispatch_managed_control_command
+from zerg.services.managed_control_dispatcher import select_managed_control_transport
 from zerg.services.managed_local_transport import ManagedLocalTransportError
 from zerg.services.managed_local_transport import build_managed_local_interrupt_command
 from zerg.services.managed_local_transport import build_managed_local_send_text_command
 from zerg.services.managed_local_transport import build_managed_local_steer_text_command
-from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.utils.time import normalize_utc
@@ -84,6 +86,12 @@ class ManagedLocalTerminalResult:
     control_status: str
     runtime_event_id: int
     occurred_at: datetime | None = None
+
+
+def _managed_control_transport_error(session: AgentSession) -> str | None:
+    if select_managed_control_transport(session) is None:
+        return MISSING_LEGACY_RUNNER_METADATA_ERROR
+    return None
 
 
 def get_managed_local_control_status_for_phase(phase: str | None) -> str:
@@ -424,32 +432,32 @@ async def interrupt_managed_local_session(
 
     if str(getattr(session, "execution_home", "") or "").strip() != SessionExecutionHome.MANAGED_LOCAL.value:
         return ManagedLocalInterruptResult(ok=False, error="Session is not managed_local")
-    runner_id = getattr(session, "source_runner_id", None)
-    if runner_id is None:
-        return ManagedLocalInterruptResult(ok=False, error="Managed local session is missing source runner metadata")
+    transport_error = _managed_control_transport_error(session)
+    if transport_error is not None:
+        return ManagedLocalInterruptResult(ok=False, error=transport_error)
 
     try:
         command = build_managed_local_interrupt_command(session=session)
     except ManagedLocalTransportError as exc:
         return ManagedLocalInterruptResult(ok=False, error=str(exc))
 
-    dispatcher = get_runner_job_dispatcher()
-    result = await dispatcher.dispatch_job(
+    result = await dispatch_managed_control_command(
         db=db,
         owner_id=owner_id,
-        runner_id=int(runner_id),
+        session=session,
         command=command,
         timeout_secs=timeout_secs,
         commis_id=commis_id,
         run_id=None,
+        failure_message="Failed to dispatch interrupt command",
     )
-    if not result.get("ok"):
+    if not result.ok:
         return ManagedLocalInterruptResult(
             ok=False,
-            error=str(result.get("error", {}).get("message", "Failed to dispatch interrupt command")),
+            error=result.error or "Failed to dispatch interrupt command",
         )
 
-    data = result.get("data", {})
+    data = result.data or {}
     exit_code = int(data.get("exit_code", 1))
     stdout = data.get("stdout") or ""
     stderr = data.get("stderr") or ""
@@ -484,9 +492,9 @@ async def send_text_to_managed_local_session(
 
     if str(getattr(session, "execution_home", "") or "").strip() != SessionExecutionHome.MANAGED_LOCAL.value:
         return ManagedLocalSendResult(ok=False, error="Session is not managed_local")
-    runner_id = getattr(session, "source_runner_id", None)
-    if runner_id is None:
-        return ManagedLocalSendResult(ok=False, error="Managed local session is missing source runner metadata")
+    transport_error = _managed_control_transport_error(session)
+    if transport_error is not None:
+        return ManagedLocalSendResult(ok=False, error=transport_error)
 
     transport = str(getattr(session, "managed_transport", "") or "").strip()
     effective_verify = bool(verify_turn_started)
@@ -501,25 +509,25 @@ async def send_text_to_managed_local_session(
         command = build_managed_local_send_text_command(session=session, text=text)
     except ManagedLocalTransportError as exc:
         return ManagedLocalSendResult(ok=False, error=str(exc))
-    dispatcher = get_runner_job_dispatcher()
-    result = await dispatcher.dispatch_job(
+    result = await dispatch_managed_control_command(
         db=db,
         owner_id=owner_id,
-        runner_id=int(runner_id),
+        session=session,
         command=command,
         timeout_secs=timeout_secs,
         commis_id=commis_id,
         run_id=None,
+        failure_message="Failed to send text to managed local session",
     )
 
-    if not result.get("ok"):
+    if not result.ok:
         return ManagedLocalSendResult(
             ok=False,
             baseline_event_id=baseline_event_id,
-            error=str(result.get("error", {}).get("message", "Failed to send text to managed local session")),
+            error=result.error or "Failed to send text to managed local session",
         )
 
-    data = result.get("data", {})
+    data = result.data or {}
     exit_code = int(data.get("exit_code", 1))
     if exit_code != 0:
         detail = (data.get("stderr") or "").strip() or (data.get("stdout") or "").strip()
@@ -612,32 +620,32 @@ async def steer_text_to_managed_local_session(
 
     if str(getattr(session, "execution_home", "") or "").strip() != SessionExecutionHome.MANAGED_LOCAL.value:
         return ManagedLocalSendResult(ok=False, error="Session is not managed_local")
-    runner_id = getattr(session, "source_runner_id", None)
-    if runner_id is None:
-        return ManagedLocalSendResult(ok=False, error="Managed local session is missing source runner metadata")
+    transport_error = _managed_control_transport_error(session)
+    if transport_error is not None:
+        return ManagedLocalSendResult(ok=False, error=transport_error)
 
     try:
         command = build_managed_local_steer_text_command(session=session, text=text)
     except ManagedLocalTransportError as exc:
         return ManagedLocalSendResult(ok=False, error=str(exc))
 
-    dispatcher = get_runner_job_dispatcher()
-    result = await dispatcher.dispatch_job(
+    result = await dispatch_managed_control_command(
         db=db,
         owner_id=owner_id,
-        runner_id=int(runner_id),
+        session=session,
         command=command,
         timeout_secs=timeout_secs,
         commis_id=commis_id,
         run_id=None,
+        failure_message="Failed to dispatch steer command",
     )
-    if not result.get("ok"):
+    if not result.ok:
         return ManagedLocalSendResult(
             ok=False,
-            error=str(result.get("error", {}).get("message", "Failed to dispatch steer command")),
+            error=result.error or "Failed to dispatch steer command",
         )
 
-    data = result.get("data", {})
+    data = result.data or {}
     exit_code = int(data.get("exit_code", 1))
     stderr = data.get("stderr") or ""
     if exit_code == 2 and "error_code: turn_ended" in stderr:
