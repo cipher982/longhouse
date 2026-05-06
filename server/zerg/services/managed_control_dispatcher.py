@@ -102,6 +102,20 @@ def _runner_dispatch_error(result: Mapping[str, Any], fallback: str) -> str:
     return fallback
 
 
+def _engine_command_id(
+    *,
+    session: AgentSession,
+    command_type: str | None,
+    commis_id: str | None,
+    run_id: str | None,
+) -> str | None:
+    seed = str(commis_id or run_id or "").strip()
+    command = str(command_type or "").strip()
+    if not seed or not command:
+        return None
+    return f"managed-control:{getattr(session, 'id')}:{command}:{seed}"
+
+
 async def dispatch_managed_control_command(
     *,
     db: Session,
@@ -125,6 +139,12 @@ async def dispatch_managed_control_command(
             command_type=command_type,
             payload=payload,
             timeout_secs=timeout_secs,
+            command_id=_engine_command_id(
+                session=session,
+                command_type=command_type,
+                commis_id=commis_id,
+                run_id=run_id,
+            ),
         )
     if transport != MANAGED_CONTROL_TRANSPORT_LEGACY_RUNNER:
         return ManagedControlDispatchResult(
@@ -197,6 +217,7 @@ async def _dispatch_engine_channel(
     command_type: str | None,
     payload: Mapping[str, Any] | None,
     timeout_secs: int,
+    command_id: str | None = None,
 ) -> ManagedControlDispatchResult:
     if command_type is None:
         return ManagedControlDispatchResult(
@@ -219,6 +240,7 @@ async def _dispatch_engine_channel(
         command_type=command_type,
         payload=payload,
         timeout_secs=timeout_secs,
+        command_id=command_id,
     )
     if not response.transport_ok:
         return ManagedControlDispatchResult(
@@ -232,13 +254,9 @@ async def _dispatch_engine_channel(
         data = _engine_command_result_data(message)
         if data is None:
             return ManagedControlDispatchResult(
-                ok=True,
+                ok=False,
                 transport=MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL,
-                data={
-                    "exit_code": 1,
-                    "stdout": "",
-                    "stderr": "Machine Agent control command returned malformed result",
-                },
+                error="Machine Agent control command returned malformed result",
             )
         return ManagedControlDispatchResult(
             ok=True,
