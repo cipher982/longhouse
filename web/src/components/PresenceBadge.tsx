@@ -290,10 +290,10 @@ export function PresenceBadge({
         ? `Running: ${tool}`
         : normalizedState === "blocked" && tool
           ? `Blocked: ${tool}`
-            : normalizedState === "needs_user"
-              ? "Ready"
-              : normalizedState === "stalled"
-                ? "Stalled"
+          : normalizedState === "needs_user"
+            ? "Idle"
+            : normalizedState === "stalled"
+              ? "Stalled"
               : normalizedState;
     return (
       <span
@@ -360,7 +360,7 @@ export function PresenceBadge({
       <span className={className} style={containerStyle}>
         <Dot state="needs_user" size={dotSize} />
         <span style={{ color: "#9ca3af", fontWeight: 500, letterSpacing: "0.02em" }}>
-          Ready
+          Idle
         </span>
       </span>
     );

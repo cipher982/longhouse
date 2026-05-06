@@ -640,7 +640,7 @@ describe("SessionDetailPage", () => {
       active_tool: null,
       runtime_source: "managed_local_transport",
       confidence: "live",
-      display_phase: "Ready",
+      display_phase: "Idle",
       last_live_at: "2026-03-22T22:04:30Z",
     });
     const model = buildTimelineModel([
@@ -704,9 +704,9 @@ describe("SessionDetailPage", () => {
     expect(
       screen.queryByTestId("session-detail-header-runtime"),
     ).not.toBeInTheDocument();
-    expect(screen.getByTestId("session-control-strip")).toHaveTextContent("Ready");
+    expect(screen.getByTestId("session-control-strip")).toHaveTextContent("Idle");
     expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
-      "Ready for next prompt",
+      "Waiting for next prompt",
     );
   });
 

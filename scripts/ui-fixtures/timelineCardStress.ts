@@ -607,7 +607,7 @@ export function buildTimelineCardStressFixture(): {
     last_live_at: "2026-04-15T16:04:00Z",
     runtime_source: "managed_local_transport",
     confidence: "live",
-    display_phase: "Ready",
+    display_phase: "Idle",
     runtime_facts: makeRuntimeFacts({
       control_path: "managed",
       host: {

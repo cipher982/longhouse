@@ -327,8 +327,8 @@ export function getRuntimeDisplayCopy(
   }
   if (runtime.presenceState === "needs_user") {
     return {
-      headline: "Ready",
-      detail: "Ready for next prompt",
+      headline: "Idle",
+      detail: "Waiting for next prompt",
     };
   }
   if (runtime.presenceState === "blocked") {
@@ -351,13 +351,13 @@ export function getRuntimeDisplayCopy(
   }
   if (runtime.presenceState === "idle" || runtime.isIdle) {
     return {
-      headline: "Ready",
-      detail: "Ready for next prompt",
+      headline: "Idle",
+      detail: "Waiting for next prompt",
     };
   }
   return {
-    headline: "Ready",
-    detail: "Ready for next prompt",
+    headline: "Idle",
+    detail: "Waiting for next prompt",
   };
 }
 

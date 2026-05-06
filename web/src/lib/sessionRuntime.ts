@@ -131,10 +131,10 @@ export function resolveSessionStatusLabel(
       return "Needs permission";
     }
     if (runtime.presenceState === "needs_user") {
-      return "Ready";
+      return "Idle";
     }
     if (runtime.presenceState === "idle" || runtime.isIdle) {
-      return "Ready";
+      return "Idle";
     }
     if (display?.activity_recency === "live" || display?.activity_recency === "recent") {
       return "Recent activity";
@@ -162,7 +162,7 @@ export function resolveSessionStatusLabel(
     return "Active";
   }
   if (runtime.isIdle) {
-    return "Ready";
+    return "Idle";
   }
   return "Unknown";
 }
@@ -215,7 +215,7 @@ function compactFactToolLabel(toolName: string | null | undefined): string | nul
 }
 
 function formatPhaseStatus(kind: string, tool: string | null | undefined): string {
-  const phase = kind === "needs_user" ? "ready" : kind.replace(/[-_]+/g, " ");
+  const phase = kind === "needs_user" ? "idle" : kind.replace(/[-_]+/g, " ");
   const compactTool = compactFactToolLabel(tool);
   if (compactTool && kind === "running") {
     return `Using ${compactTool}`;
@@ -353,7 +353,7 @@ function getDisplayPhase(
     return "Thinking";
   }
   if (presenceState === "needs_user") {
-    return "Ready";
+    return "Idle";
   }
   if (presenceState === "blocked") {
     return presenceTool ? `Blocked on ${presenceTool}` : "Needs permission";
@@ -367,7 +367,7 @@ function getDisplayPhase(
 
   if (status === "idle") return "Idle";
   if (status === "completed") return "Completed";
-  return "Recent";
+  return "Inactive";
 }
 
 function getTone(

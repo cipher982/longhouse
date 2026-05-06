@@ -619,7 +619,8 @@ test.describe("Sessions Page", () => {
       .locator('[data-testid="session-card"]', { hasText: `needs-user-state-${suffix}` })
       .first();
     await expect(needsUserCard).toBeVisible();
-    await expect(needsUserCard).toContainText("Ready");
+    await expect(needsUserCard).toContainText("Idle");
+    await expect(needsUserCard).not.toContainText("Ready");
     await expect(needsUserCard).not.toContainText("Needs you");
     await expect(needsUserCard).toHaveAttribute("data-runtime-tone", "idle");
     await expect(needsUserCard).not.toHaveClass(/session-card--live/);

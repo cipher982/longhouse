@@ -75,7 +75,7 @@ enum RuntimeDisplayText {
     }
 
     static func phaseStatusLabel(kind: String, tool: String?) -> String {
-        let phase = kind == "needs_user" ? "ready" : kind.replacingOccurrences(of: #"[-_]+"#, with: " ", options: .regularExpression)
+        let phase = kind == "needs_user" ? "idle" : kind.replacingOccurrences(of: #"[-_]+"#, with: " ", options: .regularExpression)
         if let compactTool = compactFactToolLabel(tool), kind == "running" {
             return "Using \(compactTool)"
         }
@@ -370,7 +370,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         case "thinking":
             return "Thinking"
         case "needs_user":
-            return "Ready"
+            return "Idle"
         case "blocked":
             return tool.map { "Blocked on \($0)" } ?? "Needs permission"
         case "idle":
@@ -379,7 +379,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
             let lifecycle = runtimeDisplay?.lifecycle
             if lifecycle == "closed" { return "Closed" }
             if lifecycle == nil && status == "completed" { return "Closed" }
-            return "Recent"
+            return "Inactive"
         }
     }
 
@@ -399,7 +399,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
             if isBlocked { return "Needs permission" }
             if isExecuting { return "Working" }
             if runtimeDisplay?.state == "needs_user" || runtimeDisplay?.state == "idle" || isIdle {
-                return "Ready"
+                return "Idle"
             }
             switch runtimeDisplay?.activityRecency {
             case "live", "recent":
@@ -432,7 +432,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
             return "Active"
         }
         if isIdle {
-            return "Ready"
+            return "Idle"
         }
         return "Unknown"
     }
@@ -704,7 +704,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         case "thinking":
             return "Thinking"
         case "needs_user":
-            return "Ready"
+            return "Idle"
         case "blocked":
             return tool.map { "Blocked on \($0)" } ?? "Needs permission"
         case "working", "active":
@@ -757,7 +757,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         }
         if isControlOffline || isReadOnly { return runtimeCapabilityLabel }
         if isSessionExecuting { return "Working" }
-        if runtimePhaseState == "idle" { return "Ready" }
+        if runtimePhaseState == "idle" { return "Idle" }
         return runtimePhaseLabel
     }
 

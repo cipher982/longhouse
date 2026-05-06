@@ -8452,7 +8452,7 @@ export interface components {
             needs_attention: boolean;
             /**
              * Is Idle
-             * @description True when the runtime is ready for the next prompt
+             * @description True when the runtime is waiting for another turn
              * @default false
              */
             is_idle: boolean;

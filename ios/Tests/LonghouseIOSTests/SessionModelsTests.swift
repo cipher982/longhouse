@@ -89,7 +89,7 @@ struct SessionModelsTests {
               "truth_tier": "managed-local",
               "state": "idle",
               "tone": "idle",
-              "headline": "Ready",
+              "headline": "Idle",
               "detail": null,
               "phase_label": "Idle",
               "compact_tool_label": null,
@@ -235,7 +235,7 @@ struct SessionModelsTests {
           "user_state": "active",
           "status": "idle",
           "last_activity_at": "2026-04-25T20:00:00Z",
-          "display_phase": "Ready",
+          "display_phase": "Idle",
           "active_tool": null,
           "home_label": "On this Mac",
           "origin_label": "On this Mac",
@@ -257,7 +257,7 @@ struct SessionModelsTests {
         #expect(detail.canSendLive)
         #expect(detail.runtimeCapabilityLabel == "Live on this Mac")
         #expect(detail.runtimeCapabilityTone == "success")
-        #expect(detail.runtimePhaseLabel == "Ready")
+        #expect(detail.runtimePhaseLabel == "Idle")
         #expect(detail.controlHealthMessage == nil)
     }
 
@@ -515,14 +515,14 @@ struct SessionModelsTests {
             project: "zerg",
             lastActivityAt: "2026-04-25T20:00:00Z",
             status: "active",
-            displayPhase: "Ready",
+            displayPhase: "Idle",
             runtimeDisplay: SessionRuntimeDisplay(
                 truthTier: "managed-local",
                 state: "needs_user",
                 tone: "idle",
-                headline: "Ready",
-                detail: "Ready for next prompt",
-                phaseLabel: "Ready",
+                headline: "Idle",
+                detail: "Waiting for next prompt",
+                phaseLabel: "Idle",
                 compactToolLabel: nil,
                 isLive: false,
                 isExecuting: false,
@@ -555,14 +555,14 @@ struct SessionModelsTests {
             project: "zerg",
             lastActivityAt: "2026-04-25T20:00:00Z",
             status: "active",
-            displayPhase: "Ready",
+            displayPhase: "Idle",
             runtimeDisplay: SessionRuntimeDisplay(
                 truthTier: "managed-local",
                 state: nil,
                 tone: "inactive",
                 headline: "Not connected",
                 detail: nil,
-                phaseLabel: "Recent",
+                phaseLabel: "Inactive",
                 compactToolLabel: nil,
                 isLive: false,
                 isExecuting: false,
@@ -582,7 +582,7 @@ struct SessionModelsTests {
         #expect(!summary.needsAttention)
         #expect(!summary.isExecuting)
         #expect(summary.runtimeTone == "inactive")
-        #expect(summary.displayPhaseLabel == "Recent")
+        #expect(summary.displayPhaseLabel == "Inactive")
     }
 
     @Test
@@ -625,14 +625,14 @@ struct SessionModelsTests {
             project: "sauron",
             lastActivityAt: "2026-04-25T20:00:00Z",
             status: "idle",
-            displayPhase: "Ready",
+            displayPhase: "Idle",
             runtimeDisplay: SessionRuntimeDisplay(
                 truthTier: "fresh",
                 state: "needs_user",
                 tone: "idle",
                 headline: "Inactive",
                 detail: nil,
-                phaseLabel: "Ready",
+                phaseLabel: "Idle",
                 compactToolLabel: nil,
                 isLive: false,
                 isExecuting: false,
@@ -654,23 +654,23 @@ struct SessionModelsTests {
     }
 
     @Test
-    func timelineStatusKeepsManagedReadySeparateFromUnmanagedActivity() {
+    func timelineStatusKeepsManagedIdleSeparateFromUnmanagedActivity() {
         let summary = SessionSummary(
-            id: "session-managed-ready",
+            id: "session-managed-idle",
             title: "Managed session",
             presenceState: "needs_user",
             provider: "claude",
             project: "zerg",
             lastActivityAt: "2026-04-25T20:00:00Z",
             status: "idle",
-            displayPhase: "Ready",
+            displayPhase: "Idle",
             runtimeDisplay: SessionRuntimeDisplay(
                 truthTier: "managed-local",
                 state: "needs_user",
                 tone: "idle",
                 headline: "Inactive",
                 detail: nil,
-                phaseLabel: "Ready",
+                phaseLabel: "Idle",
                 compactToolLabel: nil,
                 isLive: false,
                 isExecuting: false,
@@ -686,7 +686,7 @@ struct SessionModelsTests {
             )
         )
 
-        #expect(summary.timelineStatusLabel == "Ready")
+        #expect(summary.timelineStatusLabel == "Idle")
     }
 
     @Test
@@ -699,14 +699,14 @@ struct SessionModelsTests {
             project: "zerg",
             lastActivityAt: "2026-04-25T20:00:00Z",
             status: "idle",
-            displayPhase: "Ready",
+            displayPhase: "Idle",
             runtimeDisplay: SessionRuntimeDisplay(
                 truthTier: "managed-local",
                 state: "needs_user",
                 tone: "idle",
-                headline: "Ready",
+                headline: "Idle",
                 detail: nil,
-                phaseLabel: "Ready",
+                phaseLabel: "Idle",
                 compactToolLabel: nil,
                 isLive: false,
                 isExecuting: false,
@@ -899,7 +899,7 @@ struct SessionModelsTests {
                 "presence_state": "needs_user",
                 "presence_tool": null,
                 "active_tool": null,
-                "display_phase": "Ready",
+                "display_phase": "Idle",
                 "user_state": "active",
                 "provider": "claude",
                 "project": "zerg",
@@ -927,7 +927,7 @@ struct SessionModelsTests {
                 },
                 "timeline_card": {
                   "ownership": {"label": "Managed", "tone": "neutral"},
-                  "status": {"label": "Ready", "tone": "idle", "seen_at": null, "seen_at_prefix": "Updated"},
+                  "status": {"label": "Idle", "tone": "idle", "seen_at": null, "seen_at_prefix": "Updated"},
                   "border_tone": "idle"
                 }
               }
@@ -940,7 +940,7 @@ struct SessionModelsTests {
         let session = try #require(decoded.sessions.first?.head)
 
         #expect(session.timelineCard?.ownership.label == "Managed")
-        #expect(session.timelineCard?.status?.label == "Ready")
+        #expect(session.timelineCard?.status?.label == "Idle")
         #expect(session.timelineCard?.borderTone == "idle")
         #expect(session.runtimeFacts?.controlPath == "managed")
         #expect(session.runtimeFacts?.processState == "unknown")
@@ -968,12 +968,12 @@ struct SessionModelsTests {
             ),
             timelineCard: TimelineCardPresentation(
                 ownership: TimelineBadgePresentation(label: "Managed", tone: "neutral"),
-                status: TimelineStatusPresentation(label: "Ready", tone: "idle", seenAt: nil, seenAtPrefix: "Updated"),
+                status: TimelineStatusPresentation(label: "Idle", tone: "idle", seenAt: nil, seenAtPrefix: "Updated"),
                 borderTone: "idle"
             )
         )
 
-        #expect(summary.timelineStatusLabel == "Ready")
+        #expect(summary.timelineStatusLabel == "Idle")
         #expect(summary.timelineStatusTone == "idle")
         #expect(summary.timelineBorderTone == "idle")
         #expect(summary.displayPhaseLabel == "Using Shell")
@@ -1008,14 +1008,14 @@ struct SessionModelsTests {
             project: "bar",
             lastActivityAt: "2026-04-28T13:21:51Z",
             status: "active",
-            displayPhase: "Ready",
+            displayPhase: "Idle",
             runtimeDisplay: SessionRuntimeDisplay(
                 truthTier: "stale",
                 state: "needs_user",
                 tone: "idle",
                 headline: "Inactive",
                 detail: nil,
-                phaseLabel: "Recent",
+                phaseLabel: "Inactive",
                 compactToolLabel: nil,
                 isLive: false,
                 isExecuting: false,
@@ -1044,14 +1044,14 @@ struct SessionModelsTests {
             project: "zerg",
             lastActivityAt: "2026-04-25T20:00:00Z",
             status: "active",
-            displayPhase: "Ready",
+            displayPhase: "Idle",
             runtimeDisplay: SessionRuntimeDisplay(
                 truthTier: "managed-local",
                 state: "needs_user",
                 tone: "idle",
-                headline: "Ready",
-                detail: "Ready for next prompt",
-                phaseLabel: "Ready",
+                headline: "Idle",
+                detail: "Waiting for next prompt",
+                phaseLabel: "Idle",
                 compactToolLabel: nil,
                 isLive: false,
                 isExecuting: false,
@@ -1074,7 +1074,7 @@ struct SessionModelsTests {
             project: "zerg",
             lastActivityAt: "2026-04-25T20:01:00Z",
             status: "active",
-            displayPhase: "Ready"
+            displayPhase: "Idle"
         )
 
         let ordered = SessionSummary.attentionWidgetOrder([closed, openAttention], limit: 2)
@@ -1232,7 +1232,7 @@ struct SessionModelsTests {
 
         let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
 
-        #expect(detail.runtimeHeadline == "Ready")
+        #expect(detail.runtimeHeadline == "Idle")
         #expect(detail.runtimeDetail == nil)
         #expect(detail.runtimePhaseLabel == "Idle")
     }

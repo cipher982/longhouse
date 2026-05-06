@@ -167,11 +167,11 @@ describe("resolveSessionRuntimeState", () => {
 
     expect(runtime.truthTier).toBe("none");
     expect(runtime.isLive).toBe(false);
-    expect(runtime.displayPhase).toBe("Recent");
+    expect(runtime.displayPhase).toBe("Inactive");
     expect(runtime.tone).toBe("inactive");
   });
 
-  it("treats managed-local needs-user as ready, not attention or execution", () => {
+  it("treats managed-local needs-user as idle, not attention or execution", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({
         capabilities: {
@@ -183,7 +183,7 @@ describe("resolveSessionRuntimeState", () => {
         confidence: "live",
         runtime_source: "managed_local_transport",
         presence_state: "needs_user",
-        display_phase: "Ready",
+        display_phase: "Idle",
       }),
     );
 
@@ -192,10 +192,10 @@ describe("resolveSessionRuntimeState", () => {
     expect(runtime.isLive).toBe(false);
     expect(runtime.isExecuting).toBe(false);
     expect(runtime.tone).toBe("idle");
-    expect(runtime.displayPhase).toBe("Ready");
+    expect(runtime.displayPhase).toBe("Idle");
   });
 
-  it("treats a fresh managed-local idle lease as ready even when ended_at is old", () => {
+  it("treats a fresh managed-local idle lease as idle even when ended_at is old", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({
         ended_at: "2026-03-21T10:00:00Z",
@@ -216,8 +216,8 @@ describe("resolveSessionRuntimeState", () => {
     expect(runtime.isIdle).toBe(true);
     expect(runtime.tone).toBe("idle");
     expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
-      headline: "Ready",
-      detail: "Ready for next prompt",
+      headline: "Idle",
+      detail: "Waiting for next prompt",
     });
   });
 
@@ -490,9 +490,9 @@ describe("resolveSessionRuntimeState", () => {
         runtime_display: makeRuntimeDisplay({
           state: "needs_user",
           tone: "idle",
-          headline: "Ready",
-          detail: "Ready for next prompt",
-          phase_label: "Ready",
+          headline: "Idle",
+          detail: "Waiting for next prompt",
+          phase_label: "Idle",
           needs_attention: true,
           is_live: true,
           is_executing: true,
@@ -572,7 +572,7 @@ describe("resolveSessionRuntimeState", () => {
       ["blocked", "Blocked Shell", "blocked"],
       ["stalled", "Stalled", "stalled"],
       ["idle", "Idle", "idle"],
-      ["needs_user", "Ready", "idle"],
+      ["needs_user", "Idle", "idle"],
       ["reviewing", "Reviewing", "inactive"],
     ];
 
