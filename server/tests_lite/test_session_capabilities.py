@@ -94,6 +94,7 @@ def _upsert_runtime_state(
     session: AgentSession,
     *,
     phase: str = "running",
+    phase_source: str = "semantic",
     freshness_expires_at: datetime | None = None,
     terminal_state: str | None = None,
 ) -> SessionRuntimeState:
@@ -106,7 +107,7 @@ def _upsert_runtime_state(
         "provider": str(session.provider or "codex"),
         "device_id": session.device_id,
         "phase": phase,
-        "phase_source": "semantic",
+        "phase_source": phase_source,
         "active_tool": "shell" if phase == "running" else None,
         "phase_started_at": now - timedelta(seconds=5),
         "last_runtime_signal_at": now - timedelta(seconds=5),
@@ -626,6 +627,7 @@ def test_current_session_capabilities_uses_engine_channel_without_runner_metadat
                     db,
                     session,
                     phase="running",
+                    phase_source="codex_bridge",
                     freshness_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
                 )
 
@@ -653,6 +655,53 @@ def test_current_session_capabilities_uses_engine_channel_without_runner_metadat
                 assert live.can_queue_next_input is True
                 assert live.can_steer_active_turn is True
                 assert live.host_reattach_available is False
+        finally:
+            await registry.clear_for_tests()
+
+    try:
+        asyncio.run(_run())
+    finally:
+        engine.dispose()
+
+
+def test_current_session_capabilities_do_not_treat_engine_online_as_bridge_attached(monkeypatch, tmp_path):
+    engine, session_local = _make_db(tmp_path)
+
+    async def _run():
+        registry = get_machine_control_channel_registry()
+        await registry.clear_for_tests()
+        try:
+            with session_local() as db:
+                session = _seed_agent_session(db, source_runner_id=None, device_id="cinder")
+                _upsert_runtime_state(
+                    db,
+                    session,
+                    phase="running",
+                    phase_source="semantic",
+                    freshness_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+                )
+
+                def _runner_state_should_not_be_used(_db, _session):
+                    raise AssertionError("engine-channel capability should not query runner host state")
+
+                monkeypatch.setattr(
+                    "zerg.services.session_current_control.managed_runner_host_state",
+                    _runner_state_should_not_be_used,
+                )
+                await registry.register(
+                    owner_id=7,
+                    device_id="cinder",
+                    machine_name="cinder",
+                    engine_build="abc123",
+                    supports=["codex.send", "codex.steer"],
+                    websocket=SimpleNamespace(),
+                )
+                capabilities = current_session_capabilities(db, session, owner_id=7)
+
+                assert capabilities.live_control_available is False
+                assert capabilities.can_queue_next_input is False
+                assert capabilities.can_steer_active_turn is False
+                assert capabilities.host_reattach_available is False
         finally:
             await registry.clear_for_tests()
 

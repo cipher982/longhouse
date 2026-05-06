@@ -14,6 +14,7 @@ from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_capabilities import project_current_session_capabilities_from_facts
 from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_runner_state import managed_runner_host_state
+from zerg.services.session_runtime import MANAGED_CODEX_RUNTIME_SOURCES
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.session_execution_home import ManagedSessionTransport
@@ -34,9 +35,21 @@ def _with_engine_control_capability(
     capability_flags: SessionCapabilityFlags,
     *,
     engine_control_online: bool,
+    engine_bridge_attached: bool,
 ) -> SessionCapabilityFlags:
     if not engine_control_online:
         return capability_flags
+    if not engine_bridge_attached:
+        return SessionCapabilityFlags(
+            execution_home=capability_flags.execution_home,
+            managed_transport=capability_flags.managed_transport,
+            live_control_available=False,
+            host_reattach_available=False,
+            reply_to_live_session_available=False,
+            can_queue_next_input=False,
+            can_steer_active_turn=False,
+            home_label=capability_flags.home_label,
+        )
     can_steer = capability_flags.managed_transport == ManagedSessionTransport.CODEX_APP_SERVER
     return SessionCapabilityFlags(
         execution_home=capability_flags.execution_home,
@@ -50,6 +63,12 @@ def _with_engine_control_capability(
     )
 
 
+def _engine_bridge_attached(runtime_overlay) -> bool:
+    source = str(getattr(runtime_overlay, "runtime_source", "") or "").strip().lower()
+    phase = str(getattr(runtime_overlay, "runtime_phase", "") or "").strip()
+    return source in MANAGED_CODEX_RUNTIME_SOURCES and getattr(runtime_overlay, "confidence", None) == "live" and bool(phase)
+
+
 def current_session_capabilities(
     db: Session,
     session: AgentSession,
@@ -59,10 +78,6 @@ def current_session_capabilities(
     """Return user-action capabilities backed by current runtime truth."""
     capability_flags = build_session_capabilities(session)
     engine_control_online = _engine_control_online(session, owner_id)
-    capability_flags = _with_engine_control_capability(
-        capability_flags,
-        engine_control_online=engine_control_online,
-    )
     now = datetime.now(timezone.utc)
     last_activity_at = (
         getattr(session, "last_activity_at", None) or getattr(session, "ended_at", None) or getattr(session, "started_at", None)
@@ -73,6 +88,11 @@ def current_session_capabilities(
         last_activity_at=last_activity_at,
         runtime_state_map=runtime_state_map,
         now=now,
+    )
+    capability_flags = _with_engine_control_capability(
+        capability_flags,
+        engine_control_online=engine_control_online,
+        engine_bridge_attached=_engine_bridge_attached(runtime_overlay),
     )
     binding_host_state = None
     if engine_control_online:
