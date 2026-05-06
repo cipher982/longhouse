@@ -111,10 +111,11 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
     typer.echo(f"  stored url: {launch_readiness.get('stored_url') or '-'}")
     typer.echo(f"  machine name: {launch_readiness.get('machine_name') or '-'}")
     typer.echo(f"  service machine: {launch_readiness.get('service_machine_name') or '-'}")
-    typer.echo(f"  runner env: {runner.get('path') or '-'}")
-    typer.echo(f"  runner name: {runner.get('runner_name') or '-'}")
+    typer.echo(f"  remote command Runner env: {runner.get('path') or '-'}")
+    typer.echo(f"  remote command Runner name: {runner.get('runner_name') or '-'}")
     runner_urls = ", ".join(str(item) for item in list(runner.get("runner_urls") or []) if str(item))
-    typer.echo(f"  runner urls: {runner_urls or '-'}")
+    typer.echo(f"  remote command Runner urls: {runner_urls or '-'}")
+    typer.echo("  note: the remote command Runner is separate from the Machine Agent shipping path")
 
     reasons = list(snapshot.get("reasons") or [])
     if reasons:

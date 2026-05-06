@@ -577,10 +577,11 @@ def _check_config() -> list[CheckResult]:
             results.append(
                 CheckResult(
                     FAIL,
-                    "Managed launch target disagrees with this machine's runner",
+                    "Managed launch target disagrees with this machine's remote command Runner",
                     (
                         f"launch={control_plane_url}; runner_urls={runner_urls}; "
                         f"machine_name={machine_name}; runner_name={runner_name}. "
+                        "This Runner is separate from the Machine Agent that ships transcripts. "
                         "Run: longhouse machine configure --url <control-plane-url> --machine-name <runner-name>"
                     ),
                 )
