@@ -156,7 +156,9 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
     if params.require_runner_ready:
         _require_runner_ready(runner, owner_id=params.owner_id)
     source_name = str(getattr(runner, "name", "") or params.runner_target).strip()
-    source_runner_id = _runner_remote_control_id(runner)
+    # Codex managed control is owned by the Machine Agent channel. Keep Runner
+    # association only for legacy transports that still dispatch through Runner.
+    source_runner_id = None if provider == "codex" else _runner_remote_control_id(runner)
 
     session_uuid = uuid4()
     provider_session_id = str(session_uuid)
