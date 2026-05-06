@@ -160,7 +160,9 @@ def test_machine_repair_delegates_to_canonical_repair_flow(monkeypatch):
     result = runner.invoke(app, ["machine", "repair", "--claude-dir", "/tmp/.claude"])
 
     assert result.exit_code == 0, result.output
-    assert calls == [{"claude_dir": "/tmp/.claude"}]
+    assert len(calls) == 1
+    assert calls[0]["claude_dir"] == "/tmp/.claude"
+    assert callable(calls[0]["progress"])
     assert "Repaired machine generation 20260414-test" in result.output
     assert "Queued shipping replayed=2, pending=0" in result.output
     assert "Longhouse shipping healthy" in result.output

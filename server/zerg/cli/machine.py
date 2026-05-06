@@ -25,7 +25,7 @@ def _render_install_result(result: LocalRuntimeInstallResult) -> None:
         fg=typer.colors.YELLOW if service_skipped else typer.colors.GREEN,
     )
     typer.echo(f"  Machine Agent: {result.service_result.get('service', 'N/A')}")
-    typer.echo("  Config: " f"{result.service_result.get('plist_path') or result.service_result.get('unit_path', 'N/A')}")
+    typer.echo(f"  Config: {result.service_result.get('plist_path') or result.service_result.get('unit_path', 'N/A')}")
 
     typer.echo("")
     typer.echo("Installing CLI hooks (Claude Code + Codex)...")
@@ -106,6 +106,7 @@ def _run_repair(*, claude_dir: str | None) -> None:
     try:
         result: MachineRepairResult = repair_machine_runtime(
             claude_dir=claude_dir,
+            progress=lambda message: typer.echo(f"  {message}"),
         )
     except RuntimeError as exc:
         typer.secho(f"[ERROR] {exc}", fg=typer.colors.RED)

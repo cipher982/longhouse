@@ -411,7 +411,7 @@ public struct SpyHealthActionSink: HealthActionSink {
                 for: .repairInstall,
                 style: .info,
                 title: "Repair running",
-                detail: "Longhouse is reconciling the local runtime from canonical machine state in the background. Open Logs for progress or errors."
+                detail: "Longhouse is reconciling the runtime, replaying queued shipping, then collecting health. Open Logs for live progress."
             )
         }
 
