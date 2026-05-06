@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from types import SimpleNamespace
 
 from cryptography.fernet import Fernet
@@ -18,8 +19,14 @@ from zerg.services import local_runtime_installer as local_runtime_installer_ser
 
 
 def test_recommended_machine_repair_command_prefers_machine_repair_when_state_is_complete():
-    assert machine_repair.recommended_machine_repair_command(can_reconcile_from_state=True) == "Run: longhouse machine repair"
-    assert machine_repair.recommended_machine_repair_command(can_reconcile_from_state=False) == "Run: longhouse connect --install"
+    assert (
+        machine_repair.recommended_machine_repair_command(can_reconcile_from_state=True)
+        == "Run: longhouse machine repair"
+    )
+    assert (
+        machine_repair.recommended_machine_repair_command(can_reconcile_from_state=False)
+        == "Run: longhouse connect --install"
+    )
 
 
 def test_can_repair_machine_from_state_requires_runtime_url_and_machine_name(tmp_path):
@@ -82,6 +89,57 @@ def test_replay_machine_backlog_ignores_trailing_output_after_json(monkeypatch):
     assert result.summary == {"status": "ok", "spool_replayed": 3, "spool_pending": 1}
 
 
+def test_replay_machine_backlog_reports_progress_summary(monkeypatch):
+    events: list[str] = []
+    monkeypatch.setattr(machine_repair, "get_engine_executable", lambda: "/tmp/longhouse-engine")
+    monkeypatch.setattr(
+        machine_repair.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout='{"status":"ok","spool_replayed":2,"spool_pending":1,"spool_dead":0}\n',
+            stderr="",
+        ),
+    )
+
+    result = machine_repair.replay_machine_backlog(
+        url="https://demo.longhouse.test",
+        token="zdt_test",
+        claude_dir="/tmp/.claude",
+        progress=events.append,
+    )
+
+    assert result.success is True
+    assert events == [
+        "Starting queued shipping replay with longhouse-engine ship --json.",
+        "Queued shipping replay finished: replayed=2, pending=1, dead=0.",
+    ]
+
+
+def test_replay_machine_backlog_reports_timeout_progress(monkeypatch):
+    events: list[str] = []
+    monkeypatch.setattr(machine_repair, "get_engine_executable", lambda: "/tmp/longhouse-engine")
+
+    def fail_with_timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=["longhouse-engine", "ship"], timeout=30)
+
+    monkeypatch.setattr(machine_repair.subprocess, "run", fail_with_timeout)
+
+    result = machine_repair.replay_machine_backlog(
+        url="https://demo.longhouse.test",
+        token="zdt_test",
+        claude_dir="/tmp/.claude",
+        progress=events.append,
+    )
+
+    assert result.success is False
+    assert "timed out after 30 seconds" in str(result.warning)
+    assert events == [
+        "Starting queued shipping replay with longhouse-engine ship --json.",
+        "Queued shipping replay timed out after 30 seconds; the Machine Agent will keep retrying in the background.",
+    ]
+
+
 def test_repair_machine_runtime_reconciles_replays_and_collects_health(monkeypatch, tmp_path):
     calls: list[tuple[str, object]] = []
     monkeypatch.setattr(
@@ -131,9 +189,53 @@ def test_repair_machine_runtime_reconciles_replays_and_collects_health(monkeypat
                 "url": "https://demo.longhouse.test",
                 "token": "zdt_test",
                 "claude_dir": str(tmp_path / ".claude"),
+                "progress": None,
             },
         ),
         ("health", tmp_path / ".longhouse"),
+    ]
+
+
+def test_repair_machine_runtime_reports_progress_steps(monkeypatch, tmp_path):
+    events: list[str] = []
+    monkeypatch.setattr(
+        local_runtime_installer_service,
+        "reconcile_local_runtime",
+        lambda **kwargs: SimpleNamespace(
+            machine_state=SimpleNamespace(
+                runtime_url="https://demo.longhouse.test",
+                config_generation="20260423-test",
+            ),
+            install_result=SimpleNamespace(machine_name="cinder"),
+        ),
+    )
+    monkeypatch.setattr(machine_repair, "load_token", lambda config_dir: "zdt_test")
+
+    def replay_stub(**kwargs):
+        assert callable(kwargs["progress"])
+        kwargs["progress"]("queued replay progress")
+        return machine_repair.SpoolReplayResult(
+            attempted=True,
+            success=True,
+            summary={"spool_replayed": 1, "spool_pending": 0},
+        )
+
+    monkeypatch.setattr(machine_repair, "replay_machine_backlog", replay_stub)
+    monkeypatch.setattr(
+        local_health_service,
+        "collect_local_health",
+        lambda state_root: {"health_state": "healthy", "severity": "green", "headline": "Longhouse shipping healthy"},
+    )
+
+    result = machine_repair.repair_machine_runtime(claude_dir=str(tmp_path / ".claude"), progress=events.append)
+
+    assert result.spool_replay.success is True
+    assert events == [
+        "Step 1/4: reconciling local runtime from canonical machine state.",
+        "Step 2/4: replaying queued shipping backlog.",
+        "queued replay progress",
+        "Step 3/4: collecting post-repair local health snapshot.",
+        "Step 4/4: repair complete; local health is healthy.",
     ]
 
 

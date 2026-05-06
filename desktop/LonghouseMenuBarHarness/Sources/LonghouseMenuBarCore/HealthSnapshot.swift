@@ -323,6 +323,38 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         return "Clear"
     }
 
+    private var shippingBacklogAttentionLabel: String? {
+        let pending = engineStatus?.payload?.spoolPendingCount ?? 0
+        let outboxFiles = outboxCount
+        let dead = engineStatus?.payload?.spoolDeadCount ?? 0
+
+        if dead > 0 {
+            return "\(dead) dead queued shipping item\(dead == 1 ? "" : "s") need manual attention before Longhouse can drain the backlog."
+        }
+
+        guard pending > 0 || outboxFiles > 0 else {
+            return nil
+        }
+
+        var parts: [String] = []
+        if pending > 0 {
+            parts.append("\(pending) queued transcript range\(pending == 1 ? "" : "s")")
+        }
+        if outboxFiles > 0 {
+            parts.append("\(outboxFiles) local hook event\(outboxFiles == 1 ? "" : "s")")
+        }
+        let backlog = parts.joined(separator: " and ")
+        return "Shipping has \(backlog) waiting. Repair now logs each phase: reconcile runtime, replay backlog, then collect health."
+    }
+
+    private var shippingFailureAttentionLabel: String? {
+        let failures = engineStatus?.payload?.consecutiveShipFailures ?? 0
+        guard failures > 0 else {
+            return nil
+        }
+        return "\(failures) consecutive shipping failure\(failures == 1 ? "" : "s") recorded. Repair now shows whether it is replaying data or still failing to connect."
+    }
+
     public var latestActivityLabel: String {
         latestActivityLabel(relativeTo: Date())
     }
@@ -764,11 +796,23 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         case .green:
             return "Shipping is healthy on this Mac. Leave Longhouse running quietly in the menu bar."
         case .yellow:
+            if let shippingBacklogAttentionLabel {
+                return shippingBacklogAttentionLabel
+            }
+            if let shippingFailureAttentionLabel {
+                return shippingFailureAttentionLabel
+            }
             if let primaryReason {
                 return "\(primaryReason). Refresh or inspect logs if this keeps aging."
             }
             return "Longhouse is still shipping, but local status is aging."
         case .red:
+            if let shippingBacklogAttentionLabel {
+                return shippingBacklogAttentionLabel
+            }
+            if let shippingFailureAttentionLabel {
+                return shippingFailureAttentionLabel
+            }
             if let primaryReason {
                 return "\(primaryReason). Repair is the fastest path to restore shipping."
             }

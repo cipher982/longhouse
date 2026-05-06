@@ -587,6 +587,87 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func attentionSummaryExplainsShippingBacklogWithCounts() {
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-04-08T01:52:00Z",
+            healthState: "degraded",
+            severity: "yellow",
+            headline: "Longhouse shipping is degraded",
+            reasons: ["spool_pending", "outbox_backlog"],
+            suggestedActions: ["Run: longhouse machine repair"],
+            service: nil,
+            engineStatus: EngineStatusSnapshot(
+                path: nil,
+                exists: true,
+                fresh: true,
+                ageSeconds: 4,
+                payload: EngineStatusPayload(
+                    version: "0.1.16",
+                    daemonPid: 123,
+                    lastShipAt: "2026-04-08T01:51:00Z",
+                    spoolPendingCount: 1,
+                    spoolDeadCount: 0,
+                    parseErrorCount1H: 0,
+                    consecutiveShipFailures: 0,
+                    diskFreeBytes: nil,
+                    isOffline: false,
+                    recentDeadLetters: nil,
+                    lastUpdated: "2026-04-08T01:52:00Z"
+                ),
+                error: nil
+            ),
+            outbox: OutboxSnapshot(path: nil, fileCount: 10, oldestAgeSeconds: 480),
+            activitySummary: nil,
+            launchReadiness: nil
+        )
+
+        #expect(snapshot.attentionSummaryLabel.contains("1 queued transcript range"))
+        #expect(snapshot.attentionSummaryLabel.contains("10 local hook events"))
+        #expect(snapshot.attentionSummaryLabel.contains("replay backlog"))
+    }
+
+    @Test
+    func attentionSummaryExplainsConsecutiveShippingFailures() {
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-04-08T01:52:00Z",
+            healthState: "degraded",
+            severity: "yellow",
+            headline: "Longhouse shipping is degraded",
+            reasons: ["consecutive_failures"],
+            suggestedActions: ["Run: longhouse machine repair"],
+            service: nil,
+            engineStatus: EngineStatusSnapshot(
+                path: nil,
+                exists: true,
+                fresh: true,
+                ageSeconds: 4,
+                payload: EngineStatusPayload(
+                    version: "0.1.16",
+                    daemonPid: 123,
+                    lastShipAt: "2026-04-08T01:51:00Z",
+                    spoolPendingCount: 0,
+                    spoolDeadCount: 0,
+                    parseErrorCount1H: 0,
+                    consecutiveShipFailures: 3,
+                    diskFreeBytes: nil,
+                    isOffline: false,
+                    recentDeadLetters: nil,
+                    lastUpdated: "2026-04-08T01:52:00Z"
+                ),
+                error: nil
+            ),
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: nil
+        )
+
+        #expect(snapshot.attentionSummaryLabel.contains("3 consecutive shipping failures"))
+        #expect(snapshot.attentionSummaryLabel.contains("still failing to connect"))
+    }
+
+    @Test
     func managedAttentionOverridesDisplaySeverity() throws {
         let fixtureURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
