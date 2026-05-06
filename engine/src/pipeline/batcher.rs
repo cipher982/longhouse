@@ -31,6 +31,7 @@ fn event_index_at_or_after(events: &[ParsedEvent], offset: u64) -> usize {
     events.partition_point(|event| event.source_offset < offset)
 }
 
+#[cfg(test)]
 pub fn plan_range_actions(
     source_lines: &[ParsedSourceLine],
     events: &[ParsedEvent],
@@ -38,6 +39,27 @@ pub fn plan_range_actions(
     end_offset: u64,
     max_batch_bytes: u64,
 ) -> Result<Vec<PlannedRangeAction>> {
+    plan_range_actions_with_limits(
+        source_lines,
+        events,
+        start_offset,
+        end_offset,
+        max_batch_bytes,
+        max_batch_bytes,
+    )
+}
+
+pub fn plan_range_actions_with_limits(
+    source_lines: &[ParsedSourceLine],
+    events: &[ParsedEvent],
+    start_offset: u64,
+    end_offset: u64,
+    target_batch_bytes: u64,
+    max_batch_bytes: u64,
+) -> Result<Vec<PlannedRangeAction>> {
+    if target_batch_bytes == 0 {
+        bail!("target_batch_bytes must be > 0");
+    }
     if max_batch_bytes == 0 {
         bail!("max_batch_bytes must be > 0");
     }
@@ -67,6 +89,7 @@ pub fn plan_range_actions(
         );
     }
 
+    let target_batch_bytes = target_batch_bytes.min(max_batch_bytes);
     let mut actions = Vec::new();
     let mut batch_start_idx = start_line_idx;
     let mut batch_start_offset = start_offset;
@@ -115,7 +138,7 @@ pub fn plan_range_actions(
         }
 
         let proposed_bytes = line_end - batch_start_offset;
-        if batch_start_idx < line_idx && proposed_bytes > max_batch_bytes {
+        if batch_start_idx < line_idx && proposed_bytes > target_batch_bytes {
             actions.push(PlannedRangeAction::Ship(ShipRange {
                 start_offset: batch_start_offset,
                 end_offset: line_start,
@@ -288,5 +311,70 @@ mod tests {
         };
 
         assert_eq!(range.event_range, 0..3);
+    }
+
+    #[test]
+    fn test_plan_range_actions_with_limits_uses_soft_target_without_dead_lettering() {
+        let source_lines = vec![line(0, "large-1"), line(700, "large-2"), line(1400, "tail")];
+        let events = vec![
+            event(0, "large-1"),
+            event(700, "large-2"),
+            event(1400, "tail"),
+        ];
+
+        let actions =
+            plan_range_actions_with_limits(&source_lines, &events, 0, 1600, 512, 2_000).unwrap();
+
+        assert_eq!(
+            actions,
+            vec![
+                PlannedRangeAction::Ship(ShipRange {
+                    start_offset: 0,
+                    end_offset: 700,
+                    source_line_range: 0..1,
+                    event_range: 0..1,
+                }),
+                PlannedRangeAction::Ship(ShipRange {
+                    start_offset: 700,
+                    end_offset: 1400,
+                    source_line_range: 1..2,
+                    event_range: 1..2,
+                }),
+                PlannedRangeAction::Ship(ShipRange {
+                    start_offset: 1400,
+                    end_offset: 1600,
+                    source_line_range: 2..3,
+                    event_range: 2..3,
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_plan_range_actions_with_limits_still_dead_letters_hard_cap() {
+        let source_lines = vec![line(0, "huge"), line(700, "tail")];
+        let events = vec![event(0, "huge"), event(700, "tail")];
+
+        let actions =
+            plan_range_actions_with_limits(&source_lines, &events, 0, 800, 256, 512).unwrap();
+
+        assert_eq!(
+            actions,
+            vec![
+                PlannedRangeAction::DeadLetter(DeadLetterRange {
+                    start_offset: 0,
+                    end_offset: 700,
+                    source_line_range: 0..1,
+                    event_range: 0..1,
+                    byte_len: 700,
+                }),
+                PlannedRangeAction::Ship(ShipRange {
+                    start_offset: 700,
+                    end_offset: 800,
+                    source_line_range: 1..2,
+                    event_range: 1..2,
+                }),
+            ]
+        );
     }
 }
