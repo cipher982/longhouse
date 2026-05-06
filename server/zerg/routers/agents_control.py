@@ -105,7 +105,7 @@ async def machine_control_websocket(websocket: WebSocket) -> None:
                 await registry.mark_seen(owner_id=owner_id, device_id=device_id)
             elif message_type == "command_result":
                 await registry.mark_seen(owner_id=owner_id, device_id=device_id)
-                await registry.complete_command(message)
+                await registry.complete_command(message, owner_id=owner_id, device_id=device_id)
             else:
                 logger.warning("Unknown machine control message type from %s: %s", device_id, message_type)
     finally:
