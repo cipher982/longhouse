@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import datetime
 from datetime import timedelta
@@ -21,6 +22,7 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionRuntimeState
+from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_capabilities import project_current_session_capabilities
 from zerg.services.session_capabilities import project_current_session_capabilities_from_facts
@@ -607,5 +609,54 @@ def test_current_session_capabilities_uses_liveness_facts_for_runtime_gate(monke
             assert expired.can_queue_next_input is False
             assert expired.can_steer_active_turn is False
             assert expired.host_reattach_available is True
+    finally:
+        engine.dispose()
+
+
+def test_current_session_capabilities_uses_engine_channel_without_runner_metadata(monkeypatch, tmp_path):
+    engine, session_local = _make_db(tmp_path)
+
+    async def _run():
+        registry = get_machine_control_channel_registry()
+        await registry.clear_for_tests()
+        try:
+            with session_local() as db:
+                session = _seed_agent_session(db, source_runner_id=None, device_id="cinder")
+                _upsert_runtime_state(
+                    db,
+                    session,
+                    phase="running",
+                    freshness_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+                )
+
+                without_owner = current_session_capabilities(db, session)
+                assert without_owner.live_control_available is False
+
+                def _runner_state_should_not_be_used(_db, _session):
+                    raise AssertionError("engine-channel capability should not query runner host state")
+
+                monkeypatch.setattr(
+                    "zerg.services.session_current_control.managed_runner_host_state",
+                    _runner_state_should_not_be_used,
+                )
+                await registry.register(
+                    owner_id=7,
+                    device_id="cinder",
+                    machine_name="cinder",
+                    engine_build="abc123",
+                    supports=["codex.send", "codex.steer"],
+                    websocket=SimpleNamespace(),
+                )
+                live = current_session_capabilities(db, session, owner_id=7)
+
+                assert live.live_control_available is True
+                assert live.can_queue_next_input is True
+                assert live.can_steer_active_turn is True
+                assert live.host_reattach_available is False
+        finally:
+            await registry.clear_for_tests()
+
+    try:
+        asyncio.run(_run())
     finally:
         engine.dispose()

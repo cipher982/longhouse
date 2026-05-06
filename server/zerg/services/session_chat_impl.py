@@ -258,8 +258,9 @@ async def _build_managed_local_draft_reply_response(
     request_id: str,
     max_chars: int,
     db: Session,
+    owner_id: int | None = None,
 ) -> SessionDraftReplyResponse:
-    _assert_live_session_send_available(db, source_session)
+    _assert_live_session_send_available(db, source_session, owner_id=owner_id)
 
     events = AgentsStore(db).get_session_events(
         source_session.id,
@@ -343,8 +344,13 @@ def _load_session_for_continuation(db: Session, session_id: str):
     return source_session
 
 
-def _assert_live_session_send_available(db: Session, source_session) -> None:
-    capabilities = current_session_capabilities(db, source_session)
+def _assert_live_session_send_available(
+    db: Session,
+    source_session,
+    *,
+    owner_id: int | None = None,
+) -> None:
+    capabilities = current_session_capabilities(db, source_session, owner_id=owner_id)
     if capabilities.live_control_available:
         return
     if capabilities.host_reattach_available:
@@ -589,7 +595,7 @@ async def _drain_next_queued_input(
         if source_session is None:
             logger.warning("Drain aborted: session %s not found", session_id)
             return
-        if not current_session_capabilities(db, source_session).live_control_available:
+        if not current_session_capabilities(db, source_session, owner_id=queued_exists.owner_id).live_control_available:
             logger.info("Drain aborted: session %s no longer supports live control", session_id)
             return
 
@@ -858,7 +864,7 @@ async def _dispatch_managed_local_text(
             },
         )
 
-        if not current_session_capabilities(db, source_session).live_control_available:
+        if not current_session_capabilities(db, source_session, owner_id=owner_id).live_control_available:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Managed local session is missing live runner metadata",
@@ -1132,7 +1138,7 @@ async def _stream_managed_local_output(
 ) -> AsyncIterator[str]:
     if db is None:
         raise RuntimeError("Managed local chat requires a database session")
-    capabilities = current_session_capabilities(db, source_session)
+    capabilities = current_session_capabilities(db, source_session, owner_id=owner_id)
     if not capabilities.live_control_available:
         raise RuntimeError("Managed local session is missing live runner metadata")
 

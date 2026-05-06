@@ -230,7 +230,7 @@ async def send_to_live_session(
     request_id = str(uuid.uuid4())[:8]
     source_session = _load_session_for_continuation(db, session_id)
     logger.info(f"[{request_id}] Live session send request for session {source_session.id}")
-    _assert_live_session_send_available(db, source_session)
+    _assert_live_session_send_available(db, source_session, owner_id=current_user.id)
     lock_scope_id = await _acquire_session_lock_or_raise(source_session=source_session, request_id=request_id)
     try:
         return await _build_managed_local_chat_response(
@@ -258,12 +258,12 @@ async def draft_reply_for_live_session(
     session_id: str,
     body: SessionDraftReplyRequest | None = None,
     db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_browser_route_user),
+    current_user: User = Depends(get_current_browser_route_user),
 ):
     """Generate a suggested next user message for a live managed-local session."""
     request_id = str(uuid.uuid4())[:8]
     source_session = _load_session_for_continuation(db, session_id)
-    _assert_live_session_send_available(db, source_session)
+    _assert_live_session_send_available(db, source_session, owner_id=current_user.id)
     try:
         max_chars = (body or SessionDraftReplyRequest()).max_chars
         return await _build_managed_local_draft_reply_response(
@@ -271,6 +271,7 @@ async def draft_reply_for_live_session(
             request_id=request_id,
             max_chars=max_chars,
             db=db,
+            owner_id=current_user.id,
         )
     except HTTPException:
         raise
@@ -302,8 +303,8 @@ async def send_to_live_session_agents(
         device_token=resolved_device_token,
         auth_disabled=settings.auth_disabled,
     )
-    _assert_live_session_send_available(db, source_session)
     owner_id = _resolve_agents_owner_id(db, resolved_device_token)
+    _assert_live_session_send_available(db, source_session, owner_id=owner_id)
     lock_scope_id = await _acquire_session_lock_or_raise(source_session=source_session, request_id=request_id)
 
     try:
@@ -347,7 +348,8 @@ async def draft_reply_for_live_session_agents(
         device_token=resolved_device_token,
         auth_disabled=settings.auth_disabled,
     )
-    _assert_live_session_send_available(db, source_session)
+    owner_id = _resolve_agents_owner_id(db, resolved_device_token)
+    _assert_live_session_send_available(db, source_session, owner_id=owner_id)
 
     try:
         max_chars = (body or SessionDraftReplyRequest()).max_chars
@@ -356,6 +358,7 @@ async def draft_reply_for_live_session_agents(
             request_id=request_id,
             max_chars=max_chars,
             db=db,
+            owner_id=owner_id,
         )
     except HTTPException:
         raise
@@ -376,7 +379,7 @@ async def interrupt_live_session(
     """Browser-authenticated explicit interrupt for managed-local sessions."""
     request_id = str(uuid.uuid4())[:8]
     source_session = _load_session_for_continuation(db, session_id)
-    _assert_live_session_send_available(db, source_session)
+    _assert_live_session_send_available(db, source_session, owner_id=current_user.id)
     return await _interrupt_live_session_response(
         db=db,
         owner_id=current_user.id,
@@ -408,8 +411,8 @@ async def interrupt_live_session_agents(
         device_token=resolved_device_token,
         auth_disabled=settings.auth_disabled,
     )
-    _assert_live_session_send_available(db, source_session)
     owner_id = _resolve_agents_owner_id(db, resolved_device_token)
+    _assert_live_session_send_available(db, source_session, owner_id=owner_id)
     return await _interrupt_live_session_response(
         db=db,
         owner_id=owner_id,
@@ -522,7 +525,7 @@ async def _dispatch_steer_input(
     from zerg.services.managed_local_control import MANAGED_LOCAL_STEER_TURN_ENDED
     from zerg.services.managed_local_control import steer_text_to_managed_local_session
 
-    capabilities = current_session_capabilities(db, source_session)
+    capabilities = current_session_capabilities(db, source_session, owner_id=owner_id)
     if not capabilities.can_steer_active_turn:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -600,7 +603,7 @@ async def _create_session_input_response(
             detail=f"unknown intent: {body.intent}",
         )
 
-    _assert_live_session_send_available(db, source_session)
+    _assert_live_session_send_available(db, source_session, owner_id=owner_id)
 
     request_id = str(uuid.uuid4())[:8]
 
