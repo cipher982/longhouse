@@ -1523,6 +1523,19 @@ fn load_ready_state(
     Ok(state)
 }
 
+pub fn validate_codex_bridge_attached(
+    session_id: &str,
+    state_root_override: Option<&Path>,
+) -> Result<()> {
+    let state = load_ready_state(session_id, state_root_override)?;
+    state
+        .thread_id
+        .as_deref()
+        .filter(|thread_id| !thread_id.trim().is_empty())
+        .context("bridge state is missing thread_id")?;
+    Ok(())
+}
+
 fn read_log_tail(path: &Path, max_chars: usize) -> String {
     let text = fs::read_to_string(path).unwrap_or_default();
     truncate_tail_chars(&text, max_chars)

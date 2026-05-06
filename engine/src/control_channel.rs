@@ -1,6 +1,7 @@
 //! Machine Agent managed-control WebSocket client.
 
-use std::time::Duration;
+use std::collections::{HashMap, VecDeque};
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use futures_util::{SinkExt, StreamExt};
@@ -14,13 +15,16 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::build_identity;
 use crate::codex_bridge::{
     cmd_codex_bridge_interrupt, cmd_codex_bridge_send, cmd_codex_bridge_steer,
-    BridgeInterruptConfig, BridgeSendConfig, BridgeSteerConfig, BridgeSteerError,
+    validate_codex_bridge_attached, BridgeInterruptConfig, BridgeSendConfig, BridgeSteerConfig,
+    BridgeSteerError,
 };
 use crate::config::ShipperConfig;
 
 const COMMAND_SEND_TEXT: &str = "session.send_text";
 const COMMAND_INTERRUPT: &str = "session.interrupt";
 const COMMAND_STEER_TEXT: &str = "session.steer_text";
+const COMPLETED_COMMAND_CACHE_CAPACITY: usize = 256;
+const COMPLETED_COMMAND_CACHE_TTL_SECS: u64 = 5 * 60;
 
 pub fn spawn_control_channel(config: ShipperConfig) -> Option<JoinHandle<()>> {
     if config.api_token.as_deref().unwrap_or("").trim().is_empty() {
@@ -35,8 +39,12 @@ pub fn spawn_control_channel(config: ShipperConfig) -> Option<JoinHandle<()>> {
 
 async fn run_reconnect_loop(config: ShipperConfig) {
     let mut backoff = Duration::from_secs(1);
+    let mut completed_commands = CompletedCommandCache::new(
+        COMPLETED_COMMAND_CACHE_CAPACITY,
+        Duration::from_secs(COMPLETED_COMMAND_CACHE_TTL_SECS),
+    );
     loop {
-        match run_once(&config).await {
+        match run_once(&config, &mut completed_commands).await {
             Ok(()) => {
                 tracing::info!("Machine control channel disconnected");
                 backoff = Duration::from_secs(1);
@@ -50,7 +58,10 @@ async fn run_reconnect_loop(config: ShipperConfig) {
     }
 }
 
-async fn run_once(config: &ShipperConfig) -> Result<()> {
+async fn run_once(
+    config: &ShipperConfig,
+    completed_commands: &mut CompletedCommandCache,
+) -> Result<()> {
     let ws_url = control_ws_url(&config.api_url)?;
     let mut request = ws_url
         .as_str()
@@ -95,7 +106,7 @@ async fn run_once(config: &ShipperConfig) -> Result<()> {
             );
             continue;
         }
-        let result = handle_command_frame(frame).await;
+        let result = handle_command_frame(frame, completed_commands).await;
         write
             .send(Message::Text(result.to_string()))
             .await
@@ -105,7 +116,10 @@ async fn run_once(config: &ShipperConfig) -> Result<()> {
     Ok(())
 }
 
-async fn handle_command_frame(frame: Value) -> Value {
+async fn handle_command_frame(
+    frame: Value,
+    completed_commands: &mut CompletedCommandCache,
+) -> Value {
     let command_id = frame
         .get("command_id")
         .and_then(Value::as_str)
@@ -115,16 +129,22 @@ async fn handle_command_frame(frame: Value) -> Value {
         return command_error("", "invalid_command", "command_id is required");
     }
 
+    if let Some(result) = completed_commands.get(&command_id) {
+        return result;
+    }
+
     let result = execute_command(&frame).await;
-    match result {
+    let response = match result {
         Ok(result) => json!({
             "type": "command_result",
-            "command_id": command_id,
+            "command_id": &command_id,
             "ok": true,
             "result": result,
         }),
         Err(CommandError { code, message }) => command_error(&command_id, &code, &message),
-    }
+    };
+    completed_commands.insert(command_id, response.clone());
+    response
 }
 
 async fn execute_command(frame: &Value) -> std::result::Result<Value, CommandError> {
@@ -135,6 +155,8 @@ async fn execute_command(frame: &Value) -> std::result::Result<Value, CommandErr
     match command_type.as_str() {
         COMMAND_SEND_TEXT => {
             let text = payload_required_string(&payload, "text")?;
+            validate_codex_bridge_attached(&session_id, None)
+                .map_err(CommandError::session_not_attached)?;
             let summary = cmd_codex_bridge_send(BridgeSendConfig {
                 session_id: session_id.clone(),
                 text,
@@ -155,6 +177,8 @@ async fn execute_command(frame: &Value) -> std::result::Result<Value, CommandErr
             }))
         }
         COMMAND_INTERRUPT => {
+            validate_codex_bridge_attached(&session_id, None)
+                .map_err(CommandError::session_not_attached)?;
             cmd_codex_bridge_interrupt(BridgeInterruptConfig {
                 session_id,
                 state_root: None,
@@ -171,6 +195,8 @@ async fn execute_command(frame: &Value) -> std::result::Result<Value, CommandErr
         }
         COMMAND_STEER_TEXT => {
             let text = payload_required_string(&payload, "text")?;
+            validate_codex_bridge_attached(&session_id, None)
+                .map_err(CommandError::session_not_attached)?;
             match cmd_codex_bridge_steer(BridgeSteerConfig {
                 session_id,
                 text,
@@ -196,6 +222,77 @@ async fn execute_command(frame: &Value) -> std::result::Result<Value, CommandErr
             code: "unsupported_command".to_string(),
             message: format!("Unsupported command_type={other}"),
         }),
+    }
+}
+
+struct CachedCommandResult {
+    completed_at: Instant,
+    result: Value,
+}
+
+struct CompletedCommandCache {
+    capacity: usize,
+    ttl: Duration,
+    entries: HashMap<String, CachedCommandResult>,
+    order: VecDeque<String>,
+}
+
+impl CompletedCommandCache {
+    fn new(capacity: usize, ttl: Duration) -> Self {
+        Self {
+            capacity,
+            ttl,
+            entries: HashMap::new(),
+            order: VecDeque::new(),
+        }
+    }
+
+    fn get(&mut self, command_id: &str) -> Option<Value> {
+        self.prune(Instant::now());
+        self.entries
+            .get(command_id)
+            .map(|cached| cached.result.clone())
+    }
+
+    fn insert(&mut self, command_id: String, result: Value) {
+        if self.capacity == 0 {
+            return;
+        }
+        let now = Instant::now();
+        self.prune(now);
+        if !self.entries.contains_key(&command_id) {
+            self.order.push_back(command_id.clone());
+        }
+        self.entries.insert(
+            command_id,
+            CachedCommandResult {
+                completed_at: now,
+                result,
+            },
+        );
+        while self.entries.len() > self.capacity {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            self.entries.remove(&oldest);
+        }
+    }
+
+    fn prune(&mut self, now: Instant) {
+        while let Some(command_id) = self.order.front() {
+            let expired = self
+                .entries
+                .get(command_id)
+                .map(|cached| now.duration_since(cached.completed_at) >= self.ttl)
+                .unwrap_or(true);
+            if !expired {
+                break;
+            }
+            let Some(command_id) = self.order.pop_front() else {
+                break;
+            };
+            self.entries.remove(&command_id);
+        }
     }
 }
 
@@ -270,11 +367,22 @@ impl CommandError {
             message: message.into(),
         }
     }
+
+    fn session_not_attached(error: impl Into<anyhow::Error>) -> Self {
+        Self {
+            code: "session_not_attached".to_string(),
+            message: error.into().to_string(),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn command_cache() -> CompletedCommandCache {
+        CompletedCommandCache::new(16, Duration::from_secs(60))
+    }
 
     #[test]
     fn control_ws_url_converts_http_and_https() {
@@ -290,12 +398,13 @@ mod tests {
 
     #[tokio::test]
     async fn handle_command_frame_rejects_missing_command_id() {
+        let mut cache = command_cache();
         let result = handle_command_frame(json!({
             "type": "command",
             "session_id": "session-1",
             "command_type": COMMAND_SEND_TEXT,
             "payload": {"text": "continue"},
-        }))
+        }), &mut cache)
         .await;
 
         assert_eq!(result["ok"], false);
@@ -304,17 +413,69 @@ mod tests {
 
     #[tokio::test]
     async fn handle_command_frame_rejects_unsupported_command_type() {
+        let mut cache = command_cache();
         let result = handle_command_frame(json!({
             "type": "command",
             "command_id": "cmd-1",
             "session_id": "session-1",
             "command_type": "session.unknown",
             "payload": {},
-        }))
+        }), &mut cache)
         .await;
 
         assert_eq!(result["command_id"], "cmd-1");
         assert_eq!(result["ok"], false);
         assert_eq!(result["error"]["code"], "unsupported_command");
+    }
+
+    #[tokio::test]
+    async fn handle_command_frame_rejects_missing_attached_session() {
+        let mut cache = command_cache();
+        let result = handle_command_frame(json!({
+            "type": "command",
+            "command_id": "cmd-missing-session",
+            "session_id": "definitely-missing-control-channel-session",
+            "command_type": COMMAND_SEND_TEXT,
+            "payload": {"text": "continue"},
+        }), &mut cache)
+        .await;
+
+        assert_eq!(result["command_id"], "cmd-missing-session");
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["error"]["code"], "session_not_attached");
+    }
+
+    #[tokio::test]
+    async fn handle_command_frame_returns_cached_result_for_duplicate_command_id() {
+        let mut cache = command_cache();
+        let first = handle_command_frame(json!({
+            "type": "command",
+            "command_id": "cmd-duplicate",
+            "session_id": "session-1",
+            "command_type": "session.unknown",
+            "payload": {},
+        }), &mut cache)
+        .await;
+        let second = handle_command_frame(json!({
+            "type": "command",
+            "command_id": "cmd-duplicate",
+            "session_id": "definitely-missing-control-channel-session",
+            "command_type": COMMAND_SEND_TEXT,
+            "payload": {"text": "continue"},
+        }), &mut cache)
+        .await;
+
+        assert_eq!(first, second);
+        assert_eq!(second["error"]["code"], "unsupported_command");
+    }
+
+    #[test]
+    fn completed_command_cache_evicts_oldest_result() {
+        let mut cache = CompletedCommandCache::new(1, Duration::from_secs(60));
+        cache.insert("cmd-1".to_string(), json!({"command_id": "cmd-1"}));
+        cache.insert("cmd-2".to_string(), json!({"command_id": "cmd-2"}));
+
+        assert_eq!(cache.get("cmd-1"), None);
+        assert_eq!(cache.get("cmd-2").unwrap()["command_id"], "cmd-2");
     }
 }
