@@ -193,6 +193,7 @@ If you touch a secondary area, either simplify it toward the core story or expla
 ## Managed vs Unmanaged Sessions
 
 - **Managed** means Longhouse owns the control path for the session, not necessarily the provider binary. Today that usually means the session was launched with `longhouse claude`, `longhouse codex`, or another Longhouse wrapper, and it is reflected by `session.capabilities.live_control_available` or `host_reattach_available`.
+- A `this-device` managed launch without a remote command Runner row is managed but observe-only from browser/iOS until a Runner-backed send path exists; `host_reattach_available` may still be true.
 - **Unmanaged** means Longhouse imported or discovered the session but does not own its live control path. Bare provider CLI runs are unmanaged compatibility ingest: searchable, sometimes partially live, but not steerable from the browser.
 - Do not use "started in Longhouse" in user-facing copy. It sounds like the website. Prefer `managed` / `unmanaged`, then separately describe whether the session is steerable, observe-only, or only has transcript-level liveness.
 - The timeline, wall, and workspace should all tell you whether the session you are looking at is managed before you try to drive it. Always rely on `session.capabilities` so you do not assume bare CLI sessions can behave like managed ones.

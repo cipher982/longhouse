@@ -228,6 +228,24 @@ def test_build_session_capabilities_marks_native_managed_local_session():
     assert capabilities.home_label == "On this Mac"
 
 
+def test_managed_local_without_runner_metadata_is_observe_only_but_reattachable():
+    session = _make_session(
+        execution_home="managed_local",
+        managed_transport=ManagedSessionTransport.CODEX_APP_SERVER.value,
+        source_runner_id=None,
+    )
+
+    capabilities = build_session_capabilities(session)
+
+    assert capabilities.execution_home.value == "managed_local"
+    assert capabilities.managed_transport == ManagedSessionTransport.CODEX_APP_SERVER
+    assert capabilities.live_control_available is False
+    assert capabilities.reply_to_live_session_available is False
+    assert capabilities.can_queue_next_input is False
+    assert capabilities.can_steer_active_turn is False
+    assert capabilities.host_reattach_available is True
+
+
 def test_build_session_capabilities_drops_legacy_tmux_sessions_out_of_live_control():
     session = _make_session(
         execution_home="managed_local",
