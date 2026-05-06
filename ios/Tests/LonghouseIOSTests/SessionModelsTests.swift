@@ -890,6 +890,7 @@ struct SessionModelsTests {
         {
           "sessions": [
             {
+              "timeline_anchor_at": "2026-04-25T20:05:00Z",
               "head_origin_label": "On this Mac",
               "head": {
                 "id": "session-card-contract",
@@ -937,8 +938,12 @@ struct SessionModelsTests {
         """
 
         let decoded = try JSONDecoder.snakeCase.decode(SessionsResponse.self, from: Data(json.utf8))
-        let session = try #require(decoded.sessions.first?.head)
+        let card = try #require(decoded.sessions.first)
+        let session = card.head
+        let summary = card.sessionSummary
 
+        #expect(card.timelineAnchorAt == "2026-04-25T20:05:00Z")
+        #expect(summary.timelineAnchorAt == "2026-04-25T20:05:00Z")
         #expect(session.timelineCard?.ownership.label == "Managed")
         #expect(session.timelineCard?.status?.label == "Idle")
         #expect(session.timelineCard?.borderTone == "idle")
