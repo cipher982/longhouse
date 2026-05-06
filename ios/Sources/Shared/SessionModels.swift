@@ -497,8 +497,38 @@ struct SessionsResponse: Codable, Sendable {
 }
 
 struct TimelineCard: Codable, Sendable {
+    let timelineAnchorAt: String?
     let head: TimelineSession
     let headOriginLabel: String?
+
+    var sessionSummary: SessionSummary {
+        SessionSummary(
+            id: head.id,
+            title: head.summaryTitle ?? head.summary ?? head.provider ?? "Session",
+            presenceState: head.presenceState ?? "unknown",
+            provider: head.provider,
+            project: head.project,
+            lastActivityAt: head.lastActivityAt,
+            summary: head.summary,
+            userState: head.userState,
+            status: head.status,
+            displayPhase: head.displayPhase,
+            presenceTool: head.presenceTool,
+            activeTool: head.activeTool,
+            gitBranch: head.gitBranch,
+            homeLabel: head.homeLabel,
+            headOriginLabel: headOriginLabel,
+            timelineAnchorAt: timelineAnchorAt ?? head.timelineAnchorAt,
+            userMessages: head.userMessages,
+            toolCalls: head.toolCalls,
+            liveControlAvailable: head.capabilities?.liveControlAvailable,
+            hostReattachAvailable: head.capabilities?.hostReattachAvailable,
+            replyToLiveSessionAvailable: head.capabilities?.replyToLiveSessionAvailable,
+            runtimeDisplay: head.runtimeDisplay,
+            runtimeFacts: head.runtimeFacts,
+            timelineCard: head.timelineCard
+        )
+    }
 }
 
 struct TimelineSession: Codable, Sendable {

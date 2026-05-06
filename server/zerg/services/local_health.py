@@ -2079,7 +2079,10 @@ def _classify_health(
         reasons.append("managed_unknown_phase")
         _with_action(actions, "Update the managed phase contract before trusting this managed-session status")
 
-    if outbox_count >= DEGRADED_BACKLOG_COUNT:
+    outbox_backlog_is_actionable = outbox_count >= BROKEN_BACKLOG_COUNT or (
+        outbox_count >= DEGRADED_BACKLOG_COUNT and outbox_oldest is not None and outbox_oldest > OUTBOX_DEGRADED_AGE_SECONDS
+    )
+    if outbox_backlog_is_actionable:
         reasons.append("outbox_backlog")
     if outbox_count > 0 and outbox_oldest is not None and outbox_oldest > OUTBOX_DEGRADED_AGE_SECONDS:
         reasons.append("outbox_stuck")

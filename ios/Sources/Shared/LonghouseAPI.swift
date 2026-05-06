@@ -87,35 +87,7 @@ struct LonghouseAPI: Sendable {
         }
 
         let decoded = try JSONDecoder.snakeCase.decode(SessionsResponse.self, from: data)
-        return decoded.sessions.map { card in
-            let session = card.head
-            return SessionSummary(
-                id: session.id,
-                title: session.summaryTitle ?? session.summary ?? session.provider ?? "Session",
-                presenceState: session.presenceState ?? "unknown",
-                provider: session.provider,
-                project: session.project,
-                lastActivityAt: session.lastActivityAt,
-                summary: session.summary,
-                userState: session.userState,
-                status: session.status,
-                displayPhase: session.displayPhase,
-                presenceTool: session.presenceTool,
-                activeTool: session.activeTool,
-                gitBranch: session.gitBranch,
-                homeLabel: session.homeLabel,
-                headOriginLabel: card.headOriginLabel,
-                timelineAnchorAt: session.timelineAnchorAt,
-                userMessages: session.userMessages,
-                toolCalls: session.toolCalls,
-                liveControlAvailable: session.capabilities?.liveControlAvailable,
-                hostReattachAvailable: session.capabilities?.hostReattachAvailable,
-                replyToLiveSessionAvailable: session.capabilities?.replyToLiveSessionAvailable,
-                runtimeDisplay: session.runtimeDisplay,
-                runtimeFacts: session.runtimeFacts,
-                timelineCard: session.timelineCard
-            )
-        }
+        return decoded.sessions.map(\.sessionSummary)
     }
 
     static func sessionWorkspaceURL(baseURL: URL, id: String, limit: Int = 200, branchMode: String = "head") -> URL {
