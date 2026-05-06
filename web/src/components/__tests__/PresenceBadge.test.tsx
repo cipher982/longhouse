@@ -33,7 +33,7 @@ describe("PresenceBadge styles", () => {
   it("keeps compact needs-user badges steady instead of pulsing like execution", () => {
     render(<PresenceBadge state="needs_user" compact />);
 
-    const indicator = screen.getByTitle("Ready").firstElementChild as HTMLElement;
+    const indicator = screen.getByTitle("Idle").firstElementChild as HTMLElement;
     expect(indicator).toBeTruthy();
     expect(indicator.style.animation).toBe("");
   });

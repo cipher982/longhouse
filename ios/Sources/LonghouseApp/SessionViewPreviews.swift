@@ -4,8 +4,8 @@ import SwiftUI
 
 private extension SessionDetail {
     static func mock(
-        headline: String = "Ready",
-        runtimeDetail: String? = "Ready for next prompt",
+        headline: String = "Idle",
+        runtimeDetail: String? = "Waiting for next prompt",
         tone: String = "idle",
         capabilityLabel: String = "Live on cinder",
         live: Bool = true,

@@ -29,7 +29,7 @@ struct SessionLiveActivityModelsTests {
         let payload = """
         {
           "presenceState": "needs_user",
-          "displayPhase": "Ready",
+          "displayPhase": "Idle",
           "activeTool": null,
           "updatedAt": 1777140001,
           "isAttention": false
@@ -234,7 +234,7 @@ struct SessionLiveActivityModelsTests {
             "tone": "inactive",
             "headline": "Not connected",
             "detail": null,
-            "phase_label": "Recent",
+            "phase_label": "Inactive",
             "compact_tool_label": null,
             "is_live": false,
             "is_executing": false,
@@ -251,7 +251,7 @@ struct SessionLiveActivityModelsTests {
         let state = detail.liveActivityContentState(updatedAt: Date(timeIntervalSince1970: 1_777_140_000))
 
         #expect(state.presenceState == "unknown")
-        #expect(state.displayPhase == "Recent")
+        #expect(state.displayPhase == "Inactive")
         #expect(state.activeTool == nil)
         #expect(state.isAttention == false)
     }

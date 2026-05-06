@@ -20,7 +20,7 @@ struct SessionSummary: Identifiable {
         switch presenceState {
         case "running": return "Running"
         case "thinking": return "Thinking"
-        case "needs_user": return "Ready"
+        case "needs_user": return "Idle"
         case "blocked": return "Needs permission"
         case "idle": return "Idle"
         default:

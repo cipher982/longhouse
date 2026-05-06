@@ -1297,7 +1297,7 @@ describe("SessionsPage", () => {
     expect(card).not.toHaveClass("session-card--thinking");
   });
 
-  it("styles needs-user sessions as ready state, not attention or execution", async () => {
+  it("styles needs-user sessions as idle state, not attention or execution", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
@@ -1310,7 +1310,7 @@ describe("SessionsPage", () => {
             presence_updated_at: "2026-03-21T12:04:00Z",
             last_live_at: "2026-03-21T12:04:00Z",
             timeline_anchor_at: "2026-03-21T12:04:00Z",
-            display_phase: "Ready",
+            display_phase: "Idle",
             capabilities: makeCapabilities({
               live_control_available: true,
               host_reattach_available: true,
@@ -1328,7 +1328,7 @@ describe("SessionsPage", () => {
 
     const { container } = renderSessionsPage();
 
-    expect(await screen.findByText("Ready")).toBeInTheDocument();
+    expect(await screen.findByText("Idle")).toBeInTheDocument();
     expect(screen.getByTestId("session-card-ownership")).toHaveTextContent("Managed");
     expect(screen.queryByText(/Reply needed/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Live on laptop/)).not.toBeInTheDocument();
@@ -1930,8 +1930,8 @@ describe("SessionsPage", () => {
               control_path: "managed",
               state: "needs_user",
               tone: "idle",
-              headline: "Ready",
-              phase_label: "Ready",
+              headline: "Idle",
+              phase_label: "Idle",
               needs_attention: false,
               activity_recency: "stale",
               lifecycle: "closed",

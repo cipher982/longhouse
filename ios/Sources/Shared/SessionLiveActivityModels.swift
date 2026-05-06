@@ -59,7 +59,7 @@ extension SessionDetail {
         case "thinking":
             return "Thinking"
         case "needs_user":
-            return "Ready"
+            return "Idle"
         case "blocked":
             return tool.map { "Blocked on \($0)" } ?? "Needs permission"
         case "idle":
