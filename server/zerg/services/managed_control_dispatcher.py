@@ -15,13 +15,24 @@ from typing import Mapping
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
+from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
+from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
 
+MANAGED_CONTROL_COMMAND_INTERRUPT = "session.interrupt"
+MANAGED_CONTROL_COMMAND_SEND_TEXT = "session.send_text"
+MANAGED_CONTROL_COMMAND_STEER_TEXT = "session.steer_text"
 MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL = "engine_channel"
 MANAGED_CONTROL_TRANSPORT_LEGACY_RUNNER = "legacy_runner"
 MANAGED_CONTROL_TRANSPORT_NONE = "none"
 MISSING_LEGACY_RUNNER_METADATA_ERROR = "Managed local session is missing source runner metadata"
+
+_CODEX_ENGINE_CAPABILITY_BY_COMMAND = {
+    MANAGED_CONTROL_COMMAND_SEND_TEXT: "codex.send",
+    MANAGED_CONTROL_COMMAND_INTERRUPT: "codex.interrupt",
+    MANAGED_CONTROL_COMMAND_STEER_TEXT: "codex.steer",
+}
 
 
 @dataclass(frozen=True)
@@ -32,7 +43,38 @@ class ManagedControlDispatchResult:
     error: str | None = None
 
 
-def select_managed_control_transport(session: AgentSession | None) -> str | None:
+def _session_device_id(session: AgentSession | None) -> str | None:
+    device_id = str(getattr(session, "device_id", "") or "").strip()
+    return device_id or None
+
+
+def _session_uses_engine_control(
+    session: AgentSession,
+    *,
+    owner_id: int | None,
+    command_type: str | None,
+) -> bool:
+    if owner_id is None or command_type is None:
+        return False
+    if str(getattr(session, "managed_transport", "") or "").strip() != ManagedSessionTransport.CODEX_APP_SERVER.value:
+        return False
+    capability = _CODEX_ENGINE_CAPABILITY_BY_COMMAND.get(command_type)
+    device_id = _session_device_id(session)
+    if capability is None or device_id is None:
+        return False
+    return get_machine_control_channel_registry().supports(
+        owner_id=owner_id,
+        device_id=device_id,
+        capability=capability,
+    )
+
+
+def select_managed_control_transport(
+    session: AgentSession | None,
+    *,
+    owner_id: int | None = None,
+    command_type: str | None = None,
+) -> str | None:
     """Return the explicit control transport for a managed session.
 
     Phase 1 preserves existing behavior: sessions with legacy Runner metadata
@@ -44,6 +86,8 @@ def select_managed_control_transport(session: AgentSession | None) -> str | None
         return None
     if str(getattr(session, "execution_home", "") or "").strip() != SessionExecutionHome.MANAGED_LOCAL.value:
         return None
+    if _session_uses_engine_control(session, owner_id=owner_id, command_type=command_type):
+        return MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
     if getattr(session, "source_runner_id", None) is not None:
         return MANAGED_CONTROL_TRANSPORT_LEGACY_RUNNER
     return None
@@ -65,13 +109,23 @@ async def dispatch_managed_control_command(
     session: AgentSession,
     command: str,
     timeout_secs: int,
+    command_type: str | None = None,
+    payload: Mapping[str, Any] | None = None,
     commis_id: str | None = None,
     run_id: str | None = None,
     failure_message: str = "Failed to dispatch managed control command",
 ) -> ManagedControlDispatchResult:
     """Dispatch one managed-control command through the selected transport."""
 
-    transport = select_managed_control_transport(session)
+    transport = select_managed_control_transport(session, owner_id=owner_id, command_type=command_type)
+    if transport == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL:
+        return await _dispatch_engine_channel(
+            owner_id=owner_id,
+            session=session,
+            command_type=command_type,
+            payload=payload,
+            timeout_secs=timeout_secs,
+        )
     if transport != MANAGED_CONTROL_TRANSPORT_LEGACY_RUNNER:
         return ManagedControlDispatchResult(
             ok=False,
@@ -111,4 +165,91 @@ async def dispatch_managed_control_command(
         ok=True,
         transport=MANAGED_CONTROL_TRANSPORT_LEGACY_RUNNER,
         data=data,
+    )
+
+
+def _engine_error_message(error: Any, fallback: str) -> tuple[str | None, str]:
+    if isinstance(error, Mapping):
+        code = str(error.get("code") or "").strip() or None
+        message = str(error.get("message") or "").strip() or fallback
+        return code, message
+    if error:
+        return None, str(error)
+    return None, fallback
+
+
+def _engine_command_result_data(message: Mapping[str, Any]) -> Mapping[str, Any]:
+    result = message.get("result", {})
+    data = dict(result) if isinstance(result, Mapping) else {}
+    data.setdefault("exit_code", 0)
+    data.setdefault("stdout", "")
+    data.setdefault("stderr", "")
+    return data
+
+
+async def _dispatch_engine_channel(
+    *,
+    owner_id: int,
+    session: AgentSession,
+    command_type: str | None,
+    payload: Mapping[str, Any] | None,
+    timeout_secs: int,
+) -> ManagedControlDispatchResult:
+    if command_type is None:
+        return ManagedControlDispatchResult(
+            ok=False,
+            transport=MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL,
+            error="Managed control command is missing command_type",
+        )
+    device_id = _session_device_id(session)
+    if device_id is None:
+        return ManagedControlDispatchResult(
+            ok=False,
+            transport=MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL,
+            error="Managed local session is missing device_id",
+        )
+
+    response = await get_machine_control_channel_registry().send_command(
+        owner_id=owner_id,
+        device_id=device_id,
+        session_id=str(getattr(session, "id")),
+        command_type=command_type,
+        payload=payload,
+        timeout_secs=timeout_secs,
+    )
+    if not response.transport_ok:
+        return ManagedControlDispatchResult(
+            ok=False,
+            transport=MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL,
+            error=response.error or "Machine Agent control channel dispatch failed",
+        )
+
+    message = response.message or {}
+    if message.get("ok") is True:
+        return ManagedControlDispatchResult(
+            ok=True,
+            transport=MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL,
+            data=_engine_command_result_data(message),
+        )
+
+    code, error = _engine_error_message(message.get("error"), "Machine Agent control command failed")
+    if code == "turn_ended":
+        return ManagedControlDispatchResult(
+            ok=True,
+            transport=MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL,
+            data={
+                "exit_code": 2,
+                "stdout": "",
+                "stderr": f"error_code: turn_ended\nerror_detail: {error}",
+            },
+        )
+
+    return ManagedControlDispatchResult(
+        ok=True,
+        transport=MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL,
+        data={
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": error,
+        },
     )

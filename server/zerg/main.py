@@ -107,6 +107,7 @@ from zerg.routers.account_connectors import router as account_connectors_router
 from zerg.routers.admin import router as admin_router
 from zerg.routers.admin_bootstrap import router as admin_bootstrap_router
 from zerg.routers.agents_backfill import router as agents_backfill_router
+from zerg.routers.agents_control import router as agents_control_router
 from zerg.routers.agents_demo import router as agents_demo_router
 from zerg.routers.agents_ingest import router as agents_ingest_router
 from zerg.routers.agents_machines import router as agents_machines_router
@@ -285,6 +286,7 @@ api_app.include_router(session_chat_router)
 api_app.include_router(agents_session_chat_router)
 api_app.include_router(timeline_router)
 api_app.include_router(timeline_canary_stream_router)
+api_app.include_router(agents_control_router)
 api_app.include_router(agents_ingest_router)
 api_app.include_router(agents_machines_router)
 api_app.include_router(agents_search_router)

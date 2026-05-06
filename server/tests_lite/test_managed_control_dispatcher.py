@@ -3,13 +3,18 @@ from __future__ import annotations
 import asyncio
 import os
 from types import SimpleNamespace
+from uuid import uuid4
 
+import pytest
 from cryptography.fernet import Fernet
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
+from zerg.services.machine_control_channel import get_machine_control_channel_registry
+from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
+from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_LEGACY_RUNNER
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_NONE
 from zerg.services.managed_control_dispatcher import MISSING_LEGACY_RUNNER_METADATA_ERROR
@@ -19,7 +24,10 @@ from zerg.services.managed_control_dispatcher import select_managed_control_tran
 
 def _session(**overrides):
     values = {
+        "id": uuid4(),
+        "device_id": "cinder",
         "execution_home": "managed_local",
+        "managed_transport": "codex_app_server",
         "source_runner_id": 17,
     }
     values.update(overrides)
@@ -53,12 +61,79 @@ class _FakeRunnerDispatcher:
         return self.result
 
 
+class _FakeMachineWebSocket:
+    def __init__(self):
+        self.sent: list[dict[str, object]] = []
+
+    async def send_json(self, message):
+        self.sent.append(message)
+
+
+async def _clear_machine_registry():
+    await get_machine_control_channel_registry().clear_for_tests()
+
+
+@pytest.fixture(autouse=True)
+def _reset_machine_registry():
+    asyncio.run(_clear_machine_registry())
+    yield
+    asyncio.run(_clear_machine_registry())
+
+
+async def _connect_fake_engine(*, owner_id: int = 42, supports: list[str] | None = None) -> _FakeMachineWebSocket:
+    websocket = _FakeMachineWebSocket()
+    await get_machine_control_channel_registry().register(
+        owner_id=owner_id,
+        device_id="cinder",
+        machine_name="cinder",
+        engine_build="abc123",
+        supports=supports or ["codex.send"],
+        websocket=websocket,
+    )
+    return websocket
+
+
+async def _complete_first_machine_command(websocket: _FakeMachineWebSocket, result):
+    for _ in range(20):
+        if websocket.sent:
+            command_id = str(websocket.sent[0]["command_id"])
+            await get_machine_control_channel_registry().complete_command(
+                {
+                    "type": "command_result",
+                    "command_id": command_id,
+                    **result,
+                }
+            )
+            return
+        await asyncio.sleep(0)
+    raise AssertionError("expected a machine control command frame")
+
+
 def test_select_managed_control_transport_defaults_to_legacy_runner():
     assert select_managed_control_transport(_session(source_runner_id=17)) == MANAGED_CONTROL_TRANSPORT_LEGACY_RUNNER
 
 
 def test_select_managed_control_transport_requires_runner_metadata_for_now():
     assert select_managed_control_transport(_session(source_runner_id=None)) is None
+
+
+def test_select_managed_control_transport_prefers_engine_channel_when_supported():
+    async def _run():
+        await _clear_machine_registry()
+        try:
+            await _connect_fake_engine(owner_id=42, supports=["codex.send"])
+            assert (
+                select_managed_control_transport(
+                    _session(source_runner_id=17),
+                    owner_id=42,
+                    command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+                )
+                == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
+            )
+        finally:
+            await _clear_machine_registry()
+
+    asyncio.run(_run())
 
 
 def test_dispatch_managed_control_command_uses_legacy_runner(monkeypatch):
@@ -113,3 +188,39 @@ def test_dispatch_managed_control_command_has_no_transport_without_runner_metada
     assert result.ok is False
     assert result.transport == MANAGED_CONTROL_TRANSPORT_NONE
     assert result.error == MISSING_LEGACY_RUNNER_METADATA_ERROR
+
+
+def test_dispatch_managed_control_command_uses_engine_channel_when_connected():
+    async def _run():
+        await _clear_machine_registry()
+        try:
+            websocket = await _connect_fake_engine(owner_id=42, supports=["codex.send"])
+            completer = asyncio.create_task(
+                _complete_first_machine_command(
+                    websocket,
+                    {
+                        "ok": True,
+                        "result": {"stdout": "accepted"},
+                    },
+                )
+            )
+            result = await dispatch_managed_control_command(
+                db=object(),
+                owner_id=42,
+                session=_session(source_runner_id=None),
+                command="legacy command is unused for engine transport",
+                timeout_secs=1,
+                command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+                payload={"text": "continue"},
+            )
+            await completer
+
+            assert result.ok is True
+            assert result.transport == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
+            assert result.data == {"stdout": "accepted", "exit_code": 0, "stderr": ""}
+            assert websocket.sent[0]["command_type"] == MANAGED_CONTROL_COMMAND_SEND_TEXT
+            assert websocket.sent[0]["payload"] == {"text": "continue"}
+        finally:
+            await _clear_machine_registry()
+
+    asyncio.run(_run())
