@@ -943,6 +943,7 @@ struct SessionModelsTests {
         let summary = card.sessionSummary
 
         #expect(card.timelineAnchorAt == "2026-04-25T20:05:00Z")
+        #expect(session.timelineAnchorAt == "2026-04-25T20:00:00Z")
         #expect(summary.timelineAnchorAt == "2026-04-25T20:05:00Z")
         #expect(session.timelineCard?.ownership.label == "Managed")
         #expect(session.timelineCard?.status?.label == "Idle")
