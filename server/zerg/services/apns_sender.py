@@ -893,7 +893,7 @@ def _live_activity_display_phase(presence_state: str, active_tool: str | None) -
         case "thinking":
             return "Thinking"
         case "needs_user":
-            return "Ready"
+            return "Idle"
         case "blocked":
             return f"Blocked on {active_tool}" if active_tool else "Needs permission"
         case "idle":

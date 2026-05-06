@@ -116,7 +116,7 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
                 "status": "idle",
                 "presence_state": "needs_user",
                 "confidence": "live",
-                "display_phase": "Ready",
+                "display_phase": "Idle",
             },
             "expect": {
                 "control_path": "managed",
@@ -124,8 +124,8 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
                 "lifecycle": "open",
                 "state": "needs_user",
                 "tone": "idle",
-                "headline": "Ready",
-                "phase_label": "Ready",
+                "headline": "Idle",
+                "phase_label": "Idle",
                 "activity_recency": "live",
                 "needs_attention": False,
             },
@@ -140,7 +140,7 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
                 "status": "idle",
                 "presence_state": None,
                 "confidence": "stale",
-                "display_phase": "Recent",
+                "display_phase": "",
                 "last_live_at": datetime(2026, 4, 26, 11, 0, tzinfo=timezone.utc),
             },
             "expect": {
@@ -150,7 +150,7 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
                 "state": None,
                 "tone": "inactive",
                 "headline": "Not connected",
-                "phase_label": "Recent",
+                "phase_label": "Inactive",
                 "activity_recency": "stale",
                 "needs_attention": False,
             },
@@ -205,7 +205,7 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
                 "state": None,
                 "tone": "active",
                 "headline": "Active",
-                "phase_label": "Recent",
+                "phase_label": "Process running",
                 "activity_recency": "live",
                 "needs_attention": False,
             },
@@ -366,7 +366,7 @@ def test_stale_progress_source_is_inactive():
             runtime_source="progress",
             status="idle",
             confidence="stale",
-            display_phase="Recent",
+            display_phase="Inactive",
             last_live_at=datetime(2026, 4, 26, 11, 0, tzinfo=timezone.utc),
         ),
         capabilities=_capabilities(),
@@ -376,7 +376,7 @@ def test_stale_progress_source_is_inactive():
     assert display.truth_tier == "stale"
     assert display.signal_tier == "transcript_progress"
     assert display.headline == "Inactive"
-    assert display.phase_label == "Recent"
+    assert display.phase_label == "Inactive"
     assert display.is_idle is True
     assert display.activity_recency == "stale"
 
@@ -545,7 +545,7 @@ def test_managed_stale_thinking_without_active_tool_is_not_current_state():
     assert display.tone == "inactive"
     assert display.headline == "Not connected"
     assert display.detail is None
-    assert display.phase_label == "Recent"
+    assert display.phase_label == "Inactive"
     assert display.is_executing is False
     assert display.needs_attention is False
     assert display.activity_recency == "stale"
@@ -634,7 +634,7 @@ def test_unmanaged_stale_thinking_without_active_tool_is_not_stalled():
     assert display.state is None
 
 
-def test_unmanaged_needs_user_without_online_host_renders_ready():
+def test_unmanaged_needs_user_without_online_host_renders_idle():
     display = build_session_runtime_display(
         runtime_view=_runtime_view(
             runtime_phase="needs_user",
@@ -642,7 +642,7 @@ def test_unmanaged_needs_user_without_online_host_renders_ready():
             status="active",
             presence_state="needs_user",
             confidence="live",
-            display_phase="Ready",
+            display_phase="Idle",
         ),
         capabilities=_capabilities(managed=False),
         ended_at=None,
@@ -651,14 +651,14 @@ def test_unmanaged_needs_user_without_online_host_renders_ready():
     assert display.control_path == "unmanaged"
     assert display.host_state == "unknown"
     assert display.state == "needs_user"
-    assert display.phase_label == "Ready"
+    assert display.phase_label == "Idle"
     assert display.headline == "Inactive"
     assert display.is_idle is True
     assert display.tone == "idle"
     assert display.needs_attention is False
 
 
-def test_unmanaged_needs_user_with_online_host_still_renders_ready():
+def test_unmanaged_needs_user_with_online_host_still_renders_idle():
     display = build_session_runtime_display(
         runtime_view=_runtime_view(
             runtime_phase="needs_user",
@@ -666,7 +666,7 @@ def test_unmanaged_needs_user_with_online_host_still_renders_ready():
             status="active",
             presence_state="needs_user",
             confidence="live",
-            display_phase="Ready",
+            display_phase="Idle",
         ),
         capabilities=_capabilities(managed=False),
         ended_at=None,
@@ -676,7 +676,7 @@ def test_unmanaged_needs_user_with_online_host_still_renders_ready():
     assert display.control_path == "unmanaged"
     assert display.host_state == "online"
     assert display.state == "needs_user"
-    assert display.phase_label == "Ready"
+    assert display.phase_label == "Idle"
     assert display.headline == "Inactive"
     assert display.tone == "idle"
     assert display.needs_attention is False
@@ -690,7 +690,7 @@ def test_managed_stale_needs_user_without_presence_is_not_actionable():
             status="idle",
             presence_state=None,
             confidence="stale",
-            display_phase="Recent",
+            display_phase="",
             last_live_at=datetime(2026, 4, 26, 11, 0, tzinfo=timezone.utc),
         ),
         capabilities=_capabilities(managed=True),
@@ -699,13 +699,13 @@ def test_managed_stale_needs_user_without_presence_is_not_actionable():
 
     assert display.control_path == "managed"
     assert display.state is None
-    assert display.phase_label == "Recent"
+    assert display.phase_label == "Inactive"
     assert display.headline == "Not connected"
     assert display.needs_attention is False
     assert display.tone == "inactive"
 
 
-def test_unmanaged_stale_needs_user_phase_without_presence_is_recent():
+def test_unmanaged_stale_needs_user_phase_without_presence_uses_process_truth():
     display = build_session_runtime_display(
         runtime_view=_runtime_view(
             runtime_phase="needs_user",
@@ -713,7 +713,7 @@ def test_unmanaged_stale_needs_user_phase_without_presence_is_recent():
             status="idle",
             presence_state=None,
             confidence="stale",
-            display_phase="Recent",
+            display_phase="",
             last_live_at=datetime(2026, 4, 26, 11, 0, tzinfo=timezone.utc),
         ),
         capabilities=_capabilities(managed=False),
@@ -723,8 +723,8 @@ def test_unmanaged_stale_needs_user_phase_without_presence_is_recent():
 
     assert display.control_path == "unmanaged"
     assert display.state is None
-    assert display.phase_label == "Recent"
-    assert display.headline == "Inactive"
+    assert display.phase_label == "Process running"
+    assert display.headline == "Active"
     assert display.needs_attention is False
 
 

@@ -257,7 +257,7 @@ def _timeline_status_from_liveness_facts(runtime_facts: SessionLivenessFactsResp
 
 
 def _phase_status_label(kind: str, tool_name: str | None) -> str:
-    phase = "ready" if kind == "needs_user" else kind.replace("_", " ").replace("-", " ")
+    phase = "idle" if kind == "needs_user" else kind.replace("_", " ").replace("-", " ")
     compact_tool = compact_runtime_tool_label(tool_name)
     if compact_tool and kind == "running":
         return f"Using {compact_tool}"
@@ -363,7 +363,7 @@ class SessionRuntimeDisplayResponse(BaseModel):
     is_live: bool = Field(False, description="True when the session is actively executing")
     is_executing: bool = Field(False, description="True when the agent is thinking or running a tool")
     needs_attention: bool = Field(False, description="True when the user should respond or approve")
-    is_idle: bool = Field(False, description="True when the runtime is ready for the next prompt")
+    is_idle: bool = Field(False, description="True when the runtime is waiting for another turn")
     is_stalled: bool = Field(False, description="True when a provider explicitly reports stalled state")
     is_managed_local_truth: bool = Field(False, description="True when runtime truth is from a managed-local control path")
     has_signal: bool = Field(False, description="True when clients should render runtime state")
