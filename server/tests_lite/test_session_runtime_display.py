@@ -652,7 +652,7 @@ def test_unmanaged_needs_user_without_online_host_renders_idle():
     assert display.host_state == "unknown"
     assert display.state == "needs_user"
     assert display.phase_label == "Idle"
-    assert display.headline == "Inactive"
+    assert display.headline == "Idle"
     assert display.is_idle is True
     assert display.tone == "idle"
     assert display.needs_attention is False
@@ -677,7 +677,7 @@ def test_unmanaged_needs_user_with_online_host_still_renders_idle():
     assert display.host_state == "online"
     assert display.state == "needs_user"
     assert display.phase_label == "Idle"
-    assert display.headline == "Inactive"
+    assert display.headline == "Idle"
     assert display.tone == "idle"
     assert display.needs_attention is False
 

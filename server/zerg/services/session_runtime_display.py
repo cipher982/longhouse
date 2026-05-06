@@ -180,6 +180,7 @@ def _tone(
 
 def _outcome_label(
     *,
+    presence_state: str | None,
     is_executing: bool,
     needs_attention: bool,
     process_observed: bool,
@@ -188,6 +189,8 @@ def _outcome_label(
 ) -> str:
     if is_executing or needs_attention or process_observed:
         return "Active"
+    if presence_state in {"idle", "needs_user"}:
+        return "Idle"
     if terminal_state or status == "completed":
         return "Completed"
     return "Inactive"
@@ -213,8 +216,6 @@ def _managed_copy(
         return "Not connected", None
     if presence_state is None and truth_tier == "managed-local":
         return "Not connected", None
-    if presence_state in {"idle", "needs_user"} or is_idle:
-        return "Idle", "Waiting for next prompt"
     return "Idle", "Waiting for next prompt"
 
 
@@ -271,7 +272,7 @@ def build_session_runtime_display(
         is_idle = True
     display_phase = runtime_view.display_phase
     if confidence != "live" and runtime_source not in {"fallback", "progress"} and runtime_view.terminal_state is None:
-        display_phase = ""
+        display_phase = "Inactive"
     if unmanaged_attention_unverified:
         display_phase = "Inactive"
     phase_label = _phase_label(
@@ -294,6 +295,7 @@ def build_session_runtime_display(
         )
     else:
         headline = _outcome_label(
+            presence_state=presence_state,
             is_executing=is_executing,
             needs_attention=needs_attention,
             process_observed=process_observed,

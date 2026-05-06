@@ -188,7 +188,7 @@ def _display_phase_for_state(
     if terminal_state is not None or phase == "finished" or status == "completed":
         return "Completed"
     if confidence == "stale" and phase in KNOWN_PHASES:
-        return ""
+        return "Inactive"
     if phase == "running":
         return f"Running {active_tool}" if active_tool else "Running"
     if phase == "thinking":
@@ -199,7 +199,7 @@ def _display_phase_for_state(
         return f"Blocked on {active_tool}" if active_tool else "Needs permission"
     if phase == "idle":
         return "Idle"
-    return ""
+    return "Inactive"
 
 
 def _status_for_state(
@@ -332,7 +332,7 @@ def build_fallback_runtime_view(
             status=status,
         )
         if terminal_state is not None
-        else "Recent"
+        else "Inactive"
     )
 
     return SessionRuntimeView(
