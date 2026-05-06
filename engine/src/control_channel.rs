@@ -427,12 +427,15 @@ mod tests {
     #[tokio::test]
     async fn handle_command_frame_rejects_missing_command_id() {
         let mut cache = command_cache();
-        let result = handle_command_frame(json!({
-            "type": "command",
-            "session_id": "session-1",
-            "command_type": COMMAND_SEND_TEXT,
-            "payload": {"text": "continue"},
-        }), &mut cache)
+        let result = handle_command_frame(
+            json!({
+                "type": "command",
+                "session_id": "session-1",
+                "command_type": COMMAND_SEND_TEXT,
+                "payload": {"text": "continue"},
+            }),
+            &mut cache,
+        )
         .await;
 
         assert_eq!(result["ok"], false);
@@ -442,13 +445,16 @@ mod tests {
     #[tokio::test]
     async fn handle_command_frame_rejects_unsupported_command_type() {
         let mut cache = command_cache();
-        let result = handle_command_frame(json!({
-            "type": "command",
-            "command_id": "cmd-1",
-            "session_id": "session-1",
-            "command_type": "session.unknown",
-            "payload": {},
-        }), &mut cache)
+        let result = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-1",
+                "session_id": "session-1",
+                "command_type": "session.unknown",
+                "payload": {},
+            }),
+            &mut cache,
+        )
         .await;
 
         assert_eq!(result["command_id"], "cmd-1");
@@ -459,13 +465,16 @@ mod tests {
     #[tokio::test]
     async fn handle_command_frame_rejects_missing_attached_session() {
         let mut cache = command_cache();
-        let result = handle_command_frame(json!({
-            "type": "command",
-            "command_id": "cmd-missing-session",
-            "session_id": "definitely-missing-control-channel-session",
-            "command_type": COMMAND_SEND_TEXT,
-            "payload": {"text": "continue"},
-        }), &mut cache)
+        let result = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-missing-session",
+                "session_id": "definitely-missing-control-channel-session",
+                "command_type": COMMAND_SEND_TEXT,
+                "payload": {"text": "continue"},
+            }),
+            &mut cache,
+        )
         .await;
 
         assert_eq!(result["command_id"], "cmd-missing-session");
@@ -476,21 +485,27 @@ mod tests {
     #[tokio::test]
     async fn handle_command_frame_returns_cached_result_for_duplicate_command_id() {
         let mut cache = command_cache();
-        let first = handle_command_frame(json!({
-            "type": "command",
-            "command_id": "cmd-duplicate",
-            "session_id": "session-1",
-            "command_type": "session.unknown",
-            "payload": {},
-        }), &mut cache)
+        let first = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-duplicate",
+                "session_id": "session-1",
+                "command_type": "session.unknown",
+                "payload": {},
+            }),
+            &mut cache,
+        )
         .await;
-        let second = handle_command_frame(json!({
-            "type": "command",
-            "command_id": "cmd-duplicate",
-            "session_id": "definitely-missing-control-channel-session",
-            "command_type": COMMAND_SEND_TEXT,
-            "payload": {"text": "continue"},
-        }), &mut cache)
+        let second = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-duplicate",
+                "session_id": "definitely-missing-control-channel-session",
+                "command_type": COMMAND_SEND_TEXT,
+                "payload": {"text": "continue"},
+            }),
+            &mut cache,
+        )
         .await;
 
         assert_eq!(first, second);

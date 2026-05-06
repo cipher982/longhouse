@@ -12,6 +12,13 @@ use reqwest::header::{HeaderMap, HeaderValue, CONTENT_ENCODING, CONTENT_TYPE};
 use crate::config::ShipperConfig;
 use crate::pipeline::compressor::{content_encoding, CompressionAlgo};
 
+/// Structured details for a network-layer ingest failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectErrorDetail {
+    pub kind: &'static str,
+    pub message: String,
+}
+
 /// Result of a shipping attempt.
 #[derive(Debug)]
 pub enum ShipResult {
@@ -28,7 +35,7 @@ pub enum ShipResult {
     /// Auth/config/wrong-host style client error. Should stay replayable.
     RetryableClientError(u16, String),
     /// Connection error (DNS, timeout, refused). Should spool for later.
-    ConnectError(String),
+    ConnectError(ConnectErrorDetail),
 }
 
 /// HTTP client with connection pooling and retry logic.
@@ -89,7 +96,7 @@ impl ShipperClient {
 
             match result {
                 Err(e) => {
-                    return ShipResult::ConnectError(e.to_string());
+                    return ShipResult::ConnectError(classify_connect_error(&e));
                 }
                 Ok(response) => {
                     let status = response.status().as_u16();
@@ -191,11 +198,65 @@ impl ShipperClient {
     }
 }
 
+fn classify_connect_error(error: &reqwest::Error) -> ConnectErrorDetail {
+    ConnectErrorDetail {
+        kind: classify_connect_error_kind(
+            error.is_timeout(),
+            error.is_connect(),
+            error.is_request(),
+            &error.to_string(),
+        ),
+        message: error.to_string(),
+    }
+}
+
+fn classify_connect_error_kind(
+    is_timeout: bool,
+    is_connect: bool,
+    is_request: bool,
+    message: &str,
+) -> &'static str {
+    let lower = message.to_ascii_lowercase();
+    if is_timeout || lower.contains("timed out") || lower.contains("timeout") {
+        return "timeout";
+    }
+    if lower.contains("dns")
+        || lower.contains("resolve")
+        || lower.contains("name or service not known")
+        || lower.contains("nodename nor servname")
+        || lower.contains("no such host")
+    {
+        return "dns";
+    }
+    if lower.contains("connection refused")
+        || lower.contains("os error 61")
+        || lower.contains("os error 111")
+    {
+        return "connection_refused";
+    }
+    if lower.contains("connection reset")
+        || lower.contains("connection closed")
+        || lower.contains("broken pipe")
+    {
+        return "connection_closed";
+    }
+    if lower.contains("tls") || lower.contains("ssl") || lower.contains("certificate") {
+        return "tls";
+    }
+    if is_connect {
+        return "connect";
+    }
+    if is_request {
+        return "request";
+    }
+    "network"
+}
+
 #[cfg(test)]
 mod tests {
     use rand::Rng;
 
-    use super::ShipResult;
+    use super::{classify_connect_error_kind, ShipResult};
 
     fn classify_status(status: u16, body: &str) -> ShipResult {
         match status {
@@ -255,5 +316,39 @@ mod tests {
             classify_status(405, "method not allowed"),
             ShipResult::RetryableClientError(405, _)
         ));
+    }
+
+    #[test]
+    fn test_classify_connect_error_kind_from_reqwest_shape_and_message() {
+        assert_eq!(
+            classify_connect_error_kind(true, true, false, "operation timed out"),
+            "timeout"
+        );
+        assert_eq!(
+            classify_connect_error_kind(false, true, false, "dns error: failed to lookup address"),
+            "dns"
+        );
+        assert_eq!(
+            classify_connect_error_kind(
+                false,
+                true,
+                false,
+                "tcp connect error: Connection refused (os error 61)"
+            ),
+            "connection_refused"
+        );
+        assert_eq!(
+            classify_connect_error_kind(
+                false,
+                true,
+                false,
+                "connection closed before message completed"
+            ),
+            "connection_closed"
+        );
+        assert_eq!(
+            classify_connect_error_kind(false, false, true, "builder error"),
+            "request"
+        );
     }
 }

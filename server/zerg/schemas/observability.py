@@ -29,6 +29,8 @@ class MachineHealthItemResponse(UTCBaseModel):
     last_ship_result: str | None = None
     last_ship_latency_ms: int | None = None
     last_ship_http_status: int | None = None
+    last_ship_error_kind: str | None = None
+    last_ship_error_message: str | None = None
     ship_attempts_1h: int
     ship_successes_1h: int
     ship_success_rate_1h: float | None = None

@@ -39,6 +39,8 @@ def build_machine_health_item_response(item: MachineTransportHealthSummary) -> M
         last_ship_result=item.last_ship_result,
         last_ship_latency_ms=item.last_ship_latency_ms,
         last_ship_http_status=item.last_ship_http_status,
+        last_ship_error_kind=item.last_ship_error_kind,
+        last_ship_error_message=item.last_ship_error_message,
         ship_attempts_1h=item.ship_attempts_1h,
         ship_successes_1h=item.ship_successes_1h,
         ship_success_rate_1h=item.ship_success_rate_1h,

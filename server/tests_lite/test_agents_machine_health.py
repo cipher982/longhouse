@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime
 from datetime import timedelta
@@ -232,6 +233,14 @@ def test_machine_health_route_marks_transport_error_burst_degraded(tmp_path, mon
                 ship_latency_p95_ms_1h=3400,
                 disk_free_bytes=100,
                 is_offline=0,
+                last_ship_result="connect_error",
+                raw_json=json.dumps(
+                    {
+                        "last_ship_result": "connect_error",
+                        "last_ship_error_kind": "connection_refused",
+                        "last_ship_error_message": "connection refused",
+                    }
+                ),
             )
         )
         db.commit()
@@ -247,8 +256,10 @@ def test_machine_health_route_marks_transport_error_burst_degraded(tmp_path, mon
         machine = payload["machines"][0]
         assert machine["status"] == "degraded"
         assert machine["status_reason"] == "connect_errors"
-        assert machine["status_summary"] == "2 ship connect error(s) in the last hour."
+        assert machine["status_summary"] == "2 ship connect error(s) in the last hour. Last error: connection_refused."
         assert machine["ship_connect_errors_1h"] == 2
+        assert machine["last_ship_error_kind"] == "connection_refused"
+        assert machine["last_ship_error_message"] == "connection refused"
         assert machine["reasons"] == ["connect_errors"]
     finally:
         api_app_ref.dependency_overrides = {}

@@ -116,6 +116,8 @@ class HeartbeatIn(BaseModel):
     last_ship_result: Optional[str] = None
     last_ship_latency_ms: Optional[int] = None
     last_ship_http_status: Optional[int] = None
+    last_ship_error_kind: Optional[str] = None
+    last_ship_error_message: Optional[str] = None
     spool_pending_count: int = 0
     spool_dead_count: int = 0
     parse_error_count_1h: int = 0
@@ -748,6 +750,7 @@ async def ingest_heartbeat(
                         "longhouse.build.version": payload.version,
                         "longhouse.heartbeat.last_ship_attempt_at": payload.last_ship_attempt_at,
                         "longhouse.heartbeat.last_ship_result": payload.last_ship_result,
+                        "longhouse.heartbeat.last_ship_error_kind": payload.last_ship_error_kind,
                         "longhouse.heartbeat.ship_attempts_1h": payload.ship_attempts_1h,
                         "longhouse.heartbeat.spool_pending_count": payload.spool_pending_count,
                         "longhouse.heartbeat.spool_dead_count": payload.spool_dead_count,

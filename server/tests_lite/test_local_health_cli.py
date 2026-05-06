@@ -515,6 +515,30 @@ def test_collect_local_health_uses_shared_transport_burst_classifier(monkeypatch
     assert snapshot["transport_health"]["status_summary"] == "2 ship connect error(s) in the last hour."
 
 
+def test_collect_local_health_includes_last_transport_error_detail(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(
+        tmp_path,
+        age_seconds=5,
+        payload={
+            "ship_attempts_1h": 20,
+            "ship_successes_1h": 18,
+            "ship_connect_errors_1h": 2,
+            "last_ship_result": "connect_error",
+            "last_ship_error_kind": "timeout",
+            "last_ship_error_message": "request timed out after 60s",
+        },
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["transport_health"]["status"] == "degraded"
+    assert snapshot["transport_health"]["status_summary"] == "2 ship connect error(s) in the last hour. Last error: timeout."
+    assert snapshot["transport_health"]["last_ship_error_kind"] == "timeout"
+    assert snapshot["transport_health"]["last_ship_error_message"] == "request timed out after 60s"
+
+
 def test_collect_local_health_flags_non_object_engine_status_payload(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))

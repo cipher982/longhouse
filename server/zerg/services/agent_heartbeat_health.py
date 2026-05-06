@@ -44,6 +44,8 @@ class MachineTransportHealthSummary:
     last_ship_result: str | None
     last_ship_latency_ms: int | None
     last_ship_http_status: int | None
+    last_ship_error_kind: str | None
+    last_ship_error_message: str | None
     ship_attempts_1h: int
     ship_successes_1h: int
     ship_success_rate_1h: float | None
@@ -189,6 +191,8 @@ def build_machine_transport_health_summary(
         last_ship_result=row.last_ship_result,
         last_ship_latency_ms=row.last_ship_latency_ms,
         last_ship_http_status=row.last_ship_http_status,
+        last_ship_error_kind=sample.last_ship_error_kind,
+        last_ship_error_message=sample.last_ship_error_message,
         ship_attempts_1h=ship_attempts_1h,
         ship_successes_1h=ship_successes_1h,
         ship_success_rate_1h=ship_success_rate_1h,
