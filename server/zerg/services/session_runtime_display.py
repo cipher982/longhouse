@@ -199,22 +199,17 @@ def _outcome_label(
 def _managed_copy(
     *,
     presence_state: str | None,
-    phase_label: str,
     compact_tool: str | None,
-    truth_tier: str,
-    is_idle: bool,
 ) -> tuple[str, str | None]:
     if presence_state == "thinking":
         return "Working", "Thinking"
     if presence_state == "running":
-        return "Working", f"Using {compact_tool}" if compact_tool else phase_label
+        return "Working", f"Using {compact_tool}" if compact_tool else "Running"
     if presence_state == "needs_user":
         return "Idle", "Waiting for next prompt"
     if presence_state == "blocked":
         return "Needs permission", f"Approval needed • {compact_tool}" if compact_tool else "Approval needed"
-    if presence_state is None and truth_tier != "managed-local":
-        return "Not connected", None
-    if presence_state is None and truth_tier == "managed-local":
+    if presence_state is None:
         return "Not connected", None
     return "Idle", "Waiting for next prompt"
 
@@ -288,10 +283,7 @@ def build_session_runtime_display(
     if is_managed_session:
         headline, detail = _managed_copy(
             presence_state=presence_state,
-            phase_label=phase_label,
             compact_tool=compact_tool,
-            truth_tier=truth_tier,
-            is_idle=is_idle,
         )
     else:
         headline = _outcome_label(

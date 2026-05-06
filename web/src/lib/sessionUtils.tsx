@@ -337,22 +337,10 @@ export function getRuntimeDisplayCopy(
       detail: compactTool ? `Approval needed • ${compactTool}` : "Approval needed",
     };
   }
-  if (runtime.presenceState == null && runtime.truthTier !== "managed-local") {
+  if (runtime.presenceState == null) {
     return {
       headline: "Not connected",
       detail: null,
-    };
-  }
-  if (runtime.presenceState == null && runtime.truthTier === "managed-local") {
-    return {
-      headline: "Not connected",
-      detail: null,
-    };
-  }
-  if (runtime.presenceState === "idle" || runtime.isIdle) {
-    return {
-      headline: "Idle",
-      detail: "Waiting for next prompt",
     };
   }
   return {
