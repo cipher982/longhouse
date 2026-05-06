@@ -257,6 +257,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     if let Some(parent) = status_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    let control_channel_task =
+        crate::control_channel::spawn_control_channel(config.shipper_config.clone());
 
     loop {
         drain_due_local_retries(&mut scheduler, &mut deferred_retries);
@@ -508,6 +510,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         }
     }
 
+    if let Some(task) = control_channel_task {
+        task.abort();
+    }
     tracing::info!("Daemon shutdown complete");
     Ok(())
 }

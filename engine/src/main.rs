@@ -6,6 +6,7 @@ mod codex_source;
 mod codex_ws_relay;
 mod commands;
 mod config;
+mod control_channel;
 mod daemon;
 mod discovery;
 mod error_tracker;
