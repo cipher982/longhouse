@@ -172,17 +172,7 @@ pub async fn ship_and_record(
         | ShipResult::ServerError(_, _)
         | ShipResult::ConnectError(_)
         | ShipResult::RetryableClientError(_, _) => {
-            let err_msg = match &result {
-                ShipResult::RateLimited => "rate limited".to_string(),
-                ShipResult::ServerError(code, body) => {
-                    format!("{}:{}", code, truncate_http_body(body))
-                }
-                ShipResult::ConnectError(e) => e.clone(),
-                ShipResult::RetryableClientError(code, body) => {
-                    format!("{}:{}", code, truncate_http_body(body))
-                }
-                _ => unreachable!(),
-            };
+            let err_msg = transient_error_message(&result);
 
             // Rate-limited logging: log 1st failure and every 100th
             let should_log = tracker.map_or(true, |t| t.record_error());
@@ -941,6 +931,7 @@ pub(crate) fn prepare_file_batches_with_parse_tracker(
         longhouse.ship.event_count = item.event_count as u64,
         longhouse.ship.range_bytes = item.new_offset.saturating_sub(item.offset),
         longhouse.ship.outcome = tracing::field::Empty,
+        longhouse.ship.error_kind = tracing::field::Empty,
     )
 )]
 async fn attempt_ship(
@@ -962,8 +953,26 @@ async fn attempt_ship(
     if let Some(status) = http_status {
         span.record("http.response.status_code", tracing::field::display(status));
     }
+    let error_kind = transient_error_kind(&result);
+    let error_message = match &result {
+        ShipResult::Ok => None,
+        _ => Some(transient_error_message(&result)),
+    };
+    if let Some(kind) = error_kind {
+        span.record("longhouse.ship.error_kind", tracing::field::display(kind));
+    }
     if let Some(stats) = ship_stats {
-        stats.record(outcome, latency_ms, http_status);
+        if error_kind.is_none() && error_message.is_none() {
+            stats.record(outcome, latency_ms, http_status);
+        } else {
+            stats.record_with_detail(
+                outcome,
+                latency_ms,
+                http_status,
+                error_kind,
+                error_message.as_deref(),
+            );
+        }
     }
 
     match result {
@@ -988,28 +997,30 @@ async fn attempt_ship(
         | ShipResult::ServerError(_, _)
         | ShipResult::ConnectError(_)
         | ShipResult::RetryableClientError(_, _) => {
-            let error = match &result {
-                ShipResult::RateLimited => "rate limited".to_string(),
-                ShipResult::ServerError(code, body) => {
-                    format!("{}:{}", code, truncate_http_body(body))
-                }
-                ShipResult::ConnectError(error) => error.clone(),
-                ShipResult::RetryableClientError(code, body) => {
-                    format!("{}:{}", code, truncate_http_body(body))
-                }
-                _ => unreachable!(),
-            };
+            let error = error_message.unwrap_or_else(|| transient_error_message(&result));
             let should_log = tracker.map_or(true, |t| t.record_error());
             if should_log {
                 let count = tracker.map_or(1, |t| t.consecutive_count());
                 if count > 1 {
                     tracing::warn!(
-                        "Ship still failing after {} attempts, latest: {}",
-                        count,
-                        error
+                        path = %item.path_str,
+                        provider = %item.provider,
+                        error_kind = error_kind.unwrap_or("unknown"),
+                        error = %error,
+                        latency_ms,
+                        "Ship still failing after {} attempts",
+                        count
                     );
                 } else {
-                    tracing::warn!("Spooled {}: {}", item.path_str, error);
+                    tracing::warn!(
+                        path = %item.path_str,
+                        provider = %item.provider,
+                        error_kind = error_kind.unwrap_or("unknown"),
+                        error = %error,
+                        latency_ms,
+                        ingest_url = %client.ingest_url(),
+                        "Shipping attempt failed; queued range for retry"
+                    );
                 }
             }
 
@@ -1054,6 +1065,33 @@ fn classify_ship_attempt_result(result: &ShipResult) -> (ShipAttemptOutcome, Opt
             (ShipAttemptOutcome::RetryableClientError, Some(*code))
         }
         ShipResult::ConnectError(_) => (ShipAttemptOutcome::ConnectError, None),
+    }
+}
+
+fn transient_error_kind(result: &ShipResult) -> Option<&'static str> {
+    match result {
+        ShipResult::Ok => None,
+        ShipResult::RateLimited => Some("rate_limited"),
+        ShipResult::ServerError(_, _) => Some("server_response"),
+        ShipResult::PayloadRejected(_, _) => Some("payload_rejected"),
+        ShipResult::PayloadTooLarge(_) => Some("payload_too_large"),
+        ShipResult::RetryableClientError(401 | 403, _) => Some("auth"),
+        ShipResult::RetryableClientError(_, _) => Some("client_response"),
+        ShipResult::ConnectError(detail) => Some(detail.kind),
+    }
+}
+
+fn transient_error_message(result: &ShipResult) -> String {
+    match result {
+        ShipResult::Ok => "ok".to_string(),
+        ShipResult::RateLimited => "rate limited".to_string(),
+        ShipResult::ServerError(code, body) => format!("{}:{}", code, truncate_http_body(body)),
+        ShipResult::PayloadRejected(code, body) => format!("{}:{}", code, truncate_http_body(body)),
+        ShipResult::PayloadTooLarge(body) => format!("413:{}", truncate_http_body(body)),
+        ShipResult::RetryableClientError(code, body) => {
+            format!("{}:{}", code, truncate_http_body(body))
+        }
+        ShipResult::ConnectError(detail) => detail.message.clone(),
     }
 }
 

@@ -72,6 +72,38 @@ def test_transport_health_keeps_single_transient_connect_error_healthy():
     assert assessment.reasons == ()
 
 
+def test_transport_health_surfaces_last_transport_error_detail():
+    payload = {
+        "ship_attempts_1h": 20,
+        "ship_successes_1h": 18,
+        "ship_connect_errors_1h": 2,
+        "last_ship_result": "connect_error",
+        "last_ship_error_kind": "timeout",
+        "last_ship_error_message": "request timed out after 60s",
+    }
+    row = AgentHeartbeat(
+        device_id="cinder",
+        ship_attempts_1h=20,
+        ship_successes_1h=18,
+        ship_connect_errors_1h=2,
+        last_ship_result="connect_error",
+        raw_json=json.dumps(payload),
+    )
+
+    local_sample = transport_health_sample_from_engine_status_payload(payload)
+    heartbeat_sample = transport_health_sample_from_heartbeat(row)
+
+    assert local_sample == heartbeat_sample
+    assert local_sample.last_ship_error_kind == "timeout"
+    assert local_sample.last_ship_error_message == "request timed out after 60s"
+
+    assessment = assess_transport_health(local_sample)
+
+    assert assessment.status == "degraded"
+    assert assessment.status_reason == "connect_errors"
+    assert assessment.status_summary == "2 ship connect error(s) in the last hour. Last error: timeout."
+
+
 def test_local_health_cli_does_not_require_database_url(tmp_path):
     repo_server_dir = Path(__file__).resolve().parent.parent
     build_identity_path = repo_server_dir / "zerg" / "build_identity.json"

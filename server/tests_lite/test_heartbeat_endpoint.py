@@ -205,6 +205,8 @@ def test_heartbeat_endpoint_persists_transport_summary_fields(tmp_path):
                 "last_ship_result": "rate_limited",
                 "last_ship_latency_ms": 187,
                 "last_ship_http_status": 429,
+                "last_ship_error_kind": "rate_limited",
+                "last_ship_error_message": "429: rate limited",
                 "spool_pending_count": 7,
                 "spool_dead_count": 2,
                 "parse_error_count_1h": 2,
@@ -249,6 +251,8 @@ def test_heartbeat_endpoint_persists_transport_summary_fields(tmp_path):
             assert raw["last_ship_result"] == "rate_limited"
             assert raw["last_ship_latency_ms"] == 187
             assert raw["last_ship_http_status"] == 429
+            assert raw["last_ship_error_kind"] == "rate_limited"
+            assert raw["last_ship_error_message"] == "429: rate limited"
             assert raw["spool_dead_count"] == 2
             assert raw["ship_attempts_1h"] == 12
             assert raw["ship_successes_1h"] == 8

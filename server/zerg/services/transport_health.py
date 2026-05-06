@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -45,6 +46,10 @@ class TransportHealthSample:
     ship_payload_too_large_1h: int = 0
     ship_retryable_client_errors_1h: int = 0
     ship_connect_errors_1h: int = 0
+    last_ship_result: str | None = None
+    last_ship_http_status: int | None = None
+    last_ship_error_kind: str | None = None
+    last_ship_error_message: str | None = None
     is_offline: bool = False
 
     @property
@@ -63,6 +68,7 @@ class TransportHealthAssessment:
 
 
 def transport_health_sample_from_heartbeat(row: AgentHeartbeat) -> TransportHealthSample:
+    raw = _heartbeat_raw_json(row)
     return TransportHealthSample(
         spool_pending=_normalize_int(getattr(row, "spool_pending", 0)),
         spool_dead=_normalize_int(getattr(row, "spool_dead", 0)),
@@ -76,6 +82,10 @@ def transport_health_sample_from_heartbeat(row: AgentHeartbeat) -> TransportHeal
         ship_payload_too_large_1h=_normalize_int(getattr(row, "ship_payload_too_large_1h", 0)),
         ship_retryable_client_errors_1h=_normalize_int(getattr(row, "ship_retryable_client_errors_1h", 0)),
         ship_connect_errors_1h=_normalize_int(getattr(row, "ship_connect_errors_1h", 0)),
+        last_ship_result=_normalize_optional_str(getattr(row, "last_ship_result", None) or raw.get("last_ship_result")),
+        last_ship_http_status=_normalize_optional_int(getattr(row, "last_ship_http_status", None) or raw.get("last_ship_http_status")),
+        last_ship_error_kind=_normalize_optional_str(raw.get("last_ship_error_kind")),
+        last_ship_error_message=_normalize_optional_str(raw.get("last_ship_error_message")),
         is_offline=bool(getattr(row, "is_offline", False)),
     )
 
@@ -95,6 +105,10 @@ def transport_health_sample_from_engine_status_payload(payload: Mapping[str, Any
         ship_payload_too_large_1h=_normalize_int(raw_payload.get("ship_payload_too_large_1h")),
         ship_retryable_client_errors_1h=_normalize_int(raw_payload.get("ship_retryable_client_errors_1h")),
         ship_connect_errors_1h=_normalize_int(raw_payload.get("ship_connect_errors_1h")),
+        last_ship_result=_normalize_optional_str(raw_payload.get("last_ship_result")),
+        last_ship_http_status=_normalize_optional_int(raw_payload.get("last_ship_http_status")),
+        last_ship_error_kind=_normalize_optional_str(raw_payload.get("last_ship_error_kind")),
+        last_ship_error_message=_normalize_optional_str(raw_payload.get("last_ship_error_message")),
         is_offline=bool(raw_payload.get("is_offline", False)),
     )
 
@@ -177,19 +191,31 @@ def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAss
     elif connect_error_burst:
         status = "degraded"
         status_reason = "connect_errors"
-        status_summary = f"{sample.ship_connect_errors_1h} ship connect error(s) in the last hour."
+        status_summary = _append_last_ship_error_detail(
+            f"{sample.ship_connect_errors_1h} ship connect error(s) in the last hour.",
+            sample,
+        )
     elif server_error_burst:
         status = "degraded"
         status_reason = "server_errors"
-        status_summary = f"{sample.ship_server_errors_1h} ship server error(s) in the last hour."
+        status_summary = _append_last_ship_error_detail(
+            f"{sample.ship_server_errors_1h} ship server error(s) in the last hour.",
+            sample,
+        )
     elif rate_limited_burst:
         status = "degraded"
         status_reason = "rate_limited"
-        status_summary = f"{sample.ship_rate_limited_1h} rate-limit response(s) in the last hour."
+        status_summary = _append_last_ship_error_detail(
+            f"{sample.ship_rate_limited_1h} rate-limit response(s) in the last hour.",
+            sample,
+        )
     elif retryable_client_error_burst:
         status = "degraded"
         status_reason = "retryable_client_errors"
-        status_summary = f"{sample.ship_retryable_client_errors_1h} retryable client error(s) in the last hour."
+        status_summary = _append_last_ship_error_detail(
+            f"{sample.ship_retryable_client_errors_1h} retryable client error(s) in the last hour.",
+            sample,
+        )
     elif sample.spool_pending > 0:
         status = "degraded"
         status_reason = "spool_pending"
@@ -205,3 +231,43 @@ def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAss
         status_summary=status_summary,
         reasons=tuple(reasons),
     )
+
+
+def _normalize_optional_int(value: Any) -> int | None:
+    normalized = _normalize_int(value)
+    if value is None or str(value).strip() == "":
+        return None
+    return normalized
+
+
+def _normalize_optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def _heartbeat_raw_json(row: AgentHeartbeat) -> Mapping[str, Any]:
+    raw_json = getattr(row, "raw_json", None)
+    if not raw_json:
+        return {}
+    try:
+        parsed = json.loads(raw_json)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, Mapping) else {}
+
+
+def _append_last_ship_error_detail(summary: str, sample: TransportHealthSample) -> str:
+    if sample.last_ship_result not in {
+        "connect_error",
+        "server_error",
+        "rate_limited",
+        "retryable_client_error",
+    }:
+        return summary
+    if sample.last_ship_error_kind:
+        return f"{summary} Last error: {sample.last_ship_error_kind}."
+    if sample.last_ship_http_status is not None:
+        return f"{summary} Last HTTP status: {sample.last_ship_http_status}."
+    return summary

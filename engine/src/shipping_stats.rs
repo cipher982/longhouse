@@ -44,6 +44,8 @@ struct ShipAttemptRecord {
     outcome: ShipAttemptOutcome,
     latency_ms: u64,
     http_status: Option<u16>,
+    error_kind: Option<String>,
+    error_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -52,6 +54,8 @@ pub struct ShipStatsSummary {
     pub last_ship_result: Option<String>,
     pub last_ship_latency_ms: Option<u64>,
     pub last_ship_http_status: Option<u16>,
+    pub last_ship_error_kind: Option<String>,
+    pub last_ship_error_message: Option<String>,
     pub ship_attempts_1h: u32,
     pub ship_successes_1h: u32,
     pub ship_rate_limited_1h: u32,
@@ -77,12 +81,25 @@ impl RecentShipStatsTracker {
     }
 
     pub fn record(&self, outcome: ShipAttemptOutcome, latency_ms: u64, http_status: Option<u16>) {
+        self.record_with_detail(outcome, latency_ms, http_status, None, None);
+    }
+
+    pub fn record_with_detail(
+        &self,
+        outcome: ShipAttemptOutcome,
+        latency_ms: u64,
+        http_status: Option<u16>,
+        error_kind: Option<&str>,
+        error_message: Option<&str>,
+    ) {
         self.record_at(
             Instant::now(),
             chrono::Utc::now().to_rfc3339(),
             outcome,
             latency_ms,
             http_status,
+            error_kind.map(str::to_string),
+            error_message.map(truncate_error_message),
         );
     }
 
@@ -118,6 +135,8 @@ impl RecentShipStatsTracker {
                 summary.last_ship_result = Some(last.outcome.as_str().to_string());
                 summary.last_ship_latency_ms = Some(last.latency_ms);
                 summary.last_ship_http_status = last.http_status;
+                summary.last_ship_error_kind = last.error_kind.clone();
+                summary.last_ship_error_message = last.error_message.clone();
             }
 
             latencies.sort_unstable();
@@ -136,6 +155,8 @@ impl RecentShipStatsTracker {
         outcome: ShipAttemptOutcome,
         latency_ms: u64,
         http_status: Option<u16>,
+        error_kind: Option<String>,
+        error_message: Option<String>,
     ) {
         if let Ok(mut guard) = self.inner.lock() {
             guard.push_back(ShipAttemptRecord {
@@ -144,12 +165,25 @@ impl RecentShipStatsTracker {
                 outcome,
                 latency_ms,
                 http_status,
+                error_kind,
+                error_message,
             });
             prune_old_records(&mut guard, at);
             while guard.len() > SHIP_STATS_MAX_RECORDS {
                 guard.pop_front();
             }
         }
+    }
+}
+
+fn truncate_error_message(message: &str) -> String {
+    const MAX_ERROR_CHARS: usize = 300;
+    let mut chars = message.chars();
+    let truncated: String = chars.by_ref().take(MAX_ERROR_CHARS).collect();
+    if chars.next().is_some() {
+        format!("{truncated}...")
+    } else {
+        truncated
     }
 }
 
@@ -194,12 +228,16 @@ mod tests {
             ShipAttemptOutcome::Ok,
             40,
             None,
+            None,
+            None,
         );
         tracker.record_at(
             now - Duration::from_secs(9),
             "2026-04-23T20:00:01Z".to_string(),
             ShipAttemptOutcome::Ok,
             60,
+            None,
+            None,
             None,
         );
         tracker.record_at(
@@ -208,6 +246,8 @@ mod tests {
             ShipAttemptOutcome::ServerError,
             120,
             Some(503),
+            Some("server_response".to_string()),
+            Some("503: upstream unavailable".to_string()),
         );
         tracker.record_at(
             now - Duration::from_secs(7),
@@ -215,6 +255,8 @@ mod tests {
             ShipAttemptOutcome::ConnectError,
             220,
             None,
+            Some("timeout".to_string()),
+            Some("request timed out after 60s".to_string()),
         );
 
         let summary = tracker.summary();
@@ -230,6 +272,11 @@ mod tests {
         assert_eq!(summary.last_ship_result.as_deref(), Some("connect_error"));
         assert_eq!(summary.last_ship_latency_ms, Some(220));
         assert_eq!(summary.last_ship_http_status, None);
+        assert_eq!(summary.last_ship_error_kind.as_deref(), Some("timeout"));
+        assert_eq!(
+            summary.last_ship_error_message.as_deref(),
+            Some("request timed out after 60s")
+        );
         assert_eq!(summary.ship_latency_p50_ms_1h, Some(90));
         assert_eq!(summary.ship_latency_p95_ms_1h, Some(205));
     }
@@ -244,6 +291,8 @@ mod tests {
             ShipAttemptOutcome::Ok,
             50,
             None,
+            None,
+            None,
         );
         tracker.record_at(
             now - Duration::from_secs(30),
@@ -251,6 +300,8 @@ mod tests {
             ShipAttemptOutcome::RateLimited,
             100,
             Some(429),
+            Some("rate_limited".to_string()),
+            Some("429: rate limited".to_string()),
         );
 
         let summary = tracker.summary();
@@ -264,5 +315,27 @@ mod tests {
         );
         assert_eq!(summary.last_ship_result.as_deref(), Some("rate_limited"));
         assert_eq!(summary.last_ship_http_status, Some(429));
+        assert_eq!(
+            summary.last_ship_error_kind.as_deref(),
+            Some("rate_limited")
+        );
+    }
+
+    #[test]
+    fn recent_ship_stats_truncates_last_error_message() {
+        let tracker = RecentShipStatsTracker::new();
+        tracker.record_with_detail(
+            ShipAttemptOutcome::ConnectError,
+            60_000,
+            None,
+            Some("timeout"),
+            Some(&"x".repeat(350)),
+        );
+
+        let summary = tracker.summary();
+
+        let message = summary.last_ship_error_message.unwrap();
+        assert_eq!(message.chars().count(), 303);
+        assert!(message.ends_with("..."));
     }
 }
