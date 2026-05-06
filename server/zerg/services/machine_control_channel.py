@@ -38,6 +38,7 @@ class MachineControlCommandResponse:
 class _MachineControlConnection:
     info: MachineControlConnectionInfo
     websocket: WebSocket
+    send_lock: asyncio.Lock
 
 
 @dataclass
@@ -83,7 +84,11 @@ class MachineControlChannelRegistry:
             if key in self._connections:
                 logger.warning("Replacing machine control channel for owner=%s device=%s", owner_id, device_id)
                 self._fail_pending_for_key(key, "Machine control channel was replaced")
-            self._connections[key] = _MachineControlConnection(info=info, websocket=websocket)
+            self._connections[key] = _MachineControlConnection(
+                info=info,
+                websocket=websocket,
+                send_lock=asyncio.Lock(),
+            )
         logger.info("Registered machine control channel for owner=%s device=%s", owner_id, device_id)
 
     async def unregister(self, *, owner_id: int, device_id: str, websocket: WebSocket) -> bool:
@@ -149,6 +154,7 @@ class MachineControlChannelRegistry:
                 )
             self._pending[command_id] = _PendingCommand(key=key, future=future)
             websocket = connection.websocket
+            send_lock = connection.send_lock
 
         frame = {
             "type": "command",
@@ -158,7 +164,8 @@ class MachineControlChannelRegistry:
             "payload": dict(payload or {}),
         }
         try:
-            await websocket.send_json(frame)
+            async with send_lock:
+                await websocket.send_json(frame)
         except Exception as exc:
             async with self._lock:
                 self._pending.pop(command_id, None)

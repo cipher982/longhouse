@@ -7,6 +7,7 @@ use anyhow::{bail, Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::task::JoinHandle;
+use tokio::time::MissedTickBehavior;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
@@ -25,6 +26,7 @@ const COMMAND_INTERRUPT: &str = "session.interrupt";
 const COMMAND_STEER_TEXT: &str = "session.steer_text";
 const COMPLETED_COMMAND_CACHE_CAPACITY: usize = 256;
 const COMPLETED_COMMAND_CACHE_TTL_SECS: u64 = 5 * 60;
+const HEARTBEAT_INTERVAL_SECS: u64 = 25;
 
 pub fn spawn_control_channel(config: ShipperConfig) -> Option<JoinHandle<()>> {
     if config.api_token.as_deref().unwrap_or("").trim().is_empty() {
@@ -93,27 +95,48 @@ async fn run_once(
         .context("sending machine control hello")?;
     tracing::info!("Machine control channel connected to {ws_url}");
 
-    while let Some(message) = read.next().await {
-        let message = message.context("reading machine control websocket message")?;
-        let Message::Text(text) = message else {
-            continue;
-        };
-        let frame: Value = serde_json::from_str(&text).context("parsing machine control frame")?;
-        if frame.get("type").and_then(Value::as_str) != Some("command") {
-            tracing::debug!(
-                "Ignoring machine control frame type={:?}",
-                frame.get("type")
-            );
-            continue;
+    let mut heartbeat = tokio::time::interval(Duration::from_secs(HEARTBEAT_INTERVAL_SECS));
+    heartbeat.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    heartbeat.tick().await;
+
+    loop {
+        tokio::select! {
+            _ = heartbeat.tick() => {
+                write
+                    .send(Message::Text(heartbeat_frame().to_string()))
+                    .await
+                    .context("sending machine control heartbeat")?;
+            }
+            message = read.next() => {
+                let Some(message) = message else {
+                    break;
+                };
+                let message = message.context("reading machine control websocket message")?;
+                let Message::Text(text) = message else {
+                    continue;
+                };
+                let frame: Value = serde_json::from_str(&text).context("parsing machine control frame")?;
+                if frame.get("type").and_then(Value::as_str) != Some("command") {
+                    tracing::debug!(
+                        "Ignoring machine control frame type={:?}",
+                        frame.get("type")
+                    );
+                    continue;
+                }
+                let result = handle_command_frame(frame, completed_commands).await;
+                write
+                    .send(Message::Text(result.to_string()))
+                    .await
+                    .context("sending machine control command result")?;
+            }
         }
-        let result = handle_command_frame(frame, completed_commands).await;
-        write
-            .send(Message::Text(result.to_string()))
-            .await
-            .context("sending machine control command result")?;
     }
 
     Ok(())
+}
+
+fn heartbeat_frame() -> Value {
+    json!({"type": "heartbeat"})
 }
 
 async fn handle_command_frame(
@@ -394,6 +417,11 @@ mod tests {
             control_ws_url("https://david010.longhouse.ai/").unwrap(),
             "wss://david010.longhouse.ai/api/agents/control/ws"
         );
+    }
+
+    #[test]
+    fn heartbeat_frame_uses_server_schema() {
+        assert_eq!(heartbeat_frame(), json!({"type": "heartbeat"}));
     }
 
     #[tokio::test]
