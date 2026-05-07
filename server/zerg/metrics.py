@@ -41,6 +41,12 @@ try:
         labelnames=("provider", "function"),
     )
 
+    database_migrations_failed_total = Counter(
+        "database_migrations_failed_total",
+        "Total startup SQLite migrations that failed. Label is the migration name.",
+        labelnames=("migration_name",),
+    )
+
     # ------------------------------------------------------------------
     # Gauges (current state) -------------------------------------------
     # ------------------------------------------------------------------
@@ -286,6 +292,7 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
     gmail_api_error_total = _NoopCounter()  # type: ignore[assignment]
     gmail_webhook_error_total = _NoopCounter()  # type: ignore[assignment]
     external_api_retry_total = _NoopCounter()  # type: ignore[assignment]
+    database_migrations_failed_total = _NoopCounter()  # type: ignore[assignment]
     dashboard_snapshot_requests_total = _NoopCounter()  # type: ignore[assignment]
     websocket_run_updates_total = _NoopCounter()  # type: ignore[assignment]
     managed_turn_requests_total = _NoopCounter()  # type: ignore[assignment]
