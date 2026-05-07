@@ -28,7 +28,6 @@ from fastapi import Query
 from fastapi import Request
 from fastapi import Response
 from fastapi.responses import JSONResponse
-from pydantic import Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
@@ -43,8 +42,7 @@ from zerg.routers import agents_demo as _demo_router
 from zerg.routers import agents_search as _search_router
 from zerg.routers import agents_sessions as _sessions_router
 from zerg.services.agents_store import AgentsStore
-from zerg.services.session_response_projection import build_session_response_map
-from zerg.services.session_response_projection import has_real_sessions
+from zerg.services.session_listing import SessionListingError
 from zerg.services.session_views import DemoSeedResponse
 from zerg.services.session_views import EventsListResponse
 from zerg.services.session_views import FiltersResponse
@@ -63,8 +61,11 @@ from zerg.services.session_views import SessionTurnEnvelopeResponse
 from zerg.services.session_views import SessionTurnsListResponse
 from zerg.services.session_views import SessionWorkspaceResponse
 from zerg.services.session_workspace import build_session_workspace
+from zerg.services.timeline_session_listing import TimelineSessionCardResponse
+from zerg.services.timeline_session_listing import TimelineSessionListParams
+from zerg.services.timeline_session_listing import TimelineSessionsListResponse
+from zerg.services.timeline_session_listing import list_timeline_sessions_for_browser
 from zerg.utils.server_timing import ServerTimingRecorder
-from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -89,74 +90,9 @@ _timeline_filters_cache: dict[tuple[str, int, str | None], _TimelineFiltersCache
 _timeline_filters_cache_lock = Lock()
 
 
-class TimelineSessionCardResponse(UTCBaseModel):
-    thread_id: str = Field(..., description="Logical thread/task root UUID")
-    timeline_anchor_at: datetime | None = Field(None, description="Anchor used for timeline ordering and grouping")
-    head: SessionResponse
-    detail: SessionResponse
-    root: SessionResponse
-    continuation_count: int = Field(..., description="Concrete continuation count in this logical thread")
-    started_origin_label: str | None = Field(None, description="Origin label for where the thread started")
-    head_origin_label: str | None = Field(None, description="Origin label for the current writable head")
-
-
-class TimelineSessionsListResponse(UTCBaseModel):
-    sessions: list[TimelineSessionCardResponse]
-    total: int
-    has_real_sessions: bool = True
-
-
 def _session_payload_signature(session: TimelineSessionCardResponse) -> tuple[dict, str]:
     payload = session.model_dump(mode="json")
     return payload, json.dumps(payload, sort_keys=True, separators=(",", ":"))
-
-
-def _build_timeline_cards_from_thread_rows(
-    *,
-    db: Session,
-    thread_rows: tuple[tuple[str, str, datetime | None], ...],
-) -> list[TimelineSessionCardResponse]:
-    if not thread_rows:
-        return []
-
-    representative_ids = [session_id for _thread_id, session_id, _thread_anchor in thread_rows]
-    response_map = build_session_response_map(db=db, session_ids=representative_ids)
-    representative_rows = [(thread_id, response_map.get(session_id), thread_anchor) for thread_id, session_id, thread_anchor in thread_rows]
-    supplemental_ids = sorted(
-        (
-            {detail.thread_root_session_id for _thread_id, detail, _thread_anchor in representative_rows if detail is not None}
-            | {detail.thread_head_session_id for _thread_id, detail, _thread_anchor in representative_rows if detail is not None}
-        )
-        - response_map.keys()
-    )
-    response_map.update(build_session_response_map(db=db, session_ids=supplemental_ids))
-
-    cards: list[TimelineSessionCardResponse] = []
-    for thread_id, representative, thread_anchor in representative_rows:
-        if representative is None:
-            continue
-        head = response_map.get(representative.thread_head_session_id, representative)
-        root = response_map.get(representative.thread_root_session_id, representative)
-        cards.append(
-            TimelineSessionCardResponse(
-                thread_id=thread_id,
-                timeline_anchor_at=(
-                    thread_anchor
-                    or representative.timeline_anchor_at
-                    or head.timeline_anchor_at
-                    or representative.last_activity_at
-                    or head.last_activity_at
-                    or head.started_at
-                ),
-                head=head,
-                detail=head,
-                root=root,
-                continuation_count=head.thread_continuation_count or representative.thread_continuation_count or 1,
-                started_origin_label=root.origin_label or root.environment,
-                head_origin_label=head.origin_label or head.environment,
-            )
-        )
-    return cards
 
 
 def _effective_stream_sort(query: str | None, sort: str | None) -> str:
@@ -439,15 +375,10 @@ async def list_timeline_sessions(
     db: Session = Depends(get_db),
 ):
     timing = ServerTimingRecorder()
-    effective_mode = mode or "lexical"
-    if query is not None or effective_mode != "lexical":
-        # COMPATIBILITY: Query-driven and hybrid search return raw SessionResponse[]
-        # because thread-aware search ranking/paging hasn't been built yet.
-        # The frontend reshapes these into TimelineSessionCards client-side via
-        # buildCompatibilityTimelineCards(). This is the only remaining non-thread
-        # path on the timeline read surface.
-        with timing.span("compat_delegate"):
-            raw_response = await _sessions_router.list_sessions(
+    try:
+        result = await list_timeline_sessions_for_browser(
+            db=db,
+            params=TimelineSessionListParams(
                 project=project,
                 provider=provider,
                 environment=environment,
@@ -461,43 +392,22 @@ async def list_timeline_sessions(
                 sort=sort,
                 mode=mode,
                 context_mode=context_mode,
-                db=db,
-                _auth=None,
-                _single=None,
-            )
-        if isinstance(raw_response, Response):
-            timing.apply(raw_response)
-            return raw_response
-        compat_response = JSONResponse(content=raw_response.model_dump(mode="json"))
+            ),
+            timing=timing,
+        )
+    except SessionListingError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    if result.compatibility_raw:
+        compat_response = JSONResponse(
+            content=result.response.model_dump(mode="json"),
+            headers=result.headers,
+        )
         timing.apply(compat_response)
         return compat_response
 
-    store = AgentsStore(db)
-    since = datetime.now(timezone.utc) - timedelta(days=days_back)
-    with timing.span("list_threads"):
-        total, thread_rows = store.list_timeline_thread_page(
-            project=project,
-            provider=provider,
-            environment=environment,
-            include_test=include_test,
-            device_id=device_id,
-            since=since,
-            query=query,
-            limit=limit,
-            offset=offset,
-            hide_autonomous=hide_autonomous,
-            context_mode=context_mode,
-        )
-    with timing.span("build_cards"):
-        sessions = _build_timeline_cards_from_thread_rows(db=db, thread_rows=thread_rows)
-    with timing.span("has_real"):
-        has_real_sessions_value = has_real_sessions(db, default_when_empty=total == 0)
     timing.apply(response)
-    return TimelineSessionsListResponse(
-        sessions=sessions,
-        total=total,
-        has_real_sessions=has_real_sessions_value,
-    )
+    return result.response
 
 
 @router.get("/sessions/stream")
