@@ -9,12 +9,10 @@ listing/streaming plus short-lived UI caches.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from datetime import timedelta
 from datetime import timezone
 from threading import Lock
 from time import monotonic
@@ -41,7 +39,6 @@ from zerg.models.agents import AgentSession
 from zerg.routers import agents_demo as _demo_router
 from zerg.routers import agents_search as _search_router
 from zerg.routers import agents_sessions as _sessions_router
-from zerg.services.agents_store import AgentsStore
 from zerg.services.session_listing import SessionListingError
 from zerg.services.session_views import DemoSeedResponse
 from zerg.services.session_views import EventsListResponse
@@ -61,10 +58,11 @@ from zerg.services.session_views import SessionTurnEnvelopeResponse
 from zerg.services.session_views import SessionTurnsListResponse
 from zerg.services.session_views import SessionWorkspaceResponse
 from zerg.services.session_workspace import build_session_workspace
-from zerg.services.timeline_session_listing import TimelineSessionCardResponse
 from zerg.services.timeline_session_listing import TimelineSessionListParams
 from zerg.services.timeline_session_listing import TimelineSessionsListResponse
 from zerg.services.timeline_session_listing import list_timeline_sessions_for_browser
+from zerg.services.timeline_session_stream import stream_timeline_sessions_for_browser
+from zerg.services.timeline_session_stream import validate_timeline_stream_contract
 from zerg.utils.server_timing import ServerTimingRecorder
 
 logger = logging.getLogger(__name__)
@@ -75,8 +73,6 @@ router = APIRouter(
     dependencies=[Depends(get_current_browser_user), Depends(require_single_tenant)],
 )
 
-TIMELINE_STREAM_CHANGE_WAIT_SECONDS = 5.0
-TIMELINE_STREAM_HEARTBEAT_SECONDS = 30.0
 TIMELINE_FILTERS_CACHE_TTL_SECONDS = 60.0
 
 
@@ -90,20 +86,6 @@ _timeline_filters_cache: dict[tuple[str, int, str | None], _TimelineFiltersCache
 _timeline_filters_cache_lock = Lock()
 
 
-def _session_payload_signature(session: TimelineSessionCardResponse) -> tuple[dict, str]:
-    payload = session.model_dump(mode="json")
-    return payload, json.dumps(payload, sort_keys=True, separators=(",", ":"))
-
-
-def _effective_stream_sort(query: str | None, sort: str | None) -> str:
-    return sort or ("relevance" if query else "recency")
-
-
-def _stream_supports_preflight(*, query: str | None, sort: str | None, mode: str | None) -> bool:
-    effective_sort = _effective_stream_sort(query, sort)
-    return query is None and mode in (None, "lexical") and effective_sort == "recency"
-
-
 def _timeline_filters_cache_key(db: Session, *, days_back: int) -> tuple[str, int, str | None]:
     bind = db.get_bind()
     bind_url = getattr(bind, "url", None)
@@ -111,198 +93,6 @@ def _timeline_filters_cache_key(db: Session, *, days_back: int) -> tuple[str, in
     latest_session_update = db.query(func.max(AgentSession.updated_at)).scalar()
     latest_update_key = latest_session_update.isoformat() if latest_session_update is not None else None
     return bind_key, days_back, latest_update_key
-
-
-def _validate_timeline_stream_contract(*, query: str | None, sort: str | None, mode: str | None) -> None:
-    if _stream_supports_preflight(query=query, sort=sort, mode=mode):
-        return
-    raise HTTPException(
-        status_code=400,
-        detail="Timeline session stream only supports the default no-query lexical recency contract.",
-    )
-
-
-def _load_timeline_stream_window_signature(
-    *,
-    db: Session,
-    project: Optional[str],
-    provider: Optional[str],
-    environment: Optional[str],
-    include_test: bool,
-    hide_autonomous: bool,
-    device_id: Optional[str],
-    days_back: int,
-    query: Optional[str],
-    limit: int,
-    offset: int,
-    context_mode: str,
-) -> tuple[tuple[str, datetime | None, datetime | None, datetime | None, int, datetime | None], ...]:
-    store = AgentsStore(db)
-    since = datetime.now(timezone.utc) - timedelta(days=days_back)
-    _, rows = store.list_timeline_thread_window_signature(
-        project=project,
-        provider=provider,
-        environment=environment,
-        include_test=include_test,
-        device_id=device_id,
-        since=since,
-        query=query,
-        limit=limit,
-        offset=offset,
-        hide_autonomous=hide_autonomous,
-        context_mode=context_mode,
-        include_total=False,
-    )
-    return rows
-
-
-async def _timeline_sessions_stream(
-    request: Request,
-    *,
-    session_factory: sessionmaker,
-    project: Optional[str],
-    provider: Optional[str],
-    environment: Optional[str],
-    include_test: bool,
-    hide_autonomous: bool,
-    device_id: Optional[str],
-    days_back: int,
-    query: Optional[str],
-    limit: int,
-    offset: int,
-    sort: Optional[str],
-    mode: Optional[str],
-    context_mode: str,
-    skip_initial_replay: bool,
-):
-    previous_signatures: dict[str, str] = {}
-    previous_window_signature: tuple[tuple[str, datetime | None, datetime | None, datetime | None, int, datetime | None], ...] | None = None
-    last_heartbeat = monotonic()
-    preflight_enabled = _stream_supports_preflight(query=query, sort=sort, mode=mode)
-
-    yield {
-        "event": "connected",
-        "data": json.dumps({"message": "Timeline session stream connected"}),
-    }
-
-    while True:
-        if await request.is_disconnected():
-            logger.info("Timeline sessions SSE disconnected")
-            break
-
-        if skip_initial_replay:
-            # The browser already has a fresh timeline snapshot from the initial
-            # HTTP query. Do not immediately rebuild the same window on stream
-            # connect; wait for the next write/heartbeat cycle instead.
-            skip_initial_replay = False
-            await _wait_for_timeline_change()
-            continue
-
-        if preflight_enabled:
-            with session_factory() as db:
-                current_window_signature = _load_timeline_stream_window_signature(
-                    db=db,
-                    project=project,
-                    provider=provider,
-                    environment=environment,
-                    include_test=include_test,
-                    hide_autonomous=hide_autonomous,
-                    device_id=device_id,
-                    days_back=days_back,
-                    query=query,
-                    limit=limit,
-                    offset=offset,
-                    context_mode=context_mode,
-                )
-            if previous_window_signature is not None and current_window_signature == previous_window_signature:
-                now = monotonic()
-                if now - last_heartbeat >= TIMELINE_STREAM_HEARTBEAT_SECONDS:
-                    yield {
-                        "event": "heartbeat",
-                        "data": json.dumps({"timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}),
-                    }
-                    last_heartbeat = now
-                await _wait_for_timeline_change()
-                continue
-            previous_window_signature = current_window_signature
-
-        with session_factory() as db:
-            response = await list_timeline_sessions(
-                response=Response(),
-                project=project,
-                provider=provider,
-                environment=environment,
-                include_test=include_test,
-                hide_autonomous=hide_autonomous,
-                device_id=device_id,
-                days_back=days_back,
-                query=query,
-                limit=limit,
-                offset=offset,
-                sort=sort,
-                mode=mode,
-                context_mode=context_mode,
-                db=db,
-            )
-
-        current_payloads: dict[str, dict] = {}
-        current_signatures: dict[str, str] = {}
-
-        for session in response.sessions:
-            payload, signature = _session_payload_signature(session)
-            current_payloads[session.thread_id] = payload
-            current_signatures[session.thread_id] = signature
-
-        removed_ids = previous_signatures.keys() - current_signatures.keys()
-        for thread_id in sorted(removed_ids):
-            yield {
-                "event": "session_remove",
-                "data": json.dumps(
-                    {
-                        "thread_id": thread_id,
-                        "total": response.total,
-                        "has_real_sessions": response.has_real_sessions,
-                    }
-                ),
-            }
-
-        for session in response.sessions:
-            signature = current_signatures[session.thread_id]
-            if previous_signatures.get(session.thread_id) == signature:
-                continue
-            yield {
-                "event": "session_upsert",
-                "data": json.dumps(
-                    {
-                        "session": current_payloads[session.thread_id],
-                        "total": response.total,
-                        "has_real_sessions": response.has_real_sessions,
-                    }
-                ),
-            }
-
-        previous_signatures = current_signatures
-
-        now = monotonic()
-        if now - last_heartbeat >= TIMELINE_STREAM_HEARTBEAT_SECONDS:
-            yield {
-                "event": "heartbeat",
-                "data": json.dumps({"timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}),
-            }
-            last_heartbeat = now
-
-        await _wait_for_timeline_change()
-
-
-async def _wait_for_timeline_change() -> None:
-    """Wait for a DB write or a timeout before the next SSE poll cycle."""
-    from zerg.services.write_serializer import get_write_serializer
-
-    ws = get_write_serializer()
-    if ws.is_configured:
-        await ws.wait_for_change(timeout=TIMELINE_STREAM_CHANGE_WAIT_SECONDS)
-    else:
-        await asyncio.sleep(TIMELINE_STREAM_CHANGE_WAIT_SECONDS)
 
 
 @router.get("/sessions/semantic", response_model=SemanticSearchResponse)
@@ -360,7 +150,10 @@ async def list_timeline_sessions(
     provider: Optional[str] = Query(None, description="Filter by provider"),
     environment: Optional[str] = Query(None, description="Filter by environment (production, development, test, e2e)"),
     include_test: bool = Query(False, description="Include test/e2e sessions (default: False)"),
-    hide_autonomous: bool = Query(True, description="Hide autonomous sessions (Task sub-agents and sessions with no user messages)"),
+    hide_autonomous: bool = Query(
+        True,
+        description="Hide autonomous sessions (Task sub-agents and sessions with no user messages)",
+    ),
     device_id: Optional[str] = Query(None, description="Filter by device ID"),
     days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
     query: Optional[str] = Query(None, description="Search query for content"),
@@ -417,7 +210,10 @@ async def stream_timeline_sessions(
     provider: Optional[str] = Query(None, description="Filter by provider"),
     environment: Optional[str] = Query(None, description="Filter by environment (production, development, test, e2e)"),
     include_test: bool = Query(False, description="Include test/e2e sessions (default: False)"),
-    hide_autonomous: bool = Query(True, description="Hide autonomous sessions (Task sub-agents and sessions with no user messages)"),
+    hide_autonomous: bool = Query(
+        True,
+        description="Hide autonomous sessions (Task sub-agents and sessions with no user messages)",
+    ),
     device_id: Optional[str] = Query(None, description="Filter by device ID"),
     days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
     query: Optional[str] = Query(None, description="Search query for content"),
@@ -435,27 +231,34 @@ async def stream_timeline_sessions(
     ),
     db: Session = Depends(get_db),
 ) -> EventSourceResponse:
-    _validate_timeline_stream_contract(query=query, sort=sort, mode=mode)
+    try:
+        validate_timeline_stream_contract(query=query, sort=sort, mode=mode)
+    except SessionListingError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
     session_factory = make_sessionmaker(db.get_bind())
     db.close()
+    params = TimelineSessionListParams(
+        project=project,
+        provider=provider,
+        environment=environment,
+        include_test=include_test,
+        hide_autonomous=hide_autonomous,
+        device_id=device_id,
+        days_back=days_back,
+        query=query,
+        limit=limit,
+        offset=offset,
+        sort=sort,
+        mode=mode,
+        context_mode=context_mode,
+    )
 
     return EventSourceResponse(
-        _timeline_sessions_stream(
+        stream_timeline_sessions_for_browser(
             request,
             session_factory=session_factory,
-            project=project,
-            provider=provider,
-            environment=environment,
-            include_test=include_test,
-            hide_autonomous=hide_autonomous,
-            device_id=device_id,
-            days_back=days_back,
-            query=query,
-            limit=limit,
-            offset=offset,
-            sort=sort,
-            mode=mode,
-            context_mode=context_mode,
+            params=params,
             skip_initial_replay=skip_initial_replay,
         )
     )
@@ -472,7 +275,10 @@ async def list_timeline_session_summaries(
     query: Optional[str] = Query(None, description="Search query for content"),
     limit: int = Query(20, ge=1, le=100, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
-    hide_autonomous: bool = Query(True, description="Hide autonomous sessions (Task sub-agents and sessions with no user messages)"),
+    hide_autonomous: bool = Query(
+        True,
+        description="Hide autonomous sessions (Task sub-agents and sessions with no user messages)",
+    ),
     db: Session = Depends(get_db),
 ):
     return await _sessions_router.list_session_summaries(
@@ -526,7 +332,13 @@ async def get_timeline_filters(
             return cached.response
 
     with timing.span("distinct_filters"):
-        filters = await _sessions_router.get_filters(days_back=days_back, response=response, db=db, _auth=None, _single=None)
+        filters = await _sessions_router.get_filters(
+            days_back=days_back,
+            response=response,
+            db=db,
+            _auth=None,
+            _single=None,
+        )
 
     with _timeline_filters_cache_lock:
         _timeline_filters_cache[cache_key] = _TimelineFiltersCacheEntry(
@@ -591,7 +403,13 @@ async def get_timeline_session_thread(
     response: Response,
     db: Session = Depends(get_db),
 ):
-    return await _sessions_router.get_session_thread(session_id=session_id, response=response, db=db, _auth=None, _single=None)
+    return await _sessions_router.get_session_thread(
+        session_id=session_id,
+        response=response,
+        db=db,
+        _auth=None,
+        _single=None,
+    )
 
 
 @router.get("/sessions/{session_id}/turns", response_model=SessionTurnsListResponse)
@@ -719,6 +537,11 @@ async def export_timeline_session(
 # ---------------------------------------------------------------------------
 
 WORKSPACE_STREAM_HEARTBEAT_SECONDS = 30.0
+WORKSPACE_STREAM_CHANGE_WAIT_SECONDS = 5.0
+
+
+def _utc_now_z() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _load_workspace_signature(
@@ -748,7 +571,8 @@ def _load_workspace_signature(
     thread_session_ids = [str(row.id) for row in thread_sessions]
     latest_session_updated = max((row.updated_at for row in thread_sessions if row.updated_at), default=None)
 
-    latest_event_id = (db.query(func.max(AgentEvent.id)).filter(AgentEvent.session_id.in_(thread_session_ids)).scalar()) or 0
+    latest_event_id_query = db.query(func.max(AgentEvent.id)).filter(AgentEvent.session_id.in_(thread_session_ids))
+    latest_event_id = latest_event_id_query.scalar() or 0
 
     # Latest event emitted_at (the provider/engine timestamp on the newest event).
     # This feeds client beacons so we can measure true end-to-end latency.
@@ -843,7 +667,7 @@ async def _session_workspace_stream(
                 if now - last_heartbeat >= WORKSPACE_STREAM_HEARTBEAT_SECONDS:
                     yield {
                         "event": "heartbeat",
-                        "data": json.dumps({"timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}),
+                        "data": json.dumps({"timestamp": _utc_now_z()}),
                     }
                     last_heartbeat = now
                 wait_start = monotonic()
@@ -890,7 +714,7 @@ async def _session_workspace_stream(
 
 async def _wait_for_session_change(subscription) -> int:
     """Wait for a publish or a short tick. Returns the seq of the message that woke us, or 0 on timeout."""
-    msg = await subscription.next_message(timeout=TIMELINE_STREAM_CHANGE_WAIT_SECONDS)
+    msg = await subscription.next_message(timeout=WORKSPACE_STREAM_CHANGE_WAIT_SECONDS)
     return msg.seq if msg else 0
 
 
