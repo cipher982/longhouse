@@ -1160,6 +1160,8 @@ mod tests {
             last_ship_result: None,
             last_ship_latency_ms: None,
             last_ship_http_status: None,
+            last_ship_error_kind: None,
+            last_ship_error_message: None,
             spool_pending_count: 0,
             spool_dead_count: 0,
             parse_error_count_1h: 0,
