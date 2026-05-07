@@ -1807,6 +1807,48 @@ def test_collect_local_health_recent_touches_use_workspace_context_and_ignore_me
     ]
 
 
+def test_collect_local_health_recent_touch_context_scan_counts_physical_lines(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(tmp_path, age_seconds=5)
+
+    now = datetime(2026, 4, 12, 18, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(local_health_service, "_utc_now", lambda: now)
+
+    session = tmp_path / "projects" / "-Users-davidrose-git-path-fallback" / "claude-session.jsonl"
+    session.parent.mkdir(parents=True, exist_ok=True)
+    session.write_text(
+        "\n".join(
+            [
+                "",
+                "not-json",
+                "",
+                "still-not-json",
+                "",
+                json.dumps({"type": "assistant"}),
+                json.dumps({"message": {"cwd": "/Users/davidrose/git/late-cwd", "gitBranch": "too-late"}}),
+            ]
+        )
+        + "\n"
+    )
+    _write_shipper_db(
+        tmp_path,
+        [(str(session), "claude", "claude-limited-context", None, (now - timedelta(minutes=2)).isoformat())],
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["activity_summary"]["recent_touches"] == [
+        {
+            "provider": "claude",
+            "last_updated": (now - timedelta(minutes=2)).isoformat(),
+            "workspace_label": "path-fallback",
+            "branch": None,
+            "is_subagent": False,
+        }
+    ]
+
+
 def test_collect_local_health_surfaces_live_unmanaged_processes_separately_from_recent_activity(
     monkeypatch, tmp_path: Path
 ):
@@ -2277,6 +2319,61 @@ def test_process_snapshot_scope_reuses_single_scan(monkeypatch):
         ]
 
     assert calls == 1
+
+
+def test_collect_local_health_reports_process_scan_payload_contract(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(local_health_service, "_candidate_runner_env_paths", lambda: [tmp_path / "missing-runner.env"])
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(tmp_path, age_seconds=5)
+    now = datetime(2026, 4, 19, 0, 0, 0, tzinfo=timezone.utc)
+    session_id = "bfb567fb-7e0f-4552-8411-24f682751484"
+    proc = _FakeProc(
+        pid=55507,
+        cmdline=["/opt/homebrew/bin/claude", "--session-id", session_id],
+        create_time=now.timestamp(),
+        env={
+            "LONGHOUSE_MANAGED_SESSION_ID": session_id,
+            "LONGHOUSE_DEVICE_ID": "device-abc",
+        },
+        cwd="/Users/test/git/zerg",
+    )
+    _patch_process_iter(monkeypatch, [proc])
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["managed_summary"] == {
+        "attached_count": 1,
+        "detached_count": 0,
+        "degraded_count": 0,
+        "orphan_bridge_count": 0,
+        "latest_activity_at": "2026-04-19T00:00:00Z",
+    }
+    assert snapshot["managed_sessions"] == [
+        {
+            "session_id": session_id,
+            "provider": "claude",
+            "control_path": "managed",
+            "liveness_model": "process_scan",
+            "provider_cli": {"path": "/opt/homebrew/bin/claude", "source": "process"},
+            "pid": 55507,
+            "workspace_label": "zerg",
+            "cwd": "/Users/test/git/zerg",
+            "device_id": "device-abc",
+            "started_at": "2026-04-19T00:00:00Z",
+            "branch": None,
+            "state": "attached",
+            "raw_phase": None,
+            "phase": None,
+            "phase_observed_at": None,
+            "last_activity_at": "2026-04-19T00:00:00Z",
+            "bridge_status": None,
+            "bridge_pid": None,
+            "bridge_heartbeat_at": None,
+            "reason_codes": [],
+        }
+    ]
+    assert snapshot["orphan_bridges"] == []
+    assert snapshot["unmanaged_processes"] == []
 
 
 def test_process_scan_detects_claude_via_env(monkeypatch, tmp_path: Path):
