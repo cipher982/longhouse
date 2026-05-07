@@ -71,12 +71,14 @@ These are the contracts the experiment should eventually enforce.
 
 ## Lifecycle Propagation Contract
 
-Lifecycle truth is eventful on the primary path and inferred only on backstop paths. A managed control path that knows it is closing must push a terminal lifecycle event immediately; the Runtime Host must not wait for the next heartbeat, process scan, lease expiry, or transcript import to discover that fact.
+Lifecycle truth is eventful on the primary path and inferred only on backstop paths. A managed control path that knows it is closing must push a terminal lifecycle event immediately; the Runtime Host must not wait for the next heartbeat, process scan, lease expiry, or transcript import to discover that fact when the primary path is healthy.
+
+The latency budgets below are target budgets until the profiler records enough runs to report p50/p95 honestly. A single sub-second run proves the primary path exists; it does not prove the SLA distribution. The profiler must report DB ingest, API/SSE, and rendered-card latency separately before the product can claim a user-visible SLA.
 
 | Lane | Point Of Truth | Terminal Signal | Target Budget | Backstop Budget | Notes |
 | --- | --- | --- | --- | --- | --- |
-| Managed Codex bridge | `longhouse-engine codex-bridge` daemon | `terminal_signal` from `codex_bridge` with `terminal_state=session_ended`, `terminal_reason=bridge_stop` | p50 < 250ms, p95 < 1000ms after graceful stop is requested | heartbeat missing lease < 2min until replaced | The bridge already owns API credentials and posts runtime phase/progress events, so graceful stop is a push event. |
-| Managed Claude channel | Claude native channel/control wrapper | `terminal_signal` from channel/control path with `terminal_reason=channel_closed` or `provider_exit` | p50 < 250ms, p95 < 1000ms after provider exit is observed by the wrapper/channel | process scan / missing lease < 2min until replaced | Claude must not borrow Codex bridge semantics; it needs its own channel/process lifecycle source. |
+| Managed Codex bridge | `longhouse-engine codex-bridge` daemon | `terminal_signal` from `codex_bridge` with `terminal_state=session_ended`, `terminal_reason=bridge_stop` | target p50 < 250ms, p95 < 1000ms after graceful stop is requested | heartbeat missing lease < 2min until replaced | The bridge already owns API credentials and posts runtime phase/progress events, so graceful stop is a push event. Until runtime events are spooled, this primary path is best-effort when hosted is unreachable. |
+| Managed Claude channel | Claude native channel/control wrapper | `terminal_signal` from channel/control path with `terminal_reason=channel_closed` or `provider_exit` | target p50 < 250ms, p95 < 1000ms after provider exit is observed by the wrapper/channel | process scan / missing lease < 2min until replaced | Claude must not borrow Codex bridge semantics; it needs its own channel/process lifecycle source. |
 | Hooked unmanaged provider | provider hook/wrapper when available | `terminal_signal` with `terminal_reason=provider_exit` and exit metadata | p50 < 1s, p95 < 5s after provider exit | complete engine process snapshot < 2min | This is still not managed control. It is a truthful terminal observation from a local hook/wrapper. |
 | Scanned unmanaged provider | Machine Agent process snapshot | `terminal_signal` with `terminal_reason=process_gone` | no near-instant SLA | p95 < 2min after complete snapshot proves absence | This is a compatibility/backstop lane, not the trust-critical managed lane. |
 | Machine offline / network loss | Machine heartbeat and Runtime Host freshness | stale/offline state, not terminal close | p95 < 10s for stale machine indication once freshness expires | explicit reconnect repair | Offline is not closed. A session can be disconnected from hosted while the provider process remains alive. |
@@ -99,6 +101,9 @@ The profiler should fail a managed graceful shutdown if the first terminal event
 
 5. **Profiler hardening.**
    Fix SSE measurement, record terminal source/reason directly, add SLA verdicts per lane, and classify backstop closures as failures for managed graceful shutdown cases.
+
+6. **Runtime event durability.**
+   Decide whether runtime terminal events are part of the hard SLA or an opportunistic fast path. If hard SLA, route them through a retry/spool path before treating the managed close contract as met under flaky network conditions.
 
 ## Fidelity Metrics
 
