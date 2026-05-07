@@ -267,6 +267,47 @@ def test_opencode_config_content_preserves_existing_plugins(tmp_path):
     assert config["plugin"][1][1]["longhouseSessionID"] == "session-123"
 
 
+def test_opencode_config_content_rejects_invalid_shapes(tmp_path):
+    with pytest.raises(opencode_cli._OpenCodeLaunchError, match="JSON object"):
+        opencode_cli._opencode_config_content_with_longhouse_plugin(
+            existing_content="[]",
+            plugin_path=tmp_path / "longhouse-opencode-runtime.mjs",
+            runtime_events_url="https://longhouse.test/api/agents/runtime/events/batch",
+            token="zdt_test_token",
+            session_id="session-123",
+            device_id="work-laptop",
+        )
+
+    with pytest.raises(opencode_cli._OpenCodeLaunchError, match="plugin field must be an array"):
+        opencode_cli._opencode_config_content_with_longhouse_plugin(
+            existing_content=json.dumps({"plugin": {"bad": True}}),
+            plugin_path=tmp_path / "longhouse-opencode-runtime.mjs",
+            runtime_events_url="https://longhouse.test/api/agents/runtime/events/batch",
+            token="zdt_test_token",
+            session_id="session-123",
+            device_id="work-laptop",
+        )
+
+
+def test_write_opencode_runtime_config_content_is_private(monkeypatch, tmp_path):
+    monkeypatch.delenv("OPENCODE_CONFIG_CONTENT", raising=False)
+
+    path = opencode_cli._write_opencode_runtime_config_content(
+        config_dir=tmp_path / "config",
+        runtime_events_url="https://longhouse.test/api/agents/runtime/events/batch",
+        token="zdt_test_token",
+        session_id="session-123",
+        device_id="work-laptop",
+    )
+
+    assert path.name == "session-123.config-content.json"
+    assert path.stat().st_mode & 0o777 == 0o600
+    config = json.loads(path.read_text(encoding="utf-8"))
+    plugin_path = tmp_path / "config" / "managed-local" / "opencode" / "longhouse-opencode-runtime.mjs"
+    assert plugin_path.exists()
+    assert config["plugin"][0][0] == plugin_path.resolve().as_uri()
+
+
 def test_build_opencode_command_uses_config_content_file_without_echoing_token(tmp_path):
     config_path = tmp_path / "session.config-content.json"
     config_path.write_text('{"plugin":[]}\n', encoding="utf-8")
