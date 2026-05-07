@@ -16,6 +16,7 @@ import shutil
 import sqlite3
 from collections.abc import Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -522,7 +523,29 @@ def _repair_command(*, can_reconcile_from_state: bool) -> str:
     return recommended_machine_repair_command(can_reconcile_from_state=can_reconcile_from_state)
 
 
-def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dict[str, Any]:
+@dataclass
+class _LaunchReadinessContext:
+    runner: dict[str, Any]
+    shipper_db_path: Path
+    stored_url: str | None
+    machine_name: str | None
+    config_generation: str | None
+    state_hash: str | None
+    state_exists: bool
+    state_error: str | None
+    runner_expected: bool
+    runner_name: str | None
+    runner_urls: list[str]
+    service_machine_name: str | None
+    service_config_generation: str | None
+    service_state_hash: str | None
+    service_status: str
+    service_file_exists: bool
+    shipper_state_exists: bool
+    can_reconcile_from_state: bool
+
+
+def _collect_launch_readiness_context(base_dir: Path, *, service: dict[str, Any]) -> _LaunchReadinessContext:
     config = _collect_local_config(base_dir)
     runner = _collect_runner_config(include_global_runner=_state_root_tracks_machine_runner(base_dir))
     shipper_db_path = get_agent_db_path(base_dir)
@@ -530,9 +553,6 @@ def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dic
     service_file = Path(service_file_raw) if service_file_raw else None
     service_machine_name = _extract_service_machine_name(service.get("service_file"))
     service_metadata = _extract_service_metadata(service.get("service_file"))
-    reasons: list[str] = []
-    warnings: list[str] = []
-    actions: list[str] = []
 
     stored_url = str(config.get("stored_url") or "").strip() or None
     machine_name = str(config.get("machine_name") or "").strip() or None
@@ -555,104 +575,211 @@ def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dic
         machine_name=machine_name,
     )
 
-    if state_error:
+    return _LaunchReadinessContext(
+        runner=runner,
+        shipper_db_path=shipper_db_path,
+        stored_url=stored_url,
+        machine_name=machine_name,
+        config_generation=config_generation,
+        state_hash=state_hash,
+        state_exists=state_exists,
+        state_error=state_error,
+        runner_expected=runner_expected,
+        runner_name=runner_name,
+        runner_urls=runner_urls,
+        service_machine_name=service_machine_name,
+        service_config_generation=service_config_generation,
+        service_state_hash=service_state_hash,
+        service_status=service_status,
+        service_file_exists=service_file_exists,
+        shipper_state_exists=shipper_state_exists,
+        can_reconcile_from_state=can_reconcile_from_state,
+    )
+
+
+def _add_launch_machine_state_reasons(ctx: _LaunchReadinessContext, reasons: list[str], actions: list[str]) -> None:
+    if ctx.state_error:
         reasons.append("machine_state_invalid")
         _with_action(actions, _repair_command(can_reconcile_from_state=False))
-    elif not state_exists and (service_machine_name or runner.get("exists")):
+    elif not ctx.state_exists and (ctx.service_machine_name or ctx.runner.get("exists")):
         reasons.append("machine_state_missing")
         _with_action(actions, _repair_command(can_reconcile_from_state=False))
 
-    if state_exists and not stored_url:
+    if ctx.state_exists and not ctx.stored_url:
         reasons.append("machine_state_missing_runtime_url")
         _with_action(actions, _repair_command(can_reconcile_from_state=False))
 
-    if state_exists and not machine_name:
+    if ctx.state_exists and not ctx.machine_name:
         reasons.append("machine_state_missing_machine_name")
         _with_action(actions, _repair_command(can_reconcile_from_state=False))
 
-    if runner_expected and can_reconcile_from_state and stored_url and runner_urls and stored_url not in runner_urls:
+
+def _add_launch_runner_config_reasons(ctx: _LaunchReadinessContext, reasons: list[str], actions: list[str]) -> None:
+    if (
+        ctx.runner_expected
+        and ctx.can_reconcile_from_state
+        and ctx.stored_url
+        and ctx.runner_urls
+        and ctx.stored_url not in ctx.runner_urls
+    ):
         reasons.append("config_url_runner_url_mismatch")
         _with_action(actions, _repair_command(can_reconcile_from_state=True))
 
-    if runner_expected and can_reconcile_from_state and machine_name and runner_name and machine_name != runner_name:
+    if (
+        ctx.runner_expected
+        and ctx.can_reconcile_from_state
+        and ctx.machine_name
+        and ctx.runner_name
+        and ctx.machine_name != ctx.runner_name
+    ):
         reasons.append("machine_name_runner_name_mismatch")
         _with_action(actions, _repair_command(can_reconcile_from_state=True))
 
-    if can_reconcile_from_state and machine_name and service_machine_name and machine_name != service_machine_name:
+
+def _add_launch_service_config_reasons(
+    ctx: _LaunchReadinessContext,
+    reasons: list[str],
+    warnings: list[str],
+    actions: list[str],
+) -> None:
+    if ctx.can_reconcile_from_state and ctx.machine_name and ctx.service_machine_name and ctx.machine_name != ctx.service_machine_name:
         reasons.append("service_machine_name_mismatch")
         _with_action(actions, _repair_command(can_reconcile_from_state=True))
 
-    if can_reconcile_from_state and state_hash and service_state_hash and state_hash != service_state_hash:
+    if ctx.can_reconcile_from_state and ctx.state_hash and ctx.service_state_hash and ctx.state_hash != ctx.service_state_hash:
         reasons.append("service_state_hash_mismatch")
         _with_action(actions, _repair_command(can_reconcile_from_state=True))
 
-    if can_reconcile_from_state and config_generation and service_config_generation and config_generation != service_config_generation:
-        if state_hash and service_state_hash and state_hash == service_state_hash:
+    if (
+        ctx.can_reconcile_from_state
+        and ctx.config_generation
+        and ctx.service_config_generation
+        and ctx.config_generation != ctx.service_config_generation
+    ):
+        if ctx.state_hash and ctx.service_state_hash and ctx.state_hash == ctx.service_state_hash:
             warnings.append("service_generation_mismatch")
         else:
             reasons.append("service_generation_mismatch")
         _with_action(actions, _repair_command(can_reconcile_from_state=True))
 
-    if service_status != "not-installed" and service_file_exists and not shipper_state_exists:
-        reasons.append("shipper_state_missing")
-        _with_action(actions, f"Inspect or restore shipper state: {shipper_db_path}")
 
-    if runner_expected and can_reconcile_from_state and runner_name and service_machine_name and runner_name != service_machine_name:
+def _add_launch_shipper_state_reason(ctx: _LaunchReadinessContext, reasons: list[str], actions: list[str]) -> None:
+    if ctx.service_status != "not-installed" and ctx.service_file_exists and not ctx.shipper_state_exists:
+        reasons.append("shipper_state_missing")
+        _with_action(actions, f"Inspect or restore shipper state: {ctx.shipper_db_path}")
+
+
+def _add_launch_service_runner_reason(ctx: _LaunchReadinessContext, reasons: list[str], actions: list[str]) -> None:
+    if (
+        ctx.runner_expected
+        and ctx.can_reconcile_from_state
+        and ctx.runner_name
+        and ctx.service_machine_name
+        and ctx.runner_name != ctx.service_machine_name
+    ):
         reasons.append("service_runner_name_mismatch")
         _with_action(actions, _repair_command(can_reconcile_from_state=True))
 
-    configured = bool(state_exists or stored_url or machine_name or service_machine_name or runner.get("exists"))
 
+def _launch_readiness_configured(ctx: _LaunchReadinessContext) -> bool:
+    return bool(ctx.state_exists or ctx.stored_url or ctx.machine_name or ctx.service_machine_name or ctx.runner.get("exists"))
+
+
+def _launch_readiness_state(*, reasons: list[str], configured: bool) -> tuple[str, str]:
     if reasons:
-        state = "broken"
-        headline = "Managed launch config is inconsistent"
-    elif configured:
-        state = "ready"
-        headline = "Managed launch configuration looks coherent"
-    else:
-        state = "unconfigured"
-        headline = "Managed launch has not been configured on this machine"
+        return "broken", "Managed launch config is inconsistent"
+    if configured:
+        return "ready", "Managed launch configuration looks coherent"
+    return "unconfigured", "Managed launch has not been configured on this machine"
 
+
+def _launch_readiness_payload(
+    ctx: _LaunchReadinessContext,
+    *,
+    state: str,
+    headline: str,
+    reasons: list[str],
+    warnings: list[str],
+    actions: list[str],
+) -> dict[str, Any]:
     return {
         "state": state,
         "headline": headline,
         "reasons": reasons,
         "warnings": warnings,
         "suggested_actions": actions,
-        "control_plane_url": stored_url,
-        "stored_url": stored_url,
-        "machine_name": machine_name,
-        "state_exists": state_exists,
-        "state_error": state_error,
-        "config_generation": config_generation,
-        "state_hash": state_hash,
-        "runner_expected": runner_expected,
-        "service_machine_name": service_machine_name,
-        "service_config_generation": service_config_generation,
-        "service_state_hash": service_state_hash,
-        "service_file_exists": service_file_exists,
-        "shipper_db_path": str(shipper_db_path),
-        "shipper_state_exists": shipper_state_exists,
-        "runner": runner,
+        "control_plane_url": ctx.stored_url,
+        "stored_url": ctx.stored_url,
+        "machine_name": ctx.machine_name,
+        "state_exists": ctx.state_exists,
+        "state_error": ctx.state_error,
+        "config_generation": ctx.config_generation,
+        "state_hash": ctx.state_hash,
+        "runner_expected": ctx.runner_expected,
+        "service_machine_name": ctx.service_machine_name,
+        "service_config_generation": ctx.service_config_generation,
+        "service_state_hash": ctx.service_state_hash,
+        "service_file_exists": ctx.service_file_exists,
+        "shipper_db_path": str(ctx.shipper_db_path),
+        "shipper_state_exists": ctx.shipper_state_exists,
+        "runner": ctx.runner,
     }
 
 
-def collect_launch_readiness(
-    base_dir: str | Path | None = None,
+def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dict[str, Any]:
+    ctx = _collect_launch_readiness_context(base_dir, service=service)
+    reasons: list[str] = []
+    warnings: list[str] = []
+    actions: list[str] = []
+
+    # Keep this ordering stable; the top-level health classifier preserves it.
+    _add_launch_machine_state_reasons(ctx, reasons, actions)
+    _add_launch_runner_config_reasons(ctx, reasons, actions)
+    _add_launch_service_config_reasons(ctx, reasons, warnings, actions)
+    _add_launch_shipper_state_reason(ctx, reasons, actions)
+    _add_launch_service_runner_reason(ctx, reasons, actions)
+
+    state, headline = _launch_readiness_state(
+        reasons=reasons,
+        configured=_launch_readiness_configured(ctx),
+    )
+    return _launch_readiness_payload(
+        ctx,
+        state=state,
+        headline=headline,
+        reasons=reasons,
+        warnings=warnings,
+        actions=actions,
+    )
+
+
+def _drop_launch_reason(reasons: list[str], reason_code: str) -> None:
+    while reason_code in reasons:
+        reasons.remove(reason_code)
+
+
+def _launch_override_repair_command(
+    readiness: dict[str, Any],
     *,
-    runtime_url_override: str | None = None,
-    machine_name_override: str | None = None,
+    stored_url: str | None,
+    machine_name: str | None,
+) -> str:
+    return _repair_command(
+        can_reconcile_from_state=_can_reconcile_launch_from_state(
+            state_exists=bool(readiness.get("state_exists")),
+            state_error=str(readiness.get("state_error") or "").strip() or None,
+            stored_url=stored_url,
+            machine_name=machine_name,
+        )
+    )
+
+
+def _apply_launch_readiness_overrides(
+    readiness: dict[str, Any],
+    *,
+    runtime_url_override: str | None,
+    machine_name_override: str | None,
 ) -> dict[str, Any]:
-    """Collect the local managed-launch readiness contract.
-
-    `runtime_url_override` / `machine_name_override` let callers validate a
-    concrete launch target without first mutating canonical machine state.
-    """
-
-    resolved_base_dir = _coerce_path(base_dir)
-    service = _collect_service(resolved_base_dir)
-    readiness = _collect_launch_readiness(resolved_base_dir, service=service)
-
     effective_url = str(runtime_url_override or "").strip() or str(readiness.get("stored_url") or "").strip() or None
     effective_machine_name = str(machine_name_override or "").strip() or str(readiness.get("machine_name") or "").strip() or None
     runner = dict(readiness.get("runner") or {})
@@ -663,39 +790,21 @@ def collect_launch_readiness(
     warnings = [str(item) for item in list(readiness.get("warnings") or [])]
     had_override = runtime_url_override is not None or machine_name_override is not None
 
-    def _drop_reason(reason_code: str) -> None:
-        while reason_code in reasons:
-            reasons.remove(reason_code)
-
-    _drop_reason("config_url_runner_url_mismatch")
-    _drop_reason("machine_name_runner_name_mismatch")
+    _drop_launch_reason(reasons, "config_url_runner_url_mismatch")
+    _drop_launch_reason(reasons, "machine_name_runner_name_mismatch")
 
     if bool(readiness.get("runner_expected")) and effective_url and runner_urls and effective_url not in runner_urls:
         reasons.append("config_url_runner_url_mismatch")
         _with_action(
             actions,
-            _repair_command(
-                can_reconcile_from_state=_can_reconcile_launch_from_state(
-                    state_exists=bool(readiness.get("state_exists")),
-                    state_error=str(readiness.get("state_error") or "").strip() or None,
-                    stored_url=effective_url,
-                    machine_name=effective_machine_name,
-                )
-            ),
+            _launch_override_repair_command(readiness, stored_url=effective_url, machine_name=effective_machine_name),
         )
 
     if bool(readiness.get("runner_expected")) and effective_machine_name and runner_name and effective_machine_name != runner_name:
         reasons.append("machine_name_runner_name_mismatch")
         _with_action(
             actions,
-            _repair_command(
-                can_reconcile_from_state=_can_reconcile_launch_from_state(
-                    state_exists=bool(readiness.get("state_exists")),
-                    state_error=str(readiness.get("state_error") or "").strip() or None,
-                    stored_url=effective_url,
-                    machine_name=effective_machine_name,
-                )
-            ),
+            _launch_override_repair_command(readiness, stored_url=effective_url, machine_name=effective_machine_name),
         )
 
     state = str(readiness.get("state") or "unconfigured")
@@ -719,6 +828,28 @@ def collect_launch_readiness(
         }
     )
     return readiness
+
+
+def collect_launch_readiness(
+    base_dir: str | Path | None = None,
+    *,
+    runtime_url_override: str | None = None,
+    machine_name_override: str | None = None,
+) -> dict[str, Any]:
+    """Collect the local managed-launch readiness contract.
+
+    `runtime_url_override` / `machine_name_override` let callers validate a
+    concrete launch target without first mutating canonical machine state.
+    """
+
+    resolved_base_dir = _coerce_path(base_dir)
+    service = _collect_service(resolved_base_dir)
+    readiness = _collect_launch_readiness(resolved_base_dir, service=service)
+    return _apply_launch_readiness_overrides(
+        readiness,
+        runtime_url_override=runtime_url_override,
+        machine_name_override=machine_name_override,
+    )
 
 
 def _collect_build_identity(*, engine_status: dict[str, Any]) -> dict[str, Any]:
