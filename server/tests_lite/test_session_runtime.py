@@ -907,6 +907,56 @@ def test_heartbeat_empty_unmanaged_snapshot_closes_stale_unbound_codex_session(t
     engine.dispose()
 
 
+def test_heartbeat_omitted_unmanaged_snapshot_does_not_close_stale_unbound_codex_session(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_unmanaged_snapshot_omitted.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, provider="codex", started_at=now - timedelta(minutes=20))
+        session.execution_home = "unmanaged_local"
+        session.provider_session_id = str(session.id)
+        session.last_activity_at = now - timedelta(minutes=10)
+        runtime_key = runtime_key_for_session("codex", str(session.id))
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="codex",
+                    device_id="runtime-device",
+                    source="codex_hook",
+                    kind="phase_signal",
+                    phase="thinking",
+                    occurred_at=now - timedelta(minutes=10),
+                    freshness_ms=90 * 1000,
+                    dedupe_key="unbound-codex-phase-omitted-snapshot",
+                    payload={},
+                )
+            ],
+        )
+        db.commit()
+        session_id = session.id
+
+    for client in _client(SessionLocal):
+        response = client.post(
+            "/agents/heartbeat",
+            json={
+                "version": "legacy-engine",
+                "daemon_pid": 123,
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert response.status_code == 204, response.text
+
+    with SessionLocal() as db:
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session_id).one()
+        assert state.phase == "thinking"
+        assert state.terminal_state is None
+
+    engine.dispose()
+
+
 def test_heartbeat_empty_unmanaged_snapshot_keeps_fresh_unbound_codex_session_open(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_unmanaged_unbound_fresh.db")
     now = datetime.now(timezone.utc)
@@ -1107,6 +1157,70 @@ def test_heartbeat_repeat_unmanaged_binding_does_not_republish(tmp_path):
         assert msg is None
 
     reset_pubsub_for_test()
+    engine.dispose()
+
+
+def test_heartbeat_empty_unmanaged_snapshot_closes_stale_unbound_gemini_session(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_gemini_unbound_missing.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, provider="gemini", started_at=now - timedelta(minutes=20))
+        session.execution_home = "unmanaged_local"
+        session.provider_session_id = str(session.id)
+        session.last_activity_at = now - timedelta(minutes=10)
+        runtime_key = runtime_key_for_session("gemini", str(session.id))
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="gemini",
+                    device_id="runtime-device",
+                    source="gemini_hook",
+                    kind="phase_signal",
+                    phase="thinking",
+                    occurred_at=now - timedelta(minutes=10),
+                    freshness_ms=90 * 1000,
+                    dedupe_key="unbound-gemini-phase",
+                    payload={},
+                )
+            ],
+        )
+        db.commit()
+        session_id = session.id
+
+    for client in _client(SessionLocal):
+        response = client.post(
+            "/agents/heartbeat",
+            json={
+                "version": "test",
+                "daemon_pid": 123,
+                "unmanaged_session_bindings": [],
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert response.status_code == 204, response.text
+
+    with SessionLocal() as db:
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session_id).one()
+        stored_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        view = build_runtime_view(state=state, session=stored_session, now=datetime.now(timezone.utc))
+        facts = build_session_liveness_facts(
+            runtime_view=view,
+            capabilities=build_session_capabilities(stored_session),
+            last_activity_at=stored_session.last_activity_at,
+        )
+
+        assert state.phase == "finished"
+        assert state.terminal_state == "process_gone"
+        assert view.status == "completed"
+        assert facts.control_path == "unmanaged"
+        assert facts.lifecycle.state == "closed"
+        assert facts.lifecycle.reason == "process_gone"
+        assert facts.process_state == "closed"
+
     engine.dispose()
 
 
