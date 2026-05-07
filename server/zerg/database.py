@@ -856,16 +856,19 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 )
                 conn.commit()
     except Exception:
-        from zerg.metrics import database_migrations_failed_total
-
-        database_migrations_failed_total.labels(
-            migration_name="session_inputs_idempotency_index",
-        ).inc()
         logger.error(
             "session_inputs idempotency index migration FAILED — client_request_id dedupe will not be enforced; "
             "duplicate iOS retries may create duplicate rows",
             exc_info=True,
         )
+        try:
+            from zerg.metrics import database_migrations_failed_total
+
+            database_migrations_failed_total.labels(
+                migration_name="session_inputs_idempotency_index",
+            ).inc()
+        except Exception:
+            logger.debug("failed to emit database_migrations_failed_total metric", exc_info=True)
 
     # session_messages table migrations
     try:
