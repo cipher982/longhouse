@@ -861,7 +861,7 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 )
                 conn.commit()
     except Exception:
-        logger.debug("session_inputs table migration skipped", exc_info=True)
+        logger.warning("session_inputs idempotency index migration skipped", exc_info=True)
 
     # session_messages table migrations
     try:
