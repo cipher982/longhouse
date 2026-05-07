@@ -89,6 +89,8 @@ Propagation measurements cross process and machine boundaries, so clock handling
 - Never subtract monotonic timestamps from different processes or machines.
 - Report latency as wall-clock delta with the recorded skew context.
 
+Clock skew sampling should be explicit in the artifact. Prefer a Runtime Host timestamp from the canonical API/health surface when available. If that is not exposed, record the HTTP `Date` header and a hosted database `CURRENT_TIMESTAMP` sample as lower-fidelity skew context. Mark sub-second latency claims as approximate unless skew is known.
+
 ## Environment Controls
 
 Every run should record:
@@ -332,6 +334,37 @@ Hosted snapshots should use the existing canonical debugger:
 ```bash
 scripts/ops/hosted-session-debug.sh --subdomain <subdomain> --session <session-id> --limit 20 --json
 ```
+
+## Instrumentation Choices
+
+The profiler owns a Longhouse-native observation schema. External tooling can help collect or visualize data, but must not replace the domain vocabulary in this spec.
+
+### Terminal Lifecycle Control
+
+Phase 1 graceful shutdowns can use direct subprocess and signal control. Phase 2 hostile shutdowns and Phase 3 SSH scenarios require a real PTY so that SIGHUP, controlling-TTY loss, and line-discipline signal delivery are faithful.
+
+Use a small `pexpect`/Expect-style wrapper for:
+
+- closing a terminal relationship
+- sending `Ctrl-C` through the terminal line discipline
+- launching provider TUIs that behave differently under a real TTY
+- later SSH disconnect simulations
+
+The harness should record PTY master/slave identity and controlling-TTY state under the `harness` source. It must not treat `SIGTERM` to a provider PID as equivalent to closing a terminal window; those are different facts and the profiler exists to distinguish them.
+
+Do not adopt a larger PTY library until it has been checked for maintenance quality and CI behavior. A narrow local wrapper is acceptable for the first implementation.
+
+### Timeline SSE Measurement
+
+Version 1 should measure `timeline_sse` with a direct SSE client against the same endpoint the browser uses. The client records every event with wall and monotonic timestamps and stops when the target session reaches a terminal state or the run times out.
+
+Do not use a headless browser to measure SSE in version 1. Browser rendering adds cold-start cost, layout work, and client-state flake that are not part of the SSE contract. Browser-rendered card timing is a later `browser_card` layer and must not be conflated with `timeline_sse` latency.
+
+### Deferred External Exports
+
+Keep the primary artifact as Longhouse-native JSONL. OpenTelemetry or OTLP export can be added later as a derived projection if there is an actual trace viewer or observability backend consuming it. The derived export must not rename or flatten away fields like `execution_home`, `managed_transport`, `host_reattach_available`, `source`, or `event`.
+
+When browser-card measurement is added, prefer the existing Zerg UI capture/fixture workflow before introducing broad live-browser automation. Only escalate after provider, machine, runtime, timeline REST, and timeline SSE layers are boring.
 
 ## CI Path
 
