@@ -26,7 +26,7 @@ struct SessionViewModelTests {
     }
 
     @Test
-    func sendRefreshesFromWorkspaceEndpoint() async throws {
+    func sendReturnsBeforeWorkspaceRefreshCompletes() async throws {
         let before = try makeWorkspace(eventId: 10, content: "Before send")
         let after = try makeWorkspace(eventId: 11, content: "After send")
         let api = FakeSessionWorkspaceClient(workspaces: [before, after])
@@ -35,12 +35,14 @@ struct SessionViewModelTests {
         let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
 
         await model.start(sessionId: "session-1", appState: appState)
+        await api.failFutureWorkspaceLoads()
         let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
 
         #expect(sent)
         #expect(model.lastSendOutcome == .sent)
-        #expect(model.items.map(\.id) == ["user:11"])
-        #expect(await api.workspaceRequestCount() == 2)
+        #expect(model.items.map(\.id) == ["user:10"])
+        #expect(model.submittedInputs.count == 1)
+        #expect(model.submittedInputs.first?.phase == .sent)
         #expect(await api.sendRequests() == ["continue:auto"])
     }
 
@@ -59,7 +61,61 @@ struct SessionViewModelTests {
         #expect(sent)
         #expect(model.errorMessage == nil)
         #expect(model.items.map(\.id) == ["user:10"])
-        #expect(await api.workspaceRequestCount() == 2)
+        #expect(await api.workspaceRequestCount() >= 1)
+    }
+
+    @Test
+    func sendFailureKeepsSubmittedTextOutOfComposerState() async throws {
+        let before = try makeWorkspace(eventId: 10, content: "Before send")
+        let api = FakeSessionWorkspaceClient(workspaces: [before])
+        await api.failFutureSends(URLError(.notConnectedToInternet))
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        let sent = await model.send(text: "do not lose this", sessionId: "session-1", appState: appState)
+
+        #expect(!sent)
+        #expect(model.submittedInputs.count == 1)
+        #expect(model.submittedInputs.first?.text == "do not lose this")
+        #expect(model.submittedInputs.first?.phase == .failed)
+        #expect(model.errorMessage?.contains("Send failed") == true)
+    }
+
+    @Test
+    func queuedSendUpdatesSubmittedStateWithoutTranscriptRefresh() async throws {
+        let before = try makeWorkspace(eventId: 10, content: "Before send")
+        let api = FakeSessionWorkspaceClient(
+            workspaces: [before],
+            sendResponse: SessionInputResponse(
+                outcome: .queued,
+                inputId: 7,
+                intent: "queue",
+                queued: [
+                    QueuedInputSummary(
+                        id: 7,
+                        text: "next",
+                        intent: "queue",
+                        status: "queued",
+                        lastError: nil,
+                        createdAt: "2026-05-02T20:00:00Z"
+                    )
+                ]
+            )
+        )
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        let sent = await model.send(text: "next", sessionId: "session-1", appState: appState, intent: "queue")
+
+        #expect(sent)
+        #expect(model.lastSendOutcome == .queued)
+        #expect(model.queuedInputCount == 1)
+        #expect(model.submittedInputs.first?.phase == .queued)
+        #expect(model.submittedInputs.first?.serverInputId == 7)
     }
 
     private func makeWorkspace(eventId: Int, content: String) throws -> SessionWorkspaceResponse {
@@ -116,12 +172,18 @@ struct SessionViewModelTests {
 
 private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
     private var workspaces: [SessionWorkspaceResponse]
+    private let sendResponse: SessionInputResponse
     private var shouldFailWorkspaceLoads = false
+    private var sendError: Error?
     private var workspaceRequests: [(id: String, limit: Int, branchMode: String)] = []
     private var sentInputs: [String] = []
 
-    init(workspaces: [SessionWorkspaceResponse]) {
+    init(
+        workspaces: [SessionWorkspaceResponse],
+        sendResponse: SessionInputResponse = SessionInputResponse(outcome: .sent, inputId: 1, intent: "auto", queued: [])
+    ) {
         self.workspaces = workspaces
+        self.sendResponse = sendResponse
     }
 
     func sessionWorkspace(id: String, limit: Int, branchMode: String) async throws -> SessionWorkspaceResponse {
@@ -135,9 +197,12 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
         return workspaces[0]
     }
 
-    func sendInput(id: String, text: String, intent: String) async throws -> SessionInputResponse {
+    func sendInput(id: String, text: String, intent: String, clientRequestId: String?) async throws -> SessionInputResponse {
         sentInputs.append("\(text):\(intent)")
-        return SessionInputResponse(outcome: .sent, inputId: 1, intent: intent, queued: [])
+        if let sendError {
+            throw sendError
+        }
+        return sendResponse
     }
 
     func draftReply(id: String, maxChars: Int) async throws -> DraftReplyResponse {
@@ -152,6 +217,10 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
 
     func failFutureWorkspaceLoads() {
         shouldFailWorkspaceLoads = true
+    }
+
+    func failFutureSends(_ error: Error) {
+        sendError = error
     }
 
     func workspaceRequestCount() -> Int {

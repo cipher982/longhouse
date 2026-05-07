@@ -26,6 +26,7 @@ from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
+from zerg.models.agents import SessionInput
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
 from zerg.services.managed_local_launcher import ManagedLocalLaunchError
@@ -119,6 +120,12 @@ class SessionInputRequest(BaseModel):
 
     text: str = Field(..., min_length=1, max_length=10000)
     intent: str = Field(INPUT_INTENT_AUTO, description="auto | queue | steer")
+    client_request_id: str | None = Field(
+        None,
+        min_length=1,
+        max_length=64,
+        description="Optional client idempotency key for this submitted input",
+    )
 
 
 class QueuedInputSummary(BaseModel):
@@ -508,6 +515,45 @@ def _queued_summary(row) -> QueuedInputSummary:
     )
 
 
+def _request_id_for_input(body: SessionInputRequest) -> str:
+    client_request_id = (body.client_request_id or "").strip()
+    if client_request_id:
+        return client_request_id
+    return str(uuid.uuid4())[:8]
+
+
+def _existing_input_response(
+    *,
+    source_session,
+    owner_id: int,
+    body: SessionInputRequest,
+    db: Session,
+) -> SessionInputResponse | None:
+    client_request_id = (body.client_request_id or "").strip()
+    if not client_request_id:
+        return None
+    existing = (
+        db.query(SessionInput)
+        .filter(
+            SessionInput.session_id == source_session.id,
+            SessionInput.owner_id == owner_id,
+            SessionInput.request_id == client_request_id,
+        )
+        .order_by(SessionInput.id.asc())
+        .first()
+    )
+    if existing is None:
+        return None
+    recent = list_recent_inputs(db, source_session.id)
+    outcome = "sent" if existing.status == "delivered" else "queued"
+    return SessionInputResponse(
+        outcome=outcome,
+        input_id=int(existing.id),
+        intent=existing.intent,
+        queued=[_queued_summary(r) for r in recent],
+    )
+
+
 async def _dispatch_steer_input(
     *,
     source_session,
@@ -605,7 +651,15 @@ async def _create_session_input_response(
 
     _assert_live_session_send_available(db, source_session, owner_id=owner_id)
 
-    request_id = str(uuid.uuid4())[:8]
+    if existing_response := _existing_input_response(
+        source_session=source_session,
+        owner_id=owner_id,
+        body=body,
+        db=db,
+    ):
+        return existing_response
+
+    request_id = _request_id_for_input(body)
 
     def _cap_check_or_raise() -> None:
         current = count_queued(db, source_session.id)

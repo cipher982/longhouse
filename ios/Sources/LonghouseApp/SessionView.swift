@@ -147,6 +147,14 @@ struct SessionView: View {
                                     )
                                     .id(item.id)
                                 }
+                                ForEach(viewModel.submittedInputs) { input in
+                                    SubmittedInputBubble(input: input) {
+                                        composerText = input.text
+                                        composerFocused = true
+                                        viewModel.dismissSubmittedInput(input.id)
+                                    }
+                                    .id(input.id)
+                                }
                             }
                         }
                         .padding(.horizontal)
@@ -260,7 +268,7 @@ struct SessionView: View {
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...6)
                     .focused($composerFocused)
-                    .disabled(viewModel.isSending || viewModel.isDrafting)
+                    .disabled(viewModel.isDrafting)
 
                 // Send button: always a circle arrow icon; long-press reveals steer/queue split
                 Button {
@@ -349,6 +357,8 @@ struct SessionView: View {
         let trimmed = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let resolvedIntent = intent ?? primaryIntent
+        composerText = ""
+        composerFocused = false
         let sent = await viewModel.send(
             text: trimmed,
             sessionId: sessionId,
@@ -356,8 +366,6 @@ struct SessionView: View {
             intent: resolvedIntent,
         )
         if sent {
-            composerText = ""
-            composerFocused = false
             let token = viewModel.sendCounter
             Task { [weak viewModel] in
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
@@ -583,6 +591,89 @@ private struct UserBubble: View {
                 }
             }
         }
+    }
+}
+
+enum SubmittedInputPhase: String, Sendable {
+    case submitting
+    case sent
+    case queued
+    case failed
+    case needsUserDecision
+}
+
+struct SubmittedInput: Identifiable, Sendable {
+    let id: String
+    let clientRequestId: String
+    let text: String
+    let intent: String
+    var phase: SubmittedInputPhase
+    var serverInputId: Int?
+    var lastError: String?
+    let createdAt: Date
+}
+
+private struct SubmittedInputBubble: View {
+    let input: SubmittedInput
+    let onEdit: () -> Void
+
+    private var statusText: String {
+        switch input.phase {
+        case .submitting:
+            return "Sending..."
+        case .sent:
+            return "Sent"
+        case .queued:
+            return "Queued"
+        case .failed:
+            return input.lastError ?? "Could not send"
+        case .needsUserDecision:
+            return "Needs choice"
+        }
+    }
+
+    private var statusColor: Color {
+        switch input.phase {
+        case .failed, .needsUserDecision:
+            return .orange
+        case .queued:
+            return .secondary
+        case .submitting, .sent:
+            return .secondary
+        }
+    }
+
+    var body: some View {
+        HStack {
+            Spacer(minLength: 40)
+            VStack(alignment: .trailing, spacing: 6) {
+                Text(input.text)
+                    .font(.callout)
+                    .textSelection(.enabled)
+                    .padding(10)
+                    .background(Color.blue.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.blue.opacity(0.20), lineWidth: 1)
+                    )
+                    .frame(alignment: .trailing)
+                HStack(spacing: 8) {
+                    if input.phase == .submitting {
+                        ProgressView().controlSize(.mini)
+                    }
+                    Text(statusText)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(statusColor)
+                    if input.phase == .failed {
+                        Button("Edit") { onEdit() }
+                            .font(.caption2.weight(.semibold))
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.blue)
+                    }
+                }
+            }
+        }
+        .accessibilityIdentifier("session-chat-submitted-input")
     }
 }
 
@@ -993,6 +1084,7 @@ final class SessionViewModel: ObservableObject {
     @Published var lastSendOutcome: SessionInputOutcome?
     @Published var queuedInputCount: Int = 0
     @Published var failedInputCount: Int = 0
+    @Published var submittedInputs: [SubmittedInput] = []
     /// Text preserved from a steer attempt that the server rejected with
     /// error_code: "turn_ended". The UI offers an explicit "Queue instead"
     /// action; we do not silently convert the intent for the user.
@@ -1032,6 +1124,7 @@ final class SessionViewModel: ObservableObject {
             isInitialLoading = true
             detail = nil
             items = []
+            submittedInputs = []
             errorMessage = nil
             expandedIds.removeAll()
         }
@@ -1080,26 +1173,72 @@ final class SessionViewModel: ObservableObject {
     }
 
     func send(text: String, sessionId: String, appState: AppState, intent: String = "auto") async -> Bool {
-        guard let api = apiFactory(appState.serverURL) else { return false }
+        let clientRequestId = "ios-\(UUID().uuidString)"
+        let localInput = SubmittedInput(
+            id: clientRequestId,
+            clientRequestId: clientRequestId,
+            text: text,
+            intent: intent,
+            phase: .submitting,
+            serverInputId: nil,
+            lastError: nil,
+            createdAt: Date()
+        )
+        submittedInputs.append(localInput)
+        guard let api = apiFactory(appState.serverURL) else {
+            updateSubmittedInput(
+                clientRequestId,
+                phase: .failed,
+                serverInputId: nil,
+                lastError: "Invalid server URL"
+            )
+            return false
+        }
         isSending = true
         draftErrorMessage = nil
         defer { isSending = false }
         do {
-            let response = try await api.sendInput(id: sessionId, text: text, intent: intent)
+            let response = try await api.sendInput(
+                id: sessionId,
+                text: text,
+                intent: intent,
+                clientRequestId: clientRequestId
+            )
             sendCounter &+= 1
             lastSendOutcome = response.outcome
             queuedInputCount = response.pendingInputCount
             failedInputCount = response.visibleFailedInputCount
             turnEndedDraft = nil
-            try? await refreshWorkspace(api: api, sessionId: sessionId, allowFailure: true)
+            updateSubmittedInput(
+                clientRequestId,
+                phase: response.outcome == .sent ? .sent : .queued,
+                serverInputId: response.inputId,
+                lastError: nil
+            )
+            Task { [weak self] in
+                guard let self else { return }
+                try? await self.refreshWorkspace(api: api, sessionId: sessionId, allowFailure: true)
+            }
             return true
         } catch let LonghouseAPIError.structured(_, code, message) where intent == "steer" && code == "turn_ended" {
             // Preserve the original text; the UI offers an explicit
             // "Queue instead" action. Intent is never silently mapped.
+            updateSubmittedInput(
+                clientRequestId,
+                phase: .needsUserDecision,
+                serverInputId: nil,
+                lastError: message.isEmpty ? "Active turn ended before your update arrived." : message
+            )
             turnEndedDraft = text
             errorMessage = message.isEmpty ? "Active turn ended before your update arrived." : message
             return false
         } catch {
+            updateSubmittedInput(
+                clientRequestId,
+                phase: .failed,
+                serverInputId: nil,
+                lastError: error.localizedDescription
+            )
             errorMessage = "Send failed: \(error.localizedDescription)"
             return false
         }
@@ -1111,6 +1250,10 @@ final class SessionViewModel: ObservableObject {
         guard let text = turnEndedDraft else { return false }
         turnEndedDraft = nil
         return await send(text: text, sessionId: sessionId, appState: appState, intent: "queue")
+    }
+
+    func dismissSubmittedInput(_ id: String) {
+        submittedInputs.removeAll { $0.id == id }
     }
 
     func draftReply(sessionId: String, appState: AppState) async -> String? {
@@ -1210,9 +1353,37 @@ final class SessionViewModel: ObservableObject {
             self.detail = workspace.session
             let events = workspace.events
             self.items = TimelineBuilder.build(events: events)
-            await reportRenderBeacon(api: api, sessionId: sessionId, events: events)
+            reconcileSubmittedInputs(with: events)
+            Task { [weak self] in
+                guard let self else { return }
+                await self.reportRenderBeacon(api: api, sessionId: sessionId, events: events)
+            }
         } catch {
             if !allowFailure { throw error }
+        }
+    }
+
+    private func updateSubmittedInput(
+        _ id: String,
+        phase: SubmittedInputPhase,
+        serverInputId: Int?,
+        lastError: String?
+    ) {
+        guard let index = submittedInputs.firstIndex(where: { $0.id == id }) else { return }
+        submittedInputs[index].phase = phase
+        submittedInputs[index].serverInputId = serverInputId
+        submittedInputs[index].lastError = lastError
+    }
+
+    private func reconcileSubmittedInputs(with events: [SessionEvent]) {
+        guard !submittedInputs.isEmpty else { return }
+        submittedInputs.removeAll { input in
+            guard input.phase == .sent || input.phase == .queued || input.phase == .submitting else { return false }
+            return events.contains { event in
+                guard event.role == "user", event.contentText == input.text else { return false }
+                guard let eventDate = LonghouseDateParser.parse(event.timestamp) else { return true }
+                return eventDate >= input.createdAt.addingTimeInterval(-5)
+            }
         }
     }
 
