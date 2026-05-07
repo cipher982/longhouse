@@ -4104,7 +4104,10 @@ mod tests {
 
         let outbound = outbound_rx.recv().await.unwrap();
         let payload: Value = serde_json::from_str(&outbound).unwrap();
-        assert_eq!(payload.get("method").and_then(Value::as_str), Some("thread/resume"));
+        assert_eq!(
+            payload.get("method").and_then(Value::as_str),
+            Some("thread/resume")
+        );
         assert_eq!(
             payload.pointer("/params/threadId").and_then(Value::as_str),
             Some("thr-parent")
