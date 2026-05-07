@@ -295,6 +295,81 @@ def test_client_request_id_dedupes_queued_input(monkeypatch, tmp_path):
         api_app_ref.dependency_overrides = {}
 
 
+def test_client_request_id_unique_constraint_blocks_duplicate_rows(tmp_path):
+    from sqlalchemy.exc import IntegrityError
+
+    from zerg.services.session_inputs import create_session_input
+
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+
+    with session_local() as db:
+        create_session_input(
+            db,
+            session_id=session_id,
+            text="once",
+            owner_id=user_id,
+            intent="queue",
+            status=INPUT_STATUS_QUEUED,
+            request_id="ios-unique-1",
+        )
+        try:
+            create_session_input(
+                db,
+                session_id=session_id,
+                text="twice",
+                owner_id=user_id,
+                intent="queue",
+                status=INPUT_STATUS_QUEUED,
+                request_id="ios-unique-1",
+            )
+        except IntegrityError:
+            db.rollback()
+        else:
+            raise AssertionError("duplicate client request id inserted")
+
+        rows = db.query(SessionInput).filter(SessionInput.session_id == session_id).all()
+        assert len(rows) == 1
+        assert rows[0].body == "once"
+
+
+def test_client_request_id_failed_retry_does_not_report_queued(monkeypatch, tmp_path):
+    from zerg.services.session_inputs import create_session_input
+
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    _stub_dispatch(monkeypatch)
+
+    with session_local() as db:
+        row = create_session_input(
+            db,
+            session_id=session_id,
+            text="failed once",
+            owner_id=user_id,
+            intent="auto",
+            status=INPUT_STATUS_FAILED,
+            request_id="ios-failed-1",
+        )
+        row.last_error = "provider disconnected"
+        db.commit()
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        retry = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={"text": "failed once", "intent": "auto", "client_request_id": "ios-failed-1"},
+        )
+        assert retry.status_code == 409, retry.text
+        body = retry.json()["detail"]
+        assert body["error_code"] == "input_failed"
+        assert "provider disconnected" in body["message"]
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
 def test_intent_auto_locked_returns_queued(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_live_session(session_local)

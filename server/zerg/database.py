@@ -4,6 +4,8 @@ This module provides database connection and session management for Zerg.
 The codebase is SQLite-only for OSS deployment simplicity.
 """
 
+# ruff: noqa: E501
+
 import logging
 import os
 from contextlib import contextmanager
@@ -840,6 +842,26 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 conn.commit()
     except Exception:
         logger.debug("session_tasks table migration skipped (table may not exist yet)", exc_info=True)
+
+    # session_inputs table migrations
+    try:
+        with engine.connect() as conn:
+            session_inputs_exists = conn.execute(
+                text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_inputs'")
+            ).fetchone()
+            if session_inputs_exists:
+                conn.execute(
+                    text(
+                        """
+                        CREATE UNIQUE INDEX IF NOT EXISTS ix_session_inputs_session_owner_request
+                        ON session_inputs(session_id, owner_id, request_id)
+                        WHERE request_id IS NOT NULL
+                        """
+                    )
+                )
+                conn.commit()
+    except Exception:
+        logger.debug("session_inputs table migration skipped", exc_info=True)
 
     # session_messages table migrations
     try:

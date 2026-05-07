@@ -354,6 +354,7 @@ struct SessionView: View {
     }
 
     private func send(intent: String? = nil) async {
+        guard !viewModel.isSending else { return }
         let trimmed = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let resolvedIntent = intent ?? primaryIntent
@@ -1381,8 +1382,9 @@ final class SessionViewModel: ObservableObject {
             guard input.phase == .sent || input.phase == .queued || input.phase == .submitting else { return false }
             return events.contains { event in
                 guard event.role == "user", event.contentText == input.text else { return false }
-                guard let eventDate = LonghouseDateParser.parse(event.timestamp) else { return true }
+                guard let eventDate = LonghouseDateParser.parse(event.timestamp) else { return false }
                 return eventDate >= input.createdAt.addingTimeInterval(-5)
+                    && eventDate <= input.createdAt.addingTimeInterval(120)
             }
         }
     }
