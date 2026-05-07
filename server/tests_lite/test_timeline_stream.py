@@ -558,7 +558,14 @@ def test_list_timeline_sessions_query_path_stays_raw_session_hits(tmp_path):
         )
         db.commit()
 
-        with patch.object(AgentsStore, "_fts_session_ids", return_value=[root.id]):
+        with (
+            patch.object(AgentsStore, "_fts_session_ids", return_value=[root.id]),
+            patch.object(
+                timeline_router._sessions_router,
+                "list_sessions",
+                side_effect=AssertionError("timeline listing should call the service, not the agents router"),
+            ),
+        ):
             payload = asyncio.run(
                 timeline_router.list_timeline_sessions(
                     response=Response(),
