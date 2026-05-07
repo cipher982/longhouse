@@ -69,6 +69,37 @@ These are the contracts the experiment should eventually enforce.
 7. **Detached is not closed.**
    Use `detached` for "provider process is alive but the original terminal/SSH relationship is gone." Use `closed` only when the provider/control process is gone or a terminal lifecycle event says the session ended.
 
+## Lifecycle Propagation Contract
+
+Lifecycle truth is eventful on the primary path and inferred only on backstop paths. A managed control path that knows it is closing must push a terminal lifecycle event immediately; the Runtime Host must not wait for the next heartbeat, process scan, lease expiry, or transcript import to discover that fact.
+
+| Lane | Point Of Truth | Terminal Signal | Target Budget | Backstop Budget | Notes |
+| --- | --- | --- | --- | --- | --- |
+| Managed Codex bridge | `longhouse-engine codex-bridge` daemon | `terminal_signal` from `codex_bridge` with `terminal_state=session_ended`, `terminal_reason=bridge_stop` | p50 < 250ms, p95 < 1000ms after graceful stop is requested | heartbeat missing lease < 2min until replaced | The bridge already owns API credentials and posts runtime phase/progress events, so graceful stop is a push event. |
+| Managed Claude channel | Claude native channel/control wrapper | `terminal_signal` from channel/control path with `terminal_reason=channel_closed` or `provider_exit` | p50 < 250ms, p95 < 1000ms after provider exit is observed by the wrapper/channel | process scan / missing lease < 2min until replaced | Claude must not borrow Codex bridge semantics; it needs its own channel/process lifecycle source. |
+| Hooked unmanaged provider | provider hook/wrapper when available | `terminal_signal` with `terminal_reason=provider_exit` and exit metadata | p50 < 1s, p95 < 5s after provider exit | complete engine process snapshot < 2min | This is still not managed control. It is a truthful terminal observation from a local hook/wrapper. |
+| Scanned unmanaged provider | Machine Agent process snapshot | `terminal_signal` with `terminal_reason=process_gone` | no near-instant SLA | p95 < 2min after complete snapshot proves absence | This is a compatibility/backstop lane, not the trust-critical managed lane. |
+| Machine offline / network loss | Machine heartbeat and Runtime Host freshness | stale/offline state, not terminal close | p95 < 10s for stale machine indication once freshness expires | explicit reconnect repair | Offline is not closed. A session can be disconnected from hosted while the provider process remains alive. |
+
+The profiler should fail a managed graceful shutdown if the first terminal event is `engine_attached_lease` or another missing-lease inference. Those sources are acceptable only as backstops and should be labeled as such in artifacts.
+
+### Phase Plan
+
+1. **Managed Codex push-close.**
+   Make `codex-bridge` emit an immediate terminal runtime event when the bridge receives a graceful IPC stop. Run the managed Codex profiler before and after; success means hosted runtime and timeline close from `source=codex_bridge` within the target budget.
+
+2. **Terminal reason/source model.**
+   Persist terminal reason/source separately from `terminal_state` so the UI and profiler can distinguish `bridge_stop`, `provider_exit`, `process_gone`, `host_expired`, and `heartbeat_gap` without parsing payload JSON.
+
+3. **Managed Claude lifecycle event.**
+   Add the equivalent channel/control-path terminal event for managed Claude. Its implementation should follow Claude's actual process/channel mechanics, not Codex bridge state.
+
+4. **Unmanaged close improvements.**
+   Add a best-effort provider exit hook/outbox event where available, then tighten the scanned unmanaged backstop separately. The product should communicate that scanned unmanaged close is less immediate than managed close.
+
+5. **Profiler hardening.**
+   Fix SSE measurement, record terminal source/reason directly, add SLA verdicts per lane, and classify backstop closures as failures for managed graceful shutdown cases.
+
 ## Fidelity Metrics
 
 Latency is not enough. The profiler must also measure whether Longhouse copied the right truth.
