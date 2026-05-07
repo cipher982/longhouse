@@ -1965,41 +1965,8 @@ def _with_action(actions: list[str], text: str) -> None:
         actions.append(text)
 
 
-def _classify_health(
-    *,
-    service: dict[str, Any],
-    engine_status: dict[str, Any],
-    transport_sample: TransportHealthSample | None,
-    transport_assessment: TransportHealthAssessment | None,
-    outbox: dict[str, Any],
-    launch_readiness: dict[str, Any],
-    managed_summary: dict[str, Any] | None,
-    managed_sessions: list[dict[str, Any]],
-) -> tuple[str, str, str, list[str], list[str]]:
-    reasons: list[str] = []
-    actions: list[str] = []
-
-    service_status = str(service.get("status") or "not-installed")
-    payload = engine_status.get("payload") or {}
-    engine_status_path = str(engine_status.get("path") or get_agent_status_path())
-    engine_log_path = str(service.get("log_path") or (get_agent_log_dir() / "engine.log.*"))
-    engine_exists = bool(engine_status.get("exists"))
-    engine_error = engine_status.get("error")
-    engine_age = engine_status.get("age_seconds")
-    spool_pending = transport_sample.spool_pending if transport_sample is not None else int(payload.get("spool_pending_count") or 0)
-    disk_free_bytes = payload.get("disk_free_bytes")
-    outbox_count = int(outbox.get("file_count") or 0)
-    outbox_oldest = outbox.get("oldest_age_seconds")
-    launch_state = str(launch_readiness.get("state") or "unconfigured")
-    launch_reasons = [str(item) for item in list(launch_readiness.get("reasons") or [])]
-    launch_actions = [str(item) for item in list(launch_readiness.get("suggested_actions") or [])]
-    shipper_state_missing = "shipper_state_missing" in launch_reasons
-    managed_attached = int((managed_summary or {}).get("attached_count") or 0)
-    managed_detached = int((managed_summary or {}).get("detached_count") or 0)
-    managed_degraded = int((managed_summary or {}).get("degraded_count") or 0)
-    orphan_bridge_count = int((managed_summary or {}).get("orphan_bridge_count") or 0)
-    unknown_managed_phase_count = sum(1 for session in managed_sessions if _managed_phase_is_unknown(session.get("raw_phase")))
-    repair_action = _repair_command(
+def _repair_action_for_launch_readiness(launch_readiness: dict[str, Any]) -> str:
+    return _repair_command(
         can_reconcile_from_state=_can_reconcile_launch_from_state(
             state_exists=bool(launch_readiness.get("state_exists")),
             state_error=str(launch_readiness.get("state_error") or "").strip() or None,
@@ -2008,34 +1975,49 @@ def _classify_health(
         )
     )
 
-    reasons.extend(launch_reasons)
-    for action in launch_actions:
-        _with_action(actions, action)
 
-    if transport_assessment is not None:
-        for reason in transport_assessment.reasons:
-            if reason not in reasons:
-                reasons.append(reason)
-        if any(
-            reason in transport_assessment.reasons
-            for reason in (
-                "consecutive_failures",
-                "connect_errors",
-                "server_errors",
-                "rate_limited",
-                "retryable_client_errors",
-                "payload_rejected",
-                "payload_too_large",
-            )
-        ):
-            _with_action(actions, f"Inspect logs: {engine_log_path}")
-        if "reported_offline" in transport_assessment.reasons:
-            _with_action(actions, "Verify network reachability to your Longhouse URL")
-        if "parse_errors" in transport_assessment.reasons:
-            _with_action(actions, "Inspect recent dead letters and parser errors")
-        if "spool_dead" in transport_assessment.reasons:
-            _with_action(actions, "Repair dead letters before trusting continuity")
+def _add_transport_health_reasons(
+    reasons: list[str],
+    actions: list[str],
+    *,
+    transport_assessment: TransportHealthAssessment | None,
+    engine_log_path: str,
+) -> None:
+    if transport_assessment is None:
+        return
 
+    for reason in transport_assessment.reasons:
+        if reason not in reasons:
+            reasons.append(reason)
+    if any(
+        reason in transport_assessment.reasons
+        for reason in (
+            "consecutive_failures",
+            "connect_errors",
+            "server_errors",
+            "rate_limited",
+            "retryable_client_errors",
+            "payload_rejected",
+            "payload_too_large",
+        )
+    ):
+        _with_action(actions, f"Inspect logs: {engine_log_path}")
+    if "reported_offline" in transport_assessment.reasons:
+        _with_action(actions, "Verify network reachability to your Longhouse URL")
+    if "parse_errors" in transport_assessment.reasons:
+        _with_action(actions, "Inspect recent dead letters and parser errors")
+    if "spool_dead" in transport_assessment.reasons:
+        _with_action(actions, "Repair dead letters before trusting continuity")
+
+
+def _add_service_status_reasons(
+    reasons: list[str],
+    actions: list[str],
+    *,
+    service_status: str,
+    repair_action: str,
+    shipper_state_missing: bool,
+) -> None:
     if service_status == "not-installed":
         reasons.append("service_not_installed")
         if not shipper_state_missing:
@@ -2045,6 +2027,20 @@ def _classify_health(
         if not shipper_state_missing:
             _with_action(actions, repair_action)
 
+
+def _add_engine_status_reasons(
+    reasons: list[str],
+    actions: list[str],
+    *,
+    engine_error: Any,
+    engine_exists: bool,
+    engine_age: Any,
+    engine_status_path: str,
+    engine_log_path: str,
+    service_status: str,
+    repair_action: str,
+    shipper_state_missing: bool,
+) -> None:
     if engine_error:
         reasons.append("engine_status_unreadable")
         _with_action(actions, f"Inspect: {engine_status_path}")
@@ -2060,9 +2056,16 @@ def _classify_health(
     elif engine_age is not None and engine_age > ENGINE_FRESH_SECONDS:
         reasons.append("engine_status_aging")
 
-    if spool_pending >= DEGRADED_BACKLOG_COUNT and "spool_pending" not in reasons:
-        reasons.append("spool_pending")
 
+def _add_managed_session_reasons(
+    reasons: list[str],
+    actions: list[str],
+    *,
+    orphan_bridge_count: int,
+    managed_degraded: int,
+    managed_detached: int,
+    unknown_managed_phase_count: int,
+) -> None:
     if orphan_bridge_count > 0:
         reasons.append("orphaned_managed_bridge")
         _with_action(actions, "Stop orphaned background managed sessions from Longhouse.app")
@@ -2079,6 +2082,24 @@ def _classify_health(
         reasons.append("managed_unknown_phase")
         _with_action(actions, "Update the managed phase contract before trusting this managed-session status")
 
+
+def _add_spool_pending_reason(
+    reasons: list[str],
+    *,
+    spool_pending: int,
+) -> None:
+    if spool_pending >= DEGRADED_BACKLOG_COUNT and "spool_pending" not in reasons:
+        reasons.append("spool_pending")
+
+
+def _add_outbox_reasons(
+    reasons: list[str],
+    actions: list[str],
+    *,
+    outbox_count: int,
+    outbox_oldest: Any,
+    engine_log_path: str,
+) -> None:
     outbox_backlog_is_actionable = outbox_count >= BROKEN_BACKLOG_COUNT or (
         outbox_count >= DEGRADED_BACKLOG_COUNT and outbox_oldest is not None and outbox_oldest > OUTBOX_DEGRADED_AGE_SECONDS
     )
@@ -2088,6 +2109,13 @@ def _classify_health(
         reasons.append("outbox_stuck")
         _with_action(actions, f"Inspect logs: {engine_log_path}")
 
+
+def _add_disk_reasons(
+    reasons: list[str],
+    actions: list[str],
+    *,
+    disk_free_bytes: Any,
+) -> None:
     if isinstance(disk_free_bytes, int):
         if disk_free_bytes < DISK_BROKEN_BYTES:
             reasons.append("disk_critically_low")
@@ -2096,15 +2124,24 @@ def _classify_health(
             reasons.append("disk_low")
             _with_action(actions, "Consider freeing disk space soon")
 
-    if service_status == "not-installed" and not engine_exists and outbox_count == 0 and spool_pending == 0 and launch_state != "broken":
-        return (
-            "uninstalled",
-            "gray",
-            "Longhouse local shipping is not installed",
-            reasons,
-            actions,
-        )
 
+def _health_flags(
+    *,
+    launch_state: str,
+    service_status: str,
+    engine_error: Any,
+    engine_exists: bool,
+    engine_age: Any,
+    transport_assessment: TransportHealthAssessment | None,
+    disk_free_bytes: Any,
+    outbox_count: int,
+    outbox_oldest: Any,
+    spool_pending: int,
+    orphan_bridge_count: int,
+    managed_degraded: int,
+    managed_detached: int,
+    unknown_managed_phase_count: int,
+) -> tuple[bool, bool]:
     broken = False
     degraded = False
 
@@ -2154,57 +2191,199 @@ def _classify_health(
         if isinstance(disk_free_bytes, int) and disk_free_bytes < DISK_DEGRADED_BYTES:
             degraded = True
 
+    return broken, degraded
+
+
+def _broken_health_headline(reasons: list[str]) -> str:
+    headline = "Longhouse shipping needs repair"
+    # Priority order matters: users should see the most specific actionable state.
+    if any(
+        reason in reasons
+        for reason in (
+            "shipper_state_missing",
+            "machine_state_invalid",
+            "machine_state_missing",
+            "machine_state_missing_runtime_url",
+            "machine_state_missing_machine_name",
+            "config_url_runner_url_mismatch",
+            "machine_name_runner_name_mismatch",
+            "service_machine_name_mismatch",
+            "service_generation_mismatch",
+            "service_state_hash_mismatch",
+            "service_runner_name_mismatch",
+        )
+    ):
+        headline = "Longhouse launch config is inconsistent"
+        if "shipper_state_missing" in reasons:
+            headline = "Longhouse shipper state is missing"
+    elif "service_stopped" in reasons:
+        headline = "Longhouse engine service is stopped"
+    elif "spool_dead" in reasons:
+        headline = "Longhouse has dead-lettered data to repair"
+    elif "engine_status_stale" in reasons:
+        headline = "Longhouse local status is stale while work is pending"
+    elif "orphaned_managed_bridge" in reasons:
+        headline = "Longhouse has orphaned managed sessions"
+    elif "managed_session_control_degraded" in reasons:
+        headline = "Longhouse lost managed session control"
+    elif "managed_unknown_phase" in reasons:
+        headline = "Longhouse saw an unknown managed phase"
+    return headline
+
+
+def _degraded_health_headline(
+    reasons: list[str],
+    *,
+    service_status: str,
+    managed_attached: int,
+    managed_detached: int,
+) -> str:
+    headline = "Longhouse shipping is degraded"
+    # Priority order matters: users should see the most specific actionable state.
+    if "reported_offline" in reasons:
+        headline = "Longhouse is retrying while offline"
+    elif "engine_status_missing" in reasons and service_status == "running":
+        headline = "Longhouse is waiting for its first local status update"
+    elif "engine_status_stale" in reasons:
+        headline = "Longhouse local status is aging"
+    elif "engine_status_aging" in reasons:
+        headline = "Longhouse local status is aging"
+    elif "managed_session_detached" in reasons:
+        if managed_detached == 1 and managed_attached == 0:
+            headline = "Managed session is running in background"
+        else:
+            headline = "Managed sessions are running in background"
+    return headline
+
+
+def _classify_health(
+    *,
+    service: dict[str, Any],
+    engine_status: dict[str, Any],
+    transport_sample: TransportHealthSample | None,
+    transport_assessment: TransportHealthAssessment | None,
+    outbox: dict[str, Any],
+    launch_readiness: dict[str, Any],
+    managed_summary: dict[str, Any] | None,
+    managed_sessions: list[dict[str, Any]],
+) -> tuple[str, str, str, list[str], list[str]]:
+    reasons: list[str] = []
+    actions: list[str] = []
+
+    service_status = str(service.get("status") or "not-installed")
+    payload = engine_status.get("payload") or {}
+    engine_status_path = str(engine_status.get("path") or get_agent_status_path())
+    engine_log_path = str(service.get("log_path") or (get_agent_log_dir() / "engine.log.*"))
+    engine_exists = bool(engine_status.get("exists"))
+    engine_error = engine_status.get("error")
+    engine_age = engine_status.get("age_seconds")
+    spool_pending = transport_sample.spool_pending if transport_sample is not None else int(payload.get("spool_pending_count") or 0)
+    disk_free_bytes = payload.get("disk_free_bytes")
+    outbox_count = int(outbox.get("file_count") or 0)
+    outbox_oldest = outbox.get("oldest_age_seconds")
+    launch_state = str(launch_readiness.get("state") or "unconfigured")
+    launch_reasons = [str(item) for item in list(launch_readiness.get("reasons") or [])]
+    launch_actions = [str(item) for item in list(launch_readiness.get("suggested_actions") or [])]
+    shipper_state_missing = "shipper_state_missing" in launch_reasons
+    managed_attached = int((managed_summary or {}).get("attached_count") or 0)
+    managed_detached = int((managed_summary or {}).get("detached_count") or 0)
+    managed_degraded = int((managed_summary or {}).get("degraded_count") or 0)
+    orphan_bridge_count = int((managed_summary or {}).get("orphan_bridge_count") or 0)
+    unknown_managed_phase_count = sum(1 for session in managed_sessions if _managed_phase_is_unknown(session.get("raw_phase")))
+    repair_action = _repair_action_for_launch_readiness(launch_readiness)
+
+    reasons.extend(launch_reasons)
+    for action in launch_actions:
+        _with_action(actions, action)
+
+    _add_transport_health_reasons(
+        reasons,
+        actions,
+        transport_assessment=transport_assessment,
+        engine_log_path=engine_log_path,
+    )
+    _add_service_status_reasons(
+        reasons,
+        actions,
+        service_status=service_status,
+        repair_action=repair_action,
+        shipper_state_missing=shipper_state_missing,
+    )
+    _add_engine_status_reasons(
+        reasons,
+        actions,
+        engine_error=engine_error,
+        engine_exists=engine_exists,
+        engine_age=engine_age,
+        engine_status_path=engine_status_path,
+        engine_log_path=engine_log_path,
+        service_status=service_status,
+        repair_action=repair_action,
+        shipper_state_missing=shipper_state_missing,
+    )
+    _add_spool_pending_reason(
+        reasons,
+        spool_pending=spool_pending,
+    )
+    _add_managed_session_reasons(
+        reasons,
+        actions,
+        orphan_bridge_count=orphan_bridge_count,
+        managed_degraded=managed_degraded,
+        managed_detached=managed_detached,
+        unknown_managed_phase_count=unknown_managed_phase_count,
+    )
+    _add_outbox_reasons(
+        reasons,
+        actions,
+        outbox_count=outbox_count,
+        outbox_oldest=outbox_oldest,
+        engine_log_path=engine_log_path,
+    )
+    _add_disk_reasons(reasons, actions, disk_free_bytes=disk_free_bytes)
+
+    if service_status == "not-installed" and not engine_exists and outbox_count == 0 and spool_pending == 0 and launch_state != "broken":
+        return (
+            "uninstalled",
+            "gray",
+            "Longhouse local shipping is not installed",
+            reasons,
+            actions,
+        )
+
+    broken, degraded = _health_flags(
+        launch_state=launch_state,
+        service_status=service_status,
+        engine_error=engine_error,
+        engine_exists=engine_exists,
+        engine_age=engine_age,
+        transport_assessment=transport_assessment,
+        disk_free_bytes=disk_free_bytes,
+        outbox_count=outbox_count,
+        outbox_oldest=outbox_oldest,
+        spool_pending=spool_pending,
+        orphan_bridge_count=orphan_bridge_count,
+        managed_degraded=managed_degraded,
+        managed_detached=managed_detached,
+        unknown_managed_phase_count=unknown_managed_phase_count,
+    )
+
     if broken:
-        headline = "Longhouse shipping needs repair"
-        if any(
-            reason in reasons
-            for reason in (
-                "shipper_state_missing",
-                "machine_state_invalid",
-                "machine_state_missing",
-                "machine_state_missing_runtime_url",
-                "machine_state_missing_machine_name",
-                "config_url_runner_url_mismatch",
-                "machine_name_runner_name_mismatch",
-                "service_machine_name_mismatch",
-                "service_generation_mismatch",
-                "service_state_hash_mismatch",
-                "service_runner_name_mismatch",
-            )
-        ):
-            headline = "Longhouse launch config is inconsistent"
-            if "shipper_state_missing" in reasons:
-                headline = "Longhouse shipper state is missing"
-        elif "service_stopped" in reasons:
-            headline = "Longhouse engine service is stopped"
-        elif "spool_dead" in reasons:
-            headline = "Longhouse has dead-lettered data to repair"
-        elif "engine_status_stale" in reasons:
-            headline = "Longhouse local status is stale while work is pending"
-        elif "orphaned_managed_bridge" in reasons:
-            headline = "Longhouse has orphaned managed sessions"
-        elif "managed_session_control_degraded" in reasons:
-            headline = "Longhouse lost managed session control"
-        elif "managed_unknown_phase" in reasons:
-            headline = "Longhouse saw an unknown managed phase"
-        return ("broken", "red", headline, reasons, actions)
+        return ("broken", "red", _broken_health_headline(reasons), reasons, actions)
 
     if degraded:
-        headline = "Longhouse shipping is degraded"
-        if "reported_offline" in reasons:
-            headline = "Longhouse is retrying while offline"
-        elif "engine_status_missing" in reasons and service_status == "running":
-            headline = "Longhouse is waiting for its first local status update"
-        elif "engine_status_stale" in reasons:
-            headline = "Longhouse local status is aging"
-        elif "engine_status_aging" in reasons:
-            headline = "Longhouse local status is aging"
-        elif "managed_session_detached" in reasons:
-            if managed_detached == 1 and managed_attached == 0:
-                headline = "Managed session is running in background"
-            else:
-                headline = "Managed sessions are running in background"
-        return ("degraded", "yellow", headline, reasons, actions)
+        return (
+            "degraded",
+            "yellow",
+            _degraded_health_headline(
+                reasons,
+                service_status=service_status,
+                managed_attached=managed_attached,
+                managed_detached=managed_detached,
+            ),
+            reasons,
+            actions,
+        )
 
     return ("healthy", "green", "Longhouse shipping healthy", reasons, actions)
 
