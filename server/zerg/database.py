@@ -856,7 +856,11 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 )
                 conn.commit()
     except Exception:
-        logger.warning("session_inputs idempotency index migration skipped", exc_info=True)
+        logger.error(
+            "session_inputs idempotency index migration FAILED — client_request_id dedupe will not be enforced; "
+            "duplicate iOS retries may create duplicate rows",
+            exc_info=True,
+        )
 
     # session_messages table migrations
     try:
