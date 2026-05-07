@@ -39,7 +39,13 @@ def _seed_user(db, *, user_id: int = 1) -> User:
     return user
 
 
-def _seed_session(db, *, session_id: str | None = None, project: str = "hiring", device_id: str = "cinder") -> AgentSession:
+def _seed_session(
+    db,
+    *,
+    session_id: str | None = None,
+    project: str = "hiring",
+    device_id: str = "cinder",
+) -> AgentSession:
     sid = session_id or str(uuid4())
     session = AgentSession(
         id=sid,
@@ -209,6 +215,40 @@ def test_agents_sessions_allows_bounded_project_lookup_for_managed_local_hook_to
             payload = response.json()
             assert payload["total"] == 1
             assert payload["sessions"][0]["project"] == "hiring"
+        finally:
+            api_app.dependency_overrides.clear()
+
+
+def test_agents_sessions_rejects_broader_filters_for_managed_local_hook_token(tmp_path):
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        user = _seed_user(db)
+        session = _seed_session(db, project="hiring", device_id="cinder")
+        token = issue_managed_local_hook_token(
+            owner_id=user.id,
+            session_id=str(session.id),
+            project="hiring",
+            device_id="cinder",
+        )
+        client = _make_client(db)
+
+        try:
+            with patch("zerg.dependencies.agents_auth.get_settings", _settings_override):
+                for params in (
+                    {"project": "hiring", "limit": 6, "days_back": 7},
+                    {"project": "hiring", "limit": 5, "days_back": 7, "query": "hiring"},
+                ):
+                    response = client.get(
+                        "/agents/sessions",
+                        params=params,
+                        headers={"X-Agents-Token": token},
+                    )
+
+                    assert response.status_code == 403, response.text
+                    assert response.json()["detail"] == (
+                        "Managed-local hook token only supports bounded recent project lookup"
+                    )
         finally:
             api_app.dependency_overrides.clear()
 

@@ -229,7 +229,13 @@ def _hybrid_semantic_candidate_ids(db: Session, params: SessionListParams) -> se
     return {str(row[0]) for row in filter_q.all()}
 
 
-def _load_match_map(store: AgentsStore, session_ids: list[Any], query: str | None, *, context_mode: str) -> dict[Any, dict[str, Any]]:
+def _load_match_map(
+    store: AgentsStore,
+    session_ids: list[Any],
+    query: str | None,
+    *,
+    context_mode: str,
+) -> dict[Any, dict[str, Any]]:
     if not query:
         return {}
     try:
