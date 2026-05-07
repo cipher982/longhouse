@@ -2030,9 +2030,8 @@ def _merge_managed_sessions(
     return managed_summary, sessions, bridge_orphans
 
 
-def _collect_activity_summary(base_dir: Path, *, now: datetime) -> dict[str, Any]:
-    db_path = get_agent_db_path(base_dir)
-    summary = {
+def _empty_activity_summary(db_path: Path) -> dict[str, Any]:
+    return {
         "path": str(db_path),
         "exists": db_path.exists(),
         "error": None,
@@ -2045,19 +2044,169 @@ def _collect_activity_summary(base_dir: Path, *, now: datetime) -> dict[str, Any
         "latest_activity_at": None,
         "recent_window_minutes": ACTIVITY_RECENT_MINUTES,
     }
-    if not db_path.exists():
-        return summary
 
+
+def _activity_cutoffs(now: datetime) -> tuple[str, str, list[str]]:
     local_now = now.astimezone()
     start_of_day_local = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
     start_of_day_utc = start_of_day_local.astimezone(timezone.utc)
-    recent_cutoff_utc = now - timedelta(minutes=ACTIVITY_RECENT_MINUTES)
     today_cutoff = _to_rfc3339(start_of_day_utc)
-    recent_cutoff = _to_rfc3339(recent_cutoff_utc)
+    recent_cutoff = _to_rfc3339(now - timedelta(minutes=ACTIVITY_RECENT_MINUTES))
     band_edges = [_to_rfc3339(now - delta) for _, delta in ACTIVITY_RECENCY_BANDS]
+    return today_cutoff, recent_cutoff, band_edges
+
+
+def _activity_sql_fragments() -> tuple[str, str, str]:
     session_expr = "provider || ':' || COALESCE(NULLIF(session_id, ''), NULLIF(provider_session_id, ''), path)"
     provider_session_expr = "COALESCE(NULLIF(session_id, ''), NULLIF(provider_session_id, ''), path)"
     session_files_predicate = "path LIKE '%.jsonl'"
+    return session_expr, provider_session_expr, session_files_predicate
+
+
+def _populate_activity_aggregate(
+    summary: dict[str, Any],
+    conn: sqlite3.Connection,
+    *,
+    session_expr: str,
+    session_files_predicate: str,
+    today_cutoff: str,
+    recent_cutoff: str,
+) -> None:
+    aggregate_row = conn.execute(
+        f"""
+        SELECT
+            MAX(last_updated),
+            COUNT(DISTINCT CASE
+                WHEN julianday(last_updated) >= julianday(?) THEN {session_expr}
+            END),
+            COUNT(DISTINCT CASE
+                WHEN julianday(last_updated) >= julianday(?) THEN {session_expr}
+            END)
+        FROM file_state
+        WHERE {session_files_predicate}
+        """,
+        (today_cutoff, recent_cutoff),
+    ).fetchone()
+    if aggregate_row is not None:
+        summary["latest_activity_at"] = aggregate_row[0]
+        summary["sessions_today"] = int(aggregate_row[1] or 0)
+        summary["sessions_recent"] = int(aggregate_row[2] or 0)
+
+
+def _activity_provider_counts(
+    conn: sqlite3.Connection,
+    *,
+    provider_session_expr: str,
+    session_files_predicate: str,
+    cutoff: str,
+) -> dict[str, int]:
+    provider_counts: dict[str, int] = {}
+    for provider, count in conn.execute(
+        f"""
+        SELECT provider, COUNT(DISTINCT {provider_session_expr})
+        FROM file_state
+        WHERE {session_files_predicate}
+          AND julianday(last_updated) >= julianday(?)
+        GROUP BY provider
+        """,
+        (cutoff,),
+    ):
+        provider_name = str(provider or "").strip()
+        if not provider_name:
+            continue
+        provider_counts[provider_name] = int(count or 0)
+    return provider_counts
+
+
+def _activity_band_specs(today_cutoff: str, band_edges: list[str]) -> list[dict[str, str | None]]:
+    return [
+        {"label": "0-1m", "newer_than": band_edges[0], "older_than": None},
+        {"label": "1-5m", "newer_than": band_edges[1], "older_than": band_edges[0]},
+        {"label": "5-15m", "newer_than": band_edges[2], "older_than": band_edges[1]},
+        {"label": "15-60m", "newer_than": band_edges[3], "older_than": band_edges[2]},
+        {"label": "1-6h", "newer_than": band_edges[4], "older_than": band_edges[3]},
+        {"label": "6h+", "newer_than": today_cutoff, "older_than": band_edges[4]},
+    ]
+
+
+def _activity_recency_bands(
+    conn: sqlite3.Connection,
+    *,
+    session_expr: str,
+    session_files_predicate: str,
+    band_specs: list[dict[str, str | None]],
+) -> list[dict[str, Any]]:
+    band_clauses: list[str] = []
+    band_params: list[Any] = []
+    for spec in band_specs:
+        clause = "COUNT(DISTINCT CASE WHEN julianday(last_updated) >= julianday(?)"
+        band_params.append(spec["newer_than"])
+        older_than = spec["older_than"]
+        if older_than is not None:
+            clause += " AND julianday(last_updated) < julianday(?)"
+            band_params.append(older_than)
+        clause += f" THEN {session_expr} END)"
+        band_clauses.append(clause)
+
+    band_row = conn.execute(
+        f"""
+        SELECT {", ".join(band_clauses)}
+        FROM file_state
+        WHERE {session_files_predicate}
+        """,
+        tuple(band_params),
+    ).fetchone()
+    if band_row is None:
+        return []
+    return [
+        {
+            "label": spec["label"],
+            "session_count": int(band_row[index] or 0),
+        }
+        for index, spec in enumerate(band_specs)
+    ]
+
+
+def _activity_recent_touches(
+    conn: sqlite3.Connection,
+    *,
+    provider_session_expr: str,
+    session_files_predicate: str,
+) -> list[dict[str, Any]]:
+    recent_touches: list[dict[str, Any]] = []
+    for provider, last_updated, path in conn.execute(
+        f"""
+        SELECT provider, last_updated, path
+        FROM (
+            SELECT
+                provider,
+                {provider_session_expr} AS session_key,
+                path,
+                MAX(last_updated) AS last_updated
+            FROM file_state
+            WHERE {session_files_predicate}
+            GROUP BY provider, session_key
+        )
+        ORDER BY julianday(last_updated) DESC
+        LIMIT ?
+        """,
+        (RECENT_TOUCH_LIMIT,),
+    ):
+        provider_name = str(provider or "").strip()
+        if not provider_name or not last_updated:
+            continue
+        recent_touches.append(_recent_touch_entry(str(path), provider_name, str(last_updated)))
+    return recent_touches
+
+
+def _collect_activity_summary(base_dir: Path, *, now: datetime) -> dict[str, Any]:
+    db_path = get_agent_db_path(base_dir)
+    summary = _empty_activity_summary(db_path)
+    if not db_path.exists():
+        return summary
+
+    today_cutoff, recent_cutoff, band_edges = _activity_cutoffs(now)
+    session_expr, provider_session_expr, session_files_predicate = _activity_sql_fragments()
 
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1)
@@ -2066,121 +2215,37 @@ def _collect_activity_summary(base_dir: Path, *, now: datetime) -> dict[str, Any
         return summary
 
     try:
-        aggregate_row = conn.execute(
-            f"""
-            SELECT
-                MAX(last_updated),
-                COUNT(DISTINCT CASE
-                    WHEN julianday(last_updated) >= julianday(?) THEN {session_expr}
-                END),
-                COUNT(DISTINCT CASE
-                    WHEN julianday(last_updated) >= julianday(?) THEN {session_expr}
-                END)
-            FROM file_state
-            WHERE {session_files_predicate}
-            """,
-            (today_cutoff, recent_cutoff),
-        ).fetchone()
-        if aggregate_row is not None:
-            summary["latest_activity_at"] = aggregate_row[0]
-            summary["sessions_today"] = int(aggregate_row[1] or 0)
-            summary["sessions_recent"] = int(aggregate_row[2] or 0)
-
-        provider_counts_today: dict[str, int] = {}
-        for provider, count in conn.execute(
-            f"""
-            SELECT provider, COUNT(DISTINCT {provider_session_expr})
-            FROM file_state
-            WHERE {session_files_predicate}
-              AND julianday(last_updated) >= julianday(?)
-            GROUP BY provider
-            """,
-            (today_cutoff,),
-        ):
-            provider_name = str(provider or "").strip()
-            if not provider_name:
-                continue
-            provider_counts_today[provider_name] = int(count or 0)
-        summary["provider_counts_today"] = provider_counts_today
-
-        provider_counts_recent: dict[str, int] = {}
-        for provider, count in conn.execute(
-            f"""
-            SELECT provider, COUNT(DISTINCT {provider_session_expr})
-            FROM file_state
-            WHERE {session_files_predicate}
-              AND julianday(last_updated) >= julianday(?)
-            GROUP BY provider
-            """,
-            (recent_cutoff,),
-        ):
-            provider_name = str(provider or "").strip()
-            if not provider_name:
-                continue
-            provider_counts_recent[provider_name] = int(count or 0)
-        summary["provider_counts_recent"] = provider_counts_recent
-
-        band_specs = [
-            {"label": "0-1m", "newer_than": band_edges[0], "older_than": None},
-            {"label": "1-5m", "newer_than": band_edges[1], "older_than": band_edges[0]},
-            {"label": "5-15m", "newer_than": band_edges[2], "older_than": band_edges[1]},
-            {"label": "15-60m", "newer_than": band_edges[3], "older_than": band_edges[2]},
-            {"label": "1-6h", "newer_than": band_edges[4], "older_than": band_edges[3]},
-            {"label": "6h+", "newer_than": today_cutoff, "older_than": band_edges[4]},
-        ]
-        band_clauses: list[str] = []
-        band_params: list[str] = []
-        for spec in band_specs:
-            clause = "COUNT(DISTINCT CASE WHEN julianday(last_updated) >= julianday(?)"
-            band_params.append(spec["newer_than"])
-            older_than = spec["older_than"]
-            if older_than is not None:
-                clause += " AND julianday(last_updated) < julianday(?)"
-                band_params.append(older_than)
-            clause += f" THEN {session_expr} END)"
-            band_clauses.append(clause)
-
-        band_row = conn.execute(
-            f"""
-            SELECT {", ".join(band_clauses)}
-            FROM file_state
-            WHERE {session_files_predicate}
-            """,
-            tuple(band_params),
-        ).fetchone()
-        if band_row is not None:
-            summary["session_recency_bands"] = [
-                {
-                    "label": spec["label"],
-                    "session_count": int(band_row[index] or 0),
-                }
-                for index, spec in enumerate(band_specs)
-            ]
-
-        recent_touches: list[dict[str, Any]] = []
-        for provider, last_updated, path in conn.execute(
-            f"""
-            SELECT provider, last_updated, path
-            FROM (
-                SELECT
-                    provider,
-                    {provider_session_expr} AS session_key,
-                    path,
-                    MAX(last_updated) AS last_updated
-                FROM file_state
-                WHERE {session_files_predicate}
-                GROUP BY provider, session_key
-            )
-            ORDER BY julianday(last_updated) DESC
-            LIMIT ?
-            """,
-            (RECENT_TOUCH_LIMIT,),
-        ):
-            provider_name = str(provider or "").strip()
-            if not provider_name or not last_updated:
-                continue
-            recent_touches.append(_recent_touch_entry(str(path), provider_name, str(last_updated)))
-        summary["recent_touches"] = recent_touches
+        _populate_activity_aggregate(
+            summary,
+            conn,
+            session_expr=session_expr,
+            session_files_predicate=session_files_predicate,
+            today_cutoff=today_cutoff,
+            recent_cutoff=recent_cutoff,
+        )
+        summary["provider_counts_today"] = _activity_provider_counts(
+            conn,
+            provider_session_expr=provider_session_expr,
+            session_files_predicate=session_files_predicate,
+            cutoff=today_cutoff,
+        )
+        summary["provider_counts_recent"] = _activity_provider_counts(
+            conn,
+            provider_session_expr=provider_session_expr,
+            session_files_predicate=session_files_predicate,
+            cutoff=recent_cutoff,
+        )
+        summary["session_recency_bands"] = _activity_recency_bands(
+            conn,
+            session_expr=session_expr,
+            session_files_predicate=session_files_predicate,
+            band_specs=_activity_band_specs(today_cutoff, band_edges),
+        )
+        summary["recent_touches"] = _activity_recent_touches(
+            conn,
+            provider_session_expr=provider_session_expr,
+            session_files_predicate=session_files_predicate,
+        )
         return summary
     except sqlite3.Error as exc:
         summary["error"] = str(exc)
