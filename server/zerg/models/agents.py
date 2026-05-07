@@ -676,4 +676,15 @@ class SessionInput(AgentsBase):
     delivered_at = Column(DateTime(timezone=True), nullable=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    __table_args__ = (Index("ix_session_inputs_session_status_created", "session_id", "status", "created_at"),)
+    __table_args__ = (
+        Index("ix_session_inputs_session_status_created", "session_id", "status", "created_at"),
+        Index(
+            "ix_session_inputs_session_owner_request",
+            "session_id",
+            "owner_id",
+            "request_id",
+            unique=True,
+            postgresql_where=text("request_id IS NOT NULL"),
+            sqlite_where=text("request_id IS NOT NULL"),
+        ),
+    )

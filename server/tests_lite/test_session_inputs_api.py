@@ -10,7 +10,6 @@ from uuid import uuid4
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
-import pytest
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
@@ -21,11 +20,11 @@ from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
+from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionInput
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
-from zerg.routers import session_chat
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
@@ -73,7 +72,12 @@ def _seed_live_runtime_state(db, session, *, phase: str = "idle") -> None:
     key = runtime_key_for_session(str(session.provider or "claude"), str(session.id))
     state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == key).first()
     if state is None:
-        state = SessionRuntimeState(runtime_key=key, session_id=session.id, provider=str(session.provider or "claude"), device_id=session.device_id)
+        state = SessionRuntimeState(
+            runtime_key=key,
+            session_id=session.id,
+            provider=str(session.provider or "claude"),
+            device_id=session.device_id,
+        )
         db.add(state)
     state.phase = phase
     state.phase_source = "semantic"
@@ -205,6 +209,35 @@ def test_intent_auto_not_locked_returns_sent(monkeypatch, tmp_path):
         api_app_ref.dependency_overrides = {}
 
 
+def test_client_request_id_dedupes_delivered_auto(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    calls = _stub_dispatch(monkeypatch)
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        payload = {"text": "hello once", "intent": "auto", "client_request_id": "ios-request-1"}
+        first = client.post(f"/api/sessions/{session_id}/input", json=payload)
+        second = client.post(f"/api/sessions/{session_id}/input", json=payload)
+
+        assert first.status_code == 200, first.text
+        assert second.status_code == 200, second.text
+        assert first.json()["input_id"] == second.json()["input_id"]
+        assert second.json()["outcome"] == "sent"
+        assert len(calls) == 1
+        with session_local() as db:
+            rows = db.query(SessionInput).filter(SessionInput.session_id == session_id).all()
+            assert len(rows) == 1
+            assert rows[0].request_id == "ios-request-1"
+            assert rows[0].status == INPUT_STATUS_DELIVERED
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
+        api_app_ref.dependency_overrides = {}
+
+
 def test_intent_queue_always_persists_queued(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_live_session(session_local)
@@ -231,6 +264,108 @@ def test_intent_queue_always_persists_queued(monkeypatch, tmp_path):
             row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
             assert row.status == INPUT_STATUS_QUEUED
             assert row.intent == "queue"
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_client_request_id_dedupes_queued_input(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    _stub_dispatch(monkeypatch)
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        payload = {"text": "queued once", "intent": "queue", "client_request_id": "ios-queued-1"}
+        first = client.post(f"/api/sessions/{session_id}/input", json=payload)
+        second = client.post(f"/api/sessions/{session_id}/input", json=payload)
+
+        assert first.status_code == 200, first.text
+        assert second.status_code == 200, second.text
+        assert first.json()["input_id"] == second.json()["input_id"]
+        assert second.json()["outcome"] == "queued"
+        with session_local() as db:
+            rows = db.query(SessionInput).filter(SessionInput.session_id == session_id).all()
+            assert len(rows) == 1
+            assert rows[0].request_id == "ios-queued-1"
+            assert rows[0].status == INPUT_STATUS_QUEUED
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_client_request_id_unique_constraint_blocks_duplicate_rows(tmp_path):
+    from sqlalchemy.exc import IntegrityError
+
+    from zerg.services.session_inputs import create_session_input
+
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+
+    with session_local() as db:
+        create_session_input(
+            db,
+            session_id=session_id,
+            text="once",
+            owner_id=user_id,
+            intent="queue",
+            status=INPUT_STATUS_QUEUED,
+            request_id="ios-unique-1",
+        )
+        try:
+            create_session_input(
+                db,
+                session_id=session_id,
+                text="twice",
+                owner_id=user_id,
+                intent="queue",
+                status=INPUT_STATUS_QUEUED,
+                request_id="ios-unique-1",
+            )
+        except IntegrityError:
+            db.rollback()
+        else:
+            raise AssertionError("duplicate client request id inserted")
+
+        rows = db.query(SessionInput).filter(SessionInput.session_id == session_id).all()
+        assert len(rows) == 1
+        assert rows[0].body == "once"
+
+
+def test_client_request_id_failed_retry_does_not_report_queued(monkeypatch, tmp_path):
+    from zerg.services.session_inputs import create_session_input
+
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    _stub_dispatch(monkeypatch)
+
+    with session_local() as db:
+        row = create_session_input(
+            db,
+            session_id=session_id,
+            text="failed once",
+            owner_id=user_id,
+            intent="auto",
+            status=INPUT_STATUS_FAILED,
+            request_id="ios-failed-1",
+        )
+        row.last_error = "provider disconnected"
+        db.commit()
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        retry = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={"text": "failed once", "intent": "auto", "client_request_id": "ios-failed-1"},
+        )
+        assert retry.status_code == 409, retry.text
+        body = retry.json()["detail"]
+        assert body["error_code"] == "input_failed"
+        assert "provider disconnected" in body["message"]
     finally:
         api_app_ref.dependency_overrides = {}
 
@@ -314,7 +449,7 @@ def _seed_codex_session(session_local):
     capability gate for steer is satisfied."""
     session_id, user_id = _seed_live_session(session_local)
     with session_local() as db:
-        session = db.query(__import__("zerg.models.agents", fromlist=["AgentSession"]).AgentSession).filter_by(id=session_id).one()
+        session = db.query(AgentSession).filter_by(id=session_id).one()
         session.managed_transport = "codex_app_server"
         db.commit()
         _seed_live_runtime_state(db, session, phase="running")
