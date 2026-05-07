@@ -458,7 +458,7 @@ def _upsert_unmanaged_session_bindings(
                 .first()
             )
 
-        # Soft-link to agent_sessions by (provider, provider_session_id).
+        # Soft-link to sessions by (provider, provider_session_id).
         linked_session_id = None
         if session_key:
             linked = (

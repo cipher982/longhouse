@@ -202,7 +202,10 @@ mod tests {
             &commands,
             "ws://127.0.0.1:65268"
         ));
-        assert!(!codex_tui_process_attached(&commands, "ws://127.0.0.1:9999"));
+        assert!(!codex_tui_process_attached(
+            &commands,
+            "ws://127.0.0.1:9999"
+        ));
         assert!(!codex_tui_process_attached(&commands, ""));
     }
 
