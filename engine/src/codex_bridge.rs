@@ -818,11 +818,23 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                         let _ = reply.send(result);
                     }
                     IpcCommand::Stop { reply } => {
-                        let _ = reply.send(Ok(json!({})));
                         context.state.status = "stopped".to_string();
                         context.state.active_turn_id = None;
                         context.state.last_error = None;
                         write_state_file(&context.state_file, &context.state)?;
+                        context
+                            .runtime
+                            .post_terminal(
+                                "session_ended",
+                                "bridge_stop",
+                                format!(
+                                    "bridge:terminal:{}:{}",
+                                    context.state.session_id,
+                                    Uuid::new_v4()
+                                ),
+                            )
+                            .await;
+                        let _ = reply.send(Ok(json!({})));
                         shutdown_child(&mut client).await?;
                         break;
                     }
@@ -2658,6 +2670,46 @@ impl BridgeRuntimeSink {
         .await;
     }
 
+    async fn post_terminal(&self, terminal_state: &str, terminal_reason: &str, dedupe_key: String) {
+        let observed_at = Utc::now();
+        self.persist_local_phase("finished", None, observed_at);
+        self.post_runtime_events(vec![self.terminal_event(
+            terminal_state,
+            terminal_reason,
+            &dedupe_key,
+            observed_at,
+        )])
+        .await;
+    }
+
+    fn terminal_event(
+        &self,
+        terminal_state: &str,
+        terminal_reason: &str,
+        dedupe_key: &str,
+        observed_at: chrono::DateTime<Utc>,
+    ) -> Value {
+        json!({
+            "runtime_key": format!("codex:{}", self.session_id),
+            "session_id": self.session_id,
+            "provider": "codex",
+            "device_id": self.machine_name,
+            "source": BRIDGE_RUNTIME_SOURCE,
+            "kind": "terminal_signal",
+            "phase": Value::Null,
+            "tool_name": Value::Null,
+            "occurred_at": observed_at.to_rfc3339(),
+            "dedupe_key": dedupe_key,
+            "payload": {
+                "managed_transport": "codex_app_server",
+                "thread_id": self.thread_id,
+                "terminal_state": terminal_state,
+                "terminal_reason": terminal_reason,
+                "terminal_source": BRIDGE_RUNTIME_SOURCE,
+            }
+        })
+    }
+
     async fn post_runtime_events(&self, events: Vec<Value>) {
         let response = match self
             .http
@@ -3224,6 +3276,86 @@ mod tests {
         assert_eq!(managed_row.2, "assistants-service");
         assert_eq!(managed_row.3, Some("shell".to_string()));
         assert_eq!(managed_row.4, "running");
+    }
+
+    #[test]
+    fn bridge_runtime_sink_terminal_event_carries_close_cause() {
+        let temp = tempfile::tempdir().unwrap();
+        let sink = BridgeRuntimeSink {
+            http: reqwest::Client::new(),
+            api_url: "http://127.0.0.1:9".to_string(),
+            api_token: "token".to_string(),
+            session_id: "session-123".to_string(),
+            cwd: "/Users/test/git/assistants-service".to_string(),
+            machine_name: Some("test-box".to_string()),
+            thread_id: Some("thread-123".to_string()),
+            local_db_path: Some(resolve_bridge_agent_db_path(Some(temp.path())).unwrap()),
+        };
+
+        let observed_at = DateTime::parse_from_rfc3339("2026-04-19T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let event = sink.terminal_event(
+            "session_ended",
+            "bridge_stop",
+            "bridge:terminal:session-123:dedupe",
+            observed_at,
+        );
+
+        assert_eq!(event["runtime_key"], "codex:session-123");
+        assert_eq!(event["session_id"], "session-123");
+        assert_eq!(event["provider"], "codex");
+        assert_eq!(event["device_id"], "test-box");
+        assert_eq!(event["source"], BRIDGE_RUNTIME_SOURCE);
+        assert_eq!(event["kind"], "terminal_signal");
+        assert_eq!(event["occurred_at"], "2026-04-19T00:00:00+00:00");
+        assert_eq!(event["payload"]["managed_transport"], "codex_app_server");
+        assert_eq!(event["payload"]["thread_id"], "thread-123");
+        assert_eq!(event["payload"]["terminal_state"], "session_ended");
+        assert_eq!(event["payload"]["terminal_reason"], "bridge_stop");
+        assert_eq!(event["payload"]["terminal_source"], BRIDGE_RUNTIME_SOURCE);
+    }
+
+    #[tokio::test]
+    async fn bridge_runtime_sink_post_terminal_persists_finished_phase() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = resolve_bridge_agent_db_path(Some(temp.path())).unwrap();
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_millis(100))
+            .build()
+            .unwrap();
+        let sink = BridgeRuntimeSink {
+            http,
+            api_url: "http://127.0.0.1:9".to_string(),
+            api_token: "token".to_string(),
+            session_id: "session-123".to_string(),
+            cwd: "/Users/test/git/assistants-service".to_string(),
+            machine_name: Some("test-box".to_string()),
+            thread_id: None,
+            local_db_path: Some(db_path.clone()),
+        };
+
+        sink.post_terminal(
+            "session_ended",
+            "bridge_stop",
+            "bridge:terminal:session-123:dedupe".to_string(),
+        )
+        .await;
+
+        let conn = crate::state::db::open_db(Some(&db_path)).unwrap();
+        let row: (String, Option<String>, String) = conn
+            .query_row(
+                "SELECT phase, tool_name, source
+                 FROM session_phase_state
+                 WHERE session_id = 'session-123'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+
+        assert_eq!(row.0, "finished");
+        assert_eq!(row.1, None);
+        assert_eq!(row.2, BRIDGE_RUNTIME_SOURCE);
     }
 
     #[test]
