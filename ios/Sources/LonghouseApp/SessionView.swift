@@ -1378,13 +1378,26 @@ final class SessionViewModel: ObservableObject {
 
     private func reconcileSubmittedInputs(with events: [SessionEvent]) {
         guard !submittedInputs.isEmpty else { return }
+        let now = Date()
         submittedInputs.removeAll { input in
             guard input.phase == .sent || input.phase == .queued || input.phase == .submitting else { return false }
+            let age = now.timeIntervalSince(input.createdAt)
             return events.contains { event in
                 guard event.role == "user", event.contentText == input.text else { return false }
                 guard let eventDate = LonghouseDateParser.parse(event.timestamp) else { return false }
-                return eventDate >= input.createdAt.addingTimeInterval(-5)
-                    && eventDate <= input.createdAt.addingTimeInterval(120)
+                // Near-realtime window: tight [-5s, +120s] around submit.
+                if eventDate >= input.createdAt.addingTimeInterval(-5)
+                    && eventDate <= input.createdAt.addingTimeInterval(120) {
+                    return true
+                }
+                // Late-echo fallback: after the tight window has passed, accept any
+                // durable user event with matching text from >=createdAt-5s. This
+                // prevents a stale optimistic row sitting next to a duplicate
+                // transcript row when ingest was delayed past 120s.
+                if age > 120 && eventDate >= input.createdAt.addingTimeInterval(-5) {
+                    return true
+                }
+                return false
             }
         }
     }
