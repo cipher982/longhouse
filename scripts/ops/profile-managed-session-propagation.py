@@ -535,7 +535,8 @@ print(json.dumps(payload))
             ownership=ownership,
             predicate=lambda data: lifecycle_closed(data),
             event="hosted_runtime_closed",
-            timeout=180,
+            timeout=15,
+            interval=0.25,
         )
         self.write_snapshot(case_id, ownership, session_id, "post_shutdown")
         return {"case_id": case_id, "session_id": session_id, "nonce": nonce, "thread_id": thread_id}
@@ -695,7 +696,9 @@ print(json.dumps(payload))
         if closed:
             close_note = "close=closed"
             if close_latency is not None:
-                close_note += f" in {close_latency}ms"
+                close_note += f" observed_in={close_latency}ms"
+            if terminal.get("ingest_lag_ms") is not None:
+                close_note += f" ingest_lag={terminal['ingest_lag_ms']}ms"
             if terminal.get("source"):
                 close_note += f" source={terminal['source']}"
             if terminal.get("reason"):
@@ -799,17 +802,22 @@ def lifecycle_closed(data: dict[str, Any]) -> bool:
     return bool(session.get("ended_at"))
 
 
-def terminal_details(data: dict[str, Any]) -> dict[str, str | None]:
+def terminal_details(data: dict[str, Any]) -> dict[str, Any]:
     runtime = data.get("runtime_state") or {}
     details = {
         "state": str(runtime.get("terminal_state") or "").strip() or None,
         "reason": str(runtime.get("terminal_reason") or "").strip() or None,
         "source": str(runtime.get("terminal_source") or "").strip() or None,
+        "ingest_lag_ms": None,
     }
     for event in data.get("runtime_events") or []:
         if event.get("kind") != "terminal_signal":
             continue
         details["source"] = details["source"] or str(event.get("source") or "").strip() or None
+        occurred_at = parse_db_timestamp(event.get("occurred_at"))
+        received_at = parse_db_timestamp(event.get("received_at"))
+        if occurred_at is not None and received_at is not None:
+            details["ingest_lag_ms"] = int((received_at - occurred_at).total_seconds() * 1000)
         payload = safe_json_loads(str(event.get("payload_json") or "")) or {}
         if isinstance(payload, dict):
             details["state"] = details["state"] or str(payload.get("terminal_state") or "").strip() or None
@@ -817,6 +825,23 @@ def terminal_details(data: dict[str, Any]) -> dict[str, str | None]:
             details["source"] = details["source"] or str(payload.get("terminal_source") or "").strip() or None
         break
     return details
+
+
+def parse_db_timestamp(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    for candidate in (text, text.replace(" ", "T")):
+        try:
+            parsed = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except ValueError:
+            continue
+    return None
 
 
 def compact_hosted(data: dict[str, Any]) -> dict[str, Any]:
