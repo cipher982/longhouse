@@ -8,17 +8,20 @@ from datetime import timezone
 from unittest.mock import patch
 
 import pytest
-import zerg.dependencies.auth as _auth_deps  # noqa: F401
-import zerg.routers.timeline as timeline_router
 from fastapi import HTTPException
 from fastapi import Response
+
+import zerg.dependencies.auth as _auth_deps  # noqa: F401
+import zerg.routers.timeline as timeline_router
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
-from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentsBase
+from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents_store import AgentsStore
+from zerg.services.session_listing import SessionListParams
+from zerg.services.session_listing import list_agent_sessions
 
 
 async def _noop_coro() -> None:
@@ -372,6 +375,14 @@ def test_list_timeline_sessions_default_cards_open_writable_head_and_keep_thread
             project="threaded-default",
         )
         root.is_writable_head = 0
+        db.add(
+            AgentEvent(
+                session_id=root.id,
+                role="user",
+                content_text="Root session prompt",
+                timestamp=now - timedelta(days=7),
+            )
+        )
         db.commit()
 
         head = AgentSession(
@@ -392,6 +403,15 @@ def test_list_timeline_sessions_default_cards_open_writable_head_and_keep_thread
         db.add(head)
         db.commit()
         db.refresh(head)
+        db.add(
+            AgentEvent(
+                session_id=head.id,
+                role="user",
+                content_text="Writable head prompt",
+                timestamp=now - timedelta(days=6),
+            )
+        )
+        db.commit()
 
         recent_single = _seed_session(
             db,
@@ -441,9 +461,33 @@ def test_list_timeline_sessions_default_cards_open_writable_head_and_keep_thread
                 db=db,
             )
         )
+        agents_result = asyncio.run(
+            list_agent_sessions(
+                db=db,
+                auth=object(),
+                params=SessionListParams(
+                    project=None,
+                    provider=None,
+                    environment=None,
+                    include_test=False,
+                    hide_autonomous=True,
+                    device_id=None,
+                    days_back=14,
+                    query=None,
+                    limit=20,
+                    offset=0,
+                    sort=None,
+                    mode="lexical",
+                    context_mode="forensic",
+                ),
+            )
+        )
 
     assert response.total == 2
     assert len(response.sessions) == 2
+    raw_sessions = {session.id: session for session in agents_result.response.sessions}
+    raw_root = raw_sessions[str(root.id)]
+    raw_head = raw_sessions[str(head.id)]
 
     top = response.sessions[0]
     assert top.thread_id == str(root.id)
@@ -453,6 +497,14 @@ def test_list_timeline_sessions_default_cards_open_writable_head_and_keep_thread
     assert top.timeline_anchor_at == thread_anchor.replace(tzinfo=None)
     assert top.timeline_anchor_at > response.sessions[1].timeline_anchor_at
     assert response.sessions[1].thread_id == str(recent_single.id)
+    assert top.root.runtime_display == raw_root.runtime_display
+    assert top.root.runtime_facts == raw_root.runtime_facts
+    assert top.root.timeline_card == raw_root.timeline_card
+    assert top.root.capabilities == raw_root.capabilities
+    assert top.root.timeline_anchor_at == raw_root.timeline_anchor_at
+    assert top.head.first_user_message == raw_head.first_user_message == "Writable head prompt"
+    assert top.head.thread_root_session_id == raw_head.thread_root_session_id
+    assert top.head.thread_head_session_id == raw_head.thread_head_session_id
 
 
 def test_list_timeline_sessions_query_path_stays_raw_session_hits(tmp_path):

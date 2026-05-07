@@ -13,20 +13,15 @@ from datetime import timedelta
 from datetime import timezone
 from typing import Any
 
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.services.agents_store import AgentsStore
-from zerg.services.session_runtime import load_runtime_state_map
-from zerg.services.session_runtime import resolve_runtime_overlay
-from zerg.services.session_views import SessionResponse
+from zerg.services.session_response_projection import build_session_response_list
+from zerg.services.session_response_projection import has_real_sessions
 from zerg.services.session_views import SessionsListResponse
-from zerg.services.session_views import build_session_response
-from zerg.services.session_views import normalize_utc_datetime
-from zerg.services.unmanaged_bindings import load_binding_overlay
 
 
 @dataclass(frozen=True)
@@ -197,7 +192,7 @@ async def _list_hybrid_sessions(*, db: Session, params: SessionListParams) -> Se
         match_map=match_map,
     )
     sem_score_map = {s.id: score for s, score in sem_hits}
-    response_sessions = _build_session_list_response(
+    response_sessions = build_session_response_list(
         db=db,
         store=store,
         sessions=fused,
@@ -209,7 +204,7 @@ async def _list_hybrid_sessions(*, db: Session, params: SessionListParams) -> Se
     response = SessionsListResponse(
         sessions=response_sessions,
         total=len(fused),
-        has_real_sessions=_has_real_sessions(db, default_when_empty=False),
+        has_real_sessions=has_real_sessions(db, default_when_empty=False),
     )
     headers = {"X-Search-Mode": x_search_mode_header} if x_search_mode_header else {}
     return SessionListResult(response=response, headers=headers)
@@ -328,7 +323,7 @@ def _list_lexical_sessions(
 
     session_ids = [s.id for s in sessions]
     match_map = store.get_session_matches(session_ids, params.query, context_mode=params.context_mode) if params.query else {}
-    response_sessions = _build_session_list_response(
+    response_sessions = build_session_response_list(
         db=db,
         store=store,
         sessions=sessions,
@@ -345,66 +340,6 @@ def _list_lexical_sessions(
         response=SessionsListResponse(
             sessions=response_sessions,
             total=total,
-            has_real_sessions=_has_real_sessions(db, default_when_empty=total == 0),
+            has_real_sessions=has_real_sessions(db, default_when_empty=total == 0),
         )
-    )
-
-
-def _build_session_list_response(
-    *,
-    db: Session,
-    store: AgentsStore,
-    sessions: list[AgentSession],
-    match_map: dict[Any, dict[str, Any]],
-    semantic_snippet_map: dict[str, str] | None = None,
-    sem_score_map: dict[Any, float] | None = None,
-) -> list[SessionResponse]:
-    session_ids = [s.id for s in sessions]
-    activity_map = store.get_last_activity_map(session_ids)
-    now = datetime.now(timezone.utc)
-    runtime_state_map = load_runtime_state_map(db, session_ids)
-    first_user_map = store.get_first_message_map(session_ids, role="user", max_len=80)
-    thread_cache = store.batch_thread_meta(sessions)
-    binding_overlay_map = load_binding_overlay(db, session_ids, now=now)
-    semantic_snippet_map = semantic_snippet_map or {}
-    sem_score_map = sem_score_map or {}
-
-    return [
-        build_session_response(
-            store,
-            session,
-            thread_cache=thread_cache,
-            last_activity_at=normalize_utc_datetime(activity_map.get(session.id) or session.ended_at or session.started_at),
-            runtime_overlay=resolve_runtime_overlay(
-                session,
-                last_activity_at=activity_map.get(session.id) or session.ended_at or session.started_at,
-                runtime_state_map=runtime_state_map,
-                now=now,
-            ),
-            first_user_message=first_user_map.get(session.id),
-            match_event_id=(match_map.get(session.id) or {}).get("event_id"),
-            match_snippet=(match_map.get(session.id) or {}).get("snippet") or semantic_snippet_map.get(str(session.id)),
-            match_role=(match_map.get(session.id) or {}).get("role"),
-            match_score=sem_score_map.get(session.id),
-            binding_overlay=binding_overlay_map.get(session.id),
-        )
-        for session in sessions
-    ]
-
-
-def _has_real_sessions(db: Session, *, default_when_empty: bool) -> bool:
-    if default_when_empty:
-        return True
-
-    return (
-        db.query(AgentSession.id)
-        .filter(
-            or_(
-                AgentSession.device_id != "demo-mac",
-                AgentSession.device_id.is_(None),
-            )
-        )
-        .limit(1)
-        .first()
-        is not None
     )
