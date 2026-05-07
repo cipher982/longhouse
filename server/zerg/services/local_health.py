@@ -545,6 +545,19 @@ class _LaunchReadinessContext:
     can_reconcile_from_state: bool
 
 
+@dataclass
+class _LaunchOverrideContext:
+    effective_url: str | None
+    effective_machine_name: str | None
+    runner_expected: bool
+    runner_name: str | None
+    runner_urls: list[str]
+    reasons: list[str]
+    actions: list[str]
+    warnings: list[str]
+    had_override: bool
+
+
 def _collect_launch_readiness_context(base_dir: Path, *, service: dict[str, Any]) -> _LaunchReadinessContext:
     config = _collect_local_config(base_dir)
     runner = _collect_runner_config(include_global_runner=_state_root_tracks_machine_runner(base_dir))
@@ -774,57 +787,90 @@ def _launch_override_repair_command(
     )
 
 
+def _launch_override_context(
+    readiness: dict[str, Any],
+    *,
+    runtime_url_override: str | None,
+    machine_name_override: str | None,
+) -> _LaunchOverrideContext:
+    runner = dict(readiness.get("runner") or {})
+    return _LaunchOverrideContext(
+        effective_url=str(runtime_url_override or "").strip() or str(readiness.get("stored_url") or "").strip() or None,
+        effective_machine_name=str(machine_name_override or "").strip() or str(readiness.get("machine_name") or "").strip() or None,
+        runner_expected=bool(readiness.get("runner_expected")),
+        runner_name=str(runner.get("runner_name") or "").strip() or None,
+        runner_urls=[str(item).strip() for item in list(runner.get("runner_urls") or []) if str(item).strip()],
+        reasons=[str(item) for item in list(readiness.get("reasons") or [])],
+        actions=[str(item) for item in list(readiness.get("suggested_actions") or [])],
+        warnings=[str(item) for item in list(readiness.get("warnings") or [])],
+        had_override=runtime_url_override is not None or machine_name_override is not None,
+    )
+
+
+def _apply_runner_url_override_reason(readiness: dict[str, Any], ctx: _LaunchOverrideContext) -> None:
+    _drop_launch_reason(ctx.reasons, "config_url_runner_url_mismatch")
+    if ctx.runner_expected and ctx.effective_url and ctx.runner_urls and ctx.effective_url not in ctx.runner_urls:
+        ctx.reasons.append("config_url_runner_url_mismatch")
+        _with_action(
+            ctx.actions,
+            _launch_override_repair_command(
+                readiness,
+                stored_url=ctx.effective_url,
+                machine_name=ctx.effective_machine_name,
+            ),
+        )
+
+
+def _apply_runner_name_override_reason(readiness: dict[str, Any], ctx: _LaunchOverrideContext) -> None:
+    _drop_launch_reason(ctx.reasons, "machine_name_runner_name_mismatch")
+    if ctx.runner_expected and ctx.effective_machine_name and ctx.runner_name and ctx.effective_machine_name != ctx.runner_name:
+        ctx.reasons.append("machine_name_runner_name_mismatch")
+        _with_action(
+            ctx.actions,
+            _launch_override_repair_command(
+                readiness,
+                stored_url=ctx.effective_url,
+                machine_name=ctx.effective_machine_name,
+            ),
+        )
+
+
+def _launch_override_state(readiness: dict[str, Any], ctx: _LaunchOverrideContext) -> tuple[str, str]:
+    state = str(readiness.get("state") or "unconfigured")
+    headline = str(readiness.get("headline") or "Managed launch configuration looks coherent")
+    if ctx.reasons:
+        state = "broken"
+        headline = "Managed launch config is inconsistent"
+    elif ctx.had_override:
+        state = "ready"
+        headline = "Managed launch configuration looks coherent"
+    return state, headline
+
+
 def _apply_launch_readiness_overrides(
     readiness: dict[str, Any],
     *,
     runtime_url_override: str | None,
     machine_name_override: str | None,
 ) -> dict[str, Any]:
-    effective_url = str(runtime_url_override or "").strip() or str(readiness.get("stored_url") or "").strip() or None
-    effective_machine_name = str(machine_name_override or "").strip() or str(readiness.get("machine_name") or "").strip() or None
-    runner = dict(readiness.get("runner") or {})
-    runner_name = str(runner.get("runner_name") or "").strip() or None
-    runner_urls = [str(item).strip() for item in list(runner.get("runner_urls") or []) if str(item).strip()]
-    reasons = [str(item) for item in list(readiness.get("reasons") or [])]
-    actions = [str(item) for item in list(readiness.get("suggested_actions") or [])]
-    warnings = [str(item) for item in list(readiness.get("warnings") or [])]
-    had_override = runtime_url_override is not None or machine_name_override is not None
-
-    _drop_launch_reason(reasons, "config_url_runner_url_mismatch")
-    _drop_launch_reason(reasons, "machine_name_runner_name_mismatch")
-
-    if bool(readiness.get("runner_expected")) and effective_url and runner_urls and effective_url not in runner_urls:
-        reasons.append("config_url_runner_url_mismatch")
-        _with_action(
-            actions,
-            _launch_override_repair_command(readiness, stored_url=effective_url, machine_name=effective_machine_name),
-        )
-
-    if bool(readiness.get("runner_expected")) and effective_machine_name and runner_name and effective_machine_name != runner_name:
-        reasons.append("machine_name_runner_name_mismatch")
-        _with_action(
-            actions,
-            _launch_override_repair_command(readiness, stored_url=effective_url, machine_name=effective_machine_name),
-        )
-
-    state = str(readiness.get("state") or "unconfigured")
-    headline = str(readiness.get("headline") or "Managed launch configuration looks coherent")
-    if reasons:
-        state = "broken"
-        headline = "Managed launch config is inconsistent"
-    elif had_override:
-        state = "ready"
-        headline = "Managed launch configuration looks coherent"
+    ctx = _launch_override_context(
+        readiness,
+        runtime_url_override=runtime_url_override,
+        machine_name_override=machine_name_override,
+    )
+    _apply_runner_url_override_reason(readiness, ctx)
+    _apply_runner_name_override_reason(readiness, ctx)
+    state, headline = _launch_override_state(readiness, ctx)
 
     readiness.update(
         {
             "state": state,
             "headline": headline,
-            "reasons": reasons,
-            "warnings": warnings,
-            "suggested_actions": actions,
-            "control_plane_url": effective_url,
-            "machine_name": effective_machine_name,
+            "reasons": ctx.reasons,
+            "warnings": ctx.warnings,
+            "suggested_actions": ctx.actions,
+            "control_plane_url": ctx.effective_url,
+            "machine_name": ctx.effective_machine_name,
         }
     )
     return readiness
