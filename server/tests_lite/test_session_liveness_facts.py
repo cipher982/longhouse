@@ -33,6 +33,8 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
         "last_progress_at": None,
         "runtime_source": "fallback",
         "terminal_state": None,
+        "terminal_reason": None,
+        "terminal_source": None,
         "runtime_version": 0,
         "status": "idle",
         "presence_state": None,
@@ -244,6 +246,29 @@ def test_explicit_provider_terminal_closes_session():
     assert facts.process_state == "closed"
     assert facts.lifecycle.reason == "session_ended"
     assert facts.lifecycle.observed_at == terminal_at
+
+
+def test_explicit_terminal_reason_closes_with_specific_reason():
+    terminal_at = NOW - timedelta(minutes=2)
+    facts = build_session_liveness_facts(
+        runtime_view=_runtime_view(
+            signal_tier="phase_signal",
+            runtime_phase="finished",
+            runtime_source="semantic",
+            terminal_state="session_ended",
+            terminal_reason="bridge_stop",
+            terminal_source="codex_bridge",
+            phase_started_at=terminal_at,
+            presence_updated_at=terminal_at,
+            last_live_at=terminal_at,
+            status="completed",
+        ),
+        capabilities=_capabilities(managed=True),
+        last_activity_at=terminal_at,
+    )
+
+    assert facts.lifecycle.state == "closed"
+    assert facts.lifecycle.reason == "bridge_stop"
 
 
 def test_explicit_process_gone_terminal_closes_managed_session():

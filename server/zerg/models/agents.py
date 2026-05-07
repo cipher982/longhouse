@@ -486,6 +486,8 @@ class SessionRuntimeState(AgentsBase):
     timeline_anchor_at = Column(DateTime(timezone=True), nullable=False, index=True)
     freshness_expires_at = Column(DateTime(timezone=True), nullable=True)
     terminal_state = Column(String(32), nullable=True)
+    terminal_reason = Column(String(64), nullable=True)
+    terminal_source = Column(String(64), nullable=True)
     terminal_at = Column(DateTime(timezone=True), nullable=True)
     runtime_version = Column(Integer, nullable=False, server_default=text("0"))
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())

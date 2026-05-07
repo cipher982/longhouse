@@ -365,7 +365,8 @@ def test_startup_migration_clears_progress_only_runtime_live_timestamps(tmp_path
             text(
                 """
                 SELECT runtime_key, phase, active_tool, last_runtime_signal_at,
-                       last_progress_at, last_live_at, freshness_expires_at
+                       last_progress_at, last_live_at, freshness_expires_at,
+                       terminal_reason, terminal_source
                 FROM session_runtime_state
                 ORDER BY runtime_key
                 """
@@ -381,8 +382,10 @@ def test_startup_migration_clears_progress_only_runtime_live_timestamps(tmp_path
             "2026-05-04 18:00:00",
             "2026-05-04 18:00:00",
             "2026-05-04 18:01:00",
+            None,
+            None,
         ),
-        ("opencode:progress-only", "idle", None, None, "2026-05-04 17:40:44", None, None),
+        ("opencode:progress-only", "idle", None, None, "2026-05-04 17:40:44", None, None, None, None),
     ]
 
 

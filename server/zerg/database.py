@@ -699,6 +699,10 @@ def _migrate_agents_columns(engine: Engine) -> None:
             ).fetchone()
             if runtime_state_exists:
                 columns = {row[1] for row in conn.execute(text("PRAGMA table_info(session_runtime_state)"))}
+                if "terminal_reason" not in columns:
+                    conn.execute(text("ALTER TABLE session_runtime_state ADD COLUMN terminal_reason VARCHAR(64)"))
+                if "terminal_source" not in columns:
+                    conn.execute(text("ALTER TABLE session_runtime_state ADD COLUMN terminal_source VARCHAR(64)"))
                 if {
                     "phase",
                     "phase_source",
