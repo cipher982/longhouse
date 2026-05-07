@@ -2354,6 +2354,84 @@ def _add_disk_reasons(
             _with_action(actions, "Consider freeing disk space soon")
 
 
+def _launch_health_flags(launch_state: str) -> tuple[bool, bool]:
+    if launch_state == "broken":
+        return True, False
+    if launch_state == "degraded":
+        return False, True
+    return False, False
+
+
+def _managed_health_flags(
+    *,
+    orphan_bridge_count: int,
+    managed_degraded: int,
+    managed_detached: int,
+    unknown_managed_phase_count: int,
+) -> tuple[bool, bool]:
+    if orphan_bridge_count > 0 or managed_degraded > 0 or unknown_managed_phase_count > 0:
+        return True, False
+    if managed_detached > 0:
+        return False, True
+    return False, False
+
+
+def _broken_shipping_flag(
+    *,
+    service_status: str,
+    engine_error: Any,
+    engine_exists: bool,
+    engine_age: Any,
+    transport_assessment: TransportHealthAssessment | None,
+    disk_free_bytes: Any,
+    outbox_count: int,
+    outbox_oldest: Any,
+    spool_pending: int,
+) -> bool:
+    if service_status == "stopped":
+        return True
+    if engine_error:
+        return True
+    if transport_assessment is not None and transport_assessment.status == "broken":
+        return True
+    if isinstance(disk_free_bytes, int) and disk_free_bytes < DISK_BROKEN_BYTES:
+        return True
+    if outbox_count >= BROKEN_BACKLOG_COUNT:
+        return True
+    if outbox_count > 0 and outbox_oldest is not None and outbox_oldest > OUTBOX_BROKEN_AGE_SECONDS:
+        return True
+    if spool_pending >= BROKEN_BACKLOG_COUNT:
+        return True
+    if service_status != "running" and (outbox_count > 0 or spool_pending > 0):
+        return True
+    return bool(engine_exists and engine_age is not None and engine_age > ENGINE_STALE_SECONDS and (outbox_count > 0 or spool_pending > 0))
+
+
+def _degraded_shipping_flag(
+    *,
+    service_status: str,
+    engine_exists: bool,
+    engine_age: Any,
+    transport_assessment: TransportHealthAssessment | None,
+    disk_free_bytes: Any,
+    outbox_count: int,
+    outbox_oldest: Any,
+) -> bool:
+    if service_status != "running":
+        return True
+    if not engine_exists:
+        return True
+    if engine_age is not None and engine_age > ENGINE_FRESH_SECONDS:
+        return True
+    # Transport severity is delegated to the shared reducer. Keep local overlays
+    # here, but let transport_assessment remain the shipping-state source of truth.
+    if transport_assessment is not None and transport_assessment.status in ("offline", "degraded"):
+        return True
+    if outbox_count >= DEGRADED_BACKLOG_COUNT and outbox_oldest is not None and outbox_oldest > OUTBOX_DEGRADED_AGE_SECONDS:
+        return True
+    return bool(isinstance(disk_free_bytes, int) and disk_free_bytes < DISK_DEGRADED_BYTES)
+
+
 def _health_flags(
     *,
     launch_state: str,
@@ -2371,53 +2449,39 @@ def _health_flags(
     managed_detached: int,
     unknown_managed_phase_count: int,
 ) -> tuple[bool, bool]:
-    broken = False
-    degraded = False
+    broken, degraded = _launch_health_flags(launch_state)
+    managed_broken, managed_degraded_flag = _managed_health_flags(
+        orphan_bridge_count=orphan_bridge_count,
+        managed_degraded=managed_degraded,
+        managed_detached=managed_detached,
+        unknown_managed_phase_count=unknown_managed_phase_count,
+    )
+    broken = broken or managed_broken
+    degraded = degraded or managed_degraded_flag
 
-    if launch_state == "broken":
-        broken = True
-    elif launch_state == "degraded":
-        degraded = True
-
-    if orphan_bridge_count > 0 or managed_degraded > 0 or unknown_managed_phase_count > 0:
-        broken = True
-    elif managed_detached > 0:
-        degraded = True
-
-    if service_status == "stopped":
-        broken = True
-    if engine_error:
-        broken = True
-    if transport_assessment is not None and transport_assessment.status == "broken":
-        broken = True
-    if isinstance(disk_free_bytes, int) and disk_free_bytes < DISK_BROKEN_BYTES:
-        broken = True
-    if outbox_count >= BROKEN_BACKLOG_COUNT:
-        broken = True
-    if outbox_count > 0 and outbox_oldest is not None and outbox_oldest > OUTBOX_BROKEN_AGE_SECONDS:
-        broken = True
-    if spool_pending >= BROKEN_BACKLOG_COUNT:
-        broken = True
-    if service_status != "running" and (outbox_count > 0 or spool_pending > 0):
-        broken = True
-    if engine_exists and engine_age is not None and engine_age > ENGINE_STALE_SECONDS and (outbox_count > 0 or spool_pending > 0):
+    if _broken_shipping_flag(
+        service_status=service_status,
+        engine_error=engine_error,
+        engine_exists=engine_exists,
+        engine_age=engine_age,
+        transport_assessment=transport_assessment,
+        disk_free_bytes=disk_free_bytes,
+        outbox_count=outbox_count,
+        outbox_oldest=outbox_oldest,
+        spool_pending=spool_pending,
+    ):
         broken = True
 
     if not broken:
-        if service_status != "running":
-            degraded = True
-        if not engine_exists:
-            degraded = True
-        if engine_age is not None and engine_age > ENGINE_FRESH_SECONDS:
-            degraded = True
-        # Transport severity is now delegated to the shared reducer. Keep
-        # local overlays here, but let transport_assessment remain the single
-        # source of truth for shipping-state degradation semantics.
-        if transport_assessment is not None and transport_assessment.status in ("offline", "degraded"):
-            degraded = True
-        if outbox_count >= DEGRADED_BACKLOG_COUNT and outbox_oldest is not None and outbox_oldest > OUTBOX_DEGRADED_AGE_SECONDS:
-            degraded = True
-        if isinstance(disk_free_bytes, int) and disk_free_bytes < DISK_DEGRADED_BYTES:
+        if _degraded_shipping_flag(
+            service_status=service_status,
+            engine_exists=engine_exists,
+            engine_age=engine_age,
+            transport_assessment=transport_assessment,
+            disk_free_bytes=disk_free_bytes,
+            outbox_count=outbox_count,
+            outbox_oldest=outbox_oldest,
+        ):
             degraded = True
 
     return broken, degraded
