@@ -1337,6 +1337,126 @@ def _binding_by_session_id(base_dir: Path) -> dict[str, dict[str, str | None]]:
     return latest
 
 
+def _codex_orphan_bridge_row(
+    *,
+    state: dict[str, Any],
+    bridge_pid: int,
+    codex_bin: str | None,
+    heartbeat_at: str | None,
+    reason_codes: list[str],
+    app_server: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "session_id": _normalize_optional_string(state.get("session_id")),
+        "provider": "codex",
+        "control_path": CONTROL_PATH_MANAGED,
+        "liveness_model": LIVENESS_MODEL_CODEX_BRIDGE,
+        "provider_cli": _provider_cli_reference(codex_bin, source=PROVIDER_CLI_SOURCE_BRIDGE_STATE),
+        "pid": bridge_pid,
+    }
+    if app_server is not None:
+        row["app_server_pid"] = app_server.get("pid")
+    row.update(
+        {
+            "workspace_label": Path(str(state.get("cwd") or "")).name or None,
+            "status": "orphan",
+            "started_at": heartbeat_at,
+            "heartbeat_at": heartbeat_at,
+            "reason_codes": reason_codes,
+        }
+    )
+    return row
+
+
+def _codex_bridge_reason_codes(
+    *,
+    binding_path: str | None,
+    state_thread_path: str | None,
+    has_turn_activity: bool,
+    last_error: str | None,
+    bridge_status: str,
+    thread_subscription_status: str | None,
+    thread_subscription_last_error: str | None,
+    app_server: dict[str, Any] | None,
+) -> list[str]:
+    reason_codes: list[str] = []
+    rollout_missing_after_turn = bool(state_thread_path and not Path(state_thread_path).exists() and has_turn_activity)
+    thread_subscription_failed = thread_subscription_status == "failed"
+    thread_subscription_transitional = thread_subscription_status in _THREAD_SUBSCRIPTION_TRANSIENT_STATES
+    thread_subscription_issue = bool(last_error or thread_subscription_failed)
+    bridge_thread_is_subagent = False
+    if binding_path and state_thread_path and binding_path != state_thread_path:
+        thread_subscription_issue = True
+        bridge_thread_is_subagent = _codex_rollout_is_subagent(state_thread_path)
+    if rollout_missing_after_turn and not thread_subscription_transitional:
+        thread_subscription_issue = True
+
+    if thread_subscription_issue:
+        if (
+            bridge_thread_is_subagent
+            or _looks_like_subagent_control_error(last_error)
+            or _looks_like_subagent_control_error(thread_subscription_last_error)
+        ):
+            reason_codes.append("control_attached_to_subagent")
+        else:
+            reason_codes.append("thread_subscription_failed")
+    if app_server is None:
+        reason_codes.append("live_control_unavailable")
+    if bridge_status != "ready":
+        reason_codes.append("live_control_unavailable")
+    return reason_codes
+
+
+def _codex_managed_session_row(
+    *,
+    state: dict[str, Any],
+    session_id: str | None,
+    bridge_pid: int,
+    codex_bin: str | None,
+    bridge_status: str,
+    bridge_heartbeat_at: str | None,
+    attached_process: dict[str, Any] | None,
+    phase_state: dict[str, str | None] | None,
+    thread_subscription_status: str | None,
+    thread_subscription_attempts: int,
+    thread_subscription_last_error: str | None,
+    reason_codes: list[str],
+) -> dict[str, Any]:
+    normalized_state = "attached" if attached_process is not None else "detached"
+    if reason_codes:
+        normalized_state = "degraded"
+    workspace_label = _normalize_optional_string(phase_state.get("workspace_label")) if phase_state else None
+    if workspace_label is None:
+        workspace_label = Path(str(state.get("cwd") or "")).name or None
+    phase_observed_at = phase_state.get("observed_at") if phase_state else None
+    phase_last_activity_at = phase_state.get("last_activity_at") if phase_state else None
+
+    return {
+        "session_id": session_id,
+        "provider": "codex",
+        "control_path": CONTROL_PATH_MANAGED,
+        "liveness_model": LIVENESS_MODEL_CODEX_BRIDGE,
+        "provider_cli": _provider_cli_reference(codex_bin, source=PROVIDER_CLI_SOURCE_BRIDGE_STATE),
+        "workspace_label": workspace_label,
+        "branch": None,
+        "state": normalized_state,
+        "raw_phase": phase_state.get("phase") if phase_state else None,
+        "phase": _phase_display_label(
+            phase_state.get("phase") if phase_state else None,
+            phase_state.get("tool_name") if phase_state else None,
+        ),
+        "phase_observed_at": phase_observed_at,
+        "last_activity_at": _max_rfc3339(bridge_heartbeat_at, phase_last_activity_at, phase_observed_at),
+        "bridge_status": bridge_status,
+        "bridge_pid": bridge_pid,
+        "bridge_heartbeat_at": bridge_heartbeat_at,
+        "thread_subscription_status": thread_subscription_status,
+        "thread_subscription_attempts": thread_subscription_attempts,
+        "thread_subscription_last_error": thread_subscription_last_error,
+        "reason_codes": reason_codes,
+    }
+
+
 def _collect_managed_codex_sessions(
     base_dir: Path,
     *,
@@ -1365,20 +1485,14 @@ def _collect_managed_codex_sessions(
                 bridge_updated_at = _normalize_optional_string(state.get("updated_at"))
                 codex_bin = _normalize_optional_string(state.get("codex_bin"))
                 orphan_bridges.append(
-                    {
-                        "session_id": _normalize_optional_string(state.get("session_id")),
-                        "provider": "codex",
-                        "control_path": CONTROL_PATH_MANAGED,
-                        "liveness_model": LIVENESS_MODEL_CODEX_BRIDGE,
-                        "provider_cli": _provider_cli_reference(codex_bin, source=PROVIDER_CLI_SOURCE_BRIDGE_STATE),
-                        "pid": bridge_pid,
-                        "app_server_pid": app_server.get("pid"),
-                        "workspace_label": Path(str(state.get("cwd") or "")).name or None,
-                        "status": "orphan",
-                        "started_at": bridge_updated_at,
-                        "heartbeat_at": bridge_updated_at,
-                        "reason_codes": ["bridge_process_missing", "provider_child_alive"],
-                    }
+                    _codex_orphan_bridge_row(
+                        state=state,
+                        bridge_pid=bridge_pid,
+                        codex_bin=codex_bin,
+                        heartbeat_at=bridge_updated_at,
+                        app_server=app_server,
+                        reason_codes=["bridge_process_missing", "provider_child_alive"],
+                    )
                 )
                 continue
             _purge_stale_bridge_files(path)
@@ -1405,83 +1519,43 @@ def _collect_managed_codex_sessions(
 
         if binding is None:
             orphan_bridges.append(
-                {
-                    "session_id": session_id,
-                    "provider": "codex",
-                    "control_path": CONTROL_PATH_MANAGED,
-                    "liveness_model": LIVENESS_MODEL_CODEX_BRIDGE,
-                    "provider_cli": _provider_cli_reference(codex_bin, source=PROVIDER_CLI_SOURCE_BRIDGE_STATE),
-                    "pid": bridge_pid,
-                    "workspace_label": Path(str(state.get("cwd") or "")).name or None,
-                    "status": "orphan",
-                    "started_at": bridge_updated_at,
-                    "heartbeat_at": bridge_heartbeat_at,
-                    "reason_codes": ["no_managed_session_bound"],
-                }
+                _codex_orphan_bridge_row(
+                    state=state,
+                    bridge_pid=bridge_pid,
+                    codex_bin=codex_bin,
+                    heartbeat_at=bridge_heartbeat_at,
+                    reason_codes=["no_managed_session_bound"],
+                )
             )
             continue
 
-        reason_codes: list[str] = []
-        rollout_missing_after_turn = bool(state_thread_path and not Path(state_thread_path).exists() and has_turn_activity)
-        thread_subscription_failed = thread_subscription_status == "failed"
-        thread_subscription_transitional = thread_subscription_status in _THREAD_SUBSCRIPTION_TRANSIENT_STATES
-        thread_subscription_issue = bool(last_error or thread_subscription_failed)
-        bridge_thread_is_subagent = False
-        if binding_path and state_thread_path and binding_path != state_thread_path:
-            thread_subscription_issue = True
-            bridge_thread_is_subagent = _codex_rollout_is_subagent(state_thread_path)
-        if rollout_missing_after_turn and not thread_subscription_transitional:
-            thread_subscription_issue = True
-
-        if thread_subscription_issue:
-            if (
-                bridge_thread_is_subagent
-                or _looks_like_subagent_control_error(last_error)
-                or _looks_like_subagent_control_error(thread_subscription_last_error)
-            ):
-                reason_codes.append("control_attached_to_subagent")
-            else:
-                reason_codes.append("thread_subscription_failed")
-        if app_server is None:
-            reason_codes.append("live_control_unavailable")
-        if bridge_status != "ready":
-            reason_codes.append("live_control_unavailable")
-
-        normalized_state = "attached" if attached_process is not None else "detached"
-        if reason_codes:
-            normalized_state = "degraded"
+        reason_codes = _codex_bridge_reason_codes(
+            binding_path=binding_path,
+            state_thread_path=state_thread_path,
+            has_turn_activity=has_turn_activity,
+            last_error=last_error,
+            bridge_status=bridge_status,
+            thread_subscription_status=thread_subscription_status,
+            thread_subscription_last_error=thread_subscription_last_error,
+            app_server=app_server,
+        )
         phase_state = phase_overlay.get(session_id or "") if phase_overlay else None
-        workspace_label = _normalize_optional_string(phase_state.get("workspace_label")) if phase_state else None
-        if workspace_label is None:
-            workspace_label = Path(str(state.get("cwd") or "")).name or None
-        phase_observed_at = phase_state.get("observed_at") if phase_state else None
-        phase_last_activity_at = phase_state.get("last_activity_at") if phase_state else None
 
         sessions.append(
-            {
-                "session_id": session_id,
-                "provider": "codex",
-                "control_path": CONTROL_PATH_MANAGED,
-                "liveness_model": LIVENESS_MODEL_CODEX_BRIDGE,
-                "provider_cli": _provider_cli_reference(codex_bin, source=PROVIDER_CLI_SOURCE_BRIDGE_STATE),
-                "workspace_label": workspace_label,
-                "branch": None,
-                "state": normalized_state,
-                "raw_phase": phase_state.get("phase") if phase_state else None,
-                "phase": _phase_display_label(
-                    phase_state.get("phase") if phase_state else None,
-                    phase_state.get("tool_name") if phase_state else None,
-                ),
-                "phase_observed_at": phase_observed_at,
-                "last_activity_at": _max_rfc3339(bridge_updated_at, phase_last_activity_at, phase_observed_at),
-                "bridge_status": bridge_status,
-                "bridge_pid": bridge_pid,
-                "bridge_heartbeat_at": bridge_heartbeat_at,
-                "thread_subscription_status": thread_subscription_status,
-                "thread_subscription_attempts": thread_subscription_attempts,
-                "thread_subscription_last_error": thread_subscription_last_error,
-                "reason_codes": reason_codes,
-            }
+            _codex_managed_session_row(
+                state=state,
+                session_id=session_id,
+                bridge_pid=bridge_pid,
+                codex_bin=codex_bin,
+                bridge_status=bridge_status,
+                bridge_heartbeat_at=bridge_updated_at,
+                attached_process=attached_process,
+                phase_state=phase_state,
+                thread_subscription_status=thread_subscription_status,
+                thread_subscription_attempts=thread_subscription_attempts,
+                thread_subscription_last_error=thread_subscription_last_error,
+                reason_codes=reason_codes,
+            )
         )
 
     return sessions, orphan_bridges
@@ -1550,6 +1624,50 @@ def _scan_provider_processes() -> list[dict[str, Any]]:
     return provider_processes
 
 
+def _process_managed_session_row(
+    *,
+    proc_row: dict[str, Any],
+    session_id: str,
+    provider: str,
+    started_at: str,
+    phase_state: dict[str, str | None] | None,
+) -> dict[str, Any]:
+    workspace_label = _normalize_optional_string(phase_state.get("workspace_label")) if phase_state else None
+    if workspace_label is None:
+        workspace_label = _normalize_optional_string(proc_row.get("workspace_label"))
+    workspace_path = _normalize_optional_string(phase_state.get("workspace_path")) if phase_state else None
+    if workspace_path is None:
+        workspace_path = _normalize_optional_string(proc_row.get("cwd"))
+    phase_observed_at = phase_state.get("observed_at") if phase_state else None
+    phase_last_activity_at = phase_state.get("last_activity_at") if phase_state else None
+
+    return {
+        "session_id": session_id,
+        "provider": provider,
+        "control_path": CONTROL_PATH_MANAGED,
+        "liveness_model": LIVENESS_MODEL_PROCESS_SCAN,
+        "provider_cli": proc_row.get("provider_cli") or _provider_cli_reference(None, source=PROVIDER_CLI_SOURCE_PROCESS),
+        "pid": proc_row.get("pid"),
+        "workspace_label": workspace_label,
+        "cwd": workspace_path,
+        "device_id": _normalize_optional_string(proc_row.get("device_id")),
+        "started_at": started_at,
+        "branch": None,
+        "state": "attached",
+        "raw_phase": phase_state.get("phase") if phase_state else None,
+        "phase": _phase_display_label(
+            phase_state.get("phase") if phase_state else None,
+            phase_state.get("tool_name") if phase_state else None,
+        ),
+        "phase_observed_at": phase_observed_at,
+        "last_activity_at": _max_rfc3339(started_at, phase_last_activity_at, phase_observed_at) or started_at,
+        "bridge_status": None,
+        "bridge_pid": None,
+        "bridge_heartbeat_at": None,
+        "reason_codes": [],
+    }
+
+
 def _collect_managed_sessions_by_process(
     *,
     existing_session_ids: set[str],
@@ -1586,41 +1704,15 @@ def _collect_managed_sessions_by_process(
 
         provider = _normalize_optional_string(proc_row.get("provider")) or "unknown"
         phase_state = phase_overlay.get(session_id or "") if phase_overlay else None
-        workspace_label = _normalize_optional_string(phase_state.get("workspace_label")) if phase_state else None
-        if workspace_label is None:
-            workspace_label = _normalize_optional_string(proc_row.get("workspace_label"))
-        workspace_path = _normalize_optional_string(phase_state.get("workspace_path")) if phase_state else None
-        if workspace_path is None:
-            workspace_path = _normalize_optional_string(proc_row.get("cwd"))
-        phase_observed_at = phase_state.get("observed_at") if phase_state else None
-        phase_last_activity_at = phase_state.get("last_activity_at") if phase_state else None
 
         sessions.append(
-            {
-                "session_id": session_id,
-                "provider": provider,
-                "control_path": CONTROL_PATH_MANAGED,
-                "liveness_model": LIVENESS_MODEL_PROCESS_SCAN,
-                "provider_cli": proc_row.get("provider_cli") or _provider_cli_reference(None, source=PROVIDER_CLI_SOURCE_PROCESS),
-                "pid": proc_row.get("pid"),
-                "workspace_label": workspace_label,
-                "cwd": workspace_path,
-                "device_id": _normalize_optional_string(proc_row.get("device_id")),
-                "started_at": started_at,
-                "branch": None,
-                "state": "attached",
-                "raw_phase": phase_state.get("phase") if phase_state else None,
-                "phase": _phase_display_label(
-                    phase_state.get("phase") if phase_state else None,
-                    phase_state.get("tool_name") if phase_state else None,
-                ),
-                "phase_observed_at": phase_observed_at,
-                "last_activity_at": _max_rfc3339(started_at, phase_last_activity_at, phase_observed_at) or started_at,
-                "bridge_status": None,
-                "bridge_pid": None,
-                "bridge_heartbeat_at": None,
-                "reason_codes": [],
-            }
+            _process_managed_session_row(
+                proc_row=proc_row,
+                session_id=session_id,
+                provider=provider,
+                started_at=started_at,
+                phase_state=phase_state,
+            )
         )
         seen.add(session_id)
 
@@ -1670,6 +1762,49 @@ def _engine_status_payload(engine_status: dict[str, Any]) -> Mapping[str, Any]:
     return raw_payload if isinstance(raw_payload, Mapping) else {}
 
 
+def _engine_status_managed_session_row(
+    *,
+    raw_row: Mapping[str, Any],
+    phase_overlay: dict[str, dict[str, str | None]] | None,
+) -> dict[str, Any]:
+    session_id = _normalize_optional_string(raw_row.get("session_id"))
+    provider = _normalize_optional_string(raw_row.get("provider")) or "unknown"
+    state = _normalize_optional_string(raw_row.get("state")) or "unknown"
+    observed_at = _normalize_optional_string(raw_row.get("observed_at"))
+    raw_phase = _normalize_optional_string(raw_row.get("phase"))
+    tool_name = _normalize_optional_string(raw_row.get("tool_name"))
+    phase_state = phase_overlay.get(session_id or "") if phase_overlay else None
+    overlay_phase = _normalize_optional_string(phase_state.get("phase")) if phase_state else None
+    overlay_tool = _normalize_optional_string(phase_state.get("tool_name")) if phase_state else None
+    phase_observed_at = _normalize_optional_string(phase_state.get("observed_at")) if phase_state else None
+    phase_last_activity_at = _normalize_optional_string(phase_state.get("last_activity_at")) if phase_state else None
+    workspace_label = _normalize_optional_string(phase_state.get("workspace_label")) if phase_state else None
+    workspace_path = _normalize_optional_string(phase_state.get("workspace_path")) if phase_state else None
+    display_phase = overlay_phase if overlay_phase is not None else raw_phase
+    display_tool = overlay_tool if overlay_phase is not None else tool_name
+
+    return {
+        "session_id": session_id,
+        "provider": provider,
+        "control_path": CONTROL_PATH_MANAGED,
+        "liveness_model": LIVENESS_MODEL_ENGINE_STATUS,
+        "provider_cli": None,
+        "workspace_label": workspace_label,
+        "cwd": workspace_path,
+        "branch": None,
+        "state": state,
+        "raw_phase": display_phase,
+        "phase": _phase_display_label(display_phase, display_tool),
+        "phase_observed_at": phase_observed_at or observed_at,
+        "last_activity_at": _max_rfc3339(observed_at, phase_last_activity_at, phase_observed_at),
+        "bridge_status": _normalize_optional_string(raw_row.get("bridge_status")),
+        "bridge_pid": None,
+        "bridge_heartbeat_at": observed_at,
+        "thread_subscription_status": _normalize_optional_string(raw_row.get("thread_subscription_status")),
+        "reason_codes": [],
+    }
+
+
 def _collect_managed_sessions_from_engine_status(
     engine_status: dict[str, Any],
     *,
@@ -1684,44 +1819,7 @@ def _collect_managed_sessions_from_engine_status(
     for raw_row in raw_rows:
         if not isinstance(raw_row, Mapping):
             continue
-        session_id = _normalize_optional_string(raw_row.get("session_id"))
-        provider = _normalize_optional_string(raw_row.get("provider")) or "unknown"
-        state = _normalize_optional_string(raw_row.get("state")) or "unknown"
-        observed_at = _normalize_optional_string(raw_row.get("observed_at"))
-        raw_phase = _normalize_optional_string(raw_row.get("phase"))
-        tool_name = _normalize_optional_string(raw_row.get("tool_name"))
-        phase_state = phase_overlay.get(session_id or "") if phase_overlay else None
-        overlay_phase = _normalize_optional_string(phase_state.get("phase")) if phase_state else None
-        overlay_tool = _normalize_optional_string(phase_state.get("tool_name")) if phase_state else None
-        phase_observed_at = _normalize_optional_string(phase_state.get("observed_at")) if phase_state else None
-        phase_last_activity_at = _normalize_optional_string(phase_state.get("last_activity_at")) if phase_state else None
-        workspace_label = _normalize_optional_string(phase_state.get("workspace_label")) if phase_state else None
-        workspace_path = _normalize_optional_string(phase_state.get("workspace_path")) if phase_state else None
-        display_phase = overlay_phase if overlay_phase is not None else raw_phase
-        display_tool = overlay_tool if overlay_phase is not None else tool_name
-
-        sessions.append(
-            {
-                "session_id": session_id,
-                "provider": provider,
-                "control_path": CONTROL_PATH_MANAGED,
-                "liveness_model": LIVENESS_MODEL_ENGINE_STATUS,
-                "provider_cli": None,
-                "workspace_label": workspace_label,
-                "cwd": workspace_path,
-                "branch": None,
-                "state": state,
-                "raw_phase": display_phase,
-                "phase": _phase_display_label(display_phase, display_tool),
-                "phase_observed_at": phase_observed_at or observed_at,
-                "last_activity_at": _max_rfc3339(observed_at, phase_last_activity_at, phase_observed_at),
-                "bridge_status": _normalize_optional_string(raw_row.get("bridge_status")),
-                "bridge_pid": None,
-                "bridge_heartbeat_at": observed_at,
-                "thread_subscription_status": _normalize_optional_string(raw_row.get("thread_subscription_status")),
-                "reason_codes": [],
-            }
-        )
+        sessions.append(_engine_status_managed_session_row(raw_row=raw_row, phase_overlay=phase_overlay))
 
     return sessions
 
@@ -2436,18 +2534,16 @@ def _serialize_transport_health(
     }
 
 
-def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = False) -> dict[str, Any]:
-    now = _utc_now()
-    resolved_base_dir = _coerce_path(claude_dir)
-    phase_overlay = _load_managed_session_phase_state(resolved_base_dir, now=now)
-    service = _collect_service(resolved_base_dir)
-    engine_status = _collect_engine_status(resolved_base_dir, now=now)
-    outbox = _collect_outbox(resolved_base_dir, now=now)
-    provider_clis = _collect_provider_clis()
-    activity_summary = _collect_activity_summary(resolved_base_dir, now=now)
+def _collect_managed_session_sources(
+    base_dir: Path,
+    *,
+    engine_status: dict[str, Any],
+    phase_overlay: dict[str, dict[str, str | None]],
+    fast: bool,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     if fast:
-        bridge_sessions = []
-        orphan_bridges = []
+        bridge_sessions: list[dict[str, Any]] = []
+        orphan_bridges: list[dict[str, Any]] = []
         process_sessions = _collect_managed_sessions_from_engine_status(
             engine_status,
             phase_overlay=phase_overlay,
@@ -2457,7 +2553,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         with _process_snapshot_scope():
             provider_processes = _scan_provider_processes()
             bridge_sessions, orphan_bridges = _collect_managed_codex_sessions(
-                resolved_base_dir,
+                base_dir,
                 phase_overlay=phase_overlay,
             )
             bridge_session_ids = {row.get("session_id") for row in bridge_sessions if row.get("session_id")}
@@ -2467,10 +2563,29 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
                 scanned_processes=provider_processes,
             )
             unmanaged_processes = _collect_unmanaged_processes(scanned_processes=provider_processes)
+
     managed_summary, managed_sessions, orphan_bridges = _merge_managed_sessions(
         bridge_sessions=bridge_sessions,
         bridge_orphans=orphan_bridges,
         process_sessions=process_sessions,
+    )
+    return managed_summary, managed_sessions, orphan_bridges, unmanaged_processes
+
+
+def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = False) -> dict[str, Any]:
+    now = _utc_now()
+    resolved_base_dir = _coerce_path(claude_dir)
+    phase_overlay = _load_managed_session_phase_state(resolved_base_dir, now=now)
+    service = _collect_service(resolved_base_dir)
+    engine_status = _collect_engine_status(resolved_base_dir, now=now)
+    outbox = _collect_outbox(resolved_base_dir, now=now)
+    provider_clis = _collect_provider_clis()
+    activity_summary = _collect_activity_summary(resolved_base_dir, now=now)
+    managed_summary, managed_sessions, orphan_bridges, unmanaged_processes = _collect_managed_session_sources(
+        resolved_base_dir,
+        engine_status=engine_status,
+        phase_overlay=phase_overlay,
+        fast=fast,
     )
     launch_readiness = _collect_launch_readiness(resolved_base_dir, service=service)
     transport_sample, transport_assessment = _collect_transport_health(engine_status)
