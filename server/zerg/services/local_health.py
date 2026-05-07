@@ -440,26 +440,74 @@ def _extract_machine_name_from_args(arguments: list[str]) -> str | None:
     return None
 
 
-def _extract_service_machine_name(service_file: str | None) -> str | None:
+def _service_file_path(service_file: str | None) -> Path | None:
     raw = str(service_file or "").strip()
     if not raw:
         return None
     path = Path(raw)
     if not path.exists():
         return None
+    return path
+
+
+def _read_service_plist(path: Path) -> dict[str, Any]:
+    payload = plistlib.loads(path.read_bytes())
+    return payload if isinstance(payload, dict) else {}
+
+
+def _systemd_exec_start_arguments(path: Path) -> list[str] | None:
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line.startswith("ExecStart="):
+            continue
+        return shlex.split(line.split("=", 1)[1].strip())
+    return None
+
+
+def _systemd_environment(path: Path) -> dict[str, str]:
+    env: dict[str, str] = {}
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line.startswith("Environment="):
+            continue
+        value = line.split("=", 1)[1].strip()
+        for token in shlex.split(value):
+            if "=" not in token:
+                continue
+            key, env_value = token.split("=", 1)
+            env[key] = env_value
+    return env
+
+
+def _service_metadata_from_env(env: dict[str, Any] | None) -> dict[str, str | None]:
+    env = env or {}
+    return {
+        "config_generation": str(env.get("LONGHOUSE_MACHINE_GENERATION") or "").strip() or None,
+        "state_hash": str(env.get("LONGHOUSE_MACHINE_STATE_HASH") or "").strip() or None,
+    }
+
+
+def _empty_service_metadata() -> dict[str, str | None]:
+    return {
+        "config_generation": None,
+        "state_hash": None,
+    }
+
+
+def _extract_service_machine_name(service_file: str | None) -> str | None:
+    path = _service_file_path(service_file)
+    if path is None:
+        return None
 
     try:
         if path.suffix == ".plist":
-            payload = plistlib.loads(path.read_bytes())
+            payload = _read_service_plist(path)
             arguments = [str(item) for item in payload.get("ProgramArguments") or []]
             return _extract_machine_name_from_args(arguments)
 
         if path.suffix == ".service":
-            for raw_line in path.read_text().splitlines():
-                line = raw_line.strip()
-                if not line.startswith("ExecStart="):
-                    continue
-                arguments = shlex.split(line.split("=", 1)[1].strip())
+            arguments = _systemd_exec_start_arguments(path)
+            if arguments is not None:
                 return _extract_machine_name_from_args(arguments)
     except Exception:
         return None
@@ -468,41 +516,21 @@ def _extract_service_machine_name(service_file: str | None) -> str | None:
 
 
 def _extract_service_metadata(service_file: str | None) -> dict[str, str | None]:
-    raw = str(service_file or "").strip()
-    metadata = {
-        "config_generation": None,
-        "state_hash": None,
-    }
-    if not raw:
-        return metadata
-
-    path = Path(raw)
-    if not path.exists():
+    metadata = _empty_service_metadata()
+    path = _service_file_path(service_file)
+    if path is None:
         return metadata
 
     try:
         if path.suffix == ".plist":
-            payload = plistlib.loads(path.read_bytes())
+            payload = _read_service_plist(path)
             env = payload.get("EnvironmentVariables") if isinstance(payload, dict) else None
             if isinstance(env, dict):
-                metadata["config_generation"] = str(env.get("LONGHOUSE_MACHINE_GENERATION") or "").strip() or None
-                metadata["state_hash"] = str(env.get("LONGHOUSE_MACHINE_STATE_HASH") or "").strip() or None
+                metadata = _service_metadata_from_env(env)
             return metadata
 
         if path.suffix == ".service":
-            env: dict[str, str] = {}
-            for raw_line in path.read_text().splitlines():
-                line = raw_line.strip()
-                if not line.startswith("Environment="):
-                    continue
-                value = line.split("=", 1)[1].strip()
-                for token in shlex.split(value):
-                    if "=" not in token:
-                        continue
-                    key, env_value = token.split("=", 1)
-                    env[key] = env_value
-            metadata["config_generation"] = str(env.get("LONGHOUSE_MACHINE_GENERATION") or "").strip() or None
-            metadata["state_hash"] = str(env.get("LONGHOUSE_MACHINE_STATE_HASH") or "").strip() or None
+            metadata = _service_metadata_from_env(_systemd_environment(path))
     except Exception:
         return metadata
 
