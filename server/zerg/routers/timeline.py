@@ -43,8 +43,8 @@ from zerg.routers import agents_demo as _demo_router
 from zerg.routers import agents_search as _search_router
 from zerg.routers import agents_sessions as _sessions_router
 from zerg.services.agents_store import AgentsStore
-from zerg.services.session_runtime import load_runtime_state_map
-from zerg.services.session_runtime import resolve_runtime_overlay
+from zerg.services.session_response_projection import build_session_response_map
+from zerg.services.session_response_projection import has_real_sessions
 from zerg.services.session_views import DemoSeedResponse
 from zerg.services.session_views import EventsListResponse
 from zerg.services.session_views import FiltersResponse
@@ -62,10 +62,7 @@ from zerg.services.session_views import SessionThreadResponse
 from zerg.services.session_views import SessionTurnEnvelopeResponse
 from zerg.services.session_views import SessionTurnsListResponse
 from zerg.services.session_views import SessionWorkspaceResponse
-from zerg.services.session_views import build_session_response
-from zerg.services.session_views import normalize_utc_datetime
 from zerg.services.session_workspace import build_session_workspace
-from zerg.services.unmanaged_bindings import load_binding_overlay
 from zerg.utils.server_timing import ServerTimingRecorder
 from zerg.utils.time import UTCBaseModel
 
@@ -114,59 +111,6 @@ def _session_payload_signature(session: TimelineSessionCardResponse) -> tuple[di
     return payload, json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 
-def _has_real_sessions(db: Session, *, total: int) -> bool:
-    if total == 0:
-        return True
-    return (
-        db.query(AgentSession.id).filter((AgentSession.device_id != "demo-mac") | (AgentSession.device_id.is_(None))).limit(1).first()
-        is not None
-    )
-
-
-def _build_session_response_map(
-    *,
-    db: Session,
-    session_ids: list[str],
-) -> dict[str, SessionResponse]:
-    if not session_ids:
-        return {}
-
-    store = AgentsStore(db)
-    uuid_ids = [UUID(session_id) for session_id in session_ids]
-    sessions = db.query(AgentSession).filter(AgentSession.id.in_(uuid_ids)).all()
-    if not sessions:
-        return {}
-
-    activity_map = store.get_last_activity_map([session.id for session in sessions])
-    runtime_state_map = load_runtime_state_map(db, [session.id for session in sessions])
-    first_user_map = store.get_first_message_map([session.id for session in sessions], role="user", max_len=80)
-    thread_cache: dict[str, tuple[str, int]] = store.batch_thread_meta(sessions)
-    now = datetime.now(timezone.utc)
-    # Phase 5c/6: batch-load machine-agent binding overlay once so each
-    # card gets host_state + (potential) process_gone lifecycle from a
-    # single query rather than per-session.
-    binding_overlay_map = load_binding_overlay(db, [session.id for session in sessions], now=now)
-
-    response_map: dict[str, SessionResponse] = {}
-    for session in sessions:
-        response = build_session_response(
-            store,
-            session,
-            thread_cache=thread_cache,
-            last_activity_at=normalize_utc_datetime(activity_map.get(session.id) or session.ended_at or session.started_at),
-            runtime_overlay=resolve_runtime_overlay(
-                session,
-                last_activity_at=activity_map.get(session.id) or session.ended_at or session.started_at,
-                runtime_state_map=runtime_state_map,
-                now=now,
-            ),
-            first_user_message=first_user_map.get(session.id),
-            binding_overlay=binding_overlay_map.get(session.id),
-        )
-        response_map[response.id] = response
-    return response_map
-
-
 def _build_timeline_cards_from_thread_rows(
     *,
     db: Session,
@@ -176,7 +120,7 @@ def _build_timeline_cards_from_thread_rows(
         return []
 
     representative_ids = [session_id for _thread_id, session_id, _thread_anchor in thread_rows]
-    response_map = _build_session_response_map(db=db, session_ids=representative_ids)
+    response_map = build_session_response_map(db=db, session_ids=representative_ids)
     representative_rows = [(thread_id, response_map.get(session_id), thread_anchor) for thread_id, session_id, thread_anchor in thread_rows]
     supplemental_ids = sorted(
         (
@@ -185,7 +129,7 @@ def _build_timeline_cards_from_thread_rows(
         )
         - response_map.keys()
     )
-    response_map.update(_build_session_response_map(db=db, session_ids=supplemental_ids))
+    response_map.update(build_session_response_map(db=db, session_ids=supplemental_ids))
 
     cards: list[TimelineSessionCardResponse] = []
     for thread_id, representative, thread_anchor in representative_rows:
@@ -547,12 +491,12 @@ async def list_timeline_sessions(
     with timing.span("build_cards"):
         sessions = _build_timeline_cards_from_thread_rows(db=db, thread_rows=thread_rows)
     with timing.span("has_real"):
-        has_real_sessions = _has_real_sessions(db, total=total)
+        has_real_sessions_value = has_real_sessions(db, default_when_empty=total == 0)
     timing.apply(response)
     return TimelineSessionsListResponse(
         sessions=sessions,
         total=total,
-        has_real_sessions=has_real_sessions,
+        has_real_sessions=has_real_sessions_value,
     )
 
 
