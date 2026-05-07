@@ -398,17 +398,54 @@ def _parse_env_file(path: Path) -> dict[str, str]:
     return payload
 
 
+def _runner_config_payload(
+    path: Path,
+    *,
+    exists: bool,
+    error: str | None = None,
+    runner_name: str | None = None,
+    runner_id: str | None = None,
+    runner_urls: list[str] | None = None,
+    install_mode: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "path": str(path),
+        "exists": exists,
+        "error": error,
+        "runner_name": runner_name,
+        "runner_id": runner_id,
+        "runner_urls": runner_urls or [],
+        "install_mode": install_mode,
+    }
+
+
+def _missing_runner_config() -> dict[str, Any]:
+    return _runner_config_payload(_candidate_runner_env_paths()[0], exists=False)
+
+
+def _runner_urls_from_env(env: dict[str, str]) -> list[str]:
+    raw_urls = str(env.get("LONGHOUSE_URLS") or "").strip()
+    if raw_urls:
+        return [item.strip() for item in raw_urls.split(",") if item.strip()]
+
+    raw_url = str(env.get("LONGHOUSE_URL") or "").strip()
+    return [raw_url] if raw_url else []
+
+
+def _runner_config_from_env(path: Path, env: dict[str, str]) -> dict[str, Any]:
+    return _runner_config_payload(
+        path,
+        exists=True,
+        runner_name=str(env.get("RUNNER_NAME") or "").strip() or None,
+        runner_id=str(env.get("RUNNER_ID") or "").strip() or None,
+        runner_urls=_runner_urls_from_env(env),
+        install_mode=str(env.get("RUNNER_INSTALL_MODE") or "").strip() or None,
+    )
+
+
 def _collect_runner_config(*, include_global_runner: bool = True) -> dict[str, Any]:
     if not include_global_runner:
-        return {
-            "path": str(_candidate_runner_env_paths()[0]),
-            "exists": False,
-            "error": None,
-            "runner_name": None,
-            "runner_id": None,
-            "runner_urls": [],
-            "install_mode": None,
-        }
+        return _missing_runner_config()
 
     for path in _candidate_runner_env_paths():
         if not path.exists():
@@ -416,44 +453,11 @@ def _collect_runner_config(*, include_global_runner: bool = True) -> dict[str, A
         try:
             env = _parse_env_file(path)
         except OSError as exc:
-            return {
-                "path": str(path),
-                "exists": True,
-                "error": str(exc),
-                "runner_name": None,
-                "runner_id": None,
-                "runner_urls": [],
-                "install_mode": None,
-            }
+            return _runner_config_payload(path, exists=True, error=str(exc))
 
-        urls: list[str] = []
-        raw_urls = str(env.get("LONGHOUSE_URLS") or "").strip()
-        if raw_urls:
-            urls = [item.strip() for item in raw_urls.split(",") if item.strip()]
-        else:
-            raw_url = str(env.get("LONGHOUSE_URL") or "").strip()
-            if raw_url:
-                urls = [raw_url]
+        return _runner_config_from_env(path, env)
 
-        return {
-            "path": str(path),
-            "exists": True,
-            "error": None,
-            "runner_name": str(env.get("RUNNER_NAME") or "").strip() or None,
-            "runner_id": str(env.get("RUNNER_ID") or "").strip() or None,
-            "runner_urls": urls,
-            "install_mode": str(env.get("RUNNER_INSTALL_MODE") or "").strip() or None,
-        }
-
-    return {
-        "path": str(_candidate_runner_env_paths()[0]),
-        "exists": False,
-        "error": None,
-        "runner_name": None,
-        "runner_id": None,
-        "runner_urls": [],
-        "install_mode": None,
-    }
+    return _missing_runner_config()
 
 
 def _extract_machine_name_from_args(arguments: list[str]) -> str | None:
