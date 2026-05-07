@@ -2259,6 +2259,30 @@ def _with_action(actions: list[str], text: str) -> None:
         actions.append(text)
 
 
+@dataclass
+class _HealthClassificationContext:
+    service_status: str
+    engine_status_path: str
+    engine_log_path: str
+    engine_exists: bool
+    engine_error: Any
+    engine_age: Any
+    spool_pending: int
+    disk_free_bytes: Any
+    outbox_count: int
+    outbox_oldest: Any
+    launch_state: str
+    launch_reasons: list[str]
+    launch_actions: list[str]
+    shipper_state_missing: bool
+    managed_attached: int
+    managed_detached: int
+    managed_degraded: int
+    orphan_bridge_count: int
+    unknown_managed_phase_count: int
+    repair_action: str
+
+
 def _repair_action_for_launch_readiness(launch_readiness: dict[str, Any]) -> str:
     return _repair_command(
         can_reconcile_from_state=_can_reconcile_launch_from_state(
@@ -2614,6 +2638,114 @@ def _degraded_health_headline(
     return headline
 
 
+def _health_classification_context(
+    *,
+    service: dict[str, Any],
+    engine_status: dict[str, Any],
+    transport_sample: TransportHealthSample | None,
+    outbox: dict[str, Any],
+    launch_readiness: dict[str, Any],
+    managed_summary: dict[str, Any] | None,
+    managed_sessions: list[dict[str, Any]],
+) -> _HealthClassificationContext:
+    service_status = str(service.get("status") or "not-installed")
+    payload = engine_status.get("payload") or {}
+    launch_reasons = [str(item) for item in list(launch_readiness.get("reasons") or [])]
+
+    return _HealthClassificationContext(
+        service_status=service_status,
+        engine_status_path=str(engine_status.get("path") or get_agent_status_path()),
+        engine_log_path=str(service.get("log_path") or (get_agent_log_dir() / "engine.log.*")),
+        engine_exists=bool(engine_status.get("exists")),
+        engine_error=engine_status.get("error"),
+        engine_age=engine_status.get("age_seconds"),
+        spool_pending=transport_sample.spool_pending if transport_sample is not None else int(payload.get("spool_pending_count") or 0),
+        disk_free_bytes=payload.get("disk_free_bytes"),
+        outbox_count=int(outbox.get("file_count") or 0),
+        outbox_oldest=outbox.get("oldest_age_seconds"),
+        launch_state=str(launch_readiness.get("state") or "unconfigured"),
+        launch_reasons=launch_reasons,
+        launch_actions=[str(item) for item in list(launch_readiness.get("suggested_actions") or [])],
+        shipper_state_missing="shipper_state_missing" in launch_reasons,
+        managed_attached=int((managed_summary or {}).get("attached_count") or 0),
+        managed_detached=int((managed_summary or {}).get("detached_count") or 0),
+        managed_degraded=int((managed_summary or {}).get("degraded_count") or 0),
+        orphan_bridge_count=int((managed_summary or {}).get("orphan_bridge_count") or 0),
+        unknown_managed_phase_count=sum(1 for session in managed_sessions if _managed_phase_is_unknown(session.get("raw_phase"))),
+        repair_action=_repair_action_for_launch_readiness(launch_readiness),
+    )
+
+
+def _collect_health_reasons(
+    context: _HealthClassificationContext,
+    *,
+    transport_assessment: TransportHealthAssessment | None,
+) -> tuple[list[str], list[str]]:
+    reasons = list(context.launch_reasons)
+    actions: list[str] = []
+
+    for action in context.launch_actions:
+        _with_action(actions, action)
+
+    _add_transport_health_reasons(
+        reasons,
+        actions,
+        transport_assessment=transport_assessment,
+        engine_log_path=context.engine_log_path,
+    )
+    _add_service_status_reasons(
+        reasons,
+        actions,
+        service_status=context.service_status,
+        repair_action=context.repair_action,
+        shipper_state_missing=context.shipper_state_missing,
+    )
+    _add_engine_status_reasons(
+        reasons,
+        actions,
+        engine_error=context.engine_error,
+        engine_exists=context.engine_exists,
+        engine_age=context.engine_age,
+        engine_status_path=context.engine_status_path,
+        engine_log_path=context.engine_log_path,
+        service_status=context.service_status,
+        repair_action=context.repair_action,
+        shipper_state_missing=context.shipper_state_missing,
+    )
+    _add_spool_pending_reason(
+        reasons,
+        spool_pending=context.spool_pending,
+    )
+    _add_managed_session_reasons(
+        reasons,
+        actions,
+        orphan_bridge_count=context.orphan_bridge_count,
+        managed_degraded=context.managed_degraded,
+        managed_detached=context.managed_detached,
+        unknown_managed_phase_count=context.unknown_managed_phase_count,
+    )
+    _add_outbox_reasons(
+        reasons,
+        actions,
+        outbox_count=context.outbox_count,
+        outbox_oldest=context.outbox_oldest,
+        engine_log_path=context.engine_log_path,
+    )
+    _add_disk_reasons(reasons, actions, disk_free_bytes=context.disk_free_bytes)
+
+    return reasons, actions
+
+
+def _is_uninstalled_health(context: _HealthClassificationContext) -> bool:
+    return (
+        context.service_status == "not-installed"
+        and not context.engine_exists
+        and context.outbox_count == 0
+        and context.spool_pending == 0
+        and context.launch_state != "broken"
+    )
+
+
 def _classify_health(
     *,
     service: dict[str, Any],
@@ -2625,82 +2757,21 @@ def _classify_health(
     managed_summary: dict[str, Any] | None,
     managed_sessions: list[dict[str, Any]],
 ) -> tuple[str, str, str, list[str], list[str]]:
-    reasons: list[str] = []
-    actions: list[str] = []
-
-    service_status = str(service.get("status") or "not-installed")
-    payload = engine_status.get("payload") or {}
-    engine_status_path = str(engine_status.get("path") or get_agent_status_path())
-    engine_log_path = str(service.get("log_path") or (get_agent_log_dir() / "engine.log.*"))
-    engine_exists = bool(engine_status.get("exists"))
-    engine_error = engine_status.get("error")
-    engine_age = engine_status.get("age_seconds")
-    spool_pending = transport_sample.spool_pending if transport_sample is not None else int(payload.get("spool_pending_count") or 0)
-    disk_free_bytes = payload.get("disk_free_bytes")
-    outbox_count = int(outbox.get("file_count") or 0)
-    outbox_oldest = outbox.get("oldest_age_seconds")
-    launch_state = str(launch_readiness.get("state") or "unconfigured")
-    launch_reasons = [str(item) for item in list(launch_readiness.get("reasons") or [])]
-    launch_actions = [str(item) for item in list(launch_readiness.get("suggested_actions") or [])]
-    shipper_state_missing = "shipper_state_missing" in launch_reasons
-    managed_attached = int((managed_summary or {}).get("attached_count") or 0)
-    managed_detached = int((managed_summary or {}).get("detached_count") or 0)
-    managed_degraded = int((managed_summary or {}).get("degraded_count") or 0)
-    orphan_bridge_count = int((managed_summary or {}).get("orphan_bridge_count") or 0)
-    unknown_managed_phase_count = sum(1 for session in managed_sessions if _managed_phase_is_unknown(session.get("raw_phase")))
-    repair_action = _repair_action_for_launch_readiness(launch_readiness)
-
-    reasons.extend(launch_reasons)
-    for action in launch_actions:
-        _with_action(actions, action)
-
-    _add_transport_health_reasons(
-        reasons,
-        actions,
+    context = _health_classification_context(
+        service=service,
+        engine_status=engine_status,
+        transport_sample=transport_sample,
+        outbox=outbox,
+        launch_readiness=launch_readiness,
+        managed_summary=managed_summary,
+        managed_sessions=managed_sessions,
+    )
+    reasons, actions = _collect_health_reasons(
+        context,
         transport_assessment=transport_assessment,
-        engine_log_path=engine_log_path,
     )
-    _add_service_status_reasons(
-        reasons,
-        actions,
-        service_status=service_status,
-        repair_action=repair_action,
-        shipper_state_missing=shipper_state_missing,
-    )
-    _add_engine_status_reasons(
-        reasons,
-        actions,
-        engine_error=engine_error,
-        engine_exists=engine_exists,
-        engine_age=engine_age,
-        engine_status_path=engine_status_path,
-        engine_log_path=engine_log_path,
-        service_status=service_status,
-        repair_action=repair_action,
-        shipper_state_missing=shipper_state_missing,
-    )
-    _add_spool_pending_reason(
-        reasons,
-        spool_pending=spool_pending,
-    )
-    _add_managed_session_reasons(
-        reasons,
-        actions,
-        orphan_bridge_count=orphan_bridge_count,
-        managed_degraded=managed_degraded,
-        managed_detached=managed_detached,
-        unknown_managed_phase_count=unknown_managed_phase_count,
-    )
-    _add_outbox_reasons(
-        reasons,
-        actions,
-        outbox_count=outbox_count,
-        outbox_oldest=outbox_oldest,
-        engine_log_path=engine_log_path,
-    )
-    _add_disk_reasons(reasons, actions, disk_free_bytes=disk_free_bytes)
 
-    if service_status == "not-installed" and not engine_exists and outbox_count == 0 and spool_pending == 0 and launch_state != "broken":
+    if _is_uninstalled_health(context):
         return (
             "uninstalled",
             "gray",
@@ -2710,20 +2781,20 @@ def _classify_health(
         )
 
     broken, degraded = _health_flags(
-        launch_state=launch_state,
-        service_status=service_status,
-        engine_error=engine_error,
-        engine_exists=engine_exists,
-        engine_age=engine_age,
+        launch_state=context.launch_state,
+        service_status=context.service_status,
+        engine_error=context.engine_error,
+        engine_exists=context.engine_exists,
+        engine_age=context.engine_age,
         transport_assessment=transport_assessment,
-        disk_free_bytes=disk_free_bytes,
-        outbox_count=outbox_count,
-        outbox_oldest=outbox_oldest,
-        spool_pending=spool_pending,
-        orphan_bridge_count=orphan_bridge_count,
-        managed_degraded=managed_degraded,
-        managed_detached=managed_detached,
-        unknown_managed_phase_count=unknown_managed_phase_count,
+        disk_free_bytes=context.disk_free_bytes,
+        outbox_count=context.outbox_count,
+        outbox_oldest=context.outbox_oldest,
+        spool_pending=context.spool_pending,
+        orphan_bridge_count=context.orphan_bridge_count,
+        managed_degraded=context.managed_degraded,
+        managed_detached=context.managed_detached,
+        unknown_managed_phase_count=context.unknown_managed_phase_count,
     )
 
     if broken:
@@ -2735,9 +2806,9 @@ def _classify_health(
             "yellow",
             _degraded_health_headline(
                 reasons,
-                service_status=service_status,
-                managed_attached=managed_attached,
-                managed_detached=managed_detached,
+                service_status=context.service_status,
+                managed_attached=context.managed_attached,
+                managed_detached=context.managed_detached,
             ),
             reasons,
             actions,
