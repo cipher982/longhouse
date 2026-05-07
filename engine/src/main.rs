@@ -12,6 +12,7 @@ mod discovery;
 mod error_tracker;
 mod heartbeat;
 mod managed_bridge_scan;
+mod managed_claude_scan;
 mod managed_reaper;
 mod observability;
 mod outbox;

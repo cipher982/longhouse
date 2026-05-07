@@ -15,6 +15,7 @@ use serde::Serialize;
 
 use crate::build_identity::BuildIdentity;
 use crate::managed_bridge_scan::CodexBridgeObservation;
+use crate::managed_claude_scan::ClaudeChannelObservation;
 
 /// Captured once per daemon process at the first write_status_file call.
 /// Compared against the on-disk binary mtime to detect "restart pending".
@@ -257,6 +258,69 @@ pub fn leases_from_observations(
     leases
 }
 
+/// Build managed-session leases for Claude channel sessions.
+///
+/// Only live Claude provider processes are emitted. The server treats
+/// `managed_sessions` as a complete snapshot, so a previously leased session
+/// disappearing from this list becomes an explicit `process_gone` terminal
+/// signal there.
+pub fn leases_from_claude_channel_observations(
+    conn: &rusqlite::Connection,
+    machine_id: &str,
+    observations: &[ClaudeChannelObservation],
+    now: DateTime<Utc>,
+) -> Vec<ManagedSessionLease> {
+    let phase_overlay = load_managed_phase_overlay(conn);
+    let sequence = now.timestamp_millis().max(0) as u64;
+    let observed_at = now.to_rfc3339();
+    let mut leases = Vec::with_capacity(observations.len());
+
+    for obs in observations {
+        if !obs.claude_alive {
+            continue;
+        }
+        let overlay = phase_overlay.get(&obs.session_id);
+        let lease_state = if obs.ready && obs.bridge_alive {
+            "attached"
+        } else {
+            "degraded"
+        };
+
+        leases.push(ManagedSessionLease {
+            session_id: obs.session_id.clone(),
+            provider: "claude".to_string(),
+            machine_id: machine_id.trim().to_string(),
+            sequence,
+            state: lease_state.to_string(),
+            phase: match lease_state {
+                "attached" => Some(
+                    overlay
+                        .and_then(|row| normalize_managed_phase(row.phase.as_deref()))
+                        .unwrap_or_else(|| "idle".to_string()),
+                ),
+                _ => None,
+            },
+            tool_name: overlay.and_then(|row| row.tool_name.clone()),
+            bridge_status: Some(if obs.ready && obs.bridge_alive {
+                "ready".to_string()
+            } else if obs.bridge_alive {
+                "not_ready".to_string()
+            } else {
+                "bridge_down".to_string()
+            }),
+            thread_subscription_status: None,
+            observed_at: overlay
+                .and_then(|row| row.observed_at.clone())
+                .unwrap_or_else(|| obs.updated_at.clone())
+                .if_empty(observed_at.clone()),
+            lease_ttl_ms: 15 * 60 * 1000,
+        });
+    }
+
+    leases.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+    leases
+}
+
 trait EmptyStringFallback {
     fn if_empty(self, fallback: String) -> String;
 }
@@ -284,7 +348,7 @@ fn load_managed_phase_overlay(conn: &rusqlite::Connection) -> HashMap<String, Ma
     let Ok(mut stmt) = conn.prepare(
         "SELECT session_id, phase_kind, tool_name, phase_observed_at
          FROM managed_session_state
-         WHERE provider = 'codex'",
+         WHERE provider IN ('codex', 'claude')",
     ) else {
         return rows;
     };
@@ -687,6 +751,64 @@ mod tests {
             .unwrap();
         assert_eq!(degraded_lease.state, "degraded");
         assert_eq!(detached_lease.state, "detached");
+    }
+
+    #[test]
+    fn leases_from_claude_channel_observations_emit_live_channel_sessions() {
+        use crate::managed_claude_scan::ClaudeChannelObservation;
+        use crate::state::managed_session_state::{
+            ManagedSessionPhaseSignal, ManagedSessionStateStore,
+        };
+
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(db.path())).unwrap();
+        let session_id = "09b68f98-1e31-458e-b78a-6dfd062ead75";
+        let now = Utc::now();
+        ManagedSessionStateStore::new(&conn)
+            .record_phase(&ManagedSessionPhaseSignal {
+                session_id: session_id.to_string(),
+                provider: "claude".to_string(),
+                workspace_path: None,
+                phase_kind: "needs_user".to_string(),
+                tool_name: None,
+                phase_source: "claude_hook".to_string(),
+                observed_at: now,
+            })
+            .unwrap();
+
+        let live = ClaudeChannelObservation {
+            session_id: session_id.to_string(),
+            provider_session_id: Some(session_id.to_string()),
+            state_file: PathBuf::from("/tmp/live.json"),
+            claude_pid: Some(123),
+            bridge_pid: Some(124),
+            ready: true,
+            updated_at: "2026-05-07T20:03:50Z".to_string(),
+            claude_alive: true,
+            bridge_alive: true,
+        };
+        let dead = ClaudeChannelObservation {
+            session_id: "19b68f98-1e31-458e-b78a-6dfd062ead75".to_string(),
+            provider_session_id: None,
+            state_file: PathBuf::from("/tmp/dead.json"),
+            claude_pid: Some(223),
+            bridge_pid: Some(224),
+            ready: true,
+            updated_at: "2026-05-07T20:03:50Z".to_string(),
+            claude_alive: false,
+            bridge_alive: false,
+        };
+
+        let leases = leases_from_claude_channel_observations(&conn, "cinder", &[live, dead], now);
+
+        assert_eq!(leases.len(), 1);
+        let lease = &leases[0];
+        assert_eq!(lease.session_id, session_id);
+        assert_eq!(lease.provider, "claude");
+        assert_eq!(lease.state, "attached");
+        assert_eq!(lease.phase.as_deref(), Some("needs_user"));
+        assert_eq!(lease.bridge_status.as_deref(), Some("ready"));
+        assert_eq!(lease.lease_ttl_ms, 900_000);
     }
 
     #[test]

@@ -21,6 +21,7 @@ use crate::error_tracker::ConsecutiveErrorTracker;
 use crate::error_tracker::RecentIssueTracker;
 use crate::heartbeat;
 use crate::managed_bridge_scan;
+use crate::managed_claude_scan;
 use crate::managed_reaper::ManagedBridgeReaper;
 use crate::outbox;
 use crate::pipeline::compressor::CompressionAlgo;
@@ -451,6 +452,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // Frequent local status file refresh for ambient UX and debugging
             _ = local_status_timer.tick() => {
                 let observations = managed_bridge_scan::collect_observations();
+                let claude_observations = managed_claude_scan::collect_observations();
                 let payload = write_local_status_snapshot(
                     &conn,
                     &tracker,
@@ -461,6 +463,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &config.shipper_config.machine_name,
                     &status_path,
                     &observations,
+                    &claude_observations,
                 );
                 bridge_reaper.tick(&observations);
                 let signature = runtime_truth_signature(&payload);
@@ -486,6 +489,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // Periodic server heartbeat
             _ = heartbeat_timer.tick() => {
                 let observations = managed_bridge_scan::collect_observations();
+                let claude_observations = managed_claude_scan::collect_observations();
                 let payload = write_local_status_snapshot(
                     &conn,
                     &tracker,
@@ -496,6 +500,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &config.shipper_config.machine_name,
                     &status_path,
                     &observations,
+                    &claude_observations,
                 );
                 if !offline.is_offline {
                     runtime_truth_bootstrapped = true;
@@ -527,6 +532,7 @@ fn write_local_status_snapshot(
     machine_id: &str,
     status_path: &Path,
     observations: &[managed_bridge_scan::CodexBridgeObservation],
+    claude_observations: &[managed_claude_scan::ClaudeChannelObservation],
 ) -> heartbeat::HeartbeatPayload {
     let spool = Spool::new(conn);
     let stats = heartbeat::HeartbeatStats {
@@ -538,8 +544,22 @@ fn write_local_status_snapshot(
         last_ship_at: last_ship_at.clone(),
     };
     let mut payload = heartbeat::HeartbeatPayload::build(&stats);
+    let now = chrono::Utc::now();
     payload.managed_sessions =
-        heartbeat::leases_from_observations(conn, machine_id, observations, chrono::Utc::now());
+        heartbeat::leases_from_observations(conn, machine_id, observations, now);
+    payload
+        .managed_sessions
+        .extend(heartbeat::leases_from_claude_channel_observations(
+            conn,
+            machine_id,
+            claude_observations,
+            now,
+        ));
+    payload.managed_sessions.sort_by(|a, b| {
+        a.provider
+            .cmp(&b.provider)
+            .then_with(|| a.session_id.cmp(&b.session_id))
+    });
     payload.unmanaged_session_bindings = heartbeat::collect_unmanaged_session_bindings_with_store(
         conn,
         machine_id,
