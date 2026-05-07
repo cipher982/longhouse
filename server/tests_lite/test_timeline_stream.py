@@ -2,17 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+from builtins import anext
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from unittest.mock import patch
 
 import pytest
-from fastapi import HTTPException
-from fastapi import Response
-
 import zerg.dependencies.auth as _auth_deps  # noqa: F401
 import zerg.routers.timeline as timeline_router
+import zerg.services.timeline_session_stream as timeline_stream
+from fastapi import HTTPException
+from fastapi import Response
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
@@ -22,6 +23,7 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents_store import AgentsStore
 from zerg.services.session_listing import SessionListParams
 from zerg.services.session_listing import list_agent_sessions
+from zerg.services.timeline_session_listing import TimelineSessionListParams
 
 
 async def _noop_coro() -> None:
@@ -33,6 +35,26 @@ def _make_db(tmp_path, name="timeline_stream.db"):
     engine = make_engine(f"sqlite:///{db_path}")
     AgentsBase.metadata.create_all(bind=engine)
     return make_sessionmaker(engine)
+
+
+def _stream_params(**overrides) -> TimelineSessionListParams:
+    values = {
+        "project": None,
+        "provider": None,
+        "environment": None,
+        "include_test": False,
+        "hide_autonomous": True,
+        "device_id": None,
+        "days_back": 14,
+        "query": None,
+        "limit": 1,
+        "offset": 0,
+        "sort": None,
+        "mode": "lexical",
+        "context_mode": "forensic",
+    }
+    values.update(overrides)
+    return TimelineSessionListParams(**values)
 
 
 def _seed_session(
@@ -114,22 +136,10 @@ def test_timeline_stream_emits_runtime_backed_session_upsert(tmp_path):
         db.commit()
 
     async def _collect_events():
-        stream = timeline_router._timeline_sessions_stream(
+        stream = timeline_stream.stream_timeline_sessions_for_browser(
             _ConnectedRequest(),
             session_factory=session_local,
-            project=None,
-            provider=None,
-            environment=None,
-            include_test=False,
-            hide_autonomous=True,
-            device_id=None,
-            days_back=14,
-            query=None,
-            limit=1,
-            offset=0,
-            sort=None,
-            mode="lexical",
-            context_mode="forensic",
+            params=_stream_params(),
             skip_initial_replay=False,
         )
         events = [await anext(stream), await anext(stream)]
@@ -255,8 +265,8 @@ def test_timeline_stream_skips_full_rebuild_when_window_is_unchanged(tmp_path):
 
     list_sessions_calls = 0
     window_signature_kwargs: list[dict] = []
-    original_list_timeline_sessions = timeline_router.list_timeline_sessions
-    original_window_signature = timeline_router.AgentsStore.list_timeline_thread_window_signature
+    original_list_timeline_sessions = timeline_stream.list_timeline_sessions_for_browser
+    original_window_signature = timeline_stream.AgentsStore.list_timeline_thread_window_signature
 
     async def _counting_list_timeline_sessions(*args, **kwargs):
         nonlocal list_sessions_calls
@@ -268,22 +278,10 @@ def test_timeline_stream_skips_full_rebuild_when_window_is_unchanged(tmp_path):
         return original_window_signature(self, *args, **kwargs)
 
     async def _collect_events():
-        stream = timeline_router._timeline_sessions_stream(
+        stream = timeline_stream.stream_timeline_sessions_for_browser(
             _ConnectedRequest(),
             session_factory=session_local,
-            project=None,
-            provider=None,
-            environment=None,
-            include_test=False,
-            hide_autonomous=True,
-            device_id=None,
-            days_back=14,
-            query=None,
-            limit=1,
-            offset=0,
-            sort=None,
-            mode="lexical",
-            context_mode="forensic",
+            params=_stream_params(),
             skip_initial_replay=False,
         )
         events = [await anext(stream), await anext(stream), await anext(stream)]
@@ -291,11 +289,11 @@ def test_timeline_stream_skips_full_rebuild_when_window_is_unchanged(tmp_path):
         return events
 
     with (
-        patch.object(timeline_router, "list_timeline_sessions", new=_counting_list_timeline_sessions),
-        patch.object(timeline_router.AgentsStore, "list_timeline_thread_window_signature", new=_capturing_window_signature),
-        patch.object(timeline_router, "TIMELINE_STREAM_CHANGE_WAIT_SECONDS", 0),
-        patch.object(timeline_router, "TIMELINE_STREAM_HEARTBEAT_SECONDS", 0),
-        patch.object(timeline_router, "_wait_for_timeline_change", new=_noop_coro),
+        patch.object(timeline_stream, "list_timeline_sessions_for_browser", new=_counting_list_timeline_sessions),
+        patch.object(timeline_stream.AgentsStore, "list_timeline_thread_window_signature", new=_capturing_window_signature),
+        patch.object(timeline_stream, "TIMELINE_STREAM_CHANGE_WAIT_SECONDS", 0),
+        patch.object(timeline_stream, "TIMELINE_STREAM_HEARTBEAT_SECONDS", 0),
+        patch.object(timeline_stream, "_wait_for_timeline_change", new=_noop_coro),
     ):
         events = asyncio.run(_collect_events())
 
@@ -320,7 +318,7 @@ def test_timeline_stream_skip_initial_replay_avoids_redundant_rebuild_before_dis
         )
 
     list_sessions_calls = 0
-    original_list_timeline_sessions = timeline_router.list_timeline_sessions
+    original_list_timeline_sessions = timeline_stream.list_timeline_sessions_for_browser
 
     async def _counting_list_timeline_sessions(*args, **kwargs):
         nonlocal list_sessions_calls
@@ -328,22 +326,10 @@ def test_timeline_stream_skip_initial_replay_avoids_redundant_rebuild_before_dis
         return await original_list_timeline_sessions(*args, **kwargs)
 
     async def _collect_events():
-        stream = timeline_router._timeline_sessions_stream(
+        stream = timeline_stream.stream_timeline_sessions_for_browser(
             _DisconnectAfterFirstCycleRequest(),
             session_factory=session_local,
-            project=None,
-            provider=None,
-            environment=None,
-            include_test=False,
-            hide_autonomous=True,
-            device_id=None,
-            days_back=14,
-            query=None,
-            limit=1,
-            offset=0,
-            sort=None,
-            mode="lexical",
-            context_mode="forensic",
+            params=_stream_params(),
             skip_initial_replay=True,
         )
         connected = await anext(stream)
@@ -353,8 +339,8 @@ def test_timeline_stream_skip_initial_replay_avoids_redundant_rebuild_before_dis
         return connected
 
     with (
-        patch.object(timeline_router, "list_timeline_sessions", new=_counting_list_timeline_sessions),
-        patch.object(timeline_router, "_wait_for_timeline_change", new=_noop_coro),
+        patch.object(timeline_stream, "list_timeline_sessions_for_browser", new=_counting_list_timeline_sessions),
+        patch.object(timeline_stream, "_wait_for_timeline_change", new=_noop_coro),
     ):
         event = asyncio.run(_collect_events())
 
