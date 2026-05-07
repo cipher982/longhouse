@@ -15,14 +15,13 @@ from fastapi import Query
 from fastapi import Request
 from fastapi import Response
 from fastapi import status
-from sqlalchemy import or_
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.services.agents_store import AgentsStore
 from zerg.services.session_archive import SessionArchiveBundleResponse
@@ -34,6 +33,9 @@ from zerg.services.session_coordination import list_session_messages
 from zerg.services.session_coordination import load_session_tail
 from zerg.services.session_coordination import query_wall_sessions
 from zerg.services.session_coordination import serialize_session_message
+from zerg.services.session_listing import SessionListingError
+from zerg.services.session_listing import SessionListParams
+from zerg.services.session_listing import list_agent_sessions
 from zerg.services.session_messages import create_session_message
 from zerg.services.session_messages import resolve_session_message_owner_id
 from zerg.services.session_runtime import load_runtime_state_map
@@ -192,288 +194,31 @@ async def list_sessions(
 ) -> SessionsListResponse:
     """List sessions with optional filters."""
     try:
-        if isinstance(_auth, ManagedLocalHookToken):
-            if project != _auth.project:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Managed-local hook token requires a matching project filter",
-                )
-            if (
-                provider is not None
-                or environment is not None
-                or include_test
-                or device_id is not None
-                or query is not None
-                or offset != 0
-                or limit > 5
-                or days_back > 7
-                or sort not in {None, "recency"}
-                or mode != "lexical"
-                or context_mode != "forensic"
-                or not hide_autonomous
-            ):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Managed-local hook token only supports bounded recent project lookup",
-                )
-        if context_mode not in {"forensic", "active_context"}:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="context_mode must be one of: forensic, active_context",
-            )
-
-        effective_sort = sort
-        if effective_sort is None:
-            effective_sort = "relevance" if query else "recency"
-        elif effective_sort == "balanced" and not query:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="sort=balanced requires a search query (q param)",
-            )
-
-        # Hybrid mode: RRF fusion
-        if mode == "hybrid":
-            if offset > 0:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Pagination (offset) is not supported for mode=hybrid",
-                )
-            from zerg.models_config import get_embedding_config_with_db_fallback
-            from zerg.services.search import SessionFilters
-            from zerg.services.search import lexical_search
-            from zerg.services.search import rrf_fuse
-
-            _filters = SessionFilters(
-                project=project,
-                provider=provider,
-                environment=environment,
-                include_test=include_test,
-                device_id=device_id,
-                days_back=days_back,
-                exclude_user_states=["archived"],
-                hide_autonomous=hide_autonomous,
-                context_mode=context_mode,
-            )
-
-            lex_hits = lexical_search(query or "", db, _filters, limit, over_fetch=True)
-
-            config = get_embedding_config_with_db_fallback(db=db)
-            sem_hits: list[tuple[AgentSession, float]] = []
-            x_search_mode_header = None
-            query_vec = None
-            if context_mode == "active_context":
-                x_search_mode_header = "active-context-lexical"
-            elif config and query:
-                from zerg.services.embedding_cache import EmbeddingCache
-                from zerg.services.session_processing.embeddings import generate_embedding
-
-                fetch_limit = min(limit * 3, 200)
-                query_vec = await generate_embedding(query, config)
-                cache = EmbeddingCache()
-                if not cache._session_loaded:
-                    cache.load_session_embeddings(db, config.model, config.dims)
-
-                since = datetime.now(timezone.utc) - timedelta(days=days_back)
-                filter_q = db.query(AgentSession.id).filter(AgentSession.started_at >= since)
-                if project:
-                    filter_q = filter_q.filter(AgentSession.project == project)
-                if provider:
-                    filter_q = filter_q.filter(AgentSession.provider == provider)
-                if environment:
-                    filter_q = filter_q.filter(AgentSession.environment == environment)
-                if hide_autonomous:
-                    filter_q = filter_q.filter(AgentSession.user_messages > 0).filter(AgentSession.is_sidechain == 0)
-                valid_ids = {str(row[0]) for row in filter_q.all()}
-
-                sem_results = cache.search_sessions(query_vec, limit=fetch_limit, session_filter=valid_ids)
-                store = AgentsStore(db)
-                session_map = {str(session.id): session for session in store.get_sessions_ordered([sid for sid, _score in sem_results])}
-                for sid, score in sem_results:
-                    session = session_map.get(str(sid))
-                    if session:
-                        sem_hits.append((session, score))
-            else:
-                x_search_mode_header = "lexical-fallback"
-
-            fused = rrf_fuse(lex_hits, sem_hits, limit)
-
-            store = AgentsStore(db)
-            match_map = {}
-            if query and lex_hits:
-                try:
-                    match_map = store.get_session_matches([s.id for s in lex_hits], query, context_mode=context_mode)
-                except Exception:
-                    pass
-
-            semantic_snippet_map: dict[str, str] = {}
-            if config and query and query_vec is not None:
-                no_snippet_ids = {str(s.id) for s in fused if not (match_map.get(s.id) or {}).get("snippet")}
-                if no_snippet_ids:
-                    try:
-                        if not cache._turn_loaded:
-                            cache.load_turn_embeddings(db, config.model, config.dims)
-                        turn_hits = cache.search_turns(
-                            query_vec,
-                            limit=len(no_snippet_ids) * 3,
-                            session_filter=no_snippet_ids,
-                        )
-                        best_turn: dict[str, tuple[int | None, int | None]] = {}
-                        for tsid, _chunk, _score, estart, eend in turn_hits:
-                            if tsid not in best_turn:
-                                best_turn[tsid] = (estart, eend)
-                        for tsid, (estart, eend) in best_turn.items():
-                            if estart is None:
-                                continue
-                            count = max(1, (eend or estart) - estart + 1)
-                            events = (
-                                db.query(AgentEvent)
-                                .filter(AgentEvent.session_id == tsid)
-                                .order_by(AgentEvent.id)
-                                .offset(estart)
-                                .limit(count)
-                                .all()
-                            )
-                            for ev in events:
-                                ct = (ev.content_text or "").strip()
-                                if len(ct) > 20:
-                                    semantic_snippet_map[tsid] = ct[:200]
-                                    break
-                    except Exception:
-                        pass
-
-            session_ids = [s.id for s in fused]
-            activity_map = store.get_last_activity_map(session_ids)
-            now = datetime.now(timezone.utc)
-            runtime_state_map = load_runtime_state_map(db, [session.id for session in fused])
-            first_user_map = store.get_first_message_map([s.id for s in fused], role="user", max_len=80)
-            sem_score_map = {s.id: score for s, score in sem_hits}
-            thread_cache = store.batch_thread_meta(fused)
-            binding_overlay_map = load_binding_overlay(db, session_ids, now=now)
-
-            response_sessions = [
-                build_session_response(
-                    store,
-                    s,
-                    thread_cache=thread_cache,
-                    last_activity_at=normalize_utc_datetime(activity_map.get(s.id) or s.ended_at or s.started_at),
-                    runtime_overlay=resolve_runtime_overlay(
-                        s,
-                        last_activity_at=activity_map.get(s.id) or s.ended_at or s.started_at,
-                        runtime_state_map=runtime_state_map,
-                        now=now,
-                    ),
-                    first_user_message=first_user_map.get(s.id),
-                    match_event_id=(match_map.get(s.id) or {}).get("event_id"),
-                    match_snippet=(match_map.get(s.id) or {}).get("snippet") or semantic_snippet_map.get(str(s.id)),
-                    match_role=(match_map.get(s.id) or {}).get("role"),
-                    match_score=sem_score_map.get(s.id),
-                    binding_overlay=binding_overlay_map.get(s.id),
-                )
-                for s in fused
-            ]
-
-            has_real = (
-                db.query(AgentSession.id)
-                .filter(
-                    or_(
-                        AgentSession.device_id != "demo-mac",
-                        AgentSession.device_id.is_(None),
-                    )
-                )
-                .limit(1)
-                .first()
-                is not None
-            )
-
-            response = SessionsListResponse(sessions=response_sessions, total=len(fused), has_real_sessions=has_real)
-            if x_search_mode_header:
-                from fastapi.responses import JSONResponse
-
-                return JSONResponse(
-                    content=response.model_dump(mode="json"),
-                    headers={"X-Search-Mode": x_search_mode_header},
-                )
-            return response
-
-        store = AgentsStore(db)
-        since = datetime.now(timezone.utc) - timedelta(days=days_back)
-
-        sessions, total = store.list_sessions(
+        params = SessionListParams(
             project=project,
             provider=provider,
             environment=environment,
             include_test=include_test,
+            hide_autonomous=hide_autonomous,
             device_id=device_id,
-            since=since,
+            days_back=days_back,
             query=query,
             limit=limit,
             offset=offset,
-            hide_autonomous=hide_autonomous,
+            sort=sort,
+            mode=mode,
             context_mode=context_mode,
-            anchor_on_activity=effective_sort == "recency",
         )
-
-        if query or effective_sort != "recency":
-            from zerg.services.search import apply_sort
-
-            bm25_order = [str(s.id) for s in sessions]
-            sessions = apply_sort(sessions, effective_sort, bm25_order=bm25_order)
-
-        session_ids = [s.id for s in sessions]
-        match_map = store.get_session_matches(session_ids, query, context_mode=context_mode) if query else {}
-        activity_map = store.get_last_activity_map(session_ids)
-        first_user_map = store.get_first_message_map(session_ids, role="user", max_len=80)
-        thread_cache = store.batch_thread_meta(sessions)
-        now = datetime.now(timezone.utc)
-        runtime_state_map = load_runtime_state_map(db, [session.id for session in sessions])
-        binding_overlay_map = load_binding_overlay(db, session_ids, now=now)
-
-        response_sessions = [
-            build_session_response(
-                store,
-                s,
-                thread_cache=thread_cache,
-                last_activity_at=normalize_utc_datetime(activity_map.get(s.id) or s.ended_at or s.started_at),
-                runtime_overlay=resolve_runtime_overlay(
-                    s,
-                    last_activity_at=activity_map.get(s.id) or s.ended_at or s.started_at,
-                    runtime_state_map=runtime_state_map,
-                    now=now,
-                ),
-                first_user_message=first_user_map.get(s.id),
-                match_event_id=(match_map.get(s.id) or {}).get("event_id"),
-                binding_overlay=binding_overlay_map.get(s.id),
-                match_snippet=(match_map.get(s.id) or {}).get("snippet"),
-                match_role=(match_map.get(s.id) or {}).get("role"),
-            )
-            for s in sessions
-        ]
-
-        if effective_sort == "recency":
-            response_sessions.sort(
-                key=lambda r: r.timeline_anchor_at or r.last_activity_at or r.started_at,
-                reverse=True,
+        result = await list_agent_sessions(db=db, auth=_auth, params=params)
+        if result.headers:
+            return JSONResponse(
+                content=result.response.model_dump(mode="json"),
+                headers=result.headers,
             )
 
-        has_real = total == 0 or (
-            db.query(AgentSession.id)
-            .filter(
-                or_(
-                    AgentSession.device_id != "demo-mac",
-                    AgentSession.device_id.is_(None),
-                )
-            )
-            .limit(1)
-            .first()
-            is not None
-        )
-
-        return SessionsListResponse(
-            sessions=response_sessions,
-            total=total,
-            has_real_sessions=has_real,
-        )
-
+        return result.response
+    except SessionListingError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except HTTPException:
         raise
     except Exception:

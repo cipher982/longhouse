@@ -194,6 +194,26 @@ def test_list_sessions_hybrid_mode_serializes_datetimes(tmp_path):
         assert isinstance(payload["sessions"][0]["started_at"], str)
 
 
+def test_list_sessions_rejects_balanced_sort_without_query(tmp_path):
+    """sort=balanced is only defined for query-backed listing."""
+    factory = _make_db(tmp_path)
+
+    for client in _get_client(factory):
+        resp = client.get("/agents/sessions?sort=balanced&days_back=1")
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "sort=balanced requires a search query (q param)"
+
+
+def test_list_sessions_rejects_hybrid_offset(tmp_path):
+    """Hybrid fusion does not support offset pagination."""
+    factory = _make_db(tmp_path)
+
+    for client in _get_client(factory):
+        resp = client.get("/agents/sessions?mode=hybrid&offset=1&days_back=1")
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "Pagination (offset) is not supported for mode=hybrid"
+
+
 def test_list_sessions_hybrid_mode_batches_semantic_session_loads(tmp_path):
     """Hybrid mode bulk-loads semantic hits instead of fetching each matched session by ID."""
     factory = _make_db(tmp_path)
