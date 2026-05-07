@@ -5819,6 +5819,10 @@ export interface components {
             last_ship_latency_ms?: number | null;
             /** Last Ship Http Status */
             last_ship_http_status?: number | null;
+            /** Last Ship Error Kind */
+            last_ship_error_kind?: string | null;
+            /** Last Ship Error Message */
+            last_ship_error_message?: string | null;
             /**
              * Spool Pending Count
              * @default 0
@@ -6282,6 +6286,10 @@ export interface components {
             last_ship_latency_ms?: number | null;
             /** Last Ship Http Status */
             last_ship_http_status?: number | null;
+            /** Last Ship Error Kind */
+            last_ship_error_kind?: string | null;
+            /** Last Ship Error Message */
+            last_ship_error_message?: string | null;
             /** Ship Attempts 1H */
             ship_attempts_1h: number;
             /** Ship Successes 1H */
