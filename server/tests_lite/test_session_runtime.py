@@ -137,7 +137,11 @@ def test_runtime_reducer_materializes_phase_progress_and_terminal(tmp_path):
                     kind="terminal_signal",
                     occurred_at=now,
                     dedupe_key="terminal-1",
-                    payload={"terminal_state": "finished"},
+                    payload={
+                        "terminal_state": "finished",
+                        "terminal_reason": "provider_exit",
+                        "terminal_source": "claude_hook",
+                    },
                 ),
             ],
         )
@@ -151,6 +155,8 @@ def test_runtime_reducer_materializes_phase_progress_and_terminal(tmp_path):
         assert str(state.session_id) == str(session.id)
         assert state.phase == "finished"
         assert state.terminal_state == "finished"
+        assert state.terminal_reason == "provider_exit"
+        assert state.terminal_source == "claude_hook"
         assert state.active_tool is None
         assert state.last_progress_at is not None
         assert state.timeline_anchor_at is not None
@@ -162,6 +168,8 @@ def test_runtime_reducer_materializes_phase_progress_and_terminal(tmp_path):
         assert view.confidence == "stale"
         assert view.runtime_phase == "finished"
         assert view.runtime_source == "semantic"
+        assert view.terminal_reason == "provider_exit"
+        assert view.terminal_source == "claude_hook"
 
     engine.dispose()
 

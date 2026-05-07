@@ -321,7 +321,7 @@ def build_session_runtime_display(
     binding_closed = binding_terminal_reason == "process_gone" and control_path == "unmanaged"
     if terminal_state:
         lifecycle = "closed"
-        terminal_reason = _derive_terminal_reason(terminal_state)
+        terminal_reason = runtime_view.terminal_reason or _derive_terminal_reason(terminal_state)
     elif binding_closed:
         lifecycle = "closed"
         terminal_reason = binding_terminal_reason

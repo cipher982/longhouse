@@ -395,6 +395,8 @@ def _runtime_events_for_missing_managed_leases(
                 ),
                 payload={
                     "terminal_state": "process_gone",
+                    "terminal_reason": "process_gone",
+                    "terminal_source": MANAGED_SESSION_LEASE_SOURCE,
                     "timeline_anchor_at": timeline_anchor_at.isoformat(),
                 },
             )
@@ -685,6 +687,8 @@ def _runtime_events_for_missing_unbound_unmanaged_sessions(
                 ),
                 payload={
                     "terminal_state": "process_gone",
+                    "terminal_reason": "process_gone",
+                    "terminal_source": UNMANAGED_PROCESS_SNAPSHOT_SOURCE,
                     "timeline_anchor_at": timeline_anchor_at.isoformat(),
                 },
             )

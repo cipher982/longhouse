@@ -157,6 +157,8 @@ class SessionRuntimeView:
     last_progress_at: datetime | None
     runtime_source: str
     terminal_state: str | None
+    terminal_reason: str | None
+    terminal_source: str | None
     runtime_version: int
     status: str
     presence_state: str | None
@@ -238,6 +240,8 @@ def build_runtime_view(
     confidence = _confidence_for_state(state, now=normalized_now)
     runtime_phase = (state.phase or "idle").strip() or "idle"
     terminal_state = (state.terminal_state or "").strip() or None
+    terminal_reason = (state.terminal_reason or "").strip() or None
+    terminal_source = (state.terminal_source or "").strip() or None
     phase_source = (state.phase_source or "fallback").strip() or "fallback"
     active_tool = (state.active_tool or "").strip() or None
     timeline_anchor_at = normalize_utc(state.timeline_anchor_at) or normalize_utc(session.started_at) or normalized_now
@@ -281,6 +285,8 @@ def build_runtime_view(
         last_progress_at=normalize_utc(state.last_progress_at),
         runtime_source=phase_source,
         terminal_state=terminal_state,
+        terminal_reason=terminal_reason,
+        terminal_source=terminal_source,
         runtime_version=int(state.runtime_version or 0),
         status=status,
         presence_state=presence_state,
@@ -342,6 +348,8 @@ def build_fallback_runtime_view(
         last_progress_at=progress_at,
         runtime_source="fallback",
         terminal_state=terminal_state,
+        terminal_reason=None,
+        terminal_source=None,
         runtime_version=0,
         status=status,
         presence_state=None,
@@ -595,6 +603,8 @@ def _state_snapshot(state: SessionRuntimeState | None) -> tuple[Any, ...] | None
         normalize_utc(state.timeline_anchor_at),
         normalize_utc(state.freshness_expires_at),
         state.terminal_state,
+        state.terminal_reason,
+        state.terminal_source,
         normalize_utc(state.terminal_at),
     )
 
@@ -620,6 +630,8 @@ def _ensure_state(db: Session, event: RuntimeEventIngest) -> SessionRuntimeState
         timeline_anchor_at=occurred_at,
         freshness_expires_at=None,
         terminal_state=None,
+        terminal_reason=None,
+        terminal_source=None,
         terminal_at=None,
         runtime_version=0,
     )
@@ -687,6 +699,8 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
         freshness_ms = _phase_signal_freshness_ms(event, next_phase)
         state.freshness_expires_at = occurred_at + timedelta(milliseconds=freshness_ms) if freshness_ms is not None else None
         state.terminal_state = None
+        state.terminal_reason = None
+        state.terminal_source = None
         state.terminal_at = None
 
     elif event.kind == "progress_signal":
@@ -703,6 +717,8 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
             normalize_utc(state.terminal_at) is None or occurred_at >= normalize_utc(state.terminal_at)
         ):
             state.terminal_state = None
+            state.terminal_reason = None
+            state.terminal_source = None
             state.terminal_at = None
             state.phase = "idle"
             state.active_tool = None
@@ -721,6 +737,10 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
         if latest_terminal_related_at is not None and occurred_at < latest_terminal_related_at:
             return "ignored"
         terminal_state = str((event.payload or {}).get("terminal_state") or "finished").strip() or "finished"
+        terminal_reason = str((event.payload or {}).get("terminal_reason") or "").strip() or None
+        if terminal_reason is None and terminal_state in {"process_gone", "host_expired", "user_closed"}:
+            terminal_reason = terminal_state
+        terminal_source = str((event.payload or {}).get("terminal_source") or event.source or "").strip() or None
         state.phase = "finished"
         state.phase_source = "semantic"
         state.active_tool = None
@@ -728,6 +748,8 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
         state.last_live_at = occurred_at
         state.freshness_expires_at = occurred_at
         state.terminal_state = terminal_state
+        state.terminal_reason = terminal_reason
+        state.terminal_source = terminal_source
         state.terminal_at = occurred_at
         state.timeline_anchor_at = _payload_timestamp(event.payload or {}, "timeline_anchor_at") or occurred_at
         phase_started_at = normalize_utc(state.phase_started_at)

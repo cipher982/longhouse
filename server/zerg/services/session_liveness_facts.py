@@ -100,11 +100,12 @@ def _explicit_lifecycle(runtime_view: SessionRuntimeView) -> LifecycleFact | Non
     if terminal_state is None:
         return None
     observed_at = runtime_view.presence_updated_at or runtime_view.last_live_at
+    terminal_reason = _normalized(runtime_view.terminal_reason)
     if terminal_state in _EXPLICIT_CLOSED_TERMINAL_STATES:
-        return LifecycleFact(state="closed", reason=terminal_state, observed_at=observed_at)
+        return LifecycleFact(state="closed", reason=terminal_reason or terminal_state, observed_at=observed_at)
     if terminal_state in _UNVERIFIED_TERMINAL_STATES:
-        return LifecycleFact(state="unknown", reason=terminal_state, observed_at=observed_at)
-    return LifecycleFact(state="closed", reason="provider_signal", observed_at=observed_at)
+        return LifecycleFact(state="unknown", reason=terminal_reason or terminal_state, observed_at=observed_at)
+    return LifecycleFact(state="closed", reason=terminal_reason or "provider_signal", observed_at=observed_at)
 
 
 def _phase_observation(runtime_view: SessionRuntimeView) -> PhaseObservation:

@@ -684,16 +684,42 @@ print(json.dumps(payload))
         runtime = hosted.get("runtime_state") or {}
         contains = hosted_events_contain(hosted, nonce)
         closed = lifecycle_closed(hosted)
+        close_latency = self.event_delta_ms(case_id, session_id, "shutdown_requested", "hosted_runtime_closed")
+        terminal = terminal_details(hosted)
         ownership = session.get("execution_home") or "-"
         transport = session.get("managed_transport") or "-"
         if not session:
             return "missing", "hosted session row not observed"
+        transcript = "synced" if contains else "missing"
+        close_note = "close=missing"
+        if closed:
+            close_note = "close=closed"
+            if close_latency is not None:
+                close_note += f" in {close_latency}ms"
+            if terminal.get("source"):
+                close_note += f" source={terminal['source']}"
+            if terminal.get("reason"):
+                close_note += f" reason={terminal['reason']}"
         if not contains:
-            return "missing", f"hosted events did not include nonce; ownership={ownership}, transport={transport}"
+            verdict = "partial" if closed else "missing"
+            return verdict, f"transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
         if not closed:
             phase = runtime.get("phase") or runtime.get("terminal_state") or "-"
             return "pass", f"nonce synced; close not confirmed yet; phase={phase}; ownership={ownership}, transport={transport}"
-        return "pass", f"nonce synced and closed; ownership={ownership}, transport={transport}"
+        return "pass", f"transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
+
+    def event_delta_ms(self, case_id: str, session_id: str, start_event: str, end_event: str) -> int | None:
+        start = None
+        for row in self.observations:
+            if row.get("case_id") != case_id or row.get("session_id") != session_id:
+                continue
+            if row.get("event") == start_event and start is None:
+                start = row.get("observed_at_monotonic_ms")
+            if row.get("event") == end_event and start is not None:
+                end = row.get("observed_at_monotonic_ms")
+                if isinstance(start, int) and isinstance(end, int):
+                    return end - start
+        return None
 
 
 def redact_cmd(cmd: list[str]) -> list[str]:
@@ -771,6 +797,26 @@ def lifecycle_closed(data: dict[str, Any]) -> bool:
             return True
     session = data.get("session") or {}
     return bool(session.get("ended_at"))
+
+
+def terminal_details(data: dict[str, Any]) -> dict[str, str | None]:
+    runtime = data.get("runtime_state") or {}
+    details = {
+        "state": str(runtime.get("terminal_state") or "").strip() or None,
+        "reason": str(runtime.get("terminal_reason") or "").strip() or None,
+        "source": str(runtime.get("terminal_source") or "").strip() or None,
+    }
+    for event in data.get("runtime_events") or []:
+        if event.get("kind") != "terminal_signal":
+            continue
+        details["source"] = details["source"] or str(event.get("source") or "").strip() or None
+        payload = safe_json_loads(str(event.get("payload_json") or "")) or {}
+        if isinstance(payload, dict):
+            details["state"] = details["state"] or str(payload.get("terminal_state") or "").strip() or None
+            details["reason"] = details["reason"] or str(payload.get("terminal_reason") or "").strip() or None
+            details["source"] = details["source"] or str(payload.get("terminal_source") or "").strip() or None
+        break
+    return details
 
 
 def compact_hosted(data: dict[str, Any]) -> dict[str, Any]:
