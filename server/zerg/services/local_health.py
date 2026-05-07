@@ -14,6 +14,7 @@ import re
 import shlex
 import shutil
 import sqlite3
+from collections.abc import Iterator
 from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -266,8 +267,7 @@ _THREAD_SUBSCRIPTION_TRANSIENT_STATES = frozenset(
 )
 
 
-def _read_session_context(path: Path, *, max_lines: int = 6) -> tuple[str | None, str | None]:
-    """Extract cwd and branch from the first few JSONL records when available."""
+def _session_context_payloads(path: Path, *, max_lines: int) -> Iterator[Any]:
     try:
         with path.open() as handle:
             for index, raw_line in enumerate(handle):
@@ -280,25 +280,49 @@ def _read_session_context(path: Path, *, max_lines: int = 6) -> tuple[str | None
                     payload = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-
-                cwd = None
-                branch = None
-
-                if isinstance(payload, dict):
-                    if isinstance(payload.get("payload"), dict):
-                        meta = payload["payload"]
-                        cwd = meta.get("cwd") if isinstance(meta.get("cwd"), str) else None
-                        if isinstance(meta.get("git"), dict):
-                            branch = meta["git"].get("branch") if isinstance(meta["git"].get("branch"), str) else None
-                    if isinstance(payload.get("message"), dict):
-                        message = payload["message"]
-                        cwd = cwd or (message.get("cwd") if isinstance(message.get("cwd"), str) else None)
-                        branch = branch or (message.get("gitBranch") if isinstance(message.get("gitBranch"), str) else None)
-
-                if cwd or branch:
-                    return cwd, branch
+                yield payload
     except OSError:
-        return None, None
+        return
+
+
+def _payload_metadata_context(meta: dict[str, Any]) -> tuple[str | None, str | None]:
+    cwd = meta.get("cwd") if isinstance(meta.get("cwd"), str) else None
+    branch = None
+    if isinstance(meta.get("git"), dict):
+        branch = meta["git"].get("branch") if isinstance(meta["git"].get("branch"), str) else None
+    return cwd, branch
+
+
+def _payload_message_context(
+    message: dict[str, Any],
+    *,
+    cwd: str | None,
+    branch: str | None,
+) -> tuple[str | None, str | None]:
+    cwd = cwd or (message.get("cwd") if isinstance(message.get("cwd"), str) else None)
+    branch = branch or (message.get("gitBranch") if isinstance(message.get("gitBranch"), str) else None)
+    return cwd, branch
+
+
+def _session_context_from_payload(payload: Any) -> tuple[str | None, str | None]:
+    cwd = None
+    branch = None
+    if not isinstance(payload, dict):
+        return cwd, branch
+
+    if isinstance(payload.get("payload"), dict):
+        cwd, branch = _payload_metadata_context(payload["payload"])
+    if isinstance(payload.get("message"), dict):
+        cwd, branch = _payload_message_context(payload["message"], cwd=cwd, branch=branch)
+    return cwd, branch
+
+
+def _read_session_context(path: Path, *, max_lines: int = 6) -> tuple[str | None, str | None]:
+    """Extract cwd and branch from the first few JSONL records when available."""
+    for payload in _session_context_payloads(path, max_lines=max_lines):
+        cwd, branch = _session_context_from_payload(payload)
+        if cwd or branch:
+            return cwd, branch
 
     return None, None
 
