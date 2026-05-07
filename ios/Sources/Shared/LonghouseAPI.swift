@@ -42,7 +42,7 @@ actor RenderBeaconReporter {
 
 protocol SessionWorkspaceClient: Sendable {
     func sessionWorkspace(id: String, limit: Int, branchMode: String) async throws -> SessionWorkspaceResponse
-    func sendInput(id: String, text: String, intent: String) async throws -> SessionInputResponse
+    func sendInput(id: String, text: String, intent: String, clientRequestId: String?) async throws -> SessionInputResponse
     func draftReply(id: String, maxChars: Int) async throws -> DraftReplyResponse
     func setSessionLoopMode(id: String, loopMode: SessionLoopMode) async throws -> LoopModeResponse
     func postRenderBeacon(_ payload: RenderBeaconReporter.Payload) async
@@ -147,12 +147,21 @@ struct LonghouseAPI: Sendable {
     /// UI's capability check and dispatch. That surfaces as
     /// `LonghouseAPIError.structured(...)` so the caller can offer a
     /// "Queue instead" action instead of silently converting the intent.
-    func sendInput(id: String, text: String, intent: String = "auto") async throws -> SessionInputResponse {
+    func sendInput(
+        id: String,
+        text: String,
+        intent: String = "auto",
+        clientRequestId: String? = nil
+    ) async throws -> SessionInputResponse {
         var request = URLRequest(url: baseURL.appendingPathComponent("/api/sessions/\(id)/input"))
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
         request.addValue("application/json", forHTTPHeaderField: "Accept")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["text": text, "intent": intent])
+        var body: [String: Any] = ["text": text, "intent": intent]
+        if let clientRequestId, !clientRequestId.isEmpty {
+            body["client_request_id"] = clientRequestId
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, httpResponse) = try await data(for: request)
         guard (200..<300).contains(httpResponse.statusCode) else {
