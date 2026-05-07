@@ -4,8 +4,6 @@ This module provides database connection and session management for Zerg.
 The codebase is SQLite-only for OSS deployment simplicity.
 """
 
-# ruff: noqa: E501
-
 import logging
 import os
 from contextlib import contextmanager
@@ -612,11 +610,8 @@ def _migrate_agents_columns(engine: Engine) -> None:
             if "user_state_at" not in columns:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN user_state_at DATETIME"))
             if "execution_home" not in columns:
-                conn.execute(
-                    text(
-                        f"ALTER TABLE sessions ADD COLUMN execution_home VARCHAR(32) DEFAULT '{SessionExecutionHome.UNMANAGED_LOCAL.value}' NOT NULL"
-                    )
-                )
+                default_home = SessionExecutionHome.UNMANAGED_LOCAL.value
+                conn.execute(text(f"ALTER TABLE sessions ADD COLUMN execution_home VARCHAR(32) DEFAULT '{default_home}' NOT NULL"))
             conn.execute(
                 text(
                     f"""
