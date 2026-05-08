@@ -262,9 +262,7 @@ print(json.dumps(payload, default=str))
             "-o",
             "ControlPath=none",
             self.args.ssh_target,
-            "python3",
-            "-c",
-            "import time; print(int(time.time()*1000))",
+            "python3 -c 'import time; print(int(time.time()*1000))'",
         ]
         before = time.time() * 1000
         completed = run_cmd(cmd, timeout=10)
