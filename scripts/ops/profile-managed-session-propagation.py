@@ -17,6 +17,7 @@ import shlex
 import signal
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -107,6 +108,8 @@ class Profiler:
         self.subdomain = args.subdomain
         self.container = args.container or f"{HOSTED_CONTAINER_PREFIX}{self.subdomain}"
         self.remote_clock_skew_ms = self.measure_remote_clock_skew_ms()
+        self._observe_lock = threading.Lock()
+        self._browser_session_cookie: str | None = None
 
     def observe(
         self,
@@ -136,9 +139,10 @@ class Profiler:
             "clock_skew_ms": self.remote_clock_skew_ms,
             "payload": payload or {},
         }
-        self.observations.append(row)
-        with self.observations_path.open("a") as fh:
-            fh.write(json.dumps(row, sort_keys=True) + "\n")
+        with self._observe_lock:
+            self.observations.append(row)
+            with self.observations_path.open("a") as fh:
+                fh.write(json.dumps(row, sort_keys=True) + "\n")
 
     def run_observed(
         self,
@@ -285,20 +289,86 @@ print(json.dumps(payload, default=str))
         midpoint = (before + after) / 2
         return int(round(remote_ms - midpoint))
 
-    def timeline_session(self, session_id: str) -> dict[str, Any] | None:
+    def browser_session_cookie(self) -> str | None:
+        if self._browser_session_cookie:
+            return self._browser_session_cookie
+
         script = r"""
-import json, sys
-from fastapi.testclient import TestClient
-from zerg.main import api_app
-sid = sys.argv[1]
-c = TestClient(api_app)
-detail = c.get(f"/timeline/sessions/{sid}")
-listing = c.get("/timeline/sessions", params={"project":"zerg","provider":"codex","limit":20})
-payload = {"detail_status": detail.status_code, "listing_status": listing.status_code}
-if detail.status_code == 200:
-    payload["detail"] = detail.json()
-if listing.status_code == 200:
-    data = listing.json()
+from zerg.auth.session_tokens import _issue_access_token
+from zerg.database import db_session
+from zerg.models.models import User
+
+with db_session() as db:
+    user = db.query(User).order_by(User.id.asc()).first()
+    if user is None:
+        raise SystemExit("no browser user found")
+    print(_issue_access_token(user.id, user.email, display_name=user.display_name, avatar_url=user.avatar_url))
+"""
+        proc = subprocess.run(
+            [
+                "ssh",
+                self.args.ssh_target,
+                "docker",
+                "exec",
+                "-i",
+                self.container,
+                "python3",
+                "-",
+            ],
+            input=script,
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        token = (proc.stdout or "").strip().splitlines()[-1] if proc.stdout else ""
+        if proc.returncode != 0 or not token:
+            return None
+        self._browser_session_cookie = token
+        return token
+
+    def timeline_session(self, session_id: str) -> dict[str, Any] | None:
+        token = self.browser_session_cookie()
+        if not token:
+            return {"error": "could not mint browser session cookie"}
+
+        script = r"""
+import json, sys, time
+import httpx
+
+token, sid, project = sys.argv[1], sys.argv[2], sys.argv[3]
+headers = {"Cookie": f"longhouse_session={token}"}
+client = httpx.Client(base_url="http://127.0.0.1:8000/api", headers=headers, timeout=10.0)
+
+def get(path, **params):
+    started = time.monotonic()
+    response = client.get(path, params=params)
+    elapsed = int((time.monotonic() - started) * 1000)
+    body = None
+    if response.headers.get("content-type", "").startswith("application/json"):
+        body = response.json()
+    return response.status_code, elapsed, body, response.text[:500]
+
+detail_status, detail_ms, detail_body, detail_text = get(f"/timeline/sessions/{sid}")
+listing_status, listing_ms, listing_body, listing_text = get(
+    "/timeline/sessions",
+    project=project,
+    provider="codex",
+    limit=20,
+    hide_autonomous="true",
+)
+payload = {
+    "detail_status": detail_status,
+    "detail_request_ms": detail_ms,
+    "listing_status": listing_status,
+    "listing_request_ms": listing_ms,
+}
+if detail_status == 200:
+    payload["detail"] = detail_body
+else:
+    payload["detail_error"] = detail_text
+if listing_status == 200 and isinstance(listing_body, dict):
+    data = listing_body
     payload["listing_total"] = data.get("total")
     matches = []
     for card in data.get("sessions", []):
@@ -309,6 +379,8 @@ if listing.status_code == 200:
         if sid in ids:
             matches.append(card)
     payload["matches"] = matches
+else:
+    payload["listing_error"] = listing_text
 print(json.dumps(payload, default=str))
 """
         proc = subprocess.run(
@@ -318,12 +390,12 @@ print(json.dumps(payload, default=str))
                 "docker",
                 "exec",
                 "-i",
-                "-e",
-                "AUTH_DISABLED=1",
                 self.container,
                 "python3",
                 "-",
+                token,
                 session_id,
+                self.project,
             ],
             input=script,
             text=True,
@@ -339,22 +411,67 @@ print(json.dumps(payload, default=str))
         return None
 
     def timeline_sse_initial_replay(self, session_id: str) -> dict[str, Any] | None:
+        token = self.browser_session_cookie()
+        if not token:
+            return {"error": "could not mint browser session cookie"}
+
         script = r"""
-import json, sys
-from fastapi.testclient import TestClient
-from zerg.main import api_app
-sid = sys.argv[1]
-c = TestClient(api_app)
+import json, sys, time
+import httpx
+
+token, sid, project = sys.argv[1], sys.argv[2], sys.argv[3]
+headers = {"Cookie": f"longhouse_session={token}"}
+params = {"project": project, "provider": "codex", "limit": "20", "hide_autonomous": "true"}
 seen = []
-with c.stream("GET", "/timeline/sessions/stream", params={"project":"zerg","provider":"codex","limit":20}) as r:
-    for raw in r.iter_lines():
-        if not raw:
+events = []
+event_name = None
+data_lines = []
+contains_session = False
+started = time.monotonic()
+
+def flush_event():
+    global event_name, data_lines
+    if event_name is None and not data_lines:
+        return False
+    data = "\n".join(data_lines)
+    events.append({"event": event_name, "data": data[:1000]})
+    event_name = None
+    data_lines = []
+    return sid in data
+
+timeout = httpx.Timeout(12.0, connect=3.0, read=12.0)
+with httpx.stream(
+    "GET",
+    "http://127.0.0.1:8000/api/timeline/sessions/stream",
+    params=params,
+    headers=headers,
+    timeout=timeout,
+) as response:
+    status_code = response.status_code
+    for line in response.iter_lines():
+        if sid in line:
+            contains_session = True
+        seen.append(line[:1000])
+        if line == "":
+            contains_session = flush_event() or contains_session
+            if contains_session or len(seen) > 120:
+                break
             continue
-        line = raw.decode() if isinstance(raw, bytes) else raw
-        seen.append(line)
-        if sid in line or len(seen) > 80:
+        if line.startswith("event:"):
+            event_name = line[6:].strip()
+        elif line.startswith("data:"):
+            data_lines.append(line[5:].lstrip())
+        if sid in line or len(seen) > 120:
             break
-payload = {"line_count": len(seen), "contains_session": any(sid in line for line in seen), "sample": seen[:20]}
+
+payload = {
+    "status_code": status_code,
+    "line_count": len(seen),
+    "contains_session": contains_session or any(sid in event.get("data", "") for event in events),
+    "elapsed_ms": int((time.monotonic() - started) * 1000),
+    "events": events[:8],
+    "sample": seen[:20],
+}
 print(json.dumps(payload))
 """
         proc = subprocess.run(
@@ -364,17 +481,17 @@ print(json.dumps(payload))
                 "docker",
                 "exec",
                 "-i",
-                "-e",
-                "AUTH_DISABLED=1",
                 self.container,
                 "python3",
                 "-",
+                token,
                 session_id,
+                self.project,
             ],
             input=script,
             text=True,
             capture_output=True,
-            timeout=8,
+            timeout=15,
             check=False,
         )
         for line in reversed((proc.stdout or "").splitlines()):
@@ -421,6 +538,69 @@ print(json.dumps(payload))
         )
         return last
 
+    def poll_timeline_session(
+        self,
+        session_id: str,
+        *,
+        case_id: str,
+        ownership: str,
+        predicate,
+        event: str,
+        timeout: float = 30,
+        interval: float = 0.25,
+    ) -> dict[str, Any] | None:
+        deadline = time.monotonic() + timeout
+        last: dict[str, Any] | None = None
+        while time.monotonic() < deadline:
+            data = self.timeline_session(session_id)
+            last = data if isinstance(data, dict) else None
+            if last is not None and predicate(last):
+                self.observe(
+                    case_id=case_id,
+                    provider="codex",
+                    ownership=ownership,
+                    source="hosted_http",
+                    event=event,
+                    session_id=session_id,
+                    payload=compact_timeline(last),
+                )
+                return last
+            time.sleep(interval)
+        self.observe(
+            case_id=case_id,
+            provider="codex",
+            ownership=ownership,
+            source="hosted_http",
+            event=f"{event}_timeout",
+            session_id=session_id,
+            payload=compact_timeline(last or {}),
+        )
+        return last
+
+    def start_timeline_live_poll(
+        self,
+        session_id: str,
+        nonce: str,
+        *,
+        case_id: str,
+        ownership: str,
+    ) -> threading.Thread:
+        thread = threading.Thread(
+            target=lambda: self.poll_timeline_session(
+                session_id,
+                case_id=case_id,
+                ownership=ownership,
+                predicate=lambda data: timeline_live_transcript_contains(data, nonce),
+                event="timeline_live_transcript_visible",
+                timeout=90,
+                interval=0.1,
+            ),
+            name=f"timeline-live-poll-{session_id}",
+            daemon=True,
+        )
+        thread.start()
+        return thread
+
     def run_managed_codex(self) -> dict[str, Any]:
         case_id = "B1"
         ownership = "managed"
@@ -466,6 +646,15 @@ print(json.dumps(payload))
             provider_session_id=session_id,
             payload={"ws_url": ws_url},
         )
+        self.poll_timeline_session(
+            session_id,
+            case_id=case_id,
+            ownership=ownership,
+            predicate=timeline_has_card,
+            event="timeline_card_visible_pre_ingest",
+            timeout=30,
+            interval=0.25,
+        )
         self.write_snapshot(case_id, ownership, session_id, "post_launch")
 
         tui_log = self.output_dir / f"{session_id}-managed-tui.log"
@@ -507,6 +696,12 @@ print(json.dumps(payload))
             payload={"thread_id": thread_id, "state": state},
         )
 
+        timeline_live_poll = self.start_timeline_live_poll(
+            session_id,
+            nonce,
+            case_id=case_id,
+            ownership=ownership,
+        )
         send = self.run_observed(
             [
                 "longhouse-engine",
@@ -534,6 +729,7 @@ print(json.dumps(payload))
                 ownership=ownership,
                 session_id=session_id,
             )
+        timeline_live_poll.join(timeout=95)
         self.poll_hosted_session(
             session_id,
             case_id=case_id,
@@ -790,6 +986,24 @@ print(json.dumps(payload))
             "assistant_response_local",
             "assistant_response_hosted",
         )
+        card_latency = self.event_delta_ms(
+            case_id,
+            session_id,
+            "session_id_observed",
+            "timeline_card_visible_pre_ingest",
+        )
+        live_http_latency = self.event_delta_ms(
+            case_id,
+            session_id,
+            "prompt_sent_started",
+            "timeline_live_transcript_visible",
+        )
+        live_http_from_local_latency = self.event_delta_ms(
+            case_id,
+            session_id,
+            "assistant_response_local",
+            "timeline_live_transcript_visible",
+        )
         close_latency = self.event_delta_ms(case_id, session_id, "shutdown_requested", "hosted_runtime_closed")
         terminal = terminal_details(hosted)
         transcript_ingest = transcript_ingest_details(hosted, self.remote_clock_skew_ms)
@@ -804,6 +1018,12 @@ print(json.dumps(payload))
             transcript += f" provider={provider_latency}ms"
         if propagation_latency is not None:
             transcript += f" local_to_hosted={propagation_latency}ms"
+        if card_latency is not None:
+            transcript += f" timeline_card_pre_ingest={card_latency}ms"
+        if live_http_latency is not None:
+            transcript += f" live_http={live_http_latency}ms"
+        if live_http_from_local_latency is not None:
+            transcript += f" live_http_from_local={live_http_from_local_latency}ms"
         if transcript_ingest.get("ingest_lag_ms") is not None:
             transcript += f" server_ingest_lag={transcript_ingest['ingest_lag_ms']}ms"
         if transcript_ingest.get("skew_adjusted_lag_ms") is not None:
@@ -1176,7 +1396,9 @@ def compact_timeline(data: dict[str, Any]) -> dict[str, Any]:
     matches = data.get("matches") or []
     return {
         "detail_status": data.get("detail_status"),
+        "detail_request_ms": data.get("detail_request_ms"),
         "listing_status": data.get("listing_status"),
+        "listing_request_ms": data.get("listing_request_ms"),
         "listing_total": data.get("listing_total"),
         "detail": {
             key: detail.get(key)
@@ -1190,6 +1412,7 @@ def compact_timeline(data: dict[str, Any]) -> dict[str, Any]:
                 "runtime_display",
                 "timeline_card",
                 "capabilities",
+                "live_transcript",
             ]
         },
         "matches": [
@@ -1201,11 +1424,39 @@ def compact_timeline(data: dict[str, Any]) -> dict[str, Any]:
                     "summary_title": (card.get("head") or {}).get("summary_title"),
                     "timeline_card": (card.get("head") or {}).get("timeline_card"),
                     "runtime_display": (card.get("head") or {}).get("runtime_display"),
+                    "live_transcript": (card.get("head") or {}).get("live_transcript"),
                 },
             }
             for card in matches[:3]
         ],
     }
+
+
+def timeline_has_card(data: dict[str, Any]) -> bool:
+    return data.get("detail_status") == 200 and bool(data.get("matches"))
+
+
+def timeline_live_transcript_contains(data: dict[str, Any], nonce: str) -> bool:
+    for live in timeline_live_transcripts(data):
+        text = str(live.get("text") or live.get("preview") or "")
+        if nonce in text:
+            return True
+    return False
+
+
+def timeline_live_transcripts(data: dict[str, Any]) -> list[dict[str, Any]]:
+    transcripts: list[dict[str, Any]] = []
+    detail = data.get("detail")
+    if isinstance(detail, dict) and isinstance(detail.get("live_transcript"), dict):
+        transcripts.append(detail["live_transcript"])
+    for card in data.get("matches") or []:
+        if not isinstance(card, dict):
+            continue
+        for key in ("head", "detail", "root"):
+            value = card.get(key)
+            if isinstance(value, dict) and isinstance(value.get("live_transcript"), dict):
+                transcripts.append(value["live_transcript"])
+    return transcripts
 
 
 def compact_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
