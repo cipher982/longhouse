@@ -534,6 +534,15 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &mut codex_terminal_catchup_marks,
                     &observations,
                 );
+                pump_ready_local_work(
+                    &mut scheduler,
+                    &mut in_flight,
+                    &task_context,
+                    &mut deferred_retries,
+                    &mut transcript_catchups,
+                    &mut active_transcript_polls,
+                    offline.is_offline,
+                );
                 let payload = write_local_status_snapshot(
                     &conn,
                     &tracker,
@@ -548,15 +557,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 );
                 bridge_reaper.tick(&observations);
                 let signature = runtime_truth_signature(&payload);
-                pump_ready_local_work(
-                    &mut scheduler,
-                    &mut in_flight,
-                    &task_context,
-                    &mut deferred_retries,
-                    &mut transcript_catchups,
-                    &mut active_transcript_polls,
-                    offline.is_offline,
-                );
                 if !runtime_truth_bootstrapped {
                     last_runtime_truth_signature = Some(signature);
                     runtime_truth_bootstrapped = true;
@@ -586,6 +586,15 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &mut codex_terminal_catchup_marks,
                     &observations,
                 );
+                pump_ready_local_work(
+                    &mut scheduler,
+                    &mut in_flight,
+                    &task_context,
+                    &mut deferred_retries,
+                    &mut transcript_catchups,
+                    &mut active_transcript_polls,
+                    offline.is_offline,
+                );
                 let payload = write_local_status_snapshot(
                     &conn,
                     &tracker,
@@ -597,15 +606,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &status_path,
                     &observations,
                     &claude_observations,
-                );
-                pump_ready_local_work(
-                    &mut scheduler,
-                    &mut in_flight,
-                    &task_context,
-                    &mut deferred_retries,
-                    &mut transcript_catchups,
-                    &mut active_transcript_polls,
-                    offline.is_offline,
                 );
                 if !offline.is_offline {
                     runtime_truth_bootstrapped = true;
@@ -1220,7 +1220,7 @@ fn schedule_transcript_catchup(
             active_transcript_polls.insert(
                 path.clone(),
                 ActiveTranscriptPoll {
-                    due_at: now + ACTIVE_TRANSCRIPT_POLL_INTERVAL,
+                    due_at: now,
                     expires_at: now + ACTIVE_TRANSCRIPT_POLL_TTL,
                     provider,
                 },
@@ -1235,9 +1235,9 @@ fn schedule_transcript_catchup(
             }
         }
         // A bridge wake arrives at turn start, before Codex has necessarily
-        // written useful rollout content. Let the live poll carry the first
-        // durable transcript pass so an early no-op pass cannot block the same
-        // path once real output lands.
+        // written useful rollout content. Let the active poll carry durable
+        // transcript passes without adding a separate pending catch-up for
+        // the same path.
         if observation_source != "wake_socket"
             && !transcript_catchups.iter().any(|item| item.path == path)
         {
@@ -1934,6 +1934,12 @@ mod tests {
 
         assert!(catchups.is_empty());
         assert!(active_polls.contains_key(&path));
+        let mut scheduler = PathScheduler::new(4);
+        drain_due_active_transcript_polls(&mut scheduler, &mut active_polls);
+        let job = scheduler.pop_launchable().expect("wake active poll queued");
+        assert_eq!(job.path, path);
+        assert_eq!(job.priority, WorkPriority::Live);
+        assert_eq!(job.observation.source, "active_poll");
     }
 
     #[test]
