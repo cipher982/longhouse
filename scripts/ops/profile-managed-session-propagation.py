@@ -577,6 +577,69 @@ print(json.dumps(payload))
         )
         return last
 
+    def poll_timeline_live_transcript(
+        self,
+        session_id: str,
+        nonce: str,
+        *,
+        case_id: str,
+        ownership: str,
+        timeout: float = 90,
+        interval: float = 0.1,
+    ) -> dict[str, Any] | None:
+        deadline = time.monotonic() + timeout
+        last: dict[str, Any] | None = None
+        first_observed = False
+
+        while time.monotonic() < deadline:
+            data = self.timeline_session(session_id)
+            last = data if isinstance(data, dict) else None
+            transcripts = timeline_live_transcripts(last or {})
+            if transcripts and not first_observed:
+                first_observed = True
+                self.observe(
+                    case_id=case_id,
+                    provider="codex",
+                    ownership=ownership,
+                    source="hosted_http",
+                    event="timeline_live_transcript_first_visible",
+                    session_id=session_id,
+                    payload=compact_timeline(last or {}),
+                )
+            if last is not None and timeline_live_transcript_contains(last, nonce):
+                self.observe(
+                    case_id=case_id,
+                    provider="codex",
+                    ownership=ownership,
+                    source="hosted_http",
+                    event="timeline_live_transcript_visible",
+                    session_id=session_id,
+                    payload=compact_timeline(last),
+                )
+                return last
+            time.sleep(interval)
+
+        if not first_observed:
+            self.observe(
+                case_id=case_id,
+                provider="codex",
+                ownership=ownership,
+                source="hosted_http",
+                event="timeline_live_transcript_first_visible_timeout",
+                session_id=session_id,
+                payload=compact_timeline(last or {}),
+            )
+        self.observe(
+            case_id=case_id,
+            provider="codex",
+            ownership=ownership,
+            source="hosted_http",
+            event="timeline_live_transcript_visible_timeout",
+            session_id=session_id,
+            payload=compact_timeline(last or {}),
+        )
+        return last
+
     def start_timeline_live_poll(
         self,
         session_id: str,
@@ -586,14 +649,11 @@ print(json.dumps(payload))
         ownership: str,
     ) -> threading.Thread:
         thread = threading.Thread(
-            target=lambda: self.poll_timeline_session(
+            target=lambda: self.poll_timeline_live_transcript(
                 session_id,
+                nonce,
                 case_id=case_id,
                 ownership=ownership,
-                predicate=lambda data: timeline_live_transcript_contains(data, nonce),
-                event="timeline_live_transcript_visible",
-                timeout=90,
-                interval=0.1,
             ),
             name=f"timeline-live-poll-{session_id}",
             daemon=True,
@@ -606,6 +666,7 @@ print(json.dumps(payload))
         ownership = "managed"
         nonce = f"LH_PROBE_CODEX_MANAGED_{self.run_id}"
         name = f"{self.args.name_prefix}-managed-{self.run_id}"
+        self.browser_session_cookie()
         self.observe(
             case_id=case_id,
             provider="codex",
@@ -998,11 +1059,23 @@ print(json.dumps(payload))
             "prompt_sent_started",
             "timeline_live_transcript_visible",
         )
+        first_live_http_latency = self.event_delta_ms(
+            case_id,
+            session_id,
+            "prompt_sent_started",
+            "timeline_live_transcript_first_visible",
+        )
         live_http_from_local_latency = self.event_delta_ms(
             case_id,
             session_id,
             "assistant_response_local",
             "timeline_live_transcript_visible",
+        )
+        first_live_http_from_local_latency = self.event_delta_ms(
+            case_id,
+            session_id,
+            "assistant_response_local",
+            "timeline_live_transcript_first_visible",
         )
         close_latency = self.event_delta_ms(case_id, session_id, "shutdown_requested", "hosted_runtime_closed")
         terminal = terminal_details(hosted)
@@ -1020,8 +1093,12 @@ print(json.dumps(payload))
             transcript += f" local_to_hosted={propagation_latency}ms"
         if card_latency is not None:
             transcript += f" timeline_card_pre_ingest={card_latency}ms"
+        if first_live_http_latency is not None:
+            transcript += f" first_live_http={first_live_http_latency}ms"
         if live_http_latency is not None:
             transcript += f" live_http={live_http_latency}ms"
+        if first_live_http_from_local_latency is not None:
+            transcript += f" first_live_http_from_local={first_live_http_from_local_latency}ms"
         if live_http_from_local_latency is not None:
             transcript += f" live_http_from_local={live_http_from_local_latency}ms"
         if transcript_ingest.get("ingest_lag_ms") is not None:
