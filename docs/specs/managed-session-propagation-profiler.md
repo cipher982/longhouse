@@ -82,7 +82,7 @@ Managed sessions have two different truth lanes:
 - **Managed live UI lane**: control-path runtime events from bridge/channel state. This lane owns current UI truth: running, thinking, idle, closed, active tool, and latest live output. Target: p95 < 500ms from local bridge/channel observation to timeline API/SSE visibility on nominal networks.
 - **Durable archive lane**: transcript file ingest into canonical `events` and turn durability. This lane owns history, search, replay, and reconciliation. Target: p95 < 5s from provider transcript append/turn completion to durable canonical events, with alerting when a managed runtime-completed turn is not durable after 30s.
 
-The profiler must report both lanes. A managed card can be truthful in the live UI lane before the transcript archive has caught up. That is not a failure; it is the intended architecture. A live UI that waits for transcript ingest is a failure for managed sessions.
+The profiler must report both lanes. A managed card can be truthful in the live UI lane before the transcript archive has caught up. That is not a failure; it is the intended architecture. A live UI that waits for transcript ingest is a failure for managed sessions. Because the browser timeline consumes `/api/timeline/sessions/stream`, the managed live UI verdict should use timeline SSE first and keep REST polling as a comparison/backstop measurement.
 
 The transcript shipper can and should be improved for archive freshness, but it must not be the primary realtime state source for managed sessions. For managed Codex, the bridge is the clock and rollout JSONL ingest is the ledger.
 
@@ -111,7 +111,7 @@ The profiler should fail a managed graceful shutdown if the first terminal event
    Add a best-effort provider exit hook/outbox event where available, then tighten the scanned unmanaged backstop separately. The product should communicate that scanned unmanaged close is less immediate than managed close.
 
 5. **Profiler hardening.**
-   Fix SSE measurement, record terminal source/reason directly, add SLA verdicts per lane, and classify backstop closures as failures for managed graceful shutdown cases.
+   Keep SSE measurement aligned with the browser timeline stream, record terminal source/reason directly, add SLA verdicts per lane, and classify backstop closures as failures for managed graceful shutdown cases.
 
 6. **Runtime event durability.**
    Decide whether runtime terminal events are part of the hard SLA or an opportunistic fast path. If hard SLA, route them through a retry/spool path before treating the managed close contract as met under flaky network conditions.
