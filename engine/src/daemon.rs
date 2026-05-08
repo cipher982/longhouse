@@ -251,6 +251,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut last_ship_at: Option<String> = None;
     let mut last_runtime_truth_signature: Option<String> = None;
     let mut runtime_truth_bootstrapped = false;
+    let mut codex_terminal_catchup_marks: HashMap<PathBuf, String> = HashMap::new();
     let mut bridge_reaper = ManagedBridgeReaper::from_env();
 
     let outbox_dir = config::get_agent_outbox_dir()?;
@@ -453,6 +454,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             _ = local_status_timer.tick() => {
                 let observations = managed_bridge_scan::collect_observations();
                 let claude_observations = managed_claude_scan::collect_observations();
+                schedule_transcript_catchups_for_codex_observations(
+                    &mut transcript_catchups,
+                    &mut active_transcript_polls,
+                    &mut codex_terminal_catchup_marks,
+                    &observations,
+                );
                 let payload = write_local_status_snapshot(
                     &conn,
                     &tracker,
@@ -490,6 +497,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             _ = heartbeat_timer.tick() => {
                 let observations = managed_bridge_scan::collect_observations();
                 let claude_observations = managed_claude_scan::collect_observations();
+                schedule_transcript_catchups_for_codex_observations(
+                    &mut transcript_catchups,
+                    &mut active_transcript_polls,
+                    &mut codex_terminal_catchup_marks,
+                    &observations,
+                );
                 let payload = write_local_status_snapshot(
                     &conn,
                     &tracker,
@@ -816,6 +829,60 @@ fn schedule_transcript_catchups_for_signals(
             provider,
             &signal.phase,
         );
+    }
+}
+
+fn schedule_transcript_catchups_for_codex_observations(
+    transcript_catchups: &mut Vec<TranscriptCatchup>,
+    active_transcript_polls: &mut HashMap<PathBuf, ActiveTranscriptPoll>,
+    terminal_catchup_marks: &mut HashMap<PathBuf, String>,
+    observations: &[managed_bridge_scan::CodexBridgeObservation],
+) {
+    for observation in observations {
+        if !(observation.bridge_alive
+            || observation.has_tui_attachment
+            || observation.app_server_alive)
+        {
+            continue;
+        }
+        let Some(path) = observation
+            .thread_path
+            .as_deref()
+            .map(PathBuf::from)
+            .filter(|path| path.exists())
+        else {
+            continue;
+        };
+        let phase = codex_observation_transcript_phase(observation);
+        if is_terminal_or_attention_phase(phase) {
+            if terminal_catchup_marks.get(&path) == Some(&observation.updated_at) {
+                continue;
+            }
+            terminal_catchup_marks.insert(path.clone(), observation.updated_at.clone());
+        } else {
+            terminal_catchup_marks.remove(&path);
+        }
+
+        schedule_transcript_catchup(
+            transcript_catchups,
+            active_transcript_polls,
+            path,
+            "codex",
+            phase,
+        );
+    }
+}
+
+fn codex_observation_transcript_phase(
+    observation: &managed_bridge_scan::CodexBridgeObservation,
+) -> &'static str {
+    if observation.active_turn_id.is_some() {
+        return "running";
+    }
+
+    match observation.last_turn_status.as_deref() {
+        Some("completed") | Some("failed") | Some("cancelled") => "idle",
+        _ => "running",
     }
 }
 
@@ -1203,6 +1270,34 @@ mod tests {
         }
     }
 
+    fn codex_bridge_observation(
+        transcript_path: &Path,
+        active_turn_id: Option<&str>,
+        last_turn_status: Option<&str>,
+        updated_at: &str,
+        bridge_alive: bool,
+    ) -> managed_bridge_scan::CodexBridgeObservation {
+        managed_bridge_scan::CodexBridgeObservation {
+            session_id: "sess-codex-managed".to_string(),
+            state_file: PathBuf::from("/tmp/sess-codex-managed.json"),
+            cwd: Some("/tmp".to_string()),
+            ws_url: Some("ws://127.0.0.1:1111".to_string()),
+            status: "ready".to_string(),
+            thread_id: Some("thread-live".to_string()),
+            thread_path: Some(transcript_path.display().to_string()),
+            active_turn_id: active_turn_id.map(str::to_string),
+            last_turn_status: last_turn_status.map(str::to_string),
+            last_error: None,
+            thread_subscription_status: Some("subscribed".to_string()),
+            app_server_pid: None,
+            app_server_pgid: None,
+            updated_at: updated_at.to_string(),
+            bridge_alive,
+            has_tui_attachment: false,
+            app_server_alive: false,
+        }
+    }
+
     #[test]
     fn test_runtime_truth_signature_ignores_observation_timestamps() {
         let mut first = empty_heartbeat_payload();
@@ -1396,6 +1491,91 @@ mod tests {
         assert_eq!(job.priority, WorkPriority::Catchup);
         assert_eq!(active_polls.len(), 1);
         assert!(active_polls[&path].due_at > now);
+    }
+
+    #[test]
+    fn test_codex_bridge_observation_starts_transcript_polling() {
+        let transcript = tempfile::NamedTempFile::new().unwrap();
+        let observation =
+            codex_bridge_observation(transcript.path(), None, None, "2026-05-01T00:00:00Z", true);
+        let mut catchups = Vec::new();
+        let mut active_polls = HashMap::new();
+        let mut terminal_marks = HashMap::new();
+
+        schedule_transcript_catchups_for_codex_observations(
+            &mut catchups,
+            &mut active_polls,
+            &mut terminal_marks,
+            &[observation],
+        );
+
+        assert_eq!(catchups.len(), 1);
+        assert_eq!(catchups[0].path, transcript.path());
+        assert_eq!(catchups[0].provider, "codex");
+        assert!(active_polls.contains_key(transcript.path()));
+    }
+
+    #[test]
+    fn test_codex_bridge_observation_completed_turn_schedules_terminal_catchups() {
+        let transcript = tempfile::NamedTempFile::new().unwrap();
+        let observation = codex_bridge_observation(
+            transcript.path(),
+            None,
+            Some("completed"),
+            "2026-05-01T00:00:00Z",
+            true,
+        );
+        let mut catchups = Vec::new();
+        let mut active_polls = HashMap::new();
+        let mut terminal_marks = HashMap::new();
+
+        schedule_transcript_catchups_for_codex_observations(
+            &mut catchups,
+            &mut active_polls,
+            &mut terminal_marks,
+            &[observation],
+        );
+
+        assert_eq!(catchups.len(), TERMINAL_CATCHUP_DELAYS.len());
+        assert!(active_polls.is_empty());
+        assert!(catchups
+            .iter()
+            .all(|catchup| catchup.path == transcript.path()));
+
+        let repeated = codex_bridge_observation(
+            transcript.path(),
+            None,
+            Some("completed"),
+            "2026-05-01T00:00:00Z",
+            true,
+        );
+        schedule_transcript_catchups_for_codex_observations(
+            &mut catchups,
+            &mut active_polls,
+            &mut terminal_marks,
+            &[repeated],
+        );
+        assert_eq!(catchups.len(), TERMINAL_CATCHUP_DELAYS.len());
+    }
+
+    #[test]
+    fn test_codex_bridge_observation_ignores_dead_bridge() {
+        let transcript = tempfile::NamedTempFile::new().unwrap();
+        let observation =
+            codex_bridge_observation(transcript.path(), None, None, "2026-05-01T00:00:00Z", false);
+        let mut catchups = Vec::new();
+        let mut active_polls = HashMap::new();
+        let mut terminal_marks = HashMap::new();
+
+        schedule_transcript_catchups_for_codex_observations(
+            &mut catchups,
+            &mut active_polls,
+            &mut terminal_marks,
+            &[observation],
+        );
+
+        assert!(catchups.is_empty());
+        assert!(active_polls.is_empty());
     }
 
     #[test]
