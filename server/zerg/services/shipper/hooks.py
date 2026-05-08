@@ -578,9 +578,17 @@ def install_codex_hooks(
     )
 
     hook_script = hooks_dir / "longhouse-codex-hook.sh"
-    hook_script.write_text(hook_content)
-    hook_script.chmod(stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
-    actions.append(f"Wrote {hook_script}")
+    hook_script_changed = _write_text_if_changed(hook_script, hook_content)
+    mode_changed = _chmod_if_needed(
+        hook_script,
+        stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH,
+    )
+    if hook_script_changed:
+        actions.append(f"Wrote {hook_script}")
+    elif mode_changed:
+        actions.append(f"Updated mode for {hook_script}")
+    else:
+        actions.append(f"{hook_script} already up to date")
 
     # ------------------------------------------------------------------
     # 2. Read existing hooks.json
@@ -633,13 +641,36 @@ def install_codex_hooks(
     # ------------------------------------------------------------------
     # 4. Write hooks.json back
     # ------------------------------------------------------------------
-    hooks_json_path.write_text(json.dumps(hooks_data, indent=2) + "\n")
-    actions.append(
-        f"Updated {hooks_json_path} with SessionStart, UserPromptSubmit, PreToolUse, " "PostToolUse, PermissionRequest, Stop hooks"
-    )
+    hooks_json_content = json.dumps(hooks_data, indent=2) + "\n"
+    if _write_text_if_changed(hooks_json_path, hooks_json_content):
+        actions.append(
+            f"Updated {hooks_json_path} with SessionStart, UserPromptSubmit, PreToolUse, " "PostToolUse, PermissionRequest, Stop hooks"
+        )
+    else:
+        actions.append(f"{hooks_json_path} already up to date")
 
     logger.info("Installed Longhouse Codex hooks in %s", codex_dir)
     return actions
+
+
+def _write_text_if_changed(path: Path, content: str) -> bool:
+    try:
+        if path.exists() and path.read_text() == content:
+            return False
+    except OSError:
+        pass
+    path.write_text(content)
+    return True
+
+
+def _chmod_if_needed(path: Path, mode: int) -> bool:
+    try:
+        if stat.S_IMODE(path.stat().st_mode) == mode:
+            return False
+    except OSError:
+        pass
+    path.chmod(mode)
+    return True
 
 
 # ---------------------------------------------------------------------------
