@@ -500,6 +500,7 @@ print(json.dumps(payload))
             predicate=lambda data: hosted_assistant_events_contain(data, nonce),
             event="assistant_response_hosted",
             timeout=180,
+            interval=0.5,
         )
         self.write_snapshot(case_id, ownership, session_id, "post_response")
 
@@ -617,6 +618,7 @@ print(json.dumps(payload))
             predicate=lambda data: hosted_assistant_events_contain(data, nonce),
             event="assistant_response_hosted",
             timeout=180,
+            interval=0.5,
         )
         self.poll_hosted_session(
             session_id,
@@ -625,6 +627,7 @@ print(json.dumps(payload))
             predicate=lambda data: lifecycle_closed(data),
             event="hosted_runtime_closed",
             timeout=180,
+            interval=0.25,
         )
         self.write_snapshot(case_id, ownership, session_id, "post_exec")
         return {"case_id": case_id, "session_id": session_id, "nonce": nonce, "rollout": str(rollout)}
@@ -680,6 +683,12 @@ print(json.dumps(payload))
         runtime = hosted.get("runtime_state") or {}
         contains = hosted_assistant_events_contain(hosted, nonce)
         closed = lifecycle_closed(hosted)
+        transcript_latency = self.event_delta_ms(
+            case_id,
+            session_id,
+            "prompt_sent_started",
+            "assistant_response_hosted",
+        )
         close_latency = self.event_delta_ms(case_id, session_id, "shutdown_requested", "hosted_runtime_closed")
         terminal = terminal_details(hosted)
         ownership = session.get("execution_home") or "-"
@@ -687,6 +696,8 @@ print(json.dumps(payload))
         if not session:
             return "missing", "hosted session row not observed"
         transcript = "synced" if contains else "missing"
+        if transcript_latency is not None:
+            transcript += f" observed_in={transcript_latency}ms"
         close_note = "close=missing"
         if closed:
             close_note = "close=closed"
