@@ -19,6 +19,9 @@ pub struct ShipItem {
 #[derive(Clone, Debug)]
 pub struct ShipTraceContext {
     pub work_context: &'static str,
+    pub observation_source: &'static str,
+    pub observed_at_ms: i64,
+    pub enqueued_at_ms: i64,
     pub job_started_at_ms: i64,
     pub prepare_started_at_ms: i64,
     pub prepare_finished_at_ms: i64,
