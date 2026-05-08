@@ -900,6 +900,19 @@ async fn handle_ipc_turn_start(
         .context("missing turn.id in IPC turn/start response")?;
     let turn_status =
         extract_string(&response, &["turn", "status"]).unwrap_or_else(|| "inProgress".to_string());
+    context.state.active_turn_id = Some(turn_id.clone());
+    context.state.last_turn_status = Some(turn_status.clone());
+    context.runtime_tracker.active_turn_id = Some(turn_id.clone());
+    write_state_file(&context.state_file, &context.state)?;
+    if let Some(path) = context.state.thread_path.as_deref() {
+        wake_daemon_for_transcript(config, path, "running");
+    }
+    emit_runtime_updates(
+        config,
+        context,
+        vec![context.runtime_tracker.current_phase_update()],
+    )
+    .await;
     Ok(BridgeSendSummary {
         session_id: context.state.session_id.clone(),
         thread_id: thread_id.to_string(),
@@ -4713,6 +4726,78 @@ mod tests {
         .unwrap();
 
         assert_eq!(followup, None);
+        let (mut stream, _) = tokio::time::timeout(Duration::from_secs(1), listener.accept())
+            .await
+            .expect("wake connection")
+            .unwrap();
+        let mut body = Vec::new();
+        stream.read_to_end(&mut body).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["provider"], "codex");
+        assert_eq!(payload["path"], rollout_path.display().to_string());
+        assert_eq!(payload["phase"], "running");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ipc_turn_start_marks_active_and_wakes_daemon() {
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<String>();
+        let (events_tx, events_rx) = mpsc::unbounded_channel();
+        let temp = tempfile::tempdir().unwrap();
+        let rollout_path = temp.path().join("thread.jsonl");
+        fs::write(&rollout_path, "{\"ok\":true}\n").unwrap();
+
+        let socket_path = resolve_bridge_transcript_wake_socket_path(Some(temp.path())).unwrap();
+        fs::create_dir_all(socket_path.parent().unwrap()).unwrap();
+        let _ = fs::remove_file(&socket_path);
+        let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
+
+        let mut client = RpcClient {
+            child: None,
+            child_pid: None,
+            child_pgid: None,
+            child_ws_url: None,
+            outbound: RpcOutbound::WebSocket(outbound_tx),
+            events_rx,
+            pending_methods: BTreeMap::new(),
+            next_request_id: 1,
+            ws_url: "ws://example.test".to_string(),
+        };
+        let mut context = make_test_context(&temp);
+        context.state.thread_id = Some("thr_test".to_string());
+        context.state.thread_path = Some(rollout_path.display().to_string());
+        context.runtime.thread_id = Some("thr_test".to_string());
+        let config = make_test_run_config(&temp);
+
+        events_tx
+            .send(StreamEvent::Rpc(json!({
+                "id": 1,
+                "result": {
+                    "turn": {"id": "turn-live", "status": "inProgress"}
+                }
+            })))
+            .unwrap();
+
+        let summary =
+            handle_ipc_turn_start(&config, &mut client, &mut context, "continue", "thr_test")
+                .await
+                .unwrap();
+
+        assert_eq!(summary.turn_id, "turn-live");
+        assert_eq!(context.state.active_turn_id.as_deref(), Some("turn-live"));
+        assert_eq!(
+            context.state.last_turn_status.as_deref(),
+            Some("inProgress")
+        );
+        assert_eq!(
+            context.runtime_tracker.active_turn_id.as_deref(),
+            Some("turn-live")
+        );
+
+        let request_payload: Value =
+            serde_json::from_str(&outbound_rx.recv().await.unwrap()).unwrap();
+        assert_eq!(request_payload["method"], "turn/start");
+
         let (mut stream, _) = tokio::time::timeout(Duration::from_secs(1), listener.accept())
             .await
             .expect("wake connection")
