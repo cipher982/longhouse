@@ -520,16 +520,21 @@ fn materialize_ship_range(
     range: ShipRange,
     session_id_override: Option<&str>,
     rewind_hint: Option<&compressor::SourceRewindHint>,
+    source_line_mode: SourceLineMode,
 ) -> Result<(Vec<PreparedAction>, bool)> {
     let payload_session_id =
         resolve_payload_session_id(provider, parse_result, session_id_override);
+    let source_lines = match source_line_mode {
+        SourceLineMode::Full => Some(&parse_result.source_lines[range.source_line_range.clone()]),
+        SourceLineMode::EventOnly => None,
+    };
     let compressed = compressor::build_and_compress_with_source_lines(
         payload_session_id,
         &parse_result.events[range.event_range.clone()],
         &parse_result.metadata,
         path_str,
         provider,
-        Some(&parse_result.source_lines[range.source_line_range.clone()]),
+        source_lines,
         rewind_hint.map(std::slice::from_ref),
         algo,
     )?;
@@ -596,6 +601,7 @@ fn materialize_ship_range(
         left,
         session_id_override,
         rewind_hint,
+        source_line_mode,
     )?;
     let (right_actions, right_used_hint) = materialize_ship_range(
         parse_result,
@@ -606,6 +612,7 @@ fn materialize_ship_range(
         right,
         session_id_override,
         if left_used_hint { None } else { rewind_hint },
+        source_line_mode,
     )?;
     actions.extend(right_actions);
     Ok((actions, left_used_hint || right_used_hint))
@@ -621,6 +628,7 @@ fn build_prepared_actions(
     max_batch_bytes: u64,
     session_id_override: Option<&str>,
     rewind_hint: Option<&compressor::SourceRewindHint>,
+    source_line_mode: SourceLineMode,
 ) -> Result<Vec<PreparedAction>> {
     if parse_result.events.is_empty()
         && parse_result.candidate_records == 0
@@ -674,6 +682,7 @@ fn build_prepared_actions(
                     range,
                     session_id_override,
                     pending_rewind_hint,
+                    source_line_mode,
                 )?;
                 actions.extend(range_actions);
                 if used_hint {
@@ -723,6 +732,7 @@ pub fn prepare_path_range(
         session_id_override,
         None,
         None,
+        SourceLineMode::Full,
     )
 }
 
@@ -736,6 +746,7 @@ pub(crate) fn prepare_path_range_with_parse_tracker(
     session_id_override: Option<&str>,
     parse_tracker: Option<&RecentIssueTracker>,
     rewind_hint: Option<&compressor::SourceRewindHint>,
+    source_line_mode: SourceLineMode,
 ) -> Result<Option<PreparedFile>> {
     let path_str = path.to_string_lossy().to_string();
     let file_size = match std::fs::metadata(path) {
@@ -801,6 +812,7 @@ pub(crate) fn prepare_path_range_with_parse_tracker(
         max_batch_bytes,
         session_id_override,
         rewind_hint,
+        source_line_mode,
     )?;
 
     if actions.is_empty() {
@@ -853,6 +865,28 @@ pub(crate) fn prepare_file_batches_with_parse_tracker(
     max_batch_bytes: u64,
     session_id_override: Option<&str>,
     parse_tracker: Option<&RecentIssueTracker>,
+) -> Result<Option<PreparedFile>> {
+    prepare_file_batches_with_source_line_mode_and_parse_tracker(
+        path,
+        provider,
+        algo,
+        conn,
+        max_batch_bytes,
+        session_id_override,
+        parse_tracker,
+        SourceLineMode::Full,
+    )
+}
+
+pub(crate) fn prepare_file_batches_with_source_line_mode_and_parse_tracker(
+    path: &Path,
+    provider: &str,
+    algo: CompressionAlgo,
+    conn: &Connection,
+    max_batch_bytes: u64,
+    session_id_override: Option<&str>,
+    parse_tracker: Option<&RecentIssueTracker>,
+    source_line_mode: SourceLineMode,
 ) -> Result<Option<PreparedFile>> {
     let path_str = path.to_string_lossy().to_string();
     let file_state = FileState::new(conn);
@@ -915,6 +949,7 @@ pub(crate) fn prepare_file_batches_with_parse_tracker(
         session_id_override,
         parse_tracker,
         rewind_hint.as_ref(),
+        source_line_mode,
     )
 }
 
@@ -1493,6 +1528,7 @@ async fn prepare_spool_entry_for_replay(
             entry.session_id.as_deref(),
             parse_tracker.as_ref(),
             None,
+            SourceLineMode::Full,
         )
     })
     .await?
@@ -2122,6 +2158,50 @@ mod tests {
 
         // Parser-resolved canonical ID must win over stale file_state.
         assert_eq!(item.session_id, "cccccccc-1111-2222-3333-444455556666");
+    }
+
+    #[test]
+    fn test_prepare_codex_event_only_source_lines_skips_context_rows() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("rollout-2026-02-15T10-00-00-cccc1111-2222-3333-4444-555566667777.jsonl");
+        let session_meta = r#"{"type":"session_meta","timestamp":"2026-02-15T10:00:00Z","payload":{"type":"session_meta","id":"cccccccc-1111-2222-3333-444455556666","cwd":"/tmp/test","cli_version":"0.1.0"}}"#;
+        let developer_context = r#"{"type":"response_item","timestamp":"2026-02-15T10:00:00Z","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"large injected context"}]}}"#;
+        let user_message = r#"{"type":"response_item","timestamp":"2026-02-15T10:00:01Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello from codex"}]}}"#;
+        std::fs::write(
+            &path,
+            format!("{session_meta}\n{developer_context}\n{user_message}\n"),
+        )
+        .unwrap();
+        let user_offset = (session_meta.len() + 1 + developer_context.len() + 1) as u64;
+
+        let prepared = prepare_file_batches_with_source_line_mode_and_parse_tracker(
+            &path,
+            "codex",
+            CompressionAlgo::Gzip,
+            &conn,
+            10_000,
+            Some("019d2869-1111-7222-8333-aaaaaaaaaaaa"),
+            None,
+            SourceLineMode::EventOnly,
+        )
+        .unwrap()
+        .expect("codex user message should prepare");
+
+        assert_eq!(prepared.actions.len(), 1);
+        match prepared.actions.into_iter().next().unwrap() {
+            PreparedAction::Ship(item) => {
+                assert_eq!(
+                    decode_payload_source_offsets(&item.compressed),
+                    vec![user_offset]
+                );
+            }
+            PreparedAction::AckOnly(_) | PreparedAction::DeadLetter(_) => {
+                panic!("codex user message should ship")
+            }
+        }
     }
 
     #[test]

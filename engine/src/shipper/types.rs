@@ -27,6 +27,12 @@ pub struct ShipTraceContext {
     pub prepare_finished_at_ms: i64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SourceLineMode {
+    Full,
+    EventOnly,
+}
+
 pub struct DeadLetterItem {
     pub path_str: String,
     pub provider: String,
