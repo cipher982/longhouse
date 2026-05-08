@@ -1072,7 +1072,13 @@ fn schedule_transcript_catchup(
                 "Started active transcript polling"
             );
         }
-        if !transcript_catchups.iter().any(|item| item.path == path) {
+        // A bridge wake arrives at turn start, before Codex has necessarily
+        // written useful rollout content. Let the live poll carry the first
+        // durable transcript pass so an early no-op pass cannot block the same
+        // path once real output lands.
+        if observation_source != "wake_socket"
+            && !transcript_catchups.iter().any(|item| item.path == path)
+        {
             transcript_catchups.push(TranscriptCatchup {
                 due_at: now,
                 path,
@@ -1666,7 +1672,7 @@ mod tests {
     }
 
     #[test]
-    fn test_wake_socket_catchup_is_live_priority() {
+    fn test_wake_socket_active_phase_waits_for_poll() {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let path = tmp.path().to_path_buf();
         let mut catchups = Vec::new();
@@ -1682,13 +1688,8 @@ mod tests {
             123,
         );
 
-        let mut scheduler = PathScheduler::new(4);
-        drain_due_transcript_catchups(&mut scheduler, &mut catchups);
-
-        let job = scheduler.pop_launchable().expect("wake catch-up queued");
-        assert_eq!(job.path, path);
-        assert_eq!(job.priority, WorkPriority::Live);
-        assert_eq!(job.observation.source, "wake_socket");
+        assert!(catchups.is_empty());
+        assert!(active_polls.contains_key(&path));
     }
 
     #[test]
@@ -1941,7 +1942,7 @@ mod tests {
     }
 
     #[test]
-    fn test_transcript_wake_schedules_immediate_catchup() {
+    fn test_transcript_wake_starts_active_polling() {
         let transcript = tempfile::NamedTempFile::new().unwrap();
         let mut catchups = Vec::new();
         let mut active_polls = HashMap::new();
@@ -1957,8 +1958,7 @@ mod tests {
             },
         );
 
-        assert_eq!(catchups.len(), 1);
-        assert_eq!(catchups[0].path, transcript.path());
+        assert!(catchups.is_empty());
         assert!(active_polls.contains_key(transcript.path()));
     }
 
