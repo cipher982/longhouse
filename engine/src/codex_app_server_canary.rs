@@ -757,7 +757,7 @@ async fn spawn_client(
         .arg("--listen")
         .arg(&listen_arg)
         .arg("--enable")
-        .arg("codex_hooks")
+        .arg("hooks")
         .arg("--enable")
         .arg("exec_permission_approvals")
         .arg("--enable")
