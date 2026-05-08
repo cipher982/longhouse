@@ -1,6 +1,7 @@
 """Tests for Codex hook installation and hooks.json management."""
 
 import json
+import os
 import stat
 
 from zerg.services.shipper.hooks import CODEX_HOOK_SCRIPT
@@ -219,6 +220,30 @@ def test_install_codex_hooks_is_idempotent(tmp_path, monkeypatch):
         assert len(data["hooks"][event]) == 1, (
             f"{event} should have exactly 1 entry after double install"
         )
+
+
+def test_install_codex_hooks_does_not_rewrite_unchanged_files(tmp_path, monkeypatch):
+    """Running install twice should preserve mtimes when hook files are unchanged."""
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    codex_dir = tmp_path / ".codex"
+    codex_dir.mkdir()
+
+    install_codex_hooks(engine_path="/usr/bin/longhouse-engine")
+    hook_script = codex_dir / "hooks" / "longhouse-codex-hook.sh"
+    hooks_json = codex_dir / "hooks.json"
+
+    old_ns = 1_700_000_000_000_000_000
+    os.utime(hook_script, ns=(old_ns, old_ns))
+    os.utime(hooks_json, ns=(old_ns, old_ns))
+
+    actions = install_codex_hooks(engine_path="/usr/bin/longhouse-engine")
+
+    assert actions == [
+        f"{hook_script} already up to date",
+        f"{hooks_json} already up to date",
+    ]
+    assert hook_script.stat().st_mtime_ns == old_ns
+    assert hooks_json.stat().st_mtime_ns == old_ns
 
 
 def test_install_codex_hooks_handles_corrupt_hooks_json(tmp_path, monkeypatch):
