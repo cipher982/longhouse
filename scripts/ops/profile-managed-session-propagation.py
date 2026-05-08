@@ -799,6 +799,20 @@ print(json.dumps(payload))
             transcript += f" server_ingest_lag={transcript_ingest['ingest_lag_ms']}ms"
         if transcript_ingest.get("skew_adjusted_lag_ms") is not None:
             transcript += f" skew_adjusted_ingest={transcript_ingest['skew_adjusted_lag_ms']}ms"
+        bridge_live = bridge_live_details(hosted, nonce, self.remote_clock_skew_ms)
+        if bridge_live:
+            live_parts = []
+            for key, label in (
+                ("ingest_lag_ms", "ingest_lag"),
+                ("skew_adjusted_lag_ms", "skew_adjusted"),
+            ):
+                if bridge_live.get(key) is not None:
+                    live_parts.append(f"{label}={bridge_live[key]}ms")
+            method = bridge_live.get("method")
+            if method:
+                live_parts.insert(0, f"method={method}")
+            if live_parts:
+                transcript += " bridge_live=" + ",".join(live_parts)
         ship_trace = ship_trace_details(hosted, self.remote_clock_skew_ms)
         if ship_trace:
             parts = []
@@ -1014,6 +1028,31 @@ def transcript_ingest_details(data: dict[str, Any], remote_clock_skew_ms: int | 
             details["skew_adjusted_lag_ms"] = lag_ms - remote_clock_skew_ms
         return details
     return details
+
+
+def bridge_live_details(
+    data: dict[str, Any],
+    nonce: str,
+    remote_clock_skew_ms: int | None,
+) -> dict[str, Any]:
+    for event in data.get("runtime_events") or []:
+        if event.get("source") != "codex_bridge_live":
+            continue
+        payload = safe_json_loads(str(event.get("payload_json") or "")) or {}
+        if not isinstance(payload, dict) or payload.get("progress_kind") != "bridge_live_transcript_delta":
+            continue
+        if nonce not in str(payload.get("delta") or ""):
+            continue
+        occurred_at = parse_db_timestamp(event.get("occurred_at"))
+        received_at = parse_db_timestamp(event.get("received_at"))
+        details: dict[str, Any] = {"method": payload.get("method")}
+        if occurred_at is not None and received_at is not None:
+            lag_ms = int((received_at - occurred_at).total_seconds() * 1000)
+            details["ingest_lag_ms"] = lag_ms
+            if remote_clock_skew_ms is not None:
+                details["skew_adjusted_lag_ms"] = lag_ms - remote_clock_skew_ms
+        return details
+    return {}
 
 
 def ship_trace_details(data: dict[str, Any], remote_clock_skew_ms: int | None) -> dict[str, Any]:

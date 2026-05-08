@@ -2076,6 +2076,12 @@ async fn process_notification(
             if notification_is_for_different_thread(&params, context) {
                 return Ok(None);
             }
+            if let Some(delta) = extract_live_transcript_delta(method, &params) {
+                context
+                    .runtime
+                    .post_live_transcript_delta(method, delta)
+                    .await;
+            }
             let updates = context.runtime_tracker.handle_notification(method, &params);
             emit_runtime_updates(config, context, updates).await;
         }
@@ -2532,6 +2538,17 @@ impl CodexRuntimeTracker {
     }
 }
 
+fn extract_live_transcript_delta<'a>(method: &str, params: &'a Value) -> Option<&'a str> {
+    match method {
+        "item/agentMessage/delta"
+        | "item/commandExecution/outputDelta"
+        | "command/exec/outputDelta"
+        | "item/fileChange/outputDelta"
+        | "item/mcpToolCall/progress" => params.get("delta").and_then(Value::as_str),
+        _ => None,
+    }
+}
+
 fn item_supports_runtime_tracking(item_type: &str, item: &Value) -> bool {
     match item_type {
         "commandExecution"
@@ -2716,6 +2733,33 @@ impl BridgeRuntimeSink {
             "payload": {
                 "managed_transport": "codex_app_server",
                 "thread_id": self.thread_id,
+            }
+        })])
+        .await;
+    }
+
+    async fn post_live_transcript_delta(&self, method: &str, delta: &str) {
+        self.post_runtime_events(vec![json!({
+            "runtime_key": format!("codex:{}", self.session_id),
+            "session_id": self.session_id,
+            "provider": "codex",
+            "device_id": self.machine_name,
+            "source": "codex_bridge_live",
+            "kind": "progress_signal",
+            "phase": Value::Null,
+            "tool_name": Value::Null,
+            "occurred_at": Utc::now().to_rfc3339(),
+            "dedupe_key": format!(
+                "bridge:live_delta:{}:{}",
+                self.session_id,
+                Uuid::new_v4()
+            ),
+            "payload": {
+                "progress_kind": "bridge_live_transcript_delta",
+                "managed_transport": "codex_app_server",
+                "thread_id": self.thread_id,
+                "method": method,
+                "delta": delta,
             }
         })])
         .await;
@@ -3418,6 +3462,18 @@ mod tests {
     fn should_emit_progress_respects_throttle() {
         assert!(should_emit_progress(None, 1000));
         assert!(!should_emit_progress(Some(Instant::now()), 10_000));
+    }
+
+    #[test]
+    fn extract_live_transcript_delta_reads_agent_message_delta() {
+        assert_eq!(
+            extract_live_transcript_delta("item/agentMessage/delta", &json!({"delta": "hello"})),
+            Some("hello")
+        );
+        assert_eq!(
+            extract_live_transcript_delta("thread/status/changed", &json!({"delta": "hello"})),
+            None
+        );
     }
 
     #[test]
