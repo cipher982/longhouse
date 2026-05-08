@@ -559,7 +559,15 @@ class AgentsStore:
                 text("""
                 CREATE TRIGGER IF NOT EXISTS events_ad AFTER DELETE ON events BEGIN
                   INSERT INTO events_fts(events_fts, rowid, content_text, tool_output_text, tool_name, role, session_id)
-                  VALUES('delete', old.id, old.content_text, old.tool_output_text, old.tool_name, old.role, old.session_id);
+                  VALUES(
+                    'delete',
+                    old.id,
+                    old.content_text,
+                    old.tool_output_text,
+                    old.tool_name,
+                    old.role,
+                    old.session_id
+                  );
                 END
             """)
             )
@@ -567,7 +575,15 @@ class AgentsStore:
                 text("""
                 CREATE TRIGGER IF NOT EXISTS events_au AFTER UPDATE ON events BEGIN
                   INSERT INTO events_fts(events_fts, rowid, content_text, tool_output_text, tool_name, role, session_id)
-                  VALUES('delete', old.id, old.content_text, old.tool_output_text, old.tool_name, old.role, old.session_id);
+                  VALUES(
+                    'delete',
+                    old.id,
+                    old.content_text,
+                    old.tool_output_text,
+                    old.tool_name,
+                    old.role,
+                    old.session_id
+                  );
                   INSERT INTO events_fts(rowid, content_text, tool_output_text, tool_name, role, session_id)
                   VALUES (new.id, new.content_text, new.tool_output_text, new.tool_name, new.role, new.session_id);
                 END
@@ -2055,7 +2071,11 @@ class AgentsStore:
             stmt = stmt.where(time_anchor <= until)
 
         if hide_autonomous:
-            stmt = stmt.where(AgentSession.user_messages > 0).where(AgentSession.is_sidechain == 0)
+            open_managed_local = and_(
+                AgentSession.execution_home == SessionExecutionHome.MANAGED_LOCAL.value,
+                AgentSession.ended_at.is_(None),
+            )
+            stmt = stmt.where(AgentSession.is_sidechain == 0).where(or_(AgentSession.user_messages > 0, open_managed_local))
 
         if exclude_user_states:
             stmt = stmt.where((AgentSession.user_state.notin_(exclude_user_states)) | (AgentSession.user_state.is_(None)))
@@ -2269,9 +2289,7 @@ class AgentsStore:
         try:
             rows = self.db.execute(
                 text(
-                    "SELECT e.id FROM events_fts "
-                    "JOIN events e ON e.id = events_fts.rowid "
-                    "WHERE events_fts MATCH :q AND e.session_id = :sid"
+                    "SELECT e.id FROM events_fts JOIN events e ON e.id = events_fts.rowid WHERE events_fts MATCH :q AND e.session_id = :sid"
                 ),
                 {"q": self._fts_query(query), "sid": str(session_id)},
             ).fetchall()
