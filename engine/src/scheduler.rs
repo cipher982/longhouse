@@ -214,6 +214,10 @@ impl PathScheduler {
         !self.in_flight.is_empty()
     }
 
+    pub fn path_in_flight(&self, path: &Path) -> bool {
+        self.in_flight.contains_key(path)
+    }
+
     #[cfg(test)]
     fn ready_len(&self) -> usize {
         self.ready_jobs.len()
