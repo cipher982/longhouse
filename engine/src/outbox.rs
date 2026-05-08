@@ -66,10 +66,23 @@ pub struct DrainedPresenceSignal {
 }
 
 #[derive(Debug, Default)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub struct OutboxDrainResult {
     pub sent: usize,
     pub kept: usize,
     pub signals: Vec<DrainedPresenceSignal>,
+}
+
+#[derive(Debug, Default)]
+pub struct OutboxLocalDrainResult {
+    pub signals: Vec<DrainedPresenceSignal>,
+    pub posts: Vec<PendingPresencePost>,
+}
+
+#[derive(Debug)]
+pub struct PendingPresencePost {
+    path: PathBuf,
+    bytes: Vec<u8>,
 }
 
 /// Drain all ready presence events from the outbox directory.
@@ -99,6 +112,7 @@ pub async fn drain_outbox_with_local_state(
 /// schedule transcript catch-up work for the same sessions. Signals are returned
 /// even when the presence POST fails because transcript shipping is local truth
 /// and should not depend on the runtime accepting a presence update first.
+#[cfg_attr(not(test), allow(dead_code))]
 pub async fn drain_outbox_with_local_state_result(
     dir: &Path,
     client: &ShipperClient,
@@ -113,10 +127,31 @@ async fn drain_outbox_impl(
     db_path: Option<&Path>,
     persist_local_state: bool,
 ) -> OutboxDrainResult {
+    let local = collect_outbox_impl(dir, db_path, persist_local_state);
+    let (sent, kept) = post_pending_presence_files(client, local.posts).await;
+    OutboxDrainResult {
+        sent,
+        kept,
+        signals: local.signals,
+    }
+}
+
+pub fn collect_outbox_with_local_state_result(
+    dir: &Path,
+    db_path: Option<&Path>,
+) -> OutboxLocalDrainResult {
+    collect_outbox_impl(dir, db_path, true)
+}
+
+fn collect_outbox_impl(
+    dir: &Path,
+    db_path: Option<&Path>,
+    persist_local_state: bool,
+) -> OutboxLocalDrainResult {
     // Nothing to do if outbox doesn't exist yet.
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
-        Err(_) => return OutboxDrainResult::default(),
+        Err(_) => return OutboxLocalDrainResult::default(),
     };
 
     let now = SystemTime::now();
@@ -209,8 +244,7 @@ async fn drain_outbox_impl(
         }
     }
 
-    // POST coalesced events.
-    let mut result = OutboxDrainResult::default();
+    let mut result = OutboxLocalDrainResult::default();
     let local_phase_conn = if persist_local_state {
         match crate::state::db::open_db(db_path) {
             Ok(conn) => Some(conn),
@@ -242,6 +276,7 @@ async fn drain_outbox_impl(
             observed_at: observed_at.clone(),
             transcript_path,
         });
+        result.posts.push(PendingPresencePost { path, bytes });
 
         if let Some(conn) = local_phase_conn.as_ref() {
             let signal = SessionPhaseSignal {
@@ -286,20 +321,30 @@ async fn drain_outbox_impl(
                 }
             }
         }
-
-        match client.post_json("/api/agents/presence", bytes).await {
-            Ok(_) => {
-                let _ = std::fs::remove_file(&path);
-                result.sent += 1;
-            }
-            Err(_) => {
-                // Keep for retry next tick.
-                result.kept += 1;
-            }
-        }
     }
 
     result
+}
+
+pub async fn post_pending_presence_files(
+    client: &ShipperClient,
+    posts: Vec<PendingPresencePost>,
+) -> (usize, usize) {
+    let mut sent = 0usize;
+    let mut kept = 0usize;
+    for post in posts {
+        match client.post_json("/api/agents/presence", post.bytes).await {
+            Ok(_) => {
+                let _ = std::fs::remove_file(&post.path);
+                sent += 1;
+            }
+            Err(_) => {
+                // Keep for retry next tick.
+                kept += 1;
+            }
+        }
+    }
+    (sent, kept)
 }
 
 fn observed_at_for_payload(
@@ -636,6 +681,25 @@ mod tests {
         );
 
         server.abort();
+    }
+
+    #[test]
+    fn test_collect_outbox_result_returns_signal_before_post() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = tempfile::NamedTempFile::new().unwrap();
+
+        let f = write_hook_style(dir.path(), "FAST123", "sess-fast", "thinking");
+
+        let result = collect_outbox_with_local_state_result(dir.path(), Some(db.path()));
+
+        assert_eq!(result.signals.len(), 1);
+        assert_eq!(result.signals[0].session_id, "sess-fast");
+        assert_eq!(result.signals[0].phase, "thinking");
+        assert_eq!(result.posts.len(), 1);
+        assert!(
+            f.exists(),
+            "presence file should remain until the POST/delete phase completes"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
