@@ -35,6 +35,15 @@ HOSTED_RUNTIME_EVENT_LIMIT = 200
 MANAGED_LIVE_UI_TARGET_MS = 500
 DURABLE_TRANSCRIPT_TARGET_MS = 5_000
 MANAGED_CLOSE_TARGET_MS = 1_000
+CODEX_TUI_PRECONDITION_PATTERNS = (
+    (
+        re.compile(
+            r"(?P<count>\d+)\s+hooks need review before they can run\. Open /hooks to review them\.",
+            re.IGNORECASE,
+        ),
+        "codex_hooks_need_review",
+    ),
+)
 
 
 def utc_now() -> str:
@@ -996,6 +1005,51 @@ except Exception as exc:
             session_id=session_id,
             payload={"thread_id": thread_id, "state": state},
         )
+        precondition = self.wait_codex_tui_precondition(
+            tui_log,
+            case_id=case_id,
+            ownership=ownership,
+            session_id=session_id,
+            timeout=8,
+        )
+        if precondition:
+            self.write_snapshot(case_id, ownership, session_id, "provider_precondition")
+            self.observe(
+                case_id=case_id,
+                provider="codex",
+                ownership=ownership,
+                source="harness",
+                event="shutdown_requested",
+                session_id=session_id,
+                payload={"reason": "provider_precondition"},
+            )
+            self.run_observed(
+                ["longhouse-engine", "codex-bridge", "stop", "--session-id", session_id],
+                case_id=case_id,
+                ownership=ownership,
+                event_prefix="shutdown",
+                timeout=60,
+                session_id=session_id,
+            )
+            terminate_process(tui)
+            self.poll_hosted_session(
+                session_id,
+                case_id=case_id,
+                ownership=ownership,
+                predicate=lambda data: lifecycle_closed(data),
+                event="hosted_runtime_closed",
+                timeout=15,
+                interval=0.25,
+            )
+            self.write_snapshot(case_id, ownership, session_id, "post_shutdown")
+            return {
+                "case_id": case_id,
+                "session_id": session_id,
+                "nonce": nonce,
+                "thread_id": thread_id,
+                "thread_path": str(thread_path) if thread_path else None,
+                "precondition": precondition,
+            }
 
         timeline_live_poll = self.start_timeline_live_poll(
             session_id,
@@ -1083,6 +1137,47 @@ except Exception as exc:
             "thread_id": thread_id,
             "thread_path": str(thread_path) if thread_path else None,
         }
+
+    def wait_codex_tui_precondition(
+        self,
+        path: Path,
+        *,
+        case_id: str,
+        ownership: str,
+        session_id: str,
+        timeout: float,
+        interval: float = 0.25,
+    ) -> dict[str, Any] | None:
+        deadline = time.monotonic() + timeout
+        last_size = None
+        while time.monotonic() < deadline:
+            precondition = find_codex_tui_precondition(path)
+            if precondition is not None:
+                self.observe(
+                    case_id=case_id,
+                    provider="codex",
+                    ownership=ownership,
+                    source="provider_tui",
+                    event="provider_precondition_blocked",
+                    session_id=session_id,
+                    payload={"path": str(path), **precondition},
+                )
+                return precondition
+            try:
+                last_size = path.stat().st_size
+            except OSError:
+                last_size = None
+            time.sleep(interval)
+        self.observe(
+            case_id=case_id,
+            provider="codex",
+            ownership=ownership,
+            source="provider_tui",
+            event="provider_precondition_clear",
+            session_id=session_id,
+            payload={"path": str(path), "last_size": last_size},
+        )
+        return None
 
     def wait_bridge_thread(self, session_id: str, *, case_id: str, ownership: str) -> dict[str, Any] | None:
         state_path = BRIDGE_ROOT / f"{session_id}.json"
@@ -1355,6 +1450,7 @@ except Exception as exc:
         transport = session.get("managed_transport") or "-"
         if not session:
             return "missing", "hosted session row not observed"
+        precondition = self.provider_precondition_for(case_id, session_id)
 
         live_first_from_local_latency = first_live_sse_from_local_latency
         live_full_from_local_latency = live_sse_from_local_latency
@@ -1463,6 +1559,13 @@ except Exception as exc:
                 close_note += f" source={terminal['source']}"
             if terminal.get("reason"):
                 close_note += f" reason={terminal['reason']}"
+        if precondition:
+            reason = precondition.get("reason") or "provider_precondition"
+            message = precondition.get("message") or ""
+            note = f"provider_precondition={reason}"
+            if message:
+                note += f" message={message!r}"
+            return "blocked", f"{note}; {close_note}; ownership={ownership}, transport={transport}"
         if not contains:
             verdict = "partial" if closed else "missing"
             return verdict, f"{live_ui}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
@@ -1505,6 +1608,17 @@ except Exception as exc:
                 observed = row.get("observed_at_monotonic_ms")
                 if isinstance(observed, int):
                     return observed
+        return None
+
+    def provider_precondition_for(self, case_id: str, session_id: str) -> dict[str, Any] | None:
+        for row in self.observations:
+            if row.get("case_id") != case_id or row.get("session_id") != session_id:
+                continue
+            if row.get("event") == "provider_precondition_blocked":
+                payload = row.get("payload")
+                if isinstance(payload, dict):
+                    return payload
+                return {}
         return None
 
 
@@ -1585,6 +1699,24 @@ def find_local_assistant_event(path: Path, nonce: str) -> dict[str, Any] | None:
                 "type": data.get("type"),
                 "payload_type": payload.get("type"),
             }
+    return None
+
+
+def find_codex_tui_precondition(path: Path) -> dict[str, Any] | None:
+    try:
+        text = path.read_text(errors="ignore")
+    except OSError:
+        return None
+    clean = strip_ansi(text)
+    for pattern, reason in CODEX_TUI_PRECONDITION_PATTERNS:
+        match = pattern.search(clean)
+        if not match:
+            continue
+        return {
+            "reason": reason,
+            "message": match.group(0),
+            "hook_count": int_or_none(match.groupdict().get("count")),
+        }
     return None
 
 
@@ -1772,7 +1904,16 @@ def int_or_none(value: Any) -> int | None:
         return None
     if isinstance(value, int | float):
         return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
     return None
+
+
+def strip_ansi(value: str) -> str:
+    return re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)", "", value)
 
 
 def parse_db_timestamp(value: Any) -> datetime | None:
