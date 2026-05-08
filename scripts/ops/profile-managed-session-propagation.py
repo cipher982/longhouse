@@ -462,6 +462,7 @@ print(json.dumps(payload))
         )
         state = self.wait_bridge_thread(session_id, case_id=case_id, ownership=ownership)
         thread_id = state.get("thread_id") if state else None
+        thread_path = Path(str(state.get("thread_path") or "")) if state else None
         if not thread_id:
             raise RuntimeError("remote TUI did not create a managed Codex thread")
         self.observe(
@@ -493,6 +494,14 @@ print(json.dumps(payload))
         )
         if send.returncode != 0:
             raise RuntimeError(f"managed send failed: {send.short()}")
+        if thread_path:
+            self.poll_local_assistant_response(
+                thread_path,
+                nonce,
+                case_id=case_id,
+                ownership=ownership,
+                session_id=session_id,
+            )
         self.poll_hosted_session(
             session_id,
             case_id=case_id,
@@ -531,7 +540,13 @@ print(json.dumps(payload))
             interval=0.25,
         )
         self.write_snapshot(case_id, ownership, session_id, "post_shutdown")
-        return {"case_id": case_id, "session_id": session_id, "nonce": nonce, "thread_id": thread_id}
+        return {
+            "case_id": case_id,
+            "session_id": session_id,
+            "nonce": nonce,
+            "thread_id": thread_id,
+            "thread_path": str(thread_path) if thread_path else None,
+        }
 
     def wait_bridge_thread(self, session_id: str, *, case_id: str, ownership: str) -> dict[str, Any] | None:
         state_path = BRIDGE_ROOT / f"{session_id}.json"
@@ -556,6 +571,48 @@ print(json.dumps(payload))
             payload={"state_path": str(state_path), "last": last},
         )
         return last
+
+    def poll_local_assistant_response(
+        self,
+        path: Path,
+        nonce: str,
+        *,
+        case_id: str,
+        ownership: str,
+        session_id: str,
+        timeout: float = 180,
+        interval: float = 0.1,
+    ) -> dict[str, Any] | None:
+        deadline = time.monotonic() + timeout
+        last_size = None
+        while time.monotonic() < deadline:
+            event = find_local_assistant_event(path, nonce)
+            if event is not None:
+                self.observe(
+                    case_id=case_id,
+                    provider="codex",
+                    ownership=ownership,
+                    source="provider_transcript",
+                    event="assistant_response_local",
+                    session_id=session_id,
+                    payload={"path": str(path), **event},
+                )
+                return event
+            try:
+                last_size = path.stat().st_size
+            except OSError:
+                last_size = None
+            time.sleep(interval)
+        self.observe(
+            case_id=case_id,
+            provider="codex",
+            ownership=ownership,
+            source="provider_transcript",
+            event="assistant_response_local_timeout",
+            session_id=session_id,
+            payload={"path": str(path), "last_size": last_size},
+        )
+        return None
 
     def run_unmanaged_codex(self) -> dict[str, Any]:
         case_id = "A1"
@@ -689,6 +746,18 @@ print(json.dumps(payload))
             "prompt_sent_started",
             "assistant_response_hosted",
         )
+        provider_latency = self.event_delta_ms(
+            case_id,
+            session_id,
+            "prompt_sent_started",
+            "assistant_response_local",
+        )
+        propagation_latency = self.event_delta_ms(
+            case_id,
+            session_id,
+            "assistant_response_local",
+            "assistant_response_hosted",
+        )
         close_latency = self.event_delta_ms(case_id, session_id, "shutdown_requested", "hosted_runtime_closed")
         terminal = terminal_details(hosted)
         ownership = session.get("execution_home") or "-"
@@ -698,6 +767,10 @@ print(json.dumps(payload))
         transcript = "synced" if contains else "missing"
         if transcript_latency is not None:
             transcript += f" observed_in={transcript_latency}ms"
+        if provider_latency is not None:
+            transcript += f" provider={provider_latency}ms"
+        if propagation_latency is not None:
+            transcript += f" local_to_hosted={propagation_latency}ms"
         close_note = "close=missing"
         if closed:
             close_note = "close=closed"
@@ -786,6 +859,43 @@ def find_rollout_with_nonce(nonce: str, *, since_epoch: float) -> Path | None:
         except OSError:
             continue
     return None
+
+
+def find_local_assistant_event(path: Path, nonce: str) -> dict[str, Any] | None:
+    try:
+        lines = path.read_text(errors="ignore").splitlines()
+    except OSError:
+        return None
+    for line_number, line in reversed(list(enumerate(lines, start=1))):
+        if nonce not in line:
+            continue
+        data = safe_json_loads(line)
+        if not isinstance(data, dict):
+            continue
+        payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+        timestamp = data.get("timestamp")
+        if is_codex_assistant_payload(payload, nonce):
+            return {
+                "line_number": line_number,
+                "timestamp": timestamp,
+                "type": data.get("type"),
+                "payload_type": payload.get("type"),
+            }
+    return None
+
+
+def is_codex_assistant_payload(payload: dict[str, Any], nonce: str) -> bool:
+    payload_type = str(payload.get("type") or "")
+    if payload_type == "agent_message":
+        return nonce in str(payload.get("message") or "")
+    if payload_type != "message" or str(payload.get("role") or "") != "assistant":
+        return False
+    for item in payload.get("content") or []:
+        if not isinstance(item, dict):
+            continue
+        if nonce in str(item.get("text") or ""):
+            return True
+    return False
 
 
 def hosted_assistant_events_contain(data: dict[str, Any], text: str) -> bool:
