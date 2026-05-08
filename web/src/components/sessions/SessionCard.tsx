@@ -28,6 +28,7 @@ import {
 // ---------------------------------------------------------------------------
 
 const SESSION_CARD_HOVER_PREFETCH_DELAY_MS = 180;
+const LIVE_TRANSCRIPT_PREVIEW_LIMIT = 180;
 
 type TimelineStatusLike = {
   label: string;
@@ -66,6 +67,18 @@ function runtimeFreshness(status: TimelineStatusLike | null, relativeNowMs: numb
 
 function isAnimatedRuntimeTone(tone: string): boolean {
   return tone === "thinking" || tone === "running";
+}
+
+function getLiveTranscriptPreview(session: TimelineSessionCard["head"]): string | null {
+  const text = session.live_transcript?.text?.trim();
+  if (!text) {
+    return null;
+  }
+  const compact = text.replace(/\s+/g, " ");
+  if (compact.length <= LIVE_TRANSCRIPT_PREVIEW_LIMIT) {
+    return compact;
+  }
+  return `${compact.slice(0, LIVE_TRANSCRIPT_PREVIEW_LIMIT - 1).trimEnd()}...`;
 }
 
 // ---------------------------------------------------------------------------
@@ -173,8 +186,7 @@ export function SessionCard({
 
   const showKeywordSnippet = !isSemanticResult && !!highlightQuery && !!detailSession.match_snippet;
   const showSemanticSnippet = isSemanticResult && !!detailSession.match_snippet;
-  const showSummary = !showKeywordSnippet && !showSemanticSnippet && !!session.summary;
-  const showGenerating = !showKeywordSnippet && !showSemanticSnippet && !session.summary && !session.summary_title;
+  const liveTranscriptPreview = getLiveTranscriptPreview(session);
   const cardActionLabel = groupedQueryMode ? "Open match" : "Open session";
   const hasControlPath = interaction.liveControlAvailable || interaction.hostReattachAvailable;
   // Lifecycle is the closure axis. The reducer only closes on explicit
@@ -187,6 +199,19 @@ export function SessionCard({
     (lifecycle != null
       ? lifecycle === "closed"
       : isSessionClosed(session) && !hasCurrentControlledPresence);
+  const showLiveTranscript =
+    !showKeywordSnippet &&
+    !showSemanticSnippet &&
+    !isClosedSession &&
+    liveTranscriptPreview != null;
+  const showSummary =
+    !showLiveTranscript && !showKeywordSnippet && !showSemanticSnippet && !!session.summary;
+  const showGenerating =
+    !showLiveTranscript &&
+    !showKeywordSnippet &&
+    !showSemanticSnippet &&
+    !session.summary &&
+    !session.summary_title;
   const showProcessPill =
     !isClosedSession && processPillLabel != null && (controlPath === "unmanaged" || processState === "running");
   // Always render the runtime pill for unmanaged sessions so unknown or
@@ -369,6 +394,20 @@ export function SessionCard({
           {title && <div className="session-card-title">{title}</div>}
           {showSummary && (
             <div className="session-card-summary">{session.summary}</div>
+          )}
+          {showLiveTranscript && (
+            <div
+              className="session-card-live-transcript"
+              data-testid="session-card-live-transcript"
+              title={session.live_transcript?.text}
+            >
+              <span className="session-card-live-transcript__label">
+                {session.live_transcript?.is_complete ? "Latest output" : "Live output"}
+              </span>
+              <span className="session-card-live-transcript__text">
+                {liveTranscriptPreview}
+              </span>
+            </div>
           )}
           {showGenerating && (
             <div className="session-card-summary session-card-summary--pending">

@@ -44,6 +44,7 @@ export interface AgentSession {
   runtime_display?: SessionRuntimeDisplay | null;
   runtime_facts?: SessionLivenessFacts | null;
   timeline_card?: TimelineCardPresentation | null;
+  live_transcript?: SessionLiveTranscript | null;
   user_messages: number;
   assistant_messages: number;
   tool_calls: number;
@@ -67,6 +68,18 @@ export interface AgentSession {
   capabilities?: SessionCapabilities | null;
   loop_mode: SessionLoopMode;
   user_state?: string;
+}
+
+export interface SessionLiveTranscript {
+  text: string;
+  source: string;
+  received_at?: string | null;
+  occurred_at?: string | null;
+  thread_id?: string | null;
+  turn_id?: string | null;
+  seq?: number | null;
+  method?: string | null;
+  is_complete: boolean;
 }
 
 export interface SessionRuntimeDisplay {
