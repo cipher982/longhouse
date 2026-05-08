@@ -280,12 +280,15 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let transcript_wake_task = spawn_transcript_wake_listener(transcript_wake_tx)?;
 
     loop {
-        drain_due_local_retries(&mut scheduler, &mut deferred_retries);
-        drain_due_transcript_catchups(&mut scheduler, &mut transcript_catchups);
-        drain_due_active_transcript_polls(&mut scheduler, &mut active_transcript_polls);
-        if !offline.is_offline {
-            start_ready_jobs(&mut scheduler, &mut in_flight, &task_context);
-        }
+        pump_ready_local_work(
+            &mut scheduler,
+            &mut in_flight,
+            &task_context,
+            &mut deferred_retries,
+            &mut transcript_catchups,
+            &mut active_transcript_polls,
+            offline.is_offline,
+        );
 
         tokio::select! {
             // Shutdown signals
@@ -503,6 +506,15 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 );
                 bridge_reaper.tick(&observations);
                 let signature = runtime_truth_signature(&payload);
+                pump_ready_local_work(
+                    &mut scheduler,
+                    &mut in_flight,
+                    &task_context,
+                    &mut deferred_retries,
+                    &mut transcript_catchups,
+                    &mut active_transcript_polls,
+                    offline.is_offline,
+                );
                 if !runtime_truth_bootstrapped {
                     last_runtime_truth_signature = Some(signature);
                     runtime_truth_bootstrapped = true;
@@ -543,6 +555,15 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &status_path,
                     &observations,
                     &claude_observations,
+                );
+                pump_ready_local_work(
+                    &mut scheduler,
+                    &mut in_flight,
+                    &task_context,
+                    &mut deferred_retries,
+                    &mut transcript_catchups,
+                    &mut active_transcript_polls,
+                    offline.is_offline,
                 );
                 if !offline.is_offline {
                     runtime_truth_bootstrapped = true;
@@ -814,6 +835,23 @@ fn start_ready_jobs(
     while let Some(job) = scheduler.pop_launchable() {
         let task_context = task_context.clone();
         in_flight.spawn_local(run_path_job(job, task_context));
+    }
+}
+
+fn pump_ready_local_work(
+    scheduler: &mut PathScheduler,
+    in_flight: &mut JoinSet<PathTaskResult>,
+    task_context: &PathTaskContext,
+    deferred_retries: &mut HashMap<PathBuf, DeferredRetry>,
+    transcript_catchups: &mut Vec<TranscriptCatchup>,
+    active_transcript_polls: &mut HashMap<PathBuf, ActiveTranscriptPoll>,
+    offline: bool,
+) {
+    drain_due_local_retries(scheduler, deferred_retries);
+    drain_due_transcript_catchups(scheduler, transcript_catchups);
+    drain_due_active_transcript_polls(scheduler, active_transcript_polls);
+    if !offline {
+        start_ready_jobs(scheduler, in_flight, task_context);
     }
 }
 
