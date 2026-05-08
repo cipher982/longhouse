@@ -359,6 +359,7 @@ mod tests {
             ws_url: Some("ws://127.0.0.1:1111".to_string()),
             status: "ready".to_string(),
             thread_id: Some("thread-1".to_string()),
+            thread_path: None,
             active_turn_id: None,
             last_turn_status: Some("completed".to_string()),
             last_error: None,
