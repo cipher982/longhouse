@@ -13,6 +13,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use rusqlite::Connection;
+use serde::Deserialize;
+use tokio::io::AsyncReadExt;
+use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
 use crate::config::{self, ShipperConfig};
@@ -132,6 +135,13 @@ struct ActiveTranscriptPoll {
     due_at: Instant,
     expires_at: Instant,
     provider: &'static str,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct TranscriptWakeSignal {
+    provider: String,
+    path: PathBuf,
+    phase: String,
 }
 
 struct DiscoveryTaskResult {
@@ -261,6 +271,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     }
     let control_channel_task =
         crate::control_channel::spawn_control_channel(config.shipper_config.clone());
+    let (transcript_wake_tx, mut transcript_wake_rx) = mpsc::unbounded_channel();
+    let transcript_wake_task = spawn_transcript_wake_listener(transcript_wake_tx)?;
 
     loop {
         drain_due_local_retries(&mut scheduler, &mut deferred_retries);
@@ -314,6 +326,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     }
                     None => {}
                 }
+            }
+
+            Some(signal) = transcript_wake_rx.recv() => {
+                schedule_transcript_catchup_for_wake(
+                    &mut transcript_catchups,
+                    &mut active_transcript_polls,
+                    signal,
+                );
             }
 
             discovery_result = discovery_tasks.join_next(), if !discovery_tasks.is_empty() => {
@@ -531,6 +551,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     if let Some(task) = control_channel_task {
         task.abort();
     }
+    if let Some(task) = transcript_wake_task {
+        task.abort();
+    }
     tracing::info!("Daemon shutdown complete");
     Ok(())
 }
@@ -675,6 +698,47 @@ fn start_discovery_task(
         priority,
         reason,
     });
+}
+
+#[cfg(unix)]
+fn spawn_transcript_wake_listener(
+    tx: mpsc::UnboundedSender<TranscriptWakeSignal>,
+) -> Result<Option<tokio::task::JoinHandle<()>>> {
+    let socket_path = config::get_agent_transcript_wake_socket_path()?;
+    if let Some(parent) = socket_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let _ = std::fs::remove_file(&socket_path);
+    let listener = tokio::net::UnixListener::bind(&socket_path)?;
+    tracing::debug!(
+        path = %socket_path.display(),
+        "Transcript wake listener started"
+    );
+    Ok(Some(tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                break;
+            };
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let mut buf = Vec::with_capacity(1024);
+                if stream.read_to_end(&mut buf).await.is_err() {
+                    return;
+                }
+                let Ok(signal) = serde_json::from_slice::<TranscriptWakeSignal>(&buf) else {
+                    return;
+                };
+                let _ = tx.send(signal);
+            });
+        }
+    })))
+}
+
+#[cfg(not(unix))]
+fn spawn_transcript_wake_listener(
+    _tx: mpsc::UnboundedSender<TranscriptWakeSignal>,
+) -> Result<Option<tokio::task::JoinHandle<()>>> {
+    Ok(None)
 }
 
 fn queue_pending_spool_paths(
@@ -830,6 +894,35 @@ fn schedule_transcript_catchups_for_signals(
             &signal.phase,
         );
     }
+}
+
+fn schedule_transcript_catchup_for_wake(
+    transcript_catchups: &mut Vec<TranscriptCatchup>,
+    active_transcript_polls: &mut HashMap<PathBuf, ActiveTranscriptPoll>,
+    signal: TranscriptWakeSignal,
+) {
+    let Some(provider) = provider_name_to_static(&signal.provider) else {
+        tracing::debug!(
+            provider = %signal.provider,
+            "Skipping transcript wake for unknown provider"
+        );
+        return;
+    };
+    if !signal.path.exists() {
+        tracing::debug!(
+            provider = %signal.provider,
+            path = %signal.path.display(),
+            "Skipping transcript wake for missing path"
+        );
+        return;
+    }
+    schedule_transcript_catchup(
+        transcript_catchups,
+        active_transcript_polls,
+        signal.path,
+        provider,
+        &signal.phase,
+    );
 }
 
 fn schedule_transcript_catchups_for_codex_observations(
@@ -1720,6 +1813,27 @@ mod tests {
                 observed_at: chrono::Utc::now(),
                 transcript_path: Some(transcript.path().to_path_buf()),
             }],
+        );
+
+        assert_eq!(catchups.len(), 1);
+        assert_eq!(catchups[0].path, transcript.path());
+        assert!(active_polls.contains_key(transcript.path()));
+    }
+
+    #[test]
+    fn test_transcript_wake_schedules_immediate_catchup() {
+        let transcript = tempfile::NamedTempFile::new().unwrap();
+        let mut catchups = Vec::new();
+        let mut active_polls = HashMap::new();
+
+        schedule_transcript_catchup_for_wake(
+            &mut catchups,
+            &mut active_polls,
+            TranscriptWakeSignal {
+                provider: "codex".to_string(),
+                path: transcript.path().to_path_buf(),
+                phase: "running".to_string(),
+            },
         );
 
         assert_eq!(catchups.len(), 1);

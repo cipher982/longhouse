@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -822,6 +823,9 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                         context.state.active_turn_id = None;
                         context.state.last_error = None;
                         write_state_file(&context.state_file, &context.state)?;
+                        if let Some(path) = context.state.thread_path.as_deref() {
+                            wake_daemon_for_transcript(&config, path, "idle");
+                        }
                         context
                             .runtime
                             .post_terminal(
@@ -1464,6 +1468,40 @@ fn resolve_bridge_agent_db_path(longhouse_home_override: Option<&Path>) -> Resul
     }
 }
 
+fn resolve_bridge_transcript_wake_socket_path(
+    longhouse_home_override: Option<&Path>,
+) -> Result<PathBuf> {
+    match longhouse_home_override {
+        Some(home) => Ok(home.join("agent").join("transcript-wake.sock")),
+        None => crate::config::get_agent_transcript_wake_socket_path(),
+    }
+}
+
+#[cfg(unix)]
+fn wake_daemon_for_transcript(config: &BridgeRunConfig, thread_path: &str, phase: &str) {
+    let Ok(socket_path) =
+        resolve_bridge_transcript_wake_socket_path(config.longhouse_home.as_deref())
+    else {
+        return;
+    };
+    if !socket_path.exists() {
+        return;
+    }
+    let payload = json!({
+        "provider": "codex",
+        "path": thread_path,
+        "phase": phase,
+    });
+    let Ok(mut stream) = std::os::unix::net::UnixStream::connect(&socket_path) else {
+        return;
+    };
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(50)));
+    let _ = stream.write_all(payload.to_string().as_bytes());
+}
+
+#[cfg(not(unix))]
+fn wake_daemon_for_transcript(_config: &BridgeRunConfig, _thread_path: &str, _phase: &str) {}
+
 fn bridge_lock_path(state_file: &Path) -> PathBuf {
     state_file.with_extension("lock")
 }
@@ -2024,6 +2062,9 @@ async fn process_notification(
                 context.state.active_turn_id = extract_string(&params, &["turn", "id"]);
                 context.state.last_turn_status = extract_string(&params, &["turn", "status"]);
                 write_state_file(&context.state_file, &context.state)?;
+                if let Some(path) = context.state.thread_path.as_deref() {
+                    wake_daemon_for_transcript(config, path, "running");
+                }
             }
             let updates = context.runtime_tracker.handle_notification(method, &params);
             emit_runtime_updates(context, updates).await;
@@ -2046,6 +2087,9 @@ async fn process_notification(
             context.state.last_turn_status = extract_string(&params, &["turn", "status"]);
             context.state.active_turn_id = None;
             write_state_file(&context.state_file, &context.state)?;
+            if let Some(path) = context.state.thread_path.as_deref() {
+                wake_daemon_for_transcript(config, path, "idle");
+            }
             let updates = context.runtime_tracker.handle_notification(method, &params);
             emit_runtime_updates(context, updates).await;
             // Daemon handles shipping — no per-turn ship needed.
@@ -2217,6 +2261,7 @@ fn sync_thread_binding(
                 if let Err(e) = sb.bind(new, session_id, "codex") {
                     eprintln!("[codex-bridge] session_binding seed failed: {e}");
                 }
+                wake_daemon_for_transcript(config, new, "running");
             }
         }
         Err(e) => eprintln!("[codex-bridge] open shipper DB for binding: {e}"),

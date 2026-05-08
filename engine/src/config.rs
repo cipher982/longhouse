@@ -271,6 +271,10 @@ pub fn get_agent_status_path() -> Result<PathBuf> {
     Ok(get_agent_dir()?.join("engine-status.json"))
 }
 
+pub fn get_agent_transcript_wake_socket_path() -> Result<PathBuf> {
+    Ok(get_agent_dir()?.join("transcript-wake.sock"))
+}
+
 pub fn get_agent_db_path() -> Result<PathBuf> {
     Ok(get_agent_dir()?.join("longhouse-shipper.db"))
 }
