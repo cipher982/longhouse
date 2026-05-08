@@ -59,6 +59,7 @@ const ACTIVE_TRANSCRIPT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const ACTIVE_TRANSCRIPT_POLL_SLOW_THRESHOLD: Duration = Duration::from_secs(2);
 const ACTIVE_TRANSCRIPT_POLL_SLOW_BACKOFF: Duration = Duration::from_secs(5);
 const ACTIVE_TRANSCRIPT_POLL_TTL: Duration = Duration::from_secs(2 * 60 * 60);
+const UNMANAGED_HOOK_CATCHUP_DELAY: Duration = Duration::from_secs(30);
 const TERMINAL_CATCHUP_DELAYS: [Duration; 3] = [
     Duration::from_secs(0),
     Duration::from_secs(1),
@@ -1048,6 +1049,7 @@ fn schedule_transcript_catchups_for_signals(
             "outbox_signal_unmanaged"
         };
 
+        let catchup_start = transcript_catchups.len();
         schedule_transcript_catchup(
             transcript_catchups,
             active_transcript_polls,
@@ -1058,6 +1060,11 @@ fn schedule_transcript_catchups_for_signals(
             signal.observed_at.timestamp_millis(),
             managed_bound_path,
         );
+        if !managed_bound_path {
+            for catchup in &mut transcript_catchups[catchup_start..] {
+                catchup.due_at += UNMANAGED_HOOK_CATCHUP_DELAY;
+            }
+        }
     }
 }
 
@@ -2158,6 +2165,7 @@ mod tests {
 
         let mut catchups = Vec::new();
         let mut active_polls = HashMap::new();
+        let before = Instant::now();
         schedule_transcript_catchups_for_signals(
             &conn,
             &mut catchups,
@@ -2174,6 +2182,10 @@ mod tests {
         assert_eq!(catchups.len(), 1);
         assert_eq!(catchups[0].path, transcript.path());
         assert_eq!(catchups[0].observation_source, "outbox_signal_unmanaged");
+        assert!(
+            catchups[0].due_at >= before + UNMANAGED_HOOK_CATCHUP_DELAY,
+            "unmanaged hook catch-ups should yield the immediate lane to managed work"
+        );
         assert!(
             active_polls.is_empty(),
             "unmanaged hook signals get one catch-up but do not arm active polling"
@@ -2193,6 +2205,7 @@ mod tests {
 
         let mut catchups = Vec::new();
         let mut active_polls = HashMap::new();
+        let before = Instant::now();
         schedule_transcript_catchups_for_signals(
             &conn,
             &mut catchups,
@@ -2208,6 +2221,10 @@ mod tests {
 
         assert_eq!(catchups.len(), 1);
         assert_eq!(catchups[0].observation_source, "outbox_signal");
+        assert!(
+            catchups[0].due_at < before + UNMANAGED_HOOK_CATCHUP_DELAY,
+            "managed hook catch-ups must stay on the immediate lane"
+        );
         assert!(active_polls.contains_key(transcript.path()));
     }
 
