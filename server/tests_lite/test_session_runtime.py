@@ -221,6 +221,7 @@ def test_live_transcript_overlay_uses_latest_snapshot_and_dedupes(tmp_path):
                         "method": "item/agentMessage/delta",
                         "delta": "lo",
                         "live_text": "hello",
+                        "turn_completed": True,
                     },
                 ),
                 RuntimeEventIngest(
@@ -240,21 +241,26 @@ def test_live_transcript_overlay_uses_latest_snapshot_and_dedupes(tmp_path):
                         "method": "item/agentMessage/delta",
                         "delta": "lo",
                         "live_text": "hello",
+                        "turn_completed": True,
                     },
                 ),
             ],
         )
 
         overlay = load_live_transcript_overlay_map(db, [session.id])[str(session.id)]
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).first()
 
     assert result.accepted == 2
     assert result.duplicates == 1
+    assert result.updated_runtime_keys == [runtime_key]
+    assert state is None
     assert overlay.text == "hello"
     assert overlay.source == "codex_bridge_live"
     assert overlay.thread_id == "thread-1"
     assert overlay.turn_id == "turn-1"
     assert overlay.seq == 2
     assert overlay.method == "item/agentMessage/delta"
+    assert overlay.is_complete is True
     engine.dispose()
 
 

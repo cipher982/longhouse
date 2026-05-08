@@ -251,6 +251,7 @@ def test_sessions_list_includes_codex_live_transcript_overlay(tmp_path):
                         "method": "item/agentMessage/delta",
                         "delta": "world",
                         "live_text": "hello world",
+                        "turn_completed": False,
                     },
                     sort_keys=True,
                 ),
@@ -278,6 +279,7 @@ def test_sessions_list_includes_codex_live_transcript_overlay(tmp_path):
         "turn_id": "turn-1",
         "seq": 4,
         "method": "item/agentMessage/delta",
+        "is_complete": False,
     }
 
 

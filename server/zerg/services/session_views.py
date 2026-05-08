@@ -146,6 +146,7 @@ def build_live_transcript_response(
         turn_id=overlay.turn_id,
         seq=overlay.seq,
         method=overlay.method,
+        is_complete=overlay.is_complete,
     )
 
 
@@ -416,6 +417,7 @@ class SessionLiveTranscriptResponse(UTCBaseModel):
     turn_id: Optional[str] = Field(None, description="Provider turn id for the live text snapshot")
     seq: Optional[int] = Field(None, description="Monotonic sequence within the provider turn")
     method: Optional[str] = Field(None, description="Provider notification method that produced the snapshot")
+    is_complete: bool = Field(False, description="True when this snapshot is the final live text for the turn")
 
 
 class HostObservationResponse(UTCBaseModel):
