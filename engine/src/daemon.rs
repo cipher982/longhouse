@@ -129,6 +129,8 @@ struct TranscriptCatchup {
     due_at: Instant,
     path: PathBuf,
     provider: &'static str,
+    observation_source: &'static str,
+    observed_at_ms: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -143,6 +145,8 @@ struct TranscriptWakeSignal {
     provider: String,
     path: PathBuf,
     phase: String,
+    #[serde(default = "now_ms")]
+    observed_at_ms: i64,
 }
 
 struct DiscoveryTaskResult {
@@ -375,19 +379,25 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // File change events (primary path) — skip when offline
             batch = watcher.next_batch(config.flush_interval), if !offline.is_offline => {
                 match batch {
-                    Some(paths) if !paths.is_empty() => {
-                        for path in paths {
-                            let provider = match discovery::provider_for_path(&path, &providers) {
+                    Some(events) if !events.is_empty() => {
+                        for event in events {
+                            let provider = match discovery::provider_for_path(&event.path, &providers) {
                                 Some(provider) => provider,
                                 None => {
                                     tracing::debug!(
                                         "Skipping file outside known providers: {}",
-                                        path.display()
+                                        event.path.display()
                                     );
                                     continue;
                                 }
                             };
-                            scheduler.enqueue(path, provider, WorkPriority::Watch);
+                            scheduler.enqueue_observed(
+                                event.path,
+                                provider,
+                                WorkPriority::Watch,
+                                "fsevent",
+                                event.observed_at_ms,
+                            );
                         }
                     }
                     Some(_) => {} // empty batch, timer elapsed with no events
@@ -682,7 +692,7 @@ fn enqueue_discovered_files(
 ) -> usize {
     let count = all_files.len();
     for (path, provider) in all_files {
-        scheduler.enqueue(path, provider, priority);
+        scheduler.enqueue_observed(path, provider, priority, "discovery_scan", now_ms());
     }
     count
 }
@@ -763,10 +773,12 @@ fn queue_pending_spool_paths(
             );
             continue;
         };
-        scheduler.enqueue(
+        scheduler.enqueue_observed(
             PathBuf::from(pending.file_path),
             provider,
             WorkPriority::Retry,
+            "spool_pending",
+            now_ms(),
         );
         queued += 1;
     }
@@ -789,6 +801,10 @@ fn work_context(priority: WorkPriority) -> &'static str {
         WorkPriority::Retry => "spool_replay",
         WorkPriority::Scan => "reconciliation_scan",
     }
+}
+
+fn now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
 }
 
 fn start_ready_jobs(
@@ -814,7 +830,13 @@ fn drain_due_local_retries(
 
     for path in ready_paths {
         if let Some(retry) = deferred_retries.remove(&path) {
-            scheduler.enqueue(path, retry.provider, WorkPriority::Retry);
+            scheduler.enqueue_observed(
+                path,
+                retry.provider,
+                WorkPriority::Retry,
+                "local_retry",
+                now_ms(),
+            );
         }
     }
 }
@@ -828,7 +850,13 @@ fn drain_due_transcript_catchups(
     while index < transcript_catchups.len() {
         if transcript_catchups[index].due_at <= now {
             let catchup = transcript_catchups.swap_remove(index);
-            scheduler.enqueue(catchup.path, catchup.provider, WorkPriority::Watch);
+            scheduler.enqueue_observed(
+                catchup.path,
+                catchup.provider,
+                WorkPriority::Watch,
+                catchup.observation_source,
+                catchup.observed_at_ms,
+            );
         } else {
             index += 1;
         }
@@ -854,7 +882,13 @@ fn drain_due_active_transcript_polls(
             continue;
         }
 
-        scheduler.enqueue(path.clone(), poll.provider, WorkPriority::Watch);
+        scheduler.enqueue_observed(
+            path.clone(),
+            poll.provider,
+            WorkPriority::Watch,
+            "active_poll",
+            now_ms(),
+        );
         if let Some(poll) = active_transcript_polls.get_mut(&path) {
             poll.due_at = now + ACTIVE_TRANSCRIPT_POLL_INTERVAL;
         }
@@ -893,6 +927,8 @@ fn schedule_transcript_catchups_for_signals(
             path,
             provider,
             &signal.phase,
+            "outbox_signal",
+            signal.observed_at.timestamp_millis(),
         );
     }
 }
@@ -923,6 +959,8 @@ fn schedule_transcript_catchup_for_wake(
         signal.path,
         provider,
         &signal.phase,
+        "wake_socket",
+        signal.observed_at_ms,
     );
 }
 
@@ -963,6 +1001,8 @@ fn schedule_transcript_catchups_for_codex_observations(
             path,
             "codex",
             phase,
+            "bridge_scan",
+            now_ms(),
         );
     }
 }
@@ -986,6 +1026,8 @@ fn schedule_transcript_catchup(
     path: PathBuf,
     provider: &'static str,
     phase: &str,
+    observation_source: &'static str,
+    observed_at_ms: i64,
 ) {
     if is_terminal_or_attention_phase(phase) {
         transcript_catchups.retain(|existing| existing.path != path);
@@ -1003,6 +1045,8 @@ fn schedule_transcript_catchup(
                 due_at: now + delay,
                 path: path.clone(),
                 provider,
+                observation_source,
+                observed_at_ms,
             });
         }
         return;
@@ -1032,6 +1076,8 @@ fn schedule_transcript_catchup(
                 due_at: now,
                 path,
                 provider,
+                observation_source,
+                observed_at_ms,
             });
         }
     }
@@ -1260,6 +1306,9 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
             let prepared_new_offset = prepared.new_offset;
             let ship_trace = shipper::ShipTraceContext {
                 work_context: work_context(result.job.priority),
+                observation_source: result.job.observation.source,
+                observed_at_ms: result.job.observation.observed_at_ms,
+                enqueued_at_ms: result.job.observation.enqueued_at_ms,
                 job_started_at_ms,
                 prepare_started_at_ms,
                 prepare_finished_at_ms,
@@ -1499,6 +1548,8 @@ mod tests {
             path.clone(),
             "claude",
             "needs_user",
+            "test",
+            123,
         );
 
         assert_eq!(catchups.len(), 3);
@@ -1529,6 +1580,8 @@ mod tests {
             path.clone(),
             "claude",
             "thinking",
+            "test",
+            123,
         );
         schedule_transcript_catchup(
             &mut catchups,
@@ -1536,6 +1589,8 @@ mod tests {
             path.clone(),
             "claude",
             "running",
+            "test",
+            124,
         );
 
         assert_eq!(catchups.len(), 1);
@@ -1547,6 +1602,8 @@ mod tests {
         let job = scheduler.pop_launchable().expect("active catch-up queued");
         assert_eq!(job.path, path);
         assert_eq!(job.priority, WorkPriority::Watch);
+        assert_eq!(job.observation.source, "test");
+        assert_eq!(job.observation.observed_at_ms, 123);
         assert!(catchups.is_empty());
     }
 
@@ -1564,6 +1621,8 @@ mod tests {
                 path.clone(),
                 "claude",
                 "thinking",
+                "test",
+                123,
             );
         }
 
@@ -1692,11 +1751,15 @@ mod tests {
                 due_at: now - Duration::from_secs(1),
                 path: ready.path().to_path_buf(),
                 provider: "claude",
+                observation_source: "test",
+                observed_at_ms: 123,
             },
             TranscriptCatchup {
                 due_at: now + Duration::from_secs(30),
                 path: later.path().to_path_buf(),
                 provider: "claude",
+                observation_source: "test",
+                observed_at_ms: 124,
             },
         ];
 
@@ -1706,6 +1769,8 @@ mod tests {
         let job = scheduler.pop_launchable().expect("ready catch-up queued");
         assert_eq!(job.path, ready.path());
         assert_eq!(job.priority, WorkPriority::Watch);
+        assert_eq!(job.observation.source, "test");
+        assert_eq!(job.observation.observed_at_ms, 123);
         assert_eq!(catchups.len(), 1);
         assert_eq!(catchups[0].path, later.path());
     }
@@ -1844,6 +1909,7 @@ mod tests {
                 provider: "codex".to_string(),
                 path: transcript.path().to_path_buf(),
                 phase: "running".to_string(),
+                observed_at_ms: 123,
             },
         );
 

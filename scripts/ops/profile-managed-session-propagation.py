@@ -802,8 +802,14 @@ print(json.dumps(payload))
         ship_trace = ship_trace_details(hosted, self.remote_clock_skew_ms)
         if ship_trace:
             parts = []
+            source = ship_trace.get("observation_source")
+            if source:
+                parts.append(f"source={source}")
             for key, label in (
                 ("append_to_job_ms", "append_to_job"),
+                ("observation_to_enqueue_ms", "observe_to_enqueue"),
+                ("enqueue_to_job_ms", "enqueue_to_job"),
+                ("observed_to_job_ms", "observed_to_job"),
                 ("prepare_ms", "prepare"),
                 ("job_to_http_ms", "job_to_http"),
                 ("http_to_handler_ms", "http_to_handler"),
@@ -1022,7 +1028,15 @@ def ship_trace_details(data: dict[str, Any], remote_clock_skew_ms: int | None) -
         if not isinstance(ship_trace, dict) or not isinstance(server_trace, dict):
             continue
         details: dict[str, Any] = {}
-        for key in ("prepare_ms", "job_to_http_ms"):
+        if isinstance(ship_trace.get("observation_source"), str):
+            details["observation_source"] = ship_trace["observation_source"]
+        for key in (
+            "observation_to_enqueue_ms",
+            "enqueue_to_job_ms",
+            "observed_to_job_ms",
+            "prepare_ms",
+            "job_to_http_ms",
+        ):
             if isinstance(ship_trace.get(key), int | float):
                 details[key] = int(ship_trace[key])
         if isinstance(server_trace.get("store_write_ms"), int | float):

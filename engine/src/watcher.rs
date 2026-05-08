@@ -1,11 +1,11 @@
 //! Filesystem watcher for session files using the `notify` crate.
 //!
 //! Wraps `notify::recommended_watcher` (FSEvents on macOS, inotify on Linux)
-//! with a tokio mpsc channel. Events are coalesced using a HashSet + flush
+//! with a tokio mpsc channel. Events are coalesced using a HashMap + flush
 //! interval (throttle pattern, not debounce) to handle rapid JSONL appends
 //! without starving.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -41,7 +41,14 @@ fn is_temp_file(path: &std::path::Path) -> bool {
 pub struct SessionWatcher {
     // Must stay alive — dropping stops the watcher.
     _watcher: RecommendedWatcher,
-    rx: mpsc::Receiver<PathBuf>,
+    rx: mpsc::Receiver<WatcherEvent>,
+}
+
+/// A filesystem change after provider/session filtering.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WatcherEvent {
+    pub path: PathBuf,
+    pub observed_at_ms: i64,
 }
 
 impl SessionWatcher {
@@ -90,7 +97,11 @@ impl SessionWatcher {
                     // Bounded send. If the OS watcher floods, deterministic
                     // hook catch-up should keep active sessions fresh; the
                     // reconciliation scan repairs any remaining missed files.
-                    if watcher_tx.try_send(path).is_err() {
+                    let watcher_event = WatcherEvent {
+                        path,
+                        observed_at_ms: chrono::Utc::now().timestamp_millis(),
+                    };
+                    if watcher_tx.try_send(watcher_event).is_err() {
                         let n =
                             dropped_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                         // Warn once per 1000 drops
@@ -131,13 +142,13 @@ impl SessionWatcher {
     ///
     /// Blocks until at least one event arrives, then collects for flush_interval.
     /// Returns None if the watcher channel was closed.
-    pub async fn next_batch(&mut self, flush_interval: Duration) -> Option<Vec<PathBuf>> {
-        let mut batch = HashSet::new();
+    pub async fn next_batch(&mut self, flush_interval: Duration) -> Option<Vec<WatcherEvent>> {
+        let mut batch: HashMap<PathBuf, i64> = HashMap::new();
 
         // Wait for the first event (blocks until something happens — zero CPU)
         match self.rx.recv().await {
-            Some(path) => {
-                batch.insert(path);
+            Some(event) => {
+                batch.insert(event.path, event.observed_at_ms);
             }
             None => return None, // Channel closed
         }
@@ -154,16 +165,27 @@ impl SessionWatcher {
                 }
                 result = self.rx.recv() => {
                     match result {
-                        Some(path) => { batch.insert(path); }
+                        Some(event) => {
+                            batch
+                                .entry(event.path)
+                                .and_modify(|observed| *observed = (*observed).min(event.observed_at_ms))
+                                .or_insert(event.observed_at_ms);
+                        }
                         None => break,
                     }
                 }
             }
         }
 
-        let mut paths: Vec<_> = batch.into_iter().collect();
-        paths.sort();
-        Some(paths)
+        let mut events: Vec<_> = batch
+            .into_iter()
+            .map(|(path, observed_at_ms)| WatcherEvent {
+                path,
+                observed_at_ms,
+            })
+            .collect();
+        events.sort_by(|a, b| a.path.cmp(&b.path));
+        Some(events)
     }
 }
 
@@ -175,19 +197,42 @@ mod tests {
     #[test]
     fn test_bounded_channel_drops_not_panics() {
         // Create a bounded channel directly — fill it, then verify try_send fails gracefully
-        let (tx, mut rx) = mpsc::channel::<PathBuf>(2);
+        let (tx, mut rx) = mpsc::channel::<WatcherEvent>(2);
 
         // Fill the channel
-        tx.try_send(PathBuf::from("/a")).unwrap();
-        tx.try_send(PathBuf::from("/b")).unwrap();
+        tx.try_send(WatcherEvent {
+            path: PathBuf::from("/a"),
+            observed_at_ms: 1,
+        })
+        .unwrap();
+        tx.try_send(WatcherEvent {
+            path: PathBuf::from("/b"),
+            observed_at_ms: 2,
+        })
+        .unwrap();
 
         // Third send should fail (channel full), not panic
-        let result = tx.try_send(PathBuf::from("/c"));
+        let result = tx.try_send(WatcherEvent {
+            path: PathBuf::from("/c"),
+            observed_at_ms: 3,
+        });
         assert!(result.is_err(), "Full channel should reject send");
 
         // Drain to verify first two got through
-        assert_eq!(rx.try_recv().unwrap(), PathBuf::from("/a"));
-        assert_eq!(rx.try_recv().unwrap(), PathBuf::from("/b"));
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            WatcherEvent {
+                path: PathBuf::from("/a"),
+                observed_at_ms: 1
+            }
+        );
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            WatcherEvent {
+                path: PathBuf::from("/b"),
+                observed_at_ms: 2
+            }
+        );
         assert!(
             rx.try_recv().is_err(),
             "Channel should be empty after drain"

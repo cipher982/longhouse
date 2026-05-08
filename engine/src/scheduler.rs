@@ -34,19 +34,31 @@ pub struct PathJob {
     pub path: PathBuf,
     pub provider: &'static str,
     pub priority: WorkPriority,
+    pub observation: ObservationTrace,
+}
+
+/// Timing metadata for the code path that noticed work before a ship job ran.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ObservationTrace {
+    pub source: &'static str,
+    pub observed_at_ms: i64,
+    pub enqueued_at_ms: i64,
 }
 
 #[derive(Clone, Debug)]
 struct ReadyJob {
     provider: &'static str,
     priority: WorkPriority,
+    observation: ObservationTrace,
 }
 
 #[derive(Clone, Debug)]
 struct InFlightJob {
     provider: &'static str,
     priority: WorkPriority,
+    observation: ObservationTrace,
     rerun_priority: Option<WorkPriority>,
+    rerun_observation: Option<ObservationTrace>,
 }
 
 /// Bounded scheduler that dedupes work by file path.
@@ -79,10 +91,30 @@ impl PathScheduler {
     ///
     /// If the path is already queued, the highest-priority source wins.
     /// If the path is already in flight, a rerun is recorded for completion.
+    #[cfg(test)]
     pub fn enqueue(&mut self, path: PathBuf, provider: &'static str, priority: WorkPriority) {
+        self.enqueue_observed(path, provider, priority, "unspecified", now_ms());
+    }
+
+    /// Enqueue work with the source/timestamp that first observed it.
+    pub fn enqueue_observed(
+        &mut self,
+        path: PathBuf,
+        provider: &'static str,
+        priority: WorkPriority,
+        observation_source: &'static str,
+        observed_at_ms: i64,
+    ) {
+        let observation = ObservationTrace {
+            source: observation_source,
+            observed_at_ms,
+            enqueued_at_ms: now_ms(),
+        };
+
         if let Some(ready) = self.ready_jobs.get_mut(&path) {
             if priority < ready.priority {
                 ready.priority = priority;
+                ready.observation = observation;
                 self.push_ready_path(path, priority);
             }
             return;
@@ -90,11 +122,18 @@ impl PathScheduler {
 
         if let Some(in_flight) = self.in_flight.get_mut(&path) {
             in_flight.rerun_priority = merge_priority(in_flight.rerun_priority, Some(priority));
+            in_flight.rerun_observation = Some(observation);
             return;
         }
 
-        self.ready_jobs
-            .insert(path.clone(), ReadyJob { provider, priority });
+        self.ready_jobs.insert(
+            path.clone(),
+            ReadyJob {
+                provider,
+                priority,
+                observation,
+            },
+        );
         self.push_ready_path(path, priority);
     }
 
@@ -145,7 +184,14 @@ impl PathScheduler {
         };
 
         if let Some(priority) = merge_priority(in_flight.rerun_priority, task_rerun) {
-            self.enqueue(path.to_path_buf(), in_flight.provider, priority);
+            let observation = in_flight.rerun_observation.unwrap_or(in_flight.observation);
+            self.enqueue_observed(
+                path.to_path_buf(),
+                in_flight.provider,
+                priority,
+                observation.source,
+                observation.observed_at_ms,
+            );
         }
     }
 
@@ -186,7 +232,9 @@ impl PathScheduler {
                 InFlightJob {
                     provider: ready.provider,
                     priority: ready.priority,
+                    observation: ready.observation.clone(),
                     rerun_priority: None,
+                    rerun_observation: None,
                 },
             );
 
@@ -194,6 +242,7 @@ impl PathScheduler {
                 path,
                 provider: ready.provider,
                 priority: ready.priority,
+                observation: ready.observation,
             });
         }
 
@@ -223,6 +272,10 @@ impl PathScheduler {
             .filter(|job| job.priority == priority)
             .count()
     }
+}
+
+fn now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
 }
 
 fn merge_priority(a: Option<WorkPriority>, b: Option<WorkPriority>) -> Option<WorkPriority> {
@@ -258,12 +311,12 @@ mod tests {
         let mut scheduler = PathScheduler::new(1);
         let path = PathBuf::from("/tmp/a.jsonl");
 
-        scheduler.enqueue(path.clone(), "codex", WorkPriority::Scan);
+        scheduler.enqueue_observed(path.clone(), "codex", WorkPriority::Scan, "scan", 100);
         let job = scheduler.pop_launchable().unwrap();
         assert_eq!(job.priority, WorkPriority::Scan);
         assert_eq!(scheduler.in_flight_len(), 1);
 
-        scheduler.enqueue(path.clone(), "codex", WorkPriority::Watch);
+        scheduler.enqueue_observed(path.clone(), "codex", WorkPriority::Watch, "fsevent", 200);
         assert_eq!(scheduler.ready_len(), 0);
 
         scheduler.complete(&path, None);
@@ -272,6 +325,8 @@ mod tests {
 
         let rerun = scheduler.pop_launchable().unwrap();
         assert_eq!(rerun.priority, WorkPriority::Watch);
+        assert_eq!(rerun.observation.source, "fsevent");
+        assert_eq!(rerun.observation.observed_at_ms, 200);
     }
 
     #[test]
