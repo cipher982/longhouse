@@ -22,6 +22,7 @@ use crate::pipeline::parser::{self, ParseResult};
 use crate::shipping::client::{ShipResult, ShipperClient};
 use crate::shipping_stats::{RecentShipStatsTracker, ShipAttemptOutcome};
 use crate::state::file_state::FileState;
+use crate::state::live_file_state::LiveFileState;
 use crate::state::spool::Spool;
 
 const TARGET_BATCH_BYTES: u64 = 512 * 1024;
@@ -802,6 +803,7 @@ pub(crate) fn prepare_path_range_with_parse_tracker(
             offset,
             new_offset,
             has_reply_evidence: false,
+            cursor_mode: CursorMode::Archive,
             actions: vec![PreparedAction::AckOnly(AckOnlyItem {
                 path_str,
                 provider: provider.to_string(),
@@ -850,6 +852,10 @@ pub(crate) fn prepare_path_range_with_parse_tracker(
         offset,
         new_offset,
         has_reply_evidence,
+        cursor_mode: match source_line_mode {
+            SourceLineMode::Full => CursorMode::Archive,
+            SourceLineMode::EventOnly => CursorMode::Live,
+        },
         actions,
     }))
 }
@@ -916,9 +922,20 @@ pub(crate) fn prepare_file_batches_with_source_line_mode_and_parse_tracker(
 ) -> Result<Option<PreparedFile>> {
     let path_str = path.to_string_lossy().to_string();
     let file_state = FileState::new(conn);
+    let live_file_state = LiveFileState::new(conn);
+    let cursor_mode = match source_line_mode {
+        SourceLineMode::Full => CursorMode::Archive,
+        SourceLineMode::EventOnly => CursorMode::Live,
+    };
 
-    let current_offset = file_state.get_offset(&path_str)?;
-    let queued_offset = file_state.get_queued_offset(&path_str)?;
+    let current_offset = match cursor_mode {
+        CursorMode::Archive => file_state.get_offset(&path_str)?,
+        CursorMode::Live => live_file_state.get_offset(&path_str)?,
+    };
+    let queued_offset = match cursor_mode {
+        CursorMode::Archive => file_state.get_queued_offset(&path_str)?,
+        CursorMode::Live => current_offset,
+    };
     let file_size = match std::fs::metadata(path) {
         Ok(m) => m.len(),
         Err(e) => {
@@ -934,7 +951,10 @@ pub(crate) fn prepare_file_batches_with_source_line_mode_and_parse_tracker(
             current_offset,
             file_size
         );
-        file_state.reset_offsets(&path_str)?;
+        match cursor_mode {
+            CursorMode::Archive => file_state.reset_offsets(&path_str)?,
+            CursorMode::Live => live_file_state.reset_offset(&path_str)?,
+        }
         Some(truncation_rewind_hint(&path_str))
     } else {
         None
@@ -1207,7 +1227,10 @@ pub async fn ship_prepared_file_with_trace(
     ship_trace: Option<&ShipTraceContext>,
 ) -> Result<ShipPreparedOutcome> {
     let file_state = FileState::new(conn);
+    let live_file_state = LiveFileState::new(conn);
     let spool = Spool::new(conn);
+    let cursor_mode = prepared.cursor_mode;
+    let prepared_new_offset = prepared.new_offset;
     let mut outcome = ShipPreparedOutcome::default();
 
     for action in prepared.actions {
@@ -1228,13 +1251,21 @@ pub async fn ship_prepared_file_with_trace(
                     Some(&item.session_id),
                     &item.reason,
                 )?;
-                file_state.set_offset(
-                    &item.path_str,
-                    item.new_offset,
-                    &item.session_id,
-                    &item.session_id,
-                    &item.provider,
-                )?;
+                match cursor_mode {
+                    CursorMode::Archive => file_state.set_offset(
+                        &item.path_str,
+                        item.new_offset,
+                        &item.session_id,
+                        &item.session_id,
+                        &item.provider,
+                    )?,
+                    CursorMode::Live => live_file_state.set_offset(
+                        &item.path_str,
+                        item.new_offset,
+                        &item.provider,
+                        &item.session_id,
+                    )?,
+                }
                 outcome.dead_lettered += 1;
             }
             PreparedAction::AckOnly(item) => {
@@ -1245,24 +1276,40 @@ pub async fn ship_prepared_file_with_trace(
                     new_offset = item.new_offset,
                     "Acknowledging ignorable whole-document session without shipping"
                 );
-                file_state.set_offset(
-                    &item.path_str,
-                    item.new_offset,
-                    &item.session_id,
-                    &item.session_id,
-                    &item.provider,
-                )?;
+                match cursor_mode {
+                    CursorMode::Archive => file_state.set_offset(
+                        &item.path_str,
+                        item.new_offset,
+                        &item.session_id,
+                        &item.session_id,
+                        &item.provider,
+                    )?,
+                    CursorMode::Live => live_file_state.set_offset(
+                        &item.path_str,
+                        item.new_offset,
+                        &item.provider,
+                        &item.session_id,
+                    )?,
+                }
             }
             PreparedAction::Ship(item) => {
                 match attempt_ship(item, client, tracker, ship_stats, ship_trace).await {
                     AttemptedShip::Shipped(item) => {
-                        file_state.set_offset(
-                            &item.path_str,
-                            item.new_offset,
-                            &item.session_id,
-                            &item.session_id,
-                            &item.provider,
-                        )?;
+                        match cursor_mode {
+                            CursorMode::Archive => file_state.set_offset(
+                                &item.path_str,
+                                item.new_offset,
+                                &item.session_id,
+                                &item.session_id,
+                                &item.provider,
+                            )?,
+                            CursorMode::Live => live_file_state.set_offset(
+                                &item.path_str,
+                                item.new_offset,
+                                &item.provider,
+                                &item.session_id,
+                            )?,
+                        }
                         outcome.events_shipped += item.event_count;
                         outcome.bytes_shipped += item.new_offset - item.offset;
                     }
@@ -1271,17 +1318,22 @@ pub async fn ship_prepared_file_with_trace(
                         error: _,
                         is_connect_error,
                     } => {
+                        if cursor_mode == CursorMode::Live {
+                            outcome.fully_processed = false;
+                            outcome.had_connect_error = is_connect_error;
+                            return Ok(outcome);
+                        }
                         let enqueued = spool.enqueue(
                             &item.provider,
                             &item.path_str,
                             item.offset,
-                            prepared.new_offset,
+                            prepared_new_offset,
                             Some(&item.session_id),
                         )?;
                         if enqueued {
                             file_state.set_queued_offset(
                                 &item.path_str,
-                                prepared.new_offset,
+                                prepared_new_offset,
                                 &item.provider,
                                 &item.session_id,
                                 &item.session_id,
@@ -1297,26 +1349,30 @@ pub async fn ship_prepared_file_with_trace(
                         return Ok(outcome);
                     }
                     AttemptedShip::PayloadTooLarge { item } => {
+                        if cursor_mode == CursorMode::Live {
+                            outcome.fully_processed = false;
+                            return Ok(outcome);
+                        }
                         let enqueued = spool.enqueue(
                             &item.provider,
                             &item.path_str,
                             item.offset,
-                            prepared.new_offset,
+                            prepared_new_offset,
                             Some(&item.session_id),
                         )?;
                         if enqueued {
                             file_state.set_queued_offset(
                                 &item.path_str,
-                                prepared.new_offset,
+                                prepared_new_offset,
                                 &item.provider,
                                 &item.session_id,
                                 &item.session_id,
                             )?;
                         } else {
                             tracing::warn!(
-                            "Spool at capacity — 413 payload for {} will be retried on next startup",
-                            item.path_str
-                        );
+                                "Spool at capacity — 413 payload for {} will be retried on next startup",
+                                item.path_str
+                            );
                         }
                         outcome.fully_processed = false;
                         return Ok(outcome);
@@ -1326,6 +1382,10 @@ pub async fn ship_prepared_file_with_trace(
                         status_code,
                         body,
                     } => {
+                        if cursor_mode == CursorMode::Live {
+                            outcome.fully_processed = false;
+                            return Ok(outcome);
+                        }
                         let error = format!(
                             "payload rejected {}:{}",
                             status_code,
@@ -1339,13 +1399,21 @@ pub async fn ship_prepared_file_with_trace(
                             Some(&item.session_id),
                             &error,
                         )?;
-                        file_state.set_offset(
-                            &item.path_str,
-                            item.new_offset,
-                            &item.session_id,
-                            &item.session_id,
-                            &item.provider,
-                        )?;
+                        match cursor_mode {
+                            CursorMode::Archive => file_state.set_offset(
+                                &item.path_str,
+                                item.new_offset,
+                                &item.session_id,
+                                &item.session_id,
+                                &item.provider,
+                            )?,
+                            CursorMode::Live => live_file_state.set_offset(
+                                &item.path_str,
+                                item.new_offset,
+                                &item.provider,
+                                &item.session_id,
+                            )?,
+                        }
                         outcome.dead_lettered += 1;
                     }
                 }
@@ -2196,6 +2264,8 @@ mod tests {
         let session_meta = r#"{"type":"session_meta","timestamp":"2026-02-15T10:00:00Z","payload":{"type":"session_meta","id":"cccccccc-1111-2222-3333-444455556666","cwd":"/tmp/test","cli_version":"0.1.0"}}"#;
         let developer_context = r#"{"type":"response_item","timestamp":"2026-02-15T10:00:00Z","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"large injected context"}]}}"#;
         let user_message = r#"{"type":"response_item","timestamp":"2026-02-15T10:00:01Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello from codex"}]}}"#;
+        let user_end =
+            (session_meta.len() + 1 + developer_context.len() + 1 + user_message.len() + 1) as u64;
         std::fs::write(
             &path,
             format!("{session_meta}\n{developer_context}\n{user_message}\n"),
@@ -2220,11 +2290,7 @@ mod tests {
         match prepared.actions.into_iter().next().unwrap() {
             PreparedAction::Ship(item) => {
                 assert_eq!(item.offset, user_offset);
-                assert_eq!(
-                    item.new_offset,
-                    (session_meta.len() + 1 + developer_context.len() + 1 + user_message.len() + 1)
-                        as u64
-                );
+                assert_eq!(item.new_offset, user_end);
                 assert_eq!(
                     decode_payload_source_offsets(&item.compressed),
                     vec![user_offset]
@@ -2234,6 +2300,58 @@ mod tests {
                 panic!("codex user message should ship")
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_live_codex_event_only_uses_live_cursor_not_archive_cursor() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("rollout-2026-02-15T10-00-00-cccc1111-2222-3333-4444-555566667777.jsonl");
+        let session_meta = r#"{"type":"session_meta","timestamp":"2026-02-15T10:00:00Z","payload":{"type":"session_meta","id":"cccccccc-1111-2222-3333-444455556666","cwd":"/tmp/test","cli_version":"0.1.0"}}"#;
+        let developer_context = r#"{"type":"response_item","timestamp":"2026-02-15T10:00:00Z","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"large injected context"}]}}"#;
+        let user_message = r#"{"type":"response_item","timestamp":"2026-02-15T10:00:01Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello from codex"}]}}"#;
+        std::fs::write(
+            &path,
+            format!("{session_meta}\n{developer_context}\n{user_message}\n"),
+        )
+        .unwrap();
+        let path_str = path.to_string_lossy().to_string();
+        let user_offset = (session_meta.len() + 1 + developer_context.len() + 1) as u64;
+        let user_end =
+            (session_meta.len() + 1 + developer_context.len() + 1 + user_message.len() + 1) as u64;
+        let prepared = prepare_file_batches_with_source_line_mode_and_parse_tracker(
+            &path,
+            "codex",
+            CompressionAlgo::Gzip,
+            &conn,
+            10_000,
+            Some("019d2869-1111-7222-8333-aaaaaaaaaaaa"),
+            None,
+            SourceLineMode::EventOnly,
+        )
+        .unwrap()
+        .expect("codex user message should prepare");
+
+        let (url, captured, handle) = spawn_http_sequence_server(&[("200 OK", "{}")]);
+        let client = make_test_client(&url);
+        let outcome = ship_prepared_file(prepared, &client, &conn, None, None)
+            .await
+            .unwrap();
+        handle.join().unwrap();
+
+        assert_eq!(outcome.events_shipped, 1);
+        assert_eq!(FileState::new(&conn).get_offset(&path_str).unwrap(), 0);
+        assert_eq!(
+            crate::state::live_file_state::LiveFileState::new(&conn)
+                .get_offset(&path_str)
+                .unwrap(),
+            user_end
+        );
+        let bodies = captured.lock().unwrap();
+        assert_eq!(bodies.len(), 1);
+        assert_eq!(decode_payload_source_offsets(&bodies[0]), vec![user_offset]);
     }
 
     #[test]
@@ -2909,6 +3027,7 @@ mod tests {
             offset: 0,
             new_offset: 413,
             has_reply_evidence: false,
+            cursor_mode: CursorMode::Archive,
             actions: vec![PreparedAction::AckOnly(AckOnlyItem {
                 path_str: "/tmp/gemini-info.json".to_string(),
                 provider: "gemini".to_string(),

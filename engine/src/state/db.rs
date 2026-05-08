@@ -72,6 +72,14 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             updated_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS live_file_state (
+            path TEXT PRIMARY KEY,
+            provider TEXT NOT NULL,
+            offset INTEGER NOT NULL DEFAULT 0,
+            session_id TEXT,
+            updated_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS session_phase_state (
             session_id TEXT PRIMARY KEY,
             provider TEXT NOT NULL,
@@ -140,6 +148,9 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
 
          CREATE INDEX IF NOT EXISTS idx_session_phase_provider_observed
          ON session_phase_state(provider, observed_at DESC);
+
+         CREATE INDEX IF NOT EXISTS idx_live_file_state_updated
+         ON live_file_state(provider, updated_at DESC);
 
          CREATE INDEX IF NOT EXISTS idx_managed_session_state_provider_updated
          ON managed_session_state(provider, updated_at DESC);
