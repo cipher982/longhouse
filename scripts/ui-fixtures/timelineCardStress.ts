@@ -70,6 +70,17 @@ type AgentSession = {
   active_tool?: string | null;
   confidence?: string | null;
   runtime_facts?: SessionLivenessFacts | null;
+  live_transcript?: {
+    text: string;
+    source: string;
+    received_at: string | null;
+    occurred_at: string | null;
+    thread_id?: string | null;
+    turn_id?: string | null;
+    seq?: number | null;
+    method?: string | null;
+    is_complete: boolean;
+  } | null;
   user_messages: number;
   assistant_messages: number;
   tool_calls: number;
@@ -203,6 +214,7 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     active_tool: null,
     confidence: null,
     runtime_facts: null,
+    live_transcript: null,
     user_messages: 10,
     assistant_messages: 10,
     tool_calls: 6,
@@ -266,12 +278,12 @@ export function buildTimelineCardStressFixture(): {
   filters: AgentFiltersResponse;
   runners: { runners: [] };
 } {
-  const liveClaude = makeTimelineCard(
+  const liveCodex = makeTimelineCard(
     {
-      id: "live-claude-head",
-      thread_root_session_id: "thread-live-claude",
-      thread_head_session_id: "thread-live-claude",
-      provider: "claude",
+      id: "live-codex-head",
+      thread_root_session_id: "thread-live-codex",
+      thread_head_session_id: "thread-live-codex",
+      provider: "codex",
       project: "zerg",
       git_branch: "main",
       started_at: "2026-04-15T15:16:00Z",
@@ -283,6 +295,18 @@ export function buildTimelineCardStressFixture(): {
       summary_title: "Secure Hybrid Auth Shipped: Web, iOS, and Deployments",
       summary:
         "Delivered unified hybrid auth architecture with /login route, refactored web components, and integrated iOS updates including post-review fixes.",
+      live_transcript: {
+        text:
+          "I have the bridge live overlay visible on the timeline now; this preview should arrive before the slower durable transcript poll catches up.",
+        source: "codex_bridge_live",
+        received_at: "2026-04-15T16:11:40Z",
+        occurred_at: "2026-04-15T16:11:39Z",
+        thread_id: "fixture-live-thread",
+        turn_id: "fixture-live-turn",
+        seq: 24,
+        method: "item/agentMessage/delta",
+        is_complete: false,
+      },
       status: "working",
       presence_state: "running",
       presence_tool: "mcp__hatch__hatch_codex",
@@ -325,10 +349,10 @@ export function buildTimelineCardStressFixture(): {
         reply_to_live_session_available: true,
       }),
       control: {
-        managed_transport: "claude_channel_bridge",
+        managed_transport: "codex_app_server",
         source_runner_id: null,
         source_runner_name: null,
-        attach_command: "longhouse claude --attach live-claude-head",
+        attach_command: "longhouse codex --attach live-codex-head",
       },
     },
     {
@@ -601,6 +625,18 @@ export function buildTimelineCardStressFixture(): {
     summary_title: "Current Writable Head",
     summary:
       "This is the newest writable continuation, left here to stress Head and Started badge wrapping with a longer branch name and a reattach capability pill.",
+    live_transcript: {
+      text:
+        "I have the mobile card fixture wired now; the live preview should stay clipped, readable, and distinct from the durable summary while the turn is still streaming.",
+      source: "codex_bridge_live",
+      received_at: "2026-04-15T16:11:30Z",
+      occurred_at: "2026-04-15T16:11:29Z",
+      thread_id: "fixture-thread",
+      turn_id: "fixture-turn",
+      seq: 18,
+      method: "item/agentMessage/delta",
+      is_complete: false,
+    },
     status: "working",
     presence_state: "needs_user",
     presence_updated_at: "2026-04-15T16:04:00Z",
@@ -752,7 +788,7 @@ export function buildTimelineCardStressFixture(): {
   );
 
   const sessions = [
-    liveClaude,
+    liveCodex,
     closedCodex,
     idleClaude,
     unmanagedCodex,
