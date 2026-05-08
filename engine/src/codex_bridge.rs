@@ -840,7 +840,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                 }
             }
             _ = runtime_keepalive.tick() => {
-                emit_runtime_keepalive(&mut context).await;
+                emit_runtime_keepalive(&config, &mut context).await;
             }
         }
     }
@@ -1963,7 +1963,7 @@ async fn handle_server_request(
         .runtime_tracker
         .handle_server_request(method, &params)
     {
-        emit_runtime_updates(context, vec![update]).await;
+        emit_runtime_updates(config, context, vec![update]).await;
     }
 
     let result = match method {
@@ -2028,6 +2028,7 @@ async fn process_notification(
                 false,
             )? {
                 emit_runtime_updates(
+                    config,
                     context,
                     vec![context.runtime_tracker.current_phase_update()],
                 )
@@ -2062,7 +2063,7 @@ async fn process_notification(
                 }
             }
             let updates = context.runtime_tracker.handle_notification(method, &params);
-            emit_runtime_updates(context, updates).await;
+            emit_runtime_updates(config, context, updates).await;
             if followup.is_none() {
                 followup = pending_thread_subscription(context)?;
             }
@@ -2075,11 +2076,8 @@ async fn process_notification(
             if notification_is_for_different_thread(&params, context) {
                 return Ok(None);
             }
-            if let Some(path) = context.state.thread_path.as_deref() {
-                wake_daemon_for_transcript(config, path, "running");
-            }
             let updates = context.runtime_tracker.handle_notification(method, &params);
-            emit_runtime_updates(context, updates).await;
+            emit_runtime_updates(config, context, updates).await;
         }
         "turn/completed" => {
             if notification_is_for_different_thread(&params, context) {
@@ -2092,7 +2090,7 @@ async fn process_notification(
                 wake_daemon_for_transcript(config, path, "idle");
             }
             let updates = context.runtime_tracker.handle_notification(method, &params);
-            emit_runtime_updates(context, updates).await;
+            emit_runtime_updates(config, context, updates).await;
             // Daemon handles shipping — no per-turn ship needed.
         }
         "hook/completed" => {
@@ -2580,7 +2578,11 @@ fn extract_thread_active_flags(params: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-async fn emit_runtime_updates(context: &mut BridgeContext, updates: Vec<BridgeRuntimeUpdate>) {
+async fn emit_runtime_updates(
+    config: &BridgeRunConfig,
+    context: &mut BridgeContext,
+    updates: Vec<BridgeRuntimeUpdate>,
+) {
     for update in updates {
         match update {
             BridgeRuntimeUpdate::Phase { phase, tool_name } => {
@@ -2598,6 +2600,9 @@ async fn emit_runtime_updates(context: &mut BridgeContext, updates: Vec<BridgeRu
                     .await;
             }
             BridgeRuntimeUpdate::Progress => {
+                if let Some(path) = context.state.thread_path.as_deref() {
+                    wake_daemon_for_transcript(config, path, "running");
+                }
                 if should_emit_progress(context.last_progress_emit, DEFAULT_PROGRESS_THROTTLE_MS) {
                     context.last_progress_emit = Some(Instant::now());
                     context
@@ -2614,9 +2619,9 @@ async fn emit_runtime_updates(context: &mut BridgeContext, updates: Vec<BridgeRu
     }
 }
 
-async fn emit_runtime_keepalive(context: &mut BridgeContext) {
+async fn emit_runtime_keepalive(config: &BridgeRunConfig, context: &mut BridgeContext) {
     if let Some(update) = context.runtime_tracker.keepalive_update() {
-        emit_runtime_updates(context, vec![update]).await;
+        emit_runtime_updates(config, context, vec![update]).await;
     }
 }
 
@@ -2993,7 +2998,7 @@ async fn handle_bridge_followup(
                             resume_thread_path,
                             true,
                         )?;
-                        apply_thread_resume_snapshot(context, &response).await?;
+                        apply_thread_resume_snapshot(config, context, &response).await?;
                         context.subscribed_thread_id = context.state.thread_id.clone();
                         update_thread_subscription_tracking(
                             context,
@@ -3043,7 +3048,11 @@ async fn handle_bridge_followup(
     }
 }
 
-async fn apply_thread_resume_snapshot(context: &mut BridgeContext, response: &Value) -> Result<()> {
+async fn apply_thread_resume_snapshot(
+    config: &BridgeRunConfig,
+    context: &mut BridgeContext,
+    response: &Value,
+) -> Result<()> {
     let thread = response.get("thread").cloned().unwrap_or(Value::Null);
     if thread.is_null() {
         return Ok(());
@@ -3067,6 +3076,7 @@ async fn apply_thread_resume_snapshot(context: &mut BridgeContext, response: &Va
     context.runtime_tracker.active_turn_id = context.state.active_turn_id.clone();
     write_state_file(&context.state_file, &context.state)?;
     emit_runtime_updates(
+        config,
         context,
         vec![context.runtime_tracker.current_phase_update()],
     )
@@ -4361,9 +4371,11 @@ mod tests {
     #[tokio::test]
     async fn apply_thread_resume_snapshot_hydrates_active_turn_from_resume_response() {
         let temp = tempfile::tempdir().unwrap();
+        let config = make_test_run_config(&temp);
         let mut context = make_test_context(&temp);
 
         apply_thread_resume_snapshot(
+            &config,
             &mut context,
             &json!({
                 "thread": {
