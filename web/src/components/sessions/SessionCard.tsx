@@ -29,6 +29,8 @@ import {
 
 const SESSION_CARD_HOVER_PREFETCH_DELAY_MS = 180;
 const LIVE_TRANSCRIPT_PREVIEW_LIMIT = 180;
+const LIVE_TRANSCRIPT_PARTIAL_MAX_AGE_MS = 2 * 60 * 1000;
+const LIVE_TRANSCRIPT_COMPLETE_MAX_AGE_MS = 10 * 60 * 1000;
 
 type TimelineStatusLike = {
   label: string;
@@ -69,9 +71,24 @@ function isAnimatedRuntimeTone(tone: string): boolean {
   return tone === "thinking" || tone === "running";
 }
 
-function getLiveTranscriptPreview(session: TimelineSessionCard["head"]): string | null {
-  const text = session.live_transcript?.text?.trim();
+function getLiveTranscriptPreview(
+  session: TimelineSessionCard["head"],
+  relativeNowMs: number,
+): string | null {
+  const overlay = session.live_transcript;
+  const text = overlay?.text?.trim();
   if (!text) {
+    return null;
+  }
+  const receivedAtMs = Date.parse(overlay?.received_at ?? "");
+  if (!Number.isFinite(receivedAtMs)) {
+    return null;
+  }
+  const ageMs = Math.max(0, relativeNowMs - receivedAtMs);
+  const maxAgeMs = overlay?.is_complete
+    ? LIVE_TRANSCRIPT_COMPLETE_MAX_AGE_MS
+    : LIVE_TRANSCRIPT_PARTIAL_MAX_AGE_MS;
+  if (ageMs > maxAgeMs) {
     return null;
   }
   const compact = text.replace(/\s+/g, " ");
@@ -186,7 +203,7 @@ export function SessionCard({
 
   const showKeywordSnippet = !isSemanticResult && !!highlightQuery && !!detailSession.match_snippet;
   const showSemanticSnippet = isSemanticResult && !!detailSession.match_snippet;
-  const liveTranscriptPreview = getLiveTranscriptPreview(session);
+  const liveTranscriptPreview = getLiveTranscriptPreview(session, relativeNowMs);
   const cardActionLabel = groupedQueryMode ? "Open match" : "Open session";
   const hasControlPath = interaction.liveControlAvailable || interaction.hostReattachAvailable;
   // Lifecycle is the closure axis. The reducer only closes on explicit

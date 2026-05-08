@@ -1267,6 +1267,7 @@ describe("SessionsPage", () => {
   });
 
   it("shows live transcript output on open managed session cards", async () => {
+    const receivedAt = new Date(Date.now() - 45_000).toISOString();
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
@@ -1287,8 +1288,8 @@ describe("SessionsPage", () => {
             live_transcript: {
               text: "The provider already streamed this answer before the durable transcript poll landed.",
               source: "codex_bridge_live",
-              received_at: "2026-03-21T12:00:04Z",
-              occurred_at: "2026-03-21T12:00:04Z",
+              received_at: receivedAt,
+              occurred_at: receivedAt,
               thread_id: "thread-1",
               turn_id: "turn-1",
               seq: 12,
@@ -1313,6 +1314,41 @@ describe("SessionsPage", () => {
       "The provider already streamed this answer",
     );
     expect(screen.queryByText("Older generated summary.")).not.toBeInTheDocument();
+  });
+
+  it("does not let stale partial live transcript output replace card summaries", async () => {
+    const staleReceivedAt = new Date(Date.now() - 5 * 60_000).toISOString();
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            ended_at: null,
+            summary: "Current durable summary.",
+            live_transcript: {
+              text: "Partial text from a bridge that stopped sending updates.",
+              source: "codex_bridge_live",
+              received_at: staleReceivedAt,
+              occurred_at: staleReceivedAt,
+              thread_id: "thread-1",
+              turn_id: "turn-1",
+              seq: 3,
+              method: "item/agentMessage/delta",
+              is_complete: false,
+            },
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage();
+
+    expect(await screen.findByText("Current durable summary.")).toBeInTheDocument();
+    expect(screen.queryByTestId("session-card-live-transcript")).not.toBeInTheDocument();
   });
 
   it("does not style transcript-only progress as currently executing", async () => {
