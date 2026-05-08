@@ -53,7 +53,8 @@ const PATH_SPOOL_REPLAY_LIMIT: usize = 50;
 const LOCAL_RETRY_DELAY_SECS: u64 = 5;
 const LOCAL_STATUS_INTERVAL_SECS: u64 = 1;
 const SERVER_HEARTBEAT_INTERVAL_SECS: u64 = 5 * 60;
-const ACTIVE_TRANSCRIPT_POLL_INTERVAL: Duration = Duration::from_secs(1);
+const LOCAL_WORK_TICK_INTERVAL: Duration = Duration::from_millis(250);
+const ACTIVE_TRANSCRIPT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const ACTIVE_TRANSCRIPT_POLL_TTL: Duration = Duration::from_secs(2 * 60 * 60);
 const TERMINAL_CATCHUP_DELAYS: [Duration; 3] = [
     Duration::from_secs(0),
@@ -254,7 +255,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
     let mut outbox_timer = tokio::time::interval(Duration::from_secs(1));
     outbox_timer.tick().await; // consume first immediate tick
-    let mut local_retry_timer = tokio::time::interval(Duration::from_secs(1));
+    let mut local_retry_timer = tokio::time::interval(LOCAL_WORK_TICK_INTERVAL);
     local_retry_timer.tick().await; // consume first immediate tick
 
     let mut offline = OfflineState::new();
@@ -827,7 +828,7 @@ fn drain_due_transcript_catchups(
     while index < transcript_catchups.len() {
         if transcript_catchups[index].due_at <= now {
             let catchup = transcript_catchups.swap_remove(index);
-            scheduler.enqueue(catchup.path, catchup.provider, WorkPriority::Catchup);
+            scheduler.enqueue(catchup.path, catchup.provider, WorkPriority::Watch);
         } else {
             index += 1;
         }
@@ -853,7 +854,7 @@ fn drain_due_active_transcript_polls(
             continue;
         }
 
-        scheduler.enqueue(path.clone(), poll.provider, WorkPriority::Catchup);
+        scheduler.enqueue(path.clone(), poll.provider, WorkPriority::Watch);
         if let Some(poll) = active_transcript_polls.get_mut(&path) {
             poll.due_at = now + ACTIVE_TRANSCRIPT_POLL_INTERVAL;
         }
@@ -1511,7 +1512,7 @@ mod tests {
             .expect("immediate catch-up queued");
         assert_eq!(job.path, path);
         assert_eq!(job.provider, "claude");
-        assert_eq!(job.priority, WorkPriority::Catchup);
+        assert_eq!(job.priority, WorkPriority::Watch);
         assert_eq!(catchups.len(), 2, "delayed catch-ups remain queued");
     }
 
@@ -1545,7 +1546,7 @@ mod tests {
 
         let job = scheduler.pop_launchable().expect("active catch-up queued");
         assert_eq!(job.path, path);
-        assert_eq!(job.priority, WorkPriority::Catchup);
+        assert_eq!(job.priority, WorkPriority::Watch);
         assert!(catchups.is_empty());
     }
 
@@ -1591,7 +1592,7 @@ mod tests {
         let job = scheduler.pop_launchable().expect("active poll queued");
         assert_eq!(job.path, path);
         assert_eq!(job.provider, "codex");
-        assert_eq!(job.priority, WorkPriority::Catchup);
+        assert_eq!(job.priority, WorkPriority::Watch);
         assert_eq!(active_polls.len(), 1);
         assert!(active_polls[&path].due_at > now);
     }
@@ -1704,7 +1705,7 @@ mod tests {
 
         let job = scheduler.pop_launchable().expect("ready catch-up queued");
         assert_eq!(job.path, ready.path());
-        assert_eq!(job.priority, WorkPriority::Catchup);
+        assert_eq!(job.priority, WorkPriority::Watch);
         assert_eq!(catchups.len(), 1);
         assert_eq!(catchups[0].path, later.path());
     }
