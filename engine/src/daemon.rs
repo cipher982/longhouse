@@ -55,6 +55,8 @@ const LOCAL_STATUS_INTERVAL_SECS: u64 = 1;
 const SERVER_HEARTBEAT_INTERVAL_SECS: u64 = 5 * 60;
 const LOCAL_WORK_TICK_INTERVAL: Duration = Duration::from_millis(250);
 const ACTIVE_TRANSCRIPT_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const ACTIVE_TRANSCRIPT_POLL_SLOW_THRESHOLD: Duration = Duration::from_secs(2);
+const ACTIVE_TRANSCRIPT_POLL_SLOW_BACKOFF: Duration = Duration::from_secs(5);
 const ACTIVE_TRANSCRIPT_POLL_TTL: Duration = Duration::from_secs(2 * 60 * 60);
 const TERMINAL_CATCHUP_DELAYS: [Duration; 3] = [
     Duration::from_secs(0),
@@ -117,6 +119,7 @@ struct PathTaskResult {
     had_connect_error: bool,
     rerun_priority: Option<WorkPriority>,
     local_retry_after: Option<Duration>,
+    processing_elapsed: Duration,
 }
 
 struct DeferredRetry {
@@ -303,6 +306,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         let retry_path = result.job.path.clone();
                         let retry_provider = result.job.provider;
                         scheduler.complete(&retry_path, result.rerun_priority);
+                        backoff_slow_active_transcript_poll(
+                            &retry_path,
+                            result.processing_elapsed,
+                            &mut active_transcript_polls,
+                        );
                         if let Some(delay) = result.local_retry_after {
                             deferred_retries.insert(retry_path, DeferredRetry {
                                 due_at: Instant::now() + delay,
@@ -919,6 +927,13 @@ fn drain_due_active_transcript_polls(
             continue;
         }
 
+        if scheduler.path_in_flight(&path) {
+            if let Some(poll) = active_transcript_polls.get_mut(&path) {
+                poll.due_at = now + ACTIVE_TRANSCRIPT_POLL_INTERVAL;
+            }
+            continue;
+        }
+
         scheduler.enqueue_observed(
             path.clone(),
             poll.provider,
@@ -930,6 +945,31 @@ fn drain_due_active_transcript_polls(
             poll.due_at = now + ACTIVE_TRANSCRIPT_POLL_INTERVAL;
         }
     }
+}
+
+fn backoff_slow_active_transcript_poll(
+    path: &Path,
+    processing_elapsed: Duration,
+    active_transcript_polls: &mut HashMap<PathBuf, ActiveTranscriptPoll>,
+) {
+    if processing_elapsed < ACTIVE_TRANSCRIPT_POLL_SLOW_THRESHOLD {
+        return;
+    }
+
+    let Some(poll) = active_transcript_polls.get_mut(path) else {
+        return;
+    };
+
+    let due_at = Instant::now() + ACTIVE_TRANSCRIPT_POLL_SLOW_BACKOFF;
+    if poll.due_at < due_at {
+        poll.due_at = due_at;
+    }
+    tracing::debug!(
+        path = %path.display(),
+        elapsed_ms = processing_elapsed.as_millis() as u64,
+        backoff_ms = ACTIVE_TRANSCRIPT_POLL_SLOW_BACKOFF.as_millis() as u64,
+        "Backed off slow active transcript poll"
+    );
 }
 
 fn schedule_transcript_catchups_for_signals(
@@ -1278,6 +1318,7 @@ async fn prepare_file_for_job(
     )
 )]
 async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskResult {
+    let task_started = Instant::now();
     let job_started_at_ms = chrono::Utc::now().timestamp_millis();
     let mut result = PathTaskResult {
         job,
@@ -1287,6 +1328,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         had_connect_error: false,
         rerun_priority: None,
         local_retry_after: None,
+        processing_elapsed: Duration::ZERO,
     };
 
     let conn = match open_db(task_context.shipper_config.db_path.as_deref()) {
@@ -1300,7 +1342,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                 );
             }
             result.local_retry_after = Some(Duration::from_secs(LOCAL_RETRY_DELAY_SECS));
-            return result;
+            return finish_path_task(result, task_started);
         }
     };
 
@@ -1330,12 +1372,12 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                 );
             }
             result.local_retry_after = Some(Duration::from_secs(LOCAL_RETRY_DELAY_SECS));
-            return result;
+            return finish_path_task(result, task_started);
         }
     }
 
     if result.had_connect_error {
-        return result;
+        return finish_path_task(result, task_started);
     }
 
     let ready_spool_remaining = Spool::new(&conn)
@@ -1422,6 +1464,11 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         }
     }
 
+    finish_path_task(result, task_started)
+}
+
+fn finish_path_task(mut result: PathTaskResult, started: Instant) -> PathTaskResult {
+    result.processing_elapsed = started.elapsed();
     result
 }
 
@@ -1705,6 +1752,62 @@ mod tests {
         assert_eq!(job.priority, WorkPriority::Live);
         assert_eq!(active_polls.len(), 1);
         assert!(active_polls[&path].due_at > now);
+    }
+
+    #[test]
+    fn test_active_transcript_poll_skips_path_already_in_flight() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        let now = Instant::now();
+        let mut active_polls = HashMap::new();
+        active_polls.insert(
+            path.clone(),
+            ActiveTranscriptPoll {
+                due_at: now - Duration::from_secs(1),
+                expires_at: now + Duration::from_secs(60),
+                provider: "codex",
+            },
+        );
+
+        let mut scheduler = PathScheduler::new(4);
+        scheduler.enqueue(path.clone(), "codex", WorkPriority::Live);
+        let _in_flight = scheduler.pop_launchable().expect("job launched");
+
+        drain_due_active_transcript_polls(&mut scheduler, &mut active_polls);
+
+        assert!(
+            scheduler.pop_launchable().is_none(),
+            "active polling should not queue a rerun while the same path is already in flight"
+        );
+        assert_eq!(active_polls.len(), 1);
+        assert!(active_polls[&path].due_at > now);
+    }
+
+    #[test]
+    fn test_slow_path_job_backs_off_active_transcript_poll() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        let now = Instant::now();
+        let mut active_polls = HashMap::new();
+        active_polls.insert(
+            path.clone(),
+            ActiveTranscriptPoll {
+                due_at: now + ACTIVE_TRANSCRIPT_POLL_INTERVAL,
+                expires_at: now + Duration::from_secs(60),
+                provider: "codex",
+            },
+        );
+
+        backoff_slow_active_transcript_poll(
+            &path,
+            ACTIVE_TRANSCRIPT_POLL_SLOW_THRESHOLD + Duration::from_millis(1),
+            &mut active_polls,
+        );
+
+        assert!(
+            active_polls[&path].due_at >= now + ACTIVE_TRANSCRIPT_POLL_SLOW_BACKOFF,
+            "slow active transcript jobs should not be immediately re-polled"
+        );
     }
 
     #[test]
