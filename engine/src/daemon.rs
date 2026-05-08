@@ -1417,6 +1417,11 @@ async fn prepare_file_for_job(
     let db_path = task_context.shipper_config.db_path.clone();
     let max_batch_bytes = task_context.shipper_config.max_batch_bytes;
     let parse_tracker = task_context.parse_tracker.clone();
+    let source_line_mode = if job.priority == WorkPriority::Live && provider == "codex" {
+        shipper::SourceLineMode::EventOnly
+    } else {
+        shipper::SourceLineMode::Full
+    };
     let blocking_span = tracing::info_span!(
         "engine.ship.prepare.blocking",
         longhouse.provider = %provider,
@@ -1448,7 +1453,7 @@ async fn prepare_file_for_job(
             }
         }
 
-        shipper::prepare_file_batches_with_parse_tracker(
+        shipper::prepare_file_batches_with_source_line_mode_and_parse_tracker(
             &path,
             provider,
             algo,
@@ -1456,6 +1461,7 @@ async fn prepare_file_for_job(
             max_batch_bytes,
             session_id_override.as_deref(),
             Some(&parse_tracker),
+            source_line_mode,
         )
     })
     .await?
