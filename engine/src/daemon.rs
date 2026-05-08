@@ -55,6 +55,7 @@ const STARTUP_RECONCILIATION_SCAN_DELAY: Duration = Duration::from_secs(15);
 const LOCAL_STATUS_INTERVAL_SECS: u64 = 1;
 const SERVER_HEARTBEAT_INTERVAL_SECS: u64 = 5 * 60;
 const LOCAL_WORK_TICK_INTERVAL: Duration = Duration::from_millis(250);
+const OUTBOX_DRAIN_INTERVAL: Duration = Duration::from_millis(100);
 const ACTIVE_TRANSCRIPT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const ACTIVE_TRANSCRIPT_POLL_SLOW_THRESHOLD: Duration = Duration::from_secs(2);
 const ACTIVE_TRANSCRIPT_POLL_SLOW_BACKOFF: Duration = Duration::from_secs(5);
@@ -257,7 +258,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut local_status_timer =
         tokio::time::interval(Duration::from_secs(LOCAL_STATUS_INTERVAL_SECS));
 
-    let mut outbox_timer = tokio::time::interval(Duration::from_secs(1));
+    let mut outbox_timer = tokio::time::interval(OUTBOX_DRAIN_INTERVAL);
+    outbox_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     outbox_timer.tick().await; // consume first immediate tick
     let mut local_retry_timer = tokio::time::interval(LOCAL_WORK_TICK_INTERVAL);
     local_retry_timer.tick().await; // consume first immediate tick

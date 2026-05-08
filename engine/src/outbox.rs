@@ -4,7 +4,7 @@
 //! calling the API directly. This eliminates network I/O from the hook hot path,
 //! allowing hooks to run as `async: false` without risking stalls.
 //!
-//! This module drains the outbox on a 1-second tick: reads all ready files,
+//! The daemon drains the outbox on a short tick: reads all ready files,
 //! coalesces by session_id (latest state wins), returns local phase signals for
 //! transcript catch-up, POSTs to `/api/agents/presence`, and deletes files on
 //! success. Files are kept on failure and retried next tick.
