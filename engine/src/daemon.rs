@@ -853,7 +853,7 @@ fn drain_due_transcript_catchups(
             scheduler.enqueue_observed(
                 catchup.path,
                 catchup.provider,
-                WorkPriority::Watch,
+                transcript_catchup_priority(catchup.observation_source),
                 catchup.observation_source,
                 catchup.observed_at_ms,
             );
@@ -885,7 +885,7 @@ fn drain_due_active_transcript_polls(
         scheduler.enqueue_observed(
             path.clone(),
             poll.provider,
-            WorkPriority::Watch,
+            WorkPriority::Catchup,
             "active_poll",
             now_ms(),
         );
@@ -1080,6 +1080,13 @@ fn schedule_transcript_catchup(
                 observed_at_ms,
             });
         }
+    }
+}
+
+fn transcript_catchup_priority(observation_source: &str) -> WorkPriority {
+    match observation_source {
+        "bridge_scan" => WorkPriority::Catchup,
+        _ => WorkPriority::Watch,
     }
 }
 
@@ -1651,7 +1658,7 @@ mod tests {
         let job = scheduler.pop_launchable().expect("active poll queued");
         assert_eq!(job.path, path);
         assert_eq!(job.provider, "codex");
-        assert_eq!(job.priority, WorkPriority::Watch);
+        assert_eq!(job.priority, WorkPriority::Catchup);
         assert_eq!(active_polls.len(), 1);
         assert!(active_polls[&path].due_at > now);
     }
@@ -1676,6 +1683,15 @@ mod tests {
         assert_eq!(catchups[0].path, transcript.path());
         assert_eq!(catchups[0].provider, "codex");
         assert!(active_polls.contains_key(transcript.path()));
+
+        let mut scheduler = PathScheduler::new(4);
+        drain_due_transcript_catchups(&mut scheduler, &mut catchups);
+        let job = scheduler
+            .pop_launchable()
+            .expect("bridge scan catch-up queued");
+        assert_eq!(job.path, transcript.path());
+        assert_eq!(job.priority, WorkPriority::Catchup);
+        assert_eq!(job.observation.source, "bridge_scan");
     }
 
     #[test]
