@@ -7869,6 +7869,11 @@ export interface components {
              * @default auto
              */
             intent: string;
+            /**
+             * Client Request Id
+             * @description Optional client idempotency key for this submitted input
+             */
+            client_request_id?: string | null;
         };
         /**
          * SessionInputResponse
