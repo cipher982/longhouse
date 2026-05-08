@@ -269,6 +269,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut last_ship_at: Option<String> = None;
     let mut last_runtime_truth_signature: Option<String> = None;
     let mut runtime_truth_bootstrapped = false;
+    let mut last_unmanaged_session_bindings: Option<Vec<heartbeat::UnmanagedSessionBinding>> = None;
     let mut codex_terminal_catchup_marks: HashMap<PathBuf, String> = HashMap::new();
     let mut bridge_reaper = ManagedBridgeReaper::from_env();
     let mut outbox_post_tasks: JoinSet<(usize, usize)> = JoinSet::new();
@@ -543,6 +544,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &mut active_transcript_polls,
                     offline.is_offline,
                 );
+                let live_local_work_waiting = live_local_work_pending(
+                    &scheduler,
+                    &deferred_retries,
+                    &transcript_catchups,
+                    &active_transcript_polls,
+                );
+                let reused_unmanaged_bindings =
+                    live_local_work_waiting && last_unmanaged_session_bindings.is_some();
                 let payload = write_local_status_snapshot(
                     &conn,
                     &tracker,
@@ -554,7 +563,16 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &status_path,
                     &observations,
                     &claude_observations,
+                    if reused_unmanaged_bindings {
+                        last_unmanaged_session_bindings.as_deref()
+                    } else {
+                        None
+                    },
                 );
+                if !reused_unmanaged_bindings {
+                    last_unmanaged_session_bindings =
+                        Some(payload.unmanaged_session_bindings.clone());
+                }
                 bridge_reaper.tick(&observations);
                 let signature = runtime_truth_signature(&payload);
                 if !runtime_truth_bootstrapped {
@@ -595,6 +613,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &mut active_transcript_polls,
                     offline.is_offline,
                 );
+                let live_local_work_waiting = live_local_work_pending(
+                    &scheduler,
+                    &deferred_retries,
+                    &transcript_catchups,
+                    &active_transcript_polls,
+                );
+                let reused_unmanaged_bindings =
+                    live_local_work_waiting && last_unmanaged_session_bindings.is_some();
                 let payload = write_local_status_snapshot(
                     &conn,
                     &tracker,
@@ -606,7 +632,16 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &status_path,
                     &observations,
                     &claude_observations,
+                    if reused_unmanaged_bindings {
+                        last_unmanaged_session_bindings.as_deref()
+                    } else {
+                        None
+                    },
                 );
+                if !reused_unmanaged_bindings {
+                    last_unmanaged_session_bindings =
+                        Some(payload.unmanaged_session_bindings.clone());
+                }
                 if !offline.is_offline {
                     runtime_truth_bootstrapped = true;
                     if let Err(e) = heartbeat::send_heartbeat(&client, &payload).await {
@@ -641,6 +676,7 @@ fn write_local_status_snapshot(
     status_path: &Path,
     observations: &[managed_bridge_scan::CodexBridgeObservation],
     claude_observations: &[managed_claude_scan::ClaudeChannelObservation],
+    unmanaged_session_binding_override: Option<&[heartbeat::UnmanagedSessionBinding]>,
 ) -> heartbeat::HeartbeatPayload {
     let spool = Spool::new(conn);
     let stats = heartbeat::HeartbeatStats {
@@ -668,11 +704,16 @@ fn write_local_status_snapshot(
             .cmp(&b.provider)
             .then_with(|| a.session_id.cmp(&b.session_id))
     });
-    payload.unmanaged_session_bindings = heartbeat::collect_unmanaged_session_bindings_with_store(
-        conn,
-        machine_id,
-        chrono::Utc::now(),
-    );
+    payload.unmanaged_session_bindings =
+        if let Some(cached_bindings) = unmanaged_session_binding_override {
+            cached_bindings.to_vec()
+        } else {
+            heartbeat::collect_unmanaged_session_bindings_with_store(
+                conn,
+                machine_id,
+                chrono::Utc::now(),
+            )
+        };
     // Compute the fresh ledger view up front so a read failure is both
     // logged and encoded in the status file as `phase_ledger_status`.
     // Downstream readers (verify-runtime-truth, local-health) can then
@@ -696,6 +737,18 @@ fn write_local_status_snapshot(
         };
     heartbeat::write_status_file(&payload, &stats, phase_ledger, ledger_status, status_path);
     payload
+}
+
+fn live_local_work_pending(
+    scheduler: &PathScheduler,
+    deferred_retries: &HashMap<PathBuf, DeferredRetry>,
+    transcript_catchups: &[TranscriptCatchup],
+    active_transcript_polls: &HashMap<PathBuf, ActiveTranscriptPoll>,
+) -> bool {
+    scheduler.has_pending_work()
+        || !deferred_retries.is_empty()
+        || !transcript_catchups.is_empty()
+        || !active_transcript_polls.is_empty()
 }
 
 fn runtime_truth_signature(payload: &heartbeat::HeartbeatPayload) -> String {
@@ -1621,6 +1674,23 @@ mod tests {
         }
     }
 
+    fn unmanaged_binding(session_id: &str, pid: u32) -> heartbeat::UnmanagedSessionBinding {
+        heartbeat::UnmanagedSessionBinding {
+            machine_id: "cinder".to_string(),
+            provider: "claude".to_string(),
+            provider_session_id: session_id.to_string(),
+            source_path: Some(format!("/tmp/{session_id}.jsonl")),
+            source_inode: None,
+            source_device: None,
+            pid: Some(pid),
+            process_start_time: Some("2026-05-05T12:00:00Z".to_string()),
+            cwd: Some("/tmp/project".to_string()),
+            source_offset: None,
+            source_mtime: None,
+            observed_at: "2026-05-05T12:00:02Z".to_string(),
+        }
+    }
+
     fn codex_bridge_observation(
         transcript_path: &Path,
         active_turn_id: Option<&str>,
@@ -1647,6 +1717,56 @@ mod tests {
             has_tui_attachment: false,
             app_server_alive: false,
         }
+    }
+
+    #[test]
+    fn test_write_local_status_snapshot_uses_cached_unmanaged_bindings() {
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let status = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(db.path())).unwrap();
+        let tracker = ConsecutiveErrorTracker::new();
+        let parse_tracker = RecentIssueTracker::new();
+        let ship_stats = RecentShipStatsTracker::new();
+        let cached = vec![unmanaged_binding("sess-cached", 42)];
+
+        let payload = write_local_status_snapshot(
+            &conn,
+            &tracker,
+            &parse_tracker,
+            &ship_stats,
+            false,
+            &None,
+            "cinder",
+            status.path(),
+            &[],
+            &[],
+            Some(&cached),
+        );
+
+        assert_eq!(payload.unmanaged_session_bindings, cached);
+    }
+
+    #[test]
+    fn test_live_local_work_pending_includes_active_transcript_polls() {
+        let scheduler = PathScheduler::new(4);
+        let deferred_retries = HashMap::new();
+        let transcript_catchups = Vec::new();
+        let mut active_polls = HashMap::new();
+        active_polls.insert(
+            PathBuf::from("/tmp/live.jsonl"),
+            ActiveTranscriptPoll {
+                due_at: Instant::now(),
+                expires_at: Instant::now() + Duration::from_secs(30),
+                provider: "codex",
+            },
+        );
+
+        assert!(live_local_work_pending(
+            &scheduler,
+            &deferred_retries,
+            &transcript_catchups,
+            &active_polls,
+        ));
     }
 
     #[test]
