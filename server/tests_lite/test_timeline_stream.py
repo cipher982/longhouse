@@ -23,10 +23,14 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents_store import AgentsStore
 from zerg.services.session_listing import SessionListParams
 from zerg.services.session_listing import list_agent_sessions
+from zerg.services.session_pubsub import TOPIC_TIMELINE
+from zerg.services.session_pubsub import get_pubsub
+from zerg.services.session_pubsub import reset_pubsub_for_test
+from zerg.services.session_pubsub import topic_session
 from zerg.services.timeline_session_listing import TimelineSessionListParams
 
 
-async def _noop_coro() -> None:
+async def _noop_coro(*_args, **_kwargs) -> None:
     """No-op replacement for _wait_for_timeline_change in tests."""
 
 
@@ -346,6 +350,88 @@ def test_timeline_stream_skip_initial_replay_avoids_redundant_rebuild_before_dis
 
     assert event["event"] == "connected"
     assert list_sessions_calls == 0
+
+
+def test_timeline_stream_wakes_on_topic_timeline_publish(tmp_path):
+    reset_pubsub_for_test()
+    session_local = _make_db(tmp_path, "timeline_stream_topic_wake.db")
+    now = datetime.now(timezone.utc)
+
+    with session_local() as db:
+        session = _seed_session(
+            db,
+            started_at=now - timedelta(minutes=5),
+            ended_at=None,
+            project="topic-timeline-wake",
+        )
+
+    async def _collect_after_publish():
+        stream = timeline_stream.stream_timeline_sessions_for_browser(
+            _ConnectedRequest(),
+            session_factory=session_local,
+            params=_stream_params(),
+            skip_initial_replay=True,
+        )
+        try:
+            connected = await anext(stream)
+            next_event = asyncio.create_task(anext(stream))
+            await asyncio.sleep(0)
+            get_pubsub().publish(TOPIC_TIMELINE, {"kind": "test", "session_id": str(session.id)})
+            upsert = await asyncio.wait_for(next_event, timeout=0.5)
+            return connected, upsert
+        finally:
+            await stream.aclose()
+
+    connected, upsert = asyncio.run(_collect_after_publish())
+
+    assert connected["event"] == "connected"
+    assert upsert["event"] == "session_upsert"
+    assert json.loads(upsert["data"])["session"]["thread_id"] == str(session.id)
+    reset_pubsub_for_test()
+
+
+def test_timeline_stream_ignores_session_only_topic_publish(tmp_path):
+    reset_pubsub_for_test()
+    session_local = _make_db(tmp_path, "timeline_stream_topic_isolation.db")
+    now = datetime.now(timezone.utc)
+
+    with session_local() as db:
+        session = _seed_session(
+            db,
+            started_at=now - timedelta(minutes=5),
+            ended_at=None,
+            project="topic-timeline-isolation",
+        )
+
+    async def _collect_after_publishes():
+        stream = timeline_stream.stream_timeline_sessions_for_browser(
+            _ConnectedRequest(),
+            session_factory=session_local,
+            params=_stream_params(),
+            skip_initial_replay=True,
+        )
+        try:
+            connected = await anext(stream)
+            next_event = asyncio.create_task(anext(stream))
+            await asyncio.sleep(0)
+            get_pubsub().publish(topic_session("unrelated"), {"kind": "test"})
+            done, pending = await asyncio.wait({next_event}, timeout=0.05)
+            assert not done
+            assert next_event in pending
+
+            get_pubsub().publish(TOPIC_TIMELINE, {"kind": "test", "session_id": str(session.id)})
+            upsert = await asyncio.wait_for(next_event, timeout=0.5)
+            return connected, upsert
+        finally:
+            await stream.aclose()
+
+    with patch.object(timeline_stream, "TIMELINE_STREAM_CHANGE_WAIT_SECONDS", 1.0):
+        connected, upsert = asyncio.run(_collect_after_publishes())
+
+    assert connected["event"] == "connected"
+    assert upsert["event"] == "session_upsert"
+    assert json.loads(upsert["data"])["session"]["thread_id"] == str(session.id)
+    reset_pubsub_for_test()
 
 
 def test_list_timeline_sessions_default_cards_open_writable_head_and_keep_thread_anchor(tmp_path):
