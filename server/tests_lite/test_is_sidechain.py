@@ -5,17 +5,21 @@ Covers:
 - list_sessions(hide_autonomous=True) excludes sidechain sessions
 - list_sessions(hide_autonomous=False) includes sidechain sessions
 - hide_autonomous still excludes user_messages=0 sessions regardless of is_sidechain
+- hide_autonomous keeps open managed-local sessions visible before transcript ingest
 - Normal sessions (is_sidechain=False, user_messages>0) always pass both filters
 """
 
-from datetime import datetime, timezone
+from datetime import datetime
+from datetime import timezone
 from uuid import uuid4
 
 from sqlalchemy.orm import sessionmaker
 
-from zerg.database import initialize_database, make_engine
-from zerg.services.agents_store import AgentsStore, EventIngest, SessionIngest
-
+from zerg.database import initialize_database
+from zerg.database import make_engine
+from zerg.services.agents_store import AgentsStore
+from zerg.services.agents_store import EventIngest
+from zerg.services.agents_store import SessionIngest
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -40,13 +44,15 @@ def _ingest(store, *, is_sidechain=False, user_messages=1, session_id=None):
     sid = session_id or uuid4()
     events = []
     for i in range(user_messages):
-        events.append(EventIngest(
-            role="user",
-            content_text=f"Hello {i}",
-            timestamp=_ts(i + 1),
-            source_path="/tmp/test.jsonl",
-            source_offset=i * 100,
-        ))
+        events.append(
+            EventIngest(
+                role="user",
+                content_text=f"Hello {i}",
+                timestamp=_ts(i + 1),
+                source_path="/tmp/test.jsonl",
+                source_offset=i * 100,
+            )
+        )
     data = SessionIngest(
         id=sid,
         provider="claude",
@@ -106,7 +112,7 @@ def test_reingest_updates_sidechain_flag(tmp_path):
 def test_hide_autonomous_excludes_sidechain(tmp_path):
     """hide_autonomous=True excludes sessions with is_sidechain=1."""
     store, _ = _make_store(tmp_path)
-    _ingest(store, is_sidechain=True, user_messages=2)   # sidechain — should be hidden
+    _ingest(store, is_sidechain=True, user_messages=2)  # sidechain — should be hidden
     _ingest(store, is_sidechain=False, user_messages=1)  # normal — should be visible
 
     sessions, total = store.list_sessions(hide_autonomous=True)
@@ -133,6 +139,35 @@ def test_hide_autonomous_still_excludes_zero_user_messages(tmp_path):
     sessions, total = store.list_sessions(hide_autonomous=True)
     assert total == 1
     assert sessions[0].user_messages == 1
+
+
+def test_hide_autonomous_keeps_open_managed_local_zero_user_session(tmp_path):
+    """Open managed-local sessions are user-owned live processes even before durable transcript ingest."""
+    store, db = _make_store(tmp_path)
+    result = _ingest(store, is_sidechain=False, user_messages=0)
+    session = store.get_session(result.session_id)
+    session.execution_home = "managed_local"
+    session.managed_transport = "codex_app_server"
+    db.commit()
+
+    sessions, total = store.list_sessions(hide_autonomous=True)
+    assert total == 1
+    assert sessions[0].id == result.session_id
+
+
+def test_hide_autonomous_excludes_closed_managed_local_zero_user_session(tmp_path):
+    """Closed managed-local sessions without a user turn return to the autonomous archive filter."""
+    store, db = _make_store(tmp_path)
+    result = _ingest(store, is_sidechain=False, user_messages=0)
+    session = store.get_session(result.session_id)
+    session.execution_home = "managed_local"
+    session.managed_transport = "codex_app_server"
+    session.ended_at = _ts(2)
+    db.commit()
+
+    sessions, total = store.list_sessions(hide_autonomous=True)
+    assert total == 0
+    assert sessions == []
 
 
 def test_normal_session_always_visible(tmp_path):
