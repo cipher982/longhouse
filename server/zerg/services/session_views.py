@@ -30,6 +30,7 @@ from zerg.services.session_capabilities import project_current_session_capabilit
 from zerg.services.session_capabilities import project_current_session_capabilities_from_facts
 from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_runner_state import managed_runner_host_state
+from zerg.services.session_runtime import SessionLiveTranscriptOverlay
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_runtime import should_include_runtime_view
 from zerg.services.session_runtime_display import build_session_runtime_display
@@ -128,6 +129,23 @@ def build_session_runtime_display_response(
         lifecycle=display.lifecycle,
         host_state=display.host_state,
         terminal_reason=display.terminal_reason,
+    )
+
+
+def build_live_transcript_response(
+    overlay: SessionLiveTranscriptOverlay | None,
+) -> SessionLiveTranscriptResponse | None:
+    if overlay is None:
+        return None
+    return SessionLiveTranscriptResponse(
+        text=overlay.text,
+        source=overlay.source,
+        received_at=overlay.received_at,
+        occurred_at=overlay.occurred_at,
+        thread_id=overlay.thread_id,
+        turn_id=overlay.turn_id,
+        seq=overlay.seq,
+        method=overlay.method,
     )
 
 
@@ -389,6 +407,17 @@ class SessionRuntimeDisplayResponse(BaseModel):
     )
 
 
+class SessionLiveTranscriptResponse(UTCBaseModel):
+    text: str = Field(..., description="Latest live transcript text snapshot from a managed provider bridge")
+    source: str = Field(..., description="Runtime source for the live transcript overlay")
+    received_at: datetime = Field(..., description="When the Runtime Host received this live text snapshot")
+    occurred_at: Optional[datetime] = Field(None, description="When the bridge observed this live text snapshot")
+    thread_id: Optional[str] = Field(None, description="Provider thread id for the live text snapshot")
+    turn_id: Optional[str] = Field(None, description="Provider turn id for the live text snapshot")
+    seq: Optional[int] = Field(None, description="Monotonic sequence within the provider turn")
+    method: Optional[str] = Field(None, description="Provider notification method that produced the snapshot")
+
+
 class HostObservationResponse(UTCBaseModel):
     state: str = Field("unknown", description="Observed host state: online|stale|offline|unknown")
     last_seen_at: Optional[datetime] = Field(None, description="When the host last heartbeated, when known")
@@ -516,6 +545,10 @@ class SessionResponse(UTCBaseModel):
     capabilities: SessionCapabilitiesResponse = Field(..., description="Canonical session capability flags")
     runtime_display: Optional[SessionRuntimeDisplayResponse] = Field(None, description="Server-derived display state for clients")
     runtime_facts: Optional[SessionLivenessFactsResponse] = Field(None, description="Observed liveness facts with timestamps and sources")
+    live_transcript: Optional[SessionLiveTranscriptResponse] = Field(
+        None,
+        description="Low-latency managed bridge transcript overlay; durable events remain canonical",
+    )
     timeline_card: TimelineCardPresentationResponse = Field(..., description="Server-derived timeline-card presentation")
     loop_mode: SessionLoopMode = Field(SessionLoopMode.ASSIST, description="Session loop mode: assist|autopilot")
     user_state: str = Field("active", description="User classification: active|parked|snoozed|archived")
@@ -638,6 +671,10 @@ class ActiveSessionResponse(UTCBaseModel):
     capabilities: SessionCapabilitiesResponse = Field(..., description="Canonical session capability flags")
     runtime_display: Optional[SessionRuntimeDisplayResponse] = Field(None, description="Server-derived display state for clients")
     runtime_facts: Optional[SessionLivenessFactsResponse] = Field(None, description="Observed liveness facts with timestamps and sources")
+    live_transcript: Optional[SessionLiveTranscriptResponse] = Field(
+        None,
+        description="Low-latency managed bridge transcript overlay; durable events remain canonical",
+    )
     loop_mode: SessionLoopMode = Field(SessionLoopMode.ASSIST, description="Session loop mode: assist|autopilot")
 
 
@@ -986,6 +1023,7 @@ def build_session_response(
     match_role: str | None = None,
     match_score: float | None = None,
     binding_overlay=None,
+    live_transcript_overlay: SessionLiveTranscriptOverlay | None = None,
 ) -> SessionResponse:
     cache = thread_cache if thread_cache is not None else {}
     thread_head_session_id, thread_continuation_count = get_thread_meta(store, session, cache)
@@ -1081,6 +1119,7 @@ def build_session_response(
         ),
         runtime_display=runtime_display,
         runtime_facts=runtime_facts,
+        live_transcript=build_live_transcript_response(live_transcript_overlay),
         timeline_card=build_session_timeline_card_response(
             runtime_facts=runtime_facts,
             capability_flags=capability_flags,
@@ -1101,6 +1140,7 @@ def build_active_session_response(
     attention: str,
     now: datetime,
     binding_overlay=None,
+    live_transcript_overlay: SessionLiveTranscriptOverlay | None = None,
 ) -> ActiveSessionResponse:
     capability_flags = build_session_capabilities(session)
     _started = (
@@ -1175,6 +1215,7 @@ def build_active_session_response(
         ),
         runtime_display=runtime_display,
         runtime_facts=runtime_facts,
+        live_transcript=build_live_transcript_response(live_transcript_overlay),
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
     )
 
