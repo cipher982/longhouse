@@ -30,6 +30,7 @@ DEFAULT_OUTPUT_ROOT = ROOT / "artifacts" / "managed-session-propagation"
 BRIDGE_ROOT = Path.home() / ".claude" / "managed-local" / "codex-bridge"
 CODEX_SESSIONS_ROOT = Path.home() / ".codex" / "sessions"
 HOSTED_CONTAINER_PREFIX = "longhouse-"
+HOSTED_RUNTIME_EVENT_LIMIT = 200
 
 
 def utc_now() -> str:
@@ -208,7 +209,7 @@ class Profiler:
             "--session",
             session_id,
             "--limit",
-            "20",
+            str(HOSTED_RUNTIME_EVENT_LIMIT),
             "--json",
         ]
         completed = run_cmd(cmd, timeout=60)
@@ -220,7 +221,7 @@ class Profiler:
     def hosted_db_direct(self, session_id: str) -> dict[str, Any] | None:
         script = r"""
 import json, sqlite3, sys
-subdomain, sid = sys.argv[1], sys.argv[2]
+subdomain, sid, runtime_event_limit = sys.argv[1], sys.argv[2], int(sys.argv[3])
 path = f"/var/app-data/longhouse/{subdomain}/longhouse.db"
 conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
 conn.row_factory = sqlite3.Row
@@ -240,11 +241,19 @@ if table("events"):
     payload["event_stats"] = one("SELECT count(*) AS count, min(timestamp) AS first_timestamp, max(timestamp) AS last_timestamp FROM events WHERE session_id=?", (sid,))
     payload["recent_events"] = rows("SELECT id, role, tool_name, substr(coalesce(content_text, tool_output_text, ''), 1, 500) AS text, timestamp FROM events WHERE session_id=? ORDER BY id DESC LIMIT 20", (sid,))
 if table("session_runtime_events"):
-    payload["runtime_events"] = rows("SELECT id, source, kind, phase, tool_name, occurred_at, received_at, payload_json FROM session_runtime_events WHERE session_id=? ORDER BY id DESC LIMIT 20", (sid,))
+    payload["runtime_events"] = rows("SELECT id, source, kind, phase, tool_name, occurred_at, received_at, payload_json FROM session_runtime_events WHERE session_id=? ORDER BY id DESC LIMIT ?", (sid, runtime_event_limit))
 print(json.dumps(payload, default=str))
 """
         proc = subprocess.run(
-            ["ssh", self.args.ssh_target, "python3", "-", self.subdomain, session_id],
+            [
+                "ssh",
+                self.args.ssh_target,
+                "python3",
+                "-",
+                self.subdomain,
+                session_id,
+                str(HOSTED_RUNTIME_EVENT_LIMIT),
+            ],
             input=script,
             text=True,
             capture_output=True,
@@ -1035,17 +1044,31 @@ def bridge_live_details(
     nonce: str,
     remote_clock_skew_ms: int | None,
 ) -> dict[str, Any]:
+    live_events: list[tuple[int, dict[str, Any], dict[str, Any]]] = []
     for event in data.get("runtime_events") or []:
         if event.get("source") != "codex_bridge_live":
             continue
         payload = safe_json_loads(str(event.get("payload_json") or "")) or {}
         if not isinstance(payload, dict) or payload.get("progress_kind") != "bridge_live_transcript_delta":
             continue
-        if nonce not in str(payload.get("delta") or ""):
+        live_events.append((int_or_none(event.get("id")) or 0, event, payload))
+
+    assembled = ""
+    for _id, event, payload in sorted(live_events, key=lambda item: item[0]):
+        fragment = str(payload.get("live_text") or payload.get("delta") or "")
+        if payload.get("live_text"):
+            assembled = fragment
+        else:
+            assembled += fragment
+        if nonce not in assembled:
             continue
+
         occurred_at = parse_db_timestamp(event.get("occurred_at"))
         received_at = parse_db_timestamp(event.get("received_at"))
-        details: dict[str, Any] = {"method": payload.get("method")}
+        details: dict[str, Any] = {
+            "method": payload.get("method"),
+            "delta_count": len(live_events),
+        }
         if occurred_at is not None and received_at is not None:
             lag_ms = int((received_at - occurred_at).total_seconds() * 1000)
             details["ingest_lag_ms"] = lag_ms
