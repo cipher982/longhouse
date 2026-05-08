@@ -1320,7 +1320,7 @@ async fn spawn_remote_tui(
         fs::create_dir_all(parent)
             .with_context(|| format!("creating remote TUI log directory {}", parent.display()))?;
     }
-    let remote_cmd = match thread_id {
+    let remote_exec = match thread_id {
         Some(thread_id) => format!(
             "exec {} resume {} --enable tui_app_server --remote {} --no-alt-screen",
             shell_quote(&config.codex_bin),
@@ -1333,6 +1333,9 @@ async fn spawn_remote_tui(
             shell_quote(ws_url),
         ),
     };
+    let remote_cmd = format!(
+        "stty rows 40 cols 120 2>/dev/null || true; export LINES=40 COLUMNS=120 TERM=${{TERM:-xterm-256color}}; {remote_exec}"
+    );
     let mut command = Command::new("script");
     command
         .arg("-q")
