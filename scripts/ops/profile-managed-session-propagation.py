@@ -643,6 +643,222 @@ print(json.dumps(payload))
         )
         return last
 
+    def stream_timeline_live_transcript_sse(
+        self,
+        session_id: str,
+        nonce: str,
+        *,
+        case_id: str,
+        ownership: str,
+    ) -> None:
+        token = self.browser_session_cookie()
+        if not token:
+            self.observe(
+                case_id=case_id,
+                provider="codex",
+                ownership=ownership,
+                source="hosted_sse",
+                event="timeline_live_transcript_sse_first_timeout",
+                session_id=session_id,
+                payload={"error": "could not mint browser session cookie"},
+            )
+            return
+
+        script = r"""
+import json, sys, time
+import httpx
+
+token, sid, project, nonce = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+headers = {"Cookie": f"longhouse_session={token}"}
+params = {
+    "project": project,
+    "provider": "codex",
+    "limit": "20",
+    "hide_autonomous": "true",
+    "skip_initial_replay": "true",
+}
+event_name = None
+data_lines = []
+first_observed = False
+started = time.monotonic()
+
+def live_transcript_from_event(data):
+    try:
+        obj = json.loads(data)
+    except Exception:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    session = obj.get("session")
+    if not isinstance(session, dict) or session.get("thread_id") != sid:
+        return None
+    candidates = [session.get("head"), session]
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        live = candidate.get("live_transcript")
+        if isinstance(live, dict) and live.get("text"):
+            return live
+    return None
+
+def emit(kind, live=None, error=None):
+    payload = {
+        "kind": kind,
+        "elapsed_ms": int((time.monotonic() - started) * 1000),
+        "live_transcript": live,
+        "error": error,
+    }
+    print(json.dumps(payload, default=str), flush=True)
+
+def flush_event():
+    global event_name, data_lines, first_observed
+    if event_name is None and not data_lines:
+        return False
+    current_event = event_name
+    data = "\n".join(data_lines)
+    event_name = None
+    data_lines = []
+    if current_event != "session_upsert":
+        return False
+    live = live_transcript_from_event(data)
+    if not live:
+        return False
+    text = str(live.get("text") or "")
+    if not first_observed:
+        first_observed = True
+        emit("first", live)
+    if nonce in text:
+        emit("full", live)
+        return True
+    return False
+
+try:
+    timeout = httpx.Timeout(95.0, connect=3.0, read=95.0)
+    with httpx.stream(
+        "GET",
+        "http://127.0.0.1:8000/api/timeline/sessions/stream",
+        params=params,
+        headers=headers,
+        timeout=timeout,
+    ) as response:
+        if response.status_code != 200:
+            emit("error", error=f"status={response.status_code} body={response.text[:500]}")
+            raise SystemExit(0)
+        deadline = time.monotonic() + 90
+        for line in response.iter_lines():
+            if time.monotonic() > deadline:
+                break
+            if line == "":
+                if flush_event():
+                    raise SystemExit(0)
+                continue
+            if line.startswith("event:"):
+                event_name = line[6:].strip()
+            elif line.startswith("data:"):
+                data_lines.append(line[5:].lstrip())
+        flush_event()
+        emit("timeout" if first_observed else "first_timeout")
+except SystemExit:
+    raise
+except Exception as exc:
+    emit("error", error=repr(exc))
+"""
+        proc = subprocess.Popen(
+            [
+                "ssh",
+                self.args.ssh_target,
+                "docker",
+                "exec",
+                "-i",
+                self.container,
+                "python3",
+                "-",
+                token,
+                session_id,
+                self.project,
+                nonce,
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        assert proc.stdin is not None
+        assert proc.stdout is not None
+        assert proc.stderr is not None
+        proc.stdin.write(script)
+        proc.stdin.close()
+
+        saw_first = False
+        saw_full = False
+        for line in proc.stdout:
+            data = safe_json_loads(line.strip())
+            if not isinstance(data, dict):
+                continue
+            kind = data.get("kind")
+            if kind == "first":
+                saw_first = True
+                self.observe(
+                    case_id=case_id,
+                    provider="codex",
+                    ownership=ownership,
+                    source="hosted_sse",
+                    event="timeline_live_transcript_sse_first_visible",
+                    session_id=session_id,
+                    payload=data,
+                )
+            elif kind == "full":
+                saw_full = True
+                self.observe(
+                    case_id=case_id,
+                    provider="codex",
+                    ownership=ownership,
+                    source="hosted_sse",
+                    event="timeline_live_transcript_sse_visible",
+                    session_id=session_id,
+                    payload=data,
+                )
+                break
+            elif kind in {"first_timeout", "timeout", "error"}:
+                self.observe(
+                    case_id=case_id,
+                    provider="codex",
+                    ownership=ownership,
+                    source="hosted_sse",
+                    event=f"timeline_live_transcript_sse_{kind}",
+                    session_id=session_id,
+                    payload=data,
+                )
+                break
+
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=2)
+
+        stderr = proc.stderr.read().strip()
+        if not saw_first:
+            self.observe(
+                case_id=case_id,
+                provider="codex",
+                ownership=ownership,
+                source="hosted_sse",
+                event="timeline_live_transcript_sse_first_visible_timeout",
+                session_id=session_id,
+                payload={"returncode": proc.returncode, "stderr": stderr[-1000:]},
+            )
+        elif not saw_full:
+            self.observe(
+                case_id=case_id,
+                provider="codex",
+                ownership=ownership,
+                source="hosted_sse",
+                event="timeline_live_transcript_sse_visible_timeout",
+                session_id=session_id,
+                payload={"returncode": proc.returncode, "stderr": stderr[-1000:]},
+            )
+
     def start_timeline_live_poll(
         self,
         session_id: str,
@@ -659,6 +875,27 @@ print(json.dumps(payload))
                 ownership=ownership,
             ),
             name=f"timeline-live-poll-{session_id}",
+            daemon=True,
+        )
+        thread.start()
+        return thread
+
+    def start_timeline_live_sse(
+        self,
+        session_id: str,
+        nonce: str,
+        *,
+        case_id: str,
+        ownership: str,
+    ) -> threading.Thread:
+        thread = threading.Thread(
+            target=lambda: self.stream_timeline_live_transcript_sse(
+                session_id,
+                nonce,
+                case_id=case_id,
+                ownership=ownership,
+            ),
+            name=f"timeline-live-sse-{session_id}",
             daemon=True,
         )
         thread.start()
@@ -766,6 +1003,12 @@ print(json.dumps(payload))
             case_id=case_id,
             ownership=ownership,
         )
+        timeline_live_sse = self.start_timeline_live_sse(
+            session_id,
+            nonce,
+            case_id=case_id,
+            ownership=ownership,
+        )
         send = self.run_observed(
             [
                 "longhouse-engine",
@@ -794,6 +1037,7 @@ print(json.dumps(payload))
                 session_id=session_id,
             )
         timeline_live_poll.join(timeout=95)
+        timeline_live_sse.join(timeout=95)
         self.poll_hosted_session(
             session_id,
             case_id=case_id,
@@ -1080,6 +1324,30 @@ print(json.dumps(payload))
             "assistant_response_local",
             "timeline_live_transcript_first_visible",
         )
+        live_sse_latency = self.event_delta_ms(
+            case_id,
+            session_id,
+            "prompt_sent_started",
+            "timeline_live_transcript_sse_visible",
+        )
+        first_live_sse_latency = self.event_delta_ms(
+            case_id,
+            session_id,
+            "prompt_sent_started",
+            "timeline_live_transcript_sse_first_visible",
+        )
+        live_sse_from_local_latency = self.event_delta_any_order_ms(
+            case_id,
+            session_id,
+            "assistant_response_local",
+            "timeline_live_transcript_sse_visible",
+        )
+        first_live_sse_from_local_latency = self.event_delta_any_order_ms(
+            case_id,
+            session_id,
+            "assistant_response_local",
+            "timeline_live_transcript_sse_first_visible",
+        )
         close_latency = self.event_delta_ms(case_id, session_id, "shutdown_requested", "hosted_runtime_closed")
         terminal = terminal_details(hosted)
         transcript_ingest = transcript_ingest_details(hosted, self.remote_clock_skew_ms)
@@ -1088,20 +1356,33 @@ print(json.dumps(payload))
         if not session:
             return "missing", "hosted session row not observed"
 
+        live_first_from_local_latency = first_live_sse_from_local_latency
+        live_full_from_local_latency = live_sse_from_local_latency
+        live_ui_source = "sse"
+        if live_first_from_local_latency is not None and live_first_from_local_latency < 0:
+            live_first_from_local_latency = 0
+        if live_full_from_local_latency is not None and live_full_from_local_latency < 0:
+            live_full_from_local_latency = 0
+        if live_first_from_local_latency is None:
+            live_first_from_local_latency = first_live_http_from_local_latency
+            live_full_from_local_latency = live_http_from_local_latency
+            live_ui_source = "http"
+
         live_ui = "live_ui=missing"
-        if first_live_http_from_local_latency is not None:
+        if live_first_from_local_latency is not None:
             live_state = (
                 "pass"
-                if first_live_http_from_local_latency <= MANAGED_LIVE_UI_TARGET_MS
+                if live_first_from_local_latency <= MANAGED_LIVE_UI_TARGET_MS
                 else "slow"
             )
             live_ui = (
                 f"live_ui={live_state} "
-                f"first_from_local={first_live_http_from_local_latency}ms "
+                f"source={live_ui_source} "
+                f"first_from_local={live_first_from_local_latency}ms "
                 f"target={MANAGED_LIVE_UI_TARGET_MS}ms"
             )
-            if live_http_from_local_latency is not None:
-                live_ui += f" full_from_local={live_http_from_local_latency}ms"
+            if live_full_from_local_latency is not None:
+                live_ui += f" full_from_local={live_full_from_local_latency}ms"
 
         transcript = "synced" if contains else "missing"
         if transcript_latency is not None:
@@ -1116,10 +1397,18 @@ print(json.dumps(payload))
             transcript += f" first_live_http={first_live_http_latency}ms"
         if live_http_latency is not None:
             transcript += f" live_http={live_http_latency}ms"
+        if first_live_sse_latency is not None:
+            transcript += f" first_live_sse={first_live_sse_latency}ms"
+        if live_sse_latency is not None:
+            transcript += f" live_sse={live_sse_latency}ms"
         if first_live_http_from_local_latency is not None:
             transcript += f" first_live_http_from_local={first_live_http_from_local_latency}ms"
         if live_http_from_local_latency is not None:
             transcript += f" live_http_from_local={live_http_from_local_latency}ms"
+        if first_live_sse_from_local_latency is not None:
+            transcript += f" first_live_sse_from_local={first_live_sse_from_local_latency}ms"
+        if live_sse_from_local_latency is not None:
+            transcript += f" live_sse_from_local={live_sse_from_local_latency}ms"
         if transcript_ingest.get("ingest_lag_ms") is not None:
             transcript += f" server_ingest_lag={transcript_ingest['ingest_lag_ms']}ms"
         if transcript_ingest.get("skew_adjusted_lag_ms") is not None:
@@ -1193,6 +1482,29 @@ print(json.dumps(payload))
                 end = row.get("observed_at_monotonic_ms")
                 if isinstance(start, int) and isinstance(end, int):
                     return end - start
+        return None
+
+    def event_delta_any_order_ms(
+        self,
+        case_id: str,
+        session_id: str,
+        start_event: str,
+        end_event: str,
+    ) -> int | None:
+        start = self.event_observed_at_ms(case_id, session_id, start_event)
+        end = self.event_observed_at_ms(case_id, session_id, end_event)
+        if start is None or end is None:
+            return None
+        return end - start
+
+    def event_observed_at_ms(self, case_id: str, session_id: str, event: str) -> int | None:
+        for row in self.observations:
+            if row.get("case_id") != case_id or row.get("session_id") != session_id:
+                continue
+            if row.get("event") == event:
+                observed = row.get("observed_at_monotonic_ms")
+                if isinstance(observed, int):
+                    return observed
         return None
 
 
