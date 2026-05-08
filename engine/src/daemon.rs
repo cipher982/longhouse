@@ -288,8 +288,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         }
 
         tokio::select! {
-            biased;
-
             // Shutdown signals
             _ = shutdown_signal() => {
                 tracing::info!("Shutdown signal received, exiting gracefully...");
