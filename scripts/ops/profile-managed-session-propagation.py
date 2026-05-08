@@ -257,6 +257,10 @@ print(json.dumps(payload, default=str))
     def measure_remote_clock_skew_ms(self) -> int | None:
         cmd = [
             "ssh",
+            "-o",
+            "ControlMaster=no",
+            "-o",
+            "ControlPath=none",
             self.args.ssh_target,
             "python3",
             "-c",
