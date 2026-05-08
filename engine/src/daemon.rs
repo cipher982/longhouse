@@ -271,6 +271,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut runtime_truth_bootstrapped = false;
     let mut codex_terminal_catchup_marks: HashMap<PathBuf, String> = HashMap::new();
     let mut bridge_reaper = ManagedBridgeReaper::from_env();
+    let mut outbox_post_tasks: JoinSet<(usize, usize)> = JoinSet::new();
 
     let outbox_dir = config::get_agent_outbox_dir()?;
     let status_path = config::get_agent_status_path()?;
@@ -367,6 +368,20 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
+            outbox_post_result = outbox_post_tasks.join_next(), if !outbox_post_tasks.is_empty() => {
+                match outbox_post_result {
+                    Some(Ok((sent, kept))) => {
+                        if sent > 0 || kept > 0 {
+                            tracing::debug!("Outbox presence POST: {} sent, {} pending", sent, kept);
+                        }
+                    }
+                    Some(Err(err)) => {
+                        tracing::warn!("Outbox presence POST task failed: {}", err);
+                    }
+                    None => {}
+                }
+            }
+
             _ = &mut startup_reconciliation_timer, if startup_reconciliation_pending && !offline.is_offline => {
                 startup_reconciliation_pending = false;
                 maybe_start_reconciliation_scan(
@@ -457,21 +472,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
-            // Outbox drain: presence events written by hooks (every 1s, skip when offline)
+            // Outbox drain: presence events written by hooks. Transcript
+            // catch-up is local truth, so schedule it before awaiting the
+            // semantic presence POST/delete path.
             _ = outbox_timer.tick(), if !offline.is_offline => {
-                let outbox_result = outbox::drain_outbox_with_local_state_result(
+                let outbox_result = outbox::collect_outbox_with_local_state_result(
                     &outbox_dir,
-                    &client,
                     config.shipper_config.db_path.as_deref(),
-                )
-                .await;
-                if outbox_result.sent > 0 || outbox_result.kept > 0 {
-                    tracing::debug!(
-                        "Outbox drain: {} sent, {} pending",
-                        outbox_result.sent,
-                        outbox_result.kept
-                    );
-                }
+                );
                 if !outbox_result.signals.is_empty() {
                     schedule_transcript_catchups_for_signals(
                         &conn,
@@ -479,6 +487,21 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         &mut active_transcript_polls,
                         outbox_result.signals,
                     );
+                    pump_ready_local_work(
+                        &mut scheduler,
+                        &mut in_flight,
+                        &task_context,
+                        &mut deferred_retries,
+                        &mut transcript_catchups,
+                        &mut active_transcript_polls,
+                        offline.is_offline,
+                    );
+                }
+                if !outbox_result.posts.is_empty() {
+                    let client = client.clone();
+                    outbox_post_tasks.spawn_local(async move {
+                        outbox::post_pending_presence_files(&client, outbox_result.posts).await
+                    });
                 }
             }
 
