@@ -113,6 +113,28 @@ pub fn plan_range_actions_with_limits(
         let line_event_start = event_index_at_or_after(events, line_start);
         let line_event_end = event_index_at_or_after(events, line_end);
 
+        if line_event_start == line_event_end && line_bytes > target_batch_bytes {
+            if batch_start_idx < line_idx {
+                actions.push(PlannedRangeAction::Ship(ShipRange {
+                    start_offset: batch_start_offset,
+                    end_offset: line_start,
+                    source_line_range: batch_start_idx..line_idx,
+                    event_range: batch_event_start..line_event_start,
+                }));
+            }
+            actions.push(PlannedRangeAction::DeadLetter(DeadLetterRange {
+                start_offset: line_start,
+                end_offset: line_end,
+                source_line_range: line_idx..line_idx + 1,
+                event_range: line_event_start..line_event_end,
+                byte_len: line_bytes,
+            }));
+            batch_start_idx = line_idx + 1;
+            batch_start_offset = line_end;
+            batch_event_start = line_event_end;
+            continue;
+        }
+
         if line_bytes > max_batch_bytes {
             if batch_start_idx < line_idx {
                 actions.push(PlannedRangeAction::Ship(ShipRange {
@@ -372,6 +394,44 @@ mod tests {
                     start_offset: 700,
                     end_offset: 800,
                     source_line_range: 1..2,
+                    event_range: 1..2,
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_plan_range_actions_acks_large_source_only_line() {
+        let source_lines = vec![
+            line(0, "semantic-before"),
+            line(100, "large-source-only"),
+            line(700, "semantic-after"),
+        ];
+        let events = vec![event(10, "before"), event(710, "after")];
+
+        let actions =
+            plan_range_actions_with_limits(&source_lines, &events, 0, 900, 256, 2_000).unwrap();
+
+        assert_eq!(
+            actions,
+            vec![
+                PlannedRangeAction::Ship(ShipRange {
+                    start_offset: 0,
+                    end_offset: 100,
+                    source_line_range: 0..1,
+                    event_range: 0..1,
+                }),
+                PlannedRangeAction::DeadLetter(DeadLetterRange {
+                    start_offset: 100,
+                    end_offset: 700,
+                    source_line_range: 1..2,
+                    event_range: 1..1,
+                    byte_len: 600,
+                }),
+                PlannedRangeAction::Ship(ShipRange {
+                    start_offset: 700,
+                    end_offset: 900,
+                    source_line_range: 2..3,
                     event_range: 1..2,
                 }),
             ]
