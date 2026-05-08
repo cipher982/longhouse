@@ -32,7 +32,7 @@ from zerg.session_execution_home import SessionExecutionHome
 from zerg.utils.time import normalize_utc
 
 RuntimeEventKind = Literal["phase_signal", "progress_signal", "terminal_signal", "binding_signal"]
-RuntimeEventApplyOutcome = Literal["applied", "ignored", "protected_session_ended"]
+RuntimeEventApplyOutcome = Literal["applied", "ignored", "protected_session_ended", "stored_overlay"]
 
 PHASE_FRESHNESS = {
     "thinking": timedelta(seconds=90),
@@ -47,7 +47,7 @@ MANAGED_CODEX_FRESHNESS = timedelta(minutes=15)
 LIVE_EXECUTION_PHASES = {"thinking", "running"}
 ATTENTION_PHASES = {"blocked"}
 KNOWN_PHASES = {"thinking", "running", "blocked", "needs_user", "idle", "finished"}
-MANAGED_CODEX_RUNTIME_SOURCES = {"engine_attached_lease", "codex_bridge"}
+MANAGED_CODEX_RUNTIME_SOURCES = {"engine_attached_lease", "codex_bridge", "codex_bridge_live"}
 MANAGED_CODEX_INVARIANTS = ("ended_without_session_ended", "short_freshness")
 
 
@@ -183,6 +183,7 @@ class SessionLiveTranscriptOverlay:
     turn_id: str | None
     seq: int | None
     method: str | None
+    is_complete: bool
 
 
 def _confidence_for_state(state: SessionRuntimeState, *, now: datetime) -> str:
@@ -514,8 +515,19 @@ def load_live_transcript_overlay_map(
             turn_id=str(payload.get("turn_id") or "").strip() or None,
             seq=seq if isinstance(seq, int) and not isinstance(seq, bool) else None,
             method=str(payload.get("method") or "").strip() or None,
+            is_complete=bool(payload.get("turn_completed")),
         )
     return overlays
+
+
+def _is_live_transcript_overlay_event(event: RuntimeEventIngest) -> bool:
+    payload = event.payload or {}
+    return (
+        (event.provider or "").strip().lower() == "codex"
+        and (event.source or "").strip().lower() == "codex_bridge_live"
+        and event.kind == "progress_signal"
+        and payload.get("progress_kind") == "bridge_live_transcript_delta"
+    )
 
 
 def _managed_codex_session_ids(db: Session) -> list[UUID]:
@@ -643,6 +655,13 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
             continue
 
         accepted += 1
+        if _is_live_transcript_overlay_event(event):
+            outcome = "stored_overlay"
+            _record_managed_codex_runtime_event(event, outcome)
+            if event.runtime_key not in updated_runtime_keys:
+                updated_runtime_keys.append(event.runtime_key)
+            continue
+
         outcome = _apply_runtime_event(db, event)
         _record_managed_codex_runtime_event(event, outcome)
         if outcome == "applied" and event.runtime_key not in updated_runtime_keys:

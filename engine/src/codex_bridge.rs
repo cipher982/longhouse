@@ -2103,8 +2103,21 @@ async fn process_notification(
             if notification_is_for_different_thread(&params, context) {
                 return Ok(None);
             }
+            let completed_turn_id = context.state.active_turn_id.clone();
+            if !context.live_transcript_text.is_empty() {
+                context.live_transcript_seq += 1;
+                context
+                    .runtime
+                    .post_live_transcript_completed(
+                        completed_turn_id.as_deref(),
+                        context.live_transcript_seq,
+                        &context.live_transcript_text,
+                    )
+                    .await;
+            }
             context.state.last_turn_status = extract_string(&params, &["turn", "status"]);
             context.state.active_turn_id = None;
+            context.live_transcript_text.clear();
             write_state_file(&context.state_file, &context.state)?;
             if let Some(path) = context.state.thread_path.as_deref() {
                 wake_daemon_for_transcript(config, path, "idle");
@@ -2762,6 +2775,25 @@ impl BridgeRuntimeSink {
             turn_id,
             seq,
             live_text,
+            false,
+            Utc::now(),
+        )])
+        .await;
+    }
+
+    async fn post_live_transcript_completed(
+        &self,
+        turn_id: Option<&str>,
+        seq: u64,
+        live_text: &str,
+    ) {
+        self.post_runtime_events(vec![self.live_transcript_delta_event(
+            "turn/completed",
+            "",
+            turn_id,
+            seq,
+            live_text,
+            true,
             Utc::now(),
         )])
         .await;
@@ -2774,6 +2806,7 @@ impl BridgeRuntimeSink {
         turn_id: Option<&str>,
         seq: u64,
         live_text: &str,
+        turn_completed: bool,
         observed_at: chrono::DateTime<Utc>,
     ) -> Value {
         let thread_id = self.thread_id.as_deref().unwrap_or("unknown-thread");
@@ -2804,6 +2837,7 @@ impl BridgeRuntimeSink {
                 "method": method,
                 "delta": delta,
                 "live_text": live_text,
+                "turn_completed": turn_completed,
             }
         })
     }
@@ -3549,6 +3583,7 @@ mod tests {
             Some("turn-1"),
             2,
             "hello",
+            false,
             observed_at,
         );
 
@@ -3560,8 +3595,42 @@ mod tests {
         assert_eq!(event["payload"]["seq"], 2);
         assert_eq!(event["payload"]["delta"], "lo");
         assert_eq!(event["payload"]["live_text"], "hello");
+        assert_eq!(event["payload"]["turn_completed"], false);
         assert_eq!(event["payload"]["turn_id"], "turn-1");
         assert_eq!(event["occurred_at"], "2026-05-08T08:00:00+00:00");
+    }
+
+    #[test]
+    fn live_transcript_delta_event_can_mark_turn_complete() {
+        let sink = BridgeRuntimeSink {
+            http: reqwest::Client::new(),
+            api_url: "http://127.0.0.1:9".to_string(),
+            api_token: "token".to_string(),
+            session_id: "session-123".to_string(),
+            cwd: "/Users/test/git/zerg".to_string(),
+            machine_name: Some("test-box".to_string()),
+            thread_id: Some("thread-abc".to_string()),
+            local_db_path: None,
+        };
+        let observed_at = DateTime::parse_from_rfc3339("2026-05-08T08:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let event = sink.live_transcript_delta_event(
+            "turn/completed",
+            "",
+            Some("turn-1"),
+            3,
+            "hello",
+            true,
+            observed_at,
+        );
+
+        assert_eq!(
+            event["dedupe_key"],
+            "bridge:live:session-123:thread-abc:turn-1:3"
+        );
+        assert_eq!(event["payload"]["live_text"], "hello");
+        assert_eq!(event["payload"]["turn_completed"], true);
     }
 
     #[test]
