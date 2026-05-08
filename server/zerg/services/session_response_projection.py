@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
 from zerg.services.agents_store import AgentsStore
+from zerg.services.session_runtime import load_live_transcript_overlay_map
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.session_views import SessionResponse
@@ -37,6 +38,7 @@ def build_session_response_list(
     activity_map = store.get_last_activity_map(session_ids)
     now = datetime.now(timezone.utc)
     runtime_state_map = load_runtime_state_map(db, session_ids)
+    live_transcript_map = load_live_transcript_overlay_map(db, session_ids)
     first_user_map = store.get_first_message_map(session_ids, role="user", max_len=80)
     thread_cache: dict[str, tuple[str, int]] = store.batch_thread_meta(sessions)
     binding_overlay_map = load_binding_overlay(db, session_ids, now=now)
@@ -66,6 +68,7 @@ def build_session_response_list(
                 match_role=match.get("role"),
                 match_score=sem_score_map.get(session.id),
                 binding_overlay=binding_overlay_map.get(session.id),
+                live_transcript_overlay=live_transcript_map.get(str(session.id)),
             )
         )
 

@@ -32,6 +32,7 @@ from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import build_runtime_view
 from zerg.services.session_runtime import current_presence_state_for_session
 from zerg.services.session_runtime import ingest_runtime_events
+from zerg.services.session_runtime import load_live_transcript_overlay_map
 from zerg.services.session_runtime import managed_codex_liveness_invariant_counts
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
@@ -171,6 +172,89 @@ def test_runtime_reducer_materializes_phase_progress_and_terminal(tmp_path):
         assert view.terminal_reason == "provider_exit"
         assert view.terminal_source == "claude_hook"
 
+    engine.dispose()
+
+
+def test_live_transcript_overlay_uses_latest_snapshot_and_dedupes(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "live_transcript_overlay.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, provider="codex", started_at=now - timedelta(minutes=1))
+        runtime_key = runtime_key_for_session("codex", str(session.id))
+        result = ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="codex_bridge_live",
+                    kind="progress_signal",
+                    occurred_at=now,
+                    dedupe_key="bridge:live:s:t:turn:1",
+                    payload={
+                        "progress_kind": "bridge_live_transcript_delta",
+                        "thread_id": "thread-1",
+                        "turn_id": "turn-1",
+                        "seq": 1,
+                        "method": "item/agentMessage/delta",
+                        "delta": "hel",
+                        "live_text": "hel",
+                    },
+                ),
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="codex_bridge_live",
+                    kind="progress_signal",
+                    occurred_at=now - timedelta(seconds=5),
+                    dedupe_key="bridge:live:s:t:turn:2",
+                    payload={
+                        "progress_kind": "bridge_live_transcript_delta",
+                        "thread_id": "thread-1",
+                        "turn_id": "turn-1",
+                        "seq": 2,
+                        "method": "item/agentMessage/delta",
+                        "delta": "lo",
+                        "live_text": "hello",
+                    },
+                ),
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="codex_bridge_live",
+                    kind="progress_signal",
+                    occurred_at=now - timedelta(seconds=5),
+                    dedupe_key="bridge:live:s:t:turn:2",
+                    payload={
+                        "progress_kind": "bridge_live_transcript_delta",
+                        "thread_id": "thread-1",
+                        "turn_id": "turn-1",
+                        "seq": 2,
+                        "method": "item/agentMessage/delta",
+                        "delta": "lo",
+                        "live_text": "hello",
+                    },
+                ),
+            ],
+        )
+
+        overlay = load_live_transcript_overlay_map(db, [session.id])[str(session.id)]
+
+    assert result.accepted == 2
+    assert result.duplicates == 1
+    assert overlay.text == "hello"
+    assert overlay.source == "codex_bridge_live"
+    assert overlay.thread_id == "thread-1"
+    assert overlay.turn_id == "turn-1"
+    assert overlay.seq == 2
+    assert overlay.method == "item/agentMessage/delta"
     engine.dispose()
 
 

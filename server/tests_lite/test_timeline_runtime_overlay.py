@@ -6,6 +6,7 @@ Covers:
 - Fresh presence overrides ended_at for /agents/sessions/active
 """
 
+import json
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -20,6 +21,7 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionRuntimeEvent
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import UnmanagedSessionBinding
 from zerg.session_execution_home import SessionExecutionHome
@@ -44,13 +46,14 @@ def _seed_session(
     user_messages: int = 2,
     assistant_messages: int = 2,
     tool_calls: int = 0,
+    provider: str = "claude",
     execution_home: str | None = None,
     managed_transport: str | None = None,
     source_runner_id: int | None = None,
     managed_session_name: str | None = None,
 ):
     session = AgentSession(
-        provider="claude",
+        provider=provider,
         environment=environment,
         project=project,
         started_at=started_at,
@@ -205,6 +208,77 @@ def test_sessions_list_uses_recent_activity_anchor_for_old_live_session(tmp_path
         assert top["timeline_card"]["status"]["tone"] == "running"
         assert top["timeline_anchor_at"] is not None
         assert top["timeline_anchor_at"] >= recent_idle.started_at.isoformat().replace("+00:00", "Z")
+
+
+def test_sessions_list_includes_codex_live_transcript_overlay(tmp_path):
+    factory = _make_db(tmp_path, "codex_live_transcript_overlay.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            provider="codex",
+            project="codex-live-overlay",
+            started_at=now - timedelta(minutes=10),
+            execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
+            managed_transport="codex_app_server",
+        )
+        _upsert_runtime_state(
+            db,
+            session_id=str(session.id),
+            phase="idle",
+            updated_at=now - timedelta(seconds=2),
+            provider="codex",
+        )
+        db.add(
+            SessionRuntimeEvent(
+                runtime_key=f"codex:{session.id}",
+                session_id=session.id,
+                provider="codex",
+                device_id="cinder",
+                source="codex_bridge_live",
+                kind="progress_signal",
+                occurred_at=now - timedelta(milliseconds=80),
+                received_at=now,
+                dedupe_key=f"bridge:live:{session.id}:thread-1:turn-1:4",
+                payload_json=json.dumps(
+                    {
+                        "progress_kind": "bridge_live_transcript_delta",
+                        "thread_id": "thread-1",
+                        "turn_id": "turn-1",
+                        "seq": 4,
+                        "method": "item/agentMessage/delta",
+                        "delta": "world",
+                        "live_text": "hello world",
+                    },
+                    sort_keys=True,
+                ),
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    for client in _client(factory):
+        resp = client.get(
+            "/agents/sessions?project=codex-live-overlay&provider=codex&limit=5",
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert resp.status_code == 200, resp.text
+        session_payload = resp.json()["sessions"][0]
+
+    assert session_payload["id"] == str(session.id)
+    assert session_payload["live_transcript"] == {
+        "text": "hello world",
+        "source": "codex_bridge_live",
+        "received_at": now.isoformat().replace("+00:00", "Z"),
+        "occurred_at": (now - timedelta(milliseconds=80)).isoformat().replace("+00:00", "Z"),
+        "thread_id": "thread-1",
+        "turn_id": "turn-1",
+        "seq": 4,
+        "method": "item/agentMessage/delta",
+    }
 
 
 def test_sessions_list_marks_old_open_session_idle_without_live_signal(tmp_path):

@@ -38,6 +38,7 @@ from zerg.services.session_listing import SessionListParams
 from zerg.services.session_listing import list_agent_sessions
 from zerg.services.session_messages import create_session_message
 from zerg.services.session_messages import resolve_session_message_owner_id
+from zerg.services.session_runtime import load_live_transcript_overlay_map
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.session_turns import get_session_turn_by_id
@@ -558,6 +559,7 @@ async def list_active_sessions(
         last_ai = store.get_last_message_map(session_ids, role="assistant", max_len=300)
         now = datetime.now(timezone.utc)
         runtime_state_map = load_runtime_state_map(db, [session.id for session in sessions])
+        live_transcript_map = load_live_transcript_overlay_map(db, [session.id for session in sessions])
         binding_overlay_map = load_binding_overlay(db, session_ids, now=now)
         items: List[ActiveSessionResponse] = []
         for s in sessions:
@@ -587,6 +589,7 @@ async def list_active_sessions(
                     last_assistant_message=last_ai.get(s.id),
                     now=now,
                     binding_overlay=binding_overlay_map.get(s.id),
+                    live_transcript_overlay=live_transcript_map.get(str(s.id)),
                 )
             )
 
@@ -742,6 +745,7 @@ async def get_session(
     now = datetime.now(timezone.utc)
     with timing.span("load_runtime"):
         runtime_state_map = load_runtime_state_map(db, [session.id])
+        live_transcript_map = load_live_transcript_overlay_map(db, [session.id])
         binding_overlay_map = load_binding_overlay(db, [session.id], now=now)
     with timing.span("build_response"):
         result = build_session_response(
@@ -756,6 +760,7 @@ async def get_session(
             ),
             first_user_message=first_user_map.get(session.id),
             binding_overlay=binding_overlay_map.get(session.id),
+            live_transcript_overlay=live_transcript_map.get(str(session.id)),
         )
     timing.apply(response)
     return result
@@ -794,6 +799,7 @@ async def get_session_thread(
     now = datetime.now(timezone.utc)
     with timing.span("load_runtime"):
         runtime_state_map = load_runtime_state_map(db, [item.id for item in thread_sessions])
+        live_transcript_map = load_live_transcript_overlay_map(db, [item.id for item in thread_sessions])
         binding_overlay_map = load_binding_overlay(db, [item.id for item in thread_sessions], now=now)
 
     with timing.span("build_response"):
@@ -813,6 +819,7 @@ async def get_session_thread(
                         now=now,
                     ),
                     first_user_message=first_user_map.get(item.id),
+                    live_transcript_overlay=live_transcript_map.get(str(item.id)),
                     binding_overlay=binding_overlay_map.get(item.id),
                 )
                 for item in thread_sessions
