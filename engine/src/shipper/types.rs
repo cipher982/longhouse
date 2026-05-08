@@ -16,6 +16,14 @@ pub struct ShipItem {
     pub compressed: Vec<u8>,
 }
 
+#[derive(Clone, Debug)]
+pub struct ShipTraceContext {
+    pub work_context: &'static str,
+    pub job_started_at_ms: i64,
+    pub prepare_started_at_ms: i64,
+    pub prepare_finished_at_ms: i64,
+}
+
 pub struct DeadLetterItem {
     pub path_str: String,
     pub provider: String,

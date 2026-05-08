@@ -939,10 +939,36 @@ async fn attempt_ship(
     client: &ShipperClient,
     tracker: Option<&ConsecutiveErrorTracker>,
     ship_stats: Option<&RecentShipStatsTracker>,
+    ship_trace: Option<&ShipTraceContext>,
 ) -> AttemptedShip {
+    let http_send_started_at_ms = chrono::Utc::now().timestamp_millis();
+    let trace_header = ship_trace.and_then(|trace| {
+        serde_json::to_string(&serde_json::json!({
+            "schema": "ship_trace.v1",
+            "trace_id": format!("{}:{}:{}:{}", item.session_id, item.offset, item.new_offset, http_send_started_at_ms),
+            "provider": item.provider,
+            "session_id": item.session_id,
+            "work_context": trace.work_context,
+            "event_count": item.event_count,
+            "offset": item.offset,
+            "new_offset": item.new_offset,
+            "range_bytes": item.new_offset.saturating_sub(item.offset),
+            "job_started_at_ms": trace.job_started_at_ms,
+            "prepare_started_at_ms": trace.prepare_started_at_ms,
+            "prepare_finished_at_ms": trace.prepare_finished_at_ms,
+            "http_send_started_at_ms": http_send_started_at_ms,
+            "prepare_ms": trace.prepare_finished_at_ms.saturating_sub(trace.prepare_started_at_ms),
+            "job_to_http_ms": http_send_started_at_ms.saturating_sub(trace.job_started_at_ms),
+        }))
+        .ok()
+    });
     let payload = std::mem::take(&mut item.compressed);
     let attempt_started = std::time::Instant::now();
-    let result = client.ship(payload).await;
+    let result = if let Some(trace_header) = trace_header.as_deref() {
+        client.ship_with_trace(payload, Some(trace_header)).await
+    } else {
+        client.ship(payload).await
+    };
     let latency_ms = attempt_started.elapsed().as_millis() as u64;
     let span = tracing::Span::current();
     let (outcome, http_status) = classify_ship_attempt_result(&result);
@@ -1102,6 +1128,17 @@ pub async fn ship_prepared_file(
     tracker: Option<&ConsecutiveErrorTracker>,
     ship_stats: Option<&RecentShipStatsTracker>,
 ) -> Result<ShipPreparedOutcome> {
+    ship_prepared_file_with_trace(prepared, client, conn, tracker, ship_stats, None).await
+}
+
+pub async fn ship_prepared_file_with_trace(
+    prepared: PreparedFile,
+    client: &ShipperClient,
+    conn: &Connection,
+    tracker: Option<&ConsecutiveErrorTracker>,
+    ship_stats: Option<&RecentShipStatsTracker>,
+    ship_trace: Option<&ShipTraceContext>,
+) -> Result<ShipPreparedOutcome> {
     let file_state = FileState::new(conn);
     let spool = Spool::new(conn);
     let mut outcome = ShipPreparedOutcome::default();
@@ -1150,7 +1187,7 @@ pub async fn ship_prepared_file(
                 )?;
             }
             PreparedAction::Ship(item) => {
-                match attempt_ship(item, client, tracker, ship_stats).await {
+                match attempt_ship(item, client, tracker, ship_stats, ship_trace).await {
                     AttemptedShip::Shipped(item) => {
                         file_state.set_offset(
                             &item.path_str,
@@ -1547,7 +1584,7 @@ async fn replay_spool_entries(
                     }
                 }
                 PreparedAction::Ship(item) => {
-                    match attempt_ship(item, client, None, ship_stats).await {
+                    match attempt_ship(item, client, None, ship_stats, None).await {
                         AttemptedShip::Shipped(item) => {
                             outcome.events_shipped += item.event_count;
                             file_state.set_acked_offset(&entry.file_path, item.new_offset)?;

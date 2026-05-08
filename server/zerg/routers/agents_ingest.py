@@ -4,6 +4,8 @@ import gzip
 import json
 import logging
 import time
+from datetime import datetime
+from datetime import timezone
 from uuid import UUID
 
 import zstandard
@@ -34,6 +36,69 @@ from zerg.services.session_views import IngestResponse
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agents", tags=["agents"])
+SHIP_TRACE_HEADER = "X-Longhouse-Ship-Trace"
+
+
+def _unix_ms() -> int:
+    return int(datetime.now(timezone.utc).timestamp() * 1000)
+
+
+def _ship_trace_from_request(request: Request) -> dict | None:
+    raw = request.headers.get(SHIP_TRACE_HEADER)
+    if not raw or len(raw) > 4096:
+        return None
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(value, dict) or value.get("schema") != "ship_trace.v1":
+        return None
+    return value
+
+
+def _persist_ship_trace_event(
+    db: Session,
+    *,
+    data: SessionIngest,
+    result: IngestResponse,
+    ship_trace: dict | None,
+    server_trace: dict,
+) -> None:
+    if not ship_trace or result.events_inserted <= 0:
+        return
+    trace_id = str(ship_trace.get("trace_id") or "").strip()
+    if not trace_id:
+        return
+
+    try:
+        from zerg.services.session_runtime import RuntimeEventIngest
+        from zerg.services.session_runtime import ingest_runtime_events
+        from zerg.services.session_runtime import runtime_key_for_session
+
+        session_id = UUID(str(result.session_id))
+        payload = {
+            "progress_kind": "ship_pipeline_trace",
+            "ship_trace": ship_trace,
+            "server_trace": server_trace,
+        }
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key_for_session(data.provider, str(session_id)),
+                    session_id=session_id,
+                    provider=data.provider,
+                    device_id=data.device_id,
+                    source="agents_ingest_trace",
+                    kind="binding_signal",
+                    occurred_at=datetime.now(timezone.utc),
+                    dedupe_key=f"ship_trace:{session_id}:{trace_id}",
+                    payload=payload,
+                )
+            ],
+        )
+    except Exception:
+        logger.debug("Failed to persist ship trace event", exc_info=True)
 
 
 async def decompress_if_gzipped(request: Request) -> tuple[bytes, int, str]:
@@ -94,12 +159,19 @@ async def ingest_session(
     - Triggers async background summary/embedding/turn-loop work after successful ingest
     """
     tracer = get_tracer(__name__)
-    auth_kind_label = (
-        "managed_local_hook" if isinstance(auth_token, ManagedLocalHookToken) else "device_token" if auth_token is not None else "none"
-    )
+    if isinstance(auth_token, ManagedLocalHookToken):
+        auth_kind_label = "managed_local_hook"
+    elif auth_token is not None:
+        auth_kind_label = "device_token"
+    else:
+        auth_kind_label = "none"
     provider_label = "unknown"
     content_encoding_label = request.headers.get("Content-Encoding", "").lower() or "identity"
     request_status_label = "internal_error"
+    handler_entered_at_ms = _unix_ms()
+    decode_finished_at_ms: int | None = None
+    validate_finished_at_ms: int | None = None
+    ship_trace = _ship_trace_from_request(request)
     with tracer.start_as_current_span("longhouse.ingest") as span:
         set_span_attributes(
             span,
@@ -114,6 +186,7 @@ async def ingest_session(
                 decode_started = time.monotonic()
                 body, wire_bytes, content_encoding = await decompress_if_gzipped(request)
                 decode_ms = round((time.monotonic() - decode_started) * 1000, 1)
+                decode_finished_at_ms = _unix_ms()
                 content_encoding_label = content_encoding
                 set_span_attributes(
                     decode_span,
@@ -174,6 +247,7 @@ async def ingest_session(
                     data.device_id = auth_token.device_id
 
                 provider_label = data.provider or "unknown"
+                validate_finished_at_ms = _unix_ms()
                 set_span_attributes(
                     validate_span,
                     {
@@ -229,8 +303,25 @@ async def ingest_session(
             ws = get_write_serializer()
 
             def _do_ingest(write_db):
+                write_started_at_ms = _unix_ms()
                 store = AgentsStore(write_db)
-                return store.ingest_session(data)
+                result = store.ingest_session(data)
+                store_returned_at_ms = _unix_ms()
+                _persist_ship_trace_event(
+                    write_db,
+                    data=data,
+                    result=result,
+                    ship_trace=ship_trace,
+                    server_trace={
+                        "handler_entered_at_ms": handler_entered_at_ms,
+                        "decode_finished_at_ms": decode_finished_at_ms,
+                        "validate_finished_at_ms": validate_finished_at_ms,
+                        "write_started_at_ms": write_started_at_ms,
+                        "store_returned_at_ms": store_returned_at_ms,
+                        "store_write_ms": store_returned_at_ms - write_started_at_ms,
+                    },
+                )
+                return result
 
             with tracer.start_as_current_span("longhouse.ingest.write") as write_span:
                 write_started = time.monotonic()

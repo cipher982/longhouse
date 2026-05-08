@@ -12,6 +12,8 @@ use reqwest::header::{HeaderMap, HeaderValue, CONTENT_ENCODING, CONTENT_TYPE};
 use crate::config::ShipperConfig;
 use crate::pipeline::compressor::{content_encoding, CompressionAlgo};
 
+const SHIP_TRACE_HEADER: &str = "X-Longhouse-Ship-Trace";
+
 /// Structured details for a network-layer ingest failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectErrorDetail {
@@ -83,16 +85,27 @@ impl ShipperClient {
 
     /// Ship a gzip-compressed payload. Handles 429 retries internally.
     pub async fn ship(&self, compressed_payload: Vec<u8>) -> ShipResult {
+        self.ship_with_trace(compressed_payload, None).await
+    }
+
+    /// Ship a compressed payload with an optional compact JSON timing trace.
+    pub async fn ship_with_trace(
+        &self,
+        compressed_payload: Vec<u8>,
+        trace_header: Option<&str>,
+    ) -> ShipResult {
         let mut retries = 0u32;
         let mut backoff = self.base_backoff;
 
         loop {
-            let result = self
+            let mut request = self
                 .client
                 .post(&self.ingest_url)
-                .body(compressed_payload.clone())
-                .send()
-                .await;
+                .body(compressed_payload.clone());
+            if let Some(trace_header) = trace_header {
+                request = request.header(SHIP_TRACE_HEADER, trace_header);
+            }
+            let result = request.send().await;
 
             match result {
                 Err(e) => {

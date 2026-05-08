@@ -799,6 +799,20 @@ print(json.dumps(payload))
             transcript += f" server_ingest_lag={transcript_ingest['ingest_lag_ms']}ms"
         if transcript_ingest.get("skew_adjusted_lag_ms") is not None:
             transcript += f" skew_adjusted_ingest={transcript_ingest['skew_adjusted_lag_ms']}ms"
+        ship_trace = ship_trace_details(hosted, self.remote_clock_skew_ms)
+        if ship_trace:
+            parts = []
+            for key, label in (
+                ("append_to_job_ms", "append_to_job"),
+                ("prepare_ms", "prepare"),
+                ("job_to_http_ms", "job_to_http"),
+                ("http_to_handler_ms", "http_to_handler"),
+                ("store_write_ms", "store"),
+            ):
+                if ship_trace.get(key) is not None:
+                    parts.append(f"{label}={ship_trace[key]}ms")
+            if parts:
+                transcript += " ship_trace=" + ",".join(parts)
         close_note = "close=missing"
         if closed:
             close_note = "close=closed"
@@ -994,6 +1008,62 @@ def transcript_ingest_details(data: dict[str, Any], remote_clock_skew_ms: int | 
             details["skew_adjusted_lag_ms"] = lag_ms - remote_clock_skew_ms
         return details
     return details
+
+
+def ship_trace_details(data: dict[str, Any], remote_clock_skew_ms: int | None) -> dict[str, Any]:
+    for event in data.get("runtime_events") or []:
+        if event.get("source") != "agents_ingest_trace":
+            continue
+        payload = safe_json_loads(str(event.get("payload_json") or "")) or {}
+        if not isinstance(payload, dict) or payload.get("progress_kind") != "ship_pipeline_trace":
+            continue
+        ship_trace = payload.get("ship_trace") or {}
+        server_trace = payload.get("server_trace") or {}
+        if not isinstance(ship_trace, dict) or not isinstance(server_trace, dict):
+            continue
+        details: dict[str, Any] = {}
+        for key in ("prepare_ms", "job_to_http_ms"):
+            if isinstance(ship_trace.get(key), int | float):
+                details[key] = int(ship_trace[key])
+        if isinstance(server_trace.get("store_write_ms"), int | float):
+            details["store_write_ms"] = int(server_trace["store_write_ms"])
+
+        occurred_at = transcript_occurred_at(data)
+        job_started_at_ms = int_or_none(ship_trace.get("job_started_at_ms"))
+        if occurred_at is not None and job_started_at_ms is not None:
+            occurred_ms = int(occurred_at.timestamp() * 1000)
+            details["append_to_job_ms"] = job_started_at_ms - occurred_ms
+
+        http_send_started_at_ms = int_or_none(ship_trace.get("http_send_started_at_ms"))
+        handler_entered_at_ms = int_or_none(server_trace.get("handler_entered_at_ms"))
+        if (
+            http_send_started_at_ms is not None
+            and handler_entered_at_ms is not None
+            and remote_clock_skew_ms is not None
+        ):
+            details["http_to_handler_ms"] = handler_entered_at_ms - (
+                http_send_started_at_ms + remote_clock_skew_ms
+            )
+        return details
+    return {}
+
+
+def transcript_occurred_at(data: dict[str, Any]) -> datetime | None:
+    for event in data.get("runtime_events") or []:
+        if event.get("kind") != "progress_signal":
+            continue
+        payload = safe_json_loads(str(event.get("payload_json") or "")) or {}
+        if isinstance(payload, dict) and payload.get("progress_kind") == "transcript_append":
+            return parse_db_timestamp(event.get("occurred_at"))
+    return None
+
+
+def int_or_none(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return int(value)
+    return None
 
 
 def parse_db_timestamp(value: Any) -> datetime | None:

@@ -307,7 +307,11 @@ mod tests {
     fn test_urgent_overflow_is_bounded() {
         let mut scheduler = PathScheduler::new(1);
 
-        scheduler.enqueue(PathBuf::from("/tmp/scan.jsonl"), "codex", WorkPriority::Scan);
+        scheduler.enqueue(
+            PathBuf::from("/tmp/scan.jsonl"),
+            "codex",
+            WorkPriority::Scan,
+        );
         assert!(scheduler.pop_launchable().is_some());
 
         for idx in 0..3 {
