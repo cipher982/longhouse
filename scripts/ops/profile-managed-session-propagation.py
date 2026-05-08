@@ -446,7 +446,7 @@ print(json.dumps(payload))
         tui = subprocess.Popen(
             ["script", "-q", str(tui_log), "zsh", "-lc", remote_cmd],
             cwd=str(ROOT),
-            stdin=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,
@@ -459,20 +459,6 @@ print(json.dumps(payload))
             event="remote_tui_started",
             session_id=session_id,
             payload={"pid": tui.pid, "log": str(tui_log)},
-        )
-        bootstrap_nonce = f"{nonce}_TUI_BOOTSTRAP"
-        time.sleep(3)
-        if tui.stdin is not None:
-            tui.stdin.write(f"Reply with exactly {bootstrap_nonce}\n")
-            tui.stdin.flush()
-        self.observe(
-            case_id=case_id,
-            provider="codex",
-            ownership=ownership,
-            source="harness",
-            event="remote_tui_bootstrap_prompt_sent",
-            session_id=session_id,
-            payload={"nonce": bootstrap_nonce},
         )
         state = self.wait_bridge_thread(session_id, case_id=case_id, ownership=ownership)
         thread_id = state.get("thread_id") if state else None
@@ -511,7 +497,7 @@ print(json.dumps(payload))
             session_id,
             case_id=case_id,
             ownership=ownership,
-            predicate=lambda data: hosted_events_contain(data, nonce),
+            predicate=lambda data: hosted_assistant_events_contain(data, nonce),
             event="assistant_response_hosted",
             timeout=180,
         )
@@ -552,7 +538,11 @@ print(json.dumps(payload))
         last = None
         while time.monotonic() < deadline:
             last = read_json(state_path)
-            if last and str(last.get("thread_id") or "").strip():
+            if (
+                last
+                and str(last.get("thread_id") or "").strip()
+                and str(last.get("thread_path") or "").strip()
+            ):
                 return last
             time.sleep(1)
         self.observe(
@@ -624,7 +614,7 @@ print(json.dumps(payload))
             session_id,
             case_id=case_id,
             ownership=ownership,
-            predicate=lambda data: hosted_events_contain(data, nonce),
+            predicate=lambda data: hosted_assistant_events_contain(data, nonce),
             event="assistant_response_hosted",
             timeout=180,
         )
@@ -688,7 +678,7 @@ print(json.dumps(payload))
         hosted = self.hosted_db_direct(session_id) or {}
         session = hosted.get("session") or {}
         runtime = hosted.get("runtime_state") or {}
-        contains = hosted_events_contain(hosted, nonce)
+        contains = hosted_assistant_events_contain(hosted, nonce)
         closed = lifecycle_closed(hosted)
         close_latency = self.event_delta_ms(case_id, session_id, "shutdown_requested", "hosted_runtime_closed")
         terminal = terminal_details(hosted)
@@ -787,8 +777,10 @@ def find_rollout_with_nonce(nonce: str, *, since_epoch: float) -> Path | None:
     return None
 
 
-def hosted_events_contain(data: dict[str, Any], text: str) -> bool:
+def hosted_assistant_events_contain(data: dict[str, Any], text: str) -> bool:
     for event in data.get("recent_events") or []:
+        if str(event.get("role") or "") != "assistant":
+            continue
         if text in str(event.get("text") or ""):
             return True
     return False
