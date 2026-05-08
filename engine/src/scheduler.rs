@@ -25,6 +25,8 @@ const FAIR_SEQUENCE: [WorkPriority; 5] = [
 ];
 const URGENT_SEQUENCE: [WorkPriority; 2] = [WorkPriority::Watch, WorkPriority::Catchup];
 const URGENT_OVERFLOW_CAP: usize = 2;
+const RETRY_IN_FLIGHT_CAP: usize = 1;
+const SCAN_IN_FLIGHT_CAP: usize = 1;
 
 /// One unit of daemon work keyed to a single file path.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -43,6 +45,7 @@ struct ReadyJob {
 #[derive(Clone, Debug)]
 struct InFlightJob {
     provider: &'static str,
+    priority: WorkPriority,
     rerun_priority: Option<WorkPriority>,
 }
 
@@ -104,7 +107,11 @@ impl PathScheduler {
 
         for step in 0..FAIR_SEQUENCE.len() {
             let idx = (self.fairness_cursor + step) % FAIR_SEQUENCE.len();
-            if let Some(job) = self.pop_ready_queue(FAIR_SEQUENCE[idx]) {
+            let priority = FAIR_SEQUENCE[idx];
+            if !self.can_launch_priority(priority) {
+                continue;
+            }
+            if let Some(job) = self.pop_ready_queue(priority) {
                 self.fairness_cursor = (idx + 1) % FAIR_SEQUENCE.len();
                 return Some(job);
             }
@@ -119,6 +126,9 @@ impl PathScheduler {
         }
 
         for priority in URGENT_SEQUENCE {
+            if !self.can_launch_priority(priority) {
+                continue;
+            }
             if let Some(job) = self.pop_ready_queue(priority) {
                 return Some(job);
             }
@@ -175,6 +185,7 @@ impl PathScheduler {
                 path.clone(),
                 InFlightJob {
                     provider: ready.provider,
+                    priority: ready.priority,
                     rerun_priority: None,
                 },
             );
@@ -196,6 +207,21 @@ impl PathScheduler {
             WorkPriority::Retry => self.ready_retry.push_back(path),
             WorkPriority::Scan => self.ready_scan.push_back(path),
         }
+    }
+
+    fn can_launch_priority(&self, priority: WorkPriority) -> bool {
+        match priority {
+            WorkPriority::Watch | WorkPriority::Catchup => true,
+            WorkPriority::Retry => self.in_flight_count(WorkPriority::Retry) < RETRY_IN_FLIGHT_CAP,
+            WorkPriority::Scan => self.in_flight_count(WorkPriority::Scan) < SCAN_IN_FLIGHT_CAP,
+        }
+    }
+
+    fn in_flight_count(&self, priority: WorkPriority) -> usize {
+        self.in_flight
+            .values()
+            .filter(|job| job.priority == priority)
+            .count()
     }
 }
 
@@ -279,6 +305,58 @@ mod tests {
         scheduler.complete(&path_a, None);
         let second = scheduler.pop_launchable().unwrap();
         assert_eq!(second.path, path_b);
+    }
+
+    #[test]
+    fn test_background_scan_is_capped_even_with_capacity_available() {
+        let mut scheduler = PathScheduler::new(4);
+        let scan_a = PathBuf::from("/tmp/scan-a.jsonl");
+        let scan_b = PathBuf::from("/tmp/scan-b.jsonl");
+        let watch = PathBuf::from("/tmp/watch.jsonl");
+
+        scheduler.enqueue(scan_a.clone(), "codex", WorkPriority::Scan);
+        scheduler.enqueue(scan_b.clone(), "codex", WorkPriority::Scan);
+
+        let first = scheduler.pop_launchable().unwrap();
+        assert_eq!(first.path, scan_a);
+        assert_eq!(first.priority, WorkPriority::Scan);
+        assert!(scheduler.pop_launchable().is_none());
+
+        scheduler.enqueue(watch.clone(), "codex", WorkPriority::Watch);
+        let urgent = scheduler.pop_launchable().unwrap();
+        assert_eq!(urgent.path, watch);
+        assert_eq!(urgent.priority, WorkPriority::Watch);
+
+        scheduler.complete(&scan_a, None);
+        let second_scan = scheduler.pop_launchable().unwrap();
+        assert_eq!(second_scan.path, scan_b);
+        assert_eq!(second_scan.priority, WorkPriority::Scan);
+    }
+
+    #[test]
+    fn test_retry_replay_is_capped_even_with_capacity_available() {
+        let mut scheduler = PathScheduler::new(4);
+        let retry_a = PathBuf::from("/tmp/retry-a.jsonl");
+        let retry_b = PathBuf::from("/tmp/retry-b.jsonl");
+        let catchup = PathBuf::from("/tmp/catchup.jsonl");
+
+        scheduler.enqueue(retry_a.clone(), "codex", WorkPriority::Retry);
+        scheduler.enqueue(retry_b.clone(), "codex", WorkPriority::Retry);
+
+        let first = scheduler.pop_launchable().unwrap();
+        assert_eq!(first.path, retry_a);
+        assert_eq!(first.priority, WorkPriority::Retry);
+        assert!(scheduler.pop_launchable().is_none());
+
+        scheduler.enqueue(catchup.clone(), "codex", WorkPriority::Catchup);
+        let urgent = scheduler.pop_launchable().unwrap();
+        assert_eq!(urgent.path, catchup);
+        assert_eq!(urgent.priority, WorkPriority::Catchup);
+
+        scheduler.complete(&retry_a, None);
+        let second_retry = scheduler.pop_launchable().unwrap();
+        assert_eq!(second_retry.path, retry_b);
+        assert_eq!(second_retry.priority, WorkPriority::Retry);
     }
 
     #[test]
