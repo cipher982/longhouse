@@ -1180,6 +1180,7 @@ async fn prepare_file_for_job(
     )
 )]
 async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskResult {
+    let job_started_at_ms = chrono::Utc::now().timestamp_millis();
     let mut result = PathTaskResult {
         job,
         events_shipped: 0,
@@ -1248,18 +1249,27 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
     }
 
     let file_start = Instant::now();
+    let prepare_started_at_ms = chrono::Utc::now().timestamp_millis();
     match prepare_file_for_job(&result.job, &task_context).await {
         Ok(Some(prepared)) => {
+            let prepare_finished_at_ms = chrono::Utc::now().timestamp_millis();
             let event_count = prepared.total_event_count();
             let byte_count = prepared.new_offset.saturating_sub(prepared.offset);
             let prepared_offset = prepared.offset;
             let prepared_new_offset = prepared.new_offset;
-            match shipper::ship_prepared_file(
+            let ship_trace = shipper::ShipTraceContext {
+                work_context: work_context(result.job.priority),
+                job_started_at_ms,
+                prepare_started_at_ms,
+                prepare_finished_at_ms,
+            };
+            match shipper::ship_prepared_file_with_trace(
                 prepared,
                 &task_context.client,
                 &conn,
                 Some(&task_context.tracker),
                 Some(&task_context.ship_stats),
+                Some(&ship_trace),
             )
             .await
             {
