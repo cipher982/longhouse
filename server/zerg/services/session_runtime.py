@@ -549,6 +549,7 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
 
     for event in events:
         payload_json = json.dumps(event.payload or {}, sort_keys=True, separators=(",", ":"))
+        received_at = datetime.now(timezone.utc)
         insert_stmt = (
             sqlite_insert(SessionRuntimeEvent)
             .values(
@@ -564,6 +565,7 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
                 freshness_ms=event.freshness_ms,
                 dedupe_key=event.dedupe_key,
                 payload_json=payload_json,
+                received_at=received_at,
             )
             .on_conflict_do_nothing(index_elements=["source", "dedupe_key"])
         )

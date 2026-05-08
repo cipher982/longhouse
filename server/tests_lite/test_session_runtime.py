@@ -568,6 +568,48 @@ def test_presence_endpoint_uses_provider_source_and_wakes_subscribers(tmp_path):
         assert msg.payload["source"] == "codex_hook"
 
     reset_pubsub_for_test()
+
+
+def test_runtime_event_ingest_stamps_received_at_in_python(tmp_path, monkeypatch):
+    from zerg.services import session_runtime as runtime_module
+
+    engine, SessionLocal = _make_db(tmp_path, "runtime_received_at_precision.db")
+    received_at = datetime(2026, 1, 2, 3, 4, 5, 678901, tzinfo=timezone.utc)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return received_at.replace(tzinfo=None)
+            return received_at.astimezone(tz)
+
+    monkeypatch.setattr(runtime_module, "datetime", FrozenDateTime)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=received_at - timedelta(minutes=5))
+        runtime_key = runtime_key_for_session("codex", str(session.id))
+
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="codex_bridge",
+                    kind="progress_signal",
+                    occurred_at=received_at - timedelta(milliseconds=250),
+                    dedupe_key="progress-with-subsecond-received-at",
+                    payload={"progress_kind": "assistant_message"},
+                )
+            ],
+        )
+        db.commit()
+
+        event = db.query(SessionRuntimeEvent).filter(SessionRuntimeEvent.runtime_key == runtime_key).one()
+        assert event.received_at.replace(tzinfo=timezone.utc) == received_at
+
     engine.dispose()
 
 
