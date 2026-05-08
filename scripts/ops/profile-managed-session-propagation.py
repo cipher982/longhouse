@@ -105,6 +105,7 @@ class Profiler:
         self.project = args.project
         self.subdomain = args.subdomain
         self.container = args.container or f"{HOSTED_CONTAINER_PREFIX}{self.subdomain}"
+        self.remote_clock_skew_ms = self.measure_remote_clock_skew_ms()
 
     def observe(
         self,
@@ -131,7 +132,7 @@ class Profiler:
             "event": event,
             "observed_at_wall": utc_now(),
             "observed_at_monotonic_ms": monotonic_ms(),
-            "clock_skew_ms": None,
+            "clock_skew_ms": self.remote_clock_skew_ms,
             "payload": payload or {},
         }
         self.observations.append(row)
@@ -252,6 +253,26 @@ print(json.dumps(payload, default=str))
         )
         data = safe_json_loads(proc.stdout)
         return data if isinstance(data, dict) else None
+
+    def measure_remote_clock_skew_ms(self) -> int | None:
+        cmd = [
+            "ssh",
+            self.args.ssh_target,
+            "python3",
+            "-c",
+            "import time; print(int(time.time()*1000))",
+        ]
+        before = time.time() * 1000
+        completed = run_cmd(cmd, timeout=10)
+        after = time.time() * 1000
+        if completed.returncode != 0:
+            return None
+        try:
+            remote_ms = int((completed.stdout or "").strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            return None
+        midpoint = (before + after) / 2
+        return int(round(remote_ms - midpoint))
 
     def timeline_session(self, session_id: str) -> dict[str, Any] | None:
         script = r"""
@@ -760,6 +781,7 @@ print(json.dumps(payload))
         )
         close_latency = self.event_delta_ms(case_id, session_id, "shutdown_requested", "hosted_runtime_closed")
         terminal = terminal_details(hosted)
+        transcript_ingest = transcript_ingest_details(hosted, self.remote_clock_skew_ms)
         ownership = session.get("execution_home") or "-"
         transport = session.get("managed_transport") or "-"
         if not session:
@@ -771,6 +793,10 @@ print(json.dumps(payload))
             transcript += f" provider={provider_latency}ms"
         if propagation_latency is not None:
             transcript += f" local_to_hosted={propagation_latency}ms"
+        if transcript_ingest.get("ingest_lag_ms") is not None:
+            transcript += f" server_ingest_lag={transcript_ingest['ingest_lag_ms']}ms"
+        if transcript_ingest.get("skew_adjusted_lag_ms") is not None:
+            transcript += f" skew_adjusted_ingest={transcript_ingest['skew_adjusted_lag_ms']}ms"
         close_note = "close=missing"
         if closed:
             close_note = "close=closed"
@@ -942,6 +968,29 @@ def terminal_details(data: dict[str, Any]) -> dict[str, Any]:
             details["reason"] = details["reason"] or str(payload.get("terminal_reason") or "").strip() or None
             details["source"] = details["source"] or str(payload.get("terminal_source") or "").strip() or None
         break
+    return details
+
+
+def transcript_ingest_details(data: dict[str, Any], remote_clock_skew_ms: int | None) -> dict[str, Any]:
+    details = {
+        "ingest_lag_ms": None,
+        "skew_adjusted_lag_ms": None,
+    }
+    for event in data.get("runtime_events") or []:
+        if event.get("kind") != "progress_signal":
+            continue
+        payload = safe_json_loads(str(event.get("payload_json") or "")) or {}
+        if not isinstance(payload, dict) or payload.get("progress_kind") != "transcript_append":
+            continue
+        occurred_at = parse_db_timestamp(event.get("occurred_at"))
+        received_at = parse_db_timestamp(event.get("received_at"))
+        if occurred_at is None or received_at is None:
+            return details
+        lag_ms = int((received_at - occurred_at).total_seconds() * 1000)
+        details["ingest_lag_ms"] = lag_ms
+        if remote_clock_skew_ms is not None:
+            details["skew_adjusted_lag_ms"] = lag_ms - remote_clock_skew_ms
+        return details
     return details
 
 
