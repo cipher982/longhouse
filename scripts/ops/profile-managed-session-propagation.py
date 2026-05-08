@@ -437,7 +437,12 @@ print(json.dumps(payload))
         self.write_snapshot(case_id, ownership, session_id, "post_launch")
 
         tui_log = self.output_dir / f"{session_id}-managed-tui.log"
-        remote_cmd = f"exec {shlex.quote('/opt/homebrew/bin/codex')} --enable tui_app_server --remote {shlex.quote(ws_url)} --no-alt-screen"
+        remote_exec = f"exec {shlex.quote('/opt/homebrew/bin/codex')} --enable tui_app_server --remote {shlex.quote(ws_url)} --no-alt-screen"
+        remote_cmd = (
+            "stty rows 40 cols 120 2>/dev/null || true; "
+            "export LINES=40 COLUMNS=120 TERM=${TERM:-xterm-256color}; "
+            f"{remote_exec}"
+        )
         tui = subprocess.Popen(
             ["script", "-q", str(tui_log), "zsh", "-lc", remote_cmd],
             cwd=str(ROOT),
