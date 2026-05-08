@@ -461,6 +461,28 @@ fn resolve_payload_session_id<'a>(
     override_session_id
 }
 
+fn event_only_ship_offsets(parse_result: &ParseResult, range: &ShipRange) -> (u64, u64) {
+    if range.event_range.is_empty() {
+        return (range.start_offset, range.end_offset);
+    }
+
+    let first_event_offset = parse_result.events[range.event_range.start].source_offset;
+    let last_event_offset = parse_result.events[range.event_range.end - 1].source_offset;
+    let next_line_idx = parse_result
+        .source_lines
+        .partition_point(|line| line.source_offset <= last_event_offset);
+    let event_end_offset = parse_result
+        .source_lines
+        .get(next_line_idx)
+        .map(|line| line.source_offset)
+        .unwrap_or(range.end_offset);
+
+    (
+        first_event_offset.max(range.start_offset),
+        event_end_offset.max(first_event_offset),
+    )
+}
+
 fn prepare_whole_document_action(
     parse_result: &ParseResult,
     path_str: &str,
@@ -540,12 +562,16 @@ fn materialize_ship_range(
     )?;
 
     if compressed.len() as u64 <= max_batch_bytes {
+        let (item_offset, item_new_offset) = match source_line_mode {
+            SourceLineMode::Full => (range.start_offset, range.end_offset),
+            SourceLineMode::EventOnly => event_only_ship_offsets(parse_result, &range),
+        };
         return Ok((
             vec![PreparedAction::Ship(ShipItem {
                 path_str: path_str.to_string(),
                 provider: provider.to_string(),
-                offset: range.start_offset,
-                new_offset: range.end_offset,
+                offset: item_offset,
+                new_offset: item_new_offset,
                 event_count: range
                     .event_range
                     .end
@@ -2193,6 +2219,12 @@ mod tests {
         assert_eq!(prepared.actions.len(), 1);
         match prepared.actions.into_iter().next().unwrap() {
             PreparedAction::Ship(item) => {
+                assert_eq!(item.offset, user_offset);
+                assert_eq!(
+                    item.new_offset,
+                    (session_meta.len() + 1 + developer_context.len() + 1 + user_message.len() + 1)
+                        as u64
+                );
                 assert_eq!(
                     decode_payload_source_offsets(&item.compressed),
                     vec![user_offset]
