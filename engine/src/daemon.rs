@@ -51,6 +51,7 @@ const INITIAL_SPOOL_PATH_LIMIT: usize = 100;
 const PERIODIC_SPOOL_PATH_LIMIT: usize = 50;
 const PATH_SPOOL_REPLAY_LIMIT: usize = 50;
 const LOCAL_RETRY_DELAY_SECS: u64 = 5;
+const STARTUP_RECONCILIATION_SCAN_DELAY: Duration = Duration::from_secs(15);
 const LOCAL_STATUS_INTERVAL_SECS: u64 = 1;
 const SERVER_HEARTBEAT_INTERVAL_SECS: u64 = 5 * 60;
 const LOCAL_WORK_TICK_INTERVAL: Duration = Duration::from_millis(250);
@@ -217,22 +218,17 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let max_in_flight = daemon_max_in_flight(&config.shipper_config);
     let mut scheduler = PathScheduler::new(max_in_flight);
     let mut in_flight = JoinSet::new();
-    let mut discovery_tasks = JoinSet::new();
+    let mut discovery_tasks: JoinSet<DiscoveryTaskResult> = JoinSet::new();
     let mut deferred_retries = HashMap::new();
     let mut transcript_catchups = Vec::new();
     let mut active_transcript_polls = HashMap::new();
 
-    start_discovery_task(
-        &mut discovery_tasks,
-        &providers,
-        WorkPriority::Scan,
-        "startup reconciliation",
-    );
     let initial_retry_paths =
         queue_pending_spool_paths(&mut scheduler, &conn, INITIAL_SPOOL_PATH_LIMIT)?;
     tracing::info!(
-        "Queued startup catch-up: {} retry paths; background scan started (max {} concurrent)",
+        "Queued startup catch-up: {} retry paths; startup reconciliation deferred by {:?} (max {} concurrent)",
         initial_retry_paths,
+        STARTUP_RECONCILIATION_SCAN_DELAY,
         max_in_flight
     );
 
@@ -264,6 +260,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     outbox_timer.tick().await; // consume first immediate tick
     let mut local_retry_timer = tokio::time::interval(LOCAL_WORK_TICK_INTERVAL);
     local_retry_timer.tick().await; // consume first immediate tick
+    let startup_reconciliation_timer = tokio::time::sleep(STARTUP_RECONCILIATION_SCAN_DELAY);
+    tokio::pin!(startup_reconciliation_timer);
+    let mut startup_reconciliation_pending = true;
 
     let mut offline = OfflineState::new();
     let mut last_ship_at: Option<String> = None;
@@ -367,6 +366,19 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
+            _ = &mut startup_reconciliation_timer, if startup_reconciliation_pending && !offline.is_offline => {
+                startup_reconciliation_pending = false;
+                maybe_start_reconciliation_scan(
+                    &mut discovery_tasks,
+                    &providers,
+                    &scheduler,
+                    &deferred_retries,
+                    &transcript_catchups,
+                    &active_transcript_polls,
+                    "startup reconciliation",
+                );
+            }
+
             // Health check when offline (every 60s)
             _ = health_timer.tick(), if offline.is_offline => {
                 match client.health_check().await {
@@ -421,17 +433,15 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // restarts, sleeps, or dropped OS notifications. Active-session
             // freshness should come from hook catch-up and watcher jobs.
             _ = fallback_timer.tick(), if !offline.is_offline => {
-                if discovery_tasks.is_empty() {
-                    tracing::debug!("Starting reconciliation scan in background...");
-                    start_discovery_task(
-                        &mut discovery_tasks,
-                        &providers,
-                        WorkPriority::Scan,
-                        "reconciliation scan",
-                    );
-                } else {
-                    tracing::debug!("Skipping reconciliation scan tick because discovery is still running");
-                }
+                maybe_start_reconciliation_scan(
+                    &mut discovery_tasks,
+                    &providers,
+                    &scheduler,
+                    &deferred_retries,
+                    &transcript_catchups,
+                    &active_transcript_polls,
+                    "reconciliation scan",
+                );
             }
 
             // Spool replay (retry failed shipments) — skip when offline
@@ -736,6 +746,39 @@ fn start_discovery_task(
         priority,
         reason,
     });
+}
+
+fn maybe_start_reconciliation_scan(
+    discovery_tasks: &mut JoinSet<DiscoveryTaskResult>,
+    providers: &[ProviderConfig],
+    scheduler: &PathScheduler,
+    deferred_retries: &HashMap<PathBuf, DeferredRetry>,
+    transcript_catchups: &[TranscriptCatchup],
+    active_transcript_polls: &HashMap<PathBuf, ActiveTranscriptPoll>,
+    reason: &'static str,
+) {
+    if !discovery_tasks.is_empty() {
+        tracing::debug!(
+            reason,
+            "Skipping reconciliation scan because discovery is still running"
+        );
+        return;
+    }
+
+    if scheduler.has_pending_work()
+        || !deferred_retries.is_empty()
+        || !transcript_catchups.is_empty()
+        || !active_transcript_polls.is_empty()
+    {
+        tracing::debug!(
+            reason,
+            "Skipping reconciliation scan while live local work is pending"
+        );
+        return;
+    }
+
+    tracing::debug!(reason, "Starting reconciliation scan in background");
+    start_discovery_task(discovery_tasks, providers, WorkPriority::Scan, reason);
 }
 
 #[cfg(unix)]
