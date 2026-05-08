@@ -213,6 +213,8 @@ struct BridgeContext {
     state: BridgeStateFile,
     runtime: BridgeRuntimeSink,
     last_progress_emit: Option<Instant>,
+    live_transcript_seq: u64,
+    live_transcript_text: String,
     runtime_tracker: CodexRuntimeTracker,
     subscribed_thread_id: Option<String>,
     rejected_thread_ids: BTreeSet<String>,
@@ -711,6 +713,8 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
             local_db_path: resolve_bridge_agent_db_path(config.longhouse_home.as_deref()).ok(),
         },
         last_progress_emit: None,
+        live_transcript_seq: 0,
+        live_transcript_text: String::new(),
         runtime_tracker: CodexRuntimeTracker::default(),
         subscribed_thread_id: None,
         rejected_thread_ids: BTreeSet::new(),
@@ -2057,6 +2061,8 @@ async fn process_notification(
             if method == "turn/started" {
                 context.state.active_turn_id = extract_string(&params, &["turn", "id"]);
                 context.state.last_turn_status = extract_string(&params, &["turn", "status"]);
+                context.live_transcript_seq = 0;
+                context.live_transcript_text.clear();
                 write_state_file(&context.state_file, &context.state)?;
                 if let Some(path) = context.state.thread_path.as_deref() {
                     wake_daemon_for_transcript(config, path, "running");
@@ -2077,9 +2083,17 @@ async fn process_notification(
                 return Ok(None);
             }
             if let Some(delta) = extract_live_transcript_delta(method, &params) {
+                context.live_transcript_seq += 1;
+                context.live_transcript_text.push_str(delta);
                 context
                     .runtime
-                    .post_live_transcript_delta(method, delta)
+                    .post_live_transcript_delta(
+                        method,
+                        delta,
+                        context.state.active_turn_id.as_deref(),
+                        context.live_transcript_seq,
+                        &context.live_transcript_text,
+                    )
                     .await;
             }
             let updates = context.runtime_tracker.handle_notification(method, &params);
@@ -2540,11 +2554,7 @@ impl CodexRuntimeTracker {
 
 fn extract_live_transcript_delta<'a>(method: &str, params: &'a Value) -> Option<&'a str> {
     match method {
-        "item/agentMessage/delta"
-        | "item/commandExecution/outputDelta"
-        | "command/exec/outputDelta"
-        | "item/fileChange/outputDelta"
-        | "item/mcpToolCall/progress" => params.get("delta").and_then(Value::as_str),
+        "item/agentMessage/delta" => params.get("delta").and_then(Value::as_str),
         _ => None,
     }
 }
@@ -2738,8 +2748,37 @@ impl BridgeRuntimeSink {
         .await;
     }
 
-    async fn post_live_transcript_delta(&self, method: &str, delta: &str) {
-        self.post_runtime_events(vec![json!({
+    async fn post_live_transcript_delta(
+        &self,
+        method: &str,
+        delta: &str,
+        turn_id: Option<&str>,
+        seq: u64,
+        live_text: &str,
+    ) {
+        self.post_runtime_events(vec![self.live_transcript_delta_event(
+            method,
+            delta,
+            turn_id,
+            seq,
+            live_text,
+            Utc::now(),
+        )])
+        .await;
+    }
+
+    fn live_transcript_delta_event(
+        &self,
+        method: &str,
+        delta: &str,
+        turn_id: Option<&str>,
+        seq: u64,
+        live_text: &str,
+        observed_at: chrono::DateTime<Utc>,
+    ) -> Value {
+        let thread_id = self.thread_id.as_deref().unwrap_or("unknown-thread");
+        let turn_id = turn_id.unwrap_or("unknown-turn");
+        json!({
             "runtime_key": format!("codex:{}", self.session_id),
             "session_id": self.session_id,
             "provider": "codex",
@@ -2748,21 +2787,25 @@ impl BridgeRuntimeSink {
             "kind": "progress_signal",
             "phase": Value::Null,
             "tool_name": Value::Null,
-            "occurred_at": Utc::now().to_rfc3339(),
+            "occurred_at": observed_at.to_rfc3339(),
             "dedupe_key": format!(
-                "bridge:live_delta:{}:{}",
+                "bridge:live:{}:{}:{}:{}",
                 self.session_id,
-                Uuid::new_v4()
+                thread_id,
+                turn_id,
+                seq
             ),
             "payload": {
                 "progress_kind": "bridge_live_transcript_delta",
                 "managed_transport": "codex_app_server",
                 "thread_id": self.thread_id,
+                "turn_id": turn_id,
+                "seq": seq,
                 "method": method,
                 "delta": delta,
+                "live_text": live_text,
             }
-        })])
-        .await;
+        })
     }
 
     async fn post_terminal(&self, terminal_state: &str, terminal_reason: &str, dedupe_key: String) {
@@ -3187,6 +3230,8 @@ mod tests {
                 local_db_path: Some(resolve_bridge_agent_db_path(Some(temp.path())).unwrap()),
             },
             last_progress_emit: None,
+            live_transcript_seq: 0,
+            live_transcript_text: String::new(),
             runtime_tracker: CodexRuntimeTracker::default(),
             subscribed_thread_id: None,
             rejected_thread_ids: BTreeSet::new(),
@@ -3471,9 +3516,52 @@ mod tests {
             Some("hello")
         );
         assert_eq!(
+            extract_live_transcript_delta(
+                "item/commandExecution/outputDelta",
+                &json!({"delta": "not assistant text"})
+            ),
+            None
+        );
+        assert_eq!(
             extract_live_transcript_delta("thread/status/changed", &json!({"delta": "hello"})),
             None
         );
+    }
+
+    #[test]
+    fn live_transcript_delta_event_uses_stable_sequence_key_and_buffer() {
+        let sink = BridgeRuntimeSink {
+            http: reqwest::Client::new(),
+            api_url: "http://127.0.0.1:9".to_string(),
+            api_token: "token".to_string(),
+            session_id: "session-123".to_string(),
+            cwd: "/Users/test/git/zerg".to_string(),
+            machine_name: Some("test-box".to_string()),
+            thread_id: Some("thread-abc".to_string()),
+            local_db_path: None,
+        };
+        let observed_at = DateTime::parse_from_rfc3339("2026-05-08T08:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let event = sink.live_transcript_delta_event(
+            "item/agentMessage/delta",
+            "lo",
+            Some("turn-1"),
+            2,
+            "hello",
+            observed_at,
+        );
+
+        assert_eq!(
+            event["dedupe_key"],
+            "bridge:live:session-123:thread-abc:turn-1:2"
+        );
+        assert_eq!(event["source"], "codex_bridge_live");
+        assert_eq!(event["payload"]["seq"], 2);
+        assert_eq!(event["payload"]["delta"], "lo");
+        assert_eq!(event["payload"]["live_text"], "hello");
+        assert_eq!(event["payload"]["turn_id"], "turn-1");
+        assert_eq!(event["occurred_at"], "2026-05-08T08:00:00+00:00");
     }
 
     #[test]
