@@ -10,10 +10,13 @@ from datetime import timedelta
 from datetime import timezone
 from time import monotonic
 from typing import Protocol
+from uuid import UUID
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
 
+from zerg.models.agents import SessionRuntimeEvent
 from zerg.services.agents_store import AgentsStore
 from zerg.services.session_listing import SessionListingError
 from zerg.services.session_pubsub import TOPIC_TIMELINE
@@ -29,7 +32,7 @@ TIMELINE_STREAM_CHANGE_WAIT_SECONDS = 5.0
 TIMELINE_STREAM_HEARTBEAT_SECONDS = 30.0
 
 TimelineWindowSignature = tuple[
-    tuple[str, datetime | None, datetime | None, datetime | None, int, datetime | None],
+    tuple[str, str, datetime | None, datetime | None, datetime | None, int, int | None],
     ...,
 ]
 
@@ -197,7 +200,41 @@ def _load_timeline_stream_window_signature(
         context_mode=params.context_mode,
         include_total=False,
     )
-    return rows
+    overlay_heads = _load_live_transcript_overlay_heads(db=db, rows=rows)
+    return tuple((*row, overlay_heads.get(row[1])) for row in rows)
+
+
+def _load_live_transcript_overlay_heads(
+    *,
+    db: Session,
+    rows: tuple[tuple[str, str, datetime | None, datetime | None, datetime | None, int], ...],
+) -> dict[str, int]:
+    session_ids: list[UUID] = []
+    for row in rows:
+        try:
+            session_ids.append(UUID(row[1]))
+        except (TypeError, ValueError):
+            continue
+    if not session_ids:
+        return {}
+
+    result_rows = (
+        db.query(
+            SessionRuntimeEvent.session_id.label("session_id"),
+            func.max(SessionRuntimeEvent.id).label("max_id"),
+        )
+        .filter(SessionRuntimeEvent.session_id.in_(session_ids))
+        .filter(SessionRuntimeEvent.source == "codex_bridge_live")
+        .filter(SessionRuntimeEvent.kind == "progress_signal")
+        .group_by(SessionRuntimeEvent.session_id)
+        .all()
+    )
+    heads: dict[str, int] = {}
+    for row in result_rows:
+        if row.session_id is None or row.max_id is None:
+            continue
+        heads[str(row.session_id)] = int(row.max_id)
+    return heads
 
 
 async def _wait_for_timeline_change(subscription=None) -> None:

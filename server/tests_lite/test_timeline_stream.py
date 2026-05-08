@@ -9,16 +9,18 @@ from datetime import timezone
 from unittest.mock import patch
 
 import pytest
+from fastapi import HTTPException
+from fastapi import Response
+
 import zerg.dependencies.auth as _auth_deps  # noqa: F401
 import zerg.routers.timeline as timeline_router
 import zerg.services.timeline_session_stream as timeline_stream
-from fastapi import HTTPException
-from fastapi import Response
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionRuntimeEvent
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents_store import AgentsStore
 from zerg.services.session_listing import SessionListParams
@@ -294,7 +296,11 @@ def test_timeline_stream_skips_full_rebuild_when_window_is_unchanged(tmp_path):
 
     with (
         patch.object(timeline_stream, "list_timeline_sessions_for_browser", new=_counting_list_timeline_sessions),
-        patch.object(timeline_stream.AgentsStore, "list_timeline_thread_window_signature", new=_capturing_window_signature),
+        patch.object(
+            timeline_stream.AgentsStore,
+            "list_timeline_thread_window_signature",
+            new=_capturing_window_signature,
+        ),
         patch.object(timeline_stream, "TIMELINE_STREAM_CHANGE_WAIT_SECONDS", 0),
         patch.object(timeline_stream, "TIMELINE_STREAM_HEARTBEAT_SECONDS", 0),
         patch.object(timeline_stream, "_wait_for_timeline_change", new=_noop_coro),
@@ -387,6 +393,77 @@ def test_timeline_stream_wakes_on_topic_timeline_publish(tmp_path):
     assert connected["event"] == "connected"
     assert upsert["event"] == "session_upsert"
     assert json.loads(upsert["data"])["session"]["thread_id"] == str(session.id)
+    reset_pubsub_for_test()
+
+
+def test_timeline_stream_upserts_on_live_transcript_overlay_only_change(tmp_path):
+    reset_pubsub_for_test()
+    session_local = _make_db(tmp_path, "timeline_stream_live_overlay.db")
+    now = datetime.now(timezone.utc)
+
+    with session_local() as db:
+        session = _seed_session(
+            db,
+            started_at=now - timedelta(minutes=5),
+            project="live-overlay-stream",
+        )
+        session.provider = "codex"
+        db.commit()
+
+    async def _collect_after_overlay_insert():
+        stream = timeline_stream.stream_timeline_sessions_for_browser(
+            _ConnectedRequest(),
+            session_factory=session_local,
+            params=_stream_params(),
+            skip_initial_replay=False,
+        )
+        try:
+            connected = await anext(stream)
+            initial = await anext(stream)
+
+            next_event = asyncio.create_task(anext(stream))
+            await asyncio.sleep(0)
+            with session_local() as db:
+                db.add(
+                    SessionRuntimeEvent(
+                        runtime_key=f"codex:{session.id}",
+                        session_id=session.id,
+                        provider="codex",
+                        device_id="cinder",
+                        source="codex_bridge_live",
+                        kind="progress_signal",
+                        occurred_at=now,
+                        received_at=now,
+                        dedupe_key=f"bridge:live:{session.id}:1",
+                        payload_json=json.dumps(
+                            {
+                                "progress_kind": "bridge_live_transcript_delta",
+                                "live_text": "Bridge text arrived before the durable transcript.",
+                                "thread_id": "thread-1",
+                                "turn_id": "turn-1",
+                                "seq": 1,
+                                "method": "item/agentMessage/delta",
+                            }
+                        ),
+                    )
+                )
+                db.commit()
+            get_pubsub().publish(
+                TOPIC_TIMELINE,
+                {"kind": "runtime_update", "session_id": str(session.id)},
+            )
+            upsert = await asyncio.wait_for(next_event, timeout=0.5)
+            return connected, initial, upsert
+        finally:
+            await stream.aclose()
+
+    connected, initial, upsert = asyncio.run(_collect_after_overlay_insert())
+
+    assert connected["event"] == "connected"
+    assert initial["event"] == "session_upsert"
+    assert upsert["event"] == "session_upsert"
+    payload = json.loads(upsert["data"])
+    assert payload["session"]["head"]["live_transcript"]["text"] == "Bridge text arrived before the durable transcript."
     reset_pubsub_for_test()
 
 
