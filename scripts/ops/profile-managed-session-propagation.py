@@ -32,6 +32,9 @@ BRIDGE_ROOT = Path.home() / ".claude" / "managed-local" / "codex-bridge"
 CODEX_SESSIONS_ROOT = Path.home() / ".codex" / "sessions"
 HOSTED_CONTAINER_PREFIX = "longhouse-"
 HOSTED_RUNTIME_EVENT_LIMIT = 200
+MANAGED_LIVE_UI_TARGET_MS = 500
+DURABLE_TRANSCRIPT_TARGET_MS = 5_000
+MANAGED_CLOSE_TARGET_MS = 1_000
 
 
 def utc_now() -> str:
@@ -1084,6 +1087,22 @@ print(json.dumps(payload))
         transport = session.get("managed_transport") or "-"
         if not session:
             return "missing", "hosted session row not observed"
+
+        live_ui = "live_ui=missing"
+        if first_live_http_from_local_latency is not None:
+            live_state = (
+                "pass"
+                if first_live_http_from_local_latency <= MANAGED_LIVE_UI_TARGET_MS
+                else "slow"
+            )
+            live_ui = (
+                f"live_ui={live_state} "
+                f"first_from_local={first_live_http_from_local_latency}ms "
+                f"target={MANAGED_LIVE_UI_TARGET_MS}ms"
+            )
+            if live_http_from_local_latency is not None:
+                live_ui += f" full_from_local={live_http_from_local_latency}ms"
+
         transcript = "synced" if contains else "missing"
         if transcript_latency is not None:
             transcript += f" observed_in={transcript_latency}ms"
@@ -1105,6 +1124,9 @@ print(json.dumps(payload))
             transcript += f" server_ingest_lag={transcript_ingest['ingest_lag_ms']}ms"
         if transcript_ingest.get("skew_adjusted_lag_ms") is not None:
             transcript += f" skew_adjusted_ingest={transcript_ingest['skew_adjusted_lag_ms']}ms"
+        if propagation_latency is not None:
+            durable_state = "pass" if propagation_latency <= DURABLE_TRANSCRIPT_TARGET_MS else "slow"
+            transcript += f" durable_slo={durable_state} target={DURABLE_TRANSCRIPT_TARGET_MS}ms"
         bridge_live = bridge_live_details(hosted, nonce, self.remote_clock_skew_ms)
         if bridge_live:
             live_parts = []
@@ -1144,6 +1166,8 @@ print(json.dumps(payload))
             close_note = "close=closed"
             if close_latency is not None:
                 close_note += f" observed_in={close_latency}ms"
+                close_state = "pass" if close_latency <= MANAGED_CLOSE_TARGET_MS else "slow"
+                close_note += f" close_slo={close_state} target={MANAGED_CLOSE_TARGET_MS}ms"
             if terminal.get("ingest_lag_ms") is not None:
                 close_note += f" ingest_lag={terminal['ingest_lag_ms']}ms"
             if terminal.get("source"):
@@ -1152,11 +1176,11 @@ print(json.dumps(payload))
                 close_note += f" reason={terminal['reason']}"
         if not contains:
             verdict = "partial" if closed else "missing"
-            return verdict, f"transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
+            return verdict, f"{live_ui}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
         if not closed:
             phase = runtime.get("phase") or runtime.get("terminal_state") or "-"
-            return "pass", f"nonce synced; close not confirmed yet; phase={phase}; ownership={ownership}, transport={transport}"
-        return "pass", f"transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
+            return "pass", f"{live_ui}; nonce synced; close not confirmed yet; phase={phase}; ownership={ownership}, transport={transport}"
+        return "pass", f"{live_ui}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
 
     def event_delta_ms(self, case_id: str, session_id: str, start_event: str, end_event: str) -> int | None:
         start = None
