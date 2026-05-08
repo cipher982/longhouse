@@ -29,11 +29,6 @@ const THREAD_SUBSCRIBE_RETRY_ATTEMPTS: usize = 8;
 const THREAD_SUBSCRIBE_RETRY_DELAY_MS: u64 = 250;
 const CODEX_DISABLE_UPDATE_CHECK_CONFIG: &str = "check_for_update_on_startup=false";
 const BRIDGE_OPT_OUT_NOTIFICATION_METHODS: &[&str] = &[
-    "item/agentMessage/delta",
-    "item/commandExecution/outputDelta",
-    "command/exec/outputDelta",
-    "item/fileChange/outputDelta",
-    "item/mcpToolCall/progress",
     "item/plan/delta",
     "item/reasoning/summaryTextDelta",
     "item/reasoning/summaryPartAdded",
@@ -2077,6 +2072,12 @@ async fn process_notification(
         | "command/exec/outputDelta"
         | "item/fileChange/outputDelta"
         | "item/mcpToolCall/progress" => {
+            if notification_is_for_different_thread(&params, context) {
+                return Ok(None);
+            }
+            if let Some(path) = context.state.thread_path.as_deref() {
+                wake_daemon_for_transcript(config, path, "running");
+            }
             let updates = context.runtime_tracker.handle_notification(method, &params);
             emit_runtime_updates(context, updates).await;
         }
@@ -4453,6 +4454,50 @@ mod tests {
             context.state.thread_subscription_status.as_deref(),
             Some(ThreadSubscriptionStatus::Subscribed.as_str())
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn process_notification_wakes_daemon_for_agent_message_delta() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = make_test_run_config(&temp);
+        let mut context = make_test_context(&temp);
+        let rollout_path = temp.path().join("thread.jsonl");
+        fs::write(&rollout_path, "{\"ok\":true}\n").unwrap();
+        context.state.thread_id = Some("thr-live".to_string());
+        context.state.thread_path = Some(rollout_path.display().to_string());
+        context.runtime.thread_id = Some("thr-live".to_string());
+
+        let socket_path = resolve_bridge_transcript_wake_socket_path(Some(temp.path())).unwrap();
+        fs::create_dir_all(socket_path.parent().unwrap()).unwrap();
+        let _ = fs::remove_file(&socket_path);
+        let listener = tokio::net::UnixListener::bind(&socket_path).unwrap();
+
+        let followup = process_notification(
+            &json!({
+                "method": "item/agentMessage/delta",
+                "params": {
+                    "threadId": "thr-live",
+                    "delta": "hello"
+                }
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(followup, None);
+        let (mut stream, _) = tokio::time::timeout(Duration::from_secs(1), listener.accept())
+            .await
+            .expect("wake connection")
+            .unwrap();
+        let mut body = Vec::new();
+        stream.read_to_end(&mut body).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["provider"], "codex");
+        assert_eq!(payload["path"], rollout_path.display().to_string());
+        assert_eq!(payload["phase"], "running");
     }
 
     #[test]
