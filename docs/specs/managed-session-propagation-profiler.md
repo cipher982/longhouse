@@ -84,7 +84,9 @@ Managed sessions have two different truth lanes:
 
 The profiler must report both lanes. A managed card can be truthful in the live UI lane before the transcript archive has caught up. That is not a failure; it is the intended architecture. A live UI that waits for transcript ingest is a failure for managed sessions. Because the browser timeline consumes `/api/timeline/sessions/stream`, the managed live UI verdict should use timeline SSE first and keep REST polling as a comparison/backstop measurement.
 
-The profiler must fail fast on provider/environment preconditions before measuring propagation. For example, if the attached Codex TUI says hooks need review, the run is `blocked`, not a live-UI or durable-archive regression. The harness should close the managed bridge and record the precondition instead of waiting for transcript timeouts.
+The profiler must fail fast on provider/environment preconditions before measuring propagation. For example, if Codex says hooks need review, the run is `blocked`, not a live-UI or durable-archive regression. The harness should close the managed bridge and record the precondition instead of waiting for transcript timeouts. For Codex, prefer the structured app-server `hooks/list` trust status over scraping the TUI log; the TUI text is a fallback when the structured path is unavailable.
+
+Hook approval is a provider trust boundary. The profiler may offer an explicit operator flag to trust only the Longhouse-installed Codex hooks by writing the corresponding `hooks.state` hashes through Codex's own `config/batchWrite` API, but it must not silently approve arbitrary hooks as a side effect of running a propagation test.
 
 The transcript shipper can and should be improved for archive freshness, but it must not be the primary realtime state source for managed sessions. For managed Codex, the bridge is the clock and rollout JSONL ingest is the ledger.
 
