@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import re
+import select
 import shlex
 import signal
 import subprocess
@@ -30,6 +31,8 @@ ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT_ROOT = ROOT / "artifacts" / "managed-session-propagation"
 BRIDGE_ROOT = Path.home() / ".claude" / "managed-local" / "codex-bridge"
 CODEX_SESSIONS_ROOT = Path.home() / ".codex" / "sessions"
+CODEX_HOOKS_JSON = Path.home() / ".codex" / "hooks.json"
+CODEX_LONGHOUSE_HOOK_SCRIPT = Path.home() / ".codex" / "hooks" / "longhouse-codex-hook.sh"
 HOSTED_CONTAINER_PREFIX = "longhouse-"
 HOSTED_RUNTIME_EVENT_LIMIT = 200
 MANAGED_LIVE_UI_TARGET_MS = 500
@@ -916,6 +919,7 @@ except Exception as exc:
         nonce = f"LH_PROBE_CODEX_MANAGED_{self.run_id}"
         name = f"{self.args.name_prefix}-managed-{self.run_id}"
         self.browser_session_cookie()
+        self.prepare_codex_hooks(case_id=case_id, ownership=ownership)
         self.observe(
             case_id=case_id,
             provider="codex",
@@ -1137,6 +1141,56 @@ except Exception as exc:
             "thread_id": thread_id,
             "thread_path": str(thread_path) if thread_path else None,
         }
+
+    def prepare_codex_hooks(self, *, case_id: str, ownership: str) -> None:
+        result = self.probe_codex_longhouse_hooks(trust=self.args.trust_longhouse_codex_hooks)
+        self.observe(
+            case_id=case_id,
+            provider="codex",
+            ownership=ownership,
+            source="codex_app_server",
+            event="codex_hook_preflight",
+            payload=summarize_codex_hook_probe(result),
+        )
+
+    def probe_codex_longhouse_hooks(self, *, trust: bool) -> dict[str, Any]:
+        with CodexAppServerProbe(cwd=ROOT) as probe:
+            before = probe.longhouse_hooks()
+            writes: dict[str, dict[str, str]] = {}
+            for hook in before:
+                if not is_expected_longhouse_codex_hook(hook):
+                    continue
+                if hook.get("trustStatus") not in {"untrusted", "modified"}:
+                    continue
+                current_hash = str(hook.get("currentHash") or "")
+                key = str(hook.get("key") or "")
+                if current_hash and key:
+                    writes[key] = {"trusted_hash": current_hash}
+
+            write_result = None
+            after = before
+            if trust and writes:
+                write_result = probe.request(
+                    "config/batchWrite",
+                    {
+                        "edits": [
+                            {
+                                "keyPath": "hooks.state",
+                                "value": writes,
+                                "mergeStrategy": "upsert",
+                            }
+                        ],
+                        "reloadUserConfig": True,
+                    },
+                )
+                after = probe.longhouse_hooks()
+            return {
+                "trusted_requested": trust,
+                "before": before,
+                "after": after,
+                "trusted_written": len(writes) if trust else 0,
+                "write_status": (write_result or {}).get("status") if isinstance(write_result, dict) else None,
+            }
 
     def wait_codex_tui_precondition(
         self,
@@ -2046,6 +2100,128 @@ def terminate_process(proc: subprocess.Popen[str]) -> None:
             pass
 
 
+class CodexAppServerProbe:
+    def __init__(self, *, cwd: Path, timeout: float = 8) -> None:
+        self.cwd = cwd
+        self.timeout = timeout
+        self.proc: subprocess.Popen[str] | None = None
+        self.next_id = 1
+
+    def __enter__(self) -> "CodexAppServerProbe":
+        self.proc = subprocess.Popen(
+            ["codex", "app-server", "--enable", "hooks", "--listen", "stdio://"],
+            cwd=str(self.cwd),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        self.request(
+            "initialize",
+            {
+                "clientInfo": {
+                    "name": "longhouse_managed_profiler",
+                    "title": "Longhouse Managed Profiler",
+                    "version": "0",
+                },
+                "capabilities": {"experimentalApi": True},
+            },
+        )
+        self.notify("initialized", {})
+        return self
+
+    def __exit__(self, _exc_type, _exc, _tb) -> None:
+        if self.proc is None:
+            return
+        terminate_process(self.proc)
+
+    def notify(self, method: str, params: dict[str, Any]) -> None:
+        self._send({"method": method, "params": params})
+
+    def request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        request_id = self.next_id
+        self.next_id += 1
+        self._send({"id": request_id, "method": method, "params": params})
+        deadline = time.time() + self.timeout
+        while time.time() < deadline:
+            proc = self._proc()
+            ready, _, _ = select.select([proc.stdout, proc.stderr], [], [], 0.2)
+            for stream in ready:
+                line = stream.readline()
+                if not line:
+                    continue
+                if stream is proc.stderr:
+                    continue
+                message = safe_json_loads(line)
+                if not isinstance(message, dict):
+                    continue
+                if message.get("id") != request_id:
+                    continue
+                if "error" in message:
+                    raise RuntimeError(f"{method} failed: {message['error']}")
+                result = message.get("result")
+                return result if isinstance(result, dict) else {}
+        raise TimeoutError(method)
+
+    def longhouse_hooks(self) -> list[dict[str, Any]]:
+        result = self.request("hooks/list", {"cwds": [str(ROOT)]})
+        hooks: list[dict[str, Any]] = []
+        for entry in result.get("data") or []:
+            if not isinstance(entry, dict):
+                continue
+            for hook in entry.get("hooks") or []:
+                if isinstance(hook, dict) and is_longhouse_codex_hook_candidate(hook):
+                    hooks.append(hook)
+        return hooks
+
+    def _send(self, payload: dict[str, Any]) -> None:
+        proc = self._proc()
+        if proc.stdin is None:
+            raise RuntimeError("codex app-server stdin unavailable")
+        proc.stdin.write(json.dumps(payload) + "\n")
+        proc.stdin.flush()
+
+    def _proc(self) -> subprocess.Popen[str]:
+        if self.proc is None:
+            raise RuntimeError("codex app-server probe not started")
+        return self.proc
+
+
+def is_longhouse_codex_hook_candidate(hook: dict[str, Any]) -> bool:
+    return "longhouse-codex-hook.sh" in str(hook.get("command") or "")
+
+
+def is_expected_longhouse_codex_hook(hook: dict[str, Any]) -> bool:
+    return (
+        str(hook.get("command") or "") == str(CODEX_LONGHOUSE_HOOK_SCRIPT)
+        and str(hook.get("sourcePath") or "") == str(CODEX_HOOKS_JSON)
+    )
+
+
+def summarize_codex_hook_probe(result: dict[str, Any]) -> dict[str, Any]:
+    def compact(hook: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "key": hook.get("key"),
+            "eventName": hook.get("eventName"),
+            "sourcePath": hook.get("sourcePath"),
+            "enabled": hook.get("enabled"),
+            "isManaged": hook.get("isManaged"),
+            "trustStatus": hook.get("trustStatus"),
+            "expectedLonghouseHook": is_expected_longhouse_codex_hook(hook),
+        }
+
+    before = [compact(hook) for hook in result.get("before") or [] if isinstance(hook, dict)]
+    after = [compact(hook) for hook in result.get("after") or [] if isinstance(hook, dict)]
+    return {
+        "trusted_requested": result.get("trusted_requested"),
+        "trusted_written": result.get("trusted_written"),
+        "write_status": result.get("write_status"),
+        "before": before,
+        "after": after,
+    }
+
+
 def call_or_error(fn):
     try:
         return fn()
@@ -2068,6 +2244,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--output-dir")
     parser.add_argument("--skip-managed", action="store_true")
     parser.add_argument("--skip-unmanaged", action="store_true")
+    parser.add_argument(
+        "--trust-longhouse-codex-hooks",
+        action="store_true",
+        help=(
+            "Before managed runs, trust only the Longhouse hooks installed in "
+            "~/.codex/hooks.json using Codex app-server's hooks/list and config/batchWrite APIs."
+        ),
+    )
     return parser.parse_args(argv)
 
 
