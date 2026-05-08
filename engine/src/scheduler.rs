@@ -23,6 +23,8 @@ const FAIR_SEQUENCE: [WorkPriority; 5] = [
     WorkPriority::Retry,
     WorkPriority::Scan,
 ];
+const URGENT_SEQUENCE: [WorkPriority; 2] = [WorkPriority::Watch, WorkPriority::Catchup];
+const URGENT_OVERFLOW_CAP: usize = 2;
 
 /// One unit of daemon work keyed to a single file path.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -97,13 +99,27 @@ impl PathScheduler {
     /// in-flight concurrency cap and a simple weighted round-robin policy.
     pub fn pop_launchable(&mut self) -> Option<PathJob> {
         if self.in_flight.len() >= self.max_in_flight {
-            return None;
+            return self.pop_urgent_overflow();
         }
 
         for step in 0..FAIR_SEQUENCE.len() {
             let idx = (self.fairness_cursor + step) % FAIR_SEQUENCE.len();
             if let Some(job) = self.pop_ready_queue(FAIR_SEQUENCE[idx]) {
                 self.fairness_cursor = (idx + 1) % FAIR_SEQUENCE.len();
+                return Some(job);
+            }
+        }
+
+        None
+    }
+
+    fn pop_urgent_overflow(&mut self) -> Option<PathJob> {
+        if self.in_flight.len() >= self.max_in_flight + URGENT_OVERFLOW_CAP {
+            return None;
+        }
+
+        for priority in URGENT_SEQUENCE {
+            if let Some(job) = self.pop_ready_queue(priority) {
                 return Some(job);
             }
         }
@@ -253,8 +269,8 @@ mod tests {
         let path_a = PathBuf::from("/tmp/a.jsonl");
         let path_b = PathBuf::from("/tmp/b.jsonl");
 
-        scheduler.enqueue(path_a.clone(), "claude", WorkPriority::Watch);
-        scheduler.enqueue(path_b.clone(), "claude", WorkPriority::Watch);
+        scheduler.enqueue(path_a.clone(), "claude", WorkPriority::Retry);
+        scheduler.enqueue(path_b.clone(), "claude", WorkPriority::Retry);
 
         let first = scheduler.pop_launchable().unwrap();
         assert_eq!(first.path, path_a);
@@ -263,6 +279,48 @@ mod tests {
         scheduler.complete(&path_a, None);
         let second = scheduler.pop_launchable().unwrap();
         assert_eq!(second.path, path_b);
+    }
+
+    #[test]
+    fn test_urgent_work_can_overflow_full_scan_pool() {
+        let mut scheduler = PathScheduler::new(1);
+        let scan = PathBuf::from("/tmp/scan.jsonl");
+        let catchup = PathBuf::from("/tmp/catchup.jsonl");
+        let retry = PathBuf::from("/tmp/retry.jsonl");
+
+        scheduler.enqueue(scan.clone(), "codex", WorkPriority::Scan);
+        assert_eq!(
+            scheduler.pop_launchable().unwrap().priority,
+            WorkPriority::Scan
+        );
+
+        scheduler.enqueue(retry, "codex", WorkPriority::Retry);
+        assert!(scheduler.pop_launchable().is_none());
+
+        scheduler.enqueue(catchup.clone(), "codex", WorkPriority::Catchup);
+        let urgent = scheduler.pop_launchable().unwrap();
+        assert_eq!(urgent.path, catchup);
+        assert_eq!(urgent.priority, WorkPriority::Catchup);
+    }
+
+    #[test]
+    fn test_urgent_overflow_is_bounded() {
+        let mut scheduler = PathScheduler::new(1);
+
+        scheduler.enqueue(PathBuf::from("/tmp/scan.jsonl"), "codex", WorkPriority::Scan);
+        assert!(scheduler.pop_launchable().is_some());
+
+        for idx in 0..3 {
+            scheduler.enqueue(
+                PathBuf::from(format!("/tmp/catchup-{idx}.jsonl")),
+                "codex",
+                WorkPriority::Catchup,
+            );
+        }
+
+        assert!(scheduler.pop_launchable().is_some());
+        assert!(scheduler.pop_launchable().is_some());
+        assert!(scheduler.pop_launchable().is_none());
     }
 
     #[test]
