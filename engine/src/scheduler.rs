@@ -10,21 +10,27 @@ use std::path::{Path, PathBuf};
 /// Ready-work priority, ordered from highest urgency to lowest.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum WorkPriority {
+    Live,
     Watch,
     Catchup,
     Retry,
     Scan,
 }
 
-const FAIR_SEQUENCE: [WorkPriority; 5] = [
+const FAIR_SEQUENCE: [WorkPriority; 6] = [
+    WorkPriority::Live,
     WorkPriority::Watch,
     WorkPriority::Watch,
     WorkPriority::Catchup,
     WorkPriority::Retry,
     WorkPriority::Scan,
 ];
-const URGENT_SEQUENCE: [WorkPriority; 2] = [WorkPriority::Watch, WorkPriority::Catchup];
-const URGENT_OVERFLOW_CAP: usize = 2;
+const URGENT_SEQUENCE: [WorkPriority; 3] = [
+    WorkPriority::Live,
+    WorkPriority::Watch,
+    WorkPriority::Catchup,
+];
+const URGENT_OVERFLOW_CAP: usize = 6;
 const RETRY_IN_FLIGHT_CAP: usize = 1;
 const SCAN_IN_FLIGHT_CAP: usize = 1;
 
@@ -65,6 +71,7 @@ struct InFlightJob {
 pub struct PathScheduler {
     max_in_flight: usize,
     fairness_cursor: usize,
+    ready_live: VecDeque<PathBuf>,
     ready_watch: VecDeque<PathBuf>,
     ready_catchup: VecDeque<PathBuf>,
     ready_retry: VecDeque<PathBuf>,
@@ -78,6 +85,7 @@ impl PathScheduler {
         Self {
             max_in_flight: max_in_flight.max(1),
             fairness_cursor: 0,
+            ready_live: VecDeque::new(),
             ready_watch: VecDeque::new(),
             ready_catchup: VecDeque::new(),
             ready_retry: VecDeque::new(),
@@ -211,6 +219,7 @@ impl PathScheduler {
 
     fn pop_ready_queue(&mut self, expected_priority: WorkPriority) -> Option<PathJob> {
         let queue = match expected_priority {
+            WorkPriority::Live => &mut self.ready_live,
             WorkPriority::Watch => &mut self.ready_watch,
             WorkPriority::Catchup => &mut self.ready_catchup,
             WorkPriority::Retry => &mut self.ready_retry,
@@ -251,6 +260,7 @@ impl PathScheduler {
 
     fn push_ready_path(&mut self, path: PathBuf, priority: WorkPriority) {
         match priority {
+            WorkPriority::Live => self.ready_live.push_back(path),
             WorkPriority::Watch => self.ready_watch.push_back(path),
             WorkPriority::Catchup => self.ready_catchup.push_back(path),
             WorkPriority::Retry => self.ready_retry.push_back(path),
@@ -260,7 +270,7 @@ impl PathScheduler {
 
     fn can_launch_priority(&self, priority: WorkPriority) -> bool {
         match priority {
-            WorkPriority::Watch | WorkPriority::Catchup => true,
+            WorkPriority::Live | WorkPriority::Watch | WorkPriority::Catchup => true,
             WorkPriority::Retry => self.in_flight_count(WorkPriority::Retry) < RETRY_IN_FLIGHT_CAP,
             WorkPriority::Scan => self.in_flight_count(WorkPriority::Scan) < SCAN_IN_FLIGHT_CAP,
         }
@@ -297,12 +307,12 @@ mod tests {
         let path = PathBuf::from("/tmp/a.jsonl");
 
         scheduler.enqueue(path.clone(), "claude", WorkPriority::Scan);
-        scheduler.enqueue(path.clone(), "claude", WorkPriority::Watch);
+        scheduler.enqueue(path.clone(), "claude", WorkPriority::Live);
 
         assert_eq!(scheduler.ready_len(), 1);
         let job = scheduler.pop_launchable().unwrap();
         assert_eq!(job.path, path);
-        assert_eq!(job.priority, WorkPriority::Watch);
+        assert_eq!(job.priority, WorkPriority::Live);
         assert!(scheduler.pop_launchable().is_none());
     }
 
@@ -338,10 +348,10 @@ mod tests {
         let _ = scheduler.pop_launchable().unwrap();
 
         scheduler.enqueue(path.clone(), "gemini", WorkPriority::Scan);
-        scheduler.complete(&path, Some(WorkPriority::Watch));
+        scheduler.complete(&path, Some(WorkPriority::Live));
 
         let rerun = scheduler.pop_launchable().unwrap();
-        assert_eq!(rerun.priority, WorkPriority::Watch);
+        assert_eq!(rerun.priority, WorkPriority::Live);
     }
 
     #[test]
@@ -447,7 +457,7 @@ mod tests {
         );
         assert!(scheduler.pop_launchable().is_some());
 
-        for idx in 0..3 {
+        for idx in 0..7 {
             scheduler.enqueue(
                 PathBuf::from(format!("/tmp/catchup-{idx}.jsonl")),
                 "codex",
@@ -455,14 +465,21 @@ mod tests {
             );
         }
 
-        assert!(scheduler.pop_launchable().is_some());
-        assert!(scheduler.pop_launchable().is_some());
+        for _ in 0..6 {
+            assert!(scheduler.pop_launchable().is_some());
+        }
         assert!(scheduler.pop_launchable().is_none());
     }
 
     #[test]
     fn test_scheduler_gives_retry_and_scan_turns_under_watch_pressure() {
         let mut scheduler = PathScheduler::new(8);
+
+        scheduler.enqueue(
+            PathBuf::from("/tmp/live.jsonl"),
+            "claude",
+            WorkPriority::Live,
+        );
 
         scheduler.enqueue(
             PathBuf::from("/tmp/watch-1.jsonl"),
@@ -500,6 +517,10 @@ mod tests {
             WorkPriority::Scan,
         );
 
+        assert_eq!(
+            scheduler.pop_launchable().unwrap().priority,
+            WorkPriority::Live
+        );
         assert_eq!(
             scheduler.pop_launchable().unwrap().priority,
             WorkPriority::Watch

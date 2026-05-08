@@ -796,6 +796,7 @@ fn provider_name_to_static(provider: &str) -> Option<&'static str> {
 
 fn work_context(priority: WorkPriority) -> &'static str {
     match priority {
+        WorkPriority::Live => "live_transcript",
         WorkPriority::Watch => "watch",
         WorkPriority::Catchup => "hook_catchup",
         WorkPriority::Retry => "spool_replay",
@@ -885,7 +886,7 @@ fn drain_due_active_transcript_polls(
         scheduler.enqueue_observed(
             path.clone(),
             poll.provider,
-            WorkPriority::Catchup,
+            WorkPriority::Live,
             "active_poll",
             now_ms(),
         );
@@ -1085,6 +1086,7 @@ fn schedule_transcript_catchup(
 
 fn transcript_catchup_priority(observation_source: &str) -> WorkPriority {
     match observation_source {
+        "wake_socket" => WorkPriority::Live,
         "bridge_scan" => WorkPriority::Catchup,
         _ => WorkPriority::Watch,
     }
@@ -1658,9 +1660,35 @@ mod tests {
         let job = scheduler.pop_launchable().expect("active poll queued");
         assert_eq!(job.path, path);
         assert_eq!(job.provider, "codex");
-        assert_eq!(job.priority, WorkPriority::Catchup);
+        assert_eq!(job.priority, WorkPriority::Live);
         assert_eq!(active_polls.len(), 1);
         assert!(active_polls[&path].due_at > now);
+    }
+
+    #[test]
+    fn test_wake_socket_catchup_is_live_priority() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        let mut catchups = Vec::new();
+        let mut active_polls = HashMap::new();
+
+        schedule_transcript_catchup(
+            &mut catchups,
+            &mut active_polls,
+            path.clone(),
+            "codex",
+            "running",
+            "wake_socket",
+            123,
+        );
+
+        let mut scheduler = PathScheduler::new(4);
+        drain_due_transcript_catchups(&mut scheduler, &mut catchups);
+
+        let job = scheduler.pop_launchable().expect("wake catch-up queued");
+        assert_eq!(job.path, path);
+        assert_eq!(job.priority, WorkPriority::Live);
+        assert_eq!(job.observation.source, "wake_socket");
     }
 
     #[test]
