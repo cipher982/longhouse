@@ -1041,14 +1041,22 @@ fn schedule_transcript_catchups_for_signals(
             continue;
         };
 
+        let managed_bound_path = path_has_session_binding(conn, &path, provider);
+        let observation_source = if managed_bound_path {
+            "outbox_signal"
+        } else {
+            "outbox_signal_unmanaged"
+        };
+
         schedule_transcript_catchup(
             transcript_catchups,
             active_transcript_polls,
             path,
             provider,
             &signal.phase,
-            "outbox_signal",
+            observation_source,
             signal.observed_at.timestamp_millis(),
+            managed_bound_path,
         );
     }
 }
@@ -1081,6 +1089,7 @@ fn schedule_transcript_catchup_for_wake(
         &signal.phase,
         "wake_socket",
         signal.observed_at_ms,
+        true,
     );
 }
 
@@ -1123,6 +1132,7 @@ fn schedule_transcript_catchups_for_codex_observations(
             phase,
             "bridge_scan",
             now_ms(),
+            true,
         );
     }
 }
@@ -1148,6 +1158,7 @@ fn schedule_transcript_catchup(
     phase: &str,
     observation_source: &'static str,
     observed_at_ms: i64,
+    allow_active_poll: bool,
 ) {
     if is_terminal_or_attention_phase(phase) {
         transcript_catchups.retain(|existing| existing.path != path);
@@ -1174,22 +1185,24 @@ fn schedule_transcript_catchup(
 
     if is_active_phase(phase) {
         let now = Instant::now();
-        let was_polling = active_transcript_polls.contains_key(&path);
-        active_transcript_polls.insert(
-            path.clone(),
-            ActiveTranscriptPoll {
-                due_at: now + ACTIVE_TRANSCRIPT_POLL_INTERVAL,
-                expires_at: now + ACTIVE_TRANSCRIPT_POLL_TTL,
-                provider,
-            },
-        );
-        if !was_polling {
-            tracing::info!(
-                path = %path.display(),
-                provider,
-                phase,
-                "Started active transcript polling"
+        if allow_active_poll {
+            let was_polling = active_transcript_polls.contains_key(&path);
+            active_transcript_polls.insert(
+                path.clone(),
+                ActiveTranscriptPoll {
+                    due_at: now + ACTIVE_TRANSCRIPT_POLL_INTERVAL,
+                    expires_at: now + ACTIVE_TRANSCRIPT_POLL_TTL,
+                    provider,
+                },
             );
+            if !was_polling {
+                tracing::info!(
+                    path = %path.display(),
+                    provider,
+                    phase,
+                    "Started active transcript polling"
+                );
+            }
         }
         // A bridge wake arrives at turn start, before Codex has necessarily
         // written useful rollout content. Let the live poll carry the first
@@ -1235,6 +1248,20 @@ fn resolve_transcript_path_for_signal(
     }
 
     resolve_transcript_path_for_session(conn, &signal.session_id, provider)
+}
+
+fn path_has_session_binding(conn: &Connection, path: &Path, _provider: &str) -> bool {
+    let binding = crate::state::session_binding::SessionBinding::new(conn);
+    let canonical = std::fs::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .to_string();
+    binding.get(&canonical).ok().flatten().is_some()
+        || binding
+            .get(&path.to_string_lossy())
+            .ok()
+            .flatten()
+            .is_some()
 }
 
 fn resolve_transcript_path_for_session(
@@ -1691,6 +1718,7 @@ mod tests {
             "needs_user",
             "test",
             123,
+            true,
         );
 
         assert_eq!(catchups.len(), 3);
@@ -1723,6 +1751,7 @@ mod tests {
             "thinking",
             "test",
             123,
+            true,
         );
         schedule_transcript_catchup(
             &mut catchups,
@@ -1732,6 +1761,7 @@ mod tests {
             "running",
             "test",
             124,
+            true,
         );
 
         assert_eq!(catchups.len(), 1);
@@ -1764,6 +1794,7 @@ mod tests {
                 "thinking",
                 "test",
                 123,
+                true,
             );
         }
 
@@ -1868,6 +1899,7 @@ mod tests {
             "running",
             "wake_socket",
             123,
+            true,
         );
 
         assert!(catchups.is_empty());
@@ -2141,6 +2173,41 @@ mod tests {
 
         assert_eq!(catchups.len(), 1);
         assert_eq!(catchups[0].path, transcript.path());
+        assert_eq!(catchups[0].observation_source, "outbox_signal_unmanaged");
+        assert!(
+            active_polls.is_empty(),
+            "unmanaged hook signals get one catch-up but do not arm active polling"
+        );
+    }
+
+    #[test]
+    fn test_managed_presence_signal_arms_active_polling() {
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let transcript = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(db.path())).unwrap();
+        let canonical = std::fs::canonicalize(transcript.path()).unwrap();
+        let managed_session_id = "22222222-2222-4222-8222-222222222222";
+        crate::state::session_binding::SessionBinding::new(&conn)
+            .bind(&canonical.to_string_lossy(), managed_session_id, "codex")
+            .unwrap();
+
+        let mut catchups = Vec::new();
+        let mut active_polls = HashMap::new();
+        schedule_transcript_catchups_for_signals(
+            &conn,
+            &mut catchups,
+            &mut active_polls,
+            vec![outbox::DrainedPresenceSignal {
+                session_id: managed_session_id.to_string(),
+                provider: "codex".to_string(),
+                phase: "thinking".to_string(),
+                observed_at: chrono::Utc::now(),
+                transcript_path: Some(transcript.path().to_path_buf()),
+            }],
+        );
+
+        assert_eq!(catchups.len(), 1);
+        assert_eq!(catchups[0].observation_source, "outbox_signal");
         assert!(active_polls.contains_key(transcript.path()));
     }
 
