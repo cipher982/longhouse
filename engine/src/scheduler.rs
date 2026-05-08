@@ -214,6 +214,10 @@ impl PathScheduler {
         !self.in_flight.is_empty()
     }
 
+    pub fn has_pending_work(&self) -> bool {
+        !self.ready_jobs.is_empty() || !self.in_flight.is_empty()
+    }
+
     pub fn path_in_flight(&self, path: &Path) -> bool {
         self.in_flight.contains_key(path)
     }
@@ -382,6 +386,23 @@ mod tests {
         scheduler.complete(&path_a, None);
         let second = scheduler.pop_launchable().unwrap();
         assert_eq!(second.path, path_b);
+    }
+
+    #[test]
+    fn test_has_pending_work_covers_ready_and_inflight() {
+        let mut scheduler = PathScheduler::new(1);
+        let path = PathBuf::from("/tmp/a.jsonl");
+
+        assert!(!scheduler.has_pending_work());
+
+        scheduler.enqueue(path.clone(), "codex", WorkPriority::Watch);
+        assert!(scheduler.has_pending_work());
+
+        let _job = scheduler.pop_launchable().unwrap();
+        assert!(scheduler.has_pending_work());
+
+        scheduler.complete(&path, None);
+        assert!(!scheduler.has_pending_work());
     }
 
     #[test]
