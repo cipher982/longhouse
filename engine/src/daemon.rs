@@ -1168,7 +1168,7 @@ fn schedule_transcript_catchup(
 
 fn transcript_catchup_priority(observation_source: &str) -> WorkPriority {
     match observation_source {
-        "wake_socket" => WorkPriority::Live,
+        "wake_socket" | "outbox_signal" => WorkPriority::Live,
         "bridge_scan" => WorkPriority::Catchup,
         _ => WorkPriority::Watch,
     }
@@ -1957,6 +1957,27 @@ mod tests {
         assert_eq!(job.observation.observed_at_ms, 123);
         assert_eq!(catchups.len(), 1);
         assert_eq!(catchups[0].path, later.path());
+    }
+
+    #[test]
+    fn test_outbox_signal_catchup_uses_live_priority() {
+        let ready = tempfile::NamedTempFile::new().unwrap();
+        let now = Instant::now();
+        let mut catchups = vec![TranscriptCatchup {
+            due_at: now - Duration::from_secs(1),
+            path: ready.path().to_path_buf(),
+            provider: "codex",
+            observation_source: "outbox_signal",
+            observed_at_ms: 123,
+        }];
+
+        let mut scheduler = PathScheduler::new(4);
+        drain_due_transcript_catchups(&mut scheduler, &mut catchups);
+
+        let job = scheduler.pop_launchable().expect("outbox catch-up queued");
+        assert_eq!(job.path, ready.path());
+        assert_eq!(job.priority, WorkPriority::Live);
+        assert_eq!(job.observation.source, "outbox_signal");
     }
 
     #[test]
