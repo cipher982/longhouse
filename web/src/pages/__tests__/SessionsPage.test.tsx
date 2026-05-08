@@ -1266,6 +1266,55 @@ describe("SessionsPage", () => {
     expect(screen.queryByText("In progress")).not.toBeInTheDocument();
   });
 
+  it("shows live transcript output on open managed session cards", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            ended_at: null,
+            summary: "Older generated summary.",
+            capabilities: makeCapabilities({
+              live_control_available: true,
+              host_reattach_available: true,
+              reply_to_live_session_available: true,
+            }),
+            control: {
+              managed_transport: "codex_app_server",
+              source_runner_id: 7,
+              source_runner_name: "cinder",
+              attach_command: "longhouse-engine codex-bridge attach --session-id session-1",
+            },
+            live_transcript: {
+              text: "The provider already streamed this answer before the durable transcript poll landed.",
+              source: "codex_bridge_live",
+              received_at: "2026-03-21T12:00:04Z",
+              occurred_at: "2026-03-21T12:00:04Z",
+              thread_id: "thread-1",
+              turn_id: "turn-1",
+              seq: 12,
+              method: "item/agentMessage/delta",
+              is_complete: false,
+            },
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage();
+
+    const liveTranscript = await screen.findByTestId("session-card-live-transcript");
+    expect(liveTranscript).toHaveTextContent("Live output");
+    expect(liveTranscript).toHaveTextContent(
+      "The provider already streamed this answer",
+    );
+    expect(screen.queryByText("Older generated summary.")).not.toBeInTheDocument();
+  });
+
   it("does not style transcript-only progress as currently executing", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {

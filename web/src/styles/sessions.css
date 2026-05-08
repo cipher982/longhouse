@@ -996,6 +996,42 @@
     opacity: 0.9;
   }
 
+  .session-card-live-transcript {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+    padding: 7px 9px;
+    border-radius: var(--radius-md);
+    border: 1px solid color-mix(in srgb, #38bdf8 26%, var(--border-glass-1));
+    background:
+      linear-gradient(
+        90deg,
+        color-mix(in srgb, #38bdf8 10%, transparent),
+        color-mix(in srgb, var(--surface-glass-2) 82%, transparent)
+      );
+  }
+
+  .session-card-live-transcript__label {
+    font-size: 10px;
+    line-height: 1;
+    font-weight: var(--font-weight-semibold);
+    color: color-mix(in srgb, #38bdf8 62%, var(--color-text-secondary));
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .session-card-live-transcript__text {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    font-size: var(--font-size-sm);
+    color: color-mix(in srgb, var(--color-text-primary) 82%, var(--color-text-secondary));
+    line-height: var(--font-line-height-relaxed);
+    word-break: break-word;
+  }
+
   .search-highlight {
     background: color-mix(in srgb, var(--color-brand-primary) 20%, transparent);
     color: var(--color-text-primary);
