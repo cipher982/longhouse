@@ -1612,7 +1612,7 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
         .arg("--listen")
         .arg("ws://127.0.0.1:0")
         .arg("--enable")
-        .arg("codex_hooks")
+        .arg("hooks")
         .arg("--enable")
         .arg("exec_permission_approvals")
         .arg("--enable")
