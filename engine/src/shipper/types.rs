@@ -33,6 +33,12 @@ pub(crate) enum SourceLineMode {
     EventOnly,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CursorMode {
+    Archive,
+    Live,
+}
+
 pub struct DeadLetterItem {
     pub path_str: String,
     pub provider: String,
@@ -62,6 +68,7 @@ pub struct PreparedFile {
     pub offset: u64,
     pub new_offset: u64,
     pub has_reply_evidence: bool,
+    pub(crate) cursor_mode: CursorMode,
     pub actions: Vec<PreparedAction>,
 }
 
