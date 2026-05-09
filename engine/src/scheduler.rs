@@ -49,7 +49,12 @@ pub struct PathJob {
 pub struct ObservationTrace {
     pub source: &'static str,
     pub observed_at_ms: i64,
+    pub wake_received_at_ms: Option<i64>,
     pub enqueued_at_ms: i64,
+    pub session_id: Option<String>,
+    pub turn_id: Option<String>,
+    pub wake_reason: Option<String>,
+    pub file_len_hint: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -117,14 +122,33 @@ impl PathScheduler {
         let observation = ObservationTrace {
             source: observation_source,
             observed_at_ms,
+            wake_received_at_ms: None,
             enqueued_at_ms: now_ms(),
+            session_id: None,
+            turn_id: None,
+            wake_reason: None,
+            file_len_hint: None,
         };
+        self.enqueue_observation(path, provider, priority, observation);
+    }
 
+    pub fn enqueue_observation(
+        &mut self,
+        path: PathBuf,
+        provider: &'static str,
+        priority: WorkPriority,
+        mut observation: ObservationTrace,
+    ) {
+        observation.enqueued_at_ms = now_ms();
         if let Some(ready) = self.ready_jobs.get_mut(&path) {
             if priority < ready.priority {
                 ready.priority = priority;
                 ready.observation = observation;
                 self.push_ready_path(path, priority);
+            } else if priority == ready.priority
+                && should_replace_observation(&ready.observation, &observation)
+            {
+                ready.observation = observation;
             }
             return;
         }
@@ -200,12 +224,11 @@ impl PathScheduler {
 
         if let Some(priority) = merge_priority(in_flight.rerun_priority, task_rerun) {
             let observation = in_flight.rerun_observation.unwrap_or(in_flight.observation);
-            self.enqueue_observed(
+            self.enqueue_observation(
                 path.to_path_buf(),
                 in_flight.provider,
                 priority,
-                observation.source,
-                observation.observed_at_ms,
+                observation,
             );
         }
     }
@@ -313,6 +336,12 @@ fn merge_priority(a: Option<WorkPriority>, b: Option<WorkPriority>) -> Option<Wo
     }
 }
 
+fn should_replace_observation(current: &ObservationTrace, candidate: &ObservationTrace) -> bool {
+    (candidate.source == "wake_socket" && current.source != "wake_socket")
+        || (current.session_id.is_none() && candidate.session_id.is_some())
+        || (current.wake_received_at_ms.is_none() && candidate.wake_received_at_ms.is_some())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,6 +359,41 @@ mod tests {
         assert_eq!(job.path, path);
         assert_eq!(job.priority, WorkPriority::Live);
         assert!(scheduler.pop_launchable().is_none());
+    }
+
+    #[test]
+    fn test_ready_path_keeps_wake_observation_for_same_priority() {
+        let mut scheduler = PathScheduler::new(2);
+        let path = PathBuf::from("/tmp/a.jsonl");
+
+        scheduler.enqueue_observed(
+            path.clone(),
+            "codex",
+            WorkPriority::Live,
+            "active_poll",
+            100,
+        );
+        scheduler.enqueue_observation(
+            path.clone(),
+            "codex",
+            WorkPriority::Live,
+            ObservationTrace {
+                source: "wake_socket",
+                observed_at_ms: 110,
+                wake_received_at_ms: Some(111),
+                enqueued_at_ms: 0,
+                session_id: Some("session-123".to_string()),
+                turn_id: Some("turn-123".to_string()),
+                wake_reason: Some("progress".to_string()),
+                file_len_hint: Some(456),
+            },
+        );
+
+        assert_eq!(scheduler.ready_len(), 1);
+        let job = scheduler.pop_launchable().unwrap();
+        assert_eq!(job.observation.source, "wake_socket");
+        assert_eq!(job.observation.session_id.as_deref(), Some("session-123"));
+        assert_eq!(job.observation.wake_reason.as_deref(), Some("progress"));
     }
 
     #[test]

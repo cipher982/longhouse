@@ -823,7 +823,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                         context.state.last_error = None;
                         write_state_file(&context.state_file, &context.state)?;
                         if let Some(path) = context.state.thread_path.as_deref() {
-                            wake_daemon_for_transcript(&config, path, "idle");
+                            wake_daemon_for_transcript(&config, path, "idle", "bridge_stop", None);
                         }
                         context
                             .runtime
@@ -905,7 +905,7 @@ async fn handle_ipc_turn_start(
     context.runtime_tracker.active_turn_id = Some(turn_id.clone());
     write_state_file(&context.state_file, &context.state)?;
     if let Some(path) = context.state.thread_path.as_deref() {
-        wake_daemon_for_transcript(config, path, "running");
+        wake_daemon_for_transcript(config, path, "running", "turn_started", Some(&turn_id));
     }
     emit_runtime_updates(
         config,
@@ -1490,7 +1490,13 @@ fn resolve_bridge_transcript_wake_socket_path(
 }
 
 #[cfg(unix)]
-fn wake_daemon_for_transcript(config: &BridgeRunConfig, thread_path: &str, phase: &str) {
+fn wake_daemon_for_transcript(
+    config: &BridgeRunConfig,
+    thread_path: &str,
+    phase: &str,
+    wake_reason: &str,
+    turn_id: Option<&str>,
+) {
     let Ok(socket_path) =
         resolve_bridge_transcript_wake_socket_path(config.longhouse_home.as_deref())
     else {
@@ -1499,10 +1505,18 @@ fn wake_daemon_for_transcript(config: &BridgeRunConfig, thread_path: &str, phase
     if !socket_path.exists() {
         return;
     }
+    let file_len_hint = fs::metadata(thread_path)
+        .ok()
+        .map(|metadata| metadata.len());
     let payload = json!({
         "provider": "codex",
         "path": thread_path,
         "phase": phase,
+        "session_id": config.session_id,
+        "turn_id": turn_id,
+        "wake_reason": wake_reason,
+        "observed_at_ms": Utc::now().timestamp_millis(),
+        "file_len_hint": file_len_hint,
     });
     let Ok(mut stream) = std::os::unix::net::UnixStream::connect(&socket_path) else {
         return;
@@ -1512,7 +1526,14 @@ fn wake_daemon_for_transcript(config: &BridgeRunConfig, thread_path: &str, phase
 }
 
 #[cfg(not(unix))]
-fn wake_daemon_for_transcript(_config: &BridgeRunConfig, _thread_path: &str, _phase: &str) {}
+fn wake_daemon_for_transcript(
+    _config: &BridgeRunConfig,
+    _thread_path: &str,
+    _phase: &str,
+    _wake_reason: &str,
+    _turn_id: Option<&str>,
+) {
+}
 
 fn bridge_lock_path(state_file: &Path) -> PathBuf {
     state_file.with_extension("lock")
@@ -2078,7 +2099,13 @@ async fn process_notification(
                 context.live_transcript_text.clear();
                 write_state_file(&context.state_file, &context.state)?;
                 if let Some(path) = context.state.thread_path.as_deref() {
-                    wake_daemon_for_transcript(config, path, "running");
+                    wake_daemon_for_transcript(
+                        config,
+                        path,
+                        "running",
+                        "turn_started",
+                        context.state.active_turn_id.as_deref(),
+                    );
                 }
             }
             let updates = context.runtime_tracker.handle_notification(method, &params);
@@ -2133,7 +2160,13 @@ async fn process_notification(
             context.live_transcript_text.clear();
             write_state_file(&context.state_file, &context.state)?;
             if let Some(path) = context.state.thread_path.as_deref() {
-                wake_daemon_for_transcript(config, path, "idle");
+                wake_daemon_for_transcript(
+                    config,
+                    path,
+                    "idle",
+                    "turn_completed",
+                    completed_turn_id.as_deref(),
+                );
             }
             let updates = context.runtime_tracker.handle_notification(method, &params);
             emit_runtime_updates(config, context, updates).await;
@@ -2306,7 +2339,7 @@ fn sync_thread_binding(
                 if let Err(e) = sb.bind(new, session_id, "codex") {
                     eprintln!("[codex-bridge] session_binding seed failed: {e}");
                 }
-                wake_daemon_for_transcript(config, new, "running");
+                wake_daemon_for_transcript(config, new, "running", "binding", None);
             }
         }
         Err(e) => eprintln!("[codex-bridge] open shipper DB for binding: {e}"),
@@ -2654,7 +2687,13 @@ async fn emit_runtime_updates(
             }
             BridgeRuntimeUpdate::Progress => {
                 if let Some(path) = context.state.thread_path.as_deref() {
-                    wake_daemon_for_transcript(config, path, "running");
+                    wake_daemon_for_transcript(
+                        config,
+                        path,
+                        "running",
+                        "progress",
+                        context.state.active_turn_id.as_deref(),
+                    );
                 }
                 if should_emit_progress(context.last_progress_emit, DEFAULT_PROGRESS_THROTTLE_MS) {
                     context.last_progress_emit = Some(Instant::now());
@@ -4704,6 +4743,7 @@ mod tests {
         fs::write(&rollout_path, "{\"ok\":true}\n").unwrap();
         context.state.thread_id = Some("thr-live".to_string());
         context.state.thread_path = Some(rollout_path.display().to_string());
+        context.state.active_turn_id = Some("turn-live".to_string());
         context.runtime.thread_id = Some("thr-live".to_string());
 
         let socket_path = resolve_bridge_transcript_wake_socket_path(Some(temp.path())).unwrap();
@@ -4736,6 +4776,14 @@ mod tests {
         assert_eq!(payload["provider"], "codex");
         assert_eq!(payload["path"], rollout_path.display().to_string());
         assert_eq!(payload["phase"], "running");
+        assert_eq!(payload["session_id"], config.session_id);
+        assert_eq!(payload["turn_id"], "turn-live");
+        assert_eq!(payload["wake_reason"], "progress");
+        assert!(payload["observed_at_ms"].as_i64().is_some());
+        assert_eq!(
+            payload["file_len_hint"].as_u64(),
+            Some(fs::metadata(&rollout_path).unwrap().len())
+        );
     }
 
     #[cfg(unix)]
@@ -4808,6 +4856,14 @@ mod tests {
         assert_eq!(payload["provider"], "codex");
         assert_eq!(payload["path"], rollout_path.display().to_string());
         assert_eq!(payload["phase"], "running");
+        assert_eq!(payload["session_id"], config.session_id);
+        assert_eq!(payload["turn_id"], "turn-live");
+        assert_eq!(payload["wake_reason"], "turn_started");
+        assert!(payload["observed_at_ms"].as_i64().is_some());
+        assert_eq!(
+            payload["file_len_hint"].as_u64(),
+            Some(fs::metadata(&rollout_path).unwrap().len())
+        );
     }
 
     #[test]

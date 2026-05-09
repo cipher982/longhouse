@@ -28,7 +28,7 @@ use crate::managed_claude_scan;
 use crate::managed_reaper::ManagedBridgeReaper;
 use crate::outbox;
 use crate::pipeline::compressor::CompressionAlgo;
-use crate::scheduler::{PathJob, PathScheduler, WorkPriority};
+use crate::scheduler::{ObservationTrace, PathJob, PathScheduler, WorkPriority};
 use crate::shipper;
 use crate::shipping::client::ShipperClient;
 use crate::shipping_stats::RecentShipStatsTracker;
@@ -137,6 +137,11 @@ struct TranscriptCatchup {
     provider: &'static str,
     observation_source: &'static str,
     observed_at_ms: i64,
+    wake_received_at_ms: Option<i64>,
+    session_id: Option<String>,
+    turn_id: Option<String>,
+    wake_reason: Option<String>,
+    file_len_hint: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -144,6 +149,10 @@ struct ActiveTranscriptPoll {
     due_at: Instant,
     expires_at: Instant,
     provider: &'static str,
+    session_id: Option<String>,
+    turn_id: Option<String>,
+    wake_reason: Option<String>,
+    file_len_hint: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -153,6 +162,16 @@ struct TranscriptWakeSignal {
     phase: String,
     #[serde(default = "now_ms")]
     observed_at_ms: i64,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    turn_id: Option<String>,
+    #[serde(default)]
+    wake_reason: Option<String>,
+    #[serde(default)]
+    file_len_hint: Option<u64>,
+    #[serde(skip)]
+    received_at_ms: Option<i64>,
 }
 
 struct DiscoveryTaskResult {
@@ -885,9 +904,10 @@ fn spawn_transcript_wake_listener(
                 if stream.read_to_end(&mut buf).await.is_err() {
                     return;
                 }
-                let Ok(signal) = serde_json::from_slice::<TranscriptWakeSignal>(&buf) else {
+                let Ok(mut signal) = serde_json::from_slice::<TranscriptWakeSignal>(&buf) else {
                     return;
                 };
+                signal.received_at_ms = Some(now_ms());
                 let _ = tx.send(signal);
             });
         }
@@ -957,6 +977,13 @@ fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
+fn clean_optional_string(value: Option<String>) -> Option<String> {
+    value.and_then(|raw| {
+        let trimmed = raw.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    })
+}
+
 fn start_ready_jobs(
     scheduler: &mut PathScheduler,
     in_flight: &mut JoinSet<PathTaskResult>,
@@ -1017,12 +1044,20 @@ fn drain_due_transcript_catchups(
     while index < transcript_catchups.len() {
         if transcript_catchups[index].due_at <= now {
             let catchup = transcript_catchups.swap_remove(index);
-            scheduler.enqueue_observed(
+            scheduler.enqueue_observation(
                 catchup.path,
                 catchup.provider,
                 transcript_catchup_priority(catchup.observation_source),
-                catchup.observation_source,
-                catchup.observed_at_ms,
+                ObservationTrace {
+                    source: catchup.observation_source,
+                    observed_at_ms: catchup.observed_at_ms,
+                    wake_received_at_ms: catchup.wake_received_at_ms,
+                    enqueued_at_ms: 0,
+                    session_id: catchup.session_id,
+                    turn_id: catchup.turn_id,
+                    wake_reason: catchup.wake_reason,
+                    file_len_hint: catchup.file_len_hint,
+                },
             );
         } else {
             index += 1;
@@ -1056,12 +1091,20 @@ fn drain_due_active_transcript_polls(
             continue;
         }
 
-        scheduler.enqueue_observed(
+        scheduler.enqueue_observation(
             path.clone(),
             poll.provider,
             WorkPriority::Live,
-            "active_poll",
-            now_ms(),
+            ObservationTrace {
+                source: "active_poll",
+                observed_at_ms: now_ms(),
+                wake_received_at_ms: None,
+                enqueued_at_ms: 0,
+                session_id: poll.session_id.clone(),
+                turn_id: poll.turn_id.clone(),
+                wake_reason: poll.wake_reason.clone(),
+                file_len_hint: poll.file_len_hint,
+            },
         );
         if let Some(poll) = active_transcript_polls.get_mut(&path) {
             poll.due_at = now + ACTIVE_TRANSCRIPT_POLL_INTERVAL;
@@ -1136,7 +1179,12 @@ fn schedule_transcript_catchups_for_signals(
             &signal.phase,
             observation_source,
             signal.observed_at.timestamp_millis(),
+            None,
             managed_bound_path,
+            None,
+            None,
+            None,
+            None,
         );
         if !managed_bound_path {
             for catchup in &mut transcript_catchups[catchup_start..] {
@@ -1174,7 +1222,12 @@ fn schedule_transcript_catchup_for_wake(
         &signal.phase,
         "wake_socket",
         signal.observed_at_ms,
+        signal.received_at_ms,
         true,
+        clean_optional_string(signal.session_id),
+        clean_optional_string(signal.turn_id),
+        clean_optional_string(signal.wake_reason),
+        signal.file_len_hint,
     );
 }
 
@@ -1217,7 +1270,12 @@ fn schedule_transcript_catchups_for_codex_observations(
             phase,
             "bridge_scan",
             now_ms(),
+            None,
             true,
+            Some(observation.session_id.clone()),
+            observation.active_turn_id.clone(),
+            None,
+            None,
         );
     }
 }
@@ -1243,7 +1301,12 @@ fn schedule_transcript_catchup(
     phase: &str,
     observation_source: &'static str,
     observed_at_ms: i64,
+    wake_received_at_ms: Option<i64>,
     allow_active_poll: bool,
+    session_id: Option<String>,
+    turn_id: Option<String>,
+    wake_reason: Option<String>,
+    file_len_hint: Option<u64>,
 ) {
     if is_terminal_or_attention_phase(phase) {
         transcript_catchups.retain(|existing| existing.path != path);
@@ -1263,6 +1326,11 @@ fn schedule_transcript_catchup(
                 provider,
                 observation_source,
                 observed_at_ms,
+                wake_received_at_ms,
+                session_id: session_id.clone(),
+                turn_id: turn_id.clone(),
+                wake_reason: wake_reason.clone(),
+                file_len_hint,
             });
         }
         return;
@@ -1278,6 +1346,10 @@ fn schedule_transcript_catchup(
                     due_at: now,
                     expires_at: now + ACTIVE_TRANSCRIPT_POLL_TTL,
                     provider,
+                    session_id: session_id.clone(),
+                    turn_id: turn_id.clone(),
+                    wake_reason: wake_reason.clone(),
+                    file_len_hint,
                 },
             );
             if !was_polling {
@@ -1289,19 +1361,23 @@ fn schedule_transcript_catchup(
                 );
             }
         }
-        // A bridge wake arrives at turn start, before Codex has necessarily
-        // written useful rollout content. Let the active poll carry durable
-        // transcript passes without adding a separate pending catch-up for
-        // the same path.
-        if observation_source != "wake_socket"
-            && !transcript_catchups.iter().any(|item| item.path == path)
-        {
+        // Turn-start wakes arrive before Codex has necessarily written useful
+        // rollout content. Progress wakes happen after output changes and
+        // should enter the immediate live lane.
+        let wake_is_turn_start =
+            observation_source == "wake_socket" && wake_reason.as_deref() == Some("turn_started");
+        if !wake_is_turn_start && !transcript_catchups.iter().any(|item| item.path == path) {
             transcript_catchups.push(TranscriptCatchup {
                 due_at: now,
                 path,
                 provider,
                 observation_source,
                 observed_at_ms,
+                wake_received_at_ms,
+                session_id,
+                turn_id,
+                wake_reason,
+                file_len_hint,
             });
         }
     }
@@ -1419,6 +1495,7 @@ async fn prepare_file_for_job(
     let db_path = task_context.shipper_config.db_path.clone();
     let max_batch_bytes = task_context.shipper_config.max_batch_bytes;
     let parse_tracker = task_context.parse_tracker.clone();
+    let session_id_hint = job.observation.session_id.clone();
     let source_line_mode = if job.priority == WorkPriority::Live && provider == "codex" {
         shipper::SourceLineMode::EventOnly
     } else {
@@ -1438,22 +1515,40 @@ async fn prepare_file_for_job(
             .to_string_lossy()
             .to_string();
 
-        // Check session_binding for managed session ID override.
-        // For brand-new files (offset 0), the binding may not have landed yet
-        // (e.g. Codex bridge writes it on thread/started, which races with
-        // fsevents). Retry once after a short delay to close the window.
-        let binding = crate::state::session_binding::SessionBinding::new(&conn);
-        let mut session_id_override = binding.get(&canonical)?;
-        if session_id_override.is_none() {
-            let file_state = crate::state::file_state::FileState::new(&conn);
-            let current_offset = file_state
-                .get_offset(&canonical)
-                .or_else(|_| file_state.get_offset(&path.to_string_lossy()))?;
-            if current_offset == 0 {
-                std::thread::sleep(std::time::Duration::from_millis(300));
-                session_id_override = binding.get(&canonical)?;
+        // Wake-originated managed Codex jobs carry the session identity from
+        // the bridge, so they can skip the offset-0 binding race wait.
+        let mut session_id_override = session_id_hint;
+        let mut binding_wait_ms = 0u64;
+        let session_id_source = if session_id_override.is_some() {
+            "wake"
+        } else {
+            let binding = crate::state::session_binding::SessionBinding::new(&conn);
+            session_id_override = binding.get(&canonical)?;
+            if session_id_override.is_none() {
+                let file_state = crate::state::file_state::FileState::new(&conn);
+                let current_offset = file_state
+                    .get_offset(&canonical)
+                    .or_else(|_| file_state.get_offset(&path.to_string_lossy()))?;
+                if current_offset == 0 {
+                    let binding_wait_started = Instant::now();
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                    binding_wait_ms = binding_wait_started.elapsed().as_millis() as u64;
+                    session_id_override = binding.get(&canonical)?;
+                }
             }
-        }
+            if session_id_override.is_some() {
+                "binding"
+            } else {
+                "parsed"
+            }
+        };
+        tracing::debug!(
+            path = %path.display(),
+            provider,
+            session_id_source,
+            binding_wait_ms,
+            "Prepared session identity for ship job"
+        );
 
         shipper::prepare_file_batches_with_source_line_mode_and_parse_tracker(
             &path,
@@ -1507,46 +1602,48 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         }
     };
 
-    match shipper::replay_spool_for_path_with_batch_bytes_and_parse_tracker(
-        &conn,
-        &task_context.client,
-        task_context.algo,
-        &result.job.path,
-        PATH_SPOOL_REPLAY_LIMIT,
-        task_context.shipper_config.max_batch_bytes,
-        Some(&task_context.parse_tracker),
-        Some(&task_context.ship_stats),
-    )
-    .await
-    {
-        Ok(replay_outcome) => {
-            result.resolved_spool = replay_outcome.resolved;
-            result.failed_spool = replay_outcome.failed;
-            result.had_connect_error = replay_outcome.had_connect_error;
-        }
-        Err(e) => {
-            if task_context.tracker.record_error() {
-                tracing::warn!(
-                    "Error replaying spool for {}: {}",
-                    result.job.path.display(),
-                    e
-                );
+    if result.job.priority != WorkPriority::Live {
+        match shipper::replay_spool_for_path_with_batch_bytes_and_parse_tracker(
+            &conn,
+            &task_context.client,
+            task_context.algo,
+            &result.job.path,
+            PATH_SPOOL_REPLAY_LIMIT,
+            task_context.shipper_config.max_batch_bytes,
+            Some(&task_context.parse_tracker),
+            Some(&task_context.ship_stats),
+        )
+        .await
+        {
+            Ok(replay_outcome) => {
+                result.resolved_spool = replay_outcome.resolved;
+                result.failed_spool = replay_outcome.failed;
+                result.had_connect_error = replay_outcome.had_connect_error;
             }
-            result.local_retry_after = Some(Duration::from_secs(LOCAL_RETRY_DELAY_SECS));
+            Err(e) => {
+                if task_context.tracker.record_error() {
+                    tracing::warn!(
+                        "Error replaying spool for {}: {}",
+                        result.job.path.display(),
+                        e
+                    );
+                }
+                result.local_retry_after = Some(Duration::from_secs(LOCAL_RETRY_DELAY_SECS));
+                return finish_path_task(result, task_started);
+            }
+        }
+
+        if result.had_connect_error {
             return finish_path_task(result, task_started);
         }
-    }
 
-    if result.had_connect_error {
-        return finish_path_task(result, task_started);
-    }
-
-    let ready_spool_remaining = Spool::new(&conn)
-        .pending_entries_for_path(&result.job.path.to_string_lossy(), 1)
-        .map(|entries| !entries.is_empty())
-        .unwrap_or(false);
-    if ready_spool_remaining {
-        result.rerun_priority = Some(WorkPriority::Retry);
+        let ready_spool_remaining = Spool::new(&conn)
+            .pending_entries_for_path(&result.job.path.to_string_lossy(), 1)
+            .map(|entries| !entries.is_empty())
+            .unwrap_or(false);
+        if ready_spool_remaining {
+            result.rerun_priority = Some(WorkPriority::Retry);
+        }
     }
 
     let file_start = Instant::now();
@@ -1562,10 +1659,15 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                 work_context: work_context(result.job.priority),
                 observation_source: result.job.observation.source,
                 observed_at_ms: result.job.observation.observed_at_ms,
+                wake_received_at_ms: result.job.observation.wake_received_at_ms,
                 enqueued_at_ms: result.job.observation.enqueued_at_ms,
                 job_started_at_ms,
                 prepare_started_at_ms,
                 prepare_finished_at_ms,
+                session_id_hint: result.job.observation.session_id.clone(),
+                turn_id: result.job.observation.turn_id.clone(),
+                wake_reason: result.job.observation.wake_reason.clone(),
+                file_len_hint: result.job.observation.file_len_hint,
             };
             match shipper::ship_prepared_file_with_trace(
                 prepared,
@@ -1766,6 +1868,10 @@ mod tests {
                 due_at: Instant::now(),
                 expires_at: Instant::now() + Duration::from_secs(30),
                 provider: "codex",
+                session_id: None,
+                turn_id: None,
+                wake_reason: None,
+                file_len_hint: None,
             },
         );
 
@@ -1876,7 +1982,12 @@ mod tests {
             "needs_user",
             "test",
             123,
+            None,
             true,
+            None,
+            None,
+            None,
+            None,
         );
 
         assert_eq!(catchups.len(), 3);
@@ -1909,7 +2020,12 @@ mod tests {
             "thinking",
             "test",
             123,
+            None,
             true,
+            None,
+            None,
+            None,
+            None,
         );
         schedule_transcript_catchup(
             &mut catchups,
@@ -1919,7 +2035,12 @@ mod tests {
             "running",
             "test",
             124,
+            None,
             true,
+            None,
+            None,
+            None,
+            None,
         );
 
         assert_eq!(catchups.len(), 1);
@@ -1952,7 +2073,12 @@ mod tests {
                 "thinking",
                 "test",
                 123,
+                None,
                 true,
+                None,
+                None,
+                None,
+                None,
             );
         }
 
@@ -1972,6 +2098,10 @@ mod tests {
                 due_at: now - Duration::from_secs(1),
                 expires_at: now + Duration::from_secs(60),
                 provider: "codex",
+                session_id: None,
+                turn_id: None,
+                wake_reason: None,
+                file_len_hint: None,
             },
         );
 
@@ -1998,6 +2128,10 @@ mod tests {
                 due_at: now - Duration::from_secs(1),
                 expires_at: now + Duration::from_secs(60),
                 provider: "codex",
+                session_id: None,
+                turn_id: None,
+                wake_reason: None,
+                file_len_hint: None,
             },
         );
 
@@ -2027,6 +2161,10 @@ mod tests {
                 due_at: now + ACTIVE_TRANSCRIPT_POLL_INTERVAL,
                 expires_at: now + Duration::from_secs(60),
                 provider: "codex",
+                session_id: None,
+                turn_id: None,
+                wake_reason: None,
+                file_len_hint: None,
             },
         );
 
@@ -2057,7 +2195,12 @@ mod tests {
             "running",
             "wake_socket",
             123,
+            Some(125),
             true,
+            Some("session-123".to_string()),
+            Some("turn-123".to_string()),
+            Some("turn_started".to_string()),
+            Some(456),
         );
 
         assert!(catchups.is_empty());
@@ -2176,6 +2319,11 @@ mod tests {
                 provider: "claude",
                 observation_source: "test",
                 observed_at_ms: 123,
+                wake_received_at_ms: None,
+                session_id: None,
+                turn_id: None,
+                wake_reason: None,
+                file_len_hint: None,
             },
             TranscriptCatchup {
                 due_at: now + Duration::from_secs(30),
@@ -2183,6 +2331,11 @@ mod tests {
                 provider: "claude",
                 observation_source: "test",
                 observed_at_ms: 124,
+                wake_received_at_ms: None,
+                session_id: None,
+                turn_id: None,
+                wake_reason: None,
+                file_len_hint: None,
             },
         ];
 
@@ -2208,6 +2361,11 @@ mod tests {
             provider: "codex",
             observation_source: "outbox_signal",
             observed_at_ms: 123,
+            wake_received_at_ms: None,
+            session_id: None,
+            turn_id: None,
+            wake_reason: None,
+            file_len_hint: None,
         }];
 
         let mut scheduler = PathScheduler::new(4);
@@ -2399,11 +2557,54 @@ mod tests {
                 path: transcript.path().to_path_buf(),
                 phase: "running".to_string(),
                 observed_at_ms: 123,
+                session_id: Some("session-123".to_string()),
+                turn_id: Some("turn-123".to_string()),
+                wake_reason: Some("turn_started".to_string()),
+                file_len_hint: Some(456),
+                received_at_ms: Some(124),
             },
         );
 
         assert!(catchups.is_empty());
         assert!(active_polls.contains_key(transcript.path()));
+    }
+
+    #[test]
+    fn test_progress_wake_enqueues_live_catchup_with_metadata() {
+        let transcript = tempfile::NamedTempFile::new().unwrap();
+        let mut catchups = Vec::new();
+        let mut active_polls = HashMap::new();
+
+        schedule_transcript_catchup_for_wake(
+            &mut catchups,
+            &mut active_polls,
+            TranscriptWakeSignal {
+                provider: "codex".to_string(),
+                path: transcript.path().to_path_buf(),
+                phase: "running".to_string(),
+                observed_at_ms: 123,
+                session_id: Some("session-123".to_string()),
+                turn_id: Some("turn-123".to_string()),
+                wake_reason: Some("progress".to_string()),
+                file_len_hint: Some(456),
+                received_at_ms: Some(124),
+            },
+        );
+
+        assert_eq!(catchups.len(), 1);
+        assert!(active_polls.contains_key(transcript.path()));
+
+        let mut scheduler = PathScheduler::new(4);
+        drain_due_transcript_catchups(&mut scheduler, &mut catchups);
+        let job = scheduler.pop_launchable().expect("progress wake queued");
+        assert_eq!(job.priority, WorkPriority::Live);
+        assert_eq!(job.observation.source, "wake_socket");
+        assert_eq!(job.observation.observed_at_ms, 123);
+        assert_eq!(job.observation.wake_received_at_ms, Some(124));
+        assert_eq!(job.observation.session_id.as_deref(), Some("session-123"));
+        assert_eq!(job.observation.turn_id.as_deref(), Some("turn-123"));
+        assert_eq!(job.observation.wake_reason.as_deref(), Some("progress"));
+        assert_eq!(job.observation.file_len_hint, Some(456));
     }
 
     #[test]
