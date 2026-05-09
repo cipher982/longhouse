@@ -35,8 +35,8 @@ CODEX_HOOKS_JSON = Path.home() / ".codex" / "hooks.json"
 CODEX_LONGHOUSE_HOOK_SCRIPT = Path.home() / ".codex" / "hooks" / "longhouse-codex-hook.sh"
 HOSTED_CONTAINER_PREFIX = "longhouse-"
 HOSTED_RUNTIME_EVENT_LIMIT = 200
-MANAGED_LIVE_UI_TARGET_MS = 500
-DURABLE_TRANSCRIPT_TARGET_MS = 5_000
+LIVE_FIRST_OUTPUT_TARGET_MS = 500
+DURABLE_ARCHIVE_TARGET_MS = 3_000
 MANAGED_CLOSE_TARGET_MS = 1_000
 CODEX_TUI_PRECONDITION_PATTERNS = (
     (
@@ -1518,21 +1518,21 @@ except Exception as exc:
             live_full_from_local_latency = live_http_from_local_latency
             live_ui_source = "http"
 
-        live_ui = "live_ui=missing"
+        live_ui = "live_first=missing"
         if live_first_from_local_latency is not None:
             live_state = (
                 "pass"
-                if live_first_from_local_latency <= MANAGED_LIVE_UI_TARGET_MS
+                if live_first_from_local_latency <= LIVE_FIRST_OUTPUT_TARGET_MS
                 else "slow"
             )
             live_ui = (
-                f"live_ui={live_state} "
+                f"live_first={live_state} "
                 f"source={live_ui_source} "
                 f"first_from_local={live_first_from_local_latency}ms "
-                f"target={MANAGED_LIVE_UI_TARGET_MS}ms"
+                f"target={LIVE_FIRST_OUTPUT_TARGET_MS}ms"
             )
             if live_full_from_local_latency is not None:
-                live_ui += f" full_from_local={live_full_from_local_latency}ms"
+                live_ui += f" live_full_from_local={live_full_from_local_latency}ms"
 
         transcript = "synced" if contains else "missing"
         if transcript_latency is not None:
@@ -1564,8 +1564,8 @@ except Exception as exc:
         if transcript_ingest.get("skew_adjusted_lag_ms") is not None:
             transcript += f" skew_adjusted_ingest={transcript_ingest['skew_adjusted_lag_ms']}ms"
         if propagation_latency is not None:
-            durable_state = "pass" if propagation_latency <= DURABLE_TRANSCRIPT_TARGET_MS else "slow"
-            transcript += f" durable_slo={durable_state} target={DURABLE_TRANSCRIPT_TARGET_MS}ms"
+            durable_state = "pass" if propagation_latency <= DURABLE_ARCHIVE_TARGET_MS else "slow"
+            transcript += f" durable_archive={durable_state} target={DURABLE_ARCHIVE_TARGET_MS}ms"
         bridge_live = bridge_live_details(hosted, nonce, self.remote_clock_skew_ms)
         if bridge_live:
             live_parts = []

@@ -99,6 +99,9 @@ The product should never make users understand shell bootstrap, launchd, or help
 9. **Keep behavior explicit.**
    No hidden fallbacks, silent mode switches, or duplicated capability logic across frontend, backend, and clients.
 
+10. **Separate realtime truth from durable archive.**
+    Managed sessions have two lanes. The live lane answers "what is happening right now" and must feel terminal-class: first visible output should arrive in the browser over WebSocket/SSE in tens to hundreds of milliseconds under nominal network. The durable lane answers "what provably happened" and must be correct, ordered, replayable, and retryable; it can trail the live lane by a small bounded window. Do not weaken archive correctness to chase the live-lane SLA.
+
 ## What Longhouse Is
 
 - one searchable timeline for agent sessions
