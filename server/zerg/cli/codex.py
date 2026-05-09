@@ -48,6 +48,9 @@ _ROLLOUT_TURN_EVENT_TYPES = {"task_started", "task_complete", "turn_aborted"}
 _ROLLOUT_TERMINAL_EVENT_TYPES = {"task_complete", "turn_aborted"}
 _ROLLOUT_TAIL_LINES = 256
 _CODEX_VERSION_TIMEOUT_SECONDS = 5
+_CODEX_STOP_REASON_BRIDGE_STOP = "bridge_stop"
+_CODEX_STOP_REASON_TERMINAL_DISCONNECTED = "terminal_disconnected"
+_CODEX_STOP_SIGNAL_TIMEOUT_SECONDS = 3.0
 _CODEX_BIN_OPTION_HELP = " ".join(
     [
         "Debug override for the Codex executable used by managed sessions",
@@ -523,28 +526,90 @@ def _active_turn_survived_tui_exit(state_file: str | None) -> bool:
     return not _latest_rollout_turn_is_terminal(thread_path)
 
 
-def _stop_native_codex_bridge(*, session_id: str) -> str | None:
+def _stop_native_codex_bridge(
+    *,
+    session_id: str,
+    reason: str = _CODEX_STOP_REASON_BRIDGE_STOP,
+    timeout_secs: float | None = None,
+) -> str | None:
     try:
         engine = get_engine_executable()
     except RuntimeError as exc:
         return str(exc)
-    completed = subprocess.run(
-        [
-            engine,
-            "codex-bridge",
-            "stop",
-            "--session-id",
-            session_id,
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    command = [
+        engine,
+        "codex-bridge",
+        "stop",
+        "--session-id",
+        session_id,
+        "--reason",
+        reason,
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_secs,
+        )
+    except subprocess.TimeoutExpired:
+        return f"codex-bridge stop timed out after {timeout_secs}s"
     if completed.returncode == 0:
         return None
     stderr = (completed.stderr or "").strip()
     stdout = (completed.stdout or "").strip()
     return stderr or stdout or f"codex-bridge stop exited with code {completed.returncode}"
+
+
+class _CodexBridgeStopper:
+    def __init__(self, session_id: str, *, state_file: str | None = None) -> None:
+        self.session_id = session_id
+        self.state_file = state_file
+        self._stopped = False
+
+    def stop(self, *, reason: str, timeout_secs: float | None = None) -> str | None:
+        if self._stopped:
+            return None
+        self._stopped = True
+        return _stop_native_codex_bridge(
+            session_id=self.session_id,
+            reason=reason,
+            timeout_secs=timeout_secs,
+        )
+
+    def stop_for_terminal_disconnect(self, *, timeout_secs: float | None = None) -> str | None:
+        if self._stopped:
+            return None
+        if _active_turn_survived_tui_exit(self.state_file):
+            self._stopped = True
+            return None
+        return self.stop(
+            reason=_CODEX_STOP_REASON_TERMINAL_DISCONNECTED,
+            timeout_secs=timeout_secs,
+        )
+
+
+def _install_codex_signal_cleanup(stopper: _CodexBridgeStopper) -> dict[signal.Signals, object]:
+    previous_handlers: dict[signal.Signals, object] = {}
+
+    def cleanup_and_exit(signum: int, _frame: object) -> None:
+        stopper.stop_for_terminal_disconnect(
+            timeout_secs=_CODEX_STOP_SIGNAL_TIMEOUT_SECONDS,
+        )
+        raise SystemExit(128 + signum)
+
+    for signame in ("SIGHUP", "SIGTERM"):
+        sig = getattr(signal, signame, None)
+        if sig is None:
+            continue
+        previous_handlers[sig] = signal.signal(sig, cleanup_and_exit)
+    return previous_handlers
+
+
+def _restore_signal_handlers(previous_handlers: dict[signal.Signals, object]) -> None:
+    for sig, handler in previous_handlers.items():
+        signal.signal(sig, handler)
 
 
 def _run_native_codex_tui(
@@ -777,15 +842,20 @@ def codex(
         return
 
     typer.echo("Attaching...")
-    exit_code = _run_native_codex_tui(
-        session_id=result.session_id,
-        codex_bin=resolved_codex_bin,
-        ws_url=ws_url,
-        cwd=cwd,
-        bypass_approvals=bypass_approvals,
-    )
+    bridge_stopper = _CodexBridgeStopper(result.session_id, state_file=state_file)
+    previous_handlers = _install_codex_signal_cleanup(bridge_stopper)
+    try:
+        exit_code = _run_native_codex_tui(
+            session_id=result.session_id,
+            codex_bin=resolved_codex_bin,
+            ws_url=ws_url,
+            cwd=cwd,
+            bypass_approvals=bypass_approvals,
+        )
+    finally:
+        _restore_signal_handlers(previous_handlers)
     keep_bridge_alive = exit_code != 0 and _active_turn_survived_tui_exit(state_file)
-    stop_error = None if keep_bridge_alive else _stop_native_codex_bridge(session_id=result.session_id)
+    stop_error = None if keep_bridge_alive else bridge_stopper.stop(reason=_CODEX_STOP_REASON_TERMINAL_DISCONNECTED)
     if exit_code != 0:
         if keep_bridge_alive:
             resume_thread_id = ""

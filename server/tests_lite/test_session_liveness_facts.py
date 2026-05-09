@@ -8,7 +8,6 @@ from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.session_execution_home import SessionExecutionHome
 
-
 NOW = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
 
 
@@ -269,6 +268,30 @@ def test_explicit_terminal_reason_closes_with_specific_reason():
 
     assert facts.lifecycle.state == "closed"
     assert facts.lifecycle.reason == "bridge_stop"
+
+
+def test_explicit_terminal_disconnected_closes_with_specific_reason():
+    terminal_at = NOW - timedelta(minutes=2)
+    facts = build_session_liveness_facts(
+        runtime_view=_runtime_view(
+            signal_tier="phase_signal",
+            runtime_phase="finished",
+            runtime_source="semantic",
+            terminal_state="session_ended",
+            terminal_reason="terminal_disconnected",
+            terminal_source="codex_bridge",
+            phase_started_at=terminal_at,
+            presence_updated_at=terminal_at,
+            last_live_at=terminal_at,
+            status="completed",
+        ),
+        capabilities=_capabilities(managed=True),
+        last_activity_at=terminal_at,
+    )
+
+    assert facts.lifecycle.state == "closed"
+    assert facts.process_state == "closed"
+    assert facts.lifecycle.reason == "terminal_disconnected"
 
 
 def test_explicit_process_gone_terminal_closes_managed_session():
