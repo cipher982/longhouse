@@ -4704,6 +4704,8 @@ export interface components {
             runtime_display?: components["schemas"]["SessionRuntimeDisplayResponse"] | null;
             /** @description Observed liveness facts with timestamps and sources */
             runtime_facts?: components["schemas"]["SessionLivenessFactsResponse"] | null;
+            /** @description Low-latency managed bridge transcript overlay; durable events remain canonical */
+            live_transcript?: components["schemas"]["SessionLiveTranscriptResponse"] | null;
             /**
              * @description Session loop mode: assist|autopilot
              * @default assist
@@ -7913,6 +7915,56 @@ export interface components {
              */
             released_lock: boolean;
         };
+        /** SessionLiveTranscriptResponse */
+        SessionLiveTranscriptResponse: {
+            /**
+             * Text
+             * @description Latest live transcript text snapshot from a managed provider bridge
+             */
+            text: string;
+            /**
+             * Source
+             * @description Runtime source for the live transcript overlay
+             */
+            source: string;
+            /**
+             * Received At
+             * Format: date-time
+             * @description When the Runtime Host received this live text snapshot
+             */
+            received_at: string;
+            /**
+             * Occurred At
+             * @description When the bridge observed this live text snapshot
+             */
+            occurred_at?: string | null;
+            /**
+             * Thread Id
+             * @description Provider thread id for the live text snapshot
+             */
+            thread_id?: string | null;
+            /**
+             * Turn Id
+             * @description Provider turn id for the live text snapshot
+             */
+            turn_id?: string | null;
+            /**
+             * Seq
+             * @description Monotonic sequence within the provider turn
+             */
+            seq?: number | null;
+            /**
+             * Method
+             * @description Provider notification method that produced the snapshot
+             */
+            method?: string | null;
+            /**
+             * Is Complete
+             * @description True when this snapshot is the final live text for the turn
+             * @default false
+             */
+            is_complete: boolean;
+        };
         /**
          * SessionLivenessFactsResponse
          * @description Observed facts only.
@@ -8388,6 +8440,8 @@ export interface components {
             runtime_display?: components["schemas"]["SessionRuntimeDisplayResponse"] | null;
             /** @description Observed liveness facts with timestamps and sources */
             runtime_facts?: components["schemas"]["SessionLivenessFactsResponse"] | null;
+            /** @description Low-latency managed bridge transcript overlay; durable events remain canonical */
+            live_transcript?: components["schemas"]["SessionLiveTranscriptResponse"] | null;
             /** @description Server-derived timeline-card presentation */
             timeline_card: components["schemas"]["TimelineCardPresentationResponse"];
             /**
