@@ -28,7 +28,9 @@ from zerg.services.timeline_session_listing import list_timeline_sessions_for_br
 
 logger = logging.getLogger(__name__)
 
-TIMELINE_STREAM_CHANGE_WAIT_SECONDS = 5.0
+# Pubsub is process-local. Keep the fallback poll bounded tightly so a
+# missed cross-worker wake cannot leave timeline lifecycle cards stale.
+TIMELINE_STREAM_CHANGE_WAIT_SECONDS = 0.25
 TIMELINE_STREAM_HEARTBEAT_SECONDS = 30.0
 
 TimelineWindowSignature = tuple[
