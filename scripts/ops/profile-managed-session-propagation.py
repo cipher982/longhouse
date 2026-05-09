@@ -1094,8 +1094,6 @@ except Exception as exc:
                 ownership=ownership,
                 session_id=session_id,
             )
-        timeline_live_poll.join(timeout=95)
-        timeline_live_sse.join(timeout=95)
         self.poll_hosted_session(
             session_id,
             case_id=case_id,
@@ -1105,6 +1103,8 @@ except Exception as exc:
             timeout=180,
             interval=0.5,
         )
+        timeline_live_poll.join(timeout=95)
+        timeline_live_sse.join(timeout=95)
         self.write_snapshot(case_id, ownership, session_id, "post_response")
 
         self.observe(
