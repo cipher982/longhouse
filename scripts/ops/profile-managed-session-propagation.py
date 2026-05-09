@@ -38,6 +38,7 @@ HOSTED_RUNTIME_EVENT_LIMIT = 200
 LIVE_FIRST_OUTPUT_TARGET_MS = 500
 DURABLE_ARCHIVE_TARGET_MS = 3_000
 MANAGED_CLOSE_TARGET_MS = 1_000
+METRICS_SCHEMA_VERSION = 1
 CODEX_TUI_PRECONDITION_PATTERNS = (
     (
         re.compile(
@@ -117,6 +118,7 @@ class Profiler:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.observations_path = self.output_dir / "observations.jsonl"
         self.summary_path = self.output_dir / "summary.md"
+        self.metrics_path = self.output_dir / "metrics.json"
         self.observations: list[dict[str, Any]] = []
         self.started_monotonic_ms = monotonic_ms()
         self.project = args.project
@@ -1393,6 +1395,7 @@ except Exception as exc:
         )
 
     def write_summary(self, results: list[dict[str, Any]], errors: list[str]) -> None:
+        metrics: list[dict[str, Any]] = []
         lines = [
             "# Managed Session Propagation Profile",
             "",
@@ -1401,6 +1404,7 @@ except Exception as exc:
             f"- Project: `{self.project}`",
             f"- Subdomain: `{self.subdomain}`",
             f"- Observations: `{self.observations_path}`",
+            f"- Metrics: `{self.metrics_path}`",
             "",
             "## Results",
             "",
@@ -1411,15 +1415,37 @@ except Exception as exc:
             case_id = result.get("case_id", "-")
             sid = result.get("session_id", "-")
             nonce = result.get("nonce", "-")
-            verdict, notes = self.verdict_for(case_id, sid, nonce)
+            verdict, notes, case_metrics = self.verdict_for(case_id, sid, nonce)
+            metrics.append(case_metrics)
             lines.append(f"| {case_id} | `{sid}` | `{nonce}` | {verdict} | {notes} |")
         if errors:
             lines.extend(["", "## Errors", ""])
             lines.extend(f"- {err}" for err in errors)
         lines.extend(["", "## Artifact Directory", "", f"`{self.output_dir}`", ""])
         self.summary_path.write_text("\n".join(lines))
+        self.metrics_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": METRICS_SCHEMA_VERSION,
+                    "run_id": self.run_id,
+                    "project": self.project,
+                    "subdomain": self.subdomain,
+                    "generated_at": utc_now(),
+                    "targets": {
+                        "live_first_output_ms": LIVE_FIRST_OUTPUT_TARGET_MS,
+                        "durable_archive_ms": DURABLE_ARCHIVE_TARGET_MS,
+                        "managed_close_ms": MANAGED_CLOSE_TARGET_MS,
+                    },
+                    "errors": errors,
+                    "cases": metrics,
+                },
+                indent=2,
+                sort_keys=True,
+                default=str,
+            )
+        )
 
-    def verdict_for(self, case_id: str, session_id: str, nonce: str) -> tuple[str, str]:
+    def verdict_for(self, case_id: str, session_id: str, nonce: str) -> tuple[str, str, dict[str, Any]]:
         hosted = self.hosted_db_direct(session_id) or {}
         session = hosted.get("session") or {}
         runtime = hosted.get("runtime_state") or {}
@@ -1502,8 +1528,34 @@ except Exception as exc:
         transcript_ingest = transcript_ingest_details(hosted, self.remote_clock_skew_ms)
         ownership = session.get("execution_home") or "-"
         transport = session.get("managed_transport") or "-"
+        metrics: dict[str, Any] = {
+            "case_id": case_id,
+            "session_id": session_id,
+            "nonce": nonce,
+            "ownership": ownership,
+            "transport": transport,
+            "provider": session.get("provider") or "codex",
+            "live_first_from_local_ms": None,
+            "live_first_target_ms": LIVE_FIRST_OUTPUT_TARGET_MS,
+            "live_first_pass": None,
+            "live_first_source": None,
+            "live_tail_non_slo_from_local_ms": None,
+            "durable_archive_local_to_hosted_ms": propagation_latency,
+            "durable_archive_target_ms": DURABLE_ARCHIVE_TARGET_MS,
+            "durable_archive_pass": None,
+            "close_observed_ms": close_latency,
+            "close_target_ms": MANAGED_CLOSE_TARGET_MS,
+            "close_pass": None,
+            "bridge_live_ingest_lag_ms": None,
+            "bridge_live_skew_adjusted_lag_ms": None,
+            "bridge_live_method": None,
+            "ship_trace_source": None,
+            "ship_trace_wake_reason": None,
+        }
         if not session:
-            return "missing", "hosted session row not observed"
+            metrics["verdict"] = "missing"
+            metrics["notes"] = "hosted session row not observed"
+            return "missing", "hosted session row not observed", metrics
         precondition = self.provider_precondition_for(case_id, session_id)
 
         live_first_from_local_latency = first_live_sse_from_local_latency
@@ -1517,6 +1569,11 @@ except Exception as exc:
             live_first_from_local_latency = first_live_http_from_local_latency
             live_full_from_local_latency = live_http_from_local_latency
             live_ui_source = "http"
+        metrics["live_first_from_local_ms"] = live_first_from_local_latency
+        metrics["live_first_source"] = live_ui_source if live_first_from_local_latency is not None else None
+        metrics["live_tail_non_slo_from_local_ms"] = live_full_from_local_latency
+        if live_first_from_local_latency is not None:
+            metrics["live_first_pass"] = live_first_from_local_latency <= LIVE_FIRST_OUTPUT_TARGET_MS
 
         live_ui = "live_first=missing"
         if live_first_from_local_latency is not None:
@@ -1532,7 +1589,7 @@ except Exception as exc:
                 f"target={LIVE_FIRST_OUTPUT_TARGET_MS}ms"
             )
             if live_full_from_local_latency is not None:
-                live_ui += f" live_full_from_local={live_full_from_local_latency}ms"
+                live_ui += f" live_tail_non_slo_from_local={live_full_from_local_latency}ms"
 
         transcript = "synced" if contains else "missing"
         if transcript_latency is not None:
@@ -1565,9 +1622,13 @@ except Exception as exc:
             transcript += f" skew_adjusted_ingest={transcript_ingest['skew_adjusted_lag_ms']}ms"
         if propagation_latency is not None:
             durable_state = "pass" if propagation_latency <= DURABLE_ARCHIVE_TARGET_MS else "slow"
+            metrics["durable_archive_pass"] = propagation_latency <= DURABLE_ARCHIVE_TARGET_MS
             transcript += f" durable_archive={durable_state} target={DURABLE_ARCHIVE_TARGET_MS}ms"
         bridge_live = bridge_live_details(hosted, nonce, self.remote_clock_skew_ms)
         if bridge_live:
+            metrics["bridge_live_ingest_lag_ms"] = bridge_live.get("ingest_lag_ms")
+            metrics["bridge_live_skew_adjusted_lag_ms"] = bridge_live.get("skew_adjusted_lag_ms")
+            metrics["bridge_live_method"] = bridge_live.get("method")
             live_parts = []
             for key, label in (
                 ("ingest_lag_ms", "ingest_lag"),
@@ -1585,9 +1646,11 @@ except Exception as exc:
             parts = []
             source = ship_trace.get("observation_source")
             if source:
+                metrics["ship_trace_source"] = source
                 parts.append(f"source={source}")
             wake_reason = ship_trace.get("wake_reason")
             if wake_reason:
+                metrics["ship_trace_wake_reason"] = wake_reason
                 parts.append(f"wake={wake_reason}")
             for key, label in (
                 ("append_to_job_ms", "append_to_job"),
@@ -1611,6 +1674,7 @@ except Exception as exc:
             if close_latency is not None:
                 close_note += f" observed_in={close_latency}ms"
                 close_state = "pass" if close_latency <= MANAGED_CLOSE_TARGET_MS else "slow"
+                metrics["close_pass"] = close_latency <= MANAGED_CLOSE_TARGET_MS
                 close_note += f" close_slo={close_state} target={MANAGED_CLOSE_TARGET_MS}ms"
             if terminal.get("ingest_lag_ms") is not None:
                 close_note += f" ingest_lag={terminal['ingest_lag_ms']}ms"
@@ -1624,14 +1688,36 @@ except Exception as exc:
             note = f"provider_precondition={reason}"
             if message:
                 note += f" message={message!r}"
-            return "blocked", f"{note}; {close_note}; ownership={ownership}, transport={transport}"
+            metrics["precondition"] = precondition
+            metrics["verdict"] = "blocked"
+            metrics["notes"] = f"{note}; {close_note}; ownership={ownership}, transport={transport}"
+            return "blocked", metrics["notes"], metrics
         if not contains:
             verdict = "partial" if closed else "missing"
-            return verdict, f"{live_ui}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
+            metrics["verdict"] = verdict
+            metrics["notes"] = f"{live_ui}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
+            return verdict, metrics["notes"], metrics
+        is_managed_case = case_id == "B1" or ownership == "managed_local"
+        if is_managed_case and metrics["live_first_pass"] is not True:
+            metrics["verdict"] = "fail"
+            metrics["notes"] = f"{live_ui}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
+            return "fail", metrics["notes"], metrics
         if not closed:
             phase = runtime.get("phase") or runtime.get("terminal_state") or "-"
-            return "pass", f"{live_ui}; nonce synced; close not confirmed yet; phase={phase}; ownership={ownership}, transport={transport}"
-        return "pass", f"{live_ui}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
+            metrics["verdict"] = "partial"
+            metrics["notes"] = f"{live_ui}; nonce synced; close not confirmed yet; phase={phase}; ownership={ownership}, transport={transport}"
+            return "partial", metrics["notes"], metrics
+        if is_managed_case and metrics["close_pass"] is False:
+            metrics["verdict"] = "slow"
+            metrics["notes"] = f"{live_ui}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
+            return "slow", metrics["notes"], metrics
+        if metrics["durable_archive_pass"] is False:
+            metrics["verdict"] = "slow"
+            metrics["notes"] = f"{live_ui}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
+            return "slow", metrics["notes"], metrics
+        metrics["verdict"] = "pass"
+        metrics["notes"] = f"{live_ui}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
+        return "pass", metrics["notes"], metrics
 
     def event_delta_ms(self, case_id: str, session_id: str, start_event: str, end_event: str) -> int | None:
         start = None
