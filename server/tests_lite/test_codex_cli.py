@@ -530,6 +530,99 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
     ]
 
 
+def test_codex_command_preserves_bridge_when_active_turn_survives(monkeypatch, tmp_path):
+    runner = CliRunner()
+    stop_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        codex_cli,
+        "_load_api_credentials",
+        lambda **_kwargs: ("https://longhouse.test", "zdt_test_token"),
+    )
+    monkeypatch.setattr(codex_cli, "_ensure_managed_launch_preflight", lambda **_kwargs: None)
+    monkeypatch.setattr(codex_cli, "get_machine_name_label", lambda: "work-laptop")
+    monkeypatch.setattr(
+        codex_cli,
+        "_launch_managed_local_from_api",
+        lambda **_kwargs: codex_cli.ManagedLocalLaunchResponse(
+            session_id="session-123",
+            provider_session_id="provider-123",
+            attach_command="",
+            source_runner_name="work-laptop",
+        ),
+    )
+    monkeypatch.setattr(codex_cli, "_resolve_codex_binary", lambda _explicit=None: "/tmp/codex")
+    monkeypatch.setattr(
+        codex_cli,
+        "_start_native_codex_bridge",
+        lambda **_kwargs: ("thr_123", "ws://127.0.0.1:4800", "/tmp/state.json"),
+    )
+    monkeypatch.setattr(codex_cli, "_interactive_stdio", lambda: True)
+    monkeypatch.setattr(codex_cli, "_run_native_codex_tui", lambda **_kwargs: 7)
+    monkeypatch.setattr(codex_cli, "_active_turn_survived_tui_exit", lambda state_file: state_file == "/tmp/state.json")
+    monkeypatch.setattr(codex_cli, "_stop_native_codex_bridge", lambda **kwargs: stop_calls.append(kwargs) or None)
+
+    result = runner.invoke(app, ["codex", "--cwd", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "still running and resumable" in result.output
+    assert stop_calls == []
+
+
+def test_codex_command_signal_cleanup_stops_once(monkeypatch, tmp_path):
+    runner = CliRunner()
+    stop_calls: list[dict[str, object]] = []
+    signal_handlers: dict[object, object] = {}
+
+    def fake_signal(sig, handler):
+        if callable(handler):
+            signal_handlers[sig] = handler
+        return "old-handler"
+
+    def fake_run_native_tui(**_kwargs):
+        signal_handlers[codex_cli.signal.SIGHUP](codex_cli.signal.SIGHUP, None)
+        raise AssertionError("signal handler should exit")
+
+    monkeypatch.setattr(
+        codex_cli,
+        "_load_api_credentials",
+        lambda **_kwargs: ("https://longhouse.test", "zdt_test_token"),
+    )
+    monkeypatch.setattr(codex_cli, "_ensure_managed_launch_preflight", lambda **_kwargs: None)
+    monkeypatch.setattr(codex_cli, "get_machine_name_label", lambda: "work-laptop")
+    monkeypatch.setattr(
+        codex_cli,
+        "_launch_managed_local_from_api",
+        lambda **_kwargs: codex_cli.ManagedLocalLaunchResponse(
+            session_id="session-123",
+            provider_session_id="provider-123",
+            attach_command="",
+            source_runner_name="work-laptop",
+        ),
+    )
+    monkeypatch.setattr(codex_cli, "_resolve_codex_binary", lambda _explicit=None: "/tmp/codex")
+    monkeypatch.setattr(
+        codex_cli,
+        "_start_native_codex_bridge",
+        lambda **_kwargs: ("thr_123", "ws://127.0.0.1:4800", "/tmp/state.json"),
+    )
+    monkeypatch.setattr(codex_cli, "_interactive_stdio", lambda: True)
+    monkeypatch.setattr(codex_cli, "_run_native_codex_tui", fake_run_native_tui)
+    monkeypatch.setattr(codex_cli, "_stop_native_codex_bridge", lambda **kwargs: stop_calls.append(kwargs) or None)
+    monkeypatch.setattr(codex_cli.signal, "signal", fake_signal)
+
+    result = runner.invoke(app, ["codex", "--cwd", str(tmp_path)])
+
+    assert result.exit_code == 128 + codex_cli.signal.SIGHUP
+    assert stop_calls == [
+        {
+            "session_id": "session-123",
+            "reason": codex_cli._CODEX_STOP_REASON_TERMINAL_DISCONNECTED,
+            "timeout_secs": codex_cli._CODEX_STOP_SIGNAL_TIMEOUT_SECONDS,
+        }
+    ]
+
+
 def test_stop_native_codex_bridge_passes_reason_and_timeout(monkeypatch):
     calls: list[dict[str, object]] = []
 

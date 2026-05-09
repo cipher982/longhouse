@@ -83,7 +83,7 @@ be wired separately.
 
 ### SSH/PTTY hangup while wrapper is alive
 
-1. Wrapper receives SIGHUP/SIGTERM/SIGINT.
+1. Wrapper receives SIGHUP/SIGTERM.
 2. Signal handler attempts one best-effort bridge stop with
    `terminal_disconnected`.
 3. Handler restores signal default and exits with the signal code.
