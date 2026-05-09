@@ -709,22 +709,33 @@ profiles are added. It currently covers:
 - hosted DB/API/timeline REST/timeline SSE measurement
 - browser card observation for cold-ish page load and close paint
 - provider precondition classification for Codex hooks needing review
+- `--profile warm-live` for managed Codex with browser-card and SSE warm
+  preconditions before prompt send
 - Markdown and JSON metrics artifacts with trust verdicts
 
 ## Next Implementation Slice
 
-Build the warm managed Codex live-output profile.
+Fix the managed Codex live lane exposed by the warm-live profile.
 
-Required behavior:
+The first warm-live run that reached warm-ready showed:
 
-1. Add `--profile warm-live`.
-2. Open `/timeline` and wait for warm preconditions before launching or driving
-   the target session.
-3. Launch a managed Codex session and send a nonce prompt.
-4. Measure local bridge/progress observation to timeline SSE.
-5. Measure timeline SSE to browser card paint containing the nonce.
-6. Emit `profile_class=warm_realtime`.
-7. Report the split as "bridge -> SSE", "SSE -> paint", and "bridge -> paint".
+- browser card ready before prompt send
+- timeline SSE stream ready before prompt send
+- Codex provider response local in ~2s
+- no managed live transcript on timeline SSE or browser card
+- transcript archive arrived later through the outbox/shipper path
+
+Required behavior for the next slice:
+
+1. Add or repair a bridge-emitted live transcript/progress event for managed
+   Codex turns.
+2. Timestamp the local bridge emission separately from harness polling.
+3. Ensure Runtime Host reduces that event into timeline live transcript state.
+4. Ensure `/api/timeline/sessions/stream` emits a `session_upsert` for that
+   live transcript before durable archive ingest completes.
+5. Keep the browser metric split as `bridge -> SSE`, `SSE -> paint`, and
+   `bridge -> paint`.
+6. Re-run `--profile warm-live` after the bridge/live-lane change.
 
 Non-goals for this slice:
 
