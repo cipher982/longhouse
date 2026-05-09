@@ -752,19 +752,19 @@ def flush_event():
 
 try:
     timeout = httpx.Timeout(95.0, connect=3.0, read=95.0)
-        with httpx.stream(
-            "GET",
-            "http://127.0.0.1:8000/api/timeline/sessions/stream",
-            params=params,
-            headers=headers,
-            timeout=timeout,
-        ) as response:
-            if response.status_code != 200:
-                emit("error", error=f"status={response.status_code} body={response.text[:500]}")
-                raise SystemExit(0)
-            emit("ready")
-            deadline = time.monotonic() + 90
-            for line in response.iter_lines():
+    with httpx.stream(
+        "GET",
+        "http://127.0.0.1:8000/api/timeline/sessions/stream",
+        params=params,
+        headers=headers,
+        timeout=timeout,
+    ) as response:
+        if response.status_code != 200:
+            emit("error", error=f"status={response.status_code} body={response.text[:500]}")
+            raise SystemExit(0)
+        emit("ready")
+        deadline = time.monotonic() + 90
+        for line in response.iter_lines():
             if time.monotonic() > deadline:
                 break
             if line == "":
