@@ -132,10 +132,31 @@ def build_session_runtime_display_response(
     )
 
 
+def _live_transcript_superseded_by_durable_activity(
+    overlay: SessionLiveTranscriptOverlay,
+    *,
+    last_activity_at: datetime | None,
+) -> bool:
+    if last_activity_at is None:
+        return False
+    activity_at = normalize_utc(last_activity_at)
+    overlay_at = normalize_utc(overlay.occurred_at) or normalize_utc(overlay.received_at)
+    if activity_at is None or overlay_at is None:
+        return False
+    return activity_at > overlay_at
+
+
 def build_live_transcript_response(
     overlay: SessionLiveTranscriptOverlay | None,
+    *,
+    last_activity_at: datetime | None = None,
 ) -> SessionLiveTranscriptResponse | None:
     if overlay is None:
+        return None
+    if _live_transcript_superseded_by_durable_activity(
+        overlay,
+        last_activity_at=last_activity_at,
+    ):
         return None
     return SessionLiveTranscriptResponse(
         text=overlay.text,
@@ -1121,7 +1142,10 @@ def build_session_response(
         ),
         runtime_display=runtime_display,
         runtime_facts=runtime_facts,
-        live_transcript=build_live_transcript_response(live_transcript_overlay),
+        live_transcript=build_live_transcript_response(
+            live_transcript_overlay,
+            last_activity_at=last_activity_at,
+        ),
         timeline_card=build_session_timeline_card_response(
             runtime_facts=runtime_facts,
             capability_flags=capability_flags,
@@ -1217,7 +1241,10 @@ def build_active_session_response(
         ),
         runtime_display=runtime_display,
         runtime_facts=runtime_facts,
-        live_transcript=build_live_transcript_response(live_transcript_overlay),
+        live_transcript=build_live_transcript_response(
+            live_transcript_overlay,
+            last_activity_at=last_activity_at,
+        ),
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
     )
 
