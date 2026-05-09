@@ -39,7 +39,7 @@ HOSTED_RUNTIME_EVENT_LIMIT = 200
 LIVE_FIRST_OUTPUT_TARGET_MS = 500
 DURABLE_ARCHIVE_TARGET_MS = 3_000
 MANAGED_CLOSE_TARGET_MS = 1_000
-METRICS_SCHEMA_VERSION = 2
+METRICS_SCHEMA_VERSION = 3
 CODEX_TUI_PRECONDITION_PATTERNS = (
     (
         re.compile(
@@ -124,6 +124,7 @@ class Profiler:
         self.started_monotonic_ms = monotonic_ms()
         self.project = args.project
         self.subdomain = args.subdomain
+        self.profile_class = args.profile_class
         self.container = args.container or f"{HOSTED_CONTAINER_PREFIX}{self.subdomain}"
         self.browser_ui_base_url = args.browser_ui_base_url or f"https://{self.subdomain}.longhouse.ai"
         self.remote_clock_skew_ms = self.measure_remote_clock_skew_ms()
@@ -145,6 +146,7 @@ class Profiler:
         row = {
             "harness_version": 1,
             "run_id": self.run_id,
+            "profile_class": self.profile_class,
             "case_id": case_id,
             "provider": provider,
             "ownership": ownership,
@@ -1114,12 +1116,14 @@ except Exception as exc:
             "ui_loaded": "browser_ui_loaded",
             "card_painted": "browser_timeline_card_painted",
             "live_first_painted": "browser_live_transcript_first_painted",
+            "live_word_painted": "browser_live_transcript_word_painted",
             "live_nonce_painted": "browser_live_transcript_nonce_painted",
             "close_painted": "browser_close_card_painted",
         }
         timeout_map = {
             "card_painted_timeout": "browser_timeline_card_painted_timeout",
             "live_first_painted_timeout": "browser_live_transcript_first_painted_timeout",
+            "live_word_painted_timeout": "browser_live_transcript_word_painted_timeout",
             "live_nonce_painted_timeout": "browser_live_transcript_nonce_painted_timeout",
             "close_painted_timeout": "browser_close_card_painted_timeout",
         }
@@ -1793,6 +1797,7 @@ except Exception as exc:
                 {
                     "schema_version": METRICS_SCHEMA_VERSION,
                     "run_id": self.run_id,
+                    "profile_class": self.profile_class,
                     "project": self.project,
                     "subdomain": self.subdomain,
                     "generated_at": utc_now(),
@@ -1980,6 +1985,7 @@ except Exception as exc:
         transport = session.get("managed_transport") or "-"
         metrics: dict[str, Any] = {
             "case_id": case_id,
+            "profile_class": self.profile_class,
             "session_id": session_id,
             "nonce": nonce,
             "ownership": ownership,
@@ -2842,6 +2848,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--run-id")
     parser.add_argument("--output-dir")
     parser.add_argument(
+        "--profile-class",
+        choices=["cold_timeline", "warm_realtime", "durable_archive", "honest_degradation", "fidelity"],
+        default="warm_realtime",
+        help="Observation profile class metadata. Narrow --profile modes will map to this in later slices.",
+    )
+    parser.add_argument(
         "--browser-ui-base-url",
         help="Hosted browser UI origin to profile. Defaults to https://<subdomain>.longhouse.ai.",
     )
@@ -2879,6 +2891,7 @@ def main(argv: list[str]) -> int:
             "container": profiler.container,
             "browser_ui_base_url": profiler.browser_ui_base_url,
             "browser_ui_enabled": not args.skip_browser_ui,
+            "profile_class": args.profile_class,
         },
     )
     results: list[dict[str, Any]] = []
