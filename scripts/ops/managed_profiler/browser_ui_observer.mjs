@@ -11,6 +11,14 @@ if (!baseUrlArg || !token || !sid || !project || !nonce) {
 
 const baseUrl = new URL(baseUrlArg);
 const started = performance.now();
+const onceKinds = new Set([
+  "ui_loaded",
+  "card_painted",
+  "live_first_painted",
+  "live_word_painted",
+  "live_nonce_painted",
+  "close_painted",
+]);
 const emitted = new Set();
 let browser;
 let page;
@@ -21,11 +29,20 @@ function elapsedMs() {
 }
 
 function emit(kind, payload = {}) {
-  if (emitted.has(kind)) {
+  if (onceKinds.has(kind) && emitted.has(kind)) {
     return;
   }
-  emitted.add(kind);
-  console.log(JSON.stringify({ kind, elapsed_ms: elapsedMs(), ...payload }));
+  if (onceKinds.has(kind)) {
+    emitted.add(kind);
+  }
+  console.log(
+    JSON.stringify({
+      kind,
+      elapsed_ms: elapsedMs(),
+      observer_observed_at_wall: new Date().toISOString(),
+      ...payload,
+    }),
+  );
 }
 
 async function afterPaint() {
@@ -62,6 +79,8 @@ async function waitForCard(kind, timeoutMs) {
           runtime_tone: card.getAttribute("data-runtime-tone"),
           runtime_freshness: card.getAttribute("data-runtime-freshness"),
           control_path: card.getAttribute("data-control-path"),
+          page_observed_at_wall: new Date().toISOString(),
+          page_performance_now_ms: performance.now(),
           live_text: live?.textContent?.trim() ?? "",
           closed_text: closed?.textContent?.trim() ?? "",
           runtime_text: runtime?.textContent?.trim() ?? "",
@@ -73,10 +92,16 @@ async function waitForCard(kind, timeoutMs) {
         if (targetKind === "live_first_painted" && snapshot.live_text) {
           return snapshot;
         }
+        if (targetKind === "live_word_painted" && /\b\S+\b/.test(snapshot.live_text)) {
+          return snapshot;
+        }
         if (targetKind === "live_nonce_painted" && snapshot.live_text.includes(targetNonce)) {
           return snapshot;
         }
-        if (targetKind === "close_painted" && (snapshot.card_state === "closed" || snapshot.closed_text)) {
+        if (
+          targetKind === "close_painted" &&
+          (snapshot.card_state === "closed" || snapshot.closed_text)
+        ) {
           return snapshot;
         }
         return false;
@@ -84,13 +109,14 @@ async function waitForCard(kind, timeoutMs) {
       { sessionId: sid, targetKind: kind, targetNonce: nonce },
       { timeout: timeoutMs, polling: "raf" },
     );
+    const domMatchedElapsedMs = elapsedMs();
     const card = await handle.jsonValue();
     await handle.dispose();
     if (kind === "close_painted") {
       closeObserved = true;
     }
     await afterPaint();
-    emit(kind, { card });
+    emit(kind, { dom_matched_elapsed_ms: domMatchedElapsedMs, card });
   } catch (error) {
     if (!closeObserved) {
       emit(`${kind}_timeout`, { error: String(error).slice(0, 500) });
@@ -135,6 +161,7 @@ try {
 
   void waitForCard("card_painted", 30000);
   void waitForCard("live_first_painted", 95000);
+  void waitForCard("live_word_painted", 95000);
   void waitForCard("live_nonce_painted", 95000);
   await waitForCard("close_painted", 420000);
 } catch (error) {

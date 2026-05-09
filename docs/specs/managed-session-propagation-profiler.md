@@ -108,10 +108,13 @@ long until the timeline shows the session as closed?
 
 Primary metrics:
 
-- `warm_close_local_to_db_ms`
 - `warm_close_local_to_sse_ms`
 - `warm_close_local_to_paint_ms`
 - `warm_close_sse_to_paint_ms`
+
+Diagnostic layer metrics:
+
+- `warm_close_local_to_db_ms`
 
 Target posture after the primary paths are stable: warm live and warm close
 should be p95 < 500ms on nominal network for managed sessions, with a hard
@@ -124,12 +127,15 @@ are true:
 
 - the browser page has loaded `/timeline`
 - the initial `/api/timeline/sessions` request has returned successfully
-- the timeline SSE connection is established and has delivered an initial event,
-  heartbeat, or explicit ready marker
+- the timeline SSE connection is established and has delivered its first event,
+  heartbeat, or explicit ready marker after connection open
 - the observer has recorded `warm_ready_at`
 
 Without those preconditions, the run is a cold timeline profile or a browser
 setup failure, not a warm realtime propagation measurement.
+
+If the existing timeline stream does not emit anything until data changes, add
+an explicit ready marker before promoting warm profiles into SLA data.
 
 ### Durable Archive
 
@@ -221,6 +227,8 @@ The system should grow in layers:
    - cold timeline truth profile
    - durable archive profile
    - close while idle, close while thinking, provider timeout
+   - run on one named always-on dogfood host with cost ceilings and alerting
+   - keep latency budgets warn-only until at least 20 clean baseline runs exist
 
 4. **Release/ship confidence**
    - one hosted warm live-output run
@@ -604,6 +612,7 @@ Useful options:
 
 - `--provider codex|claude|all`
 - `--profile cold-timeline|warm-create|warm-live|warm-close|durable-archive|honest-degradation|fidelity`
+- `--profile-class cold_timeline|warm_realtime|durable_archive|honest_degradation|fidelity`
 - `--ownership managed|unmanaged|all`
 - `--shutdown graceful|codex-bridge-stop|claude-exit|terminal-close|wrapper-term|provider-term|provider-kill|ssh-exit|ssh-disconnect`
 - `--subdomain <tenant>`
@@ -689,8 +698,6 @@ CI should arrive in layers.
 - Which user-visible card states are acceptable during machine offline windows?
 - Should runtime terminal events be durably spooled before they count as meeting
   the managed close SLA under flaky network conditions?
-- What is the minimum browser-side ready signal for warm profiles: initial SSE
-  event, heartbeat, explicit ready marker, or all three?
 
 ## Built So Far
 
