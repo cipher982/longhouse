@@ -1586,9 +1586,14 @@ except Exception as exc:
             source = ship_trace.get("observation_source")
             if source:
                 parts.append(f"source={source}")
+            wake_reason = ship_trace.get("wake_reason")
+            if wake_reason:
+                parts.append(f"wake={wake_reason}")
             for key, label in (
                 ("append_to_job_ms", "append_to_job"),
                 ("observation_to_enqueue_ms", "observe_to_enqueue"),
+                ("observation_to_wake_ms", "observe_to_wake"),
+                ("wake_to_enqueue_ms", "wake_to_enqueue"),
                 ("enqueue_to_job_ms", "enqueue_to_job"),
                 ("observed_to_job_ms", "observed_to_job"),
                 ("prepare_ms", "prepare"),
@@ -1911,8 +1916,12 @@ def ship_trace_details(data: dict[str, Any], remote_clock_skew_ms: int | None) -
         details: dict[str, Any] = {}
         if isinstance(ship_trace.get("observation_source"), str):
             details["observation_source"] = ship_trace["observation_source"]
+        if isinstance(ship_trace.get("wake_reason"), str):
+            details["wake_reason"] = ship_trace["wake_reason"]
         for key in (
             "observation_to_enqueue_ms",
+            "observation_to_wake_ms",
+            "wake_to_enqueue_ms",
             "enqueue_to_job_ms",
             "observed_to_job_ms",
             "prepare_ms",
