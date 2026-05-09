@@ -1309,7 +1309,9 @@ fn schedule_transcript_catchup(
     file_len_hint: Option<u64>,
 ) {
     if is_terminal_or_attention_phase(phase) {
-        transcript_catchups.retain(|existing| existing.path != path);
+        let has_wake_socket_catchup = transcript_catchups
+            .iter()
+            .any(|existing| existing.path == path && existing.observation_source == "wake_socket");
         if active_transcript_polls.remove(&path).is_some() {
             tracing::info!(
                 path = %path.display(),
@@ -1318,6 +1320,10 @@ fn schedule_transcript_catchup(
                 "Stopped active transcript polling"
             );
         }
+        if has_wake_socket_catchup && observation_source != "wake_socket" {
+            return;
+        }
+        transcript_catchups.retain(|existing| existing.path != path);
         let now = Instant::now();
         for delay in TERMINAL_CATCHUP_DELAYS {
             transcript_catchups.push(TranscriptCatchup {
@@ -2605,6 +2611,55 @@ mod tests {
         assert_eq!(job.observation.turn_id.as_deref(), Some("turn-123"));
         assert_eq!(job.observation.wake_reason.as_deref(), Some("progress"));
         assert_eq!(job.observation.file_len_hint, Some(456));
+    }
+
+    #[test]
+    fn test_terminal_outbox_signal_does_not_replace_wake_catchup() {
+        let transcript = tempfile::NamedTempFile::new().unwrap();
+        let path = transcript.path().to_path_buf();
+        let mut catchups = Vec::new();
+        let mut active_polls = HashMap::new();
+
+        schedule_transcript_catchup(
+            &mut catchups,
+            &mut active_polls,
+            path.clone(),
+            "codex",
+            "idle",
+            "wake_socket",
+            123,
+            Some(124),
+            true,
+            Some("session-123".to_string()),
+            Some("turn-123".to_string()),
+            Some("turn_completed".to_string()),
+            Some(456),
+        );
+        schedule_transcript_catchup(
+            &mut catchups,
+            &mut active_polls,
+            path,
+            "codex",
+            "idle",
+            "outbox_signal",
+            130,
+            None,
+            true,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        let mut scheduler = PathScheduler::new(4);
+        drain_due_transcript_catchups(&mut scheduler, &mut catchups);
+        let job = scheduler.pop_launchable().expect("terminal wake queued");
+        assert_eq!(job.observation.source, "wake_socket");
+        assert_eq!(
+            job.observation.wake_reason.as_deref(),
+            Some("turn_completed")
+        );
+        assert_eq!(job.observation.session_id.as_deref(), Some("session-123"));
     }
 
     #[test]
