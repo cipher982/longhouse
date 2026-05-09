@@ -873,6 +873,199 @@ except Exception as exc:
                 payload={"returncode": proc.returncode, "stderr": stderr[-1000:]},
             )
 
+    def stream_timeline_close_sse(
+        self,
+        session_id: str,
+        *,
+        case_id: str,
+        ownership: str,
+    ) -> None:
+        token = self.browser_session_cookie()
+        if not token:
+            self.observe(
+                case_id=case_id,
+                provider="codex",
+                ownership=ownership,
+                source="hosted_sse",
+                event="timeline_close_sse_timeout",
+                session_id=session_id,
+                payload={"error": "could not mint browser session cookie"},
+            )
+            return
+
+        script = r"""
+import json, sys, time
+import httpx
+
+token, sid, project = sys.argv[1], sys.argv[2], sys.argv[3]
+headers = {"Cookie": f"longhouse_session={token}"}
+params = {
+    "project": project,
+    "provider": "codex",
+    "limit": "20",
+    "hide_autonomous": "true",
+    "skip_initial_replay": "true",
+}
+event_name = None
+data_lines = []
+started = time.monotonic()
+
+def session_from_event(data):
+    try:
+        obj = json.loads(data)
+    except Exception:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    session = obj.get("session")
+    if isinstance(session, dict) and session.get("thread_id") == sid:
+        return session
+    return None
+
+def is_closed(session):
+    candidates = [session, session.get("head") if isinstance(session, dict) else None]
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        if candidate.get("ended_at"):
+            return True
+        status = str(candidate.get("status") or "").lower()
+        if status in {"completed", "closed"}:
+            return True
+        runtime = candidate.get("runtime_display")
+        if isinstance(runtime, dict) and str(runtime.get("lifecycle") or "").lower() == "closed":
+            return True
+    return False
+
+def emit(kind, session=None, error=None):
+    payload = {
+        "kind": kind,
+        "elapsed_ms": int((time.monotonic() - started) * 1000),
+        "session": session,
+        "error": error,
+    }
+    print(json.dumps(payload, default=str), flush=True)
+
+def flush_event():
+    global event_name, data_lines
+    if event_name is None and not data_lines:
+        return False
+    current_event = event_name
+    data = "\n".join(data_lines)
+    event_name = None
+    data_lines = []
+    if current_event != "session_upsert":
+        return False
+    session = session_from_event(data)
+    if not session or not is_closed(session):
+        return False
+    emit("closed", session)
+    return True
+
+try:
+    timeout = httpx.Timeout(15.0, connect=3.0, read=15.0)
+    with httpx.stream(
+        "GET",
+        "http://127.0.0.1:8000/api/timeline/sessions/stream",
+        params=params,
+        headers=headers,
+        timeout=timeout,
+    ) as response:
+        if response.status_code != 200:
+            emit("error", error=f"status={response.status_code} body={response.text[:500]}")
+            raise SystemExit(0)
+        deadline = time.monotonic() + 10
+        for line in response.iter_lines():
+            if time.monotonic() > deadline:
+                break
+            if line == "":
+                if flush_event():
+                    raise SystemExit(0)
+                continue
+            if line.startswith("event:"):
+                event_name = line[6:].strip()
+            elif line.startswith("data:"):
+                data_lines.append(line[5:].lstrip())
+        flush_event()
+        emit("timeout")
+except SystemExit:
+    raise
+except Exception as exc:
+    emit("error", error=repr(exc))
+"""
+        proc = subprocess.Popen(
+            [
+                "ssh",
+                self.args.ssh_target,
+                "docker",
+                "exec",
+                "-i",
+                self.container,
+                "python3",
+                "-",
+                token,
+                session_id,
+                self.project,
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        assert proc.stdin is not None
+        assert proc.stdout is not None
+        assert proc.stderr is not None
+        proc.stdin.write(script)
+        proc.stdin.close()
+
+        saw_closed = False
+        for line in proc.stdout:
+            data = safe_json_loads(line.strip())
+            if not isinstance(data, dict):
+                continue
+            kind = data.get("kind")
+            if kind == "closed":
+                saw_closed = True
+                self.observe(
+                    case_id=case_id,
+                    provider="codex",
+                    ownership=ownership,
+                    source="hosted_sse",
+                    event="timeline_close_sse_visible",
+                    session_id=session_id,
+                    payload=data,
+                )
+                break
+            if kind in {"timeout", "error"}:
+                self.observe(
+                    case_id=case_id,
+                    provider="codex",
+                    ownership=ownership,
+                    source="hosted_sse",
+                    event=f"timeline_close_sse_{kind}",
+                    session_id=session_id,
+                    payload=data,
+                )
+                break
+
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=2)
+
+        stderr = proc.stderr.read().strip()
+        if not saw_closed:
+            self.observe(
+                case_id=case_id,
+                provider="codex",
+                ownership=ownership,
+                source="hosted_sse",
+                event="timeline_close_sse_timeout",
+                session_id=session_id,
+                payload={"returncode": proc.returncode, "stderr": stderr[-1000:]},
+            )
+
     def start_timeline_live_poll(
         self,
         session_id: str,
@@ -910,6 +1103,25 @@ except Exception as exc:
                 ownership=ownership,
             ),
             name=f"timeline-live-sse-{session_id}",
+            daemon=True,
+        )
+        thread.start()
+        return thread
+
+    def start_timeline_close_sse(
+        self,
+        session_id: str,
+        *,
+        case_id: str,
+        ownership: str,
+    ) -> threading.Thread:
+        thread = threading.Thread(
+            target=lambda: self.stream_timeline_close_sse(
+                session_id,
+                case_id=case_id,
+                ownership=ownership,
+            ),
+            name=f"timeline-close-sse-{session_id}",
             daemon=True,
         )
         thread.start()
@@ -1109,6 +1321,11 @@ except Exception as exc:
         timeline_live_sse.join(timeout=95)
         self.write_snapshot(case_id, ownership, session_id, "post_response")
 
+        timeline_close_sse = self.start_timeline_close_sse(
+            session_id,
+            case_id=case_id,
+            ownership=ownership,
+        )
         self.observe(
             case_id=case_id,
             provider="codex",
@@ -1135,6 +1352,7 @@ except Exception as exc:
             timeout=15,
             interval=0.25,
         )
+        timeline_close_sse.join(timeout=12)
         self.write_snapshot(case_id, ownership, session_id, "post_shutdown")
         return {
             "case_id": case_id,
@@ -1523,7 +1741,20 @@ except Exception as exc:
             "assistant_response_local",
             "timeline_live_transcript_sse_first_visible",
         )
-        close_latency = self.event_delta_ms(case_id, session_id, "shutdown_requested", "hosted_runtime_closed")
+        close_http_latency = self.event_delta_ms(
+            case_id,
+            session_id,
+            "shutdown_requested",
+            "hosted_runtime_closed",
+        )
+        close_sse_latency = self.event_delta_any_order_ms(
+            case_id,
+            session_id,
+            "shutdown_requested",
+            "timeline_close_sse_visible",
+        )
+        close_latency = close_sse_latency if close_sse_latency is not None else close_http_latency
+        close_source = "sse" if close_sse_latency is not None else "http"
         terminal = terminal_details(hosted)
         transcript_ingest = transcript_ingest_details(hosted, self.remote_clock_skew_ms)
         ownership = session.get("execution_home") or "-"
@@ -1544,6 +1775,9 @@ except Exception as exc:
             "durable_archive_target_ms": DURABLE_ARCHIVE_TARGET_MS,
             "durable_archive_pass": None,
             "close_observed_ms": close_latency,
+            "close_source": close_source if close_latency is not None else None,
+            "close_http_observed_ms": close_http_latency,
+            "close_sse_observed_ms": close_sse_latency,
             "close_target_ms": MANAGED_CLOSE_TARGET_MS,
             "close_pass": None,
             "bridge_live_ingest_lag_ms": None,
@@ -1672,10 +1906,12 @@ except Exception as exc:
         if closed:
             close_note = "close=closed"
             if close_latency is not None:
-                close_note += f" observed_in={close_latency}ms"
+                close_note += f" source={close_source} observed_in={close_latency}ms"
                 close_state = "pass" if close_latency <= MANAGED_CLOSE_TARGET_MS else "slow"
                 metrics["close_pass"] = close_latency <= MANAGED_CLOSE_TARGET_MS
                 close_note += f" close_slo={close_state} target={MANAGED_CLOSE_TARGET_MS}ms"
+                if close_sse_latency is not None and close_http_latency is not None:
+                    close_note += f" http_observed_in={close_http_latency}ms"
             if terminal.get("ingest_lag_ms") is not None:
                 close_note += f" ingest_lag={terminal['ingest_lag_ms']}ms"
             if terminal.get("source"):
