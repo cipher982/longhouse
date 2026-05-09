@@ -283,6 +283,64 @@ def test_sessions_list_includes_codex_live_transcript_overlay(tmp_path):
     }
 
 
+def test_sessions_list_hides_live_transcript_overlay_after_durable_activity_catches_up(tmp_path):
+    factory = _make_db(tmp_path, "codex_live_transcript_superseded.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            provider="codex",
+            project="codex-live-overlay-superseded",
+            started_at=now - timedelta(minutes=10),
+            execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
+            managed_transport="codex_app_server",
+        )
+        session.last_activity_at = now - timedelta(seconds=1)
+        db.add(
+            SessionRuntimeEvent(
+                runtime_key=f"codex:{session.id}",
+                session_id=session.id,
+                provider="codex",
+                device_id="cinder",
+                source="codex_bridge_live",
+                kind="progress_signal",
+                occurred_at=now - timedelta(seconds=5),
+                received_at=now,
+                dedupe_key=f"bridge:live:{session.id}:thread-1:turn-1:4",
+                payload_json=json.dumps(
+                    {
+                        "progress_kind": "bridge_live_transcript_delta",
+                        "thread_id": "thread-1",
+                        "turn_id": "turn-1",
+                        "seq": 4,
+                        "method": "item/agentMessage/delta",
+                        "delta": "older partial",
+                        "live_text": "older partial",
+                        "turn_completed": False,
+                    },
+                    sort_keys=True,
+                ),
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    for client in _client(factory):
+        resp = client.get(
+            "/agents/sessions?project=codex-live-overlay-superseded&provider=codex&limit=5",
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert resp.status_code == 200, resp.text
+        session_payload = resp.json()["sessions"][0]
+
+    assert session_payload["id"] == str(session.id)
+    assert session_payload["last_activity_at"] == (now - timedelta(seconds=1)).isoformat().replace("+00:00", "Z")
+    assert session_payload["live_transcript"] is None
+
+
 def test_sessions_list_marks_old_open_session_idle_without_live_signal(tmp_path):
     factory = _make_db(tmp_path, "open_idle.db")
     now = datetime.now(timezone.utc)
