@@ -1300,23 +1300,35 @@ except Exception as exc:
         )
         if send.returncode != 0:
             raise RuntimeError(f"managed send failed: {send.short()}")
+        local_assistant_event = None
         if thread_path:
-            self.poll_local_assistant_response(
+            local_assistant_event = self.poll_local_assistant_response(
                 thread_path,
                 nonce,
                 case_id=case_id,
                 ownership=ownership,
                 session_id=session_id,
             )
-        self.poll_hosted_session(
-            session_id,
-            case_id=case_id,
-            ownership=ownership,
-            predicate=lambda data: hosted_assistant_events_contain(data, nonce),
-            event="assistant_response_hosted",
-            timeout=180,
-            interval=0.5,
-        )
+        if local_assistant_event is None:
+            self.observe(
+                case_id=case_id,
+                provider="codex",
+                ownership=ownership,
+                source="provider_transcript",
+                event="provider_response_timeout",
+                session_id=session_id,
+                payload={"thread_path": str(thread_path) if thread_path else None},
+            )
+        else:
+            self.poll_hosted_session(
+                session_id,
+                case_id=case_id,
+                ownership=ownership,
+                predicate=lambda data: hosted_assistant_events_contain(data, nonce),
+                event="assistant_response_hosted",
+                timeout=180,
+                interval=0.5,
+            )
         timeline_live_poll.join(timeout=95)
         timeline_live_sse.join(timeout=95)
         self.write_snapshot(case_id, ownership, session_id, "post_response")
@@ -1785,6 +1797,18 @@ except Exception as exc:
             "bridge_live_method": None,
             "ship_trace_source": None,
             "ship_trace_wake_reason": None,
+            "provider_timeout": self.event_observed_at_ms(
+                case_id,
+                session_id,
+                "provider_response_timeout",
+            )
+            is not None
+            or self.event_observed_at_ms(
+                case_id,
+                session_id,
+                "assistant_response_local_timeout",
+            )
+            is not None,
         }
         if not session:
             metrics["verdict"] = "missing"
@@ -1928,6 +1952,13 @@ except Exception as exc:
             metrics["verdict"] = "blocked"
             metrics["notes"] = f"{note}; {close_note}; ownership={ownership}, transport={transport}"
             return "blocked", metrics["notes"], metrics
+        if metrics["provider_timeout"]:
+            metrics["verdict"] = "provider_timeout"
+            metrics["notes"] = (
+                f"provider_timeout=true; {live_ui}; transcript={transcript}; "
+                f"{close_note}; ownership={ownership}, transport={transport}"
+            )
+            return "provider_timeout", metrics["notes"], metrics
         if not contains:
             verdict = "partial" if closed else "missing"
             metrics["verdict"] = verdict
