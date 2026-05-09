@@ -38,7 +38,7 @@ HOSTED_RUNTIME_EVENT_LIMIT = 200
 LIVE_FIRST_OUTPUT_TARGET_MS = 500
 DURABLE_ARCHIVE_TARGET_MS = 3_000
 MANAGED_CLOSE_TARGET_MS = 1_000
-METRICS_SCHEMA_VERSION = 1
+METRICS_SCHEMA_VERSION = 2
 CODEX_TUI_PRECONDITION_PATTERNS = (
     (
         re.compile(
@@ -124,6 +124,7 @@ class Profiler:
         self.project = args.project
         self.subdomain = args.subdomain
         self.container = args.container or f"{HOSTED_CONTAINER_PREFIX}{self.subdomain}"
+        self.browser_ui_base_url = args.browser_ui_base_url or f"https://{self.subdomain}.longhouse.ai"
         self.remote_clock_skew_ms = self.measure_remote_clock_skew_ms()
         self._observe_lock = threading.Lock()
         self._browser_session_cookie: str | None = None
@@ -1066,6 +1067,261 @@ except Exception as exc:
                 payload={"returncode": proc.returncode, "stderr": stderr[-1000:]},
             )
 
+    def observe_browser_ui(
+        self,
+        session_id: str,
+        nonce: str,
+        *,
+        case_id: str,
+        ownership: str,
+    ) -> None:
+        token = self.browser_session_cookie()
+        if not token:
+            self.observe(
+                case_id=case_id,
+                provider="codex",
+                ownership=ownership,
+                source="browser_ui",
+                event="browser_ui_error",
+                session_id=session_id,
+                payload={"error": "could not mint browser session cookie"},
+            )
+            return
+
+        script_path = self.output_dir / f"{session_id}-browser-ui-observer.mjs"
+        script_path.write_text(
+            r"""
+import { chromium } from "playwright";
+
+const [baseUrlArg, token, sid, project, nonce] = process.argv.slice(2);
+const baseUrl = new URL(baseUrlArg);
+const started = performance.now();
+const emitted = new Set();
+const timeoutEmitted = new Set();
+let browser;
+let page;
+
+function elapsedMs() {
+  return Math.round(performance.now() - started);
+}
+
+function emit(kind, payload = {}) {
+  console.log(JSON.stringify({ kind, elapsed_ms: elapsedMs(), ...payload }));
+}
+
+async function afterPaint() {
+  if (!page) {
+    return;
+  }
+  await page.evaluate(() => new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  }));
+}
+
+async function readCard() {
+  if (!page) {
+    return null;
+  }
+  return await page.evaluate((sessionId) => {
+    const escaped = CSS.escape(sessionId);
+    const card = document.querySelector(`[data-session-id="${escaped}"], [data-thread-id="${escaped}"]`);
+    if (!card) {
+      return null;
+    }
+    const live = card.querySelector('[data-testid="session-card-live-transcript"]');
+    const closed = card.querySelector('[data-testid="session-card-closed-state"]');
+    const runtime = card.querySelector('[data-testid="session-card-runtime"]');
+    return {
+      session_id: card.getAttribute("data-session-id"),
+      thread_id: card.getAttribute("data-thread-id"),
+      card_state: card.getAttribute("data-card-state"),
+      runtime_tone: card.getAttribute("data-runtime-tone"),
+      runtime_freshness: card.getAttribute("data-runtime-freshness"),
+      control_path: card.getAttribute("data-control-path"),
+      live_text: live?.textContent?.trim() ?? "",
+      closed_text: closed?.textContent?.trim() ?? "",
+      runtime_text: runtime?.textContent?.trim() ?? "",
+    };
+  }, sid);
+}
+
+async function maybeEmit(kind, payload) {
+  if (emitted.has(kind)) {
+    return;
+  }
+  emitted.add(kind);
+  await afterPaint();
+  emit(kind, payload);
+}
+
+function markTimeout(kind) {
+  if (emitted.has(kind) || timeoutEmitted.has(kind)) {
+    return;
+  }
+  timeoutEmitted.add(kind);
+  emit(`${kind}_timeout`);
+}
+
+try {
+  browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  await context.addCookies([
+    {
+      name: "longhouse_session",
+      value: token,
+      domain: baseUrl.hostname,
+      path: "/",
+      httpOnly: false,
+      secure: baseUrl.protocol === "https:",
+      sameSite: "Lax",
+    },
+  ]);
+  page = await context.newPage();
+  page.on("console", (message) => {
+    const type = message.type();
+    if (type === "error" || type === "warning") {
+      emit("console", { level: type, text: message.text().slice(0, 500) });
+    }
+  });
+  page.on("pageerror", (error) => {
+    emit("page_error", { error: String(error).slice(0, 1000) });
+  });
+
+  const url = new URL("/timeline", baseUrl);
+  url.searchParams.set("project", project);
+  url.searchParams.set("provider", "codex");
+  url.searchParams.set("limit", "20");
+  url.searchParams.set("hide_autonomous", "true");
+  await page.goto(url.toString(), { waitUntil: "domcontentloaded", timeout: 30000 });
+  await maybeEmit("ui_loaded", { url: page.url() });
+
+  const deadlines = {
+    card: performance.now() + 30000,
+    live_first: performance.now() + 95000,
+    live_full: performance.now() + 95000,
+    // Provider turns can legitimately exceed the live-output timeout. Keep the
+    // close observer alive long enough to see shutdown after a provider timeout.
+    close: performance.now() + 420000,
+  };
+
+  while (performance.now() < deadlines.close) {
+    const card = await readCard();
+    const now = performance.now();
+    if (card) {
+      await maybeEmit("card_painted", { card });
+      if (card.live_text && !emitted.has("live_first_painted")) {
+        await maybeEmit("live_first_painted", { card });
+      }
+      if (card.live_text.includes(nonce) && !emitted.has("live_nonce_painted")) {
+        await maybeEmit("live_nonce_painted", { card });
+      }
+      if ((card.card_state === "closed" || card.closed_text) && !emitted.has("close_painted")) {
+        await maybeEmit("close_painted", { card });
+        break;
+      }
+    }
+
+    if (now >= deadlines.card) {
+      markTimeout("card_painted");
+    }
+    if (now >= deadlines.live_first) {
+      markTimeout("live_first_painted");
+    }
+    if (now >= deadlines.live_full) {
+      markTimeout("live_nonce_painted");
+    }
+    if (
+      emitted.has("card_painted") &&
+      emitted.has("live_first_painted") &&
+      emitted.has("live_nonce_painted") &&
+      now >= deadlines.close
+    ) {
+      break;
+    }
+    await page.waitForTimeout(50);
+  }
+  markTimeout("close_painted");
+} catch (error) {
+  emit("error", { error: String(error).slice(0, 1000) });
+} finally {
+  if (browser) {
+    await browser.close();
+  }
+}
+""".lstrip()
+        )
+
+        proc = subprocess.Popen(
+            [
+                "bun",
+                str(script_path),
+                self.browser_ui_base_url,
+                token,
+                session_id,
+                self.project,
+                nonce,
+            ],
+            cwd=str(ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        assert proc.stdout is not None
+        assert proc.stderr is not None
+
+        event_map = {
+            "ui_loaded": "browser_ui_loaded",
+            "card_painted": "browser_timeline_card_painted",
+            "live_first_painted": "browser_live_transcript_first_painted",
+            "live_nonce_painted": "browser_live_transcript_nonce_painted",
+            "close_painted": "browser_close_card_painted",
+        }
+        timeout_map = {
+            "card_painted_timeout": "browser_timeline_card_painted_timeout",
+            "live_first_painted_timeout": "browser_live_transcript_first_painted_timeout",
+            "live_nonce_painted_timeout": "browser_live_transcript_nonce_painted_timeout",
+            "close_painted_timeout": "browser_close_card_painted_timeout",
+        }
+        for line in proc.stdout:
+            data = safe_json_loads(line.strip())
+            if not isinstance(data, dict):
+                continue
+            kind = str(data.get("kind") or "")
+            event = event_map.get(kind) or timeout_map.get(kind)
+            if event is None and kind in {"console", "page_error", "error"}:
+                event = f"browser_ui_{kind}"
+            if event is None:
+                continue
+            self.observe(
+                case_id=case_id,
+                provider="codex",
+                ownership=ownership,
+                source="browser_ui",
+                event=event,
+                session_id=session_id,
+                payload=data,
+            )
+            if event == "browser_close_card_painted":
+                break
+
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=2)
+
+        stderr = proc.stderr.read().strip()
+        if proc.returncode not in {0, None}:
+            self.observe(
+                case_id=case_id,
+                provider="codex",
+                ownership=ownership,
+                source="browser_ui",
+                event="browser_ui_error",
+                session_id=session_id,
+                payload={"returncode": proc.returncode, "stderr": stderr[-1000:], "script": str(script_path)},
+            )
+
     def start_timeline_live_poll(
         self,
         session_id: str,
@@ -1103,6 +1359,29 @@ except Exception as exc:
                 ownership=ownership,
             ),
             name=f"timeline-live-sse-{session_id}",
+            daemon=True,
+        )
+        thread.start()
+        return thread
+
+    def start_browser_ui_observer(
+        self,
+        session_id: str,
+        nonce: str,
+        *,
+        case_id: str,
+        ownership: str,
+    ) -> threading.Thread | None:
+        if self.args.skip_browser_ui:
+            return None
+        thread = threading.Thread(
+            target=lambda: self.observe_browser_ui(
+                session_id,
+                nonce,
+                case_id=case_id,
+                ownership=ownership,
+            ),
+            name=f"browser-ui-{session_id}",
             daemon=True,
         )
         thread.start()
@@ -1174,6 +1453,12 @@ except Exception as exc:
             provider_session_id=session_id,
             payload={"ws_url": ws_url},
         )
+        browser_ui = self.start_browser_ui_observer(
+            session_id,
+            nonce,
+            case_id=case_id,
+            ownership=ownership,
+        )
         self.poll_timeline_session(
             session_id,
             case_id=case_id,
@@ -1186,7 +1471,12 @@ except Exception as exc:
         self.write_snapshot(case_id, ownership, session_id, "post_launch")
 
         tui_log = self.output_dir / f"{session_id}-managed-tui.log"
-        remote_exec = f"exec {shlex.quote('/opt/homebrew/bin/codex')} --enable tui_app_server --remote {shlex.quote(ws_url)} --no-alt-screen"
+        remote_exec = (
+            f"LONGHOUSE_MANAGED_SESSION_ID={shlex.quote(session_id)} "
+            f"exec {shlex.quote('/opt/homebrew/bin/codex')} "
+            "-c check_for_update_on_startup=false "
+            f"--enable tui_app_server --remote {shlex.quote(ws_url)} --no-alt-screen"
+        )
         remote_cmd = (
             "stty rows 40 cols 120 2>/dev/null || true; "
             "export LINES=40 COLUMNS=120 TERM=${TERM:-xterm-256color}; "
@@ -1259,6 +1549,8 @@ except Exception as exc:
                 timeout=15,
                 interval=0.25,
             )
+            if browser_ui is not None:
+                browser_ui.join(timeout=150)
             self.write_snapshot(case_id, ownership, session_id, "post_shutdown")
             return {
                 "case_id": case_id,
@@ -1365,6 +1657,8 @@ except Exception as exc:
             interval=0.25,
         )
         timeline_close_sse.join(timeout=12)
+        if browser_ui is not None:
+            browser_ui.join(timeout=150)
         self.write_snapshot(case_id, ownership, session_id, "post_shutdown")
         return {
             "case_id": case_id,
@@ -1705,6 +1999,12 @@ except Exception as exc:
             "session_id_observed",
             "timeline_card_visible_pre_ingest",
         )
+        browser_card_latency = self.event_delta_ms(
+            case_id,
+            session_id,
+            "session_id_observed",
+            "browser_timeline_card_painted",
+        )
         live_http_latency = self.event_delta_ms(
             case_id,
             session_id,
@@ -1753,6 +2053,42 @@ except Exception as exc:
             "assistant_response_local",
             "timeline_live_transcript_sse_first_visible",
         )
+        browser_live_first_latency = self.event_delta_ms(
+            case_id,
+            session_id,
+            "prompt_sent_started",
+            "browser_live_transcript_first_painted",
+        )
+        browser_live_full_latency = self.event_delta_ms(
+            case_id,
+            session_id,
+            "prompt_sent_started",
+            "browser_live_transcript_nonce_painted",
+        )
+        browser_live_first_from_local_latency = self.event_delta_any_order_ms(
+            case_id,
+            session_id,
+            "assistant_response_local",
+            "browser_live_transcript_first_painted",
+        )
+        browser_live_full_from_local_latency = self.event_delta_any_order_ms(
+            case_id,
+            session_id,
+            "assistant_response_local",
+            "browser_live_transcript_nonce_painted",
+        )
+        browser_first_after_sse_latency = self.event_delta_any_order_ms(
+            case_id,
+            session_id,
+            "timeline_live_transcript_sse_first_visible",
+            "browser_live_transcript_first_painted",
+        )
+        browser_full_after_sse_latency = self.event_delta_any_order_ms(
+            case_id,
+            session_id,
+            "timeline_live_transcript_sse_visible",
+            "browser_live_transcript_nonce_painted",
+        )
         close_http_latency = self.event_delta_ms(
             case_id,
             session_id,
@@ -1765,8 +2101,38 @@ except Exception as exc:
             "shutdown_requested",
             "timeline_close_sse_visible",
         )
-        close_latency = close_sse_latency if close_sse_latency is not None else close_http_latency
-        close_source = "sse" if close_sse_latency is not None else "http"
+        close_browser_latency = self.event_delta_any_order_ms(
+            case_id,
+            session_id,
+            "shutdown_requested",
+            "browser_close_card_painted",
+        )
+        close_browser_after_http_latency = self.event_delta_any_order_ms(
+            case_id,
+            session_id,
+            "hosted_runtime_closed",
+            "browser_close_card_painted",
+        )
+        close_browser_after_sse_latency = self.event_delta_any_order_ms(
+            case_id,
+            session_id,
+            "timeline_close_sse_visible",
+            "browser_close_card_painted",
+        )
+        close_latency = (
+            close_browser_latency
+            if close_browser_latency is not None
+            else close_sse_latency
+            if close_sse_latency is not None
+            else close_http_latency
+        )
+        close_source = (
+            "browser_ui"
+            if close_browser_latency is not None
+            else "sse"
+            if close_sse_latency is not None
+            else "http"
+        )
         terminal = terminal_details(hosted)
         transcript_ingest = transcript_ingest_details(hosted, self.remote_clock_skew_ms)
         ownership = session.get("execution_home") or "-"
@@ -1783,6 +2149,13 @@ except Exception as exc:
             "live_first_pass": None,
             "live_first_source": None,
             "live_tail_non_slo_from_local_ms": None,
+            "browser_timeline_card_from_session_id_ms": browser_card_latency,
+            "browser_live_first_from_prompt_ms": browser_live_first_latency,
+            "browser_live_tail_from_prompt_ms": browser_live_full_latency,
+            "browser_live_first_from_local_raw_ms": browser_live_first_from_local_latency,
+            "browser_live_tail_from_local_raw_ms": browser_live_full_from_local_latency,
+            "browser_live_first_after_sse_raw_ms": browser_first_after_sse_latency,
+            "browser_live_tail_after_sse_raw_ms": browser_full_after_sse_latency,
             "durable_archive_local_to_hosted_ms": propagation_latency,
             "durable_archive_target_ms": DURABLE_ARCHIVE_TARGET_MS,
             "durable_archive_pass": None,
@@ -1790,6 +2163,9 @@ except Exception as exc:
             "close_source": close_source if close_latency is not None else None,
             "close_http_observed_ms": close_http_latency,
             "close_sse_observed_ms": close_sse_latency,
+            "close_browser_observed_ms": close_browser_latency,
+            "close_browser_after_http_raw_ms": close_browser_after_http_latency,
+            "close_browser_after_sse_raw_ms": close_browser_after_sse_latency,
             "close_target_ms": MANAGED_CLOSE_TARGET_MS,
             "close_pass": None,
             "bridge_live_ingest_lag_ms": None,
@@ -1816,13 +2192,13 @@ except Exception as exc:
             return "missing", "hosted session row not observed", metrics
         precondition = self.provider_precondition_for(case_id, session_id)
 
-        live_first_from_local_latency = first_live_sse_from_local_latency
-        live_full_from_local_latency = live_sse_from_local_latency
-        live_ui_source = "sse"
-        if live_first_from_local_latency is not None and live_first_from_local_latency < 0:
-            live_first_from_local_latency = 0
-        if live_full_from_local_latency is not None and live_full_from_local_latency < 0:
-            live_full_from_local_latency = 0
+        live_first_from_local_latency = browser_live_first_from_local_latency
+        live_full_from_local_latency = browser_live_full_from_local_latency
+        live_ui_source = "browser_ui"
+        if live_first_from_local_latency is None:
+            live_first_from_local_latency = first_live_sse_from_local_latency
+            live_full_from_local_latency = live_sse_from_local_latency
+            live_ui_source = "sse"
         if live_first_from_local_latency is None:
             live_first_from_local_latency = first_live_http_from_local_latency
             live_full_from_local_latency = live_http_from_local_latency
@@ -1858,6 +2234,8 @@ except Exception as exc:
             transcript += f" local_to_hosted={propagation_latency}ms"
         if card_latency is not None:
             transcript += f" timeline_card_pre_ingest={card_latency}ms"
+        if browser_card_latency is not None:
+            transcript += f" browser_card_from_session_id={browser_card_latency}ms"
         if first_live_http_latency is not None:
             transcript += f" first_live_http={first_live_http_latency}ms"
         if live_http_latency is not None:
@@ -1866,6 +2244,10 @@ except Exception as exc:
             transcript += f" first_live_sse={first_live_sse_latency}ms"
         if live_sse_latency is not None:
             transcript += f" live_sse={live_sse_latency}ms"
+        if browser_live_first_latency is not None:
+            transcript += f" browser_first_live={browser_live_first_latency}ms"
+        if browser_live_full_latency is not None:
+            transcript += f" browser_live={browser_live_full_latency}ms"
         if first_live_http_from_local_latency is not None:
             transcript += f" first_live_http_from_local={first_live_http_from_local_latency}ms"
         if live_http_from_local_latency is not None:
@@ -1874,6 +2256,14 @@ except Exception as exc:
             transcript += f" first_live_sse_from_local={first_live_sse_from_local_latency}ms"
         if live_sse_from_local_latency is not None:
             transcript += f" live_sse_from_local={live_sse_from_local_latency}ms"
+        if browser_live_first_from_local_latency is not None:
+            transcript += f" browser_first_live_from_local={browser_live_first_from_local_latency}ms"
+        if browser_live_full_from_local_latency is not None:
+            transcript += f" browser_live_from_local={browser_live_full_from_local_latency}ms"
+        if browser_first_after_sse_latency is not None:
+            transcript += f" sse_to_browser_first_live={browser_first_after_sse_latency}ms"
+        if browser_full_after_sse_latency is not None:
+            transcript += f" sse_to_browser_live={browser_full_after_sse_latency}ms"
         if transcript_ingest.get("ingest_lag_ms") is not None:
             transcript += f" server_ingest_lag={transcript_ingest['ingest_lag_ms']}ms"
         if transcript_ingest.get("skew_adjusted_lag_ms") is not None:
@@ -1936,6 +2326,12 @@ except Exception as exc:
                 close_note += f" close_slo={close_state} target={MANAGED_CLOSE_TARGET_MS}ms"
                 if close_sse_latency is not None and close_http_latency is not None:
                     close_note += f" http_observed_in={close_http_latency}ms"
+                if close_browser_latency is not None:
+                    close_note += f" browser_observed_in={close_browser_latency}ms"
+                if close_browser_after_http_latency is not None:
+                    close_note += f" http_to_browser={close_browser_after_http_latency}ms"
+                if close_browser_after_sse_latency is not None:
+                    close_note += f" sse_to_browser={close_browser_after_sse_latency}ms"
             if terminal.get("ingest_lag_ms") is not None:
                 close_note += f" ingest_lag={terminal['ingest_lag_ms']}ms"
             if terminal.get("source"):
@@ -2604,6 +3000,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--name-prefix", default="lh-probe")
     parser.add_argument("--run-id")
     parser.add_argument("--output-dir")
+    parser.add_argument(
+        "--browser-ui-base-url",
+        help="Hosted browser UI origin to profile. Defaults to https://<subdomain>.longhouse.ai.",
+    )
+    parser.add_argument(
+        "--skip-browser-ui",
+        action="store_true",
+        help="Skip the Playwright browser layer and keep the profiler to HTTP/SSE/DB observers.",
+    )
     parser.add_argument("--skip-managed", action="store_true")
     parser.add_argument("--skip-unmanaged", action="store_true")
     parser.add_argument(
@@ -2631,6 +3036,8 @@ def main(argv: list[str]) -> int:
             "project": args.project,
             "subdomain": args.subdomain,
             "container": profiler.container,
+            "browser_ui_base_url": profiler.browser_ui_base_url,
+            "browser_ui_enabled": not args.skip_browser_ui,
         },
     )
     results: list[dict[str, Any]] = []
