@@ -124,7 +124,7 @@ class Profiler:
         self.started_monotonic_ms = monotonic_ms()
         self.project = args.project
         self.subdomain = args.subdomain
-        self.profile_class = args.profile_class
+        self.profile_class = args.profile_class or profile_class_for(args.profile)
         self.container = args.container or f"{HOSTED_CONTAINER_PREFIX}{self.subdomain}"
         self.browser_ui_base_url = args.browser_ui_base_url or f"https://{self.subdomain}.longhouse.ai"
         self.remote_clock_skew_ms = self.measure_remote_clock_skew_ms()
@@ -752,18 +752,19 @@ def flush_event():
 
 try:
     timeout = httpx.Timeout(95.0, connect=3.0, read=95.0)
-    with httpx.stream(
-        "GET",
-        "http://127.0.0.1:8000/api/timeline/sessions/stream",
-        params=params,
-        headers=headers,
-        timeout=timeout,
-    ) as response:
-        if response.status_code != 200:
-            emit("error", error=f"status={response.status_code} body={response.text[:500]}")
-            raise SystemExit(0)
-        deadline = time.monotonic() + 90
-        for line in response.iter_lines():
+        with httpx.stream(
+            "GET",
+            "http://127.0.0.1:8000/api/timeline/sessions/stream",
+            params=params,
+            headers=headers,
+            timeout=timeout,
+        ) as response:
+            if response.status_code != 200:
+                emit("error", error=f"status={response.status_code} body={response.text[:500]}")
+                raise SystemExit(0)
+            emit("ready")
+            deadline = time.monotonic() + 90
+            for line in response.iter_lines():
             if time.monotonic() > deadline:
                 break
             if line == "":
@@ -814,7 +815,17 @@ except Exception as exc:
             if not isinstance(data, dict):
                 continue
             kind = data.get("kind")
-            if kind == "first":
+            if kind == "ready":
+                self.observe(
+                    case_id=case_id,
+                    provider="codex",
+                    ownership=ownership,
+                    source="hosted_sse",
+                    event="timeline_live_transcript_sse_ready",
+                    session_id=session_id,
+                    payload=data,
+                )
+            elif kind == "first":
                 saw_first = True
                 self.observe(
                     case_id=case_id,
@@ -1418,6 +1429,79 @@ except Exception as exc:
             case_id=case_id,
             ownership=ownership,
         )
+        if self.args.profile == "warm-live":
+            browser_ready = self.wait_for_observation(
+                case_id,
+                session_id,
+                "browser_timeline_card_painted",
+                timeout=30,
+            )
+            sse_ready = self.wait_for_observation(
+                case_id,
+                session_id,
+                "timeline_live_transcript_sse_ready",
+                timeout=10,
+            )
+            if browser_ready and sse_ready:
+                self.observe(
+                    case_id=case_id,
+                    provider="codex",
+                    ownership=ownership,
+                    source="harness",
+                    event="warm_ready_at",
+                    session_id=session_id,
+                    payload={
+                        "browser_card_ready": True,
+                        "timeline_sse_ready": True,
+                    },
+                )
+            else:
+                self.observe(
+                    case_id=case_id,
+                    provider="codex",
+                    ownership=ownership,
+                    source="harness",
+                    event="provider_precondition_blocked",
+                    session_id=session_id,
+                    payload={
+                        "reason": "warm_live_precondition_timeout",
+                        "browser_card_ready": browser_ready,
+                        "timeline_sse_ready": sse_ready,
+                    },
+                )
+                self.observe(
+                    case_id=case_id,
+                    provider="codex",
+                    ownership=ownership,
+                    source="harness",
+                    event="shutdown_requested",
+                    session_id=session_id,
+                    payload={"reason": "warm_live_precondition_timeout"},
+                )
+                self.run_observed(
+                    ["longhouse-engine", "codex-bridge", "stop", "--session-id", session_id],
+                    case_id=case_id,
+                    ownership=ownership,
+                    event_prefix="shutdown",
+                    timeout=60,
+                    session_id=session_id,
+                )
+                terminate_process(tui)
+                if browser_ui is not None:
+                    browser_ui.join(timeout=150)
+                self.write_snapshot(case_id, ownership, session_id, "warm_ready_timeout")
+                return {
+                    "case_id": case_id,
+                    "session_id": session_id,
+                    "nonce": nonce,
+                    "thread_id": thread_id,
+                    "thread_path": str(thread_path) if thread_path else None,
+                    "precondition": {
+                        "reason": "warm_live_precondition_timeout",
+                        "browser_card_ready": browser_ready,
+                        "timeline_sse_ready": sse_ready,
+                    },
+                }
         send = self.run_observed(
             [
                 "longhouse-engine",
@@ -1769,6 +1853,7 @@ except Exception as exc:
             "# Managed Session Propagation Profile",
             "",
             f"- Run ID: `{self.run_id}`",
+            f"- Profile: `{self.args.profile}` (`{self.profile_class}`)",
             f"- Started: `{utc_now()}`",
             f"- Project: `{self.project}`",
             f"- Subdomain: `{self.subdomain}`",
@@ -1935,6 +2020,12 @@ except Exception as exc:
             "timeline_live_transcript_sse_visible",
             "browser_live_transcript_nonce_painted",
         )
+        warm_ready_to_prompt_latency = self.event_delta_ms(
+            case_id,
+            session_id,
+            "warm_ready_at",
+            "prompt_sent_started",
+        )
         close_http_latency = self.event_delta_ms(
             case_id,
             session_id,
@@ -2003,6 +2094,10 @@ except Exception as exc:
             "browser_live_tail_from_local_raw_ms": browser_live_full_from_local_latency,
             "browser_live_first_after_sse_raw_ms": browser_first_after_sse_latency,
             "browser_live_tail_after_sse_raw_ms": browser_full_after_sse_latency,
+            "warm_ready_to_prompt_ms": warm_ready_to_prompt_latency,
+            "warm_live_prompt_to_sse_first_ms": first_live_sse_latency,
+            "warm_live_prompt_to_browser_first_paint_ms": browser_live_first_latency,
+            "warm_live_sse_to_browser_first_paint_ms": browser_first_after_sse_latency,
             "durable_archive_local_to_hosted_ms": propagation_latency,
             "durable_archive_target_ms": DURABLE_ARCHIVE_TARGET_MS,
             "durable_archive_pass": None,
@@ -2265,6 +2360,22 @@ except Exception as exc:
                     return observed
         return None
 
+    def wait_for_observation(
+        self,
+        case_id: str,
+        session_id: str,
+        event: str,
+        *,
+        timeout: float,
+        interval: float = 0.05,
+    ) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.event_observed_at_ms(case_id, session_id, event) is not None:
+                return True
+            time.sleep(interval)
+        return self.event_observed_at_ms(case_id, session_id, event) is not None
+
     def provider_precondition_for(self, case_id: str, session_id: str) -> dict[str, Any] | None:
         for row in self.observations:
             if row.get("case_id") != case_id or row.get("session_id") != session_id:
@@ -2301,6 +2412,12 @@ def parse_session_id(text: str) -> str | None:
 def parse_remote_target(text: str) -> str | None:
     match = re.search(r"Remote target:\s*(ws://\S+|wss://\S+)", text)
     return match.group(1) if match else None
+
+
+def profile_class_for(profile: str) -> str:
+    if profile == "warm-live":
+        return "warm_realtime"
+    return "warm_realtime"
 
 
 def parse_session_id_from_rollout(path: Path) -> str:
@@ -2838,6 +2955,12 @@ def call_or_error(fn):
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--profile",
+        choices=["baseline", "warm-live"],
+        default="baseline",
+        help="Profiler scenario to run. warm-live runs only the managed Codex warm live-output path.",
+    )
     parser.add_argument("--provider", choices=["codex"], default="codex")
     parser.add_argument("--ownership", choices=["managed", "unmanaged", "all"], default="all")
     parser.add_argument("--subdomain", default="david010")
@@ -2850,7 +2973,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--profile-class",
         choices=["cold_timeline", "warm_realtime", "durable_archive", "honest_degradation", "fidelity"],
-        default="warm_realtime",
+        default=None,
         help="Observation profile class metadata. Narrow --profile modes will map to this in later slices.",
     )
     parser.add_argument(
@@ -2877,6 +3000,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
+    if args.profile == "warm-live":
+        if args.skip_browser_ui:
+            raise SystemExit("--profile warm-live requires the browser UI observer")
+        args.ownership = "managed"
+        args.skip_unmanaged = True
     profiler = Profiler(args)
     profiler.observe(
         case_id="run",
@@ -2889,9 +3017,10 @@ def main(argv: list[str]) -> int:
             "project": args.project,
             "subdomain": args.subdomain,
             "container": profiler.container,
+            "profile": args.profile,
             "browser_ui_base_url": profiler.browser_ui_base_url,
             "browser_ui_enabled": not args.skip_browser_ui,
-            "profile_class": args.profile_class,
+            "profile_class": profiler.profile_class,
         },
     )
     results: list[dict[str, Any]] = []
