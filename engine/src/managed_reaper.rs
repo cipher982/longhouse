@@ -203,6 +203,7 @@ fn spawn_reap(
                     if let Err(err) = codex_bridge::cmd_codex_bridge_stop(BridgeStopConfig {
                         session_id: session_id.clone(),
                         state_root: None,
+                        terminal_reason: Some("terminal_disconnected".to_string()),
                     })
                     .await
                     {

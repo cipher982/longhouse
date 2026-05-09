@@ -175,6 +175,48 @@ def test_runtime_reducer_materializes_phase_progress_and_terminal(tmp_path):
     engine.dispose()
 
 
+def test_runtime_reducer_preserves_terminal_disconnected_reason(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_terminal_disconnected.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(hours=1), provider="codex")
+        runtime_key = runtime_key_for_session("codex", str(session.id))
+
+        result = ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="codex",
+                    device_id="work-laptop",
+                    source="codex_bridge",
+                    kind="terminal_signal",
+                    occurred_at=now,
+                    dedupe_key="terminal-disconnected-1",
+                    payload={
+                        "terminal_state": "session_ended",
+                        "terminal_reason": "terminal_disconnected",
+                        "terminal_source": "codex_bridge",
+                    },
+                ),
+            ],
+        )
+        db.commit()
+
+        assert result.accepted == 1
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        assert state.terminal_state == "session_ended"
+        assert state.terminal_reason == "terminal_disconnected"
+
+        view = build_runtime_view(state=state, session=session, now=now)
+        assert view.status == "completed"
+        assert view.terminal_reason == "terminal_disconnected"
+
+    engine.dispose()
+
+
 def test_live_transcript_overlay_uses_latest_snapshot_and_dedupes(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "live_transcript_overlay.db")
     now = datetime.now(timezone.utc)

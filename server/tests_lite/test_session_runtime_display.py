@@ -784,6 +784,24 @@ def test_three_axis_fields_prefers_explicit_terminal_reason():
     assert display.terminal_reason == "bridge_stop"
 
 
+def test_three_axis_fields_preserves_terminal_disconnected_reason():
+    display = build_session_runtime_display(
+        runtime_view=_runtime_view(
+            runtime_phase="finished",
+            terminal_state="session_ended",
+            terminal_reason="terminal_disconnected",
+            terminal_source="codex_bridge",
+            status="completed",
+            display_phase="Completed",
+        ),
+        capabilities=_capabilities(managed=True),
+        ended_at=None,
+    )
+
+    assert display.lifecycle == "closed"
+    assert display.terminal_reason == "terminal_disconnected"
+
+
 def test_three_axis_fields_closed_with_process_gone_terminal():
     display = build_session_runtime_display(
         runtime_view=_runtime_view(

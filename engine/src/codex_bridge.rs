@@ -112,6 +112,7 @@ pub enum BridgeSteerError {
 pub struct BridgeStopConfig {
     pub session_id: String,
     pub state_root: Option<PathBuf>,
+    pub terminal_reason: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -301,6 +302,7 @@ enum IpcCommand {
         reply: oneshot::Sender<Result<Value>>,
     },
     Stop {
+        terminal_reason: String,
         reply: oneshot::Sender<Result<Value>>,
     },
 }
@@ -311,6 +313,23 @@ enum BridgeFollowup {
         thread_id: String,
         thread_path: Option<String>,
     },
+}
+
+const TERMINAL_REASON_BRIDGE_STOP: &str = "bridge_stop";
+const TERMINAL_REASON_TERMINAL_DISCONNECTED: &str = "terminal_disconnected";
+
+fn normalize_bridge_terminal_reason(value: Option<&str>) -> String {
+    match value.map(str::trim).filter(|reason| !reason.is_empty()) {
+        Some(TERMINAL_REASON_TERMINAL_DISCONNECTED) => {
+            TERMINAL_REASON_TERMINAL_DISCONNECTED.to_string()
+        }
+        Some(TERMINAL_REASON_BRIDGE_STOP) => TERMINAL_REASON_BRIDGE_STOP.to_string(),
+        Some("user_closed") => "user_closed".to_string(),
+        Some("process_gone") => "process_gone".to_string(),
+        Some("host_expired") => "host_expired".to_string(),
+        Some("provider_signal") => "provider_signal".to_string(),
+        _ => TERMINAL_REASON_BRIDGE_STOP.to_string(),
+    }
 }
 
 fn ipc_socket_path(state_file: &Path) -> PathBuf {
@@ -377,7 +396,12 @@ async fn handle_ipc_connection(
         serde_json::from_slice(&buf[..total]).context("parsing IPC request JSON")?;
     let (reply_tx, reply_rx) = oneshot::channel();
     let command = match request.get("kind").and_then(Value::as_str) {
-        Some("stop") => IpcCommand::Stop { reply: reply_tx },
+        Some("stop") => IpcCommand::Stop {
+            terminal_reason: normalize_bridge_terminal_reason(
+                request.get("reason").and_then(Value::as_str),
+            ),
+            reply: reply_tx,
+        },
         Some("steer") => {
             let text = request
                 .get("text")
@@ -817,19 +841,28 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                         .map(|_| json!({}));
                         let _ = reply.send(result);
                     }
-                    IpcCommand::Stop { reply } => {
+                    IpcCommand::Stop {
+                        terminal_reason,
+                        reply,
+                    } => {
                         context.state.status = "stopped".to_string();
                         context.state.active_turn_id = None;
                         context.state.last_error = None;
                         write_state_file(&context.state_file, &context.state)?;
                         if let Some(path) = context.state.thread_path.as_deref() {
-                            wake_daemon_for_transcript(&config, path, "idle", "bridge_stop", None);
+                            wake_daemon_for_transcript(
+                                &config,
+                                path,
+                                "idle",
+                                &terminal_reason,
+                                None,
+                            );
                         }
                         context
                             .runtime
                             .post_terminal(
                                 "session_ended",
-                                "bridge_stop",
+                                &terminal_reason,
                                 format!(
                                     "bridge:terminal:{}:{}",
                                     context.state.session_id,
@@ -1137,10 +1170,13 @@ async fn send_via_ipc_steer_inner(
 }
 
 #[cfg(unix)]
-async fn stop_via_ipc(sock_path: &Path) -> Result<()> {
-    tokio::time::timeout(IPC_STOP_TIMEOUT, stop_via_ipc_inner(sock_path))
-        .await
-        .map_err(|_| anyhow!("IPC stop timed out after {}s", IPC_STOP_TIMEOUT.as_secs()))?
+async fn stop_via_ipc(sock_path: &Path, terminal_reason: &str) -> Result<()> {
+    tokio::time::timeout(
+        IPC_STOP_TIMEOUT,
+        stop_via_ipc_inner(sock_path, terminal_reason),
+    )
+    .await
+    .map_err(|_| anyhow!("IPC stop timed out after {}s", IPC_STOP_TIMEOUT.as_secs()))?
 }
 
 #[cfg(unix)]
@@ -1182,13 +1218,14 @@ fn parse_stop_ipc_response(response_buf: &[u8]) -> Result<()> {
 }
 
 #[cfg(unix)]
-async fn stop_via_ipc_inner(sock_path: &Path) -> Result<()> {
+async fn stop_via_ipc_inner(sock_path: &Path, terminal_reason: &str) -> Result<()> {
     let mut stream = tokio::net::UnixStream::connect(sock_path)
         .await
         .with_context(|| format!("connecting to IPC socket {}", sock_path.display()))?;
 
     let mut request = serde_json::to_vec(&json!({
         "kind": "stop",
+        "reason": normalize_bridge_terminal_reason(Some(terminal_reason)),
     }))?;
     request.push(b'\n');
     stream.write_all(&request).await?;
@@ -1203,13 +1240,14 @@ async fn stop_via_ipc_inner(sock_path: &Path) -> Result<()> {
 pub async fn cmd_codex_bridge_stop(config: BridgeStopConfig) -> Result<()> {
     let paths = resolve_bridge_paths(config.state_root.as_deref(), &config.session_id, None)?;
     let sock_path = ipc_socket_path(&paths.state_file);
+    let terminal_reason = normalize_bridge_terminal_reason(config.terminal_reason.as_deref());
     if !paths.state_file.exists() {
         if sock_path.exists() {
             eprintln!(
                 "bridge state file is missing for session {}; attempting IPC stop via existing socket",
                 config.session_id
             );
-            return stop_via_ipc(&sock_path).await;
+            return stop_via_ipc(&sock_path, &terminal_reason).await;
         }
         eprintln!(
             "bridge state file is missing for session {}; no recorded child process to stop",
@@ -1218,7 +1256,7 @@ pub async fn cmd_codex_bridge_stop(config: BridgeStopConfig) -> Result<()> {
         return Ok(());
     }
     if sock_path.exists() {
-        match stop_via_ipc(&sock_path).await {
+        match stop_via_ipc(&sock_path, &terminal_reason).await {
             Ok(()) => return Ok(()),
             Err(err) => {
                 eprintln!(
@@ -3750,6 +3788,72 @@ mod tests {
         let state = Path::new("/tmp/codex-bridge/session-42.json");
         let sock = ipc_socket_path(state);
         assert_eq!(sock, Path::new("/tmp/codex-bridge/session-42.sock"));
+    }
+
+    #[test]
+    fn normalize_bridge_terminal_reason_defaults_unknown_to_bridge_stop() {
+        assert_eq!(
+            normalize_bridge_terminal_reason(None),
+            TERMINAL_REASON_BRIDGE_STOP
+        );
+        assert_eq!(
+            normalize_bridge_terminal_reason(Some("")),
+            TERMINAL_REASON_BRIDGE_STOP
+        );
+        assert_eq!(
+            normalize_bridge_terminal_reason(Some("future-new-reason")),
+            TERMINAL_REASON_BRIDGE_STOP
+        );
+        assert_eq!(
+            normalize_bridge_terminal_reason(Some(TERMINAL_REASON_TERMINAL_DISCONNECTED)),
+            TERMINAL_REASON_TERMINAL_DISCONNECTED
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_ipc_defaults_missing_reason_to_bridge_stop() {
+        let reason = parse_stop_ipc_reason(json!({"kind": "stop"})).await;
+
+        assert_eq!(reason, TERMINAL_REASON_BRIDGE_STOP);
+    }
+
+    #[tokio::test]
+    async fn stop_ipc_preserves_terminal_disconnected_reason() {
+        let reason = parse_stop_ipc_reason(json!({
+            "kind": "stop",
+            "reason": TERMINAL_REASON_TERMINAL_DISCONNECTED,
+        }))
+        .await;
+
+        assert_eq!(reason, TERMINAL_REASON_TERMINAL_DISCONNECTED);
+    }
+
+    #[cfg(unix)]
+    async fn parse_stop_ipc_reason(request: Value) -> String {
+        let (mut client, server) = tokio::net::UnixStream::pair().unwrap();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let task = tokio::spawn(handle_ipc_connection(server, tx));
+
+        let mut bytes = serde_json::to_vec(&request).unwrap();
+        bytes.push(b'\n');
+        client.write_all(&bytes).await.unwrap();
+        client.shutdown().await.unwrap();
+
+        let command = rx.recv().await.unwrap();
+        let IpcCommand::Stop {
+            terminal_reason,
+            reply,
+        } = command
+        else {
+            panic!("expected stop command");
+        };
+        reply.send(Ok(json!({}))).unwrap();
+
+        let mut response_buf = Vec::new();
+        client.read_to_end(&mut response_buf).await.unwrap();
+        parse_stop_ipc_response(&response_buf).unwrap();
+        task.await.unwrap().unwrap();
+        terminal_reason
     }
 
     #[tokio::test]

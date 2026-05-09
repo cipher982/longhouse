@@ -447,6 +447,7 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
     open_calls: list[str] = []
     bridge_calls: list[dict[str, object]] = []
     native_tui_calls: list[tuple[str, str, str, str, bool]] = []
+    stop_calls: list[dict[str, object]] = []
 
     monkeypatch.setattr(
         codex_cli,
@@ -481,6 +482,7 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
         or 0,
     )
     monkeypatch.setattr(codex_cli, "_open_session_url", lambda url: open_calls.append(url) or True)
+    monkeypatch.setattr(codex_cli, "_stop_native_codex_bridge", lambda **kwargs: stop_calls.append(kwargs) or None)
 
     result = runner.invoke(
         app,
@@ -519,6 +521,118 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
         }
     ]
     assert native_tui_calls == [("session-123", "/tmp/codex", "ws://127.0.0.1:4800", str(tmp_path), False)]
+    assert stop_calls == [
+        {
+            "session_id": "session-123",
+            "reason": codex_cli._CODEX_STOP_REASON_TERMINAL_DISCONNECTED,
+            "timeout_secs": None,
+        }
+    ]
+
+
+def test_stop_native_codex_bridge_passes_reason_and_timeout(monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append({"command": command, **kwargs})
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(codex_cli, "get_engine_executable", lambda: "/tmp/longhouse-engine")
+    monkeypatch.setattr(codex_cli.subprocess, "run", fake_run)
+
+    error = codex_cli._stop_native_codex_bridge(
+        session_id="session-123",
+        reason=codex_cli._CODEX_STOP_REASON_TERMINAL_DISCONNECTED,
+        timeout_secs=0.5,
+    )
+
+    assert error is None
+    assert calls == [
+        {
+            "command": [
+                "/tmp/longhouse-engine",
+                "codex-bridge",
+                "stop",
+                "--session-id",
+                "session-123",
+                "--reason",
+                "terminal_disconnected",
+            ],
+            "check": False,
+            "capture_output": True,
+            "text": True,
+            "timeout": 0.5,
+        }
+    ]
+
+
+def test_signal_cleanup_stops_bridge_once_with_terminal_disconnected(monkeypatch):
+    stop_calls: list[dict[str, object]] = []
+    signal_calls: list[tuple[object, object]] = []
+
+    stopper = codex_cli._CodexBridgeStopper("session-123")
+    monkeypatch.setattr(codex_cli, "_stop_native_codex_bridge", lambda **kwargs: stop_calls.append(kwargs) or None)
+    monkeypatch.setattr(
+        codex_cli.signal,
+        "signal",
+        lambda sig, handler: signal_calls.append((sig, handler)) or "old-handler",
+    )
+
+    previous = codex_cli._install_codex_signal_cleanup(stopper)
+    handler = signal_calls[0][1]
+
+    try:
+        handler(codex_cli.signal.SIGHUP, None)
+    except SystemExit as exc:
+        assert exc.code == 128 + codex_cli.signal.SIGHUP
+    else:
+        raise AssertionError("expected SystemExit")
+
+    assert stop_calls == [
+        {
+            "session_id": "session-123",
+            "reason": codex_cli._CODEX_STOP_REASON_TERMINAL_DISCONNECTED,
+            "timeout_secs": codex_cli._CODEX_STOP_SIGNAL_TIMEOUT_SECONDS,
+        }
+    ]
+
+    try:
+        handler(codex_cli.signal.SIGHUP, None)
+    except SystemExit:
+        pass
+    assert len(stop_calls) == 1
+
+    codex_cli._restore_signal_handlers(previous)
+    restored = signal_calls[-len(previous) :]
+    assert all(handler == "old-handler" for _sig, handler in restored)
+
+
+def test_signal_cleanup_preserves_bridge_when_active_turn_survives(monkeypatch):
+    stop_calls: list[dict[str, object]] = []
+    signal_calls: list[tuple[object, object]] = []
+
+    stopper = codex_cli._CodexBridgeStopper("session-123", state_file="/tmp/state.json")
+    monkeypatch.setattr(codex_cli, "_active_turn_survived_tui_exit", lambda state_file: state_file == "/tmp/state.json")
+    monkeypatch.setattr(codex_cli, "_stop_native_codex_bridge", lambda **kwargs: stop_calls.append(kwargs) or None)
+    monkeypatch.setattr(
+        codex_cli.signal,
+        "signal",
+        lambda sig, handler: signal_calls.append((sig, handler)) or "old-handler",
+    )
+
+    previous = codex_cli._install_codex_signal_cleanup(stopper)
+    handler = signal_calls[0][1]
+
+    try:
+        handler(codex_cli.signal.SIGHUP, None)
+    except SystemExit:
+        pass
+    else:
+        raise AssertionError("expected SystemExit")
+
+    assert stop_calls == []
+
+    codex_cli._restore_signal_handlers(previous)
 
 
 def test_run_native_codex_tui_uses_foreground_process_group_when_interactive(monkeypatch, tmp_path):

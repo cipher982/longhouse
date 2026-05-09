@@ -553,6 +553,10 @@ enum CodexBridgeCommands {
 
         #[arg(long)]
         state_root: Option<PathBuf>,
+
+        /// Terminal reason to record when the bridge accepts the stop.
+        #[arg(long)]
+        reason: Option<String>,
     },
 }
 
@@ -1088,10 +1092,12 @@ fn main() -> anyhow::Result<()> {
                 CodexBridgeCommands::Stop {
                     session_id,
                     state_root,
+                    reason,
                 } => {
                     rt.block_on(cmd_codex_bridge_stop(BridgeStopConfig {
                         session_id,
                         state_root,
+                        terminal_reason: reason,
                     }))?;
                 }
             }
@@ -1184,6 +1190,33 @@ mod tests {
                     },
             } => assert!(allow_direct_ws_fallback),
             _ => panic!("expected codex-bridge send command"),
+        }
+    }
+
+    #[test]
+    fn codex_bridge_stop_accepts_terminal_reason() {
+        let cli = Cli::try_parse_from([
+            "longhouse-engine",
+            "codex-bridge",
+            "stop",
+            "--session-id",
+            "sess-test",
+            "--reason",
+            "terminal_disconnected",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::CodexBridge {
+                command:
+                    CodexBridgeCommands::Stop {
+                        session_id, reason, ..
+                    },
+            } => {
+                assert_eq!(session_id, "sess-test");
+                assert_eq!(reason.as_deref(), Some("terminal_disconnected"));
+            }
+            _ => panic!("expected codex-bridge stop command"),
         }
     }
 }
