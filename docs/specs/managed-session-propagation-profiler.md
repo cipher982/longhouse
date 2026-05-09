@@ -22,7 +22,11 @@ The profiler answers that by comparing five views of the same session:
 
 The result should say where truth changed first, where it arrived late, and whether any surface lied.
 
-Version 1 should measure raw provider truth, machine truth, reducer inputs, runtime truth, timeline REST, and timeline SSE. Browser render and iOS render are later layers after the cheaper surfaces are stable.
+The profiler is no longer one experiment. It is a small profiling system with
+separate profiles for cold truth, warm realtime truth, durable archive truth,
+honest degradation, and fidelity. Those profiles share one observation schema
+and one report vocabulary so a run can point at the guilty layer instead of
+producing a vague "timeline slow" failure.
 
 ## Goals
 
@@ -32,13 +36,234 @@ Version 1 should measure raw provider truth, machine truth, reducer inputs, runt
 - Establish a regression harness that can start local and later move into CI or nightly dogfood monitoring.
 - Produce per-run artifacts that are useful for debugging without reading full transcripts.
 - Make user-visible trust failures explicit: stale running labels, missing cards, delayed close, wrong managed/unmanaged ownership, and mismatched active/idle/closed state.
+- Give a solo developer a repeatable substitute for a frontend/QA team: browser-visible assertions, stack-decomposed timing, and p95 trend data.
 
 ## Non-Goals
 
 - Do not benchmark model quality or provider response speed as a Longhouse metric.
-- Do not require SSH, mobile, browser-render, or network-loss scenarios in the first version.
+- Do not require SSH, mobile, or network-loss scenarios in the first version.
 - Do not collapse Codex and Claude into one implementation path. The providers have different managed mechanics.
 - Do not use hidden fallbacks to make the profiler pass.
+
+## Profile Classes
+
+Use named profile classes instead of one blended "propagation" number.
+
+### Cold Timeline Truth
+
+Question: if a user opens Longhouse from scratch, how long until the page shows
+the correct session truth?
+
+This profile intentionally includes browser launch, navigation, auth cookie
+acceptance, JavaScript boot, initial timeline query, React render, and browser
+paint. It catches broken deploys, slow initial timeline listings, auth/session
+cookie regressions, app boot errors, and card rendering failures. It must not
+be used as the realtime propagation SLA.
+
+Primary metrics:
+
+- `cold_timeline_loaded_ms`
+- `cold_timeline_card_paint_ms`
+- `cold_timeline_closed_card_paint_ms`
+- page console errors and failed network requests
+
+### Warm Realtime Timeline
+
+Question: if the user is already on `/timeline` with the stream connected, how
+long until a real change is visible?
+
+This is the core product trust profile. The browser should be warm before the
+session change is triggered. The profile must wait for initial data and timeline
+SSE connection, then trigger the action under test.
+
+Warm realtime is split into three sub-profiles because session create, live
+output, and close use different product contracts and can regress separately.
+
+#### Warm Session Create
+
+Question: after the browser is warm, how long until a newly launched managed
+session is visible as a timeline card with correct ownership and capability
+state?
+
+Primary metrics:
+
+- `warm_session_created_to_sse_ms`
+- `warm_session_created_to_card_paint_ms`
+
+#### Warm Live Output
+
+Question: after the browser is warm and a managed session is open, how long
+until local provider progress or generated text is visible on the card?
+
+Primary metrics:
+
+- `warm_live_output_local_to_sse_ms`
+- `warm_live_output_local_to_paint_ms`
+- `warm_live_output_sse_to_paint_ms`
+
+#### Warm Close
+
+Question: after the browser is warm and a managed session exits gracefully, how
+long until the timeline shows the session as closed?
+
+Primary metrics:
+
+- `warm_close_local_to_db_ms`
+- `warm_close_local_to_sse_ms`
+- `warm_close_local_to_paint_ms`
+- `warm_close_sse_to_paint_ms`
+
+Target posture after the primary paths are stable: warm live and warm close
+should be p95 < 500ms on nominal network for managed sessions, with a hard
+product alarm at p95 > 1000ms.
+
+#### Warm Preconditions
+
+A warm realtime profile may trigger the session action only after all of these
+are true:
+
+- the browser page has loaded `/timeline`
+- the initial `/api/timeline/sessions` request has returned successfully
+- the timeline SSE connection is established and has delivered an initial event,
+  heartbeat, or explicit ready marker
+- the observer has recorded `warm_ready_at`
+
+Without those preconditions, the run is a cold timeline profile or a browser
+setup failure, not a warm realtime propagation measurement.
+
+### Durable Archive
+
+Question: can Longhouse reconstruct what happened correctly after the fact?
+
+This profile follows provider transcript append through canonical event rows,
+searchable timeline history, and replay/export. It should not block the warm
+live lane. Slow archive is a durability/catch-up issue, not a reason for the
+card to wait before showing current truth.
+
+Primary metrics:
+
+- `provider_append_to_hosted_event_ms`
+- `archive_event_count_delta`
+- missing/duplicate user, assistant, and tool events
+- non-text payload preservation
+
+Target posture: p95 < 3s for the happy path, alert if a managed completed turn
+is not durable after 30s.
+
+### Honest Degradation
+
+Question: when terminal, process, SSH, or network conditions fail, does the UI
+say the most honest thing?
+
+This profile starts after graceful close is already reliable in the warm close
+profile. It distinguishes terminal disconnect, process gone, active-turn
+detach, host stale/offline, and hosted ingest loss. It must not collapse "SSH
+disappeared" into "the provider process is gone" without evidence.
+
+Primary metrics:
+
+- `terminal_detached_to_card_state_ms`
+- `process_gone_to_card_state_ms`
+- `machine_stale_to_card_state_ms`
+- `hosted_reconnect_reconciliation_ms`
+- terminal reason/source fidelity
+
+### Fidelity Checks
+
+Question: did Longhouse copy the right truth, not merely copy something fast?
+
+Fidelity checks cut across the latency profiles. They may run as a standalone
+`profile_class=fidelity` replay or as assertions inside another profile.
+
+Primary checks:
+
+- transcript event counts and payload preservation
+- capability/action agreement
+- lifecycle reason/source accuracy
+- browser/iOS row pairing equivalence
+- close/detached/offline label accuracy
+
+## Stack Decomposition
+
+Every profile should decompose the path into these layers when applicable:
+
+```text
+raw provider/process
+  -> provider transcript / bridge/channel observation
+  -> Machine Agent / hook outbox / bridge runtime event
+  -> Runtime Host ingest and reducer
+  -> hosted DB/API truth
+  -> timeline SSE event
+  -> browser receive/cache update
+  -> React commit and browser paint
+```
+
+The report should prefer layer-specific names over user-facing shorthand. For
+example, "close slow" should become "terminal event reached hosted DB after
+5.1s; browser painted 243ms later."
+
+## CI And Monitoring Ladder
+
+The system should grow in layers:
+
+1. **PR/local fast gate**
+   - unit tests for runtime display/liveness reducers
+   - profiler artifact parsing/report tests
+   - fixture-backed browser card semantic assertions
+
+2. **Pre-push/manual profiler**
+   - one warm managed Codex close profile
+   - one warm managed Codex live-output profile
+   - provider-timeout classification profile
+
+3. **Nightly dogfood**
+   - repeated warm realtime profiles, p50/p95 over N runs
+   - cold timeline truth profile
+   - durable archive profile
+   - close while idle, close while thinking, provider timeout
+
+4. **Release/ship confidence**
+   - one hosted warm live-output run
+   - one hosted warm close run
+   - screenshot/DOM assertions that timeline cards expose the right semantic pills
+
+5. **Soak and hostile cases**
+   - SSH disconnect, terminal close, process kill, sleep/wake, and network loss
+   - these are not per-PR gates; they are product truth monitors.
+
+Single clean runs are evidence that a path exists. Gates must eventually be
+p95-over-N, and provider/environment preconditions must be excluded from
+propagation verdicts.
+
+## Code Architecture Target
+
+`scripts/ops/profile-managed-session-propagation.py` began as a focused harness
+and has grown into a 3000+ line script. The goal is to make the profiler easy
+to extend without pausing feature work for a broad rewrite.
+
+Target shape:
+
+```text
+scripts/ops/profile-managed-session-propagation.py   # CLI entrypoint and current orchestration
+scripts/ops/managed_profiler/
+  browser_ui_observer.mjs                            # Playwright DOM observer
+  browser.py                                         # browser process wrapper, after warm profiles exist
+  hosted.py                                          # hosted DB/API/SSE probes, after duplication is real
+  codex.py                                           # managed Codex driver, after warm profiles exist
+  observations.py                                    # schema, recorder, deltas
+  reports.py                                         # metrics + markdown summary
+```
+
+Refactor rules:
+
+- Move one layer at a time and preserve artifact schema compatibility.
+- Extract the browser observer script first; inline JavaScript is the current
+  highest-friction part of the harness.
+- Do not introduce a provider abstraction until Claude has a real profile.
+- Keep generated per-run observer scripts as artifacts when they materially aid debugging.
+- Do not change Longhouse product behavior while refactoring the profiler.
+- Prefer boring subprocess boundaries for browser observers; the profiler should stay usable without a dev server.
+- Keep source labels and metric names stable; bump `METRICS_SCHEMA_VERSION` when semantics change.
 
 ## Trust Contracts
 
@@ -240,6 +465,8 @@ Every run should write a structured JSONL artifact. Each observation must includ
 
 - `harness_version`
 - `run_id`
+- `profile_class`: `cold_timeline`, `warm_realtime`, `durable_archive`,
+  `honest_degradation`, or `fidelity`
 - `case_id`
 - `provider`
 - `ownership`
@@ -275,7 +502,11 @@ Recommended source labels:
 - `browser_card`
 - `ios_timeline`
 
-`browser_card` and `ios_timeline` are later-layer sources. Version 1 should record timeline REST and SSE before adding full client rendering.
+`browser_card` and `ios_timeline` are client-layer sources. Browser-card
+measurement is already useful, but it must be reported separately from timeline
+REST and SSE. In warm realtime profiles, `sse_to_paint_ms` is a diagnostic
+tiebreaker: it tells whether the backend stream was late or the browser failed
+to react quickly to an already-delivered event.
 
 Recommended event labels:
 
@@ -332,17 +563,27 @@ The summary should lead with the trust verdict:
 - `inconclusive`: provider or harness setup failed before testing Longhouse
 - `lagged`: state became correct, but propagation exceeded a defined budget
 
-## Budgets
+## Budget Promotion
 
-The first implementation should record timings without hard fail thresholds. It should not emit `lagged` until budgets are explicitly defined. Before that, slow-but-correct runs should be reported as `pass` with timing warnings.
+The profiler starts as measurement and becomes a gate only after enough clean
+baseline runs exist for each profile class. A single sub-second run proves the
+path exists; it does not prove the SLA distribution.
 
-After enough clean local baseline runs, promote measured budgets into gates.
+Budget policy by stage:
 
-Suggested future budget classes:
+- PR/local fast gates enforce correctness only: reducer behavior, report
+  parsing, fixture-backed browser semantics, and fidelity checks that do not
+  require live providers.
+- Manual/pre-push profiler runs report latency and classify failures, but
+  latency is warn-only unless a profile has already been promoted.
+- Nightly dogfood owns p50/p95 trends and should be the first place absolute
+  latency budgets become hard alerts.
+- Release/ship checks may run one hosted warm live-output and one hosted warm
+  close probe, but should gate only on gross regressions and fidelity failures
+  until the nightly distribution is boring.
 
-- **interactive**: user-visible changes that should feel immediate
-- **fresh**: changes acceptable after a short backend round trip
-- **eventual**: archive or catch-up state that is useful but not live-control critical
+Never gate per-PR on cold timeline paint, hostile SSH/sleep cases, or absolute
+p95 from a single run.
 
 Do not hide slow propagation behind vague labels. If a card is stale, detached, offline, or closed, the UI should say that directly.
 
@@ -362,6 +603,7 @@ scripts/ops/profile-managed-session-propagation.py \
 Useful options:
 
 - `--provider codex|claude|all`
+- `--profile cold-timeline|warm-create|warm-live|warm-close|durable-archive|honest-degradation|fidelity`
 - `--ownership managed|unmanaged|all`
 - `--shutdown graceful|codex-bridge-stop|claude-exit|terminal-close|wrapper-term|provider-term|provider-kill|ssh-exit|ssh-disconnect`
 - `--subdomain <tenant>`
@@ -407,15 +649,20 @@ Do not adopt a larger PTY library until it has been checked for maintenance qual
 
 ### Timeline SSE Measurement
 
-Version 1 should measure `timeline_sse` with a direct SSE client against the same endpoint the browser uses. The client records every event with wall and monotonic timestamps and stops when the target session reaches a terminal state or the run times out.
+The profiler should measure `timeline_sse` with a direct SSE client against the same endpoint the browser uses. The client records every event with wall and monotonic timestamps and stops when the target session reaches a terminal state or the run times out.
 
-Do not use a headless browser to measure SSE in version 1. Browser rendering adds cold-start cost, layout work, and client-state flake that are not part of the SSE contract. Browser-rendered card timing is a later `browser_card` layer and must not be conflated with `timeline_sse` latency.
+Do not use a headless browser as the SSE clock. Browser rendering adds cold-start
+cost, layout work, and client-state flake that are not part of the SSE contract.
+Browser-rendered card timing is a separate `browser_card` layer and must not be
+conflated with `timeline_sse` latency.
 
 ### Deferred External Exports
 
 Keep the primary artifact as Longhouse-native JSONL. OpenTelemetry or OTLP export can be added later as a derived projection if there is an actual trace viewer or observability backend consuming it. The derived export must not rename or flatten away fields like `execution_home`, `managed_transport`, `host_reattach_available`, `source`, or `event`.
 
-When browser-card measurement is added, prefer the existing Zerg UI capture/fixture workflow before introducing broad live-browser automation. Only escalate after provider, machine, runtime, timeline REST, and timeline SSE layers are boring.
+For browser-card assertions, prefer the existing Zerg UI capture/fixture
+workflow for CI correctness and keep live-browser automation focused on the
+small number of hosted profiling paths that need real end-to-end timing.
 
 ## CI Path
 
@@ -438,19 +685,43 @@ CI should arrive in layers.
 
 ## Open Questions
 
-- Should managed graceful shutdown emit an explicit terminal lifecycle event, or is process absence enough?
-- Should timeline SSE failures fail the first gate, or stay measured-only until the stream path stabilizes?
 - Can Claude channel launch be made safe and deterministic enough for non-interactive CI?
 - Which user-visible card states are acceptable during machine offline windows?
+- Should runtime terminal events be durably spooled before they count as meeting
+  the managed close SLA under flaky network conditions?
+- What is the minimum browser-side ready signal for warm profiles: initial SSE
+  event, heartbeat, explicit ready marker, or all three?
 
-## First Implementation Slice
+## Built So Far
 
-Build the smallest useful profiler:
+The first useful profiler exists for Codex and should be kept working while new
+profiles are added. It currently covers:
 
-1. Codex managed graceful shutdown.
-2. Codex unmanaged graceful shutdown.
-3. Hosted API/DB/timeline REST/SSE measurement.
-4. Local process and transcript measurement.
-5. Markdown report with trust verdict.
+- managed Codex launch, prompt, live output, timeout classification, and bridge stop
+- unmanaged Codex launch and observation
+- hosted DB/API/timeline REST/timeline SSE measurement
+- browser card observation for cold-ish page load and close paint
+- provider precondition classification for Codex hooks needing review
+- Markdown and JSON metrics artifacts with trust verdicts
 
-Only after that passes should Claude and hostile shutdown modes be added.
+## Next Implementation Slice
+
+Build the warm managed Codex live-output profile.
+
+Required behavior:
+
+1. Add `--profile warm-live`.
+2. Open `/timeline` and wait for warm preconditions before launching or driving
+   the target session.
+3. Launch a managed Codex session and send a nonce prompt.
+4. Measure local bridge/progress observation to timeline SSE.
+5. Measure timeline SSE to browser card paint containing the nonce.
+6. Emit `profile_class=warm_realtime`.
+7. Report the split as "bridge -> SSE", "SSE -> paint", and "bridge -> paint".
+
+Non-goals for this slice:
+
+- no Claude profile
+- no provider abstraction
+- no p95 aggregation
+- no hostile SSH or network cases
