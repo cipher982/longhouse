@@ -168,6 +168,14 @@ enum ReapClass {
     OrphanAppServer,
 }
 
+fn terminal_disconnected_bridge_stop_config(session_id: String) -> BridgeStopConfig {
+    BridgeStopConfig {
+        session_id,
+        state_root: None,
+        terminal_reason: Some("terminal_disconnected".to_string()),
+    }
+}
+
 fn spawn_reap(
     in_flight: Arc<Mutex<HashSet<String>>>,
     obs: CodexBridgeObservation,
@@ -200,11 +208,9 @@ fn spawn_reap(
         } else {
             match class {
                 ReapClass::LiveBridge => {
-                    if let Err(err) = codex_bridge::cmd_codex_bridge_stop(BridgeStopConfig {
-                        session_id: session_id.clone(),
-                        state_root: None,
-                        terminal_reason: Some("terminal_disconnected".to_string()),
-                    })
+                    if let Err(err) = codex_bridge::cmd_codex_bridge_stop(
+                        terminal_disconnected_bridge_stop_config(session_id.clone()),
+                    )
                     .await
                     {
                         tracing::warn!(
@@ -440,6 +446,18 @@ mod tests {
         obs.has_tui_attachment = true;
         let decision = decide(&obs, None, Instant::now(), Duration::from_secs(120));
         assert_eq!(decision, ReapDecision::Skip);
+    }
+
+    #[test]
+    fn live_bridge_reap_stop_config_uses_terminal_disconnected() {
+        let config = terminal_disconnected_bridge_stop_config("session-A".to_string());
+
+        assert_eq!(config.session_id, "session-A");
+        assert_eq!(config.state_root, None);
+        assert_eq!(
+            config.terminal_reason.as_deref(),
+            Some("terminal_disconnected")
+        );
     }
 
     #[test]

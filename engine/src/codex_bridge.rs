@@ -3585,6 +3585,38 @@ mod tests {
         assert_eq!(event["payload"]["terminal_source"], BRIDGE_RUNTIME_SOURCE);
     }
 
+    #[test]
+    fn bridge_runtime_sink_terminal_event_carries_terminal_disconnected() {
+        let temp = tempfile::tempdir().unwrap();
+        let sink = BridgeRuntimeSink {
+            http: reqwest::Client::new(),
+            api_url: "http://127.0.0.1:9".to_string(),
+            api_token: "token".to_string(),
+            session_id: "session-123".to_string(),
+            cwd: "/Users/test/git/assistants-service".to_string(),
+            machine_name: Some("test-box".to_string()),
+            thread_id: Some("thread-123".to_string()),
+            local_db_path: Some(resolve_bridge_agent_db_path(Some(temp.path())).unwrap()),
+        };
+
+        let observed_at = DateTime::parse_from_rfc3339("2026-04-19T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let event = sink.terminal_event(
+            "session_ended",
+            TERMINAL_REASON_TERMINAL_DISCONNECTED,
+            "bridge:terminal:session-123:dedupe",
+            observed_at,
+        );
+
+        assert_eq!(event["payload"]["terminal_state"], "session_ended");
+        assert_eq!(
+            event["payload"]["terminal_reason"],
+            TERMINAL_REASON_TERMINAL_DISCONNECTED
+        );
+        assert_eq!(event["payload"]["terminal_source"], BRIDGE_RUNTIME_SOURCE);
+    }
+
     #[tokio::test]
     async fn bridge_runtime_sink_post_terminal_persists_finished_phase() {
         let temp = tempfile::tempdir().unwrap();

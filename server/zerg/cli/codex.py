@@ -529,7 +529,7 @@ def _active_turn_survived_tui_exit(state_file: str | None) -> bool:
 def _stop_native_codex_bridge(
     *,
     session_id: str,
-    reason: str = _CODEX_STOP_REASON_BRIDGE_STOP,
+    reason: str,
     timeout_secs: float | None = None,
 ) -> str | None:
     try:
