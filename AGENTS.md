@@ -225,6 +225,7 @@ If you touch a secondary area, either simplify it toward the core story or expla
 - `/api/timeline/sessions` caps `limit` at 100. Frontend URL parsing needs to clamp to that or the timeline can self-422 on oversized `limit` params.
 - Warp-style CLI agent detection appears to key off the final spawned executable basename in the PTY. For managed Codex, debug the attached stock `codex --enable tui_app_server --remote ...` process, not just the shell wrapper or alias that started it.
 - For `longhouse-engine codex-bridge start` repros, use `--isolation-root <tmp-dir>` so bridge files and Longhouse DB/session_binding state are isolated together.
+- Managed Codex propagation profiler attaches must mirror the launch-provided attach command, including `LONGHOUSE_MANAGED_SESSION_ID` and `-c check_for_update_on_startup=false`; dropping either creates misleading probe failures.
 
 ## Pushing Changes
 
