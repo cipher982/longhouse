@@ -323,6 +323,19 @@ def prepare_widget_timeline_push(
     if owner_id is None:
         return None
 
+    try:
+        widget_state = db.query(APNSWidgetPushState).filter(APNSWidgetPushState.owner_id == owner_id).first()
+    except OperationalError as exc:
+        if _is_missing_optional_table(exc):
+            logger.warning("APNs widget state table unavailable; skipping widget timeline push for user %s", owner_id)
+            return None
+        raise
+
+    if widget_state is not None:
+        previous_push_at_utc = _as_aware_utc(widget_state.last_push_at)
+        if previous_push_at_utc is not None and (occurred_at - previous_push_at_utc) < WIDGET_PUSH_DEBOUNCE:
+            return None
+
     targets = _active_ios_targets_for_owner(
         db,
         owner_id=owner_id,
@@ -333,13 +346,6 @@ def prepare_widget_timeline_push(
         return None
 
     state_hash = _widget_active_set_hash(db, now=occurred_at)
-    try:
-        widget_state = db.query(APNSWidgetPushState).filter(APNSWidgetPushState.owner_id == owner_id).first()
-    except OperationalError as exc:
-        if _is_missing_optional_table(exc):
-            logger.warning("APNs widget state table unavailable; skipping widget timeline push for user %s", owner_id)
-            return None
-        raise
     if widget_state is None:
         widget_state = APNSWidgetPushState(owner_id=owner_id)
         db.add(widget_state)
@@ -347,10 +353,7 @@ def prepare_widget_timeline_push(
 
     previous_state_hash = widget_state.state_hash
     previous_push_at = widget_state.last_push_at
-    previous_push_at_utc = _as_aware_utc(previous_push_at)
     if previous_state_hash == state_hash:
-        return None
-    if previous_push_at_utc is not None and (occurred_at - previous_push_at_utc) < WIDGET_PUSH_DEBOUNCE:
         return None
 
     widget_state.state_hash = state_hash
