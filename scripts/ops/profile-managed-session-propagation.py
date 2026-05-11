@@ -10,6 +10,7 @@ without solving Claude's native-channel PTY lifecycle first.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import math
 import os
@@ -29,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from managed_profiler.sla_manifest import DEFAULT_MANIFEST_PATH
+from managed_profiler.sla_manifest import case_by_id
 from managed_profiler.sla_manifest import format_case_inventory
 from managed_profiler.sla_manifest import load_manifest
 from managed_profiler.sla_manifest import manifest_summary
@@ -44,10 +46,6 @@ CODEX_LONGHOUSE_HOOK_SCRIPT = Path.home() / ".codex" / "hooks" / "longhouse-code
 BROWSER_UI_OBSERVER_SCRIPT = ROOT / "scripts" / "ops" / "managed_profiler" / "browser_ui_observer.mjs"
 HOSTED_CONTAINER_PREFIX = "longhouse-"
 HOSTED_RUNTIME_EVENT_LIMIT = 200
-SLA_MANIFEST = load_manifest(DEFAULT_MANIFEST_PATH)
-LIVE_FIRST_OUTPUT_TARGET_MS = metric_target_ms(SLA_MANIFEST, "live_first_from_local_ms", 500) or 500
-DURABLE_ARCHIVE_TARGET_MS = metric_target_ms(SLA_MANIFEST, "durable_archive_local_to_hosted_ms", 3_000) or 3_000
-MANAGED_CLOSE_TARGET_MS = metric_target_ms(SLA_MANIFEST, "close_observed_ms", 1_000) or 1_000
 METRICS_SCHEMA_VERSION = 3
 BATCH_METRICS_SCHEMA_VERSION = 1
 BATCH_METRIC_KEYS = (
@@ -79,6 +77,45 @@ def monotonic_ms() -> int:
 
 def slug_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+@functools.cache
+def sla_manifest() -> dict[str, Any]:
+    return load_manifest(DEFAULT_MANIFEST_PATH)
+
+
+def live_first_output_target_ms() -> int:
+    return metric_target_ms(sla_manifest(), "live_first_from_local_ms", 500) or 500
+
+
+def durable_archive_target_ms() -> int:
+    return metric_target_ms(sla_manifest(), "durable_archive_local_to_hosted_ms", 3_000) or 3_000
+
+
+def managed_close_target_ms() -> int:
+    return metric_target_ms(sla_manifest(), "close_observed_ms", 1_000) or 1_000
+
+
+DEFAULT_SLA_CASE_BY_PROFILE = {
+    "warm-live": "managed_codex_warm_live_graceful_close",
+}
+
+
+def resolve_sla_case(args: argparse.Namespace) -> dict[str, Any] | None:
+    case_id = args.sla_case or DEFAULT_SLA_CASE_BY_PROFILE.get(args.profile)
+    if not case_id:
+        return None
+    case = case_by_id(sla_manifest(), case_id)
+    if case is None:
+        raise SystemExit(f"unknown --sla-case {case_id!r}")
+    if case.get("status") == "undefined":
+        raise SystemExit(f"--sla-case {case_id!r} is undefined and cannot be profiled")
+    provider = case.get("provider")
+    if provider not in {args.provider, "all"}:
+        raise SystemExit(f"--sla-case {case_id!r} provider={provider!r} does not match --provider {args.provider!r}")
+    if case.get("profile") not in {args.profile, "none"}:
+        raise SystemExit(f"--sla-case {case_id!r} profile={case.get('profile')!r} does not match --profile {args.profile!r}")
+    return case
 
 
 def run_cmd(
@@ -145,6 +182,7 @@ class Profiler:
         self.profile_class = args.profile_class or profile_class_for(args.profile)
         self.container = args.container or f"{HOSTED_CONTAINER_PREFIX}{self.subdomain}"
         self.browser_ui_base_url = args.browser_ui_base_url or f"https://{self.subdomain}.longhouse.ai"
+        self.sla_case = resolve_sla_case(args)
         self.remote_clock_skew_ms = self.measure_remote_clock_skew_ms()
         self._observe_lock = threading.Lock()
         self._browser_session_cookie: str | None = None
@@ -165,6 +203,8 @@ class Profiler:
             "harness_version": 1,
             "run_id": self.run_id,
             "profile_class": self.profile_class,
+            "sla_case_id": self.sla_case.get("id") if self.sla_case else None,
+            "sla_status": self.sla_case.get("status") if self.sla_case else None,
             "case_id": case_id,
             "provider": provider,
             "ownership": ownership,
@@ -1911,17 +1951,19 @@ except Exception as exc:
                     "schema_version": METRICS_SCHEMA_VERSION,
                     "run_id": self.run_id,
                     "profile_class": self.profile_class,
+                    "sla_case_id": self.sla_case.get("id") if self.sla_case else None,
+                    "sla_status": self.sla_case.get("status") if self.sla_case else None,
                     "project": self.project,
                     "subdomain": self.subdomain,
                     "generated_at": utc_now(),
                     "targets": {
-                        "live_first_output_ms": LIVE_FIRST_OUTPUT_TARGET_MS,
-                        "durable_archive_ms": DURABLE_ARCHIVE_TARGET_MS,
-                        "managed_close_ms": MANAGED_CLOSE_TARGET_MS,
+                        "live_first_output_ms": live_first_output_target_ms(),
+                        "durable_archive_ms": durable_archive_target_ms(),
+                        "managed_close_ms": managed_close_target_ms(),
                     },
                     "sla_manifest": {
                         "path": str(DEFAULT_MANIFEST_PATH),
-                        "summary": manifest_summary(SLA_MANIFEST),
+                        "summary": manifest_summary(sla_manifest()),
                     },
                     "errors": errors,
                     "cases": metrics,
@@ -2115,7 +2157,7 @@ except Exception as exc:
             "transport": transport,
             "provider": session.get("provider") or "codex",
             "live_first_from_local_ms": None,
-            "live_first_target_ms": LIVE_FIRST_OUTPUT_TARGET_MS,
+            "live_first_target_ms": live_first_output_target_ms(),
             "live_first_pass": None,
             "live_first_source": None,
             "live_tail_non_slo_from_local_ms": None,
@@ -2131,7 +2173,7 @@ except Exception as exc:
             "warm_live_prompt_to_browser_first_paint_ms": browser_live_first_latency,
             "warm_live_sse_to_browser_first_paint_ms": browser_first_after_sse_latency,
             "durable_archive_local_to_hosted_ms": propagation_latency,
-            "durable_archive_target_ms": DURABLE_ARCHIVE_TARGET_MS,
+            "durable_archive_target_ms": durable_archive_target_ms(),
             "durable_archive_pass": None,
             "close_observed_ms": close_latency,
             "close_source": close_source if close_latency is not None else None,
@@ -2140,7 +2182,7 @@ except Exception as exc:
             "close_browser_observed_ms": close_browser_latency,
             "close_browser_after_http_raw_ms": close_browser_after_http_latency,
             "close_browser_after_sse_raw_ms": close_browser_after_sse_latency,
-            "close_target_ms": MANAGED_CLOSE_TARGET_MS,
+            "close_target_ms": managed_close_target_ms(),
             "close_pass": None,
             "bridge_live_ingest_lag_ms": None,
             "bridge_live_skew_adjusted_lag_ms": None,
@@ -2181,20 +2223,20 @@ except Exception as exc:
         metrics["live_first_source"] = live_ui_source if live_first_from_local_latency is not None else None
         metrics["live_tail_non_slo_from_local_ms"] = live_full_from_local_latency
         if live_first_from_local_latency is not None:
-            metrics["live_first_pass"] = live_first_from_local_latency <= LIVE_FIRST_OUTPUT_TARGET_MS
+            metrics["live_first_pass"] = live_first_from_local_latency <= live_first_output_target_ms()
 
         live_ui = "live_first=missing"
         if live_first_from_local_latency is not None:
             live_state = (
                 "pass"
-                if live_first_from_local_latency <= LIVE_FIRST_OUTPUT_TARGET_MS
+                if live_first_from_local_latency <= live_first_output_target_ms()
                 else "slow"
             )
             live_ui = (
                 f"live_first={live_state} "
                 f"source={live_ui_source} "
                 f"first_from_local={live_first_from_local_latency}ms "
-                f"target={LIVE_FIRST_OUTPUT_TARGET_MS}ms"
+                f"target={live_first_output_target_ms()}ms"
             )
             if live_full_from_local_latency is not None:
                 live_ui += f" live_tail_non_slo_from_local={live_full_from_local_latency}ms"
@@ -2243,9 +2285,9 @@ except Exception as exc:
         if transcript_ingest.get("skew_adjusted_lag_ms") is not None:
             transcript += f" skew_adjusted_ingest={transcript_ingest['skew_adjusted_lag_ms']}ms"
         if propagation_latency is not None:
-            durable_state = "pass" if propagation_latency <= DURABLE_ARCHIVE_TARGET_MS else "slow"
-            metrics["durable_archive_pass"] = propagation_latency <= DURABLE_ARCHIVE_TARGET_MS
-            transcript += f" durable_archive={durable_state} target={DURABLE_ARCHIVE_TARGET_MS}ms"
+            durable_state = "pass" if propagation_latency <= durable_archive_target_ms() else "slow"
+            metrics["durable_archive_pass"] = propagation_latency <= durable_archive_target_ms()
+            transcript += f" durable_archive={durable_state} target={durable_archive_target_ms()}ms"
         bridge_live = bridge_live_details(hosted, nonce, self.remote_clock_skew_ms)
         if bridge_live:
             metrics["bridge_live_ingest_lag_ms"] = bridge_live.get("ingest_lag_ms")
@@ -2295,9 +2337,9 @@ except Exception as exc:
             close_note = "close=closed"
             if close_latency is not None:
                 close_note += f" source={close_source} observed_in={close_latency}ms"
-                close_state = "pass" if close_latency <= MANAGED_CLOSE_TARGET_MS else "slow"
-                metrics["close_pass"] = close_latency <= MANAGED_CLOSE_TARGET_MS
-                close_note += f" close_slo={close_state} target={MANAGED_CLOSE_TARGET_MS}ms"
+                close_state = "pass" if close_latency <= managed_close_target_ms() else "slow"
+                metrics["close_pass"] = close_latency <= managed_close_target_ms()
+                close_note += f" close_slo={close_state} target={managed_close_target_ms()}ms"
                 if close_sse_latency is not None and close_http_latency is not None:
                     close_note += f" http_observed_in={close_http_latency}ms"
                 if close_browser_latency is not None:
@@ -3008,6 +3050,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--run-id")
     parser.add_argument("--output-dir")
     parser.add_argument(
+        "--sla-case",
+        help="SLA matrix case id this run measures. Defaults from --profile when the mapping is unambiguous.",
+    )
+    parser.add_argument(
         "--iterations",
         type=int,
         default=1,
@@ -3082,8 +3128,10 @@ def run_single(args: argparse.Namespace) -> tuple[int, Path]:
             "browser_ui_base_url": profiler.browser_ui_base_url,
             "browser_ui_enabled": not args.skip_browser_ui,
             "profile_class": profiler.profile_class,
+            "sla_case_id": profiler.sla_case.get("id") if profiler.sla_case else None,
+            "sla_status": profiler.sla_case.get("status") if profiler.sla_case else None,
             "sla_manifest": str(DEFAULT_MANIFEST_PATH),
-            "sla_manifest_summary": manifest_summary(SLA_MANIFEST),
+            "sla_manifest_summary": manifest_summary(sla_manifest()),
         },
     )
     results: list[dict[str, Any]] = []
@@ -3143,7 +3191,7 @@ def aggregate_batch_cases(cases: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def target_for_metric(key: str) -> int | None:
-    return metric_target_ms(SLA_MANIFEST, key)
+    return metric_target_ms(sla_manifest(), key)
 
 
 def write_batch_summary(
@@ -3246,6 +3294,7 @@ def run_batch(args: argparse.Namespace) -> int:
                 "generated_at": utc_now(),
                 "profile": args.profile,
                 "profile_class": args.profile_class or profile_class_for(args.profile),
+                "sla_case_id": args.sla_case or DEFAULT_SLA_CASE_BY_PROFILE.get(args.profile),
                 "iterations": args.iterations,
                 "runs": child_runs,
                 "aggregate": aggregate,
@@ -3267,7 +3316,7 @@ def run_batch(args: argparse.Namespace) -> int:
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     if args.list_sla_cases:
-        print(format_case_inventory(SLA_MANIFEST))
+        print(format_case_inventory(sla_manifest()))
         return 0
     if args.iterations > 1:
         return run_batch(args)

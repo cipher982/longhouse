@@ -10,6 +10,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_MANIFEST_PATH = ROOT / "config" / "session-propagation-sla.toml"
 ALLOWED_STATUSES = {"required", "experimental", "undefined"}
+ALLOWED_PROVIDERS = {"all", "claude", "codex", "opencode"}
 ALLOWED_PROFILE_CLASSES = {
     "cold_timeline",
     "warm_realtime",
@@ -18,6 +19,29 @@ ALLOWED_PROFILE_CLASSES = {
     "fidelity",
 }
 ALLOWED_CONTROL_PATHS = {"managed", "unmanaged"}
+ALLOWED_TOPOLOGIES = {"hosted_runtime_host", "local_runtime_host", "self_hosted_runtime_host"}
+ALLOWED_LAYERS = {
+    "browser_card",
+    "hosted_api",
+    "hosted_db",
+    "machine_agent",
+    "provider_process",
+    "provider_transcript",
+    "timeline_sse",
+}
+ALLOWED_OBSERVERS = {
+    "browser_card",
+    "claude_channel_state",
+    "hosted_db",
+    "machine_heartbeat",
+    "managed_sessions_snapshot",
+    "process_scan_snapshot",
+    "provider_transcript",
+    "pty_and_codex_bridge",
+    "timeline_api",
+    "timeline_sse",
+    "unmanaged_session_bindings",
+}
 
 
 def load_manifest(path: Path | str = DEFAULT_MANIFEST_PATH) -> dict[str, Any]:
@@ -52,15 +76,18 @@ def validate_manifest(manifest: dict[str, Any]) -> list[str]:
             value = metric.get(field)
             if not isinstance(value, int) or value <= 0:
                 errors.append(f"metric {metric_id} {field} must be a positive integer")
-        aliases = metric.get("aliases", [])
-        if aliases is None:
-            aliases = []
-        if not isinstance(aliases, list) or not all(isinstance(alias, str) for alias in aliases):
-            errors.append(f"metric {metric_id} aliases must be a list of strings")
+        layer = metric.get("layer")
+        if layer not in ALLOWED_LAYERS:
+            errors.append(f"metric {metric_id} layer must be one of {sorted(ALLOWED_LAYERS)}")
+        legacy_aliases = metric.get("legacy_aliases", [])
+        if legacy_aliases is None:
+            legacy_aliases = []
+        if not isinstance(legacy_aliases, list) or not all(isinstance(alias, str) for alias in legacy_aliases):
+            errors.append(f"metric {metric_id} legacy_aliases must be a list of strings")
             continue
-        for alias in aliases:
+        for alias in legacy_aliases:
             if alias in metric_aliases:
-                errors.append(f"metric alias {alias} is duplicated")
+                errors.append(f"metric legacy_alias {alias} is duplicated")
             metric_aliases.add(alias)
 
     cases = manifest.get("cases")
@@ -76,9 +103,15 @@ def validate_manifest(manifest: dict[str, Any]) -> list[str]:
         status = case.get("status")
         if status not in ALLOWED_STATUSES:
             errors.append(f"case {case_id} status must be one of {sorted(ALLOWED_STATUSES)}")
+        provider = case.get("provider")
+        if provider not in ALLOWED_PROVIDERS:
+            errors.append(f"case {case_id} provider must be one of {sorted(ALLOWED_PROVIDERS)}")
         control_path = case.get("control_path")
         if control_path not in ALLOWED_CONTROL_PATHS:
             errors.append(f"case {case_id} control_path must be managed or unmanaged")
+        topology = case.get("topology")
+        if topology not in ALLOWED_TOPOLOGIES:
+            errors.append(f"case {case_id} topology must be one of {sorted(ALLOWED_TOPOLOGIES)}")
         _validate_profile_class(case.get("profile_class"), f"case {case_id}", errors)
         for field in ("provider", "profile", "launch", "shutdown", "truth_source", "notes"):
             value = case.get(field)
@@ -88,9 +121,26 @@ def validate_manifest(manifest: dict[str, Any]) -> list[str]:
             value = case.get(field)
             if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
                 errors.append(f"case {case_id} {field} must be a list of strings")
+        for observer in case.get("required_observers") or []:
+            if observer not in ALLOWED_OBSERVERS:
+                errors.append(f"case {case_id} references unknown observer {observer}")
         for metric_id in case.get("metrics") or []:
             if metric_id not in metric_ids:
                 errors.append(f"case {case_id} references unknown metric {metric_id}")
+        if status == "required":
+            if len(case.get("metrics") or []) < 1:
+                errors.append(f"case {case_id} is required but has no metrics")
+            if len(case.get("required_observers") or []) < 3:
+                errors.append(f"case {case_id} is required but has fewer than 3 observers")
+            if case.get("truth_source") == "none":
+                errors.append(f"case {case_id} is required but has truth_source=none")
+        if status == "undefined":
+            if case.get("metrics"):
+                errors.append(f"case {case_id} is undefined but declares metrics")
+            if case.get("required_observers"):
+                errors.append(f"case {case_id} is undefined but declares observers")
+            if case.get("truth_source") != "none":
+                errors.append(f"case {case_id} is undefined but truth_source is not none")
 
     required_cases = [case for case in cases if isinstance(case, dict) and case.get("status") == "required"]
     if not required_cases:
@@ -99,22 +149,29 @@ def validate_manifest(manifest: dict[str, Any]) -> list[str]:
 
 
 def metric_target_ms(manifest: dict[str, Any], metric_id_or_alias: str, default: int | None = None) -> int | None:
-    metric = metric_by_id_or_alias(manifest, metric_id_or_alias)
+    metric = metric_by_id_or_legacy_alias(manifest, metric_id_or_alias)
     if metric is None:
         return default
     value = metric.get("target_ms")
     return value if isinstance(value, int) else default
 
 
-def metric_by_id_or_alias(manifest: dict[str, Any], metric_id_or_alias: str) -> dict[str, Any] | None:
+def metric_by_id_or_legacy_alias(manifest: dict[str, Any], metric_id_or_alias: str) -> dict[str, Any] | None:
     for metric in manifest.get("metrics") or []:
         if not isinstance(metric, dict):
             continue
         if metric.get("id") == metric_id_or_alias:
             return metric
-        aliases = metric.get("aliases") or []
-        if metric_id_or_alias in aliases:
+        legacy_aliases = metric.get("legacy_aliases") or []
+        if metric_id_or_alias in legacy_aliases:
             return metric
+    return None
+
+
+def case_by_id(manifest: dict[str, Any], case_id: str) -> dict[str, Any] | None:
+    for case in manifest.get("cases") or []:
+        if isinstance(case, dict) and case.get("id") == case_id:
+            return case
     return None
 
 

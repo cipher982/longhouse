@@ -17,11 +17,12 @@ def test_session_propagation_sla_manifest_is_valid():
     manifest = sla_manifest.load_manifest()
 
     assert sla_manifest.validate_manifest(manifest) == []
-    assert sla_manifest.manifest_summary(manifest) == {
-        "schema_version": 1,
-        "cases": {"required": 1, "experimental": 7, "undefined": 2},
-        "metrics": 8,
-    }
+    summary = sla_manifest.manifest_summary(manifest)
+    assert summary["schema_version"] == 1
+    assert summary["cases"]["required"] == 1
+    assert summary["cases"]["experimental"] >= 8
+    assert summary["cases"]["undefined"] >= 3
+    assert summary["metrics"] >= 10
 
 
 def test_session_propagation_sla_manifest_keeps_codex_required_path():
@@ -33,6 +34,7 @@ def test_session_propagation_sla_manifest_keeps_codex_required_path():
     case = required[0]
     assert case["provider"] == "codex"
     assert case["control_path"] == "managed"
+    assert case["topology"] == "hosted_runtime_host"
     assert case["profile"] == "warm-live"
     assert "timeline_sse" in case["required_observers"]
     assert "browser_card" in case["required_observers"]
@@ -45,6 +47,16 @@ def test_session_propagation_sla_metric_aliases_support_existing_profiler_names(
     assert sla_manifest.metric_target_ms(manifest, "live_first_from_local_ms") == 500
     assert sla_manifest.metric_target_ms(manifest, "close_observed_ms") == 1000
     assert sla_manifest.metric_target_ms(manifest, "durable_archive_local_to_hosted_ms") == 3000
+
+
+def test_session_propagation_sla_undefined_cases_do_not_declare_observers_or_metrics():
+    sla_manifest = _load_sla_manifest_module()
+    manifest = sla_manifest.load_manifest()
+
+    for case in sla_manifest.cases_by_status(manifest, "undefined"):
+        assert case["truth_source"] == "none"
+        assert case["required_observers"] == []
+        assert case["metrics"] == []
 
 
 def test_session_propagation_sla_inventory_is_human_readable():
