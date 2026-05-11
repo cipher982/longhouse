@@ -32,7 +32,7 @@ from sqlalchemy.orm import sessionmaker
 from sse_starlette.sse import EventSourceResponse
 
 from zerg.database import get_db
-from zerg.database import make_sessionmaker
+from zerg.database import get_session_factory
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.dependencies.browser_auth import require_current_browser_user_short_lived
@@ -235,15 +235,13 @@ async def stream_timeline_sessions(
         False,
         description="When true, subscribe without immediately replaying the already-fresh default timeline snapshot.",
     ),
-    db: Session = Depends(get_db),
 ) -> EventSourceResponse:
     try:
         validate_timeline_stream_contract(query=query, sort=sort, mode=mode)
     except SessionListingError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
-    session_factory = make_sessionmaker(db.get_bind())
-    db.close()
+    session_factory = get_session_factory()
     params = TimelineSessionListParams(
         project=project,
         provider=provider,
@@ -732,7 +730,6 @@ async def stream_session_workspace(
         False,
         description="When true, wait for first change before emitting workspace_changed.",
     ),
-    db: Session = Depends(get_db),
 ) -> EventSourceResponse:
     """SSE stream that emits workspace_changed when the session's data mutates.
 
@@ -740,8 +737,7 @@ async def stream_session_workspace(
     invalidate React Query caches — replacing the 5-second polling interval
     with event-driven refresh.
     """
-    session_factory = make_sessionmaker(db.get_bind())
-    db.close()
+    session_factory = get_session_factory()
 
     # SSE Last-Event-ID for replay on reconnect. Header is canonical; ignore
     # malformed values rather than 400ing the reconnect.
@@ -777,7 +773,6 @@ async def stream_canary_workspace(
     request: Request,
     session_id: UUID,
     skip_initial: bool = Query(False),
-    db: Session = Depends(get_db),
 ) -> EventSourceResponse:
     """Canary-only SSE: same generator as the browser endpoint, token-auth.
 
@@ -790,8 +785,7 @@ async def stream_canary_workspace(
     if not canary_token_matches(request):
         raise HTTPException(status_code=401, detail="canary token required")
 
-    session_factory = make_sessionmaker(db.get_bind())
-    db.close()
+    session_factory = get_session_factory()
 
     last_event_id: int | None = None
     raw = request.headers.get("Last-Event-ID")

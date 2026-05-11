@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+from inspect import signature
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -68,17 +70,30 @@ def test_timeline_stream_routes_are_on_short_lived_auth_router():
     assert "/timeline/sessions/{session_id}/workspace/stream" not in timeline_paths
 
 
+def test_timeline_stream_endpoints_do_not_request_db_dependency():
+    stream_params = signature(timeline_router.stream_timeline_sessions).parameters
+    workspace_params = signature(timeline_router.stream_session_workspace).parameters
+    canary_params = signature(timeline_router.stream_canary_workspace).parameters
+
+    assert "db" not in stream_params
+    assert "db" not in workspace_params
+    assert "db" not in canary_params
+
+
 def test_short_lived_browser_auth_closes_db_after_validation():
     request = SimpleNamespace(cookies={"longhouse_session": "token"}, headers={})
     db = SimpleNamespace(closed=False)
 
-    def close():
+    @contextmanager
+    def fake_db_session():
+        yield db
         db.closed = True
 
-    db.close = close
-
-    with patch("zerg.dependencies.browser_auth._get_browser_session_user", return_value=object()) as auth:
-        result = timeline_router.require_current_browser_user_short_lived(request, db=db)
+    with (
+        patch("zerg.dependencies.browser_auth.db_session", fake_db_session),
+        patch("zerg.dependencies.browser_auth._get_browser_session_user", return_value=object()) as auth,
+    ):
+        result = timeline_router.require_current_browser_user_short_lived(request)
 
     assert result is None
     assert db.closed is True
