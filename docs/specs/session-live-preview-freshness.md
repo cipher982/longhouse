@@ -47,7 +47,7 @@ Timeline-card projections may return two related fields:
     "seq": 12,
     "method": "item/agentMessage/delta",
     "is_complete": false,
-    "content_cursor": "codex_bridge_live:thread-1:turn-1:12",
+    "content_cursor": "codex_bridge_live:session-uuid:thread-1:turn-1:12",
     "overlay_at": "2026-05-11T15:00:01Z",
     "last_durable_at": "2026-05-11T14:59:59Z",
     "freshness": "current",
@@ -93,13 +93,12 @@ else:
   state = current
 ```
 
-Freshness budgets:
+Freshness budgets are owned by `server/zerg/services/session_views.py`:
 
-- Partial/in-flight overlay: 2 minutes.
-- Complete live overlay: 10 minutes.
+- `LIVE_TRANSCRIPT_PARTIAL_FRESHNESS`: partial/in-flight overlay budget.
+- `LIVE_TRANSCRIPT_COMPLETE_FRESHNESS`: complete live overlay budget.
 
-These match the existing browser card behavior, but the decision belongs to the
-server response so all clients see the same truth.
+The decision belongs to the server response so all clients see the same truth.
 
 ## UI Rules
 
@@ -111,7 +110,7 @@ Timeline cards:
 - Use `Latest output` for complete current overlays.
 - Prefer keyword/semantic search snippets over live preview.
 - Prefer durable summary when the overlay is missing, stale, or superseded.
-- Do not infer freshness from `received_at` alone.
+- Do not infer freshness from `received_at` or a client-owned age budget.
 
 Session detail:
 

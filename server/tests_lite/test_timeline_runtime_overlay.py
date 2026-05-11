@@ -296,7 +296,7 @@ def test_live_transcript_overlay_is_timeline_card_only(tmp_path):
         "seq": 4,
         "method": "item/agentMessage/delta",
         "is_complete": False,
-        "content_cursor": "codex_bridge_live:thread-1:turn-1:4",
+        "content_cursor": f"codex_bridge_live:{session.id}:thread-1:turn-1:4",
         "overlay_at": (now - timedelta(milliseconds=80)).isoformat().replace("+00:00", "Z"),
         "last_durable_at": session.started_at.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z"),
         "freshness": "current",

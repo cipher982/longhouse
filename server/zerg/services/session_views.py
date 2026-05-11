@@ -158,6 +158,7 @@ def _live_transcript_overlay_at(overlay: SessionLiveTranscriptOverlay) -> dateti
 def _live_transcript_content_cursor(overlay: SessionLiveTranscriptOverlay) -> str:
     parts = [
         overlay.source,
+        overlay.session_id or "unknown-session",
         overlay.thread_id or "unknown-thread",
         overlay.turn_id or "unknown-turn",
         str(overlay.seq) if overlay.seq is not None else "unknown-seq",
@@ -484,7 +485,7 @@ class SessionLiveTranscriptResponse(UTCBaseModel):
     seq: Optional[int] = Field(None, description="Monotonic sequence within the provider turn")
     method: Optional[str] = Field(None, description="Provider notification method that produced the snapshot")
     is_complete: bool = Field(False, description="True when this snapshot is the final live text for the turn")
-    content_cursor: str = Field(..., description="Stable-ish overlay cursor for card freshness/debugging")
+    content_cursor: str = Field(..., description="Session-scoped overlay cursor for card freshness/debugging")
     overlay_at: Optional[datetime] = Field(None, description="Timestamp used to compare the overlay against durable transcript activity")
     last_durable_at: Optional[datetime] = Field(None, description="Durable transcript activity timestamp used for freshness comparison")
     freshness: Literal["current", "stale"] = Field(

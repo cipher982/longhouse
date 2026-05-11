@@ -175,6 +175,7 @@ class SessionRuntimeView:
 
 @dataclass(frozen=True)
 class SessionLiveTranscriptOverlay:
+    session_id: str | None
     text: str
     source: str
     received_at: datetime
@@ -507,6 +508,7 @@ def load_live_transcript_overlay_map(
             continue
         seq = payload.get("seq")
         overlays[str(row.session_id)] = SessionLiveTranscriptOverlay(
+            session_id=str(row.session_id),
             text=text,
             source=row.source,
             received_at=normalize_utc(row.received_at) or row.received_at,
