@@ -577,7 +577,10 @@ class SessionResponse(UTCBaseModel):
     runtime_facts: Optional[SessionLivenessFactsResponse] = Field(None, description="Observed liveness facts with timestamps and sources")
     live_transcript: Optional[SessionLiveTranscriptResponse] = Field(
         None,
-        description="Low-latency managed bridge transcript overlay; durable events remain canonical",
+        description=(
+            "Low-latency managed bridge transcript overlay. Populated only for "
+            "timeline-card projections; durable events remain canonical."
+        ),
     )
     timeline_card: TimelineCardPresentationResponse = Field(..., description="Server-derived timeline-card presentation")
     loop_mode: SessionLoopMode = Field(SessionLoopMode.ASSIST, description="Session loop mode: assist|autopilot")
@@ -703,7 +706,10 @@ class ActiveSessionResponse(UTCBaseModel):
     runtime_facts: Optional[SessionLivenessFactsResponse] = Field(None, description="Observed liveness facts with timestamps and sources")
     live_transcript: Optional[SessionLiveTranscriptResponse] = Field(
         None,
-        description="Low-latency managed bridge transcript overlay; durable events remain canonical",
+        description=(
+            "Low-latency managed bridge transcript overlay. Populated only for "
+            "timeline-card projections; durable events remain canonical."
+        ),
     )
     loop_mode: SessionLoopMode = Field(SessionLoopMode.ASSIST, description="Session loop mode: assist|autopilot")
 
