@@ -190,7 +190,7 @@ async def generate_summary_impl(session_id: str) -> None:
         return
 
     session_factory = get_session_factory()
-    db = session_factory()
+    db: Session | None = session_factory()
     ws = get_write_serializer()
     client = None
     try:
@@ -211,12 +211,13 @@ async def generate_summary_impl(session_id: str) -> None:
             return
 
         cursor_id = session.last_summarized_event_id
+        expected_summary_event_count = session.summary_event_count or 0
         if cursor_id is not None:
             new_events = (
                 db.query(AgentEvent).filter(AgentEvent.session_id == session_id, AgentEvent.id > cursor_id).order_by(AgentEvent.id).all()
             )
         else:
-            old_count = session.summary_event_count or 0
+            old_count = expected_summary_event_count
             all_events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.id).all()
             new_events = all_events[old_count:]
 
@@ -246,6 +247,13 @@ async def generate_summary_impl(session_id: str) -> None:
             return
 
         new_last_event_id = new_events[-1].id
+        current_summary = session.summary
+        current_title = session.summary_title
+        metadata = {
+            "project": session.project,
+            "provider": session.provider,
+            "git_branch": session.git_branch,
+        }
 
         from zerg.models_config import get_llm_client_with_db_fallback
 
@@ -263,18 +271,20 @@ async def generate_summary_impl(session_id: str) -> None:
         finally:
             _config_db.close()
 
+        # Release the read connection before the LLM call. Summary generation is
+        # best-effort background work and must not occupy the SQLite pool while
+        # realtime ingest/presence/lifecycle requests are waiting.
+        db.close()
+        db = None
+
         summary = await incremental_summary(
-            session_id=str(session.id),
-            current_summary=session.summary,
-            current_title=session.summary_title,
+            session_id=session_id,
+            current_summary=current_summary,
+            current_title=current_title,
             new_events=new_event_dicts,
             client=client,
             model=model,
-            metadata={
-                "project": session.project,
-                "provider": session.provider,
-                "git_branch": session.git_branch,
-            },
+            metadata=metadata,
         )
 
         for _attempt in range(2):
@@ -290,13 +300,20 @@ async def generate_summary_impl(session_id: str) -> None:
             if cursor_id is not None:
                 stmt = stmt.where(AgentSession.last_summarized_event_id == cursor_id)
             else:
-                stmt = stmt.where(AgentSession.summary_event_count == (session.summary_event_count or 0))
+                stmt = stmt.where(AgentSession.summary_event_count == expected_summary_event_count)
 
             def _do_update(write_db: Session) -> int:
                 result = write_db.execute(stmt.values(**values))
                 return int(result.rowcount or 0)
 
-            updated = await ws.execute_or_direct(_do_update, db, label="summary")
+            if ws.is_configured:
+                updated = await ws.execute_with_session_factory(session_factory, _do_update, label="summary")
+            else:
+                fallback_db = session_factory()
+                try:
+                    updated = await ws.execute_or_direct(_do_update, fallback_db, label="summary")
+                finally:
+                    fallback_db.close()
             if updated > 0:
                 if summary:
                     logger.info("Updated summary for session %s: %s", session_id, summary.title)
@@ -304,48 +321,56 @@ async def generate_summary_impl(session_id: str) -> None:
                     logger.debug("No meaningful content for session %s, advanced cursor only", session_id)
                 break
 
-            db.rollback()
-            session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
-            if not session:
-                return
-            cursor_id = session.last_summarized_event_id
-            if cursor_id is not None:
-                new_events = (
-                    db.query(AgentEvent)
-                    .filter(AgentEvent.session_id == session_id, AgentEvent.id > cursor_id)
-                    .order_by(AgentEvent.id)
-                    .all()
-                )
-            else:
-                old_count = session.summary_event_count or 0
-                all_events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.id).all()
-                new_events = all_events[old_count:]
-            if not new_events:
-                return
-            new_last_event_id = new_events[-1].id
-            new_event_dicts = events_to_dicts(new_events)
-            summary = await incremental_summary(
-                session_id=str(session.id),
-                current_summary=session.summary,
-                current_title=session.summary_title,
-                new_events=new_event_dicts,
-                client=client,
-                model=model,
-                metadata={
+            retry_db = session_factory()
+            try:
+                session = retry_db.query(AgentSession).filter(AgentSession.id == session_id).first()
+                if not session:
+                    return
+                cursor_id = session.last_summarized_event_id
+                expected_summary_event_count = session.summary_event_count or 0
+                if cursor_id is not None:
+                    new_events = (
+                        retry_db.query(AgentEvent)
+                        .filter(AgentEvent.session_id == session_id, AgentEvent.id > cursor_id)
+                        .order_by(AgentEvent.id)
+                        .all()
+                    )
+                else:
+                    all_events = retry_db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.id).all()
+                    new_events = all_events[expected_summary_event_count:]
+                if not new_events:
+                    return
+                new_last_event_id = new_events[-1].id
+                new_event_dicts = events_to_dicts(new_events)
+                current_summary = session.summary
+                current_title = session.summary_title
+                metadata = {
                     "project": session.project,
                     "provider": session.provider,
                     "git_branch": session.git_branch,
-                },
+                }
+            finally:
+                retry_db.close()
+            summary = await incremental_summary(
+                session_id=session_id,
+                current_summary=current_summary,
+                current_title=current_title,
+                new_events=new_event_dicts,
+                client=client,
+                model=model,
+                metadata=metadata,
             )
         else:
             logger.warning("CAS conflict persisted for session %s after retry", session_id)
 
     except Exception:
-        db.rollback()
+        if db is not None:
+            db.rollback()
         logger.exception("Failed to generate summary for session %s", session_id)
         raise
     finally:
-        db.close()
+        if db is not None:
+            db.close()
         if client is not None:
             try:
                 await client.close()
