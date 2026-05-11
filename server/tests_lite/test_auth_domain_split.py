@@ -56,6 +56,35 @@ def test_timeline_router_exposes_browser_archive_routes():
     } <= timeline_paths
 
 
+def test_timeline_stream_routes_are_on_short_lived_auth_router():
+    timeline_paths = _route_paths(timeline_router.router)
+    stream_paths = _route_paths(timeline_router.timeline_stream_router)
+
+    assert {
+        "/timeline/sessions/stream",
+        "/timeline/sessions/{session_id}/workspace/stream",
+    } <= stream_paths
+    assert "/timeline/sessions/stream" not in timeline_paths
+    assert "/timeline/sessions/{session_id}/workspace/stream" not in timeline_paths
+
+
+def test_short_lived_browser_auth_closes_db_after_validation():
+    request = SimpleNamespace(cookies={"longhouse_session": "token"}, headers={})
+    db = SimpleNamespace(closed=False)
+
+    def close():
+        db.closed = True
+
+    db.close = close
+
+    with patch("zerg.dependencies.browser_auth._get_browser_session_user", return_value=object()) as auth:
+        result = timeline_router.require_current_browser_user_short_lived(request, db=db)
+
+    assert result is None
+    assert db.closed is True
+    auth.assert_called_once_with(request, db)
+
+
 
 def test_get_current_browser_route_user_accepts_query_token_for_sse():
     request = SimpleNamespace(cookies={}, headers={})

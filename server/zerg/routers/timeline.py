@@ -35,6 +35,7 @@ from zerg.database import get_db
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.browser_auth import get_current_browser_user
+from zerg.dependencies.browser_auth import require_current_browser_user_short_lived
 from zerg.models.agents import AgentSession
 from zerg.routers import agents_demo as _demo_router
 from zerg.routers import agents_search as _search_router
@@ -71,6 +72,11 @@ router = APIRouter(
     prefix="/timeline",
     tags=["timeline"],
     dependencies=[Depends(get_current_browser_user), Depends(require_single_tenant)],
+)
+timeline_stream_router = APIRouter(
+    prefix="/timeline",
+    tags=["timeline"],
+    dependencies=[Depends(require_current_browser_user_short_lived), Depends(require_single_tenant)],
 )
 
 TIMELINE_FILTERS_CACHE_TTL_SECONDS = 60.0
@@ -203,7 +209,7 @@ async def list_timeline_sessions(
     return result.response
 
 
-@router.get("/sessions/stream")
+@timeline_stream_router.get("/sessions/stream")
 async def stream_timeline_sessions(
     request: Request,
     project: Optional[str] = Query(None, description="Filter by project"),
@@ -718,7 +724,7 @@ async def _wait_for_session_change(subscription) -> int:
     return msg.seq if msg else 0
 
 
-@router.get("/sessions/{session_id}/workspace/stream")
+@timeline_stream_router.get("/sessions/{session_id}/workspace/stream")
 async def stream_session_workspace(
     request: Request,
     session_id: UUID,

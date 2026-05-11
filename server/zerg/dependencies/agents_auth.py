@@ -76,7 +76,7 @@ def verify_agents_token(request: Request, db: Session = Depends(get_db)) -> Devi
     )
 
 
-def require_single_tenant(db: Session = Depends(get_db)) -> None:
+def require_single_tenant() -> None:
     """Enforce single-tenant mode for agents endpoints."""
     settings = get_settings()
     if settings.testing:
