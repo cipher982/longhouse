@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from typing import Any
 from typing import Dict
@@ -43,6 +44,9 @@ from zerg.utils.time import UTCBaseModel
 from zerg.utils.time import normalize_utc
 
 logger = logging.getLogger(__name__)
+
+LIVE_TRANSCRIPT_PARTIAL_FRESHNESS = timedelta(minutes=2)
+LIVE_TRANSCRIPT_COMPLETE_FRESHNESS = timedelta(minutes=10)
 
 # ---------------------------------------------------------------------------
 # Coercion helpers
@@ -147,10 +151,25 @@ def _live_transcript_superseded_by_durable_activity(
     return activity_at > overlay_at
 
 
+def _live_transcript_overlay_at(overlay: SessionLiveTranscriptOverlay) -> datetime | None:
+    return normalize_utc(overlay.occurred_at) or normalize_utc(overlay.received_at)
+
+
+def _live_transcript_content_cursor(overlay: SessionLiveTranscriptOverlay) -> str:
+    parts = [
+        overlay.source,
+        overlay.thread_id or "unknown-thread",
+        overlay.turn_id or "unknown-turn",
+        str(overlay.seq) if overlay.seq is not None else "unknown-seq",
+    ]
+    return ":".join(parts)
+
+
 def build_live_transcript_response(
     overlay: SessionLiveTranscriptOverlay | None,
     *,
     last_activity_at: datetime | None = None,
+    now: datetime | None = None,
 ) -> SessionLiveTranscriptResponse | None:
     if overlay is None:
         return None
@@ -159,6 +178,18 @@ def build_live_transcript_response(
         last_activity_at=last_activity_at,
     ):
         return None
+    now_utc = normalize_utc(now) or datetime.now(timezone.utc)
+    overlay_at = _live_transcript_overlay_at(overlay)
+    last_durable_at = normalize_utc(last_activity_at)
+    max_age = LIVE_TRANSCRIPT_COMPLETE_FRESHNESS if overlay.is_complete else LIVE_TRANSCRIPT_PARTIAL_FRESHNESS
+    is_stale = False
+    stale_reason = None
+    if overlay_at is None:
+        is_stale = True
+        stale_reason = "missing_overlay_timestamp"
+    elif now_utc - overlay_at > max_age:
+        is_stale = True
+        stale_reason = "freshness_window_expired"
     return SessionLiveTranscriptResponse(
         text=overlay.text,
         source=overlay.source,
@@ -169,6 +200,13 @@ def build_live_transcript_response(
         seq=overlay.seq,
         method=overlay.method,
         is_complete=overlay.is_complete,
+        content_cursor=_live_transcript_content_cursor(overlay),
+        overlay_at=overlay_at,
+        last_durable_at=last_durable_at,
+        freshness="stale" if is_stale else "current",
+        is_provisional=not overlay.is_complete,
+        is_stale=is_stale,
+        stale_reason=stale_reason,
     )
 
 
@@ -446,6 +484,19 @@ class SessionLiveTranscriptResponse(UTCBaseModel):
     seq: Optional[int] = Field(None, description="Monotonic sequence within the provider turn")
     method: Optional[str] = Field(None, description="Provider notification method that produced the snapshot")
     is_complete: bool = Field(False, description="True when this snapshot is the final live text for the turn")
+    content_cursor: str = Field(..., description="Stable-ish overlay cursor for card freshness/debugging")
+    overlay_at: Optional[datetime] = Field(None, description="Timestamp used to compare the overlay against durable transcript activity")
+    last_durable_at: Optional[datetime] = Field(None, description="Durable transcript activity timestamp used for freshness comparison")
+    freshness: Literal["current", "stale"] = Field(
+        ...,
+        description="Server-owned card preview freshness. Superseded overlays are omitted instead of returned.",
+    )
+    is_provisional: bool = Field(..., description="True when the bridge snapshot is an incomplete in-flight turn")
+    is_stale: bool = Field(..., description="True when clients must not render this overlay as live/current output")
+    stale_reason: Optional[Literal["freshness_window_expired", "missing_overlay_timestamp"]] = Field(
+        None,
+        description="Why is_stale is true, when known",
+    )
 
 
 class HostObservationResponse(UTCBaseModel):
