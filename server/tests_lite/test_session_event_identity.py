@@ -31,7 +31,7 @@ def test_event_only_then_full_archive_converges_on_event_identity_and_backfills_
     timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
     source_path = "/tmp/codex-rollout.jsonl"
     event_line = (
-        '{"type":"agent_message","uuid":"event-1","parentUuid":"parent-1",'
+        '{"type":"agent_message","item":{"id":"item-1"},'
         '"message":{"content":[{"type":"output_text","text":"hello"}]}}'
     )
     context_line = '{"type":"session_meta","id":"thread-1","cwd":"/tmp/project"}'
@@ -71,6 +71,8 @@ def test_event_only_then_full_archive_converges_on_event_identity_and_backfills_
             first_event.parent_event_uuid,
         )
         assert db.query(AgentSourceLine).filter(AgentSourceLine.session_id == session_id).count() == 1
+        assert first_event.event_uuid is None
+        assert first_event.parent_event_uuid is None
 
         full_archive_result = store.ingest_session(
             SessionIngest(

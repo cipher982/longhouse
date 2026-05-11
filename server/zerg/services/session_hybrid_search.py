@@ -20,7 +20,12 @@ from zerg.services.session_response_projection import has_real_sessions
 from zerg.services.session_views import SessionsListResponse
 
 
-async def list_hybrid_sessions(*, db: Session, params: SessionListParams) -> SessionListResult:
+async def list_hybrid_sessions(
+    *,
+    db: Session,
+    params: SessionListParams,
+    include_live_transcript: bool = False,
+) -> SessionListResult:
     if params.offset > 0:
         raise SessionListingError(
             400,
@@ -95,6 +100,7 @@ async def list_hybrid_sessions(*, db: Session, params: SessionListParams) -> Ses
         match_map=match_map,
         semantic_snippet_map=semantic_snippet_map,
         sem_score_map=sem_score_map,
+        include_live_transcript=include_live_transcript,
     )
 
     response = SessionsListResponse(

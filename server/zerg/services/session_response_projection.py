@@ -39,7 +39,7 @@ def build_session_response_list(
     activity_map = store.get_last_activity_map(session_ids)
     now = datetime.now(timezone.utc)
     runtime_state_map = load_runtime_state_map(db, session_ids)
-    live_transcript_map = load_live_transcript_overlay_map(db, session_ids)
+    live_transcript_map = load_live_transcript_overlay_map(db, session_ids) if include_live_transcript else {}
     first_user_map = store.get_first_message_map(session_ids, role="user", max_len=80)
     thread_cache: dict[str, tuple[str, int]] = store.batch_thread_meta(sessions)
     binding_overlay_map = load_binding_overlay(db, session_ids, now=now)

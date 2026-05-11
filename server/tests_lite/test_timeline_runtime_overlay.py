@@ -7,6 +7,7 @@ Covers:
 """
 
 import json
+import asyncio
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -26,6 +27,8 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import UnmanagedSessionBinding
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.services.timeline_session_listing import build_timeline_cards_from_thread_rows
+from zerg.services.timeline_session_listing import list_timeline_sessions_for_browser
+from zerg.services.timeline_session_listing import TimelineSessionListParams
 
 
 def _make_db(tmp_path, name="timeline_runtime_overlay.db"):
@@ -294,6 +297,76 @@ def test_live_transcript_overlay_is_timeline_card_only(tmp_path):
         "method": "item/agentMessage/delta",
         "is_complete": False,
     }
+
+
+def test_timeline_compatibility_cards_include_live_transcript_overlay(tmp_path):
+    factory = _make_db(tmp_path, "codex_live_transcript_timeline_compat.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            provider="codex",
+            project="codex-live-compat",
+            started_at=now - timedelta(minutes=10),
+            execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
+            managed_transport="codex_app_server",
+        )
+        db.add(
+            SessionRuntimeEvent(
+                runtime_key=f"codex:{session.id}",
+                session_id=session.id,
+                provider="codex",
+                device_id="cinder",
+                source="codex_bridge_live",
+                kind="progress_signal",
+                occurred_at=now - timedelta(milliseconds=50),
+                received_at=now,
+                dedupe_key=f"bridge:live:{session.id}:thread-1:turn-1:5",
+                payload_json=json.dumps(
+                    {
+                        "progress_kind": "bridge_live_transcript_delta",
+                        "thread_id": "thread-1",
+                        "turn_id": "turn-1",
+                        "seq": 5,
+                        "method": "item/agentMessage/delta",
+                        "delta": "compat",
+                        "live_text": "timeline compat",
+                    },
+                    sort_keys=True,
+                ),
+            )
+        )
+        db.commit()
+
+        result = asyncio.run(
+            list_timeline_sessions_for_browser(
+                db=db,
+                params=TimelineSessionListParams(
+                    project="codex-live-compat",
+                    provider="codex",
+                    environment=None,
+                    include_test=False,
+                    hide_autonomous=True,
+                    device_id=None,
+                    days_back=14,
+                    query=None,
+                    limit=5,
+                    offset=0,
+                    sort=None,
+                    mode="semantic",
+                    context_mode="forensic",
+                ),
+            )
+        )
+    finally:
+        db.close()
+
+    assert result.compatibility_raw is True
+    assert result.response.sessions[0].id == str(session.id)
+    assert result.response.sessions[0].live_transcript is not None
+    assert result.response.sessions[0].live_transcript.text == "timeline compat"
 
 
 def test_sessions_list_hides_live_transcript_overlay_after_durable_activity_catches_up(tmp_path):

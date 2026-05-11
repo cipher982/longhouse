@@ -105,6 +105,7 @@ async def list_timeline_sessions_for_browser(
                     db=db,
                     auth=None,
                     params=params.to_agent_params(),
+                    include_live_transcript=True,
                 )
         except SessionListingError:
             raise
