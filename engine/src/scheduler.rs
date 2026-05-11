@@ -355,6 +355,9 @@ fn merge_priority(a: Option<WorkPriority>, b: Option<WorkPriority>) -> Option<Wo
 
 fn should_replace_observation(current: &ObservationTrace, candidate: &ObservationTrace) -> bool {
     (candidate.source == "wake_socket" && current.source != "wake_socket")
+        || (candidate.source == "wake_socket"
+            && current.source == "wake_socket"
+            && candidate.observed_at_ms > current.observed_at_ms)
         || (current.session_id.is_none() && candidate.session_id.is_some())
         || (current.wake_received_at_ms.is_none() && candidate.wake_received_at_ms.is_some())
 }
@@ -411,6 +414,52 @@ mod tests {
         assert_eq!(job.observation.source, "wake_socket");
         assert_eq!(job.observation.session_id.as_deref(), Some("session-123"));
         assert_eq!(job.observation.wake_reason.as_deref(), Some("progress"));
+    }
+
+    #[test]
+    fn test_ready_path_keeps_newest_wake_observation_for_same_priority() {
+        let mut scheduler = PathScheduler::new(2);
+        let path = PathBuf::from("/tmp/a.jsonl");
+
+        scheduler.enqueue_observation(
+            path.clone(),
+            "codex",
+            WorkPriority::Live,
+            ObservationTrace {
+                source: "wake_socket",
+                observed_at_ms: 100,
+                wake_received_at_ms: Some(150),
+                enqueued_at_ms: 0,
+                session_id: Some("session-123".to_string()),
+                turn_id: None,
+                wake_reason: Some("binding".to_string()),
+                file_len_hint: Some(100),
+            },
+        );
+        scheduler.enqueue_observation(
+            path,
+            "codex",
+            WorkPriority::Live,
+            ObservationTrace {
+                source: "wake_socket",
+                observed_at_ms: 200,
+                wake_received_at_ms: Some(201),
+                enqueued_at_ms: 0,
+                session_id: Some("session-123".to_string()),
+                turn_id: Some("turn-123".to_string()),
+                wake_reason: Some("turn_completed".to_string()),
+                file_len_hint: Some(456),
+            },
+        );
+
+        let job = scheduler.pop_launchable().unwrap();
+        assert_eq!(job.observation.source, "wake_socket");
+        assert_eq!(job.observation.observed_at_ms, 200);
+        assert_eq!(
+            job.observation.wake_reason.as_deref(),
+            Some("turn_completed")
+        );
+        assert_eq!(job.observation.file_len_hint, Some(456));
     }
 
     #[test]

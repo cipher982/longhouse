@@ -301,6 +301,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut runtime_truth_bootstrapped = false;
     let mut last_unmanaged_session_bindings: Option<Vec<heartbeat::UnmanagedSessionBinding>> = None;
     let mut codex_terminal_catchup_marks: HashMap<PathBuf, String> = HashMap::new();
+    let mut latest_transcript_wake_observed: HashMap<PathBuf, i64> = HashMap::new();
     let mut bridge_reaper = ManagedBridgeReaper::from_env();
     let mut outbox_post_tasks: JoinSet<(usize, usize)> = JoinSet::new();
     let mut heartbeat_post_tasks: JoinSet<HeartbeatPostResult> = JoinSet::new();
@@ -382,7 +383,17 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 schedule_transcript_catchup_for_wake(
                     &mut transcript_catchups,
                     &mut active_transcript_polls,
+                    &mut latest_transcript_wake_observed,
                     signal,
+                );
+                pump_ready_local_work(
+                    &mut scheduler,
+                    &mut in_flight,
+                    &task_context,
+                    &mut deferred_retries,
+                    &mut transcript_catchups,
+                    &mut active_transcript_polls,
+                    offline.is_offline,
                 );
             }
 
@@ -1320,6 +1331,7 @@ fn outbox_signal_mark(signal: &outbox::DrainedPresenceSignal) -> String {
 fn schedule_transcript_catchup_for_wake(
     transcript_catchups: &mut Vec<TranscriptCatchup>,
     active_transcript_polls: &mut HashMap<PathBuf, ActiveTranscriptPoll>,
+    latest_transcript_wake_observed: &mut HashMap<PathBuf, i64>,
     signal: TranscriptWakeSignal,
 ) {
     let Some(provider) = provider_name_to_static(&signal.provider) else {
@@ -1337,6 +1349,22 @@ fn schedule_transcript_catchup_for_wake(
         );
         return;
     }
+    let latest_observed = latest_transcript_wake_observed
+        .entry(signal.path.clone())
+        .or_insert(i64::MIN);
+    if signal.observed_at_ms <= *latest_observed {
+        tracing::debug!(
+            provider = %signal.provider,
+            path = %signal.path.display(),
+            phase = %signal.phase,
+            wake_reason = signal.wake_reason.as_deref().unwrap_or("unknown"),
+            observed_at_ms = signal.observed_at_ms,
+            latest_observed_at_ms = *latest_observed,
+            "Skipping stale transcript wake"
+        );
+        return;
+    }
+    *latest_observed = signal.observed_at_ms;
     schedule_transcript_catchup(
         transcript_catchups,
         active_transcript_polls,
@@ -2797,10 +2825,12 @@ mod tests {
         let transcript = tempfile::NamedTempFile::new().unwrap();
         let mut catchups = Vec::new();
         let mut active_polls = HashMap::new();
+        let mut latest_wakes = HashMap::new();
 
         schedule_transcript_catchup_for_wake(
             &mut catchups,
             &mut active_polls,
+            &mut latest_wakes,
             TranscriptWakeSignal {
                 provider: "codex".to_string(),
                 path: transcript.path().to_path_buf(),
@@ -2823,10 +2853,12 @@ mod tests {
         let transcript = tempfile::NamedTempFile::new().unwrap();
         let mut catchups = Vec::new();
         let mut active_polls = HashMap::new();
+        let mut latest_wakes = HashMap::new();
 
         schedule_transcript_catchup_for_wake(
             &mut catchups,
             &mut active_polls,
+            &mut latest_wakes,
             TranscriptWakeSignal {
                 provider: "codex".to_string(),
                 path: transcript.path().to_path_buf(),
@@ -2854,6 +2886,61 @@ mod tests {
         assert_eq!(job.observation.turn_id.as_deref(), Some("turn-123"));
         assert_eq!(job.observation.wake_reason.as_deref(), Some("progress"));
         assert_eq!(job.observation.file_len_hint, Some(456));
+    }
+
+    #[test]
+    fn test_stale_active_wake_does_not_replace_newer_terminal_wake() {
+        let transcript = tempfile::NamedTempFile::new().unwrap();
+        let mut catchups = Vec::new();
+        let mut active_polls = HashMap::new();
+        let mut latest_wakes = HashMap::new();
+
+        schedule_transcript_catchup_for_wake(
+            &mut catchups,
+            &mut active_polls,
+            &mut latest_wakes,
+            TranscriptWakeSignal {
+                provider: "codex".to_string(),
+                path: transcript.path().to_path_buf(),
+                phase: "idle".to_string(),
+                observed_at_ms: 200,
+                session_id: Some("session-123".to_string()),
+                turn_id: Some("turn-123".to_string()),
+                wake_reason: Some("turn_completed".to_string()),
+                file_len_hint: Some(456),
+                received_at_ms: Some(201),
+            },
+        );
+
+        schedule_transcript_catchup_for_wake(
+            &mut catchups,
+            &mut active_polls,
+            &mut latest_wakes,
+            TranscriptWakeSignal {
+                provider: "codex".to_string(),
+                path: transcript.path().to_path_buf(),
+                phase: "running".to_string(),
+                observed_at_ms: 100,
+                session_id: Some("session-123".to_string()),
+                turn_id: None,
+                wake_reason: Some("binding".to_string()),
+                file_len_hint: Some(123),
+                received_at_ms: Some(250),
+            },
+        );
+
+        assert_eq!(catchups.len(), TERMINAL_CATCHUP_DELAYS.len());
+        assert!(active_polls.is_empty());
+
+        let mut scheduler = PathScheduler::new(4);
+        drain_due_transcript_catchups(&mut scheduler, &mut catchups);
+        let job = scheduler.pop_launchable().expect("terminal wake queued");
+        assert_eq!(job.observation.source, "wake_socket");
+        assert_eq!(job.observation.observed_at_ms, 200);
+        assert_eq!(
+            job.observation.wake_reason.as_deref(),
+            Some("turn_completed")
+        );
     }
 
     #[test]
