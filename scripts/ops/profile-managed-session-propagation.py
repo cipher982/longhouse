@@ -2508,7 +2508,8 @@ except Exception as exc:
         session_id: str,
         latest_health_state: Any,
     ) -> str | None:
-        local_degraded = latest_health_state in {"degraded", "broken"}
+        _ = latest_health_state
+        local_degraded = False
         hosted_degraded = False
         for row in self.observations:
             if row.get("case_id") != case_id or row.get("session_id") != session_id:
