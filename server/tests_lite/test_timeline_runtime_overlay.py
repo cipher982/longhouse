@@ -296,6 +296,13 @@ def test_live_transcript_overlay_is_timeline_card_only(tmp_path):
         "seq": 4,
         "method": "item/agentMessage/delta",
         "is_complete": False,
+        "content_cursor": "codex_bridge_live:thread-1:turn-1:4",
+        "overlay_at": (now - timedelta(milliseconds=80)).isoformat().replace("+00:00", "Z"),
+        "last_durable_at": session.started_at.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z"),
+        "freshness": "current",
+        "is_provisional": True,
+        "is_stale": False,
+        "stale_reason": None,
     }
 
 
@@ -367,6 +374,8 @@ def test_timeline_compatibility_cards_include_live_transcript_overlay(tmp_path):
     assert result.response.sessions[0].id == str(session.id)
     assert result.response.sessions[0].live_transcript is not None
     assert result.response.sessions[0].live_transcript.text == "timeline compat"
+    assert result.response.sessions[0].live_transcript.freshness == "current"
+    assert result.response.sessions[0].live_transcript.is_stale is False
 
 
 def test_sessions_list_hides_live_transcript_overlay_after_durable_activity_catches_up(tmp_path):
@@ -425,6 +434,76 @@ def test_sessions_list_hides_live_transcript_overlay_after_durable_activity_catc
     assert session_payload["id"] == str(session.id)
     assert session_payload["last_activity_at"] == (now - timedelta(seconds=1)).isoformat().replace("+00:00", "Z")
     assert session_payload["live_transcript"] is None
+
+    db = factory()
+    try:
+        cards = build_timeline_cards_from_thread_rows(
+            db=db,
+            thread_rows=((str(session.thread_root_session_id or session.id), str(session.id), now),),
+        )
+    finally:
+        db.close()
+
+    assert cards[0].head.live_transcript is None
+
+
+def test_timeline_cards_mark_old_unsuperseded_live_transcript_stale(tmp_path):
+    factory = _make_db(tmp_path, "codex_live_transcript_stale.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            provider="codex",
+            project="codex-live-overlay-stale",
+            started_at=now - timedelta(minutes=10),
+            execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
+            managed_transport="codex_app_server",
+        )
+        db.add(
+            SessionRuntimeEvent(
+                runtime_key=f"codex:{session.id}",
+                session_id=session.id,
+                provider="codex",
+                device_id="cinder",
+                source="codex_bridge_live",
+                kind="progress_signal",
+                occurred_at=now - timedelta(minutes=5),
+                received_at=now - timedelta(minutes=5),
+                dedupe_key=f"bridge:live:{session.id}:thread-1:turn-1:2",
+                payload_json=json.dumps(
+                    {
+                        "progress_kind": "bridge_live_transcript_delta",
+                        "thread_id": "thread-1",
+                        "turn_id": "turn-1",
+                        "seq": 2,
+                        "method": "item/agentMessage/delta",
+                        "delta": "old partial",
+                        "live_text": "old partial",
+                        "turn_completed": False,
+                    },
+                    sort_keys=True,
+                ),
+            )
+        )
+        db.commit()
+
+        cards = build_timeline_cards_from_thread_rows(
+            db=db,
+            thread_rows=((str(session.thread_root_session_id or session.id), str(session.id), now),),
+        )
+    finally:
+        db.close()
+
+    live = cards[0].head.live_transcript
+    assert live is not None
+    assert live.text == "old partial"
+    assert live.freshness == "stale"
+    assert live.is_provisional is True
+    assert live.is_stale is True
+    assert live.stale_reason == "freshness_window_expired"
+    assert live.last_durable_at == session.started_at.replace(tzinfo=timezone.utc)
 
 
 def test_sessions_list_marks_old_open_session_idle_without_live_signal(tmp_path):
