@@ -2154,6 +2154,7 @@ except Exception as exc:
         transcript_ingest = transcript_ingest_details(hosted, self.remote_clock_skew_ms)
         latest_health = self.latest_local_health_summary(case_id, session_id)
         latest_health_state = latest_health.get("health_state")
+        transport_failure = self.transport_failure_classification(case_id, session_id, latest_health_state)
         ownership = session.get("execution_home") or "-"
         transport = session.get("managed_transport") or "-"
         metrics: dict[str, Any] = {
@@ -2203,7 +2204,7 @@ except Exception as exc:
             "bridge_live_method": None,
             "ship_trace_source": None,
             "ship_trace_wake_reason": None,
-            "failure_classification": None,
+            "failure_classification": transport_failure,
             "local_health_state": latest_health_state,
             "provider_timeout": self.event_observed_at_ms(
                 case_id,
@@ -2400,12 +2401,11 @@ except Exception as exc:
             return "fail", metrics["notes"], metrics
         if not closed:
             phase = runtime.get("phase") or runtime.get("terminal_state") or "-"
-            if latest_health_state in {"degraded", "broken"}:
-                metrics["failure_classification"] = "local_transport_degraded"
+            if transport_failure is not None:
                 metrics["verdict"] = "contaminated"
                 metrics["notes"] = (
                     f"{live_ui}; nonce synced; close not confirmed yet; "
-                    f"local_health={latest_health_state}; phase={phase}; "
+                    f"transport_failure={transport_failure}; local_health={latest_health_state}; phase={phase}; "
                     f"ownership={ownership}, transport={transport}"
                 )
                 return "contaminated", metrics["notes"], metrics
@@ -2501,6 +2501,41 @@ except Exception as exc:
             if isinstance(summary, dict):
                 return summary
         return {}
+
+    def transport_failure_classification(
+        self,
+        case_id: str,
+        session_id: str,
+        latest_health_state: Any,
+    ) -> str | None:
+        local_degraded = latest_health_state in {"degraded", "broken"}
+        hosted_degraded = False
+        for row in self.observations:
+            if row.get("case_id") != case_id or row.get("session_id") != session_id:
+                continue
+            payload = row.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            payload_text = json.dumps(payload, sort_keys=True, default=str)
+            if row.get("event") == "shutdown_completed" and "IPC stop timed out" in payload_text:
+                local_degraded = True
+            if row.get("source") in {"hosted_http", "hosted_sse", "browser_ui"} and any(
+                marker in payload_text
+                for marker in (
+                    "ReadTimeout",
+                    "timed out",
+                    "status of 524",
+                    "ERR_QUIC_PROTOCOL_ERROR",
+                )
+            ):
+                hosted_degraded = True
+        if local_degraded and hosted_degraded:
+            return "both_degraded"
+        if local_degraded:
+            return "local_transport_degraded"
+        if hosted_degraded:
+            return "hosted_transport_degraded"
+        return None
 
 
 def redact_cmd(cmd: list[str]) -> list[str]:
