@@ -817,14 +817,14 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
             state.phase_source = "progress"
 
     elif event.kind == "terminal_signal":
+        terminal_state = str((event.payload or {}).get("terminal_state") or "finished").strip() or "finished"
         latest_terminal_related_at = _latest_timestamp(
             state.last_runtime_signal_at,
             state.last_progress_at,
             state.terminal_at,
         )
-        if latest_terminal_related_at is not None and occurred_at < latest_terminal_related_at:
+        if latest_terminal_related_at is not None and occurred_at < latest_terminal_related_at and terminal_state != "session_ended":
             return "ignored"
-        terminal_state = str((event.payload or {}).get("terminal_state") or "finished").strip() or "finished"
         terminal_reason = str((event.payload or {}).get("terminal_reason") or "").strip() or None
         if terminal_reason is None and terminal_state in {"process_gone", "host_expired", "user_closed"}:
             terminal_reason = terminal_state

@@ -213,6 +213,9 @@ pub fn leases_from_observations(
     let mut leases = Vec::with_capacity(observations.len());
 
     for obs in observations {
+        if codex_bridge_observation_is_stopped(obs) {
+            continue;
+        }
         let overlay = phase_overlay.get(&obs.session_id);
         let thread_failed = obs.thread_subscription_status.as_deref() == Some("failed");
         let has_bridge_error = obs
@@ -256,6 +259,10 @@ pub fn leases_from_observations(
 
     leases.sort_by(|a, b| a.session_id.cmp(&b.session_id));
     leases
+}
+
+fn codex_bridge_observation_is_stopped(obs: &CodexBridgeObservation) -> bool {
+    obs.status.trim().eq_ignore_ascii_case("stopped")
 }
 
 /// Build managed-session leases for Claude channel sessions.
@@ -752,6 +759,26 @@ mod tests {
             .unwrap();
         assert_eq!(degraded_lease.state, "degraded");
         assert_eq!(detached_lease.state, "detached");
+    }
+
+    #[test]
+    fn leases_from_observations_skips_stopped_codex_bridges() {
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(db.path())).unwrap();
+        let now = Utc::now();
+
+        let mut stopped = test_observation("stopped-session", "ws://127.0.0.1:45681/session");
+        stopped.status = "stopped".to_string();
+        stopped.bridge_alive = false;
+        stopped.has_tui_attachment = false;
+        stopped.app_server_alive = false;
+
+        let live = test_observation("live-session", "ws://127.0.0.1:45682/session");
+
+        let leases = leases_from_observations(&conn, "cinder", &[stopped, live], now);
+
+        assert_eq!(leases.len(), 1);
+        assert_eq!(leases[0].session_id, "live-session");
     }
 
     #[test]
