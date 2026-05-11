@@ -36,6 +36,7 @@ from zerg.services.apns_sender import build_session_attention_resolution_payload
 from zerg.services.apns_sender import build_session_live_activity_payload
 from zerg.services.apns_sender import build_widget_timeline_payload
 from zerg.services.apns_sender import prepare_session_attention_resolution_push
+from zerg.services.apns_sender import prepare_widget_timeline_push
 
 
 def _make_db(tmp_path, name: str = "test_apns.db"):
@@ -608,6 +609,46 @@ def test_presence_widget_push_uses_set_hash_and_debounce(tmp_path):
         assert state.state_hash == second_push.state_hash
 
     _cleanup_overrides()
+    engine.dispose()
+
+
+def test_widget_push_debounce_skips_active_set_hash(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path)
+    t0 = datetime.now(timezone.utc).replace(microsecond=0)
+
+    with SessionLocal() as db:
+        db.add(User(id=1, email="user@example.com", role="ADMIN"))
+        db.commit()
+        db.add(
+            APNSDeviceRegistration(
+                owner_id=1,
+                platform="ios_widget",
+                device_token="f" * 64,
+                push_environment="sandbox",
+                app_build_id="0.1.0-dev+aaaa1111",
+            )
+        )
+        db.add(
+            APNSWidgetPushState(
+                owner_id=1,
+                state_hash="previous-hash",
+                last_push_at=t0,
+            )
+        )
+        db.commit()
+
+    with SessionLocal() as db:
+        with patch(
+            "zerg.services.apns_sender._widget_active_set_hash",
+            side_effect=AssertionError("debounced widget push should not hash timeline state"),
+        ):
+            notification = prepare_widget_timeline_push(
+                db,
+                owner_id=1,
+                occurred_at=t0 + timedelta(seconds=5),
+            )
+
+    assert notification is None
     engine.dispose()
 
 
