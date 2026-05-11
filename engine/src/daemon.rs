@@ -61,6 +61,7 @@ const ACTIVE_TRANSCRIPT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const ACTIVE_TRANSCRIPT_POLL_SLOW_THRESHOLD: Duration = Duration::from_secs(2);
 const ACTIVE_TRANSCRIPT_POLL_SLOW_BACKOFF: Duration = Duration::from_secs(5);
 const ACTIVE_TRANSCRIPT_POLL_TTL: Duration = Duration::from_secs(2 * 60 * 60);
+const MAX_TRANSCRIPT_WAKE_TRACKED_PATHS: usize = 4096;
 const UNMANAGED_HOOK_CATCHUP_DELAY: Duration = Duration::from_secs(30);
 const TERMINAL_CATCHUP_DELAYS: [Duration; 3] = [
     Duration::from_secs(0),
@@ -1349,22 +1350,21 @@ fn schedule_transcript_catchup_for_wake(
         );
         return;
     }
-    let latest_observed = latest_transcript_wake_observed
-        .entry(signal.path.clone())
-        .or_insert(i64::MIN);
-    if signal.observed_at_ms <= *latest_observed {
+    if !remember_transcript_wake_observation(
+        latest_transcript_wake_observed,
+        &signal.path,
+        signal.observed_at_ms,
+    ) {
         tracing::debug!(
             provider = %signal.provider,
             path = %signal.path.display(),
             phase = %signal.phase,
             wake_reason = signal.wake_reason.as_deref().unwrap_or("unknown"),
             observed_at_ms = signal.observed_at_ms,
-            latest_observed_at_ms = *latest_observed,
             "Skipping stale transcript wake"
         );
         return;
     }
-    *latest_observed = signal.observed_at_ms;
     schedule_transcript_catchup(
         transcript_catchups,
         active_transcript_polls,
@@ -1380,6 +1380,35 @@ fn schedule_transcript_catchup_for_wake(
         clean_optional_string(signal.wake_reason),
         signal.file_len_hint,
     );
+}
+
+fn remember_transcript_wake_observation(
+    latest_transcript_wake_observed: &mut HashMap<PathBuf, i64>,
+    path: &Path,
+    observed_at_ms: i64,
+) -> bool {
+    // Bridge wakes can arrive out of order; keep the newest wake per transcript
+    // path so a late binding wake cannot resurrect an already-completed turn.
+    if let Some(latest_observed_at_ms) = latest_transcript_wake_observed.get(path) {
+        if observed_at_ms <= *latest_observed_at_ms {
+            return false;
+        }
+    }
+
+    if !latest_transcript_wake_observed.contains_key(path)
+        && latest_transcript_wake_observed.len() >= MAX_TRANSCRIPT_WAKE_TRACKED_PATHS
+    {
+        if let Some(oldest_path) = latest_transcript_wake_observed
+            .iter()
+            .min_by_key(|(_, observed)| *observed)
+            .map(|(oldest_path, _)| oldest_path.clone())
+        {
+            latest_transcript_wake_observed.remove(&oldest_path);
+        }
+    }
+
+    latest_transcript_wake_observed.insert(path.to_path_buf(), observed_at_ms);
+    true
 }
 
 fn schedule_transcript_catchups_for_codex_observations(
@@ -2941,6 +2970,40 @@ mod tests {
             job.observation.wake_reason.as_deref(),
             Some("turn_completed")
         );
+    }
+
+    #[test]
+    fn test_transcript_wake_observation_tracker_is_bounded() {
+        let mut latest_wakes = HashMap::new();
+        for i in 0..MAX_TRANSCRIPT_WAKE_TRACKED_PATHS {
+            latest_wakes.insert(PathBuf::from(format!("/tmp/old-{i}.jsonl")), i as i64);
+        }
+
+        assert!(remember_transcript_wake_observation(
+            &mut latest_wakes,
+            Path::new("/tmp/new.jsonl"),
+            MAX_TRANSCRIPT_WAKE_TRACKED_PATHS as i64,
+        ));
+
+        assert_eq!(latest_wakes.len(), MAX_TRANSCRIPT_WAKE_TRACKED_PATHS);
+        assert!(!latest_wakes.contains_key(Path::new("/tmp/old-0.jsonl")));
+        assert_eq!(
+            latest_wakes.get(Path::new("/tmp/new.jsonl")),
+            Some(&(MAX_TRANSCRIPT_WAKE_TRACKED_PATHS as i64))
+        );
+    }
+
+    #[test]
+    fn test_transcript_wake_observation_tracker_rejects_older_value() {
+        let mut latest_wakes = HashMap::from([(PathBuf::from("/tmp/session.jsonl"), 200)]);
+
+        assert!(!remember_transcript_wake_observation(
+            &mut latest_wakes,
+            Path::new("/tmp/session.jsonl"),
+            100,
+        ));
+
+        assert_eq!(latest_wakes.get(Path::new("/tmp/session.jsonl")), Some(&200));
     }
 
     #[test]
