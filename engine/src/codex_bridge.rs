@@ -726,6 +726,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         runtime: BridgeRuntimeSink {
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(5))
+                .pool_max_idle_per_host(0)
                 .build()
                 .context("building bridge runtime HTTP client")?,
             api_url: config.api_url.clone(),
@@ -2182,11 +2183,14 @@ async fn process_notification(
                 return Ok(None);
             }
             let completed_turn_id = context.state.active_turn_id.clone();
-            if context.live_transcript_text.is_empty() {
-                if let Some(path) = context.state.thread_path.as_deref() {
-                    if let Some(text) = latest_assistant_text_from_rollout(Path::new(path)) {
-                        context.live_transcript_text = text;
-                    }
+            if let Some(path) = context.state.thread_path.as_deref() {
+                if let Some(text) = latest_assistant_text_from_rollout_for_completion(
+                    Path::new(path),
+                    &context.live_transcript_text,
+                )
+                .await
+                {
+                    context.live_transcript_text = text;
                 }
             }
             if !context.live_transcript_text.is_empty() {
@@ -2676,6 +2680,30 @@ fn latest_assistant_text_from_rollout(path: &Path) -> Option<String> {
     None
 }
 
+async fn latest_assistant_text_from_rollout_for_completion(
+    path: &Path,
+    current_live_text: &str,
+) -> Option<String> {
+    let mut best = None;
+    for attempt in 0..5 {
+        if let Some(text) = latest_assistant_text_from_rollout(path) {
+            let is_better = text.len() >= current_live_text.len()
+                && (current_live_text.is_empty() || text.starts_with(current_live_text));
+            if is_better {
+                return Some(text);
+            }
+            best = Some(text);
+        }
+        if attempt < 4 {
+            tokio::time::sleep(Duration::from_millis(40)).await;
+        }
+    }
+    if current_live_text.is_empty() {
+        return best;
+    }
+    None
+}
+
 fn assistant_text_from_rollout_event(value: &Value) -> Option<String> {
     let payload = value.get("payload")?;
     match payload.get("type").and_then(Value::as_str) {
@@ -3026,6 +3054,7 @@ impl BridgeRuntimeSink {
                 .http
                 .post(&url)
                 .header("X-Agents-Token", &self.api_token)
+                .header(reqwest::header::CONNECTION, "close")
                 .json(&json!({ "events": events.clone() }))
                 .send()
                 .await
@@ -3779,6 +3808,41 @@ mod tests {
         assert_eq!(
             latest_assistant_text_from_rollout(&rollout_path).as_deref(),
             Some("hello world")
+        );
+    }
+
+    #[tokio::test]
+    async fn completion_rollout_text_replaces_partial_live_buffer() {
+        let temp = tempfile::tempdir().unwrap();
+        let rollout_path = temp.path().join("thread.jsonl");
+        fs::write(
+            &rollout_path,
+            r#"{"type":"event_msg","payload":{"type":"agent_message","message":"LH_PROBE_CODEX_MANAGED_123"}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            latest_assistant_text_from_rollout_for_completion(&rollout_path, "LH_PRO")
+                .await
+                .as_deref(),
+            Some("LH_PROBE_CODEX_MANAGED_123")
+        );
+    }
+
+    #[tokio::test]
+    async fn completion_rollout_text_keeps_partial_buffer_when_latest_text_disagrees() {
+        let temp = tempfile::tempdir().unwrap();
+        let rollout_path = temp.path().join("thread.jsonl");
+        fs::write(
+            &rollout_path,
+            r#"{"type":"event_msg","payload":{"type":"agent_message","message":"different answer"}}"#,
+        )
+        .unwrap();
+
+        assert!(
+            latest_assistant_text_from_rollout_for_completion(&rollout_path, "LH_PRO")
+                .await
+                .is_none()
         );
     }
 
