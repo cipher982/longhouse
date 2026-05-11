@@ -20,10 +20,12 @@ from zerg.models.agents import SessionRuntimeEvent
 from zerg.services.agents_store import AgentsStore
 from zerg.services.session_listing import SessionListingError
 from zerg.services.session_pubsub import TOPIC_TIMELINE
+from zerg.services.session_pubsub import PubsubMessage
 from zerg.services.session_pubsub import get_pubsub
 from zerg.services.timeline_session_listing import TimelineSessionCardResponse
 from zerg.services.timeline_session_listing import TimelineSessionListParams
 from zerg.services.timeline_session_listing import TimelineSessionsListResponse
+from zerg.services.timeline_session_listing import build_timeline_cards_from_thread_rows
 from zerg.services.timeline_session_listing import list_timeline_sessions_for_browser
 
 logger = logging.getLogger(__name__)
@@ -61,7 +63,11 @@ async def stream_timeline_sessions_for_browser(
     skip_initial_replay: bool,
 ):
     previous_signatures: dict[str, str] = {}
+    previous_session_threads: dict[str, str] = {}
     previous_window_signature: TimelineWindowSignature | None = None
+    previous_total = 0
+    previous_has_real_sessions = False
+    pending_timeline_message: PubsubMessage | None = None
     last_heartbeat = monotonic()
     preflight_enabled = _stream_supports_preflight(query=params.query, sort=params.sort, mode=params.mode)
     bus = get_pubsub()
@@ -83,8 +89,36 @@ async def stream_timeline_sessions_for_browser(
                 # HTTP query. Do not immediately rebuild the same window on stream
                 # connect; wait for the next write/heartbeat cycle instead.
                 skip_initial_replay = False
-                await _wait_for_timeline_change(timeline_subscription)
+                pending_timeline_message = await _wait_for_timeline_change(timeline_subscription)
                 continue
+
+            if preflight_enabled and pending_timeline_message is not None:
+                targeted_session_id = _timeline_message_session_id(pending_timeline_message)
+                targeted_thread_id = previous_session_threads.get(targeted_session_id or "")
+                if targeted_session_id and targeted_thread_id:
+                    with session_factory() as db:
+                        targeted_card = _load_timeline_stream_card(
+                            db=db,
+                            thread_id=targeted_thread_id,
+                            session_id=targeted_session_id,
+                        )
+                    if targeted_card is not None:
+                        payload, signature = _session_payload_signature(targeted_card)
+                        if previous_signatures.get(targeted_card.thread_id) != signature:
+                            previous_signatures[targeted_card.thread_id] = signature
+                            previous_session_threads.update(_index_timeline_session_threads([targeted_card]))
+                            yield {
+                                "event": "session_upsert",
+                                "data": json.dumps(
+                                    {
+                                        "session": payload,
+                                        "total": previous_total,
+                                        "has_real_sessions": previous_has_real_sessions,
+                                    }
+                                ),
+                            }
+                        pending_timeline_message = await _wait_for_timeline_change(timeline_subscription)
+                        continue
 
             if preflight_enabled:
                 with session_factory() as db:
@@ -97,7 +131,7 @@ async def stream_timeline_sessions_for_browser(
                             "data": json.dumps({"timestamp": _utc_now_z()}),
                         }
                         last_heartbeat = now
-                    await _wait_for_timeline_change(timeline_subscription)
+                    pending_timeline_message = await _wait_for_timeline_change(timeline_subscription)
                     continue
                 previous_window_signature = current_window_signature
 
@@ -142,6 +176,9 @@ async def stream_timeline_sessions_for_browser(
                 }
 
             previous_signatures = current_signatures
+            previous_session_threads = _index_timeline_session_threads(response.sessions)
+            previous_total = response.total
+            previous_has_real_sessions = response.has_real_sessions
 
             now = monotonic()
             if now - last_heartbeat >= TIMELINE_STREAM_HEARTBEAT_SECONDS:
@@ -151,7 +188,7 @@ async def stream_timeline_sessions_for_browser(
                 }
                 last_heartbeat = now
 
-            await _wait_for_timeline_change(timeline_subscription)
+            pending_timeline_message = await _wait_for_timeline_change(timeline_subscription)
 
 
 def _expect_threaded_response(
@@ -171,6 +208,37 @@ def _utc_now_z() -> str:
 def _session_payload_signature(session: TimelineSessionCardResponse) -> tuple[dict, str]:
     payload = session.model_dump(mode="json")
     return payload, json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _timeline_message_session_id(message: PubsubMessage | None) -> str | None:
+    if message is None:
+        return None
+    session_id = message.payload.get("session_id")
+    return session_id if isinstance(session_id, str) else None
+
+
+def _index_timeline_session_threads(sessions: list[TimelineSessionCardResponse]) -> dict[str, str]:
+    session_threads: dict[str, str] = {}
+    for session in sessions:
+        for candidate in (
+            session.thread_id,
+            session.head.id if session.head is not None else None,
+            session.detail.id if session.detail is not None else None,
+            session.root.id if session.root is not None else None,
+        ):
+            if candidate:
+                session_threads[candidate] = session.thread_id
+    return session_threads
+
+
+def _load_timeline_stream_card(
+    *,
+    db: Session,
+    thread_id: str,
+    session_id: str,
+) -> TimelineSessionCardResponse | None:
+    cards = build_timeline_cards_from_thread_rows(db=db, thread_rows=((thread_id, session_id, None),))
+    return cards[0] if cards else None
 
 
 def _effective_stream_sort(query: str | None, sort: str | None) -> str:
@@ -240,11 +308,10 @@ def _load_live_transcript_overlay_heads(
     return heads
 
 
-async def _wait_for_timeline_change(subscription=None) -> None:
+async def _wait_for_timeline_change(subscription=None) -> PubsubMessage | None:
     """Wait for a timeline publish or timeout before the next SSE poll cycle."""
     if subscription is not None:
-        await subscription.next_message(timeout=TIMELINE_STREAM_CHANGE_WAIT_SECONDS)
-        return
+        return await subscription.next_message(timeout=TIMELINE_STREAM_CHANGE_WAIT_SECONDS)
 
     from zerg.services.write_serializer import get_write_serializer
 
@@ -253,3 +320,4 @@ async def _wait_for_timeline_change(subscription=None) -> None:
         await ws.wait_for_change(timeout=TIMELINE_STREAM_CHANGE_WAIT_SECONDS)
     else:
         await asyncio.sleep(TIMELINE_STREAM_CHANGE_WAIT_SECONDS)
+    return None

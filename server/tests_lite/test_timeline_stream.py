@@ -467,6 +467,90 @@ def test_timeline_stream_upserts_on_live_transcript_overlay_only_change(tmp_path
     reset_pubsub_for_test()
 
 
+def test_timeline_stream_known_session_update_skips_window_requery(tmp_path):
+    reset_pubsub_for_test()
+    session_local = _make_db(tmp_path, "timeline_stream_targeted_update.db")
+    now = datetime.now(timezone.utc)
+
+    with session_local() as db:
+        session = _seed_session(
+            db,
+            started_at=now - timedelta(minutes=5),
+            project="targeted-update-stream",
+        )
+        db.commit()
+
+    window_signature_calls = 0
+    original_window_signature = AgentsStore.list_timeline_thread_window_signature
+
+    def _counting_window_signature(self, *args, **kwargs):
+        nonlocal window_signature_calls
+        window_signature_calls += 1
+        return original_window_signature(self, *args, **kwargs)
+
+    async def _collect_after_known_session_update():
+        stream = timeline_stream.stream_timeline_sessions_for_browser(
+            _ConnectedRequest(),
+            session_factory=session_local,
+            params=_stream_params(),
+            skip_initial_replay=False,
+        )
+        try:
+            connected = await anext(stream)
+            initial = await anext(stream)
+
+            next_event = asyncio.create_task(anext(stream))
+            await asyncio.sleep(0)
+            with session_local() as db:
+                db.add(
+                    SessionRuntimeEvent(
+                        runtime_key=f"claude:{session.id}",
+                        session_id=session.id,
+                        provider="claude",
+                        device_id="cinder",
+                        source="codex_bridge_live",
+                        kind="progress_signal",
+                        occurred_at=now,
+                        received_at=now,
+                        dedupe_key=f"bridge:live:{session.id}:targeted",
+                        payload_json=json.dumps(
+                            {
+                                "progress_kind": "bridge_live_transcript_delta",
+                                "live_text": "Targeted card update",
+                                "thread_id": "thread-1",
+                                "turn_id": "turn-1",
+                                "seq": 1,
+                                "method": "item/agentMessage/delta",
+                            }
+                        ),
+                    )
+                )
+                db.commit()
+            get_pubsub().publish(
+                TOPIC_TIMELINE,
+                {"kind": "runtime", "session_id": str(session.id), "provider": "claude"},
+            )
+            targeted = await asyncio.wait_for(next_event, timeout=0.5)
+            return connected, initial, targeted
+        finally:
+            await stream.aclose()
+
+    with patch.object(
+        timeline_stream.AgentsStore,
+        "list_timeline_thread_window_signature",
+        new=_counting_window_signature,
+    ):
+        connected, initial, targeted = asyncio.run(_collect_after_known_session_update())
+
+    assert connected["event"] == "connected"
+    assert initial["event"] == "session_upsert"
+    assert targeted["event"] == "session_upsert"
+    assert window_signature_calls == 1
+    payload = json.loads(targeted["data"])
+    assert payload["session"]["head"]["live_transcript"]["text"] == "Targeted card update"
+    reset_pubsub_for_test()
+
+
 def test_timeline_stream_ignores_session_only_topic_publish(tmp_path):
     reset_pubsub_for_test()
     session_local = _make_db(tmp_path, "timeline_stream_topic_isolation.db")
