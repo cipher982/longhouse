@@ -4,6 +4,7 @@ import os
 from datetime import datetime
 from datetime import timezone
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from unittest.mock import patch
 
 import pytest
@@ -144,3 +145,73 @@ async def test_summarize_and_persist_updates_summary_revision(tmp_path, monkeypa
     assert refreshed.summary == "Fixed the login flow"
     assert refreshed.summary_title == "Login flow"
     assert refreshed.summary_revision == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_summary_impl_releases_db_connection_during_llm_call(tmp_path, monkeypatch):
+    from zerg.services.session_summaries import generate_summary_impl
+
+    db_path = tmp_path / "summary_releases_connection.db"
+    engine = make_engine(f"sqlite:///{db_path}", pool_size=1, max_overflow=0)
+    AgentsBase.metadata.create_all(bind=engine)
+    factory = make_sessionmaker(engine)
+
+    db = factory()
+    session = AgentSession(
+        provider="claude",
+        environment="test",
+        project="zerg",
+        started_at=datetime.now(timezone.utc),
+        transcript_revision=2,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    session_id = str(session.id)
+    db.add(
+        AgentEvent(
+            session_id=session.id,
+            role="user",
+            content_text="Please review the timeline session card state.",
+            timestamp=datetime.now(timezone.utc),
+        )
+    )
+    db.add(
+        AgentEvent(
+            session_id=session.id,
+            role="assistant",
+            content_text="I found a summary worker holding database connections.",
+            timestamp=datetime.now(timezone.utc),
+        )
+    )
+    db.commit()
+    db.close()
+
+    observed_checked_out: list[int] = []
+
+    async def _fake_incremental_summary(**_kwargs):
+        observed_checked_out.append(engine.pool.checkedout())
+        return SimpleNamespace(summary="Released the DB connection", title="DB connection release")
+
+    client = SimpleNamespace(close=AsyncMock())
+    settings = SimpleNamespace(testing=False, llm_disabled=False)
+
+    monkeypatch.setattr("zerg.services.session_processing.incremental_summary", _fake_incremental_summary)
+
+    with (
+        patch("zerg.database.get_session_factory", return_value=factory),
+        patch("zerg.services.session_summaries.get_settings", return_value=settings),
+        patch("zerg.models_config.get_llm_client_with_db_fallback", return_value=(client, "test-model", "test-provider")),
+    ):
+        await generate_summary_impl(session_id)
+
+    assert observed_checked_out == [0]
+
+    verify_db = factory()
+    refreshed = verify_db.query(AgentSession).filter(AgentSession.id == session_id).one()
+    verify_db.close()
+
+    assert refreshed.summary == "Released the DB connection"
+    assert refreshed.summary_title == "DB connection release"
+    assert refreshed.summary_revision == 2
+    client.close.assert_awaited_once()
