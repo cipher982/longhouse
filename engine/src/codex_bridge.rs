@@ -2849,10 +2849,72 @@ fn spawn_runtime_event_worker(
     mut rx: mpsc::UnboundedReceiver<Vec<Value>>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        while let Some(events) = rx.recv().await {
+        while let Some(first_batch) = rx.recv().await {
+            let mut batches = vec![first_batch];
+            while let Ok(next_batch) = rx.try_recv() {
+                batches.push(next_batch);
+            }
+            let events = coalesce_runtime_event_batches(batches);
             sink.post_runtime_events_blocking(events).await;
         }
     })
+}
+
+fn coalesce_runtime_event_batches(batches: Vec<Vec<Value>>) -> Vec<Value> {
+    let mut events = Vec::new();
+    let mut live_events: BTreeMap<String, Value> = BTreeMap::new();
+
+    for batch in batches {
+        for event in batch {
+            if let Some(key) = live_transcript_event_key(&event) {
+                let next_seq = live_transcript_event_seq(&event);
+                let should_replace = live_events
+                    .get(&key)
+                    .map(|existing| next_seq >= live_transcript_event_seq(existing))
+                    .unwrap_or(true);
+                if should_replace {
+                    live_events.insert(key, event);
+                }
+            } else {
+                events.push(event);
+            }
+        }
+    }
+
+    events.extend(live_events.into_values());
+    events
+}
+
+fn live_transcript_event_key(event: &Value) -> Option<String> {
+    if event.get("source").and_then(Value::as_str) != Some("codex_bridge_live") {
+        return None;
+    }
+    let payload = event.get("payload")?;
+    if payload.get("progress_kind").and_then(Value::as_str) != Some("bridge_live_transcript_delta")
+    {
+        return None;
+    }
+    let runtime_key = event
+        .get("runtime_key")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown-runtime");
+    let thread_id = payload
+        .get("thread_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown-thread");
+    let turn_id = payload
+        .get("turn_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown-turn");
+    Some(format!("{runtime_key}:{thread_id}:{turn_id}"))
+}
+
+fn live_transcript_event_seq(event: &Value) -> u64 {
+    event
+        .get("payload")
+        .and_then(|payload| payload.get("seq"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
 }
 
 impl BridgeRuntimeSink {
@@ -3961,6 +4023,69 @@ mod tests {
         );
         assert_eq!(event["payload"]["live_text"], "hello");
         assert_eq!(event["payload"]["turn_completed"], true);
+    }
+
+    #[test]
+    fn coalesce_runtime_event_batches_keeps_latest_live_snapshot() {
+        let sink = BridgeRuntimeSink {
+            http: reqwest::Client::new(),
+            api_url: "http://127.0.0.1:9".to_string(),
+            api_token: "token".to_string(),
+            session_id: "session-123".to_string(),
+            cwd: "/Users/test/git/zerg".to_string(),
+            machine_name: Some("test-box".to_string()),
+            thread_id: Some("thread-abc".to_string()),
+            local_db_path: None,
+            runtime_tx: None,
+        };
+        let observed_at = DateTime::parse_from_rfc3339("2026-05-08T08:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let first_live = sink.live_transcript_delta_event(
+            "item/agentMessage/delta",
+            "L",
+            Some("turn-1"),
+            1,
+            "L",
+            false,
+            observed_at,
+        );
+        let latest_live = sink.live_transcript_delta_event(
+            "item/agentMessage/delta",
+            "H",
+            Some("turn-1"),
+            2,
+            "LH",
+            false,
+            observed_at,
+        );
+        let phase_event = json!({
+            "runtime_key": "codex:session-123",
+            "session_id": "session-123",
+            "provider": "codex",
+            "source": BRIDGE_RUNTIME_SOURCE,
+            "kind": "phase_signal",
+            "phase": "running",
+            "occurred_at": observed_at.to_rfc3339(),
+            "dedupe_key": "bridge:phase:session-123:running",
+            "payload": {},
+        });
+
+        let events = coalesce_runtime_event_batches(vec![
+            vec![first_live],
+            vec![phase_event.clone()],
+            vec![latest_live],
+        ]);
+        let live_events: Vec<&Value> = events
+            .iter()
+            .filter(|event| event["source"] == "codex_bridge_live")
+            .collect();
+
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().any(|event| event == &phase_event));
+        assert_eq!(live_events.len(), 1);
+        assert_eq!(live_events[0]["payload"]["seq"], 2);
+        assert_eq!(live_events[0]["payload"]["live_text"], "LH");
     }
 
     #[test]
