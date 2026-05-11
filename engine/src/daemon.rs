@@ -128,6 +128,8 @@ struct PathTaskResult {
 struct DeferredRetry {
     due_at: Instant,
     provider: &'static str,
+    priority: WorkPriority,
+    observation: ObservationTrace,
 }
 
 struct HeartbeatPostResult {
@@ -345,6 +347,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             deferred_retries.insert(retry_path, DeferredRetry {
                                 due_at: Instant::now() + delay,
                                 provider: retry_provider,
+                                priority: result.job.priority,
+                                observation: result.job.observation.clone(),
                             });
                         }
                         if result.resolved_spool > 0 || result.failed_spool > 0 {
@@ -1091,6 +1095,8 @@ fn pump_ready_local_work(
             task_context,
             !active_transcript_polls.is_empty(),
         );
+    } else {
+        start_ready_jobs(scheduler, in_flight, task_context, true);
     }
 }
 
@@ -1106,13 +1112,7 @@ fn drain_due_local_retries(
 
     for path in ready_paths {
         if let Some(retry) = deferred_retries.remove(&path) {
-            scheduler.enqueue_observed(
-                path,
-                retry.provider,
-                WorkPriority::Retry,
-                "local_retry",
-                now_ms(),
-            );
+            scheduler.enqueue_observation(path, retry.provider, retry.priority, retry.observation);
         }
     }
 }
@@ -3045,6 +3045,17 @@ mod tests {
                 DeferredRetry {
                     due_at: now - Duration::from_secs(1),
                     provider: "claude",
+                    priority: WorkPriority::Live,
+                    observation: ObservationTrace {
+                        source: "wake_socket",
+                        observed_at_ms: 100,
+                        wake_received_at_ms: Some(101),
+                        enqueued_at_ms: 0,
+                        session_id: Some("session-live".to_string()),
+                        turn_id: Some("turn-live".to_string()),
+                        wake_reason: Some("progress".to_string()),
+                        file_len_hint: Some(42),
+                    },
                 },
             ),
             (
@@ -3052,6 +3063,17 @@ mod tests {
                 DeferredRetry {
                     due_at: now + Duration::from_secs(60),
                     provider: "claude",
+                    priority: WorkPriority::Retry,
+                    observation: ObservationTrace {
+                        source: "local_retry",
+                        observed_at_ms: 200,
+                        wake_received_at_ms: None,
+                        enqueued_at_ms: 0,
+                        session_id: None,
+                        turn_id: None,
+                        wake_reason: None,
+                        file_len_hint: None,
+                    },
                 },
             ),
         ]);
@@ -3060,7 +3082,16 @@ mod tests {
 
         let launched = scheduler.pop_launchable().unwrap();
         assert_eq!(launched.path, PathBuf::from("/tmp/retry-now.jsonl"));
-        assert_eq!(launched.priority, WorkPriority::Retry);
+        assert_eq!(launched.priority, WorkPriority::Live);
+        assert_eq!(launched.observation.source, "wake_socket");
+        assert_eq!(
+            launched.observation.session_id.as_deref(),
+            Some("session-live")
+        );
+        assert_eq!(
+            launched.observation.wake_reason.as_deref(),
+            Some("progress")
+        );
         assert_eq!(deferred_retries.len(), 1);
         assert!(deferred_retries.contains_key(&PathBuf::from("/tmp/retry-later.jsonl")));
     }
