@@ -201,6 +201,73 @@ struct SessionLiveActivityModelsTests {
     }
 
     @Test
+    func contentStatePreservesTerminalDisconnectedLifecycleFact() throws {
+        let json = """
+        {
+          "id": "session-terminal-disconnected",
+          "provider": "codex",
+          "project": "zerg",
+          "cwd": "/Users/davidrose/git/zerg",
+          "git_branch": "main",
+          "summary": "Terminal disconnected",
+          "summary_title": "Terminal disconnected",
+          "presence_state": "needs_user",
+          "presence_tool": null,
+          "user_state": "active",
+          "status": "working",
+          "last_activity_at": "2026-04-25T20:00:00Z",
+          "display_phase": "Idle",
+          "active_tool": null,
+          "home_label": "On this Mac",
+          "origin_label": "On this Mac",
+          "capabilities": {
+            "live_control_available": false,
+            "host_reattach_available": true,
+            "reply_to_live_session_available": false
+          },
+          "runtime_display": {
+            "truth_tier": "managed-local",
+            "state": "needs_user",
+            "tone": "idle",
+            "headline": "Terminal disconnected",
+            "detail": "The terminal client disconnected.",
+            "phase_label": "Terminal disconnected",
+            "compact_tool_label": null,
+            "is_live": false,
+            "is_executing": false,
+            "needs_attention": false,
+            "is_idle": true,
+            "is_managed_local_truth": true,
+            "has_signal": true,
+            "control_path": "managed",
+            "activity_recency": "stale",
+            "lifecycle": "closed",
+            "host_state": "online",
+            "terminal_reason": "terminal_disconnected"
+          },
+          "runtime_facts": {
+            "control_path": "managed",
+            "process_state": "closed",
+            "host": {"state": "online", "last_seen_at": "2026-04-25T20:00:00Z", "source": "machine_heartbeat"},
+            "process": {"status": "unknown", "pid": null, "process_start_time": null, "observed_at": null, "last_seen_at": null, "source_mtime": null, "source_path": null, "reason": null, "source": null},
+            "phase": {"kind": null, "tool": null, "source": null, "observed_at": null, "expires_at": null},
+            "activity": {"last_transcript_at": "2026-04-25T20:00:00Z", "last_runtime_signal_at": null, "last_progress_at": null},
+            "lifecycle": {"state": "closed", "reason": "terminal_disconnected", "observed_at": "2026-04-25T20:00:00Z"}
+          },
+          "loop_mode": "assist"
+        }
+        """.data(using: .utf8)!
+
+        let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
+        let state = detail.liveActivityContentState(updatedAt: Date(timeIntervalSince1970: 1_777_140_000))
+
+        #expect(state.presenceState == "unknown")
+        #expect(state.displayPhase == "Terminal disconnected")
+        #expect(state.activeTool == nil)
+        #expect(state.isAttention == false)
+    }
+
+    @Test
     func contentStateDoesNotFallbackToStaleTopLevelProgressWhenRuntimeDisplayHasNoState() throws {
         let json = """
         {

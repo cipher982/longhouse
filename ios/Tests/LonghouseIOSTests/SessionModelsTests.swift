@@ -837,6 +837,42 @@ struct SessionModelsTests {
                 lifecycleReason: "session_ended"
             )
         )
+        let terminalDisconnected = SessionSummary(
+            id: "session-terminal-disconnected",
+            title: "Terminal disconnected",
+            presenceState: "needs_user",
+            provider: "codex",
+            project: "zerg",
+            lastActivityAt: "2026-04-25T20:00:00Z",
+            status: "working",
+            runtimeDisplay: SessionRuntimeDisplay(
+                truthTier: "managed-local",
+                state: "needs_user",
+                tone: "idle",
+                headline: "Terminal disconnected",
+                detail: "The terminal client disconnected.",
+                phaseLabel: "Terminal disconnected",
+                compactToolLabel: nil,
+                isLive: false,
+                isExecuting: false,
+                needsAttention: false,
+                isIdle: true,
+                isManagedLocalTruth: true,
+                hasSignal: true,
+                controlPath: "managed",
+                activityRecency: "stale",
+                lifecycle: "closed",
+                hostState: "online",
+                terminalReason: "terminal_disconnected"
+            ),
+            runtimeFacts: runtimeFacts(
+                controlPath: "managed",
+                processState: "closed",
+                transcriptAt: "2026-04-25T20:00:00Z",
+                lifecycleState: "closed",
+                lifecycleReason: "terminal_disconnected"
+            )
+        )
         let unknownWithClosedLegacy = SessionSummary(
             id: "session-unknown-fact",
             title: "Unknown fact",
@@ -880,6 +916,11 @@ struct SessionModelsTests {
         #expect(closed.timelineStatusTone == "closed")
         #expect(closed.displayPhaseLabel == "Closed")
         #expect(!closed.isExecuting)
+        #expect(terminalDisconnected.isClosed)
+        #expect(terminalDisconnected.timelineStatusLabel == "Terminal disconnected")
+        #expect(terminalDisconnected.timelineStatusTone == "closed")
+        #expect(terminalDisconnected.displayPhaseLabel == "Terminal disconnected")
+        #expect(!terminalDisconnected.isExecuting)
         #expect(!unknownWithClosedLegacy.isClosed)
         #expect(unknownWithClosedLegacy.timelineStatusLabel == "Unknown")
     }
