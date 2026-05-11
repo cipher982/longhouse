@@ -51,6 +51,7 @@ const INITIAL_SPOOL_PATH_LIMIT: usize = 100;
 const PERIODIC_SPOOL_PATH_LIMIT: usize = 50;
 const PATH_SPOOL_REPLAY_LIMIT: usize = 50;
 const LOCAL_RETRY_DELAY_SECS: u64 = 5;
+const LIVE_LOCAL_RETRY_DELAY: Duration = Duration::from_millis(500);
 const STARTUP_RECONCILIATION_SCAN_DELAY: Duration = Duration::from_secs(120);
 const LOCAL_STATUS_INTERVAL_SECS: u64 = 1;
 const SERVER_HEARTBEAT_INTERVAL_SECS: u64 = 5 * 60;
@@ -869,6 +870,14 @@ fn runtime_truth_signature(payload: &heartbeat::HeartbeatPayload) -> String {
 
 fn daemon_max_in_flight(config: &ShipperConfig) -> usize {
     config.workers.max(1).min(DAEMON_MAX_IN_FLIGHT_CAP)
+}
+
+fn local_retry_delay(priority: WorkPriority) -> Duration {
+    if priority == WorkPriority::Live {
+        LIVE_LOCAL_RETRY_DELAY
+    } else {
+        Duration::from_secs(LOCAL_RETRY_DELAY_SECS)
+    }
 }
 
 fn enqueue_discovered_files(
@@ -1695,7 +1704,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                     e
                 );
             }
-            result.local_retry_after = Some(Duration::from_secs(LOCAL_RETRY_DELAY_SECS));
+            result.local_retry_after = Some(local_retry_delay(result.job.priority));
             return finish_path_task(result, task_started);
         }
     };
@@ -1726,7 +1735,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                         e
                     );
                 }
-                result.local_retry_after = Some(Duration::from_secs(LOCAL_RETRY_DELAY_SECS));
+                result.local_retry_after = Some(local_retry_delay(result.job.priority));
                 return finish_path_task(result, task_started);
             }
         }
@@ -1812,7 +1821,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                     if task_context.tracker.record_error() {
                         tracing::warn!("Error shipping {}: {}", result.job.path.display(), e);
                     }
-                    result.local_retry_after = Some(Duration::from_secs(LOCAL_RETRY_DELAY_SECS));
+                    result.local_retry_after = Some(local_retry_delay(result.job.priority));
                 }
             }
         }
@@ -1821,7 +1830,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
             if task_context.tracker.record_error() {
                 tracing::warn!("Error preparing {}: {}", result.job.path.display(), e);
             }
-            result.local_retry_after = Some(Duration::from_secs(LOCAL_RETRY_DELAY_SECS));
+            result.local_retry_after = Some(local_retry_delay(result.job.priority));
         }
     }
 
@@ -3094,5 +3103,17 @@ mod tests {
         );
         assert_eq!(deferred_retries.len(), 1);
         assert!(deferred_retries.contains_key(&PathBuf::from("/tmp/retry-later.jsonl")));
+    }
+
+    #[test]
+    fn test_live_retry_delay_is_shorter_than_background_retry() {
+        assert_eq!(
+            local_retry_delay(WorkPriority::Live),
+            LIVE_LOCAL_RETRY_DELAY
+        );
+        assert_eq!(
+            local_retry_delay(WorkPriority::Watch),
+            Duration::from_secs(LOCAL_RETRY_DELAY_SECS)
+        );
     }
 }

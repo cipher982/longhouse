@@ -9,6 +9,7 @@ mod types;
 pub use types::*;
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::Result;
 use rusqlite::Connection;
@@ -26,6 +27,7 @@ use crate::state::live_file_state::LiveFileState;
 use crate::state::spool::Spool;
 
 const TARGET_BATCH_BYTES: u64 = 512 * 1024;
+const LIVE_TRANSCRIPT_INGEST_TIMEOUT: Duration = Duration::from_secs(3);
 
 fn target_batch_bytes(max_batch_bytes: u64) -> u64 {
     max_batch_bytes.min(TARGET_BATCH_BYTES).max(1)
@@ -1058,10 +1060,15 @@ async fn attempt_ship(
     });
     let payload = std::mem::take(&mut item.compressed);
     let attempt_started = std::time::Instant::now();
-    let result = if let Some(trace_header) = trace_header.as_deref() {
-        client.ship_with_trace(payload, Some(trace_header)).await
-    } else {
+    let request_timeout = ship_trace
+        .filter(|trace| trace.work_context == "live_transcript")
+        .map(|_| LIVE_TRANSCRIPT_INGEST_TIMEOUT);
+    let result = if trace_header.is_none() && request_timeout.is_none() {
         client.ship(payload).await
+    } else {
+        client
+            .ship_with_trace_and_timeout(payload, trace_header.as_deref(), request_timeout)
+            .await
     };
     let latency_ms = attempt_started.elapsed().as_millis() as u64;
     let span = tracing::Span::current();
