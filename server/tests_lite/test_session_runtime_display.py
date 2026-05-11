@@ -189,8 +189,8 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
                 "lifecycle": "closed",
                 "state": None,
                 "tone": "inactive",
-                "headline": "Completed",
-                "phase_label": "Completed",
+                "headline": "Closed",
+                "phase_label": "Closed",
                 "activity_recency": "none",
                 "needs_attention": False,
             },
@@ -223,8 +223,8 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
                 "lifecycle": "closed",
                 "state": None,
                 "tone": "inactive",
-                "headline": "Completed",
-                "phase_label": "Completed",
+                "headline": "Closed",
+                "phase_label": "Closed",
                 "activity_recency": "none",
                 "needs_attention": False,
             },
@@ -290,8 +290,8 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
                 "lifecycle": "closed",
                 "state": None,
                 "tone": "inactive",
-                "headline": "Completed",
-                "phase_label": "Completed",
+                "headline": "Closed",
+                "phase_label": "Closed",
                 "activity_recency": "none",
                 "needs_attention": False,
             },
@@ -784,7 +784,9 @@ def test_three_axis_fields_prefers_explicit_terminal_reason():
     assert display.terminal_reason == "bridge_stop"
 
 
-def test_three_axis_fields_preserves_terminal_disconnected_reason():
+def test_three_axis_fields_preserves_terminal_disconnected_reason_as_metadata():
+    """terminal_reason remains on the model for metadata/debug/future-resume,
+    but the user-facing labels collapse to generic "Closed"."""
     display = build_session_runtime_display(
         runtime_view=_runtime_view(
             runtime_phase="finished",
@@ -800,9 +802,9 @@ def test_three_axis_fields_preserves_terminal_disconnected_reason():
 
     assert display.lifecycle == "closed"
     assert display.terminal_reason == "terminal_disconnected"
-    assert display.headline == "Terminal disconnected"
-    assert display.detail == "The terminal client disconnected."
-    assert display.phase_label == "Terminal disconnected"
+    assert display.headline == "Closed"
+    assert display.detail is None
+    assert display.phase_label == "Closed"
 
 
 def test_three_axis_fields_closed_with_process_gone_terminal():
@@ -840,8 +842,8 @@ def test_process_gone_closure_suppresses_stale_attention_copy():
     assert display.lifecycle == "closed"
     assert display.terminal_reason == "process_gone"
     assert display.state is None
-    assert display.headline == "Completed"
-    assert display.phase_label == "Completed"
+    assert display.headline == "Closed"
+    assert display.phase_label == "Closed"
     assert display.needs_attention is False
     assert display.is_idle is True
     assert display.tone == "inactive"

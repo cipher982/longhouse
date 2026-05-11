@@ -34,7 +34,6 @@ from zerg.services.session_runner_state import managed_runner_host_state
 from zerg.services.session_runtime import SessionLiveTranscriptOverlay
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_runtime import should_include_runtime_view
-from zerg.services.session_runtime_display import TERMINAL_DISCONNECTED_REASON
 from zerg.services.session_runtime_display import build_session_runtime_display
 from zerg.services.session_runtime_display import compact_runtime_tool_label
 from zerg.session_execution_home import ManagedSessionTransport
@@ -295,12 +294,6 @@ def build_session_timeline_card_response(
     )
 
 
-def _closed_timeline_status_label(terminal_reason: str | None) -> str:
-    if terminal_reason == TERMINAL_DISCONNECTED_REASON:
-        return "Terminal disconnected"
-    return "Closed"
-
-
 def _timeline_status_from_liveness_facts(runtime_facts: SessionLivenessFactsResponse | None) -> TimelineStatusPresentationResponse:
     if runtime_facts is None:
         return TimelineStatusPresentationResponse(label="Unknown", tone="inactive", seen_at=None, seen_at_prefix="Checked")
@@ -309,7 +302,7 @@ def _timeline_status_from_liveness_facts(runtime_facts: SessionLivenessFactsResp
     lifecycle = runtime_facts.lifecycle
     if process_state == "closed" or lifecycle.state == "closed":
         return TimelineStatusPresentationResponse(
-            label=_closed_timeline_status_label(lifecycle.reason),
+            label="Closed",
             tone="closed",
             seen_at=lifecycle.observed_at or runtime_facts.phase.observed_at or runtime_facts.activity.last_transcript_at,
             seen_at_prefix="Closed",

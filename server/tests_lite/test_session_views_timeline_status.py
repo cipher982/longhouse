@@ -83,31 +83,18 @@ def test_timeline_status_marks_process_observed_active_without_phase_claim():
     assert status.seen_at_prefix == "Verified"
 
 
-def test_timeline_status_preserves_terminal_disconnected_closed_reason():
-    status = _timeline_status_from_liveness_facts(
-        _facts(
-            lifecycle_state="closed",
-            lifecycle_reason="terminal_disconnected",
-            process_state="closed",
+def test_timeline_status_closed_label_is_generic_regardless_of_reason():
+    """terminal_reason is preserved as metadata elsewhere but never branches the label."""
+    for reason in ("terminal_disconnected", "process_gone", "session_ended", None):
+        status = _timeline_status_from_liveness_facts(
+            _facts(
+                lifecycle_state="closed",
+                lifecycle_reason=reason,
+                process_state="closed",
+            )
         )
-    )
 
-    assert status is not None
-    assert status.label == "Terminal disconnected"
-    assert status.tone == "closed"
-    assert status.seen_at_prefix == "Closed"
-
-
-def test_timeline_status_keeps_other_closed_reasons_generic():
-    status = _timeline_status_from_liveness_facts(
-        _facts(
-            lifecycle_state="closed",
-            lifecycle_reason="process_gone",
-            process_state="closed",
-        )
-    )
-
-    assert status is not None
-    assert status.label == "Closed"
-    assert status.tone == "closed"
-    assert status.seen_at_prefix == "Closed"
+        assert status is not None
+        assert status.label == "Closed", f"expected generic 'Closed' for reason={reason!r}"
+        assert status.tone == "closed"
+        assert status.seen_at_prefix == "Closed"
