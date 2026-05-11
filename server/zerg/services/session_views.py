@@ -1047,6 +1047,7 @@ def build_session_response(
     match_score: float | None = None,
     binding_overlay=None,
     live_transcript_overlay: SessionLiveTranscriptOverlay | None = None,
+    include_live_transcript: bool = False,
 ) -> SessionResponse:
     cache = thread_cache if thread_cache is not None else {}
     thread_head_session_id, thread_continuation_count = get_thread_meta(store, session, cache)
@@ -1142,9 +1143,13 @@ def build_session_response(
         ),
         runtime_display=runtime_display,
         runtime_facts=runtime_facts,
-        live_transcript=build_live_transcript_response(
-            live_transcript_overlay,
-            last_activity_at=last_activity_at,
+        live_transcript=(
+            build_live_transcript_response(
+                live_transcript_overlay,
+                last_activity_at=last_activity_at,
+            )
+            if include_live_transcript
+            else None
         ),
         timeline_card=build_session_timeline_card_response(
             runtime_facts=runtime_facts,

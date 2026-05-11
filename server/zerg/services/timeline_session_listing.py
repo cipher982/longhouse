@@ -156,7 +156,11 @@ def build_timeline_cards_from_thread_rows(
         return []
 
     representative_ids = [session_id for _thread_id, session_id, _thread_anchor in thread_rows]
-    response_map = build_session_response_map(db=db, session_ids=representative_ids)
+    response_map = build_session_response_map(
+        db=db,
+        session_ids=representative_ids,
+        include_live_transcript=True,
+    )
     representative_rows = []
     for thread_id, session_id, thread_anchor in thread_rows:
         representative_rows.append((thread_id, response_map.get(session_id), thread_anchor))
@@ -169,7 +173,13 @@ def build_timeline_cards_from_thread_rows(
         root_ids.add(detail.thread_root_session_id)
         head_ids.add(detail.thread_head_session_id)
     supplemental_ids = sorted((root_ids | head_ids) - response_map.keys())
-    response_map.update(build_session_response_map(db=db, session_ids=supplemental_ids))
+    response_map.update(
+        build_session_response_map(
+            db=db,
+            session_ids=supplemental_ids,
+            include_live_transcript=True,
+        )
+    )
 
     cards: list[TimelineSessionCardResponse] = []
     for thread_id, representative, thread_anchor in representative_rows:

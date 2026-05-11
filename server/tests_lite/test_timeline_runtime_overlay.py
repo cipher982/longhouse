@@ -25,6 +25,7 @@ from zerg.models.agents import SessionRuntimeEvent
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import UnmanagedSessionBinding
 from zerg.session_execution_home import SessionExecutionHome
+from zerg.services.timeline_session_listing import build_timeline_cards_from_thread_rows
 
 
 def _make_db(tmp_path, name="timeline_runtime_overlay.db"):
@@ -210,7 +211,7 @@ def test_sessions_list_uses_recent_activity_anchor_for_old_live_session(tmp_path
         assert top["timeline_anchor_at"] >= recent_idle.started_at.isoformat().replace("+00:00", "Z")
 
 
-def test_sessions_list_includes_codex_live_transcript_overlay(tmp_path):
+def test_live_transcript_overlay_is_timeline_card_only(tmp_path):
     factory = _make_db(tmp_path, "codex_live_transcript_overlay.db")
     now = datetime.now(timezone.utc)
 
@@ -270,7 +271,19 @@ def test_sessions_list_includes_codex_live_transcript_overlay(tmp_path):
         session_payload = resp.json()["sessions"][0]
 
     assert session_payload["id"] == str(session.id)
-    assert session_payload["live_transcript"] == {
+    assert session_payload["live_transcript"] is None
+
+    db = factory()
+    try:
+        cards = build_timeline_cards_from_thread_rows(
+            db=db,
+            thread_rows=((str(session.thread_root_session_id or session.id), str(session.id), now),),
+        )
+    finally:
+        db.close()
+
+    assert cards[0].head.live_transcript is not None
+    assert cards[0].head.live_transcript.model_dump(mode="json") == {
         "text": "hello world",
         "source": "codex_bridge_live",
         "received_at": now.isoformat().replace("+00:00", "Z"),

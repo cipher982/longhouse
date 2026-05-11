@@ -30,6 +30,7 @@ def build_session_response_list(
     match_map: Mapping[Any, Mapping[str, Any]] | None = None,
     semantic_snippet_map: Mapping[str, str] | None = None,
     sem_score_map: Mapping[Any, float] | None = None,
+    include_live_transcript: bool = False,
 ) -> list[SessionResponse]:
     if not sessions:
         return []
@@ -69,6 +70,7 @@ def build_session_response_list(
                 match_score=sem_score_map.get(session.id),
                 binding_overlay=binding_overlay_map.get(session.id),
                 live_transcript_overlay=live_transcript_map.get(str(session.id)),
+                include_live_transcript=include_live_transcript,
             )
         )
 
@@ -79,6 +81,7 @@ def build_session_response_map(
     *,
     db: Session,
     session_ids: list[str],
+    include_live_transcript: bool = False,
 ) -> dict[str, SessionResponse]:
     if not session_ids:
         return {}
@@ -86,7 +89,12 @@ def build_session_response_map(
     store = AgentsStore(db)
     uuid_ids = [UUID(session_id) for session_id in session_ids]
     sessions = db.query(AgentSession).filter(AgentSession.id.in_(uuid_ids)).all()
-    responses = build_session_response_list(db=db, store=store, sessions=sessions)
+    responses = build_session_response_list(
+        db=db,
+        store=store,
+        sessions=sessions,
+        include_live_transcript=include_live_transcript,
+    )
     return {response.id: response for response in responses}
 
 
