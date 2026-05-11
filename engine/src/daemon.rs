@@ -7,7 +7,7 @@
 //! - 0% CPU when idle (blocked on kernel filesystem events)
 //! - Current-thread tokio runtime, with blocking file work offloaded
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -304,6 +304,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut bridge_reaper = ManagedBridgeReaper::from_env();
     let mut outbox_post_tasks: JoinSet<(usize, usize)> = JoinSet::new();
     let mut heartbeat_post_tasks: JoinSet<HeartbeatPostResult> = JoinSet::new();
+    let mut outbox_signal_marks: HashSet<String> = HashSet::new();
 
     let outbox_dir = config::get_agent_outbox_dir()?;
     let status_path = config::get_agent_status_path()?;
@@ -536,19 +537,21 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             }
 
             // Outbox drain: presence events written by hooks. Transcript
-            // catch-up is local truth, so schedule it before awaiting the
-            // semantic presence POST/delete path.
-            _ = outbox_timer.tick(), if !offline.is_offline => {
+            // catch-up is local truth, so keep collecting local phase signals
+            // even while remote POSTs are paused by offline mode.
+            _ = outbox_timer.tick() => {
                 let outbox_result = outbox::collect_outbox_with_local_state_result(
                     &outbox_dir,
                     config.shipper_config.db_path.as_deref(),
                 );
-                if !outbox_result.signals.is_empty() {
+                let new_signals =
+                    filter_new_outbox_signals(outbox_result.signals, &mut outbox_signal_marks);
+                if !new_signals.is_empty() {
                     schedule_transcript_catchups_for_signals(
                         &conn,
                         &mut transcript_catchups,
                         &mut active_transcript_polls,
-                        outbox_result.signals,
+                        new_signals,
                     );
                     pump_ready_local_work(
                         &mut scheduler,
@@ -560,7 +563,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         offline.is_offline,
                     );
                 }
-                if !outbox_result.posts.is_empty() {
+                if !offline.is_offline && !outbox_result.posts.is_empty() {
                     let client = client.clone();
                     outbox_post_tasks.spawn_local(async move {
                         outbox::post_pending_presence_files(&client, outbox_result.posts).await
@@ -1283,6 +1286,35 @@ fn schedule_transcript_catchups_for_signals(
             }
         }
     }
+}
+
+fn filter_new_outbox_signals(
+    signals: Vec<outbox::DrainedPresenceSignal>,
+    seen: &mut HashSet<String>,
+) -> Vec<outbox::DrainedPresenceSignal> {
+    if seen.len() > 4096 {
+        seen.clear();
+    }
+
+    signals
+        .into_iter()
+        .filter(|signal| seen.insert(outbox_signal_mark(signal)))
+        .collect()
+}
+
+fn outbox_signal_mark(signal: &outbox::DrainedPresenceSignal) -> String {
+    format!(
+        "{}|{}|{}|{}|{}",
+        signal.provider,
+        signal.session_id,
+        signal.phase,
+        signal.observed_at.timestamp_millis(),
+        signal
+            .transcript_path
+            .as_ref()
+            .map(|path| path.to_string_lossy())
+            .unwrap_or_default(),
+    )
 }
 
 fn schedule_transcript_catchup_for_wake(
@@ -2482,6 +2514,31 @@ mod tests {
         assert_eq!(job.path, ready.path());
         assert_eq!(job.priority, WorkPriority::Live);
         assert_eq!(job.observation.source, "outbox_signal");
+    }
+
+    #[test]
+    fn test_outbox_signal_filter_dedupes_kept_presence_file() {
+        let observed_at = chrono::Utc::now();
+        let transcript_path = PathBuf::from("/tmp/transcript.jsonl");
+        let signal = outbox::DrainedPresenceSignal {
+            session_id: "sess-outbox".to_string(),
+            provider: "codex".to_string(),
+            phase: "idle".to_string(),
+            observed_at,
+            transcript_path: Some(transcript_path.clone()),
+        };
+        let mut seen = HashSet::new();
+
+        let first = filter_new_outbox_signals(vec![signal.clone()], &mut seen);
+        let second = filter_new_outbox_signals(vec![signal.clone()], &mut seen);
+        let mut changed_phase = signal;
+        changed_phase.phase = "thinking".to_string();
+        let third = filter_new_outbox_signals(vec![changed_phase], &mut seen);
+
+        assert_eq!(first.len(), 1);
+        assert!(second.is_empty());
+        assert_eq!(third.len(), 1);
+        assert_eq!(first[0].transcript_path.as_ref(), Some(&transcript_path));
     }
 
     #[test]
