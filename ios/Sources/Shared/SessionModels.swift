@@ -2,7 +2,6 @@ import Foundation
 
 enum RuntimeDisplayText {
     private static let shellAliases: Set<String> = ["bash", "shell", "terminal"]
-    private static let terminalDisconnectedReason = "terminal_disconnected"
 
     static func canonicalToolLabel(_ value: String?) -> String? {
         guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
@@ -32,10 +31,6 @@ enum RuntimeDisplayText {
         guard let value else { return nil }
         let normalized = canonicalDisplayText(value)
         return normalized.isEmpty ? nil : normalized
-    }
-
-    static func closedStatusLabel(reason: String?) -> String {
-        reason == terminalDisconnectedReason ? "Terminal disconnected" : "Closed"
     }
 
     private static func canonicalPrefixedTool(in value: String, prefix: String, outputPrefix: String? = nil) -> String? {
@@ -164,7 +159,7 @@ func sessionFactStatus(_ facts: SessionLivenessFacts?) -> SessionFactStatus? {
     let processState = facts.processState ?? "unknown"
     if facts.lifecycle.state == "closed" || processState == "closed" {
         return SessionFactStatus(
-            label: RuntimeDisplayText.closedStatusLabel(reason: facts.lifecycle.reason),
+            label: "Closed",
             tone: "closed",
             seenAt: facts.lifecycle.observedAt ?? facts.phase.observedAt ?? facts.activity.lastTranscriptAt,
             seenAtPrefix: "Closed"
@@ -274,19 +269,6 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         return false
     }
 
-    private var closedStatusReason: String? {
-        if let runtimeFacts {
-            let processState = runtimeFacts.processState ?? "unknown"
-            if runtimeFacts.lifecycle.state == "closed" || processState == "closed" {
-                return runtimeFacts.lifecycle.reason
-            }
-            return nil
-        }
-        if runtimeDisplay?.lifecycle == "closed" {
-            return runtimeDisplay?.terminalReason
-        }
-        return nil
-    }
     private var effectiveRuntimeState: String? {
         if runtimeFacts != nil { return nil }
         if let runtimeDisplay { return runtimeDisplay.state }
@@ -373,7 +355,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
             return factStatus.label
         }
         if isClosed {
-            return RuntimeDisplayText.closedStatusLabel(reason: closedStatusReason)
+            return "Closed"
         }
         if let phaseLabel = runtimeDisplay?.phaseLabel.trimmingCharacters(in: .whitespacesAndNewlines), !phaseLabel.isEmpty {
             return RuntimeDisplayText.canonicalDisplayText(phaseLabel)
@@ -409,7 +391,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
             return factStatus.label
         }
         if isClosed {
-            return RuntimeDisplayText.closedStatusLabel(reason: closedStatusReason)
+            return "Closed"
         }
 
         let controlPath = runtimeDisplay?.controlPath ?? (isManaged ? "managed" : "unmanaged")

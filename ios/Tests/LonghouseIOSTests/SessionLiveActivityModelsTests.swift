@@ -201,7 +201,7 @@ struct SessionLiveActivityModelsTests {
     }
 
     @Test
-    func contentStatePreservesTerminalDisconnectedLifecycleFact() throws {
+    func contentStateRendersClosedLifecycleGenericallyRegardlessOfTerminalReason() throws {
         let json = """
         {
           "id": "session-terminal-disconnected",
@@ -209,8 +209,8 @@ struct SessionLiveActivityModelsTests {
           "project": "zerg",
           "cwd": "/Users/davidrose/git/zerg",
           "git_branch": "main",
-          "summary": "Terminal disconnected",
-          "summary_title": "Terminal disconnected",
+          "summary": "Closed",
+          "summary_title": "Closed",
           "presence_state": "needs_user",
           "presence_tool": null,
           "user_state": "active",
@@ -229,9 +229,9 @@ struct SessionLiveActivityModelsTests {
             "truth_tier": "managed-local",
             "state": "needs_user",
             "tone": "idle",
-            "headline": "Terminal disconnected",
-            "detail": "The terminal client disconnected.",
-            "phase_label": "Terminal disconnected",
+            "headline": "Closed",
+            "detail": null,
+            "phase_label": "Closed",
             "compact_tool_label": null,
             "is_live": false,
             "is_executing": false,
@@ -262,7 +262,7 @@ struct SessionLiveActivityModelsTests {
         let state = detail.liveActivityContentState(updatedAt: Date(timeIntervalSince1970: 1_777_140_000))
 
         #expect(state.presenceState == "unknown")
-        #expect(state.displayPhase == "Terminal disconnected")
+        #expect(state.displayPhase == "Closed")
         #expect(state.activeTool == nil)
         #expect(state.isAttention == false)
     }
