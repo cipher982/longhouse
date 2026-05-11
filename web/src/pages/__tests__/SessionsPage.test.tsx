@@ -1295,6 +1295,13 @@ describe("SessionsPage", () => {
               seq: 12,
               method: "item/agentMessage/delta",
               is_complete: false,
+              content_cursor: "codex_bridge_live:thread-1:turn-1:12",
+              overlay_at: receivedAt,
+              last_durable_at: new Date(Date.now() - 60_000).toISOString(),
+              freshness: "current",
+              is_provisional: true,
+              is_stale: false,
+              stale_reason: null,
             },
           }),
         ],
@@ -1317,7 +1324,7 @@ describe("SessionsPage", () => {
   });
 
   it("does not let stale partial live transcript output replace card summaries", async () => {
-    const staleReceivedAt = new Date(Date.now() - 5 * 60_000).toISOString();
+    const staleReceivedAt = new Date(Date.now() - 45_000).toISOString();
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
@@ -1334,6 +1341,13 @@ describe("SessionsPage", () => {
               seq: 3,
               method: "item/agentMessage/delta",
               is_complete: false,
+              content_cursor: "codex_bridge_live:thread-1:turn-1:3",
+              overlay_at: staleReceivedAt,
+              last_durable_at: new Date(Date.now() - 30_000).toISOString(),
+              freshness: "stale",
+              is_provisional: true,
+              is_stale: true,
+              stale_reason: "freshness_window_expired",
             },
           }),
         ],
@@ -1349,6 +1363,50 @@ describe("SessionsPage", () => {
 
     expect(await screen.findByText("Current durable summary.")).toBeInTheDocument();
     expect(screen.queryByTestId("session-card-live-transcript")).not.toBeInTheDocument();
+  });
+
+  it("uses server live transcript freshness instead of local age heuristics", async () => {
+    const oldButServerCurrent = new Date(Date.now() - 5 * 60_000).toISOString();
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            ended_at: null,
+            summary: "Durable summary should stay behind the current server preview.",
+            live_transcript: {
+              text: "Server says this complete bridge snapshot is still the card preview.",
+              source: "codex_bridge_live",
+              received_at: oldButServerCurrent,
+              occurred_at: oldButServerCurrent,
+              thread_id: "thread-1",
+              turn_id: "turn-1",
+              seq: 10,
+              method: "item/agentMessage/delta",
+              is_complete: true,
+              content_cursor: "codex_bridge_live:thread-1:turn-1:10",
+              overlay_at: oldButServerCurrent,
+              last_durable_at: new Date(Date.now() - 6 * 60_000).toISOString(),
+              freshness: "current",
+              is_provisional: false,
+              is_stale: false,
+              stale_reason: null,
+            },
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage();
+
+    const liveTranscript = await screen.findByTestId("session-card-live-transcript");
+    expect(liveTranscript).toHaveTextContent("Latest output");
+    expect(liveTranscript).toHaveTextContent("Server says this complete bridge snapshot");
+    expect(screen.queryByText("Durable summary should stay behind the current server preview.")).not.toBeInTheDocument();
   });
 
   it("does not style transcript-only progress as currently executing", async () => {

@@ -3031,6 +3031,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/timeline/sessions/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Stream Timeline Sessions */
+        get: operations["stream_timeline_sessions_timeline_sessions_stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/timeline/sessions/{session_id}/workspace/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Session Workspace
+         * @description SSE stream that emits workspace_changed when the session's data mutates.
+         *
+         *     The browser subscribes on session detail page load and uses each event to
+         *     invalidate React Query caches — replacing the 5-second polling interval
+         *     with event-driven refresh.
+         */
+        get: operations["stream_session_workspace_timeline_sessions__session_id__workspace_stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/timeline/sessions/semantic": {
         parameters: {
             query?: never;
@@ -3074,23 +3115,6 @@ export interface paths {
         };
         /** List Timeline Sessions */
         get: operations["list_timeline_sessions_timeline_sessions_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/timeline/sessions/stream": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Stream Timeline Sessions */
-        get: operations["stream_timeline_sessions_timeline_sessions_stream_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3329,30 +3353,6 @@ export interface paths {
         };
         /** Export Timeline Session */
         get: operations["export_timeline_session_timeline_sessions__session_id__export_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/timeline/sessions/{session_id}/workspace/stream": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Stream Session Workspace
-         * @description SSE stream that emits workspace_changed when the session's data mutates.
-         *
-         *     The browser subscribes on session detail page load and uses each event to
-         *     invalidate React Query caches — replacing the 5-second polling interval
-         *     with event-driven refresh.
-         */
-        get: operations["stream_session_workspace_timeline_sessions__session_id__workspace_stream_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -7964,6 +7964,42 @@ export interface components {
              * @default false
              */
             is_complete: boolean;
+            /**
+             * Content Cursor
+             * @description Stable-ish overlay cursor for card freshness/debugging
+             */
+            content_cursor: string;
+            /**
+             * Overlay At
+             * @description Timestamp used to compare the overlay against durable transcript activity
+             */
+            overlay_at?: string | null;
+            /**
+             * Last Durable At
+             * @description Durable transcript activity timestamp used for freshness comparison
+             */
+            last_durable_at?: string | null;
+            /**
+             * Freshness
+             * @description Server-owned card preview freshness. Superseded overlays are omitted instead of returned.
+             * @enum {string}
+             */
+            freshness: "current" | "stale";
+            /**
+             * Is Provisional
+             * @description True when the bridge snapshot is an incomplete in-flight turn
+             */
+            is_provisional: boolean;
+            /**
+             * Is Stale
+             * @description True when clients must not render this overlay as live/current output
+             */
+            is_stale: boolean;
+            /**
+             * Stale Reason
+             * @description Why is_stale is true, when known
+             */
+            stale_reason?: ("freshness_window_expired" | "missing_overlay_timestamp") | null;
         };
         /**
          * SessionLivenessFactsResponse
@@ -15006,6 +15042,98 @@ export interface operations {
             };
         };
     };
+    stream_timeline_sessions_timeline_sessions_stream_get: {
+        parameters: {
+            query?: {
+                /** @description Filter by project */
+                project?: string | null;
+                /** @description Filter by provider */
+                provider?: string | null;
+                /** @description Filter by environment (production, development, test, e2e) */
+                environment?: string | null;
+                /** @description Include test/e2e sessions (default: False) */
+                include_test?: boolean;
+                /** @description Hide autonomous sessions (Task sub-agents and sessions with no user messages) */
+                hide_autonomous?: boolean;
+                /** @description Filter by device ID */
+                device_id?: string | null;
+                /** @description Days to look back */
+                days_back?: number;
+                /** @description Search query for content */
+                query?: string | null;
+                /** @description Max results */
+                limit?: number;
+                /** @description Offset for pagination */
+                offset?: number;
+                /** @description Sort order: relevance|recency|balanced. Default: recency if no query, relevance if query present. */
+                sort?: string | null;
+                /** @description Search mode: lexical|semantic|hybrid. Default: lexical. */
+                mode?: string | null;
+                /** @description Context projection mode: forensic|active_context */
+                context_mode?: string;
+                /** @description When true, subscribe without immediately replaying the already-fresh default timeline snapshot. */
+                skip_initial_replay?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stream_session_workspace_timeline_sessions__session_id__workspace_stream_get: {
+        parameters: {
+            query?: {
+                /** @description When true, wait for first change before emitting workspace_changed. */
+                skip_initial?: boolean;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     semantic_search_timeline_sessions_timeline_sessions_semantic_get: {
         parameters: {
             query: {
@@ -15135,64 +15263,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TimelineSessionsListResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    stream_timeline_sessions_timeline_sessions_stream_get: {
-        parameters: {
-            query?: {
-                /** @description Filter by project */
-                project?: string | null;
-                /** @description Filter by provider */
-                provider?: string | null;
-                /** @description Filter by environment (production, development, test, e2e) */
-                environment?: string | null;
-                /** @description Include test/e2e sessions (default: False) */
-                include_test?: boolean;
-                /** @description Hide autonomous sessions (Task sub-agents and sessions with no user messages) */
-                hide_autonomous?: boolean;
-                /** @description Filter by device ID */
-                device_id?: string | null;
-                /** @description Days to look back */
-                days_back?: number;
-                /** @description Search query for content */
-                query?: string | null;
-                /** @description Max results */
-                limit?: number;
-                /** @description Offset for pagination */
-                offset?: number;
-                /** @description Sort order: relevance|recency|balanced. Default: recency if no query, relevance if query present. */
-                sort?: string | null;
-                /** @description Search mode: lexical|semantic|hybrid. Default: lexical. */
-                mode?: string | null;
-                /** @description Context projection mode: forensic|active_context */
-                context_mode?: string;
-                /** @description When true, subscribe without immediately replaying the already-fresh default timeline snapshot. */
-                skip_initial_replay?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -15685,40 +15755,6 @@ export interface operations {
             query?: {
                 /** @description Branch projection mode for export: head|all */
                 branch_mode?: string;
-            };
-            header?: never;
-            path: {
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    stream_session_workspace_timeline_sessions__session_id__workspace_stream_get: {
-        parameters: {
-            query?: {
-                /** @description When true, wait for first change before emitting workspace_changed. */
-                skip_initial?: boolean;
             };
             header?: never;
             path: {
