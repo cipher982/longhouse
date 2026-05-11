@@ -51,7 +51,7 @@ const INITIAL_SPOOL_PATH_LIMIT: usize = 100;
 const PERIODIC_SPOOL_PATH_LIMIT: usize = 50;
 const PATH_SPOOL_REPLAY_LIMIT: usize = 50;
 const LOCAL_RETRY_DELAY_SECS: u64 = 5;
-const STARTUP_RECONCILIATION_SCAN_DELAY: Duration = Duration::from_secs(15);
+const STARTUP_RECONCILIATION_SCAN_DELAY: Duration = Duration::from_secs(120);
 const LOCAL_STATUS_INTERVAL_SECS: u64 = 1;
 const SERVER_HEARTBEAT_INTERVAL_SECS: u64 = 5 * 60;
 const LOCAL_WORK_TICK_INTERVAL: Duration = Duration::from_millis(250);
@@ -988,10 +988,21 @@ fn start_ready_jobs(
     scheduler: &mut PathScheduler,
     in_flight: &mut JoinSet<PathTaskResult>,
     task_context: &PathTaskContext,
+    live_only: bool,
 ) {
-    while let Some(job) = scheduler.pop_launchable() {
+    let mut next_job = if live_only {
+        scheduler.pop_launchable_live()
+    } else {
+        scheduler.pop_launchable()
+    };
+    while let Some(job) = next_job {
         let task_context = task_context.clone();
         in_flight.spawn_local(run_path_job(job, task_context));
+        next_job = if live_only {
+            scheduler.pop_launchable_live()
+        } else {
+            scheduler.pop_launchable()
+        };
     }
 }
 
@@ -1008,7 +1019,12 @@ fn pump_ready_local_work(
     drain_due_transcript_catchups(scheduler, transcript_catchups);
     drain_due_active_transcript_polls(scheduler, active_transcript_polls);
     if !offline {
-        start_ready_jobs(scheduler, in_flight, task_context);
+        start_ready_jobs(
+            scheduler,
+            in_flight,
+            task_context,
+            !active_transcript_polls.is_empty(),
+        );
     }
 }
 
