@@ -7966,7 +7966,7 @@ export interface components {
             is_complete: boolean;
             /**
              * Content Cursor
-             * @description Stable-ish overlay cursor for card freshness/debugging
+             * @description Session-scoped overlay cursor for card freshness/debugging
              */
             content_cursor: string;
             /**

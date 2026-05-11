@@ -31,8 +31,6 @@ import {
 
 const SESSION_CARD_HOVER_PREFETCH_DELAY_MS = 180;
 const LIVE_TRANSCRIPT_PREVIEW_LIMIT = 180;
-const LIVE_TRANSCRIPT_PARTIAL_MAX_AGE_MS = 2 * 60 * 1000;
-const LIVE_TRANSCRIPT_COMPLETE_MAX_AGE_MS = 10 * 60 * 1000;
 
 type TimelineStatusLike = {
   label: string;
@@ -73,10 +71,7 @@ function isAnimatedRuntimeTone(tone: string): boolean {
   return tone === "thinking" || tone === "running";
 }
 
-function getLiveTranscriptPreview(
-  session: TimelineSessionCard["head"],
-  relativeNowMs: number,
-): string | null {
+function getLiveTranscriptPreview(session: TimelineSessionCard["head"]): string | null {
   const overlay = session.live_transcript;
   if (!overlay) {
     return null;
@@ -85,25 +80,7 @@ function getLiveTranscriptPreview(
   if (!text) {
     return null;
   }
-  if (overlay.is_stale === true || (overlay.freshness != null && overlay.freshness !== "current")) {
-    return null;
-  }
-  if (overlay.freshness === "current") {
-    const compact = text.replace(/\s+/g, " ");
-    if (compact.length <= LIVE_TRANSCRIPT_PREVIEW_LIMIT) {
-      return compact;
-    }
-    return `${compact.slice(0, LIVE_TRANSCRIPT_PREVIEW_LIMIT - 1).trimEnd()}...`;
-  }
-  const receivedAtMs = Date.parse(overlay?.received_at ?? "");
-  if (!Number.isFinite(receivedAtMs)) {
-    return null;
-  }
-  const ageMs = Math.max(0, relativeNowMs - receivedAtMs);
-  const maxAgeMs = overlay?.is_complete
-    ? LIVE_TRANSCRIPT_COMPLETE_MAX_AGE_MS
-    : LIVE_TRANSCRIPT_PARTIAL_MAX_AGE_MS;
-  if (ageMs > maxAgeMs) {
+  if (overlay.is_stale || overlay.freshness !== "current") {
     return null;
   }
   const compact = text.replace(/\s+/g, " ");
@@ -218,7 +195,7 @@ export function SessionCard({
 
   const showKeywordSnippet = !isSemanticResult && !!highlightQuery && !!detailSession.match_snippet;
   const showSemanticSnippet = isSemanticResult && !!detailSession.match_snippet;
-  const liveTranscriptPreview = getLiveTranscriptPreview(session, relativeNowMs);
+  const liveTranscriptPreview = getLiveTranscriptPreview(session);
   const cardActionLabel = groupedQueryMode ? "Open match" : "Open session";
   const hasControlPath = interaction.liveControlAvailable || interaction.hostReattachAvailable;
   // Lifecycle is the closure axis. The reducer only closes on explicit
