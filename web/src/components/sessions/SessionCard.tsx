@@ -8,6 +8,8 @@ import { PresenceBadge } from "../PresenceBadge";
 import { type TimelineSessionCard, getTimelineCardAnchor } from "../../services/api/agents";
 import {
   isSessionClosed,
+  getClosedSessionRuntimeDetail,
+  getClosedSessionRuntimeLabel,
   resolveSessionOwnershipLabel,
   resolveSessionRuntimeState,
   resolveSessionStatusLabel,
@@ -243,6 +245,13 @@ export function SessionCard({
   const runtimePillTone = cardStatus?.tone || (runtimePhaseLabel === "Active" ? "active" : runtime.tone);
   const useToneRuntimeDot = cardStatus != null || runtimePhaseLabel === "Active";
   const animateRuntimeDot = controlPath === "managed" && isAnimatedRuntimeTone(runtimePillTone);
+  const closedSessionReason =
+    runtime.runtimeFacts?.lifecycle?.reason === "terminal_disconnected"
+      ? runtime.runtimeFacts.lifecycle.reason
+      : runtime.runtimeDisplay?.terminal_reason;
+  const closedSessionLabel = getClosedSessionRuntimeLabel(closedSessionReason);
+  const closedSessionDetail = getClosedSessionRuntimeDetail(closedSessionReason);
+  const closedSessionTitle = closedSessionDetail ?? "This process is closed.";
   const cardClassName = [
     "session-card",
     `session-card--${ownershipTone}`,
@@ -372,9 +381,9 @@ export function SessionCard({
               <span
                 className="session-card-closed-pill"
                 data-testid="session-card-closed-state"
-                title="This process is closed."
+                title={closedSessionTitle}
               >
-                Closed
+                {closedSessionLabel}
               </span>
             ) : null}
             {showRuntimePill && (

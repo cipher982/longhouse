@@ -8,6 +8,7 @@ import type {
 export type KnownPresenceState = "thinking" | "running" | "idle" | "needs_user" | "blocked" | "stalled";
 export type RuntimeTruthTier = "none" | "stale" | "fresh" | "managed-local";
 export type RuntimeTone = "inactive" | "active" | "thinking" | "running" | "blocked" | "stalled" | "idle" | "closed";
+export const TERMINAL_DISCONNECTED_REASON = "terminal_disconnected";
 
 type TimelineRuntimeOverlay = {
   timeline_anchor_at?: string | null;
@@ -86,6 +87,14 @@ export interface SessionFactStatus {
   seenAtPrefix: "Closed" | "Checked" | "Updated" | "Verified";
 }
 
+export function getClosedSessionRuntimeLabel(terminalReason: string | null | undefined): string {
+  return terminalReason === TERMINAL_DISCONNECTED_REASON ? "Terminal disconnected" : "Closed";
+}
+
+export function getClosedSessionRuntimeDetail(terminalReason: string | null | undefined): string | null {
+  return terminalReason === TERMINAL_DISCONNECTED_REASON ? "The terminal client disconnected." : null;
+}
+
 export function resolveSessionOwnershipLabel(
   runtime: SessionRuntimeState,
   fallback: SessionControlPathLabel = "Unmanaged",
@@ -116,7 +125,7 @@ export function resolveSessionStatusLabel(
   }
   const display = runtime.runtimeDisplay;
   if (display?.lifecycle === "closed") {
-    return "Closed";
+    return getClosedSessionRuntimeLabel(display.terminal_reason);
   }
 
   const controlPath = display?.control_path ?? fallbackControlPath;
@@ -245,7 +254,7 @@ function resolveSessionFactStatus(facts: SessionLivenessFacts | null): SessionFa
   const processState = facts.process_state;
   if (lifecycle === "closed" || processState === "closed") {
     return {
-      label: "Closed",
+      label: getClosedSessionRuntimeLabel(facts.lifecycle?.reason),
       tone: "closed",
       seenAt: facts.lifecycle?.observed_at ?? facts.phase?.observed_at ?? facts.activity?.last_transcript_at ?? null,
       seenAtPrefix: "Closed",
@@ -443,7 +452,7 @@ export function resolveSessionRuntimeState(
   const displayPhase =
     factStatus?.label ??
     (isClosed
-      ? "Closed"
+      ? getClosedSessionRuntimeLabel(serverDisplay?.terminal_reason)
       : (serverDisplay?.phase_label ??
           getDisplayPhase(
             presenceState,

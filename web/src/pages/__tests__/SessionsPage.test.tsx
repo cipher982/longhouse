@@ -2040,4 +2040,61 @@ describe("SessionsPage", () => {
     expect(screen.getByTestId("session-card-closed-state")).toHaveTextContent("Closed");
   });
 
+  it("shows terminal-disconnected copy for managed sessions closed by terminal detach", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            ended_at: "2026-03-21T12:10:00Z",
+            presence_state: "needs_user",
+            control: {
+              managed_transport: "codex_app_server",
+              source_runner_id: null,
+              source_runner_name: null,
+              attach_command: "longhouse codex --attach",
+            },
+            capabilities: makeCapabilities({ host_reattach_available: true }),
+            runtime_display: makeRuntimeDisplay({
+              control_path: "managed",
+              state: "needs_user",
+              tone: "idle",
+              headline: "Terminal disconnected",
+              detail: "The terminal client disconnected.",
+              phase_label: "Terminal disconnected",
+              needs_attention: false,
+              activity_recency: "stale",
+              lifecycle: "closed",
+              terminal_reason: "terminal_disconnected",
+            }),
+            runtime_facts: makeRuntimeFacts({
+              control_path: "managed",
+              process_state: "closed",
+              lifecycle: {
+                state: "closed",
+                reason: "terminal_disconnected",
+                observed_at: "2026-03-21T12:10:00Z",
+              },
+            }),
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline");
+
+    const card = await screen.findByTestId("session-card");
+    expect(card).toHaveAttribute("data-card-state", "closed");
+    expect(await within(card).findByTestId("session-card-ownership")).toHaveTextContent("Managed");
+    expect(screen.getByTestId("session-card-closed-state")).toHaveTextContent("Terminal disconnected");
+    expect(screen.getByTestId("session-card-closed-state")).toHaveAttribute(
+      "title",
+      "The terminal client disconnected.",
+    );
+  });
+
 });

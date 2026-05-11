@@ -519,6 +519,40 @@ describe("resolveSessionRuntimeState", () => {
     });
   });
 
+  it("preserves terminal-disconnected closed copy from runtime display", () => {
+    const runtime = resolveSessionRuntimeState(
+      makeSession({
+        status: "active",
+        presence_state: "needs_user",
+        runtime_display: makeRuntimeDisplay({
+          state: "needs_user",
+          tone: "idle",
+          headline: "Terminal disconnected",
+          detail: "The terminal client disconnected.",
+          phase_label: "Terminal disconnected",
+          needs_attention: true,
+          is_live: true,
+          is_executing: true,
+          lifecycle: "closed",
+          terminal_reason: "terminal_disconnected",
+        }),
+      }),
+    );
+
+    expect(runtime.presenceState).toBeNull();
+    expect(runtime.isLive).toBe(false);
+    expect(runtime.isExecuting).toBe(false);
+    expect(runtime.needsAttention).toBe(false);
+    expect(runtime.displayPhase).toBe("Terminal disconnected");
+    expect(runtime.tone).toBe("closed");
+    expect(resolveSessionStatusLabel(runtime)).toBe("Terminal disconnected");
+    expect(getRuntimeOutcomeLabel(runtime)).toBe("Terminal disconnected");
+    expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
+      headline: "Terminal disconnected",
+      detail: "The terminal client disconnected.",
+    });
+  });
+
   it("renders managed phase facts with the observed phase tone", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({
@@ -726,6 +760,36 @@ describe("resolveSessionRuntimeState", () => {
     expect(getRuntimeOutcomeLabel(runtime)).toBe("Closed");
     expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
       headline: "Closed",
+      detail: null,
+    });
+  });
+
+  it("preserves terminal-disconnected closed copy from lifecycle facts", () => {
+    const runtime = resolveSessionRuntimeState(
+      makeSession({
+        runtime_display: makeRuntimeDisplay({
+          lifecycle: "open",
+          headline: "Working",
+          phase_label: "Using Shell",
+        }),
+        runtime_facts: makeRuntimeFacts({
+          control_path: "managed",
+          process_state: "closed",
+          lifecycle: {
+            state: "closed",
+            reason: "terminal_disconnected",
+            observed_at: "2026-03-21T12:00:00Z",
+          },
+        }),
+      }),
+    );
+
+    expect(runtime.displayPhase).toBe("Terminal disconnected");
+    expect(resolveSessionStatusLabel(runtime)).toBe("Terminal disconnected");
+    expect(runtime.tone).toBe("closed");
+    expect(getRuntimeOutcomeLabel(runtime)).toBe("Terminal disconnected");
+    expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
+      headline: "Terminal disconnected",
       detail: null,
     });
   });

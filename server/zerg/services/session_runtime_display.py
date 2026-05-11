@@ -18,6 +18,7 @@ from zerg.session_execution_home import SessionExecutionHome
 KNOWN_PRESENCE_STATES = {"thinking", "running", "idle", "needs_user", "blocked", "stalled"}
 LIVE_EXECUTION_STATES = {"thinking", "running"}
 ATTENTION_STATES = {"blocked"}
+TERMINAL_DISCONNECTED_REASON = "terminal_disconnected"
 
 
 @dataclass(frozen=True)
@@ -214,6 +215,12 @@ def _managed_copy(
     return "Idle", "Waiting for next prompt"
 
 
+def _closed_copy(terminal_reason: str | None) -> tuple[str, str | None, str]:
+    if terminal_reason == TERMINAL_DISCONNECTED_REASON:
+        return "Terminal disconnected", "The terminal client disconnected.", "Terminal disconnected"
+    return "Completed", None, "Completed"
+
+
 def build_session_runtime_display(
     *,
     runtime_view: SessionRuntimeView,
@@ -330,9 +337,7 @@ def build_session_runtime_display(
         terminal_reason = None
     if lifecycle == "closed":
         presence_state = None
-        headline = "Completed"
-        detail = None
-        phase_label = "Completed"
+        headline, detail, phase_label = _closed_copy(terminal_reason)
         is_executing = False
         needs_attention = False
         is_idle = True
