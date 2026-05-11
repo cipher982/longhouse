@@ -2182,6 +2182,13 @@ async fn process_notification(
                 return Ok(None);
             }
             let completed_turn_id = context.state.active_turn_id.clone();
+            if context.live_transcript_text.is_empty() {
+                if let Some(path) = context.state.thread_path.as_deref() {
+                    if let Some(text) = latest_assistant_text_from_rollout(Path::new(path)) {
+                        context.live_transcript_text = text;
+                    }
+                }
+            }
             if !context.live_transcript_text.is_empty() {
                 context.live_transcript_seq += 1;
                 context
@@ -2656,6 +2663,43 @@ fn extract_live_transcript_delta<'a>(method: &str, params: &'a Value) -> Option<
     }
 }
 
+fn latest_assistant_text_from_rollout(path: &Path) -> Option<String> {
+    let contents = fs::read_to_string(path).ok()?;
+    for line in contents.lines().rev() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if let Some(text) = assistant_text_from_rollout_event(&value) {
+            return Some(text);
+        }
+    }
+    None
+}
+
+fn assistant_text_from_rollout_event(value: &Value) -> Option<String> {
+    let payload = value.get("payload")?;
+    match payload.get("type").and_then(Value::as_str) {
+        Some("agent_message") => {
+            let text = payload.get("message").and_then(Value::as_str)?.trim();
+            (!text.is_empty()).then(|| text.to_string())
+        }
+        Some("message") if payload.get("role").and_then(Value::as_str) == Some("assistant") => {
+            let mut out = String::new();
+            for item in payload.get("content").and_then(Value::as_array)? {
+                if item.get("type").and_then(Value::as_str) != Some("output_text") {
+                    continue;
+                }
+                if let Some(text) = item.get("text").and_then(Value::as_str) {
+                    out.push_str(text);
+                }
+            }
+            let out = out.trim().to_string();
+            (!out.is_empty()).then_some(out)
+        }
+        _ => None,
+    }
+}
+
 fn item_supports_runtime_tracking(item_type: &str, item: &Value) -> bool {
     match item_type {
         "commandExecution"
@@ -2973,27 +3017,41 @@ impl BridgeRuntimeSink {
     }
 
     async fn post_runtime_events(&self, events: Vec<Value>) {
-        let response = match self
-            .http
-            .post(format!(
-                "{}/api/agents/runtime/events/batch",
-                self.api_url.trim_end_matches('/')
-            ))
-            .header("X-Agents-Token", &self.api_token)
-            .json(&json!({ "events": events }))
-            .send()
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("[codex-bridge] runtime ingest network error: {e}");
+        let url = format!(
+            "{}/api/agents/runtime/events/batch",
+            self.api_url.trim_end_matches('/')
+        );
+        for attempt in 0..3 {
+            let response = match self
+                .http
+                .post(&url)
+                .header("X-Agents-Token", &self.api_token)
+                .json(&json!({ "events": events.clone() }))
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    if attempt < 2 {
+                        tokio::time::sleep(Duration::from_millis(100 * (attempt + 1) as u64)).await;
+                        continue;
+                    }
+                    eprintln!("[codex-bridge] runtime ingest network error: {e}");
+                    return;
+                }
+            };
+            if response.status().is_success() {
                 return;
             }
-        };
-        if !response.status().is_success() {
             let status = response.status();
+            let retryable = status.is_server_error() || status.as_u16() == 429;
             let body = response.text().await.unwrap_or_default();
+            if retryable && attempt < 2 {
+                tokio::time::sleep(Duration::from_millis(100 * (attempt + 1) as u64)).await;
+                continue;
+            }
             eprintln!("[codex-bridge] runtime ingest failed: {status} {body}");
+            return;
         }
     }
 }
@@ -3681,6 +3739,46 @@ mod tests {
         assert_eq!(
             extract_live_transcript_delta("thread/status/changed", &json!({"delta": "hello"})),
             None
+        );
+    }
+
+    #[test]
+    fn latest_assistant_text_from_rollout_reads_recent_agent_message() {
+        let temp = tempfile::tempdir().unwrap();
+        let rollout_path = temp.path().join("thread.jsonl");
+        fs::write(
+            &rollout_path,
+            [
+                r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}}"#,
+                r#"{"type":"event_msg","payload":{"type":"agent_message","message":"hello from event"}}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            latest_assistant_text_from_rollout(&rollout_path).as_deref(),
+            Some("hello from event")
+        );
+    }
+
+    #[test]
+    fn latest_assistant_text_from_rollout_reads_response_item_output_text() {
+        let temp = tempfile::tempdir().unwrap();
+        let rollout_path = temp.path().join("thread.jsonl");
+        fs::write(
+            &rollout_path,
+            [
+                r#"{"type":"event_msg","payload":{"type":"agent_message","message":"older event"}}"#,
+                r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello "},{"type":"output_text","text":"world"}]}}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            latest_assistant_text_from_rollout(&rollout_path).as_deref(),
+            Some("hello world")
         );
     }
 
