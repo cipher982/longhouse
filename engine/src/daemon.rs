@@ -1107,16 +1107,6 @@ fn drain_due_active_transcript_polls(
             continue;
         }
 
-        let current_len = path.metadata().ok().map(|metadata| metadata.len());
-        if let (Some(current_len), Some(last_len)) = (current_len, poll.file_len_hint) {
-            if current_len <= last_len {
-                if let Some(poll) = active_transcript_polls.get_mut(&path) {
-                    poll.due_at = now + ACTIVE_TRANSCRIPT_POLL_INTERVAL;
-                }
-                continue;
-            }
-        }
-
         scheduler.enqueue_observation(
             path.clone(),
             poll.provider,
@@ -1129,14 +1119,11 @@ fn drain_due_active_transcript_polls(
                 session_id: poll.session_id.clone(),
                 turn_id: poll.turn_id.clone(),
                 wake_reason: poll.wake_reason.clone(),
-                file_len_hint: current_len.or(poll.file_len_hint),
+                file_len_hint: poll.file_len_hint,
             },
         );
         if let Some(poll) = active_transcript_polls.get_mut(&path) {
             poll.due_at = now + ACTIVE_TRANSCRIPT_POLL_INTERVAL;
-            if let Some(current_len) = current_len {
-                poll.file_len_hint = Some(current_len);
-            }
         }
     }
 }
@@ -2149,63 +2136,6 @@ mod tests {
         assert_eq!(job.priority, WorkPriority::Live);
         assert_eq!(active_polls.len(), 1);
         assert!(active_polls[&path].due_at > now);
-    }
-
-    #[test]
-    fn test_active_transcript_poll_skips_unchanged_file_len_hint() {
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        let path = tmp.path().to_path_buf();
-        let now = Instant::now();
-        let current_len = path.metadata().unwrap().len();
-        let mut active_polls = HashMap::new();
-        active_polls.insert(
-            path.clone(),
-            ActiveTranscriptPoll {
-                due_at: now - Duration::from_secs(1),
-                expires_at: now + Duration::from_secs(60),
-                provider: "codex",
-                session_id: None,
-                turn_id: None,
-                wake_reason: None,
-                file_len_hint: Some(current_len),
-            },
-        );
-
-        let mut scheduler = PathScheduler::new(4);
-        drain_due_active_transcript_polls(&mut scheduler, &mut active_polls);
-
-        assert!(scheduler.pop_launchable().is_none());
-        assert_eq!(active_polls.len(), 1);
-        assert!(active_polls[&path].due_at > now);
-    }
-
-    #[test]
-    fn test_active_transcript_poll_updates_file_len_hint_after_enqueue() {
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        let path = tmp.path().to_path_buf();
-        std::fs::write(&path, b"new transcript bytes").unwrap();
-        let now = Instant::now();
-        let current_len = path.metadata().unwrap().len();
-        let mut active_polls = HashMap::new();
-        active_polls.insert(
-            path.clone(),
-            ActiveTranscriptPoll {
-                due_at: now - Duration::from_secs(1),
-                expires_at: now + Duration::from_secs(60),
-                provider: "codex",
-                session_id: None,
-                turn_id: None,
-                wake_reason: None,
-                file_len_hint: Some(0),
-            },
-        );
-
-        let mut scheduler = PathScheduler::new(4);
-        drain_due_active_transcript_polls(&mut scheduler, &mut active_polls);
-
-        let job = scheduler.pop_launchable().expect("active poll queued");
-        assert_eq!(job.observation.file_len_hint, Some(current_len));
-        assert_eq!(active_polls[&path].file_len_hint, Some(current_len));
     }
 
     #[test]
