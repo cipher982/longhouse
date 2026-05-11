@@ -28,6 +28,12 @@ from datetime import timezone
 from pathlib import Path
 from typing import Any
 
+from managed_profiler.sla_manifest import DEFAULT_MANIFEST_PATH
+from managed_profiler.sla_manifest import format_case_inventory
+from managed_profiler.sla_manifest import load_manifest
+from managed_profiler.sla_manifest import manifest_summary
+from managed_profiler.sla_manifest import metric_target_ms
+
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT_ROOT = ROOT / "artifacts" / "managed-session-propagation"
@@ -38,9 +44,10 @@ CODEX_LONGHOUSE_HOOK_SCRIPT = Path.home() / ".codex" / "hooks" / "longhouse-code
 BROWSER_UI_OBSERVER_SCRIPT = ROOT / "scripts" / "ops" / "managed_profiler" / "browser_ui_observer.mjs"
 HOSTED_CONTAINER_PREFIX = "longhouse-"
 HOSTED_RUNTIME_EVENT_LIMIT = 200
-LIVE_FIRST_OUTPUT_TARGET_MS = 500
-DURABLE_ARCHIVE_TARGET_MS = 3_000
-MANAGED_CLOSE_TARGET_MS = 1_000
+SLA_MANIFEST = load_manifest(DEFAULT_MANIFEST_PATH)
+LIVE_FIRST_OUTPUT_TARGET_MS = metric_target_ms(SLA_MANIFEST, "live_first_from_local_ms", 500) or 500
+DURABLE_ARCHIVE_TARGET_MS = metric_target_ms(SLA_MANIFEST, "durable_archive_local_to_hosted_ms", 3_000) or 3_000
+MANAGED_CLOSE_TARGET_MS = metric_target_ms(SLA_MANIFEST, "close_observed_ms", 1_000) or 1_000
 METRICS_SCHEMA_VERSION = 3
 BATCH_METRICS_SCHEMA_VERSION = 1
 BATCH_METRIC_KEYS = (
@@ -1912,6 +1919,10 @@ except Exception as exc:
                         "durable_archive_ms": DURABLE_ARCHIVE_TARGET_MS,
                         "managed_close_ms": MANAGED_CLOSE_TARGET_MS,
                     },
+                    "sla_manifest": {
+                        "path": str(DEFAULT_MANIFEST_PATH),
+                        "summary": manifest_summary(SLA_MANIFEST),
+                    },
                     "errors": errors,
                     "cases": metrics,
                 },
@@ -2977,6 +2988,11 @@ def call_or_error(fn):
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--list-sla-cases",
+        action="store_true",
+        help="Print the checked-in SLA case inventory and exit.",
+    )
+    parser.add_argument(
         "--profile",
         choices=["baseline", "warm-live"],
         default="baseline",
@@ -3066,6 +3082,8 @@ def run_single(args: argparse.Namespace) -> tuple[int, Path]:
             "browser_ui_base_url": profiler.browser_ui_base_url,
             "browser_ui_enabled": not args.skip_browser_ui,
             "profile_class": profiler.profile_class,
+            "sla_manifest": str(DEFAULT_MANIFEST_PATH),
+            "sla_manifest_summary": manifest_summary(SLA_MANIFEST),
         },
     )
     results: list[dict[str, Any]] = []
@@ -3125,13 +3143,7 @@ def aggregate_batch_cases(cases: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def target_for_metric(key: str) -> int | None:
-    if key == "live_first_from_local_ms":
-        return LIVE_FIRST_OUTPUT_TARGET_MS
-    if key == "durable_archive_local_to_hosted_ms":
-        return DURABLE_ARCHIVE_TARGET_MS
-    if key == "close_observed_ms":
-        return MANAGED_CLOSE_TARGET_MS
-    return None
+    return metric_target_ms(SLA_MANIFEST, key)
 
 
 def write_batch_summary(
@@ -3254,6 +3266,9 @@ def run_batch(args: argparse.Namespace) -> int:
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
+    if args.list_sla_cases:
+        print(format_case_inventory(SLA_MANIFEST))
+        return 0
     if args.iterations > 1:
         return run_batch(args)
     code, _summary_path = run_single(args)

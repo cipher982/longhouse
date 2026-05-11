@@ -1,0 +1,231 @@
+schema_version = 1
+owner = "Longhouse"
+description = "Session propagation SLA matrix for managed and unmanaged provider paths."
+
+[statuses]
+required = "Must stay passing once implemented; eligible for CI or release gating."
+experimental = "Measured and reported, but not yet a hard gate."
+undefined = "Product contract is intentionally not promised yet."
+
+[[metrics]]
+id = "warm_session_created_to_card_paint_ms"
+profile_class = "warm_realtime"
+layer = "browser_card"
+target_ms = 500
+hard_alarm_ms = 1000
+description = "Warm timeline card paint after a newly launched session is known locally."
+
+[[metrics]]
+id = "warm_live_output_local_to_paint_ms"
+profile_class = "warm_realtime"
+layer = "browser_card"
+target_ms = 500
+hard_alarm_ms = 1000
+aliases = ["live_first_from_local_ms"]
+description = "Warm browser paint after provider/local live-output truth is observed."
+
+[[metrics]]
+id = "warm_live_output_sse_to_paint_ms"
+profile_class = "warm_realtime"
+layer = "browser_card"
+target_ms = 100
+hard_alarm_ms = 250
+description = "Browser reaction time after timeline SSE delivered the live-output update."
+
+[[metrics]]
+id = "warm_close_local_to_paint_ms"
+profile_class = "warm_realtime"
+layer = "browser_card"
+target_ms = 1000
+hard_alarm_ms = 2000
+aliases = ["close_observed_ms"]
+description = "Warm browser paint after local managed shutdown truth is observed."
+
+[[metrics]]
+id = "warm_close_local_to_db_ms"
+profile_class = "warm_realtime"
+layer = "hosted_db"
+target_ms = 500
+hard_alarm_ms = 1000
+description = "Runtime Host state update after local managed shutdown truth is observed."
+
+[[metrics]]
+id = "durable_archive_local_to_hosted_ms"
+profile_class = "durable_archive"
+layer = "hosted_db"
+target_ms = 3000
+hard_alarm_ms = 30000
+description = "Canonical hosted transcript/archive durability after local provider transcript append."
+
+[[metrics]]
+id = "terminal_detached_to_card_state_ms"
+profile_class = "honest_degradation"
+layer = "browser_card"
+target_ms = 10000
+hard_alarm_ms = 30000
+description = "Card state update after terminal relationship loss is observed."
+
+[[metrics]]
+id = "process_gone_to_card_state_ms"
+profile_class = "honest_degradation"
+layer = "browser_card"
+target_ms = 10000
+hard_alarm_ms = 120000
+description = "Card state update after process disappearance is proven by a complete local snapshot."
+
+[[cases]]
+id = "managed_codex_warm_live_graceful_close"
+case_id = "B1"
+status = "required"
+provider = "codex"
+control_path = "managed"
+profile = "warm-live"
+profile_class = "warm_realtime"
+launch = "longhouse codex --no-attach"
+shutdown = "longhouse-engine codex-bridge stop"
+truth_source = "codex_bridge"
+required_observers = ["managed_sessions_snapshot", "timeline_sse", "browser_card", "hosted_db"]
+metrics = [
+  "warm_session_created_to_card_paint_ms",
+  "warm_live_output_local_to_paint_ms",
+  "warm_live_output_sse_to_paint_ms",
+  "warm_close_local_to_paint_ms",
+  "warm_close_local_to_db_ms",
+  "durable_archive_local_to_hosted_ms",
+]
+notes = "Current optimized happy path. This is the first SLA candidate for release confidence."
+
+[[cases]]
+id = "managed_claude_warm_live_graceful_close"
+case_id = "B2"
+status = "experimental"
+provider = "claude"
+control_path = "managed"
+profile = "warm-live"
+profile_class = "warm_realtime"
+launch = "longhouse claude"
+shutdown = "provider-supported Claude exit path"
+truth_source = "claude_channel"
+required_observers = ["managed_sessions_snapshot", "claude_channel_state", "timeline_sse", "browser_card", "hosted_db"]
+metrics = [
+  "warm_session_created_to_card_paint_ms",
+  "warm_live_output_local_to_paint_ms",
+  "warm_close_local_to_paint_ms",
+  "warm_close_local_to_db_ms",
+  "durable_archive_local_to_hosted_ms",
+]
+notes = "Needs a real channel-backed process profile; do not borrow Codex bridge assumptions."
+
+[[cases]]
+id = "managed_opencode_warm_lifecycle"
+status = "experimental"
+provider = "opencode"
+control_path = "managed"
+profile = "warm-close"
+profile_class = "warm_realtime"
+launch = "longhouse opencode"
+shutdown = "provider-supported OpenCode exit path"
+truth_source = "managed_process_scan"
+required_observers = ["managed_sessions_snapshot", "timeline_sse", "browser_card", "hosted_db"]
+metrics = ["warm_session_created_to_card_paint_ms", "warm_close_local_to_paint_ms"]
+notes = "Lifecycle only until send/interrupt control is a defined product contract."
+
+[[cases]]
+id = "unmanaged_codex_direct_graceful_close"
+case_id = "A1"
+status = "experimental"
+provider = "codex"
+control_path = "unmanaged"
+profile = "baseline"
+profile_class = "durable_archive"
+launch = "codex exec"
+shutdown = "provider process exits"
+truth_source = "provider_transcript_and_process_scan"
+required_observers = ["unmanaged_session_bindings", "timeline_api", "hosted_db"]
+metrics = ["durable_archive_local_to_hosted_ms", "process_gone_to_card_state_ms"]
+notes = "Compatibility/import path. It should be truthful, but not terminal-class realtime."
+
+[[cases]]
+id = "unmanaged_claude_direct_graceful_close"
+case_id = "A2"
+status = "experimental"
+provider = "claude"
+control_path = "unmanaged"
+profile = "baseline"
+profile_class = "durable_archive"
+launch = "claude"
+shutdown = "provider process exits"
+truth_source = "provider_transcript_and_process_scan"
+required_observers = ["unmanaged_session_bindings", "timeline_api", "hosted_db"]
+metrics = ["durable_archive_local_to_hosted_ms", "process_gone_to_card_state_ms"]
+notes = "Compatibility/import path. It should be truthful, but not terminal-class realtime."
+
+[[cases]]
+id = "managed_codex_ctrl_c"
+status = "experimental"
+provider = "codex"
+control_path = "managed"
+profile = "honest-degradation"
+profile_class = "honest_degradation"
+launch = "longhouse codex attached TUI"
+shutdown = "Ctrl-C through PTY"
+truth_source = "pty_and_codex_bridge"
+required_observers = ["managed_sessions_snapshot", "timeline_sse", "browser_card", "hosted_db"]
+metrics = ["warm_close_local_to_paint_ms", "terminal_detached_to_card_state_ms"]
+notes = "Requires a real PTY. Ctrl-C can interrupt a turn or close a process depending on provider state."
+
+[[cases]]
+id = "managed_codex_ssh_disconnect"
+status = "experimental"
+provider = "codex"
+control_path = "managed"
+profile = "honest-degradation"
+profile_class = "honest_degradation"
+launch = "longhouse codex over SSH"
+shutdown = "SSH client disconnect"
+truth_source = "pty_process_and_machine_heartbeat"
+required_observers = ["managed_sessions_snapshot", "machine_heartbeat", "timeline_sse", "browser_card", "hosted_db"]
+metrics = ["terminal_detached_to_card_state_ms", "process_gone_to_card_state_ms"]
+notes = "Must distinguish terminal relationship loss from provider process death and machine offline."
+
+[[cases]]
+id = "managed_codex_provider_kill"
+status = "experimental"
+provider = "codex"
+control_path = "managed"
+profile = "honest-degradation"
+profile_class = "honest_degradation"
+launch = "longhouse codex attached TUI"
+shutdown = "SIGKILL provider child"
+truth_source = "codex_bridge_and_process_scan"
+required_observers = ["managed_sessions_snapshot", "timeline_sse", "browser_card", "hosted_db"]
+metrics = ["process_gone_to_card_state_ms"]
+notes = "Validates hard process-gone cleanup without pretending it is graceful."
+
+[[cases]]
+id = "unmanaged_live_send"
+status = "undefined"
+provider = "all"
+control_path = "unmanaged"
+profile = "none"
+profile_class = "fidelity"
+launch = "bare provider CLI"
+shutdown = "not applicable"
+truth_source = "none"
+required_observers = []
+metrics = []
+notes = "Longhouse does not promise live send on unmanaged sessions."
+
+[[cases]]
+id = "opencode_remote_send"
+status = "undefined"
+provider = "opencode"
+control_path = "managed"
+profile = "none"
+profile_class = "fidelity"
+launch = "longhouse opencode"
+shutdown = "not applicable"
+truth_source = "none"
+required_observers = []
+metrics = []
+notes = "Remote send/interrupt is not a defined OpenCode product contract yet."
