@@ -699,7 +699,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
 
     let runtime_http = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
-        .pool_max_idle_per_host(0)
+        .pool_max_idle_per_host(4)
         .build()
         .context("building bridge runtime HTTP client")?;
     let (runtime_tx, runtime_rx) = mpsc::unbounded_channel::<Vec<Value>>();
@@ -3094,7 +3094,6 @@ impl BridgeRuntimeSink {
                 .http
                 .post(&url)
                 .header("X-Agents-Token", &self.api_token)
-                .header(reqwest::header::CONNECTION, "close")
                 .json(&json!({ "events": events.clone() }))
                 .send()
                 .await
