@@ -2412,6 +2412,15 @@ except Exception as exc:
             metrics["verdict"] = "partial"
             metrics["notes"] = f"{live_ui}; nonce synced; close not confirmed yet; phase={phase}; ownership={ownership}, transport={transport}"
             return "partial", metrics["notes"], metrics
+        if transport_failure is not None and (
+            metrics["close_pass"] is False or metrics["durable_archive_pass"] is False
+        ):
+            metrics["verdict"] = "contaminated"
+            metrics["notes"] = (
+                f"{live_ui}; transcript={transcript}; {close_note}; "
+                f"transport_failure={transport_failure}; ownership={ownership}, transport={transport}"
+            )
+            return "contaminated", metrics["notes"], metrics
         if is_managed_case and metrics["close_pass"] is False:
             metrics["verdict"] = "slow"
             metrics["notes"] = f"{live_ui}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
