@@ -206,6 +206,7 @@ struct BridgeRuntimeSink {
     machine_name: Option<String>,
     thread_id: Option<String>,
     local_db_path: Option<PathBuf>,
+    runtime_tx: Option<mpsc::UnboundedSender<Vec<Value>>>,
 }
 
 #[derive(Debug)]
@@ -696,6 +697,25 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     // notification and posts idle once it knows which thread to drive.
     initialize_client(&mut client).await?;
 
+    let runtime_http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .pool_max_idle_per_host(0)
+        .build()
+        .context("building bridge runtime HTTP client")?;
+    let (runtime_tx, runtime_rx) = mpsc::unbounded_channel::<Vec<Value>>();
+    let runtime_worker_sink = BridgeRuntimeSink {
+        http: runtime_http.clone(),
+        api_url: config.api_url.clone(),
+        api_token: config.api_token.clone(),
+        session_id: config.session_id.clone(),
+        cwd: config.cwd.display().to_string(),
+        machine_name: config.machine_name.clone(),
+        thread_id: None,
+        local_db_path: None,
+        runtime_tx: None,
+    };
+    let _runtime_worker = spawn_runtime_event_worker(runtime_worker_sink, runtime_rx);
+
     let mut context = BridgeContext {
         state_file: config.state_file.clone(),
         state: BridgeStateFile {
@@ -724,11 +744,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
             updated_at: Utc::now().to_rfc3339(),
         },
         runtime: BridgeRuntimeSink {
-            http: reqwest::Client::builder()
-                .timeout(Duration::from_secs(5))
-                .pool_max_idle_per_host(0)
-                .build()
-                .context("building bridge runtime HTTP client")?,
+            http: runtime_http,
             api_url: config.api_url.clone(),
             api_token: config.api_token.clone(),
             session_id: config.session_id.clone(),
@@ -736,6 +752,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
             machine_name: config.machine_name.clone(),
             thread_id: None,
             local_db_path: resolve_bridge_agent_db_path(config.longhouse_home.as_deref()).ok(),
+            runtime_tx: Some(runtime_tx),
         },
         last_progress_emit: None,
         live_transcript_seq: 0,
@@ -2827,6 +2844,17 @@ async fn emit_runtime_keepalive(config: &BridgeRunConfig, context: &mut BridgeCo
     }
 }
 
+fn spawn_runtime_event_worker(
+    sink: BridgeRuntimeSink,
+    mut rx: mpsc::UnboundedReceiver<Vec<Value>>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(events) = rx.recv().await {
+            sink.post_runtime_events_blocking(events).await;
+        }
+    })
+}
+
 impl BridgeRuntimeSink {
     async fn post_phase(&self, phase: &str, dedupe_key: String, tool_name: Option<String>) {
         let observed_at = Utc::now();
@@ -3041,6 +3069,15 @@ impl BridgeRuntimeSink {
     }
 
     fn post_runtime_events_background(&self, events: Vec<Value>) {
+        let mut events = events;
+        if let Some(tx) = &self.runtime_tx {
+            match tx.send(events) {
+                Ok(()) => return,
+                Err(err) => {
+                    events = err.0;
+                }
+            }
+        }
         let sink = self.clone();
         tokio::spawn(async move {
             sink.post_runtime_events_blocking(events).await;
@@ -3442,6 +3479,7 @@ mod tests {
                 machine_name: Some("test-box".to_string()),
                 thread_id: None,
                 local_db_path: Some(resolve_bridge_agent_db_path(Some(temp.path())).unwrap()),
+                runtime_tx: None,
             },
             last_progress_emit: None,
             live_transcript_seq: 0,
@@ -3590,6 +3628,7 @@ mod tests {
             machine_name: Some("test-box".to_string()),
             thread_id: None,
             local_db_path: Some(db_path.clone()),
+            runtime_tx: None,
         };
 
         let observed_at = DateTime::parse_from_rfc3339("2026-04-19T00:00:00Z")
@@ -3649,6 +3688,7 @@ mod tests {
             machine_name: Some("test-box".to_string()),
             thread_id: Some("thread-123".to_string()),
             local_db_path: Some(resolve_bridge_agent_db_path(Some(temp.path())).unwrap()),
+            runtime_tx: None,
         };
 
         let observed_at = DateTime::parse_from_rfc3339("2026-04-19T00:00:00Z")
@@ -3687,6 +3727,7 @@ mod tests {
             machine_name: Some("test-box".to_string()),
             thread_id: Some("thread-123".to_string()),
             local_db_path: Some(resolve_bridge_agent_db_path(Some(temp.path())).unwrap()),
+            runtime_tx: None,
         };
 
         let observed_at = DateTime::parse_from_rfc3339("2026-04-19T00:00:00Z")
@@ -3724,6 +3765,7 @@ mod tests {
             machine_name: Some("test-box".to_string()),
             thread_id: None,
             local_db_path: Some(db_path.clone()),
+            runtime_tx: None,
         };
 
         sink.post_terminal(
@@ -3860,6 +3902,7 @@ mod tests {
             machine_name: Some("test-box".to_string()),
             thread_id: Some("thread-abc".to_string()),
             local_db_path: None,
+            runtime_tx: None,
         };
         let observed_at = DateTime::parse_from_rfc3339("2026-05-08T08:00:00Z")
             .unwrap()
@@ -3898,6 +3941,7 @@ mod tests {
             machine_name: Some("test-box".to_string()),
             thread_id: Some("thread-abc".to_string()),
             local_db_path: None,
+            runtime_tx: None,
         };
         let observed_at = DateTime::parse_from_rfc3339("2026-05-08T08:00:00Z")
             .unwrap()
