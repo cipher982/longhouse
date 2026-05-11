@@ -196,7 +196,7 @@ struct RpcClient {
     ws_url: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct BridgeRuntimeSink {
     http: reqwest::Client,
     api_url: String,
@@ -2832,7 +2832,7 @@ impl BridgeRuntimeSink {
         let observed_at = Utc::now();
         self.persist_local_phase(phase, tool_name.clone(), observed_at);
         // freshness_ms omitted — backend PHASE_FRESHNESS is the single source of truth.
-        self.post_runtime_events(vec![json!({
+        self.post_runtime_events_background(vec![json!({
             "runtime_key": format!("codex:{}", self.session_id),
             "session_id": self.session_id,
             "provider": "codex",
@@ -2847,8 +2847,7 @@ impl BridgeRuntimeSink {
                 "managed_transport": "codex_app_server",
                 "thread_id": self.thread_id,
             }
-        })])
-        .await;
+        })]);
     }
 
     fn persist_local_phase(
@@ -2904,7 +2903,7 @@ impl BridgeRuntimeSink {
     }
 
     async fn post_progress(&self, dedupe_key: String) {
-        self.post_runtime_events(vec![json!({
+        self.post_runtime_events_background(vec![json!({
             "runtime_key": format!("codex:{}", self.session_id),
             "session_id": self.session_id,
             "provider": "codex",
@@ -2919,8 +2918,7 @@ impl BridgeRuntimeSink {
                 "managed_transport": "codex_app_server",
                 "thread_id": self.thread_id,
             }
-        })])
-        .await;
+        })]);
     }
 
     async fn post_live_transcript_delta(
@@ -2931,7 +2929,7 @@ impl BridgeRuntimeSink {
         seq: u64,
         live_text: &str,
     ) {
-        self.post_runtime_events(vec![self.live_transcript_delta_event(
+        self.post_runtime_events_background(vec![self.live_transcript_delta_event(
             method,
             delta,
             turn_id,
@@ -2939,8 +2937,7 @@ impl BridgeRuntimeSink {
             live_text,
             false,
             Utc::now(),
-        )])
-        .await;
+        )]);
     }
 
     async fn post_live_transcript_completed(
@@ -2949,7 +2946,7 @@ impl BridgeRuntimeSink {
         seq: u64,
         live_text: &str,
     ) {
-        self.post_runtime_events(vec![self.live_transcript_delta_event(
+        self.post_runtime_events_background(vec![self.live_transcript_delta_event(
             "turn/completed",
             "",
             turn_id,
@@ -2957,8 +2954,7 @@ impl BridgeRuntimeSink {
             live_text,
             true,
             Utc::now(),
-        )])
-        .await;
+        )]);
     }
 
     fn live_transcript_delta_event(
@@ -3007,7 +3003,7 @@ impl BridgeRuntimeSink {
     async fn post_terminal(&self, terminal_state: &str, terminal_reason: &str, dedupe_key: String) {
         let observed_at = Utc::now();
         self.persist_local_phase("finished", None, observed_at);
-        self.post_runtime_events(vec![self.terminal_event(
+        self.post_runtime_events_blocking(vec![self.terminal_event(
             terminal_state,
             terminal_reason,
             &dedupe_key,
@@ -3044,7 +3040,14 @@ impl BridgeRuntimeSink {
         })
     }
 
-    async fn post_runtime_events(&self, events: Vec<Value>) {
+    fn post_runtime_events_background(&self, events: Vec<Value>) {
+        let sink = self.clone();
+        tokio::spawn(async move {
+            sink.post_runtime_events_blocking(events).await;
+        });
+    }
+
+    async fn post_runtime_events_blocking(&self, events: Vec<Value>) {
         let url = format!(
             "{}/api/agents/runtime/events/batch",
             self.api_url.trim_end_matches('/')
