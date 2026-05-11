@@ -28,9 +28,10 @@ from zerg.services.timeline_session_listing import list_timeline_sessions_for_br
 
 logger = logging.getLogger(__name__)
 
-# Pubsub is process-local. Keep the fallback poll bounded tightly so a
-# missed cross-worker wake cannot leave timeline lifecycle cards stale.
-TIMELINE_STREAM_CHANGE_WAIT_SECONDS = 0.25
+# Pubsub wakes active tabs immediately. This timeout is only the fallback poll
+# for missed cross-worker wakes, so keep it slow enough that idle tabs do not
+# continuously compete with machine ingest for SQLite connections.
+TIMELINE_STREAM_CHANGE_WAIT_SECONDS = 5.0
 TIMELINE_STREAM_HEARTBEAT_SECONDS = 30.0
 
 TimelineWindowSignature = tuple[
