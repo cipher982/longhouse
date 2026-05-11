@@ -23,6 +23,7 @@ use crate::text::truncate_tail_chars;
 const BRIDGE_RUNTIME_SOURCE: &str =
     crate::state::session_phase::PhaseSource::CodexBridgeWs.as_str();
 const DEFAULT_PROGRESS_THROTTLE_MS: u64 = 1500;
+const LIVE_RUNTIME_EVENT_TIMEOUT: Duration = Duration::from_millis(500);
 const ACTIVE_PHASE_KEEPALIVE_MS: u64 = 30_000;
 const THREAD_SUBSCRIBE_BACKGROUND_RETRY_MS: u64 = 500;
 const THREAD_SUBSCRIBE_RETRY_ATTEMPTS: usize = 8;
@@ -207,6 +208,7 @@ struct BridgeRuntimeSink {
     thread_id: Option<String>,
     local_db_path: Option<PathBuf>,
     runtime_tx: Option<mpsc::UnboundedSender<Vec<Value>>>,
+    live_runtime_tx: Option<mpsc::UnboundedSender<Vec<Value>>>,
 }
 
 #[derive(Debug)]
@@ -703,6 +705,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         .build()
         .context("building bridge runtime HTTP client")?;
     let (runtime_tx, runtime_rx) = mpsc::unbounded_channel::<Vec<Value>>();
+    let (live_runtime_tx, live_runtime_rx) = mpsc::unbounded_channel::<Vec<Value>>();
     let runtime_worker_sink = BridgeRuntimeSink {
         http: runtime_http.clone(),
         api_url: config.api_url.clone(),
@@ -713,8 +716,23 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         thread_id: None,
         local_db_path: None,
         runtime_tx: None,
+        live_runtime_tx: None,
     };
     let _runtime_worker = spawn_runtime_event_worker(runtime_worker_sink, runtime_rx);
+    let live_runtime_worker_sink = BridgeRuntimeSink {
+        http: runtime_http.clone(),
+        api_url: config.api_url.clone(),
+        api_token: config.api_token.clone(),
+        session_id: config.session_id.clone(),
+        cwd: config.cwd.display().to_string(),
+        machine_name: config.machine_name.clone(),
+        thread_id: None,
+        local_db_path: None,
+        runtime_tx: None,
+        live_runtime_tx: None,
+    };
+    let _live_runtime_worker =
+        spawn_live_runtime_event_worker(live_runtime_worker_sink, live_runtime_rx);
 
     let mut context = BridgeContext {
         state_file: config.state_file.clone(),
@@ -753,6 +771,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
             thread_id: None,
             local_db_path: resolve_bridge_agent_db_path(config.longhouse_home.as_deref()).ok(),
             runtime_tx: Some(runtime_tx),
+            live_runtime_tx: Some(live_runtime_tx),
         },
         last_progress_emit: None,
         live_transcript_seq: 0,
@@ -2860,6 +2879,22 @@ fn spawn_runtime_event_worker(
     })
 }
 
+fn spawn_live_runtime_event_worker(
+    sink: BridgeRuntimeSink,
+    mut rx: mpsc::UnboundedReceiver<Vec<Value>>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(first_batch) = rx.recv().await {
+            let mut batches = vec![first_batch];
+            while let Ok(next_batch) = rx.try_recv() {
+                batches.push(next_batch);
+            }
+            let events = coalesce_runtime_event_batches(batches);
+            sink.post_runtime_events_live(events).await;
+        }
+    })
+}
+
 fn coalesce_runtime_event_batches(batches: Vec<Vec<Value>>) -> Vec<Value> {
     let mut events = Vec::new();
     let mut live_events: BTreeMap<String, Value> = BTreeMap::new();
@@ -3019,7 +3054,7 @@ impl BridgeRuntimeSink {
         seq: u64,
         live_text: &str,
     ) {
-        self.post_runtime_events_background(vec![self.live_transcript_delta_event(
+        self.post_live_runtime_events_background(vec![self.live_transcript_delta_event(
             method,
             delta,
             turn_id,
@@ -3036,7 +3071,7 @@ impl BridgeRuntimeSink {
         seq: u64,
         live_text: &str,
     ) {
-        self.post_runtime_events_background(vec![self.live_transcript_delta_event(
+        self.post_live_runtime_events_background(vec![self.live_transcript_delta_event(
             "turn/completed",
             "",
             turn_id,
@@ -3130,6 +3165,22 @@ impl BridgeRuntimeSink {
         })
     }
 
+    fn post_live_runtime_events_background(&self, events: Vec<Value>) {
+        let mut events = events;
+        if let Some(tx) = &self.live_runtime_tx {
+            match tx.send(events) {
+                Ok(()) => return,
+                Err(err) => {
+                    events = err.0;
+                }
+            }
+        }
+        let sink = self.clone();
+        tokio::spawn(async move {
+            sink.post_runtime_events_live(events).await;
+        });
+    }
+
     fn post_runtime_events_background(&self, events: Vec<Value>) {
         let mut events = events;
         if let Some(tx) = &self.runtime_tx {
@@ -3144,6 +3195,32 @@ impl BridgeRuntimeSink {
         tokio::spawn(async move {
             sink.post_runtime_events_blocking(events).await;
         });
+    }
+
+    async fn post_runtime_events_live(&self, events: Vec<Value>) {
+        let url = format!(
+            "{}/api/agents/runtime/events/batch",
+            self.api_url.trim_end_matches('/')
+        );
+        match self
+            .http
+            .post(&url)
+            .header("X-Agents-Token", &self.api_token)
+            .timeout(LIVE_RUNTIME_EVENT_TIMEOUT)
+            .json(&json!({ "events": events }))
+            .send()
+            .await
+        {
+            Ok(response) if response.status().is_success() => {}
+            Ok(response) => {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                eprintln!("[codex-bridge] live runtime ingest dropped: {status} {body}");
+            }
+            Err(err) => {
+                eprintln!("[codex-bridge] live runtime ingest dropped: {err}");
+            }
+        }
     }
 
     async fn post_runtime_events_blocking(&self, events: Vec<Value>) {
@@ -3541,6 +3618,7 @@ mod tests {
                 thread_id: None,
                 local_db_path: Some(resolve_bridge_agent_db_path(Some(temp.path())).unwrap()),
                 runtime_tx: None,
+                live_runtime_tx: None,
             },
             last_progress_emit: None,
             live_transcript_seq: 0,
@@ -3690,6 +3768,7 @@ mod tests {
             thread_id: None,
             local_db_path: Some(db_path.clone()),
             runtime_tx: None,
+            live_runtime_tx: None,
         };
 
         let observed_at = DateTime::parse_from_rfc3339("2026-04-19T00:00:00Z")
@@ -3750,6 +3829,7 @@ mod tests {
             thread_id: Some("thread-123".to_string()),
             local_db_path: Some(resolve_bridge_agent_db_path(Some(temp.path())).unwrap()),
             runtime_tx: None,
+            live_runtime_tx: None,
         };
 
         let observed_at = DateTime::parse_from_rfc3339("2026-04-19T00:00:00Z")
@@ -3789,6 +3869,7 @@ mod tests {
             thread_id: Some("thread-123".to_string()),
             local_db_path: Some(resolve_bridge_agent_db_path(Some(temp.path())).unwrap()),
             runtime_tx: None,
+            live_runtime_tx: None,
         };
 
         let observed_at = DateTime::parse_from_rfc3339("2026-04-19T00:00:00Z")
@@ -3827,6 +3908,7 @@ mod tests {
             thread_id: None,
             local_db_path: Some(db_path.clone()),
             runtime_tx: None,
+            live_runtime_tx: None,
         };
 
         sink.post_terminal(
@@ -3964,6 +4046,7 @@ mod tests {
             thread_id: Some("thread-abc".to_string()),
             local_db_path: None,
             runtime_tx: None,
+            live_runtime_tx: None,
         };
         let observed_at = DateTime::parse_from_rfc3339("2026-05-08T08:00:00Z")
             .unwrap()
@@ -4003,6 +4086,7 @@ mod tests {
             thread_id: Some("thread-abc".to_string()),
             local_db_path: None,
             runtime_tx: None,
+            live_runtime_tx: None,
         };
         let observed_at = DateTime::parse_from_rfc3339("2026-05-08T08:00:00Z")
             .unwrap()
@@ -4037,6 +4121,7 @@ mod tests {
             thread_id: Some("thread-abc".to_string()),
             local_db_path: None,
             runtime_tx: None,
+            live_runtime_tx: None,
         };
         let observed_at = DateTime::parse_from_rfc3339("2026-05-08T08:00:00Z")
             .unwrap()
