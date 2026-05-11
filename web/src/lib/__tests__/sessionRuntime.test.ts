@@ -519,7 +519,7 @@ describe("resolveSessionRuntimeState", () => {
     });
   });
 
-  it("preserves terminal-disconnected closed copy from runtime display", () => {
+  it("renders closed lifecycle generically regardless of terminal_reason metadata", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({
         status: "active",
@@ -527,9 +527,8 @@ describe("resolveSessionRuntimeState", () => {
         runtime_display: makeRuntimeDisplay({
           state: "needs_user",
           tone: "idle",
-          headline: "Terminal disconnected",
-          detail: "The terminal client disconnected.",
-          phase_label: "Terminal disconnected",
+          headline: "Completed",
+          phase_label: "Completed",
           needs_attention: true,
           is_live: true,
           is_executing: true,
@@ -543,13 +542,13 @@ describe("resolveSessionRuntimeState", () => {
     expect(runtime.isLive).toBe(false);
     expect(runtime.isExecuting).toBe(false);
     expect(runtime.needsAttention).toBe(false);
-    expect(runtime.displayPhase).toBe("Terminal disconnected");
+    expect(runtime.displayPhase).toBe("Closed");
     expect(runtime.tone).toBe("closed");
-    expect(resolveSessionStatusLabel(runtime)).toBe("Terminal disconnected");
-    expect(getRuntimeOutcomeLabel(runtime)).toBe("Terminal disconnected");
+    expect(resolveSessionStatusLabel(runtime)).toBe("Closed");
+    expect(getRuntimeOutcomeLabel(runtime)).toBe("Closed");
     expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
-      headline: "Terminal disconnected",
-      detail: "The terminal client disconnected.",
+      headline: "Closed",
+      detail: null,
     });
   });
 
@@ -764,7 +763,7 @@ describe("resolveSessionRuntimeState", () => {
     });
   });
 
-  it("preserves terminal-disconnected closed copy from lifecycle facts", () => {
+  it("renders closed lifecycle facts with generic label regardless of reason metadata", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({
         runtime_display: makeRuntimeDisplay({
@@ -784,12 +783,12 @@ describe("resolveSessionRuntimeState", () => {
       }),
     );
 
-    expect(runtime.displayPhase).toBe("Terminal disconnected");
-    expect(resolveSessionStatusLabel(runtime)).toBe("Terminal disconnected");
+    expect(runtime.displayPhase).toBe("Closed");
+    expect(resolveSessionStatusLabel(runtime)).toBe("Closed");
     expect(runtime.tone).toBe("closed");
-    expect(getRuntimeOutcomeLabel(runtime)).toBe("Terminal disconnected");
+    expect(getRuntimeOutcomeLabel(runtime)).toBe("Closed");
     expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
-      headline: "Terminal disconnected",
+      headline: "Closed",
       detail: null,
     });
   });
