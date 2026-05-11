@@ -130,6 +130,12 @@ struct DeferredRetry {
     provider: &'static str,
 }
 
+struct HeartbeatPostResult {
+    signature: String,
+    reason: &'static str,
+    result: Result<(), String>,
+}
+
 #[derive(Debug, Clone)]
 struct TranscriptCatchup {
     due_at: Instant,
@@ -294,6 +300,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut codex_terminal_catchup_marks: HashMap<PathBuf, String> = HashMap::new();
     let mut bridge_reaper = ManagedBridgeReaper::from_env();
     let mut outbox_post_tasks: JoinSet<(usize, usize)> = JoinSet::new();
+    let mut heartbeat_post_tasks: JoinSet<HeartbeatPostResult> = JoinSet::new();
 
     let outbox_dir = config::get_agent_outbox_dir()?;
     let status_path = config::get_agent_status_path()?;
@@ -399,6 +406,35 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     }
                     Some(Err(err)) => {
                         tracing::warn!("Outbox presence POST task failed: {}", err);
+                    }
+                    None => {}
+                }
+            }
+
+            heartbeat_post_result = heartbeat_post_tasks.join_next(), if !heartbeat_post_tasks.is_empty() => {
+                match heartbeat_post_result {
+                    Some(Ok(result)) => {
+                        match result.result {
+                            Ok(()) => {
+                                tracing::debug!(
+                                    reason = result.reason,
+                                    "Runtime truth snapshot sent after local process/control change"
+                                );
+                                last_runtime_truth_signature = Some(result.signature);
+                            }
+                            Err(err) => {
+                                last_runtime_truth_signature = None;
+                                tracing::debug!(
+                                    reason = result.reason,
+                                    "Runtime truth snapshot send failed: {}",
+                                    err
+                                );
+                            }
+                        }
+                    }
+                    Some(Err(err)) => {
+                        last_runtime_truth_signature = None;
+                        tracing::warn!("Heartbeat POST task failed: {}", err);
                     }
                     None => {}
                 }
@@ -602,15 +638,19 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     continue;
                 }
                 if !offline.is_offline && last_runtime_truth_signature.as_deref() != Some(signature.as_str()) {
-                    match heartbeat::send_heartbeat(&client, &payload).await {
-                        Ok(()) => {
-                            tracing::debug!("Runtime truth snapshot sent after local process/control change");
-                            last_runtime_truth_signature = Some(signature);
-                        }
-                        Err(e) => {
-                            last_runtime_truth_signature = None;
-                            tracing::debug!("Runtime truth snapshot send failed: {}", e);
-                        }
+                    if heartbeat_post_tasks.is_empty() {
+                        spawn_heartbeat_post(
+                            &mut heartbeat_post_tasks,
+                            client.clone(),
+                            payload,
+                            signature,
+                            "runtime_truth_change",
+                        );
+                    } else {
+                        last_runtime_truth_signature = None;
+                        tracing::debug!(
+                            "Runtime truth snapshot changed while a heartbeat POST is still in flight"
+                        );
                     }
                 }
             }
@@ -665,11 +705,18 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
                 if !offline.is_offline {
                     runtime_truth_bootstrapped = true;
-                    if let Err(e) = heartbeat::send_heartbeat(&client, &payload).await {
-                        last_runtime_truth_signature = None;
-                        tracing::debug!("Heartbeat send failed: {}", e);
+                    if heartbeat_post_tasks.is_empty() {
+                        let signature = runtime_truth_signature(&payload);
+                        spawn_heartbeat_post(
+                            &mut heartbeat_post_tasks,
+                            client.clone(),
+                            payload,
+                            signature,
+                            "periodic_heartbeat",
+                        );
                     } else {
-                        last_runtime_truth_signature = Some(runtime_truth_signature(&payload));
+                        last_runtime_truth_signature = None;
+                        tracing::debug!("Skipping periodic heartbeat while a heartbeat POST is still in flight");
                     }
                 }
             }
@@ -919,6 +966,25 @@ fn spawn_transcript_wake_listener(
     _tx: mpsc::UnboundedSender<TranscriptWakeSignal>,
 ) -> Result<Option<tokio::task::JoinHandle<()>>> {
     Ok(None)
+}
+
+fn spawn_heartbeat_post(
+    tasks: &mut JoinSet<HeartbeatPostResult>,
+    client: ShipperClient,
+    payload: heartbeat::HeartbeatPayload,
+    signature: String,
+    reason: &'static str,
+) {
+    tasks.spawn_local(async move {
+        let result = heartbeat::send_heartbeat(&client, &payload)
+            .await
+            .map_err(|err| err.to_string());
+        HeartbeatPostResult {
+            signature,
+            reason,
+            result,
+        }
+    });
 }
 
 fn queue_pending_spool_paths(
