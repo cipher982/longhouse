@@ -2152,6 +2152,8 @@ except Exception as exc:
         )
         terminal = terminal_details(hosted)
         transcript_ingest = transcript_ingest_details(hosted, self.remote_clock_skew_ms)
+        latest_health = self.latest_local_health_summary(case_id, session_id)
+        latest_health_state = latest_health.get("health_state")
         ownership = session.get("execution_home") or "-"
         transport = session.get("managed_transport") or "-"
         metrics: dict[str, Any] = {
@@ -2201,6 +2203,8 @@ except Exception as exc:
             "bridge_live_method": None,
             "ship_trace_source": None,
             "ship_trace_wake_reason": None,
+            "failure_classification": None,
+            "local_health_state": latest_health_state,
             "provider_timeout": self.event_observed_at_ms(
                 case_id,
                 session_id,
@@ -2396,6 +2400,15 @@ except Exception as exc:
             return "fail", metrics["notes"], metrics
         if not closed:
             phase = runtime.get("phase") or runtime.get("terminal_state") or "-"
+            if latest_health_state in {"degraded", "broken"}:
+                metrics["failure_classification"] = "local_transport_degraded"
+                metrics["verdict"] = "contaminated"
+                metrics["notes"] = (
+                    f"{live_ui}; nonce synced; close not confirmed yet; "
+                    f"local_health={latest_health_state}; phase={phase}; "
+                    f"ownership={ownership}, transport={transport}"
+                )
+                return "contaminated", metrics["notes"], metrics
             metrics["verdict"] = "partial"
             metrics["notes"] = f"{live_ui}; nonce synced; close not confirmed yet; phase={phase}; ownership={ownership}, transport={transport}"
             return "partial", metrics["notes"], metrics
@@ -2473,6 +2486,21 @@ except Exception as exc:
                     return payload
                 return {}
         return None
+
+    def latest_local_health_summary(self, case_id: str, session_id: str) -> dict[str, Any]:
+        for row in reversed(self.observations):
+            if row.get("case_id") != case_id or row.get("session_id") != session_id:
+                continue
+            payload = row.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            local_health = payload.get("local_health")
+            if not isinstance(local_health, dict):
+                continue
+            summary = local_health.get("summary")
+            if isinstance(summary, dict):
+                return summary
+        return {}
 
 
 def redact_cmd(cmd: list[str]) -> list[str]:
