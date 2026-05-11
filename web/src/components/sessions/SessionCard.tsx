@@ -245,10 +245,7 @@ export function SessionCard({
   const runtimePillTone = cardStatus?.tone || (runtimePhaseLabel === "Active" ? "active" : runtime.tone);
   const useToneRuntimeDot = cardStatus != null || runtimePhaseLabel === "Active";
   const animateRuntimeDot = controlPath === "managed" && isAnimatedRuntimeTone(runtimePillTone);
-  const closedSessionReason =
-    runtime.runtimeFacts?.lifecycle?.reason === "terminal_disconnected"
-      ? runtime.runtimeFacts.lifecycle.reason
-      : runtime.runtimeDisplay?.terminal_reason;
+  const closedSessionReason = runtime.runtimeFacts?.lifecycle?.reason ?? runtime.runtimeDisplay?.terminal_reason;
   const closedSessionLabel = getClosedSessionRuntimeLabel(closedSessionReason);
   const closedSessionDetail = getClosedSessionRuntimeDetail(closedSessionReason);
   const closedSessionTitle = closedSessionDetail ?? "This process is closed.";
