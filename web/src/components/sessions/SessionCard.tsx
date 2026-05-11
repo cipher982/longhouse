@@ -78,9 +78,22 @@ function getLiveTranscriptPreview(
   relativeNowMs: number,
 ): string | null {
   const overlay = session.live_transcript;
+  if (!overlay) {
+    return null;
+  }
   const text = overlay?.text?.trim();
   if (!text) {
     return null;
+  }
+  if (overlay.is_stale === true || (overlay.freshness != null && overlay.freshness !== "current")) {
+    return null;
+  }
+  if (overlay.freshness === "current") {
+    const compact = text.replace(/\s+/g, " ");
+    if (compact.length <= LIVE_TRANSCRIPT_PREVIEW_LIMIT) {
+      return compact;
+    }
+    return `${compact.slice(0, LIVE_TRANSCRIPT_PREVIEW_LIMIT - 1).trimEnd()}...`;
   }
   const receivedAtMs = Date.parse(overlay?.received_at ?? "");
   if (!Number.isFinite(receivedAtMs)) {

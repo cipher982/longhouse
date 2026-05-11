@@ -80,6 +80,13 @@ export interface SessionLiveTranscript {
   seq?: number | null;
   method?: string | null;
   is_complete: boolean;
+  content_cursor?: string;
+  overlay_at?: string | null;
+  last_durable_at?: string | null;
+  freshness?: "current" | "stale";
+  is_provisional?: boolean;
+  is_stale?: boolean;
+  stale_reason?: "freshness_window_expired" | "missing_overlay_timestamp" | null;
 }
 
 export interface SessionRuntimeDisplay {
