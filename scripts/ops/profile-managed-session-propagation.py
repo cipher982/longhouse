@@ -49,9 +49,15 @@ HOSTED_RUNTIME_EVENT_LIMIT = 200
 METRICS_SCHEMA_VERSION = 3
 BATCH_METRICS_SCHEMA_VERSION = 1
 BATCH_METRIC_KEYS = (
+    "warm_session_created_to_card_paint_ms",
+    "warm_live_output_local_to_paint_ms",
+    "warm_live_output_sse_to_paint_ms",
+    "warm_close_local_to_sse_ms",
+    "warm_close_local_to_paint_ms",
+    "warm_close_sse_to_paint_ms",
+    "durable_archive_local_to_hosted_ms",
     "live_first_from_local_ms",
     "live_tail_non_slo_from_local_ms",
-    "durable_archive_local_to_hosted_ms",
     "close_observed_ms",
     "bridge_live_ingest_lag_ms",
     "browser_timeline_card_from_session_id_ms",
@@ -2161,6 +2167,12 @@ except Exception as exc:
             "live_first_pass": None,
             "live_first_source": None,
             "live_tail_non_slo_from_local_ms": None,
+            "warm_session_created_to_card_paint_ms": browser_card_latency,
+            "warm_live_output_local_to_paint_ms": None,
+            "warm_live_output_sse_to_paint_ms": browser_first_after_sse_latency,
+            "warm_close_local_to_sse_ms": close_sse_latency,
+            "warm_close_local_to_paint_ms": close_latency,
+            "warm_close_sse_to_paint_ms": close_browser_after_sse_latency,
             "browser_timeline_card_from_session_id_ms": browser_card_latency,
             "browser_live_first_from_prompt_ms": browser_live_first_latency,
             "browser_live_tail_from_prompt_ms": browser_live_full_latency,
@@ -2220,6 +2232,7 @@ except Exception as exc:
             live_full_from_local_latency = live_http_from_local_latency
             live_ui_source = "http"
         metrics["live_first_from_local_ms"] = live_first_from_local_latency
+        metrics["warm_live_output_local_to_paint_ms"] = live_first_from_local_latency
         metrics["live_first_source"] = live_ui_source if live_first_from_local_latency is not None else None
         metrics["live_tail_non_slo_from_local_ms"] = live_full_from_local_latency
         if live_first_from_local_latency is not None:
