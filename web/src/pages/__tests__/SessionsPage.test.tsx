@@ -2097,4 +2097,48 @@ describe("SessionsPage", () => {
     );
   });
 
+  it("prefers lifecycle facts over stale terminal display reason on closed cards", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            ended_at: "2026-03-21T12:10:00Z",
+            capabilities: makeCapabilities({ host_reattach_available: true }),
+            runtime_display: makeRuntimeDisplay({
+              control_path: "managed",
+              headline: "Terminal disconnected",
+              phase_label: "Terminal disconnected",
+              lifecycle: "closed",
+              terminal_reason: "terminal_disconnected",
+            }),
+            runtime_facts: makeRuntimeFacts({
+              control_path: "managed",
+              process_state: "closed",
+              lifecycle: {
+                state: "closed",
+                reason: "process_gone",
+                observed_at: "2026-03-21T12:10:00Z",
+              },
+            }),
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline");
+
+    const card = await screen.findByTestId("session-card");
+    expect(card).toHaveAttribute("data-card-state", "closed");
+    expect(screen.getByTestId("session-card-closed-state")).toHaveTextContent("Closed");
+    expect(screen.getByTestId("session-card-closed-state")).toHaveAttribute(
+      "title",
+      "This process is closed.",
+    );
+  });
+
 });
