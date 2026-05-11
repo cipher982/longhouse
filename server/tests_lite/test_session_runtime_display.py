@@ -800,6 +800,9 @@ def test_three_axis_fields_preserves_terminal_disconnected_reason():
 
     assert display.lifecycle == "closed"
     assert display.terminal_reason == "terminal_disconnected"
+    assert display.headline == "Terminal disconnected"
+    assert display.detail == "The terminal client disconnected."
+    assert display.phase_label == "Terminal disconnected"
 
 
 def test_three_axis_fields_closed_with_process_gone_terminal():

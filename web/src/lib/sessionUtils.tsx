@@ -5,7 +5,11 @@
 import React from "react";
 import { parseUTC } from "./dateUtils";
 import { type AgentSession } from "../services/api/agents";
-import { resolveSessionRuntimeState } from "./sessionRuntime";
+import {
+  getClosedSessionRuntimeDetail,
+  getClosedSessionRuntimeLabel,
+  resolveSessionRuntimeState,
+} from "./sessionRuntime";
 
 // ---------------------------------------------------------------------------
 // Time / date helpers
@@ -252,7 +256,7 @@ export function getRuntimeOutcomeLabel(
     return runtime.factStatus.label;
   }
   if (runtime.runtimeDisplay?.lifecycle === "closed") {
-    return "Closed";
+    return getClosedSessionRuntimeLabel(runtime.runtimeDisplay.terminal_reason);
   }
   if (
     runtime.runtimeDisplay?.headline === "Active" ||
@@ -293,8 +297,8 @@ export function getRuntimeDisplayCopy(
   if (runtime.runtimeDisplay) {
     if (runtime.runtimeDisplay.lifecycle === "closed") {
       return {
-        headline: "Closed",
-        detail: null,
+        headline: getClosedSessionRuntimeLabel(runtime.runtimeDisplay.terminal_reason),
+        detail: getClosedSessionRuntimeDetail(runtime.runtimeDisplay.terminal_reason),
       };
     }
     return {
