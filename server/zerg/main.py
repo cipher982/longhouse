@@ -155,6 +155,7 @@ from zerg.routers.telemetry import canary_router as telemetry_canary_router
 from zerg.routers.threads import router as threads_router
 from zerg.routers.timeline import canary_stream_router as timeline_canary_stream_router
 from zerg.routers.timeline import router as timeline_router
+from zerg.routers.timeline import timeline_stream_router
 from zerg.routers.traces import router as traces_router
 from zerg.routers.triggers import router as triggers_router
 from zerg.routers.users import router as users_router
@@ -284,6 +285,7 @@ api_app.include_router(reliability_router)
 api_app.include_router(skills_router)
 api_app.include_router(session_chat_router)
 api_app.include_router(agents_session_chat_router)
+api_app.include_router(timeline_stream_router)
 api_app.include_router(timeline_router)
 api_app.include_router(timeline_canary_stream_router)
 api_app.include_router(agents_control_router)

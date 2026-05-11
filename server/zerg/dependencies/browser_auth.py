@@ -36,6 +36,26 @@ def get_current_browser_user(request: Request, db: Session = Depends(get_db)):
     return user
 
 
+def require_current_browser_user_short_lived(request: Request, db: Session = Depends(get_db)) -> None:
+    """Authenticate a browser stream without pinning a DB connection.
+
+    FastAPI keeps generator dependencies alive until a streaming response ends.
+    Timeline SSE routes only need auth at connect time, so close the session
+    immediately after validating the cookie instead of holding it for the whole
+    EventSource lifetime.
+    """
+    try:
+        user = _get_browser_session_user(request, db)
+    finally:
+        db.close()
+
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+        )
+
+
 def get_optional_browser_user(request: Request, db: Session = Depends(get_db)):
     """Return the authenticated browser user or **None**."""
     return _get_browser_session_user(request, db)
@@ -45,4 +65,5 @@ __all__ = [
     "_get_browser_session_user",
     "get_current_browser_user",
     "get_optional_browser_user",
+    "require_current_browser_user_short_lived",
 ]
