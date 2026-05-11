@@ -353,10 +353,16 @@ def _build_codex_attach_command(
     codex_bin: str,
     ws_url: str,
     bypass_approvals: bool,
+    model: str | None = None,
+    model_reasoning_effort: str | None = None,
     session_id: str | None = None,
     thread_id: str | None = None,
 ) -> str:
     cmd = [codex_bin, "-c", _CODEX_DISABLE_UPDATE_CHECK_CONFIG]
+    if model_reasoning_effort:
+        cmd += ["-c", f"model_reasoning_effort={model_reasoning_effort}"]
+    if model:
+        cmd += ["--model", model]
     if thread_id:
         cmd += ["resume", thread_id]
     if bypass_approvals:
@@ -379,28 +385,35 @@ def _start_native_codex_bridge(
     url: str,
     token: str,
     codex_bin: str,
+    model: str | None = None,
+    model_reasoning_effort: str | None = None,
 ) -> tuple[str, str, str | None]:
     try:
         engine = get_engine_executable()
     except RuntimeError as exc:
         raise _NativeBridgeError(str(exc)) from exc
+    cmd = [
+        engine,
+        "codex-bridge",
+        "start",
+        "--session-id",
+        session_id,
+        "--cwd",
+        str(cwd),
+        "--url",
+        url,
+        "--token",
+        token,
+        "--codex-bin",
+        codex_bin,
+    ]
+    if model:
+        cmd += ["--model", model]
+    if model_reasoning_effort:
+        cmd += ["--model-reasoning-effort", model_reasoning_effort]
+    cmd.append("--json")
     completed = subprocess.run(
-        [
-            engine,
-            "codex-bridge",
-            "start",
-            "--session-id",
-            session_id,
-            "--cwd",
-            str(cwd),
-            "--url",
-            url,
-            "--token",
-            token,
-            "--codex-bin",
-            codex_bin,
-            "--json",
-        ],
+        cmd,
         check=False,
         capture_output=True,
         text=True,
@@ -619,11 +632,17 @@ def _run_native_codex_tui(
     ws_url: str,
     cwd: Path,
     bypass_approvals: bool = False,
+    model: str | None = None,
+    model_reasoning_effort: str | None = None,
 ) -> int:
     # Connect TUI to the bridge's app-server. The TUI calls thread/start which
     # creates the thread; the bridge daemon observes the thread/started notification
     # and posts idle once it knows which thread to drive.
     cmd = [codex_bin, "-c", _CODEX_DISABLE_UPDATE_CHECK_CONFIG]
+    if model_reasoning_effort:
+        cmd += ["-c", f"model_reasoning_effort={model_reasoning_effort}"]
+    if model:
+        cmd += ["--model", model]
     if bypass_approvals:
         cmd.append("--dangerously-bypass-approvals-and-sandbox")
     cmd += ["--enable", "tui_app_server", "--remote", ws_url]
@@ -753,6 +772,16 @@ def codex(
         "--codex-bin",
         help=_CODEX_BIN_OPTION_HELP,
     ),
+    model: str | None = typer.Option(
+        None,
+        "--model",
+        help="Optional Codex model override for the managed app-server.",
+    ),
+    model_reasoning_effort: str | None = typer.Option(
+        None,
+        "--model-reasoning-effort",
+        help="Optional Codex reasoning effort override for the managed app-server.",
+    ),
     bypass_approvals: bool = typer.Option(
         False,
         "--dangerously-bypass-approvals-and-sandbox",
@@ -814,6 +843,8 @@ def codex(
             url=resolved_url,
             token=resolved_token,
             codex_bin=resolved_codex_bin,
+            model=model,
+            model_reasoning_effort=model_reasoning_effort,
         )
     except _NativeBridgeError as exc:
         typer.secho(f"Codex bridge failed: {exc}", fg=typer.colors.RED)
@@ -831,6 +862,8 @@ def codex(
         codex_bin=resolved_codex_bin,
         ws_url=ws_url,
         bypass_approvals=bypass_approvals,
+        model=model,
+        model_reasoning_effort=model_reasoning_effort,
         session_id=result.session_id,
     )
     if not attach:
@@ -851,6 +884,8 @@ def codex(
             ws_url=ws_url,
             cwd=cwd,
             bypass_approvals=bypass_approvals,
+            model=model,
+            model_reasoning_effort=model_reasoning_effort,
         )
     finally:
         _restore_signal_handlers(previous_handlers)
@@ -866,6 +901,8 @@ def codex(
                 codex_bin=resolved_codex_bin,
                 ws_url=ws_url,
                 bypass_approvals=bypass_approvals,
+                model=model,
+                model_reasoning_effort=model_reasoning_effort,
                 session_id=result.session_id,
                 thread_id=resume_thread_id or None,
             )

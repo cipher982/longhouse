@@ -419,6 +419,9 @@ enum CodexBridgeCommands {
         model: Option<String>,
 
         #[arg(long)]
+        model_reasoning_effort: Option<String>,
+
+        #[arg(long)]
         machine_name: Option<String>,
 
         #[arg(long)]
@@ -472,6 +475,9 @@ enum CodexBridgeCommands {
 
         #[arg(long)]
         model: Option<String>,
+
+        #[arg(long)]
+        model_reasoning_effort: Option<String>,
 
         #[arg(long)]
         machine_name: Option<String>,
@@ -939,6 +945,7 @@ fn main() -> anyhow::Result<()> {
                     approval_policy,
                     sandbox,
                     model,
+                    model_reasoning_effort,
                     machine_name,
                     auto_approve,
                     state_root,
@@ -962,6 +969,7 @@ fn main() -> anyhow::Result<()> {
                         approval_policy,
                         sandbox,
                         model,
+                        model_reasoning_effort,
                         machine_name,
                         auto_approve,
                         state_root,
@@ -992,9 +1000,10 @@ fn main() -> anyhow::Result<()> {
                     token,
                     codex_bin,
                     session_source,
-                    approval_policy: _,
-                    sandbox: _,
-                    model: _,
+                    approval_policy,
+                    sandbox,
+                    model,
+                    model_reasoning_effort,
                     machine_name,
                     auto_approve,
                     longhouse_home,
@@ -1008,6 +1017,10 @@ fn main() -> anyhow::Result<()> {
                         api_token: token,
                         codex_bin,
                         session_source,
+                        approval_policy,
+                        sandbox,
+                        model,
+                        model_reasoning_effort,
                         machine_name,
                         auto_approve,
                         longhouse_home,

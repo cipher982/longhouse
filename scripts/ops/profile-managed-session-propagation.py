@@ -1288,19 +1288,24 @@ except Exception as exc:
             event="launch_requested",
             payload={"nonce": nonce, "name": name},
         )
+        launch_cmd = [
+            "longhouse",
+            "codex",
+            "--cwd",
+            str(ROOT),
+            "--project",
+            self.project,
+            "--name",
+            name,
+            "--no-attach",
+            "--no-open",
+        ]
+        if self.args.codex_model:
+            launch_cmd.extend(["--model", self.args.codex_model])
+        if self.args.codex_effort:
+            launch_cmd.extend(["--model-reasoning-effort", self.args.codex_effort])
         launch = self.run_observed(
-            [
-                "longhouse",
-                "codex",
-                "--cwd",
-                str(ROOT),
-                "--project",
-                self.project,
-                "--name",
-                name,
-                "--no-attach",
-                "--no-open",
-            ],
+            launch_cmd,
             case_id=case_id,
             ownership=ownership,
             event_prefix="managed_launch",
