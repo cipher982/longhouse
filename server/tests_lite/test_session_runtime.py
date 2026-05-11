@@ -175,6 +175,69 @@ def test_runtime_reducer_materializes_phase_progress_and_terminal(tmp_path):
     engine.dispose()
 
 
+def test_managed_session_ended_terminal_overrides_nearby_newer_lease(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_session_ended_after_lease_race.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(
+            db,
+            provider="codex",
+            started_at=now - timedelta(minutes=20),
+        )
+        session.execution_home = "managed_local"
+        session.managed_transport = "codex_app_server"
+        runtime_key = runtime_key_for_session("codex", str(session.id))
+
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="engine_attached_lease",
+                    kind="phase_signal",
+                    phase="blocked",
+                    tool_name="control path",
+                    occurred_at=now,
+                    freshness_ms=15 * 60 * 1000,
+                    dedupe_key="lease-newer",
+                    payload={},
+                ),
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="codex_bridge",
+                    kind="terminal_signal",
+                    occurred_at=now - timedelta(milliseconds=50),
+                    dedupe_key="terminal-slightly-older",
+                    payload={
+                        "terminal_state": "session_ended",
+                        "terminal_reason": "bridge_stop",
+                        "terminal_source": "codex_bridge",
+                    },
+                ),
+            ],
+        )
+        db.commit()
+
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        stored_session = db.query(AgentSession).filter(AgentSession.id == session.id).one()
+        view = build_runtime_view(state=state, session=stored_session, now=now)
+
+        assert state.phase == "finished"
+        assert state.terminal_state == "session_ended"
+        assert state.terminal_reason == "bridge_stop"
+        assert stored_session.ended_at.replace(tzinfo=None) == (now - timedelta(milliseconds=50)).replace(tzinfo=None)
+        assert view.status == "completed"
+
+    engine.dispose()
+
+
 def test_runtime_reducer_preserves_terminal_disconnected_reason(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "runtime_terminal_disconnected.db")
     now = datetime.now(timezone.utc)
