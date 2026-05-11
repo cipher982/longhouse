@@ -395,6 +395,19 @@ def test_build_codex_attach_command_carries_managed_override_and_session_env():
     assert "--enable tui_app_server --remote ws://127.0.0.1:4800" in command
 
 
+def test_build_codex_attach_command_carries_model_overrides():
+    command = codex_cli._build_codex_attach_command(
+        codex_bin="/tmp/codex",
+        ws_url="ws://127.0.0.1:4800",
+        bypass_approvals=False,
+        model="gpt-5.4-mini",
+        model_reasoning_effort="low",
+        session_id="session-123",
+    )
+
+    assert "-c model_reasoning_effort=low --model gpt-5.4-mini" in command
+
+
 def test_launch_managed_local_from_api_sets_codex_provider(monkeypatch, tmp_path):
     fake_client = _FakeClient(
         response=_FakeResponse(
@@ -476,8 +489,15 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
     monkeypatch.setattr(
         codex_cli,
         "_run_native_codex_tui",
-        lambda *, session_id, codex_bin, ws_url, cwd, bypass_approvals=False: native_tui_calls.append(
-            (session_id, codex_bin, ws_url, str(cwd), bypass_approvals)
+        lambda *,
+        session_id,
+        codex_bin,
+        ws_url,
+        cwd,
+        bypass_approvals=False,
+        model=None,
+        model_reasoning_effort=None: native_tui_calls.append(
+            (session_id, codex_bin, ws_url, str(cwd), bypass_approvals, model, model_reasoning_effort)
         )
         or 0,
     )
@@ -518,9 +538,13 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
             "url": "https://longhouse.test",
             "token": "zdt_test_token",
             "codex_bin": "/tmp/codex",
+            "model": None,
+            "model_reasoning_effort": None,
         }
     ]
-    assert native_tui_calls == [("session-123", "/tmp/codex", "ws://127.0.0.1:4800", str(tmp_path), False)]
+    assert native_tui_calls == [
+        ("session-123", "/tmp/codex", "ws://127.0.0.1:4800", str(tmp_path), False, None, None)
+    ]
     assert stop_calls == [
         {
             "session_id": "session-123",

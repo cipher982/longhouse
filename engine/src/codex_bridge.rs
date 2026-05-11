@@ -50,6 +50,7 @@ pub struct BridgeStartConfig {
     pub approval_policy: Option<String>,
     pub sandbox: Option<String>,
     pub model: Option<String>,
+    pub model_reasoning_effort: Option<String>,
     pub machine_name: Option<String>,
     pub auto_approve: bool,
     pub state_root: Option<PathBuf>,
@@ -66,6 +67,10 @@ pub struct BridgeRunConfig {
     pub api_token: String,
     pub codex_bin: String,
     pub session_source: Option<String>,
+    pub approval_policy: Option<String>,
+    pub sandbox: Option<String>,
+    pub model: Option<String>,
+    pub model_reasoning_effort: Option<String>,
     pub machine_name: Option<String>,
     pub auto_approve: bool,
     pub longhouse_home: Option<PathBuf>,
@@ -572,6 +577,9 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
     }
     if let Some(model) = config.model.as_deref() {
         child.arg("--model").arg(model);
+    }
+    if let Some(effort) = config.model_reasoning_effort.as_deref() {
+        child.arg("--model-reasoning-effort").arg(effort);
     }
     if let Some(machine_name) = config.machine_name.as_deref() {
         child.arg("--machine-name").arg(machine_name);
@@ -1701,9 +1709,22 @@ fn read_log_tail(path: &Path, max_chars: usize) -> String {
 
 async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> {
     let mut command = Command::new(&config.codex_bin);
+    command.arg("-c").arg(CODEX_DISABLE_UPDATE_CHECK_CONFIG);
+    if let Some(effort) = config.model_reasoning_effort.as_deref() {
+        command
+            .arg("-c")
+            .arg(format!("model_reasoning_effort={effort}"));
+    }
+    if let Some(model) = config.model.as_deref() {
+        command.arg("--model").arg(model);
+    }
+    if let Some(policy) = config.approval_policy.as_deref() {
+        command.arg("--ask-for-approval").arg(policy);
+    }
+    if let Some(sandbox) = config.sandbox.as_deref() {
+        command.arg("--sandbox").arg(sandbox);
+    }
     command
-        .arg("-c")
-        .arg(CODEX_DISABLE_UPDATE_CHECK_CONFIG)
         .arg("app-server")
         .arg("--listen")
         .arg("ws://127.0.0.1:0")
@@ -3214,11 +3235,18 @@ impl BridgeRuntimeSink {
             Ok(response) if response.status().is_success() => {}
             Ok(response) => {
                 let status = response.status();
+                let retryable = status.is_server_error() || status.as_u16() == 429;
                 let body = response.text().await.unwrap_or_default();
-                eprintln!("[codex-bridge] live runtime ingest dropped: {status} {body}");
+                if retryable {
+                    eprintln!("[codex-bridge] live runtime ingest retrying after {status}: {body}");
+                    self.post_runtime_events_blocking(events).await;
+                } else {
+                    eprintln!("[codex-bridge] live runtime ingest dropped: {status} {body}");
+                }
             }
             Err(err) => {
-                eprintln!("[codex-bridge] live runtime ingest dropped: {err}");
+                eprintln!("[codex-bridge] live runtime ingest retrying after error: {err}");
+                self.post_runtime_events_blocking(events).await;
             }
         }
     }
@@ -3692,6 +3720,10 @@ mod tests {
             api_token: "token".to_string(),
             codex_bin: "codex".to_string(),
             session_source: None,
+            approval_policy: None,
+            sandbox: None,
+            model: None,
+            model_reasoning_effort: None,
             machine_name: Some("test-box".to_string()),
             auto_approve: true,
             longhouse_home: Some(temp.path().to_path_buf()),
