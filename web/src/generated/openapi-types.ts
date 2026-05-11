@@ -4704,7 +4704,7 @@ export interface components {
             runtime_display?: components["schemas"]["SessionRuntimeDisplayResponse"] | null;
             /** @description Observed liveness facts with timestamps and sources */
             runtime_facts?: components["schemas"]["SessionLivenessFactsResponse"] | null;
-            /** @description Low-latency managed bridge transcript overlay; durable events remain canonical */
+            /** @description Low-latency managed bridge transcript overlay. Populated only for timeline-card projections; durable events remain canonical. */
             live_transcript?: components["schemas"]["SessionLiveTranscriptResponse"] | null;
             /**
              * @description Session loop mode: assist|autopilot
@@ -8440,7 +8440,7 @@ export interface components {
             runtime_display?: components["schemas"]["SessionRuntimeDisplayResponse"] | null;
             /** @description Observed liveness facts with timestamps and sources */
             runtime_facts?: components["schemas"]["SessionLivenessFactsResponse"] | null;
-            /** @description Low-latency managed bridge transcript overlay; durable events remain canonical */
+            /** @description Low-latency managed bridge transcript overlay. Populated only for timeline-card projections; durable events remain canonical. */
             live_transcript?: components["schemas"]["SessionLiveTranscriptResponse"] | null;
             /** @description Server-derived timeline-card presentation */
             timeline_card: components["schemas"]["TimelineCardPresentationResponse"];
