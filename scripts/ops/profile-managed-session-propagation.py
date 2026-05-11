@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import select
@@ -20,6 +21,7 @@ import subprocess
 import sys
 import threading
 import time
+from argparse import Namespace
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
@@ -40,6 +42,15 @@ LIVE_FIRST_OUTPUT_TARGET_MS = 500
 DURABLE_ARCHIVE_TARGET_MS = 3_000
 MANAGED_CLOSE_TARGET_MS = 1_000
 METRICS_SCHEMA_VERSION = 3
+BATCH_METRICS_SCHEMA_VERSION = 1
+BATCH_METRIC_KEYS = (
+    "live_first_from_local_ms",
+    "live_tail_non_slo_from_local_ms",
+    "durable_archive_local_to_hosted_ms",
+    "close_observed_ms",
+    "bridge_live_ingest_lag_ms",
+    "browser_timeline_card_from_session_id_ms",
+)
 CODEX_TUI_PRECONDITION_PATTERNS = (
     (
         re.compile(
@@ -2971,6 +2982,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--run-id")
     parser.add_argument("--output-dir")
     parser.add_argument(
+        "--iterations",
+        type=int,
+        default=1,
+        help="Run the selected profile N times and write aggregate batch metrics.",
+    )
+    parser.add_argument(
         "--profile-class",
         choices=["cold_timeline", "warm_realtime", "durable_archive", "honest_degradation", "fidelity"],
         default=None,
@@ -2998,13 +3015,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: list[str]) -> int:
-    args = parse_args(argv)
+def normalize_args(args: argparse.Namespace) -> None:
     if args.profile == "warm-live":
         if args.skip_browser_ui:
             raise SystemExit("--profile warm-live requires the browser UI observer")
         args.ownership = "managed"
         args.skip_unmanaged = True
+
+
+def run_single(args: argparse.Namespace) -> tuple[int, Path]:
+    normalize_args(args)
     profiler = Profiler(args)
     profiler.observe(
         case_id="run",
@@ -3053,7 +3073,166 @@ def main(argv: list[str]) -> int:
         )
     profiler.write_summary(results, errors)
     print(profiler.summary_path)
-    return 1 if errors else 0
+    return (1 if errors else 0), profiler.summary_path
+
+
+def percentile(values: list[int], pct: float) -> int | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    index = max(0, min(len(ordered) - 1, math.ceil((pct / 100) * len(ordered)) - 1))
+    return ordered[index]
+
+
+def aggregate_batch_cases(cases: list[dict[str, Any]]) -> dict[str, Any]:
+    metrics: dict[str, Any] = {}
+    for key in BATCH_METRIC_KEYS:
+        values = [value for case in cases if isinstance((value := case.get(key)), int)]
+        metrics[key] = {
+            "count": len(values),
+            "min": min(values) if values else None,
+            "p50": percentile(values, 50),
+            "p95": percentile(values, 95),
+            "max": max(values) if values else None,
+            "target": target_for_metric(key),
+        }
+    return metrics
+
+
+def target_for_metric(key: str) -> int | None:
+    if key == "live_first_from_local_ms":
+        return LIVE_FIRST_OUTPUT_TARGET_MS
+    if key == "durable_archive_local_to_hosted_ms":
+        return DURABLE_ARCHIVE_TARGET_MS
+    if key == "close_observed_ms":
+        return MANAGED_CLOSE_TARGET_MS
+    return None
+
+
+def write_batch_summary(
+    *,
+    batch_dir: Path,
+    batch_id: str,
+    child_runs: list[dict[str, Any]],
+    aggregate: dict[str, Any],
+) -> Path:
+    summary_path = batch_dir / "summary.md"
+    rows = [
+        "# Managed Session Propagation Batch",
+        "",
+        f"- Batch ID: `{batch_id}`",
+        f"- Runs: {len(child_runs)}",
+        f"- Generated: `{utc_now()}`",
+        "",
+        "## Metrics",
+        "",
+        "| Metric | Count | Min | P50 | P95 | Max | Target |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for key in BATCH_METRIC_KEYS:
+        item = aggregate.get(key) or {}
+        rows.append(
+            "| "
+            + " | ".join(
+                [
+                    f"`{key}`",
+                    str(item.get("count") or 0),
+                    format_optional_ms(item.get("min")),
+                    format_optional_ms(item.get("p50")),
+                    format_optional_ms(item.get("p95")),
+                    format_optional_ms(item.get("max")),
+                    format_optional_ms(item.get("target")),
+                ]
+            )
+            + " |"
+        )
+    rows.extend(
+        [
+            "",
+            "## Runs",
+            "",
+            "| Run | Verdict | Summary |",
+            "| --- | --- | --- |",
+        ]
+    )
+    for run in child_runs:
+        rows.append(
+            f"| `{run['run_id']}` | {run.get('verdict') or '-'} | `{run.get('summary_path')}` |"
+        )
+    summary_path.write_text("\n".join(rows) + "\n")
+    return summary_path
+
+
+def format_optional_ms(value: Any) -> str:
+    return "-" if value is None else str(value)
+
+
+def run_batch(args: argparse.Namespace) -> int:
+    if args.iterations < 1:
+        raise SystemExit("--iterations must be >= 1")
+    batch_id = args.run_id or slug_now()
+    batch_dir = Path(args.output_dir or DEFAULT_OUTPUT_ROOT / batch_id)
+    batch_dir.mkdir(parents=True, exist_ok=True)
+
+    child_runs: list[dict[str, Any]] = []
+    cases: list[dict[str, Any]] = []
+    exit_code = 0
+    for index in range(args.iterations):
+        child_args = Namespace(**vars(args))
+        child_args.iterations = 1
+        child_args.run_id = f"{batch_id}-i{index + 1:02d}"
+        child_args.output_dir = str(batch_dir / child_args.run_id)
+        code, summary_path = run_single(child_args)
+        exit_code = exit_code or code
+        metrics_path = Path(child_args.output_dir) / "metrics.json"
+        metrics = read_json(metrics_path) or {}
+        case = next(iter(metrics.get("cases") or []), {})
+        if case:
+            cases.append(case)
+        child_runs.append(
+            {
+                "run_id": child_args.run_id,
+                "summary_path": str(summary_path),
+                "metrics_path": str(metrics_path),
+                "exit_code": code,
+                "verdict": case.get("verdict") if case else "error",
+            }
+        )
+
+    aggregate = aggregate_batch_cases(cases)
+    batch_metrics_path = batch_dir / "batch-metrics.json"
+    batch_metrics_path.write_text(
+        json.dumps(
+            {
+                "schema_version": BATCH_METRICS_SCHEMA_VERSION,
+                "batch_id": batch_id,
+                "generated_at": utc_now(),
+                "profile": args.profile,
+                "profile_class": args.profile_class or profile_class_for(args.profile),
+                "iterations": args.iterations,
+                "runs": child_runs,
+                "aggregate": aggregate,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    summary_path = write_batch_summary(
+        batch_dir=batch_dir,
+        batch_id=batch_id,
+        child_runs=child_runs,
+        aggregate=aggregate,
+    )
+    print(summary_path)
+    return exit_code
+
+
+def main(argv: list[str]) -> int:
+    args = parse_args(argv)
+    if args.iterations > 1:
+        return run_batch(args)
+    code, _summary_path = run_single(args)
+    return code
 
 
 if __name__ == "__main__":
