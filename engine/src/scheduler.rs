@@ -198,6 +198,15 @@ impl PathScheduler {
         None
     }
 
+    /// Return live work only. Used while a foreground session is active so
+    /// reconciliation and retry work cannot steal launch slots between polls.
+    pub fn pop_launchable_live(&mut self) -> Option<PathJob> {
+        if self.in_flight_count(WorkPriority::Live) < LIVE_IN_FLIGHT_CAP {
+            return self.pop_ready_queue(WorkPriority::Live);
+        }
+        None
+    }
+
     fn pop_urgent_overflow(&mut self) -> Option<PathJob> {
         if self.in_flight.len() >= self.max_in_flight + URGENT_OVERFLOW_CAP {
             return None;
@@ -602,6 +611,41 @@ mod tests {
         let live = scheduler.pop_launchable().unwrap();
         assert_eq!(live.priority, WorkPriority::Live);
         assert_eq!(live.path, PathBuf::from("/tmp/live.jsonl"));
+    }
+
+    #[test]
+    fn test_live_only_launch_skips_background_work() {
+        let mut scheduler = PathScheduler::new(4);
+        scheduler.enqueue(
+            PathBuf::from("/tmp/scan.jsonl"),
+            "codex",
+            WorkPriority::Scan,
+        );
+        scheduler.enqueue(
+            PathBuf::from("/tmp/watch.jsonl"),
+            "codex",
+            WorkPriority::Watch,
+        );
+
+        assert!(scheduler.pop_launchable_live().is_none());
+
+        scheduler.enqueue(
+            PathBuf::from("/tmp/live.jsonl"),
+            "codex",
+            WorkPriority::Live,
+        );
+        let live = scheduler.pop_launchable_live().unwrap();
+        assert_eq!(live.priority, WorkPriority::Live);
+        assert_eq!(live.path, PathBuf::from("/tmp/live.jsonl"));
+
+        assert_eq!(
+            scheduler.pop_launchable().unwrap().priority,
+            WorkPriority::Watch
+        );
+        assert_eq!(
+            scheduler.pop_launchable().unwrap().priority,
+            WorkPriority::Scan
+        );
     }
 
     #[test]
