@@ -29,6 +29,51 @@ archive ingest before showing managed-session truth.
 Honest degradation means failure modes are labeled correctly. SSH loss,
 terminal detach, process death, and machine offline are different facts.
 
+## Manifest Vocabulary
+
+The manifest intentionally freezes the strings that future CI and dogfood
+aggregation will group by.
+
+Statuses:
+
+- `required`: implemented path that can become a gate
+- `experimental`: measured and reported, not yet a hard gate
+- `undefined`: intentionally not promised
+
+Topologies:
+
+- `hosted_runtime_host`: Machine Agent on a user machine, Runtime Host in hosted Longhouse
+- `self_hosted_runtime_host`: Machine Agent on a user machine, Runtime Host on the user's always-on box
+- `local_runtime_host`: Machine Agent and Runtime Host on the same local machine
+
+Layers:
+
+- `provider_process`
+- `provider_transcript`
+- `machine_agent`
+- `hosted_db`
+- `hosted_api`
+- `timeline_sse`
+- `browser_card`
+
+Observers:
+
+- `managed_sessions_snapshot`
+- `unmanaged_session_bindings`
+- `process_scan_snapshot`
+- `machine_heartbeat`
+- `provider_transcript`
+- `claude_channel_state`
+- `timeline_api`
+- `timeline_sse`
+- `browser_card`
+- `hosted_db`
+- `pty_and_codex_bridge`
+
+Metric `legacy_aliases` entries exist only to bridge old artifact keys while
+the current profiler is being migrated. New metrics and reports should use the
+canonical metric IDs, not legacy aliases.
+
 ## Current Required Path
 
 `managed_codex_warm_live_graceful_close`
@@ -46,7 +91,9 @@ Current target budgets are in `config/session-propagation-sla.toml`. The
 important user-facing targets are:
 
 - warm live output local truth to browser paint: 500ms target, 1000ms alarm
+- warm close local truth to timeline SSE: 500ms target, 1000ms alarm
 - warm graceful close local truth to browser paint: 1000ms target, 2000ms alarm
+- warm close SSE to browser paint: 100ms target, 250ms alarm
 - durable archive local transcript to hosted events: 3000ms target, 30000ms alarm
 
 ## Experimental Paths

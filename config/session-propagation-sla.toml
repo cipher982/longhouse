@@ -21,7 +21,7 @@ profile_class = "warm_realtime"
 layer = "browser_card"
 target_ms = 500
 hard_alarm_ms = 1000
-aliases = ["live_first_from_local_ms"]
+legacy_aliases = ["live_first_from_local_ms"]
 description = "Warm browser paint after provider/local live-output truth is observed."
 
 [[metrics]]
@@ -33,13 +33,29 @@ hard_alarm_ms = 250
 description = "Browser reaction time after timeline SSE delivered the live-output update."
 
 [[metrics]]
+id = "warm_close_local_to_sse_ms"
+profile_class = "warm_realtime"
+layer = "timeline_sse"
+target_ms = 500
+hard_alarm_ms = 1000
+description = "Timeline SSE delivery after local managed shutdown truth is observed."
+
+[[metrics]]
 id = "warm_close_local_to_paint_ms"
 profile_class = "warm_realtime"
 layer = "browser_card"
 target_ms = 1000
 hard_alarm_ms = 2000
-aliases = ["close_observed_ms"]
+legacy_aliases = ["close_observed_ms"]
 description = "Warm browser paint after local managed shutdown truth is observed."
+
+[[metrics]]
+id = "warm_close_sse_to_paint_ms"
+profile_class = "warm_realtime"
+layer = "browser_card"
+target_ms = 100
+hard_alarm_ms = 250
+description = "Browser reaction time after timeline SSE delivered the close update."
 
 [[metrics]]
 id = "warm_close_local_to_db_ms"
@@ -75,10 +91,10 @@ description = "Card state update after process disappearance is proven by a comp
 
 [[cases]]
 id = "managed_codex_warm_live_graceful_close"
-case_id = "B1"
 status = "required"
 provider = "codex"
 control_path = "managed"
+topology = "hosted_runtime_host"
 profile = "warm-live"
 profile_class = "warm_realtime"
 launch = "longhouse codex --no-attach"
@@ -89,7 +105,9 @@ metrics = [
   "warm_session_created_to_card_paint_ms",
   "warm_live_output_local_to_paint_ms",
   "warm_live_output_sse_to_paint_ms",
+  "warm_close_local_to_sse_ms",
   "warm_close_local_to_paint_ms",
+  "warm_close_sse_to_paint_ms",
   "warm_close_local_to_db_ms",
   "durable_archive_local_to_hosted_ms",
 ]
@@ -97,15 +115,15 @@ notes = "Current optimized happy path. This is the first SLA candidate for relea
 
 [[cases]]
 id = "managed_claude_warm_live_graceful_close"
-case_id = "B2"
 status = "experimental"
 provider = "claude"
 control_path = "managed"
+topology = "hosted_runtime_host"
 profile = "warm-live"
 profile_class = "warm_realtime"
 launch = "longhouse claude"
 shutdown = "provider-supported Claude exit path"
-truth_source = "claude_channel"
+truth_source = "claude_native_channel"
 required_observers = ["managed_sessions_snapshot", "claude_channel_state", "timeline_sse", "browser_card", "hosted_db"]
 metrics = [
   "warm_session_created_to_card_paint_ms",
@@ -121,6 +139,7 @@ id = "managed_opencode_warm_lifecycle"
 status = "experimental"
 provider = "opencode"
 control_path = "managed"
+topology = "hosted_runtime_host"
 profile = "warm-close"
 profile_class = "warm_realtime"
 launch = "longhouse opencode"
@@ -132,10 +151,10 @@ notes = "Lifecycle only until send/interrupt control is a defined product contra
 
 [[cases]]
 id = "unmanaged_codex_direct_graceful_close"
-case_id = "A1"
 status = "experimental"
 provider = "codex"
 control_path = "unmanaged"
+topology = "hosted_runtime_host"
 profile = "baseline"
 profile_class = "durable_archive"
 launch = "codex exec"
@@ -147,10 +166,10 @@ notes = "Compatibility/import path. It should be truthful, but not terminal-clas
 
 [[cases]]
 id = "unmanaged_claude_direct_graceful_close"
-case_id = "A2"
 status = "experimental"
 provider = "claude"
 control_path = "unmanaged"
+topology = "hosted_runtime_host"
 profile = "baseline"
 profile_class = "durable_archive"
 launch = "claude"
@@ -165,6 +184,7 @@ id = "managed_codex_ctrl_c"
 status = "experimental"
 provider = "codex"
 control_path = "managed"
+topology = "hosted_runtime_host"
 profile = "honest-degradation"
 profile_class = "honest_degradation"
 launch = "longhouse codex attached TUI"
@@ -175,10 +195,26 @@ metrics = ["warm_close_local_to_paint_ms", "terminal_detached_to_card_state_ms"]
 notes = "Requires a real PTY. Ctrl-C can interrupt a turn or close a process depending on provider state."
 
 [[cases]]
+id = "managed_codex_graceful_close_during_active_turn"
+status = "experimental"
+provider = "codex"
+control_path = "managed"
+topology = "hosted_runtime_host"
+profile = "warm-close"
+profile_class = "warm_realtime"
+launch = "longhouse codex attached TUI"
+shutdown = "graceful bridge stop while provider turn is active"
+truth_source = "codex_bridge"
+required_observers = ["managed_sessions_snapshot", "timeline_sse", "browser_card", "hosted_db"]
+metrics = ["warm_close_local_to_sse_ms", "warm_close_local_to_paint_ms", "warm_close_sse_to_paint_ms"]
+notes = "Validates that active-turn shutdown does not leave stale working state on the card."
+
+[[cases]]
 id = "managed_codex_ssh_disconnect"
 status = "experimental"
 provider = "codex"
 control_path = "managed"
+topology = "hosted_runtime_host"
 profile = "honest-degradation"
 profile_class = "honest_degradation"
 launch = "longhouse codex over SSH"
@@ -193,6 +229,7 @@ id = "managed_codex_provider_kill"
 status = "experimental"
 provider = "codex"
 control_path = "managed"
+topology = "hosted_runtime_host"
 profile = "honest-degradation"
 profile_class = "honest_degradation"
 launch = "longhouse codex attached TUI"
@@ -207,6 +244,7 @@ id = "unmanaged_live_send"
 status = "undefined"
 provider = "all"
 control_path = "unmanaged"
+topology = "hosted_runtime_host"
 profile = "none"
 profile_class = "fidelity"
 launch = "bare provider CLI"
@@ -221,6 +259,7 @@ id = "opencode_remote_send"
 status = "undefined"
 provider = "opencode"
 control_path = "managed"
+topology = "hosted_runtime_host"
 profile = "none"
 profile_class = "fidelity"
 launch = "longhouse opencode"
@@ -229,3 +268,18 @@ truth_source = "none"
 required_observers = []
 metrics = []
 notes = "Remote send/interrupt is not a defined OpenCode product contract yet."
+
+[[cases]]
+id = "ios_timeline_realtime_propagation"
+status = "undefined"
+provider = "all"
+control_path = "managed"
+topology = "hosted_runtime_host"
+profile = "none"
+profile_class = "fidelity"
+launch = "native iOS client"
+shutdown = "not applicable"
+truth_source = "none"
+required_observers = []
+metrics = []
+notes = "iOS is a first-class client, but iOS realtime SLA is not promised until web timeline tracking is boring."
