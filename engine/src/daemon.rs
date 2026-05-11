@@ -1388,7 +1388,17 @@ fn schedule_transcript_catchup(
         // should enter the immediate live lane.
         let wake_is_turn_start =
             observation_source == "wake_socket" && wake_reason.as_deref() == Some("turn_started");
-        if !wake_is_turn_start && !transcript_catchups.iter().any(|item| item.path == path) {
+        if wake_is_turn_start {
+            return;
+        }
+
+        if observation_source == "wake_socket" {
+            transcript_catchups.retain(|item| item.path != path);
+        } else if transcript_catchups.iter().any(|item| item.path == path) {
+            return;
+        }
+
+        {
             transcript_catchups.push(TranscriptCatchup {
                 due_at: now,
                 path,
@@ -2397,6 +2407,91 @@ mod tests {
         assert_eq!(job.path, ready.path());
         assert_eq!(job.priority, WorkPriority::Live);
         assert_eq!(job.observation.source, "outbox_signal");
+    }
+
+    #[test]
+    fn test_wake_socket_catchup_replaces_pending_outbox_catchup() {
+        let transcript = tempfile::NamedTempFile::new().unwrap();
+        let now = Instant::now();
+        let mut catchups = vec![TranscriptCatchup {
+            due_at: now + Duration::from_secs(30),
+            path: transcript.path().to_path_buf(),
+            provider: "codex",
+            observation_source: "outbox_signal",
+            observed_at_ms: 100,
+            wake_received_at_ms: None,
+            session_id: None,
+            turn_id: None,
+            wake_reason: None,
+            file_len_hint: None,
+        }];
+        let mut active_polls = HashMap::new();
+
+        schedule_transcript_catchup(
+            &mut catchups,
+            &mut active_polls,
+            transcript.path().to_path_buf(),
+            "codex",
+            "running",
+            "wake_socket",
+            200,
+            Some(205),
+            true,
+            Some("session-123".to_string()),
+            Some("turn-123".to_string()),
+            Some("progress".to_string()),
+            Some(456),
+        );
+
+        assert_eq!(catchups.len(), 1);
+        assert_eq!(catchups[0].observation_source, "wake_socket");
+        assert_eq!(catchups[0].observed_at_ms, 200);
+        assert_eq!(catchups[0].wake_received_at_ms, Some(205));
+        assert_eq!(catchups[0].session_id.as_deref(), Some("session-123"));
+        assert_eq!(catchups[0].turn_id.as_deref(), Some("turn-123"));
+        assert_eq!(catchups[0].wake_reason.as_deref(), Some("progress"));
+        assert_eq!(catchups[0].file_len_hint, Some(456));
+    }
+
+    #[test]
+    fn test_outbox_catchup_does_not_replace_pending_wake_socket_catchup() {
+        let transcript = tempfile::NamedTempFile::new().unwrap();
+        let now = Instant::now();
+        let mut catchups = vec![TranscriptCatchup {
+            due_at: now,
+            path: transcript.path().to_path_buf(),
+            provider: "codex",
+            observation_source: "wake_socket",
+            observed_at_ms: 100,
+            wake_received_at_ms: Some(105),
+            session_id: Some("session-123".to_string()),
+            turn_id: Some("turn-123".to_string()),
+            wake_reason: Some("progress".to_string()),
+            file_len_hint: Some(456),
+        }];
+        let mut active_polls = HashMap::new();
+
+        schedule_transcript_catchup(
+            &mut catchups,
+            &mut active_polls,
+            transcript.path().to_path_buf(),
+            "codex",
+            "running",
+            "outbox_signal",
+            200,
+            None,
+            true,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(catchups.len(), 1);
+        assert_eq!(catchups[0].observation_source, "wake_socket");
+        assert_eq!(catchups[0].observed_at_ms, 100);
+        assert_eq!(catchups[0].session_id.as_deref(), Some("session-123"));
+        assert_eq!(catchups[0].file_len_hint, Some(456));
     }
 
     #[test]

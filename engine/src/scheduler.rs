@@ -155,7 +155,15 @@ impl PathScheduler {
 
         if let Some(in_flight) = self.in_flight.get_mut(&path) {
             in_flight.rerun_priority = merge_priority(in_flight.rerun_priority, Some(priority));
-            in_flight.rerun_observation = Some(observation);
+            match in_flight.rerun_observation.as_mut() {
+                Some(current) if should_replace_observation(current, &observation) => {
+                    *current = observation;
+                }
+                None => {
+                    in_flight.rerun_observation = Some(observation);
+                }
+                Some(_) => {}
+            }
             return;
         }
 
@@ -426,6 +434,86 @@ mod tests {
         assert_eq!(rerun.priority, WorkPriority::Watch);
         assert_eq!(rerun.observation.source, "fsevent");
         assert_eq!(rerun.observation.observed_at_ms, 200);
+    }
+
+    #[test]
+    fn test_inflight_path_keeps_wake_observation_for_rerun() {
+        let mut scheduler = PathScheduler::new(1);
+        let path = PathBuf::from("/tmp/a.jsonl");
+
+        scheduler.enqueue_observed(
+            path.clone(),
+            "codex",
+            WorkPriority::Live,
+            "outbox_signal",
+            100,
+        );
+        let _ = scheduler.pop_launchable().unwrap();
+
+        scheduler.enqueue_observation(
+            path.clone(),
+            "codex",
+            WorkPriority::Live,
+            ObservationTrace {
+                source: "wake_socket",
+                observed_at_ms: 110,
+                wake_received_at_ms: Some(111),
+                enqueued_at_ms: 0,
+                session_id: Some("session-123".to_string()),
+                turn_id: Some("turn-123".to_string()),
+                wake_reason: Some("turn_completed".to_string()),
+                file_len_hint: Some(456),
+            },
+        );
+        scheduler.complete(&path, None);
+
+        let rerun = scheduler.pop_launchable().unwrap();
+        assert_eq!(rerun.priority, WorkPriority::Live);
+        assert_eq!(rerun.observation.source, "wake_socket");
+        assert_eq!(rerun.observation.session_id.as_deref(), Some("session-123"));
+        assert_eq!(
+            rerun.observation.wake_reason.as_deref(),
+            Some("turn_completed")
+        );
+        assert_eq!(rerun.observation.file_len_hint, Some(456));
+    }
+
+    #[test]
+    fn test_inflight_path_preserves_wake_observation_over_outbox_rerun() {
+        let mut scheduler = PathScheduler::new(1);
+        let path = PathBuf::from("/tmp/a.jsonl");
+
+        scheduler.enqueue(path.clone(), "codex", WorkPriority::Live);
+        let _ = scheduler.pop_launchable().unwrap();
+
+        scheduler.enqueue_observation(
+            path.clone(),
+            "codex",
+            WorkPriority::Live,
+            ObservationTrace {
+                source: "wake_socket",
+                observed_at_ms: 110,
+                wake_received_at_ms: Some(111),
+                enqueued_at_ms: 0,
+                session_id: Some("session-123".to_string()),
+                turn_id: Some("turn-123".to_string()),
+                wake_reason: Some("progress".to_string()),
+                file_len_hint: Some(456),
+            },
+        );
+        scheduler.enqueue_observed(
+            path.clone(),
+            "codex",
+            WorkPriority::Live,
+            "outbox_signal",
+            120,
+        );
+        scheduler.complete(&path, None);
+
+        let rerun = scheduler.pop_launchable().unwrap();
+        assert_eq!(rerun.observation.source, "wake_socket");
+        assert_eq!(rerun.observation.session_id.as_deref(), Some("session-123"));
+        assert_eq!(rerun.observation.wake_reason.as_deref(), Some("progress"));
     }
 
     #[test]
