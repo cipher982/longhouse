@@ -85,14 +85,16 @@ impl ShipperClient {
 
     /// Ship a gzip-compressed payload. Handles 429 retries internally.
     pub async fn ship(&self, compressed_payload: Vec<u8>) -> ShipResult {
-        self.ship_with_trace(compressed_payload, None).await
+        self.ship_with_trace_and_timeout(compressed_payload, None, None)
+            .await
     }
 
-    /// Ship a compressed payload with an optional compact JSON timing trace.
-    pub async fn ship_with_trace(
+    /// Ship a compressed payload with an optional request timeout override.
+    pub async fn ship_with_trace_and_timeout(
         &self,
         compressed_payload: Vec<u8>,
         trace_header: Option<&str>,
+        request_timeout: Option<Duration>,
     ) -> ShipResult {
         let mut retries = 0u32;
         let mut backoff = self.base_backoff;
@@ -104,6 +106,9 @@ impl ShipperClient {
                 .body(compressed_payload.clone());
             if let Some(trace_header) = trace_header {
                 request = request.header(SHIP_TRACE_HEADER, trace_header);
+            }
+            if let Some(request_timeout) = request_timeout {
+                request = request.timeout(request_timeout);
             }
             let result = request.send().await;
 
