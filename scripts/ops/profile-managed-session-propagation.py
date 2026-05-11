@@ -1338,12 +1338,17 @@ except Exception as exc:
         self.write_snapshot(case_id, ownership, session_id, "post_launch")
 
         tui_log = self.output_dir / f"{session_id}-managed-tui.log"
-        remote_exec = (
-            f"LONGHOUSE_MANAGED_SESSION_ID={shlex.quote(session_id)} "
-            f"exec {shlex.quote('/opt/homebrew/bin/codex')} "
-            "-c check_for_update_on_startup=false "
-            f"--enable tui_app_server --remote {shlex.quote(ws_url)} --no-alt-screen"
-        )
+        tui_cmd = [
+            "/opt/homebrew/bin/codex",
+            "-c",
+            "check_for_update_on_startup=false",
+        ]
+        if self.args.codex_effort:
+            tui_cmd.extend(["-c", f"model_reasoning_effort={self.args.codex_effort}"])
+        if self.args.codex_model:
+            tui_cmd.extend(["--model", self.args.codex_model])
+        tui_cmd.extend(["--enable", "tui_app_server", "--remote", ws_url, "--no-alt-screen"])
+        remote_exec = f"LONGHOUSE_MANAGED_SESSION_ID={shlex.quote(session_id)} exec {shlex.join(tui_cmd)}"
         remote_cmd = (
             "stty rows 40 cols 120 2>/dev/null || true; "
             "export LINES=40 COLUMNS=120 TERM=${TERM:-xterm-256color}; "
@@ -3010,6 +3015,21 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help=(
             "Before managed runs, trust only the Longhouse hooks installed in "
             "~/.codex/hooks.json using Codex app-server's hooks/list and config/batchWrite APIs."
+        ),
+    )
+    parser.add_argument(
+        "--codex-model",
+        help=(
+            "Optional model override for the profiler's attached Codex TUI. "
+            "Use this to keep propagation probes deterministic without changing the user's normal Codex config."
+        ),
+    )
+    parser.add_argument(
+        "--codex-effort",
+        choices=["low", "medium", "high", "xhigh"],
+        help=(
+            "Optional model_reasoning_effort override for the profiler's attached Codex TUI. "
+            "Useful for measuring Longhouse propagation separately from provider thinking latency."
         ),
     )
     return parser.parse_args(argv)
