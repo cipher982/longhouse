@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 import zerg.dependencies.auth as auth_deps
 from zerg.auth.session_tokens import SESSION_COOKIE_NAME
+from zerg.database import db_session
 from zerg.database import get_db
 
 
@@ -36,18 +37,15 @@ def get_current_browser_user(request: Request, db: Session = Depends(get_db)):
     return user
 
 
-def require_current_browser_user_short_lived(request: Request, db: Session = Depends(get_db)) -> None:
+def require_current_browser_user_short_lived(request: Request) -> None:
     """Authenticate a browser stream without pinning a DB connection.
 
     FastAPI keeps generator dependencies alive until a streaming response ends.
-    Timeline SSE routes only need auth at connect time, so close the session
-    immediately after validating the cookie instead of holding it for the whole
-    EventSource lifetime.
+    Timeline SSE routes only need auth at connect time, so use an explicit
+    context-managed session instead of a dependency-managed one.
     """
-    try:
+    with db_session() as db:
         user = _get_browser_session_user(request, db)
-    finally:
-        db.close()
 
     if user is None:
         raise HTTPException(

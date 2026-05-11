@@ -784,7 +784,6 @@ def test_timeline_stream_rejects_non_threaded_query_contracts(tmp_path, query, s
                     sort=sort,
                     mode=mode,
                     context_mode="forensic",
-                    db=db,
                 )
             )
 
