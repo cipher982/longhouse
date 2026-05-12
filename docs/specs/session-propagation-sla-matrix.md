@@ -103,6 +103,14 @@ card paint. It is intentionally separate from the warm realtime SLA: cold load
 answers "does a newly opened timeline show current truth quickly?" rather than
 "did an already-open page update immediately?"
 
+This is a cold browser/SPA profile against a warm Runtime Host: the managed
+session was just created and closed, so server-side SQLite and reducer state may
+still be hot. That is intentional for the user-perceived fresh-page SLA. The
+profiler also reports `cold_timeline_card_to_close_paint_ms` as debug evidence.
+For an already-closed session, `0ms` is expected because the card and closed
+state should paint from the same initial DOM state. A non-zero value means the
+page briefly painted stale/non-closed truth before correcting itself.
+
 Current target budgets are in `config/session-propagation-sla.toml`. The
 important user-facing targets are:
 
