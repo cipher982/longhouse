@@ -161,6 +161,18 @@ Run required plus selected experimental paths repeatedly and compute p50/p95.
 Report warm realtime and durable archive verdicts separately even when they
 share one launch.
 
+The checked-in automation entrypoint is:
+
+```bash
+make session-propagation-sla
+```
+
+It wraps the required managed Codex warm realtime case with contaminated-run
+retries and writes artifacts under `artifacts/session-propagation-sla/`. Exit
+code `0` means pass, `1` means an SLA/tool failure, and `2` means the run was
+contaminated by infrastructure/runtime transport conditions and should be
+retried or bucketed separately.
+
 Release confidence:
 Run one hosted warm-live and one hosted warm-close probe. Gate only on gross
 fidelity failures until nightly distributions are boring.

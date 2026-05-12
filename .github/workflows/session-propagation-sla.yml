@@ -1,0 +1,125 @@
+name: Session Propagation SLA
+
+on:
+  schedule:
+    - cron: '17 11 * * *'
+  workflow_dispatch:
+    inputs:
+      attempts:
+        description: 'Profiler attempts; contaminated attempts retry'
+        required: false
+        default: '3'
+        type: string
+      subdomain:
+        description: 'Hosted instance subdomain'
+        required: false
+        default: 'david010'
+        type: string
+      project:
+        description: 'Longhouse project label'
+        required: false
+        default: 'zerg'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: session-propagation-sla-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  warm-realtime:
+    name: "managed-codex-warm-realtime"
+    runs-on: cube-deploy
+    timeout-minutes: 30
+    if: ${{ github.event_name != 'schedule' || vars.SESSION_PROPAGATION_SLA_ENABLED == 'true' }}
+    env:
+      SESSION_PROPAGATION_ATTEMPTS: ${{ inputs.attempts || '3' }}
+      SESSION_PROPAGATION_SUBDOMAIN: ${{ inputs.subdomain || 'david010' }}
+      SESSION_PROPAGATION_PROJECT: ${{ inputs.project || 'zerg' }}
+      SESSION_PROPAGATION_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
+      SESSION_PROPAGATION_OUTPUT_ROOT: ${{ github.workspace }}/artifacts/session-propagation-sla/gha-${{ github.run_id }}-${{ github.run_attempt }}
+      SESSION_PROPAGATION_CODEX_EFFORT: low
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Restore Bun download cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: longhouse-bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            longhouse-bun-${{ runner.os }}-
+
+      - name: Restore Playwright browser cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+          key: longhouse-playwright-${{ runner.os }}-${{ hashFiles('bun.lock', 'e2e/package.json') }}
+          restore-keys: |
+            longhouse-playwright-${{ runner.os }}-
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.2.20'
+
+      - name: Ensure make available
+        run: ./scripts/ci/ensure-make.sh
+
+      - name: Install JS deps
+        run: bun install --frozen-lockfile
+
+      - name: Install Playwright browser
+        run: cd e2e && bunx playwright install chromium
+
+      - name: Run session propagation SLA
+        id: profiler
+        run: |
+          set +e
+          ./scripts/ci/session-propagation-sla.sh
+          code=$?
+          set -e
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          if [[ "$code" == "1" ]]; then
+            exit 1
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          summary="$SESSION_PROPAGATION_OUTPUT_ROOT/summary.md"
+          {
+            echo "## Session Propagation SLA"
+            echo ""
+            echo "- Instance: \`$SESSION_PROPAGATION_SUBDOMAIN\`"
+            echo "- Project: \`$SESSION_PROPAGATION_PROJECT\`"
+            echo "- Exit code: \`${{ steps.profiler.outputs.exit_code || 'skipped' }}\`"
+            echo "- Commit: \`${{ github.sha }}\`"
+            echo ""
+            if [[ -f "$summary" ]]; then
+              cat "$summary"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload profiler artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: session-propagation-sla-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.SESSION_PROPAGATION_OUTPUT_ROOT }}
+          if-no-files-found: ignore
+          retention-days: 30
