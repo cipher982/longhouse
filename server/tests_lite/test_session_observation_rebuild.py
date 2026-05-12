@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -9,7 +10,9 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
+from typer.testing import CliRunner
 
+from zerg.cli.main import app as cli_app
 from zerg.database import get_db
 from zerg.database import initialize_database
 from zerg.database import make_engine
@@ -675,6 +678,62 @@ def test_session_observation_rebuild_preserves_tool_call_pairing_fields(tmp_path
             "tool_call_id": "toolu_rebuild",
         },
     ]
+
+
+def test_session_observation_rebuild_cli_restores_projection_rows(tmp_path):
+    db_url = f"sqlite:///{tmp_path / 'observation_rebuild_cli.db'}"
+    engine = make_engine(db_url)
+    initialize_database(engine)
+    SessionLocal = sessionmaker(bind=engine)
+    now = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)
+    source_path = "/tmp/cli-rebuild.jsonl"
+    raw_line = '{"type":"assistant","text":"restored by cli"}'
+
+    with SessionLocal() as db:
+        result = AgentsStore(db).ingest_session(
+            SessionIngest(
+                provider="claude",
+                environment="test",
+                project="observation-rebuild",
+                device_id="cinder",
+                cwd="/tmp/project",
+                started_at=now,
+                events=[
+                    EventIngest(
+                        role="assistant",
+                        content_text="restored by cli",
+                        timestamp=now + timedelta(seconds=1),
+                        source_path=source_path,
+                        source_offset=10,
+                        raw_json=raw_line,
+                    )
+                ],
+                source_lines=[SourceLineIngest(source_path=source_path, source_offset=10, raw_json=raw_line)],
+            )
+        )
+        session_id = result.session_id
+        _damage_session_metadata(db, session_id)
+        db.query(AgentEvent).filter(AgentEvent.session_id == session_id).delete(synchronize_session=False)
+        db.query(AgentSourceLine).filter(AgentSourceLine.session_id == session_id).delete(synchronize_session=False)
+        db.commit()
+
+    cli_result = CliRunner().invoke(cli_app, ["rebuild-session", str(session_id), "--database-url", db_url, "--json"])
+    assert cli_result.exit_code == 0, cli_result.output
+    payload = json.loads(cli_result.output)
+    assert payload["session_id"] == str(session_id)
+    assert payload["agent_events"] == 1
+    assert payload["source_lines"] == 1
+    assert payload["reducer_errors"] == []
+
+    with SessionLocal() as db:
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        events = _event_snapshot(db, session_id)
+        source_lines = _source_line_snapshot(db, session_id)
+
+    assert session.assistant_messages == 1
+    assert session.transcript_revision == 1
+    assert events[0]["content_text"] == "restored by cli"
+    assert source_lines[0]["raw_json"] == raw_line
 
 
 def test_session_observation_rebuild_preserves_rewind_branch_head_projection(tmp_path):
