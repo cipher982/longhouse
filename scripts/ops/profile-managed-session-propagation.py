@@ -778,6 +778,9 @@ def live_transcript_from_event(data):
     for candidate in candidates:
         if not isinstance(candidate, dict):
             continue
+        preview = candidate.get("transcript_preview")
+        if isinstance(preview, dict) and preview.get("text"):
+            return preview
         live = candidate.get("live_transcript")
         if isinstance(live, dict) and live.get("text"):
             return live
@@ -2902,6 +2905,7 @@ def compact_timeline(data: dict[str, Any]) -> dict[str, Any]:
                 "runtime_display",
                 "timeline_card",
                 "capabilities",
+                "transcript_preview",
                 "live_transcript",
             ]
         },
@@ -2914,6 +2918,7 @@ def compact_timeline(data: dict[str, Any]) -> dict[str, Any]:
                     "summary_title": (card.get("head") or {}).get("summary_title"),
                     "timeline_card": (card.get("head") or {}).get("timeline_card"),
                     "runtime_display": (card.get("head") or {}).get("runtime_display"),
+                    "transcript_preview": (card.get("head") or {}).get("transcript_preview"),
                     "live_transcript": (card.get("head") or {}).get("live_transcript"),
                 },
             }
@@ -2937,6 +2942,8 @@ def timeline_live_transcript_contains(data: dict[str, Any], nonce: str) -> bool:
 def timeline_live_transcripts(data: dict[str, Any]) -> list[dict[str, Any]]:
     transcripts: list[dict[str, Any]] = []
     detail = data.get("detail")
+    if isinstance(detail, dict) and isinstance(detail.get("transcript_preview"), dict):
+        transcripts.append(detail["transcript_preview"])
     if isinstance(detail, dict) and isinstance(detail.get("live_transcript"), dict):
         transcripts.append(detail["live_transcript"])
     for card in data.get("matches") or []:
@@ -2944,6 +2951,8 @@ def timeline_live_transcripts(data: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         for key in ("head", "detail", "root"):
             value = card.get(key)
+            if isinstance(value, dict) and isinstance(value.get("transcript_preview"), dict):
+                transcripts.append(value["transcript_preview"])
             if isinstance(value, dict) and isinstance(value.get("live_transcript"), dict):
                 transcripts.append(value["live_transcript"])
     return transcripts
