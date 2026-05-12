@@ -890,6 +890,7 @@ _lh_hosted_post_instance_action() {
   response_file="$(mktemp)"
   if [[ -n "$payload" ]]; then
     http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
+      --connect-timeout 10 --max-time "${LH_HOSTED_ACTION_MAX_TIME:-75}" \
       -X POST \
       -H "Content-Type: application/json" \
       -H "X-Admin-Token: ${CONTROL_PLANE_ADMIN_TOKEN}" \
@@ -897,6 +898,7 @@ _lh_hosted_post_instance_action() {
       "${CONTROL_PLANE_URL%/}/api/instances/${instance_id}/${action}")"
   else
     http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
+      --connect-timeout 10 --max-time "${LH_HOSTED_ACTION_MAX_TIME:-75}" \
       -X POST \
       -H "X-Admin-Token: ${CONTROL_PLANE_ADMIN_TOKEN}" \
       "${CONTROL_PLANE_URL%/}/api/instances/${instance_id}/${action}")"
