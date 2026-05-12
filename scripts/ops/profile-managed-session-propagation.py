@@ -49,6 +49,8 @@ HOSTED_RUNTIME_EVENT_LIMIT = 200
 METRICS_SCHEMA_VERSION = 3
 BATCH_METRICS_SCHEMA_VERSION = 2
 BATCH_METRIC_KEYS = (
+    "cold_timeline_navigation_to_card_paint_ms",
+    "cold_timeline_navigation_to_close_paint_ms",
     "warm_session_created_to_card_paint_ms",
     "warm_live_output_local_to_paint_ms",
     "warm_live_output_sse_to_paint_ms",
@@ -131,7 +133,16 @@ def managed_close_target_ms() -> int:
     return metric_target_ms(sla_manifest(), "close_observed_ms", 1_000) or 1_000
 
 
+def cold_timeline_card_target_ms() -> int:
+    return metric_target_ms(sla_manifest(), "cold_timeline_navigation_to_card_paint_ms", 2_000) or 2_000
+
+
+def cold_timeline_close_target_ms() -> int:
+    return metric_target_ms(sla_manifest(), "cold_timeline_navigation_to_close_paint_ms", 2_000) or 2_000
+
+
 DEFAULT_SLA_CASE_BY_PROFILE = {
+    "cold-timeline": "managed_codex_cold_timeline_closed",
     "warm-live": "managed_codex_warm_live_graceful_close",
 }
 
@@ -1197,6 +1208,7 @@ except Exception as exc:
         *,
         case_id: str,
         ownership: str,
+        observer_kind: str = "warm",
     ) -> None:
         token = self.browser_session_cookie()
         if not token:
@@ -1233,6 +1245,7 @@ except Exception as exc:
         assert proc.stderr is not None
 
         event_map = {
+            "navigation_started": "browser_ui_navigation_started",
             "ui_loaded": "browser_ui_loaded",
             "card_painted": "browser_timeline_card_painted",
             "preview_first_painted": "browser_transcript_preview_first_painted",
@@ -1247,6 +1260,15 @@ except Exception as exc:
             "preview_nonce_painted_timeout": "browser_transcript_preview_nonce_painted_timeout",
             "close_painted_timeout": "browser_close_card_painted_timeout",
         }
+        if observer_kind == "cold":
+            event_map = {
+                key: value.replace("browser_", "browser_cold_", 1)
+                for key, value in event_map.items()
+            }
+            timeout_map = {
+                key: value.replace("browser_", "browser_cold_", 1)
+                for key, value in timeout_map.items()
+            }
         for line in proc.stdout:
             data = safe_json_loads(line.strip())
             if not isinstance(data, dict):
@@ -1254,7 +1276,7 @@ except Exception as exc:
             kind = str(data.get("kind") or "")
             event = event_map.get(kind) or timeout_map.get(kind)
             if event is None and kind in {"console", "page_error", "error"}:
-                event = f"browser_ui_{kind}"
+                event = f"browser_{'cold_' if observer_kind == 'cold' else ''}ui_{kind}"
             if event is None:
                 continue
             self.observe(
@@ -1266,7 +1288,7 @@ except Exception as exc:
                 session_id=session_id,
                 payload=data,
             )
-            if event == "browser_close_card_painted":
+            if event in {"browser_close_card_painted", "browser_cold_close_card_painted"}:
                 break
 
         try:
@@ -1336,6 +1358,7 @@ except Exception as exc:
         *,
         case_id: str,
         ownership: str,
+        observer_kind: str = "warm",
     ) -> threading.Thread | None:
         if self.args.skip_browser_ui:
             return None
@@ -1345,8 +1368,9 @@ except Exception as exc:
                 nonce,
                 case_id=case_id,
                 ownership=ownership,
+                observer_kind=observer_kind,
             ),
-            name=f"browser-ui-{session_id}",
+            name=f"browser-{observer_kind}-ui-{session_id}",
             daemon=True,
         )
         thread.start()
@@ -1423,12 +1447,14 @@ except Exception as exc:
             provider_session_id=session_id,
             payload={"ws_url": ws_url},
         )
-        browser_ui = self.start_browser_ui_observer(
-            session_id,
-            nonce,
-            case_id=case_id,
-            ownership=ownership,
-        )
+        browser_ui = None
+        if self.args.profile != "cold-timeline":
+            browser_ui = self.start_browser_ui_observer(
+                session_id,
+                nonce,
+                case_id=case_id,
+                ownership=ownership,
+            )
         self.poll_timeline_session(
             session_id,
             case_id=case_id,
@@ -1536,18 +1562,21 @@ except Exception as exc:
                 "precondition": precondition,
             }
 
-        timeline_live_poll = self.start_timeline_live_poll(
-            session_id,
-            nonce,
-            case_id=case_id,
-            ownership=ownership,
-        )
-        timeline_live_sse = self.start_timeline_live_sse(
-            session_id,
-            nonce,
-            case_id=case_id,
-            ownership=ownership,
-        )
+        timeline_live_poll = None
+        timeline_live_sse = None
+        if self.args.profile != "cold-timeline":
+            timeline_live_poll = self.start_timeline_live_poll(
+                session_id,
+                nonce,
+                case_id=case_id,
+                ownership=ownership,
+            )
+            timeline_live_sse = self.start_timeline_live_sse(
+                session_id,
+                nonce,
+                case_id=case_id,
+                ownership=ownership,
+            )
         if self.args.profile == "warm-live":
             browser_ready = self.wait_for_observation(
                 case_id,
@@ -1669,8 +1698,10 @@ except Exception as exc:
                 timeout=180,
                 interval=0.5,
             )
-        timeline_live_poll.join(timeout=95)
-        timeline_live_sse.join(timeout=95)
+        if timeline_live_poll is not None:
+            timeline_live_poll.join(timeout=95)
+        if timeline_live_sse is not None:
+            timeline_live_sse.join(timeout=95)
         self.write_snapshot(case_id, ownership, session_id, "post_response")
 
         timeline_close_sse = self.start_timeline_close_sse(
@@ -1720,6 +1751,14 @@ except Exception as exc:
             interval=0.25,
         )
         timeline_close_sse.join(timeout=12)
+        if self.args.profile == "cold-timeline":
+            browser_ui = self.start_browser_ui_observer(
+                session_id,
+                nonce,
+                case_id=case_id,
+                ownership=ownership,
+                observer_kind="cold",
+            )
         if browser_ui is not None:
             browser_ui.join(timeout=150)
         self.write_snapshot(case_id, ownership, session_id, "post_shutdown")
@@ -2059,6 +2098,13 @@ except Exception as exc:
                 "warm_close_local_to_db_ms",
             )
         )
+        requires_cold = any(
+            metric in active_metrics
+            for metric in (
+                "cold_timeline_navigation_to_card_paint_ms",
+                "cold_timeline_navigation_to_close_paint_ms",
+            )
+        )
         requires_durable = not active_metrics or "durable_archive_local_to_hosted_ms" in active_metrics
         hosted = self.hosted_db_direct(session_id) or {}
         session = hosted.get("session") or {}
@@ -2256,6 +2302,24 @@ except Exception as exc:
             if close_sse_ready_before_shutdown
             else None
         )
+        cold_card_latency = self.event_delta_ms(
+            case_id,
+            session_id,
+            "browser_cold_ui_navigation_started",
+            "browser_cold_timeline_card_painted",
+        )
+        cold_close_latency = self.event_delta_ms(
+            case_id,
+            session_id,
+            "browser_cold_ui_navigation_started",
+            "browser_cold_close_card_painted",
+        )
+        cold_card_to_close_latency = self.event_delta_ms(
+            case_id,
+            session_id,
+            "browser_cold_timeline_card_painted",
+            "browser_cold_close_card_painted",
+        )
         close_latency = (
             close_browser_latency
             if close_browser_latency is not None
@@ -2296,6 +2360,21 @@ except Exception as exc:
             "warm_close_local_to_sse_ms": close_sse_latency,
             "warm_close_local_to_paint_ms": close_latency,
             "warm_close_sse_to_paint_ms": close_browser_after_sse_latency,
+            "cold_timeline_navigation_to_card_paint_ms": cold_card_latency,
+            "cold_timeline_navigation_to_close_paint_ms": cold_close_latency,
+            "cold_timeline_card_to_close_paint_ms": cold_card_to_close_latency,
+            "cold_timeline_card_target_ms": cold_timeline_card_target_ms(),
+            "cold_timeline_close_target_ms": cold_timeline_close_target_ms(),
+            "cold_timeline_card_pass": (
+                cold_card_latency <= cold_timeline_card_target_ms()
+                if cold_card_latency is not None
+                else None
+            ),
+            "cold_timeline_close_pass": (
+                cold_close_latency <= cold_timeline_close_target_ms()
+                if cold_close_latency is not None
+                else None
+            ),
             "browser_timeline_card_from_session_id_ms": browser_card_latency,
             "browser_live_first_from_prompt_ms": browser_live_first_latency,
             "browser_live_tail_from_prompt_ms": browser_live_full_latency,
@@ -2393,6 +2472,8 @@ except Exception as exc:
             metrics["live_first_pass"] = live_first_from_local_latency <= live_first_output_target_ms()
 
         live_ui = "live_first=missing"
+        if requires_cold and not requires_live:
+            live_ui = "live_first=not_applicable"
         if live_first_from_local_latency is not None:
             live_state = (
                 "pass"
@@ -2408,6 +2489,27 @@ except Exception as exc:
             )
             if live_full_from_local_latency is not None:
                 live_ui += f" live_tail_non_slo_from_local={live_full_from_local_latency}ms"
+
+        cold_note = "cold=not_run"
+        if requires_cold:
+            cold_parts = []
+            if cold_card_latency is not None:
+                card_state = "pass" if cold_card_latency <= cold_timeline_card_target_ms() else "slow"
+                cold_parts.append(
+                    f"card={card_state} nav_to_card={cold_card_latency}ms target={cold_timeline_card_target_ms()}ms"
+                )
+            else:
+                cold_parts.append("card=missing")
+            if cold_close_latency is not None:
+                close_state = "pass" if cold_close_latency <= cold_timeline_close_target_ms() else "slow"
+                cold_parts.append(
+                    f"close={close_state} nav_to_close={cold_close_latency}ms target={cold_timeline_close_target_ms()}ms"
+                )
+            else:
+                cold_parts.append("close=missing")
+            if cold_card_to_close_latency is not None:
+                cold_parts.append(f"card_to_close={cold_card_to_close_latency}ms")
+            cold_note = "cold=" + ",".join(cold_parts)
 
         transcript = "synced" if contains else "missing"
         if transcript_latency is not None:
@@ -2559,11 +2661,18 @@ except Exception as exc:
             return "provider_timeout", metrics["notes"], metrics
         if transport_failure is not None and (
             (requires_live and metrics["live_first_pass"] is not True)
+            or (
+                requires_cold
+                and (
+                    metrics["cold_timeline_card_pass"] is not True
+                    or metrics["cold_timeline_close_pass"] is not True
+                )
+            )
             or (requires_durable and not contains)
         ):
             metrics["verdict"] = "contaminated"
             metrics["notes"] = (
-                f"{live_ui}; transcript={transcript}; {close_note}; "
+                f"{live_ui}; {cold_note}; transcript={transcript}; {close_note}; "
                 f"transport_failure={transport_failure}; ownership={ownership}, transport={transport}"
             )
             return "contaminated", metrics["notes"], metrics
@@ -2577,6 +2686,18 @@ except Exception as exc:
             metrics["verdict"] = "fail"
             metrics["notes"] = f"{live_ui}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
             return "fail", metrics["notes"], metrics
+        if requires_cold and (
+            metrics["cold_timeline_card_pass"] is not True
+            or metrics["cold_timeline_close_pass"] is not True
+        ):
+            verdict = (
+                "missing"
+                if cold_card_latency is None or cold_close_latency is None
+                else "slow"
+            )
+            metrics["verdict"] = verdict
+            metrics["notes"] = f"{live_ui}; {cold_note}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
+            return verdict, metrics["notes"], metrics
         if requires_close and not closed:
             phase = runtime.get("phase") or runtime.get("terminal_state") or "-"
             if transport_failure is not None:
@@ -2609,7 +2730,8 @@ except Exception as exc:
             metrics["notes"] = f"{live_ui}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
             return "slow", metrics["notes"], metrics
         metrics["verdict"] = "pass"
-        metrics["notes"] = f"{live_ui}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
+        extra = f"; {cold_note}" if requires_cold else ""
+        metrics["notes"] = f"{live_ui}{extra}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
         return "pass", metrics["notes"], metrics
 
     def event_delta_ms(self, case_id: str, session_id: str, start_event: str, end_event: str) -> int | None:
@@ -2774,6 +2896,8 @@ def parse_remote_target(text: str) -> str | None:
 
 
 def profile_class_for(profile: str) -> str:
+    if profile == "cold-timeline":
+        return "cold_timeline"
     if profile == "warm-live":
         return "warm_realtime"
     return "warm_realtime"
@@ -3374,9 +3498,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--profile",
-        choices=["baseline", "warm-live"],
+        choices=["baseline", "cold-timeline", "warm-live"],
         default="baseline",
-        help="Profiler scenario to run. warm-live runs only the managed Codex warm live-output path.",
+        help="Profiler scenario to run. warm-live measures an already-open timeline; cold-timeline opens the browser after session truth exists.",
     )
     parser.add_argument("--provider", choices=["codex"], default="codex")
     parser.add_argument("--ownership", choices=["managed", "unmanaged", "all"], default="all")
@@ -3441,9 +3565,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def normalize_args(args: argparse.Namespace) -> None:
-    if args.profile == "warm-live":
+    if args.profile in {"cold-timeline", "warm-live"}:
         if args.skip_browser_ui:
-            raise SystemExit("--profile warm-live requires the browser UI observer")
+            raise SystemExit(f"--profile {args.profile} requires the browser UI observer")
         args.ownership = "managed"
         args.skip_unmanaged = True
 

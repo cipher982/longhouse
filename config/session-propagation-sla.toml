@@ -16,6 +16,22 @@ hard_alarm_ms = 1000
 description = "Warm timeline card paint after a newly launched session is known locally."
 
 [[metrics]]
+id = "cold_timeline_navigation_to_card_paint_ms"
+profile_class = "cold_timeline"
+layer = "browser_card"
+target_ms = 2000
+hard_alarm_ms = 4000
+description = "Fresh timeline page navigation to target session card paint after truth already exists."
+
+[[metrics]]
+id = "cold_timeline_navigation_to_close_paint_ms"
+profile_class = "cold_timeline"
+layer = "browser_card"
+target_ms = 2000
+hard_alarm_ms = 4000
+description = "Fresh timeline page navigation to closed-state card paint after managed shutdown truth already exists."
+
+[[metrics]]
 id = "warm_live_output_local_to_paint_ms"
 profile_class = "warm_realtime"
 layer = "browser_card"
@@ -111,6 +127,24 @@ metrics = [
   "warm_close_local_to_db_ms",
 ]
 notes = "Current optimized happy path for already-open timeline realtime truth. Durable archive is tracked as a separate case."
+
+[[cases]]
+id = "managed_codex_cold_timeline_closed"
+status = "experimental"
+provider = "codex"
+control_path = "managed"
+topology = "hosted_runtime_host"
+profile = "cold-timeline"
+profile_class = "cold_timeline"
+launch = "longhouse codex --no-attach"
+shutdown = "longhouse-engine codex-bridge stop before fresh browser navigation"
+truth_source = "hosted_runtime_state"
+required_observers = ["browser_card", "hosted_db"]
+metrics = [
+  "cold_timeline_navigation_to_card_paint_ms",
+  "cold_timeline_navigation_to_close_paint_ms",
+]
+notes = "Fresh page-load truth after a managed Codex session has already closed. This is not the realtime already-open page SLA."
 
 [[cases]]
 id = "managed_codex_durable_archive"
