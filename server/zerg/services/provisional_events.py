@@ -120,8 +120,11 @@ def materialize_live_transcript_event(
         existing_seq = existing.provisional_seq
         if seq is not None and existing_seq is not None and seq < existing_seq:
             return existing
-        if existing.provisional_state != PROVISIONAL_ACTIVE and seq == existing_seq:
+        if seq is None and existing_seq is not None:
             return existing
+        if existing.provisional_state in {PROVISIONAL_RECONCILED, PROVISIONAL_SUPERSEDED}:
+            return existing
+        existing.branch_id = _get_head_branch_id(db, session_id)
         existing.role = "assistant"
         existing.content_text = text
         existing.timestamp = timestamp

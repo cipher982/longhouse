@@ -480,6 +480,45 @@ def test_timeline_cards_mark_old_unsuperseded_live_transcript_stale(tmp_path):
     assert preview.stale_reason == "freshness_window_expired"
 
 
+def test_timeline_cards_mark_preview_stale_when_durable_activity_is_newer(tmp_path):
+    factory = _make_db(tmp_path, "codex_live_transcript_durable_newer.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            provider="codex",
+            project="codex-live-overlay-durable-newer",
+            started_at=now - timedelta(minutes=10),
+            execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
+            managed_transport="codex_app_server",
+        )
+        _ingest_live_transcript(
+            db,
+            session_id=session.id,
+            occurred_at=now - timedelta(seconds=30),
+            text="older bridge preview",
+            seq=2,
+        )
+        session.last_activity_at = now - timedelta(seconds=5)
+        db.commit()
+
+        cards = build_timeline_cards_from_thread_rows(
+            db=db,
+            thread_rows=((str(session.thread_root_session_id or session.id), str(session.id), now),),
+        )
+    finally:
+        db.close()
+
+    assert cards[0].head.live_transcript is None
+    preview = cards[0].head.transcript_preview
+    assert preview is not None
+    assert preview.text == "older bridge preview"
+    assert preview.is_stale is True
+    assert preview.stale_reason == "superseded_by_durable"
+
+
 def test_sessions_list_marks_old_open_session_idle_without_live_signal(tmp_path):
     factory = _make_db(tmp_path, "open_idle.db")
     now = datetime.now(timezone.utc)

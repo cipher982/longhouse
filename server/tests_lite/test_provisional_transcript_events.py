@@ -182,6 +182,113 @@ def test_durable_ingest_reconciles_matching_provisional_event(tmp_path):
     assert [event.id for event in visible] == [rows[1].id]
 
 
+def test_late_live_snapshot_does_not_reactivate_reconciled_provisional_event(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "provisional_reconcile_late_live.db")
+    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+    source_path = "/tmp/codex-rollout.jsonl"
+    assistant_line = '{"type":"response_item","payload":{"type":"message","role":"assistant"}}'
+
+    with SessionLocal() as db:
+        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
+        ingest_runtime_events(
+            db,
+            [
+                _live_event(
+                    session_id=session.id,
+                    occurred_at=now,
+                    seq=3,
+                    live_text="hello world",
+                    turn_completed=True,
+                )
+            ],
+        )
+        db.commit()
+
+        AgentsStore(db).ingest_session(
+            SessionIngest(
+                id=session.id,
+                provider="codex",
+                environment="test",
+                project="provisional-events",
+                started_at=now - timedelta(minutes=1),
+                events=[
+                    EventIngest(
+                        role="assistant",
+                        content_text="hello world",
+                        timestamp=now + timedelta(seconds=2),
+                        source_path=source_path,
+                        source_offset=100,
+                        raw_json=assistant_line,
+                    )
+                ],
+                source_lines=[
+                    SourceLineIngest(source_path=source_path, source_offset=100, raw_json=assistant_line),
+                ],
+            )
+        )
+        db.commit()
+
+        ingest_runtime_events(
+            db,
+            [
+                _live_event(
+                    session_id=session.id,
+                    occurred_at=now - timedelta(seconds=1),
+                    seq=4,
+                    live_text="stale live text after durable",
+                )
+            ],
+        )
+        db.commit()
+
+        rows = db.query(AgentEvent).filter(AgentEvent.session_id == session.id).order_by(AgentEvent.id.asc()).all()
+        visible = AgentsStore(db).get_session_events(session.id)
+
+    assert [row.event_origin for row in rows] == ["live_provisional", "durable"]
+    assert rows[0].provisional_state == "reconciled"
+    assert rows[0].reconciled_event_id == rows[1].id
+    assert rows[0].content_text == "hello world"
+    assert [event.id for event in visible] == [rows[1].id]
+
+
+def test_null_seq_live_snapshot_does_not_replace_known_newer_snapshot(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "provisional_null_seq.db")
+    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
+        ingest_runtime_events(
+            db,
+            [
+                _live_event(session_id=session.id, occurred_at=now, seq=5, live_text="newer text"),
+                RuntimeEventIngest(
+                    runtime_key=f"codex:{session.id}",
+                    session_id=session.id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="codex_bridge_live",
+                    kind="progress_signal",
+                    occurred_at=now + timedelta(milliseconds=10),
+                    dedupe_key=f"bridge:live:{session.id}:thread-1:turn-1:null",
+                    payload={
+                        "progress_kind": "bridge_live_transcript_delta",
+                        "thread_id": "thread-1",
+                        "turn_id": "turn-1",
+                        "method": "item/agentMessage/delta",
+                        "live_text": "unknown older text",
+                    },
+                ),
+            ],
+        )
+        db.commit()
+
+        row = db.query(AgentEvent).filter(AgentEvent.session_id == session.id).one()
+
+    assert row.provisional_state == "active"
+    assert row.provisional_seq == 5
+    assert row.content_text == "newer text"
+
+
 def test_durable_ingest_supersedes_unmatched_older_provisional_event(tmp_path):
     SessionLocal = _make_sessionmaker(tmp_path, "provisional_supersede.db")
     now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
@@ -302,7 +409,7 @@ def test_cross_session_search_ignores_provisional_only_text(tmp_path):
     assert [session.id for session in durable_sessions] == [session.id]
 
 
-def test_terminal_signal_supersedes_active_provisional_event(tmp_path):
+def test_closed_terminal_signal_supersedes_active_provisional_event(tmp_path):
     SessionLocal = _make_sessionmaker(tmp_path, "provisional_terminal.db")
     now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
 
@@ -332,7 +439,7 @@ def test_terminal_signal_supersedes_active_provisional_event(tmp_path):
                     occurred_at=now + timedelta(seconds=10),
                     dedupe_key=f"bridge:terminal:{session.id}:1",
                     payload={
-                        "terminal_state": "session_ended",
+                        "terminal_state": "process_gone",
                         "terminal_reason": "bridge_stop",
                         "terminal_source": "codex_bridge",
                     },

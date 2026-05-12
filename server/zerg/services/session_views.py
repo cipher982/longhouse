@@ -506,7 +506,7 @@ class SessionTranscriptPreviewResponse(UTCBaseModel):
     )
     content_cursor: Optional[str] = Field(None, description="Monotonic live snapshot cursor for provisional previews")
     is_stale: bool = Field(False, description="True when the provisional preview is too old to render as live output")
-    stale_reason: Optional[Literal["freshness_window_expired", "missing_preview_timestamp"]] = Field(
+    stale_reason: Optional[Literal["freshness_window_expired", "missing_preview_timestamp", "superseded_by_durable"]] = Field(
         None,
         description="Why a provisional preview is stale, when known.",
     )
@@ -1241,7 +1241,10 @@ def build_session_response(
             if include_live_transcript
             else None
         ),
-        transcript_preview=build_session_transcript_preview_response(transcript_preview),
+        transcript_preview=build_session_transcript_preview_response(
+            transcript_preview,
+            last_activity_at=last_activity_at,
+        ),
         timeline_card=build_session_timeline_card_response(
             runtime_facts=runtime_facts,
             capability_flags=capability_flags,
@@ -1254,6 +1257,7 @@ def build_session_response(
 def build_session_transcript_preview_response(
     preview: TranscriptPreview | None,
     *,
+    last_activity_at: datetime | None = None,
     now: datetime | None = None,
 ) -> SessionTranscriptPreviewResponse | None:
     if preview is None:
@@ -1264,11 +1268,15 @@ def build_session_transcript_preview_response(
         max_age = LIVE_TRANSCRIPT_COMPLETE_FRESHNESS
     else:
         max_age = LIVE_TRANSCRIPT_PARTIAL_FRESHNESS
+    durable_activity_at = normalize_utc(last_activity_at)
     is_stale = False
     stale_reason = None
     if preview_at is None:
         is_stale = True
         stale_reason = "missing_preview_timestamp"
+    elif durable_activity_at is not None and durable_activity_at > preview_at:
+        is_stale = True
+        stale_reason = "superseded_by_durable"
     elif preview.event_origin == "live_provisional" and now_utc - preview_at > max_age:
         is_stale = True
         stale_reason = "freshness_window_expired"
