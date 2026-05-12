@@ -45,7 +45,7 @@ def record_session_observation(
     source_path: str | None = None,
     source_offset: int | None = None,
     source_cursor: str | None = None,
-) -> bool:
+) -> SessionObservation | None:
     payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     stmt = (
         sqlite_insert(SessionObservation)
@@ -70,10 +70,12 @@ def record_session_observation(
         .on_conflict_do_nothing(index_elements=["observation_id"])
     )
     result = db.execute(stmt)
-    return bool(result.rowcount)
+    if result.rowcount:
+        db.flush()
+    return db.query(SessionObservation).filter(SessionObservation.observation_id == observation_id).first()
 
 
-def record_runtime_observation(db: Session, event: Any, *, received_at: datetime | None = None) -> bool:
+def record_runtime_observation(db: Session, event: Any, *, received_at: datetime | None = None) -> SessionObservation | None:
     payload = event.payload or {}
     kind = OBS_KIND_BRIDGE_TRANSCRIPT_DELTA if _is_bridge_transcript_delta(event, payload) else OBS_KIND_RUNTIME_SIGNAL
     return record_session_observation(
@@ -114,7 +116,7 @@ def record_source_line_observation(
     raw_json: str,
     observed_at: datetime,
     received_at: datetime | None = None,
-) -> bool:
+) -> SessionObservation | None:
     observation_id = "source_line:" + _hash_parts(
         str(session_id),
         str(branch_id),
