@@ -448,7 +448,7 @@ def test_await_managed_local_hook_phase_update_ignores_stale_active_event_insert
             occurred_at=datetime.now(timezone.utc),
         )
         db.commit()
-        baseline_runtime_event_id = int(baseline_event.id)
+        baseline_observation_id = int(baseline_event.id)
         baseline_occurred_at = baseline_event.occurred_at
 
         async def _insert_later():
@@ -470,7 +470,7 @@ def test_await_managed_local_hook_phase_update_ignores_stale_active_event_insert
                 return await await_managed_local_hook_phase_update(
                     db_bind=db.get_bind(),
                     session_id=session.id,
-                    after_runtime_event_id=baseline_runtime_event_id,
+                    after_observation_id=baseline_observation_id,
                     phases={"thinking", "running"},
                     timeout_secs=0.2,
                     poll_interval_secs=0.02,
@@ -574,17 +574,17 @@ def test_send_text_to_managed_local_session_can_require_active_hook_phase_for_co
         *,
         db_bind,
         session_id,
-        after_runtime_event_id,
+        after_observation_id,
         phases,
         timeout_secs,
         poll_interval_secs=1.0,
     ):
         assert db_bind is not None
         assert timeout_secs == 2.5
-        assert after_runtime_event_id >= 0
+        assert after_observation_id >= 0
         assert phases == {"thinking", "running"}
         return ManagedLocalPhaseUpdate(
-            runtime_event_id=after_runtime_event_id + 1,
+            observation_id=after_observation_id + 1,
             phase="thinking",
             source="claude_hook",
             occurred_at=datetime.now(timezone.utc),
@@ -658,17 +658,17 @@ def test_send_text_to_managed_local_session_verifies_codex_via_hook_activity(mon
         *,
         db_bind,
         session_id,
-        after_runtime_event_id,
+        after_observation_id,
         phases,
         timeout_secs,
         poll_interval_secs=1.0,
     ):
         assert db_bind is not None
         assert timeout_secs == 2.5
-        assert after_runtime_event_id >= 0
+        assert after_observation_id >= 0
         assert phases == {"thinking", "running"}
         return ManagedLocalPhaseUpdate(
-            runtime_event_id=after_runtime_event_id + 1,
+            observation_id=after_observation_id + 1,
             phase="thinking",
             source="claude_hook",
             occurred_at=datetime.now(timezone.utc),
@@ -761,7 +761,7 @@ def test_await_managed_local_turn_terminal_returns_blocked_after_active_hook_pha
                 return await await_managed_local_turn_terminal(
                     db_bind=db.get_bind(),
                     session_id=session.id,
-                    after_runtime_event_id=0,
+                    after_observation_id=0,
                     timeout_secs=1.0,
                     poll_interval_secs=0.02,
                 )
@@ -774,7 +774,7 @@ def test_await_managed_local_turn_terminal_returns_blocked_after_active_hook_pha
         assert result.control_status == "blocked"
 
 
-def test_await_managed_local_turn_terminal_ignores_terminal_before_runtime_cursor(tmp_path):
+def test_await_managed_local_turn_terminal_ignores_terminal_before_observation_cursor(tmp_path):
     SessionLocal = _make_db(tmp_path)
 
     with SessionLocal() as db:
@@ -786,13 +786,13 @@ def test_await_managed_local_turn_terminal_ignores_terminal_before_runtime_curso
             occurred_at=datetime.now(timezone.utc),
         )
         db.commit()
-        baseline_runtime_event_id = int(stale_event.id)
+        baseline_observation_id = int(stale_event.id)
 
         result = asyncio.run(
             await_managed_local_turn_terminal(
                 db_bind=db.get_bind(),
                 session_id=session.id,
-                after_runtime_event_id=baseline_runtime_event_id,
+                after_observation_id=baseline_observation_id,
                 timeout_secs=0.1,
                 poll_interval_secs=0.02,
             )
@@ -824,7 +824,7 @@ def test_await_managed_local_turn_terminal_accepts_runtime_terminal_without_acti
                 return await await_managed_local_turn_terminal(
                     db_bind=db.get_bind(),
                     session_id=session.id,
-                    after_runtime_event_id=0,
+                    after_observation_id=0,
                     timeout_secs=1.0,
                     poll_interval_secs=0.02,
                 )
@@ -850,7 +850,7 @@ def test_await_managed_local_turn_terminal_ignores_stale_terminal_inserted_after
             occurred_at=datetime.now(timezone.utc),
         )
         db.commit()
-        baseline_runtime_event_id = int(baseline_event.id)
+        baseline_observation_id = int(baseline_event.id)
         baseline_occurred_at = baseline_event.occurred_at
 
         async def _insert_later():
@@ -871,7 +871,7 @@ def test_await_managed_local_turn_terminal_ignores_stale_terminal_inserted_after
                 return await await_managed_local_turn_terminal(
                     db_bind=db.get_bind(),
                     session_id=session.id,
-                    after_runtime_event_id=baseline_runtime_event_id,
+                    after_observation_id=baseline_observation_id,
                     timeout_secs=0.2,
                     poll_interval_secs=0.02,
                 )

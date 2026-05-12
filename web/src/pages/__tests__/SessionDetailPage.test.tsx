@@ -154,7 +154,7 @@ function makeTurn(overrides: Partial<AgentSessionTurn> = {}): AgentSessionTurn {
     user_event_id: null,
     durable_assistant_event_id: null,
     baseline_event_id: null,
-    baseline_runtime_cursor: null,
+    baseline_observation_cursor: null,
     user_submitted_at: "2026-03-22T22:03:45Z",
     send_accepted_at: "2026-03-22T22:03:46Z",
     active_phase_observed_at: "2026-03-22T22:03:47Z",

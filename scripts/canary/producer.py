@@ -152,7 +152,7 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _stop)
 
     with httpx.Client(http2=True) as client:
-        # Bootstrap: create an AgentSession row (runtime events alone don't
+        # Bootstrap: create an AgentSession row (runtime observations alone don't
         # create one, so the SSE workspace stream would 404 with
         # session_not_found). Then a binding_signal so runtime state exists.
         now = datetime.now(timezone.utc)

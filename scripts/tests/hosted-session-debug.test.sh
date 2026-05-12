@@ -41,13 +41,13 @@ if [[ "$cmd" == python3\ -* ]]; then
   printf '%s' '{
     "db_path": "/srv/longhouse/demo/longhouse.db",
     "session_id": "sess-1",
-    "tables": {
-      "sessions": true,
-      "events": true,
-      "session_runtime_events": true,
-      "session_runtime_state": true,
-      "session_turns": true
-    },
+	    "tables": {
+	      "sessions": true,
+	      "events": true,
+	      "session_observations": true,
+	      "session_runtime_state": true,
+	      "session_turns": true
+	    },
     "session": {
       "id": "sess-1",
       "provider": "claude",
@@ -86,16 +86,16 @@ if [[ "$cmd" == python3\ -* ]]; then
       "tool_events": 144,
       "tool_call_events": 144
     },
-    "runtime_event_stats": {
-      "count": 421,
-      "first_occurred_at": "2026-04-27 20:35:26",
-      "last_occurred_at": "2026-04-27 22:10:49",
-      "first_received_at": "2026-04-27 20:35:26",
-      "last_received_at": "2026-04-27 22:10:50"
-    },
-    "recent_runtime_events": [
-      {"kind": "phase_signal", "phase": "running", "tool_name": "Bash", "occurred_at": "2026-04-27 22:10:27", "received_at": "2026-04-27 22:10:27", "freshness_ms": 600000}
-    ],
+	    "runtime_observation_stats": {
+	      "count": 421,
+	      "first_observed_at": "2026-04-27 20:35:26",
+	      "last_observed_at": "2026-04-27 22:10:49",
+	      "first_received_at": "2026-04-27 20:35:26",
+	      "last_received_at": "2026-04-27 22:10:50"
+	    },
+	    "recent_runtime_observations": [
+	      {"kind": "phase_signal", "phase": "running", "tool_name": "Bash", "observed_at": "2026-04-27 22:10:27", "received_at": "2026-04-27 22:10:27", "freshness_ms": 600000}
+	    ],
     "recent_events": [
       {"id": 5332839, "role": "tool", "tool_name": null, "text": "The file was updated", "timestamp": "2026-04-27 22:10:48"}
     ],

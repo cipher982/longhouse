@@ -256,13 +256,13 @@ try:
 
     managed_session_heartbeat_lease_rows_total = Counter(
         "managed_session_heartbeat_lease_rows_total",
-        "Managed session lease rows observed in agent heartbeat payloads before runtime-event dedupe",
+        "Managed session lease rows observed in agent heartbeat payloads before observation dedupe",
         labelnames=("provider", "state", "phase"),
     )
 
-    managed_codex_runtime_events_total = Counter(
-        "managed_codex_runtime_events_total",
-        "Managed Codex runtime events by source, kind, and reducer outcome",
+    managed_codex_runtime_observations_total = Counter(
+        "managed_codex_runtime_observations_total",
+        "Managed Codex runtime observations by source, kind, and reducer outcome",
         labelnames=("source", "kind", "outcome"),
     )
 
@@ -301,7 +301,7 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
     agents_ingest_events_total = _NoopCounter()  # type: ignore[assignment]
     agents_heartbeat_requests_total = _NoopCounter()  # type: ignore[assignment]
     managed_session_heartbeat_lease_rows_total = _NoopCounter()  # type: ignore[assignment]
-    managed_codex_runtime_events_total = _NoopCounter()  # type: ignore[assignment]
+    managed_codex_runtime_observations_total = _NoopCounter()  # type: ignore[assignment]
     managed_codex_bridge_freshness_total = _NoopCounter()  # type: ignore[assignment]
 
     # Provide *noop* Gauge so code can call ``set`` without importing

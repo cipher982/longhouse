@@ -81,11 +81,11 @@ def test_session_turn_lifecycle_tracks_active_terminal_and_durable_events(tmp_pa
             session_id=session.id,
             request_id="req-1234",
             baseline_event_id=0,
-            baseline_runtime_cursor=9,
+            baseline_observation_cursor=9,
         )
         assert turn.id is not None
         assert turn.baseline_event_id is None
-        assert turn.baseline_runtime_cursor == 9
+        assert turn.baseline_observation_cursor == 9
 
         assert mark_session_turn_send_accepted(db, session_id=session.id, request_id="req-1234")
         assert mark_session_turn_active(db, session_id=session.id, request_id="req-1234")
@@ -181,8 +181,8 @@ def test_session_turn_partial_unique_request_id_allows_null_and_rejects_duplicat
         db.rollback()
 
 
-def test_initialize_database_migrates_legacy_session_turn_columns(tmp_path):
-    db_path = tmp_path / "test_session_turns_legacy.db"
+def test_initialize_database_adds_session_turn_projection_columns(tmp_path):
+    db_path = tmp_path / "test_session_turns_projection_migration.db"
     engine = make_engine(f"sqlite:///{db_path}")
     SessionLocal = make_sessionmaker(engine)
     initialize_database(engine)
@@ -202,7 +202,7 @@ def test_initialize_database_migrates_legacy_session_turn_columns(tmp_path):
                     user_event_id INTEGER,
                     durable_assistant_event_id INTEGER,
                     baseline_event_id INTEGER,
-                    baseline_runtime_cursor INTEGER,
+                    baseline_observation_cursor INTEGER,
                     user_submitted_at DATETIME NOT NULL,
                     send_accepted_at DATETIME,
                     active_phase_observed_at DATETIME,
@@ -228,7 +228,7 @@ def test_initialize_database_migrates_legacy_session_turn_columns(tmp_path):
         turn = create_session_turn(
             db,
             session_id=session.id,
-            request_id="req-legacy-schema",
+            request_id="req-projection-schema",
         )
         db.commit()
         db.refresh(turn)

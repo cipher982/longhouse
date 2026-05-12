@@ -48,7 +48,7 @@ from zerg.services.managed_local_control import MANAGED_LOCAL_SYNC_STATUS_PENDIN
 from zerg.services.managed_local_control import await_managed_local_hook_phase_update
 from zerg.services.managed_local_control import await_managed_local_turn_terminal
 from zerg.services.managed_local_control import get_managed_local_control_status_for_phase
-from zerg.services.managed_local_control import get_managed_local_latest_hook_runtime_event_id
+from zerg.services.managed_local_control import get_managed_local_latest_hook_observation_id
 from zerg.services.managed_local_event_polling import MANAGED_LOCAL_EVENT_TIMEOUT_SECS
 from zerg.services.managed_local_event_polling import MANAGED_LOCAL_POLL_INTERVAL_SECS
 from zerg.services.managed_local_event_polling import await_managed_local_events_task
@@ -426,7 +426,7 @@ async def _release_managed_local_lock_after_terminal(
     session_id: UUID,
     provider: str,
     db_bind,
-    after_runtime_event_id: int,
+    after_observation_id: int,
 ) -> None:
     tracer = get_tracer(__name__)
     wait_started = time.monotonic()
@@ -438,7 +438,7 @@ async def _release_managed_local_lock_after_terminal(
                 "longhouse.managed": True,
                 "longhouse.session.id": session_id,
                 "longhouse.turn.request_id": request_id,
-                "longhouse.turn.after_runtime_event_id": after_runtime_event_id,
+                "longhouse.turn.after_observation_id": after_observation_id,
                 "longhouse.turn.timeout_secs": MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS,
             },
         )
@@ -446,7 +446,7 @@ async def _release_managed_local_lock_after_terminal(
             terminal_result = await await_managed_local_turn_terminal(
                 db_bind=db_bind,
                 session_id=session_id,
-                after_runtime_event_id=after_runtime_event_id,
+                after_observation_id=after_observation_id,
                 timeout_secs=MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS,
             )
         except Exception as exc:
@@ -678,7 +678,7 @@ async def _observe_managed_local_turn_active_phase(
     session_id: UUID,
     provider: str,
     db_bind,
-    after_runtime_event_id: int,
+    after_observation_id: int,
 ) -> None:
     tracer = get_tracer(__name__)
     wait_started = time.monotonic()
@@ -690,7 +690,7 @@ async def _observe_managed_local_turn_active_phase(
                 "longhouse.managed": True,
                 "longhouse.session.id": session_id,
                 "longhouse.turn.request_id": request_id,
-                "longhouse.turn.after_runtime_event_id": after_runtime_event_id,
+                "longhouse.turn.after_observation_id": after_observation_id,
                 "longhouse.turn.active_phases": tuple(sorted(_MANAGED_LOCAL_ACTIVE_PHASES)),
                 "longhouse.turn.timeout_secs": MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS,
             },
@@ -699,7 +699,7 @@ async def _observe_managed_local_turn_active_phase(
             active_update = await await_managed_local_hook_phase_update(
                 db_bind=db_bind,
                 session_id=session_id,
-                after_runtime_event_id=after_runtime_event_id,
+                after_observation_id=after_observation_id,
                 phases=set(_MANAGED_LOCAL_ACTIVE_PHASES),
                 timeout_secs=MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS,
                 poll_interval_secs=MANAGED_LOCAL_POLL_INTERVAL_SECS,
@@ -778,7 +778,7 @@ def _schedule_managed_local_active_phase_observation(
     session_id: UUID,
     provider: str,
     db_bind,
-    after_runtime_event_id: int,
+    after_observation_id: int,
 ) -> None:
     task = asyncio.create_task(
         _observe_managed_local_turn_active_phase(
@@ -786,7 +786,7 @@ def _schedule_managed_local_active_phase_observation(
             session_id=session_id,
             provider=provider,
             db_bind=db_bind,
-            after_runtime_event_id=after_runtime_event_id,
+            after_observation_id=after_observation_id,
         )
     )
 
@@ -808,7 +808,7 @@ def _schedule_managed_local_lock_release(
     session_id: UUID,
     provider: str,
     db_bind,
-    after_runtime_event_id: int,
+    after_observation_id: int,
 ) -> None:
     task = asyncio.create_task(
         _release_managed_local_lock_after_terminal(
@@ -817,7 +817,7 @@ def _schedule_managed_local_lock_release(
             session_id=session_id,
             provider=provider,
             db_bind=db_bind,
-            after_runtime_event_id=after_runtime_event_id,
+            after_observation_id=after_observation_id,
         )
     )
 
@@ -872,7 +872,7 @@ async def _dispatch_managed_local_text(
 
         with tracer.start_as_current_span("longhouse.turn.baseline") as baseline_span:
             baseline_event_id = int(AgentsStore(db).get_latest_event_id(source_session.id) or 0)
-            baseline_hook_runtime_event_id = get_managed_local_latest_hook_runtime_event_id(
+            baseline_hook_observation_id = get_managed_local_latest_hook_observation_id(
                 db=db,
                 session_id=source_session.id,
             )
@@ -883,7 +883,7 @@ async def _dispatch_managed_local_text(
                     "longhouse.session.id": source_session.id,
                     "longhouse.turn.request_id": request_id,
                     "longhouse.turn.baseline_event_id": baseline_event_id,
-                    "longhouse.turn.baseline_runtime_event_id": baseline_hook_runtime_event_id,
+                    "longhouse.turn.baseline_observation_id": baseline_hook_observation_id,
                     "longhouse.turn.user_submitted_at": user_submitted_at,
                 },
             )
@@ -895,7 +895,7 @@ async def _dispatch_managed_local_text(
                 session_id=source_session.id,
                 request_id=request_id,
                 baseline_event_id=baseline_event_id,
-                baseline_runtime_cursor=baseline_hook_runtime_event_id,
+                baseline_observation_cursor=baseline_hook_observation_id,
                 user_submitted_at=user_submitted_at,
                 expected_user_text=message,
             )
@@ -1030,7 +1030,7 @@ async def _dispatch_managed_local_text(
             session_id=source_session.id,
             provider=provider_label,
             db_bind=db.get_bind(),
-            after_runtime_event_id=baseline_hook_runtime_event_id,
+            after_observation_id=baseline_hook_observation_id,
         )
         _schedule_managed_local_lock_release(
             lock_scope_id=lock_scope_id,
@@ -1038,7 +1038,7 @@ async def _dispatch_managed_local_text(
             session_id=source_session.id,
             provider=provider_label,
             db_bind=db.get_bind(),
-            after_runtime_event_id=baseline_hook_runtime_event_id,
+            after_observation_id=baseline_hook_observation_id,
         )
 
         baseline_ms = round((t_baseline - t0) * 1000, 1)
@@ -1055,7 +1055,7 @@ async def _dispatch_managed_local_text(
             {
                 "longhouse.turn.outcome": "send_accepted",
                 "longhouse.turn.baseline_event_id": baseline_event_id,
-                "longhouse.turn.baseline_runtime_event_id": baseline_hook_runtime_event_id,
+                "longhouse.turn.baseline_observation_id": baseline_hook_observation_id,
                 "longhouse.turn.phase_ms.baseline": baseline_ms,
                 "longhouse.turn.phase_ms.turn_create": turn_create_ms,
                 "longhouse.turn.phase_ms.provider_dispatch": provider_dispatch_ms,
@@ -1164,7 +1164,7 @@ async def _stream_managed_local_output(
     ).encode()
 
     baseline_event_id = int(AgentsStore(db).get_latest_event_id(source_session.id) or 0)
-    baseline_hook_runtime_event_id = get_managed_local_latest_hook_runtime_event_id(
+    baseline_hook_observation_id = get_managed_local_latest_hook_observation_id(
         db=db,
         session_id=source_session.id,
     )
@@ -1176,7 +1176,7 @@ async def _stream_managed_local_output(
             session_id=source_session.id,
             request_id=request_id,
             baseline_event_id=baseline_event_id,
-            baseline_runtime_cursor=baseline_hook_runtime_event_id,
+            baseline_observation_cursor=baseline_hook_observation_id,
             expected_user_text=message,
         ),
     )
@@ -1249,7 +1249,7 @@ async def _stream_managed_local_output(
         await_managed_local_turn_terminal(
             db_bind=db.get_bind(),
             session_id=source_session.id,
-            after_runtime_event_id=baseline_hook_runtime_event_id,
+            after_observation_id=baseline_hook_observation_id,
             timeout_secs=MANAGED_LOCAL_EVENT_TIMEOUT_SECS,
             poll_interval_secs=MANAGED_LOCAL_POLL_INTERVAL_SECS,
         )

@@ -81,7 +81,7 @@ class ManagedLocalInterruptResult:
 @dataclass(frozen=True)
 class ManagedLocalPhaseUpdate:
     phase: str
-    runtime_event_id: int = 0
+    observation_id: int = 0
     occurred_at: datetime | None = None
     source: str = _MANAGED_LOCAL_HOOK_RUNTIME_SOURCE
 
@@ -90,13 +90,13 @@ class ManagedLocalPhaseUpdate:
 class ManagedLocalTerminalResult:
     phase: str
     control_status: str
-    runtime_event_id: int
+    observation_id: int
     occurred_at: datetime | None = None
 
 
 @dataclass(frozen=True)
 class _ManagedLocalHookObservation:
-    id: int
+    observation_id: int
     phase: str | None
     occurred_at: datetime | None
     source: str
@@ -158,7 +158,7 @@ def get_managed_local_latest_event_id(*, db: Session, session_id: UUID) -> int:
     return int(AgentsStore(db).get_latest_event_id(session_id) or 0)
 
 
-def get_managed_local_latest_hook_runtime_event_id(*, db: Session, session_id: UUID) -> int:
+def get_managed_local_latest_hook_observation_id(*, db: Session, session_id: UUID) -> int:
     """Return the latest hook-driven runtime observation cursor for a managed-local session."""
     row = (
         db.query(SessionObservation.id)
@@ -185,11 +185,11 @@ def _fetch_managed_local_events_since(*, db_bind, session_id: UUID, after_event_
         )
 
 
-def _fetch_managed_local_hook_runtime_events_since(
+def _fetch_managed_local_hook_observations_since(
     *,
     db_bind,
     session_id: UUID,
-    after_runtime_event_id: int,
+    after_observation_id: int,
 ) -> list[_ManagedLocalHookObservation]:
     with Session(bind=db_bind) as poll_db:
         observations = (
@@ -198,12 +198,12 @@ def _fetch_managed_local_hook_runtime_events_since(
                 SessionObservation.session_id == session_id,
                 SessionObservation.source == _MANAGED_LOCAL_HOOK_RUNTIME_SOURCE,
                 SessionObservation.kind == OBS_KIND_RUNTIME_SIGNAL,
-                SessionObservation.id > after_runtime_event_id,
+                SessionObservation.id > after_observation_id,
             )
             .order_by(SessionObservation.id.asc())
             .all()
         )
-    events: list[_ManagedLocalHookObservation] = []
+    hook_observations: list[_ManagedLocalHookObservation] = []
     for observation in observations:
         try:
             runtime_event = runtime_event_from_observation(observation)
@@ -215,15 +215,15 @@ def _fetch_managed_local_hook_runtime_events_since(
             continue
         if runtime_event is None or runtime_event.kind != "phase_signal":
             continue
-        events.append(
+        hook_observations.append(
             _ManagedLocalHookObservation(
-                id=int(getattr(observation, "id", 0) or 0),
+                observation_id=int(getattr(observation, "id", 0) or 0),
                 phase=runtime_event.phase,
                 occurred_at=normalize_utc(runtime_event.occurred_at),
                 source=runtime_event.source,
             )
         )
-    return events
+    return hook_observations
 
 
 def _load_managed_local_runtime_state(*, db_bind, session_id: UUID) -> SessionRuntimeState | None:
@@ -236,63 +236,63 @@ def _load_managed_local_runtime_state(*, db_bind, session_id: UUID) -> SessionRu
         )
 
 
-def _hook_runtime_event_matches_canonical_state(
+def _hook_observation_matches_canonical_state(
     *,
     db_bind,
     session_id: UUID,
-    event: _ManagedLocalHookObservation,
+    observation: _ManagedLocalHookObservation,
 ) -> bool:
     state = _load_managed_local_runtime_state(db_bind=db_bind, session_id=session_id)
     if state is None:
         return False
-    if str(getattr(state, "phase", "") or "").strip() != str(getattr(event, "phase", "") or "").strip():
+    if str(getattr(state, "phase", "") or "").strip() != str(getattr(observation, "phase", "") or "").strip():
         return False
     state_signal_at = normalize_utc(getattr(state, "last_runtime_signal_at", None))
-    event_occurred_at = normalize_utc(getattr(event, "occurred_at", None))
-    return state_signal_at == event_occurred_at
+    observation_occurred_at = normalize_utc(getattr(observation, "occurred_at", None))
+    return state_signal_at == observation_occurred_at
 
 
 async def await_managed_local_hook_phase_update(
     *,
     db_bind,
     session_id: UUID,
-    after_runtime_event_id: int,
+    after_observation_id: int,
     phases: set[str] | frozenset[str] | None = None,
     timeout_secs: float = MANAGED_LOCAL_EVENT_TIMEOUT_SECS,
     poll_interval_secs: float = MANAGED_LOCAL_POLL_INTERVAL_SECS,
 ) -> ManagedLocalPhaseUpdate | None:
     """Wait for a new hook-driven runtime phase after the provided cursor.
 
-    The `/api/agents/presence` endpoint records hook RuntimeEventIngest rows as
+    The `/api/agents/presence` endpoint records hook runtime signals as
     SessionObservation facts, so this polls the raw observation cursor and
     verifies the canonical SessionRuntimeState reducer output before returning.
     """
 
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout_secs
-    cursor = after_runtime_event_id
+    cursor = after_observation_id
 
     while loop.time() < deadline:
-        events = _fetch_managed_local_hook_runtime_events_since(
+        hook_observations = _fetch_managed_local_hook_observations_since(
             db_bind=db_bind,
             session_id=session_id,
-            after_runtime_event_id=cursor,
+            after_observation_id=cursor,
         )
-        for event in events:
-            cursor = max(cursor, int(getattr(event, "id", 0) or 0))
-            phase = str(getattr(event, "phase", "") or "").strip()
-            if not _hook_runtime_event_matches_canonical_state(
+        for observation in hook_observations:
+            cursor = max(cursor, int(getattr(observation, "observation_id", 0) or 0))
+            phase = str(getattr(observation, "phase", "") or "").strip()
+            if not _hook_observation_matches_canonical_state(
                 db_bind=db_bind,
                 session_id=session_id,
-                event=event,
+                observation=observation,
             ):
                 continue
             if phases is None or phase in phases:
                 return ManagedLocalPhaseUpdate(
                     phase=phase,
-                    runtime_event_id=int(getattr(event, "id", 0) or 0),
-                    occurred_at=normalize_utc(getattr(event, "occurred_at", None)),
-                    source=str(getattr(event, "source", "") or _MANAGED_LOCAL_HOOK_RUNTIME_SOURCE),
+                    observation_id=int(getattr(observation, "observation_id", 0) or 0),
+                    occurred_at=normalize_utc(getattr(observation, "occurred_at", None)),
+                    source=str(getattr(observation, "source", "") or _MANAGED_LOCAL_HOOK_RUNTIME_SOURCE),
                 )
         await asyncio.sleep(poll_interval_secs)
 
@@ -303,7 +303,7 @@ async def await_managed_local_turn_terminal(
     *,
     db_bind,
     session_id: UUID,
-    after_runtime_event_id: int,
+    after_observation_id: int,
     timeout_secs: float = MANAGED_LOCAL_EVENT_TIMEOUT_SECS,
     poll_interval_secs: float = MANAGED_LOCAL_POLL_INTERVAL_SECS,
 ) -> ManagedLocalTerminalResult | None:
@@ -316,21 +316,21 @@ async def await_managed_local_turn_terminal(
 
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout_secs
-    cursor = after_runtime_event_id
+    cursor = after_observation_id
 
     while loop.time() < deadline:
-        events = _fetch_managed_local_hook_runtime_events_since(
+        hook_observations = _fetch_managed_local_hook_observations_since(
             db_bind=db_bind,
             session_id=session_id,
-            after_runtime_event_id=cursor,
+            after_observation_id=cursor,
         )
-        for event in events:
-            cursor = max(cursor, int(getattr(event, "id", 0) or 0))
-            phase = str(getattr(event, "phase", "") or "").strip()
-            if not _hook_runtime_event_matches_canonical_state(
+        for observation in hook_observations:
+            cursor = max(cursor, int(getattr(observation, "observation_id", 0) or 0))
+            phase = str(getattr(observation, "phase", "") or "").strip()
+            if not _hook_observation_matches_canonical_state(
                 db_bind=db_bind,
                 session_id=session_id,
-                event=event,
+                observation=observation,
             ):
                 continue
             if phase in _MANAGED_LOCAL_ACTIVE_HOOK_PHASES:
@@ -343,8 +343,8 @@ async def await_managed_local_turn_terminal(
                     phase,
                     MANAGED_LOCAL_CONTROL_STATUS_COMPLETED,
                 ),
-                runtime_event_id=int(getattr(event, "id", 0) or 0),
-                occurred_at=getattr(event, "occurred_at", None),
+                observation_id=int(getattr(observation, "observation_id", 0) or 0),
+                occurred_at=getattr(observation, "occurred_at", None),
             )
         await asyncio.sleep(poll_interval_secs)
 
@@ -553,8 +553,8 @@ async def send_text_to_managed_local_session(
     effective_verify = bool(verify_turn_started)
 
     baseline_event_id = get_managed_local_latest_event_id(db=db, session_id=session.id)
-    baseline_hook_runtime_event_id = (
-        get_managed_local_latest_hook_runtime_event_id(db=db, session_id=session.id)
+    baseline_hook_observation_id = (
+        get_managed_local_latest_hook_observation_id(db=db, session_id=session.id)
         if effective_verify and transport != ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value
         else 0
     )
@@ -624,7 +624,7 @@ async def send_text_to_managed_local_session(
             hook_event = await await_managed_local_hook_phase_update(
                 db_bind=db.get_bind(),
                 session_id=session.id,
-                after_runtime_event_id=baseline_hook_runtime_event_id,
+                after_observation_id=baseline_hook_observation_id,
                 phases=set(_MANAGED_LOCAL_ACTIVE_HOOK_PHASES),
                 timeout_secs=verification_timeout,
             )
