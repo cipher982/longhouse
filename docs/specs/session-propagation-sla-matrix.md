@@ -171,7 +171,11 @@ It wraps the required managed Codex warm realtime case with contaminated-run
 retries and writes artifacts under `artifacts/session-propagation-sla/`. Exit
 code `0` means pass, `1` means an SLA/tool failure, and `2` means the run was
 contaminated by infrastructure/runtime transport conditions and should be
-retried or bucketed separately.
+retried or bucketed separately. Exit code `3` means the runner is not set up
+for managed-provider profiling and should fail the workflow as setup error.
+The GitHub workflow must run on a configured dogfood runner with `longhouse`,
+`longhouse-engine`, `codex`, Bun, and browser support available; generic
+hosted runners are not valid for this SLA.
 
 Archive-path outliers should be debugged from `ship_trace.v1` before guessing.
 The trace keeps total `prepare_ms` and also reports `prepare_open_db_ms`,

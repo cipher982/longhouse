@@ -94,7 +94,7 @@ jobs:
           code=$?
           set -e
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
-          if [[ "$code" == "1" ]]; then
+          if [[ "$code" == "1" || "$code" == "3" ]]; then
             exit 1
           fi
 

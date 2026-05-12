@@ -40,9 +40,9 @@ for required_cmd in python3 bun longhouse longhouse-engine codex; do
   fi
 done
 if [[ "$missing" == "1" ]]; then
-  echo "| 0 | 2 | contaminated: missing local profiler prerequisite | \`$OUTPUT_ROOT\` |" >> "$summary"
+  echo "| 0 | 3 | setup_error: missing local profiler prerequisite | \`$OUTPUT_ROOT\` |" >> "$summary"
   echo "$summary"
-  exit 2
+  exit 3
 fi
 
 if ! [[ "$ATTEMPTS" =~ ^[0-9]+$ ]] || [[ "$ATTEMPTS" -lt 1 ]]; then
@@ -62,11 +62,8 @@ classify_attempt() {
     echo "contaminated"
     return
   fi
-
-  if grep -R -E -q \
-    "Request timed out connecting|status of 524|status=524|ReadTimeout|ERR_QUIC_PROTOCOL_ERROR|IPC stop timed out|server responded with a status of 524" \
-    "$attempt_dir" 2>/dev/null; then
-    echo "contaminated"
+  if [[ "$code" == "3" ]]; then
+    echo "setup_error"
     return
   fi
 
@@ -118,6 +115,13 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
     echo "Result: fail" >> "$summary"
     echo "$summary"
     exit 1
+  fi
+
+  if [[ "$classification" == "setup_error" ]]; then
+    echo "" >> "$summary"
+    echo "Result: setup_error" >> "$summary"
+    echo "$summary"
+    exit 3
   fi
 
   if [[ "$attempt" -lt "$ATTEMPTS" ]]; then
