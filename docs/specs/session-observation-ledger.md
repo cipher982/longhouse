@@ -6,12 +6,12 @@ Updated: 2026-05-12
 
 ## Problem
 
-Longhouse now has an honest transcript preview contract, but the storage model
-still reflects the path it grew through:
+Longhouse now has an honest transcript preview contract. The session kernel has
+one raw fact table and reducer-owned read models:
 
 - `source_lines` stores durable provider archive rows.
 - `events` stores normalized transcript rows and active provisional bridge text.
-- `session_runtime_events` used to store runtime/liveness signals.
+- `session_observations` stores raw transcript, source, and runtime facts.
 - the Machine Agent has a local phase ledger that is later reflected into hosted
   runtime state.
 
@@ -68,9 +68,6 @@ The UI and APIs should never read provider-specific write-side ledgers directly.
 - `source_lines` / `AgentSourceLine` is the source archive/export projection.
 - `session_runtime_state` / `SessionRuntimeState` is the runtime-state
   projection for liveness and timeline badges.
-- `session_runtime_events` / `SessionRuntimeEvent` is a legacy diagnostic table,
-  not an authority. New runtime ingest writes `SessionObservation`, not this
-  table.
 - `session_branches` / `AgentSessionBranch` is still write-side branch topology.
   It must either become observation-derived or stay explicitly outside the cold
   rebuild promise before we claim a full single-ledger session kernel.
@@ -145,14 +142,10 @@ Observation identity examples:
 
 ## Current Table Fate
 
-During implementation, existing tables can remain as reducer outputs while the
-observation path is introduced. They should lose "ledger" status:
+Existing projection tables remain only as reducer outputs:
 
 - `source_lines` becomes `SourceArchive`, a rebuildable export/read model.
 - `events` becomes `TranscriptEvent`, a rebuildable transcript read model.
-- `session_runtime_events` is demoted to legacy diagnostic storage. Runtime
-  reads and writes have collapsed onto `SessionObservation` and reducer-owned
-  projections.
 - `session_runtime_state` remains a materialized runtime read model.
 
 No new public compatibility field should be added for old `live_transcript` or
@@ -164,7 +157,7 @@ overlay semantics.
 
 - Add `SessionObservation`.
 - Add an idempotent writer service.
-- Record observations for runtime events, bridge transcript deltas, and source
+- Record observations for runtime signals, bridge transcript deltas, and source
   archive lines.
 - Use observation insertion as the duplicate/acceptance boundary for runtime
   ingest.
@@ -197,15 +190,15 @@ Current implementation:
   not yet validate full route-level API responses, branch topology rebuild, or
   `SessionTurn` rebuild.
 - Managed-local hook waits and managed lease-history closure now read
-  `SessionObservation` cursors instead of `session_runtime_events`.
+  `SessionObservation` cursors.
 
-### Phase 3: Runtime Event Collapse
+### Phase 3: Runtime Observation Collapse
 
 - Runtime ingest writes `SessionObservation` runtime observations instead of
-  `session_runtime_events`.
+  any parallel raw table.
 - Rebuild `session_runtime_state` directly from observations.
 - Timeline stream freshness, managed-local hook waits, and managed lease-history
-  closure use observation cursors instead of runtime-event rows.
+  closure use observation cursors.
 
 ### Phase 4: Source Archive Collapse
 

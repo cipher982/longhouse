@@ -46,7 +46,7 @@ CODEX_HOOKS_JSON = Path.home() / ".codex" / "hooks.json"
 CODEX_LONGHOUSE_HOOK_SCRIPT = Path.home() / ".codex" / "hooks" / "longhouse-codex-hook.sh"
 BROWSER_UI_OBSERVER_SCRIPT = ROOT / "scripts" / "ops" / "managed_profiler" / "browser_ui_observer.mjs"
 HOSTED_CONTAINER_PREFIX = "longhouse-"
-HOSTED_RUNTIME_EVENT_LIMIT = 200
+HOSTED_RUNTIME_OBSERVATION_LIMIT = 200
 METRICS_SCHEMA_VERSION = 3
 BATCH_METRICS_SCHEMA_VERSION = 2
 PENDING_BROWSER_SESSION_ID = "__pending_browser_session__"
@@ -346,7 +346,7 @@ class Profiler:
             "--session",
             session_id,
             "--limit",
-            str(HOSTED_RUNTIME_EVENT_LIMIT),
+            str(HOSTED_RUNTIME_OBSERVATION_LIMIT),
             "--json",
         ]
         completed = run_cmd(cmd, timeout=60)
@@ -358,7 +358,7 @@ class Profiler:
     def hosted_db_direct(self, session_id: str) -> dict[str, Any] | None:
         script = r"""
 import json, sqlite3, sys
-subdomain, sid, runtime_event_limit = sys.argv[1], sys.argv[2], int(sys.argv[3])
+subdomain, sid, runtime_observation_limit = sys.argv[1], sys.argv[2], int(sys.argv[3])
 path = f"/var/app-data/longhouse/{subdomain}/longhouse.db"
 conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
 conn.row_factory = sqlite3.Row
@@ -377,8 +377,23 @@ if table("session_runtime_state"):
 if table("events"):
     payload["event_stats"] = one("SELECT count(*) AS count, min(timestamp) AS first_timestamp, max(timestamp) AS last_timestamp FROM events WHERE session_id=?", (sid,))
     payload["recent_events"] = rows("SELECT id, role, tool_name, substr(coalesce(content_text, tool_output_text, ''), 1, 500) AS text, timestamp FROM events WHERE session_id=? ORDER BY id DESC LIMIT 20", (sid,))
-if table("session_runtime_events"):
-    payload["runtime_events"] = rows("SELECT id, source, kind, phase, tool_name, occurred_at, received_at, payload_json FROM session_runtime_events WHERE session_id=? ORDER BY id DESC LIMIT ?", (sid, runtime_event_limit))
+if table("session_observations"):
+    runtime_rows = rows("SELECT id, source, observed_at, received_at, payload_json FROM session_observations WHERE session_id=? AND source_domain='runtime' ORDER BY id DESC LIMIT ?", (sid, runtime_observation_limit))
+    payload["runtime_observations"] = []
+    for row in runtime_rows:
+        payload_json = row.pop("payload_json") or "{}"
+        outer = json.loads(payload_json)
+        inner = outer.get("payload") if isinstance(outer, dict) else {}
+        if not isinstance(inner, dict):
+            inner = {}
+        row.update({
+            "kind": outer.get("kind") if isinstance(outer, dict) else None,
+            "phase": outer.get("phase") if isinstance(outer, dict) else None,
+            "tool_name": outer.get("tool_name") if isinstance(outer, dict) else None,
+            "occurred_at": row.get("observed_at"),
+            "payload_json": json.dumps(inner, sort_keys=True),
+        })
+        payload["runtime_observations"].append(row)
 print(json.dumps(payload, default=str))
 """
         proc = subprocess.run(
@@ -389,7 +404,7 @@ print(json.dumps(payload, default=str))
                 "-",
                 self.subdomain,
                 session_id,
-                str(HOSTED_RUNTIME_EVENT_LIMIT),
+                str(HOSTED_RUNTIME_OBSERVATION_LIMIT),
             ],
             input=script,
             text=True,
@@ -3145,7 +3160,7 @@ def lifecycle_closed(data: dict[str, Any]) -> bool:
     terminal = str(runtime.get("terminal_state") or "").strip().lower()
     if terminal:
         return True
-    for event in data.get("runtime_events") or []:
+    for event in data.get("runtime_observations") or []:
         payload = str(event.get("payload_json") or "")
         if "process_gone" in payload:
             return True
@@ -3161,7 +3176,7 @@ def terminal_details(data: dict[str, Any]) -> dict[str, Any]:
         "source": str(runtime.get("terminal_source") or "").strip() or None,
         "ingest_lag_ms": None,
     }
-    for event in data.get("runtime_events") or []:
+    for event in data.get("runtime_observations") or []:
         if event.get("kind") != "terminal_signal":
             continue
         details["source"] = details["source"] or str(event.get("source") or "").strip() or None
@@ -3183,7 +3198,7 @@ def transcript_ingest_details(data: dict[str, Any], remote_clock_skew_ms: int | 
         "ingest_lag_ms": None,
         "skew_adjusted_lag_ms": None,
     }
-    for event in data.get("runtime_events") or []:
+    for event in data.get("runtime_observations") or []:
         if event.get("kind") != "progress_signal":
             continue
         payload = safe_json_loads(str(event.get("payload_json") or "")) or {}
@@ -3207,7 +3222,7 @@ def bridge_live_details(
     remote_clock_skew_ms: int | None,
 ) -> dict[str, Any]:
     live_events: list[tuple[int, dict[str, Any], dict[str, Any]]] = []
-    for event in data.get("runtime_events") or []:
+    for event in data.get("runtime_observations") or []:
         if event.get("source") != "codex_bridge_live":
             continue
         payload = safe_json_loads(str(event.get("payload_json") or "")) or {}
@@ -3241,7 +3256,7 @@ def bridge_live_details(
 
 
 def ship_trace_details(data: dict[str, Any], remote_clock_skew_ms: int | None) -> dict[str, Any]:
-    for event in data.get("runtime_events") or []:
+    for event in data.get("runtime_observations") or []:
         if event.get("source") != "agents_ingest_trace":
             continue
         payload = safe_json_loads(str(event.get("payload_json") or "")) or {}
@@ -3294,7 +3309,7 @@ def ship_trace_details(data: dict[str, Any], remote_clock_skew_ms: int | None) -
 
 
 def transcript_occurred_at(data: dict[str, Any]) -> datetime | None:
-    for event in data.get("runtime_events") or []:
+    for event in data.get("runtime_observations") or []:
         if event.get("kind") != "progress_signal":
             continue
         payload = safe_json_loads(str(event.get("payload_json") or "")) or {}
@@ -3345,7 +3360,7 @@ def compact_hosted(data: dict[str, Any]) -> dict[str, Any]:
         "runtime_state": data.get("runtime_state"),
         "event_stats": data.get("event_stats"),
         "recent_events": (data.get("recent_events") or [])[:5],
-        "runtime_events": (data.get("runtime_events") or [])[:5],
+        "runtime_observations": (data.get("runtime_observations") or [])[:5],
     }
 
 

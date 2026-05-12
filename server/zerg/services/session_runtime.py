@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from zerg.metrics import managed_codex_bridge_freshness_total
 from zerg.metrics import managed_codex_liveness_invariant_sessions
-from zerg.metrics import managed_codex_runtime_events_total
+from zerg.metrics import managed_codex_runtime_observations_total
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
@@ -93,7 +93,7 @@ def phase_freshness_ms(phase: str | None) -> int | None:
     return int(window.total_seconds() * 1000)
 
 
-def _is_managed_codex_runtime_event(event: RuntimeEventIngest) -> bool:
+def _is_managed_codex_runtime_signal(event: RuntimeEventIngest) -> bool:
     provider = (event.provider or "").strip().lower()
     source = (event.source or "").strip().lower()
     return provider == "codex" and source in MANAGED_CODEX_RUNTIME_SOURCES
@@ -104,10 +104,10 @@ def _managed_codex_source_label(source: str | None) -> str:
     return normalized if normalized in MANAGED_CODEX_RUNTIME_SOURCES else "other"
 
 
-def _record_managed_codex_runtime_event(event: RuntimeEventIngest, outcome: str) -> None:
-    if not _is_managed_codex_runtime_event(event):
+def _record_managed_codex_runtime_observation(event: RuntimeEventIngest, outcome: str) -> None:
+    if not _is_managed_codex_runtime_signal(event):
         return
-    managed_codex_runtime_events_total.labels(
+    managed_codex_runtime_observations_total.labels(
         source=_managed_codex_source_label(event.source),
         kind=event.kind,
         outcome=outcome,
@@ -566,7 +566,7 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
         observation_result = record_runtime_observation(db, event, received_at=received_at)
         if not observation_result.inserted:
             duplicates += 1
-            _record_managed_codex_runtime_event(event, "duplicate")
+            _record_managed_codex_runtime_observation(event, "duplicate")
             continue
 
         accepted += 1
@@ -575,7 +575,7 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
                 raise RuntimeError("accepted bridge transcript observation was not readable after insert")
             reduce_bridge_transcript_observation(db, observation_result.observation)
             outcome = "stored_provisional_transcript"
-            _record_managed_codex_runtime_event(event, outcome)
+            _record_managed_codex_runtime_observation(event, outcome)
             if event.runtime_key not in updated_runtime_keys:
                 updated_runtime_keys.append(event.runtime_key)
             continue
@@ -583,7 +583,7 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
         if observation_result.observation is None:
             raise RuntimeError("accepted runtime observation was not readable after insert")
         outcome = reduce_runtime_signal_observation(db, observation_result.observation)
-        _record_managed_codex_runtime_event(event, outcome)
+        _record_managed_codex_runtime_observation(event, outcome)
         if outcome == "applied" and event.runtime_key not in updated_runtime_keys:
             updated_runtime_keys.append(event.runtime_key)
 

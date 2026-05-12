@@ -495,7 +495,7 @@ class SessionTurn(AgentsBase):
     user_event_id = Column(Integer, nullable=True)
     durable_assistant_event_id = Column(Integer, nullable=True)
     baseline_event_id = Column(Integer, nullable=True)
-    baseline_runtime_cursor = Column(Integer, nullable=True)
+    baseline_observation_cursor = Column(Integer, nullable=True)
     user_submitted_at = Column(DateTime(timezone=True), nullable=False)
     send_accepted_at = Column(DateTime(timezone=True), nullable=True)
     active_phase_observed_at = Column(DateTime(timezone=True), nullable=True)
@@ -547,37 +547,6 @@ class SessionRuntimeState(AgentsBase):
         Index("ix_runtime_state_anchor", "timeline_anchor_at"),
         Index("ix_runtime_state_updated", "updated_at"),
         Index("ix_runtime_state_device_provider", "device_id", "provider"),
-    )
-
-
-class SessionRuntimeEvent(AgentsBase):
-    """Diagnostic runtime-event tee.
-
-    Raw runtime authority lives in SessionObservation. This table remains only
-    for compatibility diagnostics while old inspection paths are collapsed.
-    """
-
-    __tablename__ = "session_runtime_events"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    runtime_key = Column(String(255), nullable=False)
-    session_id = Column(GUID(), nullable=True)
-    provider = Column(String(64), nullable=False)
-    device_id = Column(String(255), nullable=True)
-    source = Column(String(64), nullable=False)
-    kind = Column(String(32), nullable=False)
-    phase = Column(String(32), nullable=True)
-    tool_name = Column(String(128), nullable=True)
-    occurred_at = Column(DateTime(timezone=True), nullable=False)
-    freshness_ms = Column(Integer, nullable=True)
-    dedupe_key = Column(String(255), nullable=False)
-    payload_json = Column(Text, nullable=True)
-    received_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-
-    __table_args__ = (
-        UniqueConstraint("source", "dedupe_key", name="uq_runtime_events_source_dedupe"),
-        Index("ix_runtime_events_runtime_occurred", "runtime_key", "occurred_at"),
-        Index("ix_runtime_events_session_occurred", "session_id", "occurred_at"),
     )
 
 

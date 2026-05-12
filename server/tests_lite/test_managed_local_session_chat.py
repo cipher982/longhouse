@@ -679,7 +679,7 @@ def test_managed_local_active_observer_marks_canonical_turn(monkeypatch, tmp_pat
     async def fake_wait(**_kwargs):
         return ManagedLocalPhaseUpdate(
             phase="thinking",
-            runtime_event_id=12,
+            observation_id=12,
             occurred_at=datetime.now(timezone.utc),
             source="claude_hook",
         )
@@ -692,7 +692,7 @@ def test_managed_local_active_observer_marks_canonical_turn(monkeypatch, tmp_pat
             session_id=source_session.id,
             provider="claude",
             db_bind=db_bind,
-            after_runtime_event_id=0,
+            after_observation_id=0,
         )
     )
 
@@ -726,7 +726,7 @@ def test_managed_local_terminal_observer_marks_canonical_turn_and_releases_lock(
         return ManagedLocalTerminalResult(
             phase="idle",
             control_status="completed",
-            runtime_event_id=0,
+            observation_id=0,
             occurred_at=datetime.now(timezone.utc),
         )
 
@@ -744,7 +744,7 @@ def test_managed_local_terminal_observer_marks_canonical_turn_and_releases_lock(
             session_id=source_session.id,
             provider="claude",
             db_bind=db_bind,
-            after_runtime_event_id=0,
+            after_observation_id=0,
         )
     )
 
@@ -780,14 +780,14 @@ def test_managed_local_active_observer_is_noop_after_terminal_turn(monkeypatch, 
         return ManagedLocalTerminalResult(
             phase="idle",
             control_status="completed",
-            runtime_event_id=0,
+            observation_id=0,
             occurred_at=datetime.now(timezone.utc),
         )
 
     async def fake_active_wait(**_kwargs):
         return ManagedLocalPhaseUpdate(
             phase="thinking",
-            runtime_event_id=12,
+            observation_id=12,
             occurred_at=datetime.now(timezone.utc),
             source="claude_hook",
         )
@@ -806,7 +806,7 @@ def test_managed_local_active_observer_is_noop_after_terminal_turn(monkeypatch, 
             session_id=source_session.id,
             provider="claude",
             db_bind=db_bind,
-            after_runtime_event_id=0,
+            after_observation_id=0,
         )
     )
     asyncio.run(
@@ -815,7 +815,7 @@ def test_managed_local_active_observer_is_noop_after_terminal_turn(monkeypatch, 
             session_id=source_session.id,
             provider="claude",
             db_bind=db_bind,
-            after_runtime_event_id=0,
+            after_observation_id=0,
         )
     )
 
