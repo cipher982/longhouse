@@ -5,10 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
+from sqlalchemy import func
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentEvent
+from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionObservation
@@ -121,6 +123,7 @@ def rebuild_session_observation_projections(
         _rebuild_branch_prefix_projections(db, session_id=session_id)
         if transcript_touched:
             reconcile_provisional_transcript_events(db, session_id=session_id)
+        _recompute_session_metadata(db, session_id=session_id)
 
     db.flush()
     return SessionObservationRebuildResult(
@@ -199,6 +202,58 @@ def _rebuild_branch_prefix_projections(db: Session, *, session_id: UUID) -> None
         )
     if branches:
         db.flush()
+
+
+def _recompute_session_metadata(db: Session, *, session_id: UUID) -> None:
+    session_obj = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    if session_obj is None:
+        return
+
+    head_branch_id = (
+        db.query(AgentSessionBranch.id)
+        .filter(AgentSessionBranch.session_id == session_id)
+        .filter(AgentSessionBranch.is_head == 1)
+        .order_by(AgentSessionBranch.id.desc())
+        .scalar()
+    )
+    if head_branch_id is None:
+        head_branch_id = (
+            db.query(AgentSessionBranch.id)
+            .filter(AgentSessionBranch.session_id == session_id)
+            .order_by(AgentSessionBranch.id.asc())
+            .scalar()
+        )
+    if head_branch_id is None:
+        return
+
+    base_query = (
+        db.query(AgentEvent)
+        .filter(AgentEvent.session_id == session_id)
+        .filter(AgentEvent.branch_id == int(head_branch_id))
+        .filter(durable_transcript_event_predicate())
+    )
+    session_obj.user_messages = int(
+        base_query.filter(AgentEvent.role == "user")
+        .filter(or_(AgentEvent.content_text.is_(None), func.lower(func.trim(AgentEvent.content_text)) != "warmup"))
+        .count()
+    )
+    session_obj.assistant_messages = int(base_query.filter(AgentEvent.role == "assistant").filter(AgentEvent.tool_name.is_(None)).count())
+    session_obj.tool_calls = int(base_query.filter(AgentEvent.role == "assistant").filter(AgentEvent.tool_name.isnot(None)).count())
+
+    last_activity_at = base_query.with_entities(func.max(AgentEvent.timestamp)).scalar()
+    if last_activity_at is not None:
+        session_obj.last_activity_at = last_activity_at
+
+    revision_markers = {
+        str(row.received_at or row.observed_at)
+        for row in db.query(SessionObservation.received_at, SessionObservation.observed_at)
+        .filter(SessionObservation.session_id == session_id)
+        .filter(SessionObservation.kind == OBS_KIND_PROVIDER_EVENT)
+        .all()
+    }
+    if revision_markers:
+        session_obj.transcript_revision = len(revision_markers)
+        session_obj.needs_embedding = 1
 
 
 def _copy_source_prefix(
