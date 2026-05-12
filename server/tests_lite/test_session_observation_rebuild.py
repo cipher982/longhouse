@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 
 from sqlalchemy.orm import sessionmaker
 
+from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSourceLine
@@ -23,6 +25,8 @@ from zerg.services.session_observations import OBS_KIND_PROVIDER_EVENT
 from zerg.services.session_observations import record_session_observation
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
+from zerg.services.timeline_session_listing import TimelineSessionListParams
+from zerg.services.timeline_session_listing import list_timeline_sessions_for_browser
 from zerg.session_execution_home import SessionExecutionHome
 
 
@@ -30,6 +34,12 @@ def _make_sessionmaker(tmp_path, name: str):
     engine = make_engine(f"sqlite:///{tmp_path / name}")
     engine = engine.execution_options(schema_translate_map={"agents": None})
     AgentsBase.metadata.create_all(bind=engine)
+    return sessionmaker(bind=engine)
+
+
+def _make_initialized_sessionmaker(tmp_path, name: str):
+    engine = make_engine(f"sqlite:///{tmp_path / name}")
+    initialize_database(engine)
     return sessionmaker(bind=engine)
 
 
@@ -158,6 +168,77 @@ def _runtime_snapshot(db, session_id) -> list[dict]:
     ]
 
 
+def _product_surface_snapshot(db, session_id) -> dict:
+    store = AgentsStore(db)
+    visible_events = store.get_session_events(session_id, limit=20)
+    export_result = store.export_session_jsonl(session_id)
+    query_sessions, query_total = store.list_sessions(
+        include_test=True,
+        project="observation-rebuild",
+        provider="codex",
+        query="durable",
+        limit=10,
+    )
+    timeline_result = asyncio.run(
+        list_timeline_sessions_for_browser(
+            db=db,
+            params=TimelineSessionListParams(
+                project="observation-rebuild",
+                provider="codex",
+                environment=None,
+                include_test=True,
+                hide_autonomous=True,
+                device_id=None,
+                days_back=14,
+                query=None,
+                limit=10,
+                offset=0,
+                sort=None,
+                mode="lexical",
+                context_mode="forensic",
+            ),
+        )
+    )
+    assert export_result is not None
+    assert not timeline_result.compatibility_raw
+    assert hasattr(timeline_result.response, "sessions")
+    cards = timeline_result.response.sessions
+    card = next(card for card in cards if card.head.id == str(session_id))
+    transcript_preview = card.head.transcript_preview
+    runtime_display = card.head.runtime_display
+    runtime_facts = card.head.runtime_facts
+    return {
+        "visible_events": [
+            {
+                "role": event.role,
+                "content_text": event.content_text,
+                "event_origin": event.event_origin,
+                "provisional_state": event.provisional_state,
+            }
+            for event in visible_events
+        ],
+        "visible_event_count": store.count_session_events(session_id),
+        "query_total": query_total,
+        "query_session_ids": [str(session.id) for session in query_sessions],
+        "export_jsonl": export_result[0].decode("utf-8"),
+        "timeline": {
+            "total": timeline_result.response.total,
+            "thread_id": card.thread_id,
+            "head_id": card.head.id,
+            "timeline_anchor_at": card.timeline_anchor_at.isoformat() if card.timeline_anchor_at else None,
+            "preview_text": transcript_preview.text if transcript_preview else None,
+            "preview_is_provisional": transcript_preview.is_provisional if transcript_preview else None,
+            "display_phase": card.head.display_phase,
+            "runtime_status": card.head.status,
+            "runtime_phase": card.head.runtime_phase,
+            "runtime_display_lifecycle": runtime_display.lifecycle if runtime_display else None,
+            "runtime_fact_phase": runtime_facts.phase.kind if runtime_facts else None,
+            "timeline_status_label": card.head.timeline_card.status.label if card.head.timeline_card.status else None,
+            "timeline_border_tone": card.head.timeline_card.border_tone,
+        },
+    }
+
+
 def test_session_observation_rebuild_recovers_transcript_archive_and_runtime(tmp_path):
     SessionLocal = _make_sessionmaker(tmp_path, "observation_rebuild.db")
     now = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)
@@ -222,6 +303,173 @@ def test_session_observation_rebuild_recovers_transcript_archive_and_runtime(tmp
     assert after_events == before_events
     assert after_source_lines == before_source_lines
     assert after_runtime == before_runtime
+
+
+def test_session_observation_rebuild_preserves_product_surface_parity(tmp_path):
+    SessionLocal = _make_initialized_sessionmaker(tmp_path, "observation_rebuild_surface_parity.db")
+    now = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)
+    source_path = "/tmp/codex-rollout.jsonl"
+    assistant_line = (
+        '{"type":"response_item","timestamp":"2026-05-12T12:00:02Z",'
+        '"payload":{"type":"message","role":"assistant",'
+        '"content":[{"type":"output_text","text":"durable searchable transcript"}]}}'
+    )
+
+    with SessionLocal() as db:
+        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
+        ingest_runtime_events(
+            db,
+            [
+                _bridge_transcript_event(
+                    session_id=session.id,
+                    occurred_at=now,
+                    live_text="durable searchable transcript",
+                )
+            ],
+        )
+        AgentsStore(db).ingest_session(
+            SessionIngest(
+                id=session.id,
+                provider="codex",
+                environment="test",
+                project="observation-rebuild",
+                device_id="cinder",
+                cwd="/tmp/project",
+                started_at=now - timedelta(minutes=1),
+                events=[
+                    EventIngest(
+                        role="assistant",
+                        content_text="durable searchable transcript",
+                        timestamp=now + timedelta(seconds=2),
+                        source_path=source_path,
+                        source_offset=100,
+                        raw_json=assistant_line,
+                    )
+                ],
+                source_lines=[SourceLineIngest(source_path=source_path, source_offset=100, raw_json=assistant_line)],
+            )
+        )
+        ingest_runtime_events(db, [_phase_event(session_id=session.id, occurred_at=now + timedelta(seconds=5))])
+        db.commit()
+
+        before = _product_surface_snapshot(db, session.id)
+        result = rebuild_session_observation_projections(db, session_id=session.id, runtime_key=f"codex:{session.id}")
+        db.commit()
+        after = _product_surface_snapshot(db, session.id)
+
+    assert result.reducer_errors == ()
+    assert after == before
+    assert before["visible_events"] == [
+        {
+            "role": "assistant",
+            "content_text": "durable searchable transcript",
+            "event_origin": "durable",
+            "provisional_state": None,
+        }
+    ]
+    assert before["query_session_ids"] == [str(session.id)]
+    assert before["export_jsonl"] == assistant_line + "\n"
+
+
+def test_session_observation_rebuild_preserves_rewind_branch_head_projection(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "observation_rebuild_rewind_branch.db")
+    now = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)
+    source_path = "/tmp/rewind-session.jsonl"
+    line0 = '{"type":"user","text":"start"}'
+    line10_old = '{"type":"assistant","text":"old middle"}'
+    line20_old = '{"type":"assistant","text":"old tail"}'
+    line10_new = '{"type":"assistant","text":"rewritten middle"}'
+    line30_new = '{"type":"assistant","text":"new tail"}'
+
+    with SessionLocal() as db:
+        first = AgentsStore(db).ingest_session(
+            SessionIngest(
+                provider="claude",
+                environment="test",
+                project="observation-rebuild",
+                device_id="cinder",
+                cwd="/tmp/project",
+                started_at=now,
+                events=[
+                    EventIngest(role="user", content_text="start", timestamp=now, source_path=source_path, source_offset=0, raw_json=line0),
+                    EventIngest(
+                        role="assistant",
+                        content_text="old middle",
+                        timestamp=now + timedelta(seconds=1),
+                        source_path=source_path,
+                        source_offset=10,
+                        raw_json=line10_old,
+                    ),
+                    EventIngest(
+                        role="assistant",
+                        content_text="old tail",
+                        timestamp=now + timedelta(seconds=2),
+                        source_path=source_path,
+                        source_offset=20,
+                        raw_json=line20_old,
+                    ),
+                ],
+                source_lines=[
+                    SourceLineIngest(source_path=source_path, source_offset=0, raw_json=line0),
+                    SourceLineIngest(source_path=source_path, source_offset=10, raw_json=line10_old),
+                    SourceLineIngest(source_path=source_path, source_offset=20, raw_json=line20_old),
+                ],
+            )
+        )
+        session_id = first.session_id
+        AgentsStore(db).ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="claude",
+                environment="test",
+                project="observation-rebuild",
+                device_id="cinder",
+                cwd="/tmp/project",
+                started_at=now,
+                events=[
+                    EventIngest(
+                        role="assistant",
+                        content_text="rewritten middle",
+                        timestamp=now + timedelta(seconds=3),
+                        source_path=source_path,
+                        source_offset=10,
+                        raw_json=line10_new,
+                    ),
+                    EventIngest(
+                        role="assistant",
+                        content_text="new tail",
+                        timestamp=now + timedelta(seconds=4),
+                        source_path=source_path,
+                        source_offset=30,
+                        raw_json=line30_new,
+                    ),
+                ],
+                source_lines=[
+                    SourceLineIngest(source_path=source_path, source_offset=10, raw_json=line10_new),
+                    SourceLineIngest(source_path=source_path, source_offset=30, raw_json=line30_new),
+                ],
+            )
+        )
+        db.commit()
+
+        store = AgentsStore(db)
+        before_head_events = [event.content_text for event in store.get_session_events(session_id, branch_mode="head", limit=100)]
+        before_head_export = store.export_session_jsonl(session_id, branch_mode="head")[0].decode("utf-8")
+        before_all_export = store.export_session_jsonl(session_id, branch_mode="all")[0].decode("utf-8")
+
+        result = rebuild_session_observation_projections(db, session_id=session_id)
+        db.commit()
+
+        after_store = AgentsStore(db)
+        after_head_events = [event.content_text for event in after_store.get_session_events(session_id, branch_mode="head", limit=100)]
+        after_head_export = after_store.export_session_jsonl(session_id, branch_mode="head")[0].decode("utf-8")
+        after_all_export = after_store.export_session_jsonl(session_id, branch_mode="all")[0].decode("utf-8")
+
+    assert result.reducer_errors == ()
+    assert before_head_events == ["start", "rewritten middle", "new tail"]
+    assert after_head_events == before_head_events
+    assert after_head_export == before_head_export == "\n".join([line0, line10_new, line30_new]) + "\n"
+    assert after_all_export == before_all_export == "\n".join([line0, line10_old, line20_old, line10_new, line30_new]) + "\n"
 
 
 def test_session_observation_rebuild_is_idempotent(tmp_path):

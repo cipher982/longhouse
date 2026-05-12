@@ -9,9 +9,11 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentEvent
+from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
+from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.provisional_events import reconcile_provisional_transcript_events
 from zerg.services.session_observation_reducers import reduce_bridge_transcript_observation
 from zerg.services.session_observation_reducers import reduce_provider_event_observation
@@ -115,8 +117,10 @@ def rebuild_session_observation_projections(
                 )
             )
 
-    if transcript_touched and session_id is not None:
-        reconcile_provisional_transcript_events(db, session_id=session_id)
+    if session_id is not None:
+        _rebuild_branch_prefix_projections(db, session_id=session_id)
+        if transcript_touched:
+            reconcile_provisional_transcript_events(db, session_id=session_id)
 
     db.flush()
     return SessionObservationRebuildResult(
@@ -160,6 +164,152 @@ def _clear_projection_rows(db: Session, *, session_id: UUID | None, runtime_key:
     if runtime_filters:
         runtime_query.filter(or_(*runtime_filters)).delete(synchronize_session=False)
     db.flush()
+
+
+def _rebuild_branch_prefix_projections(db: Session, *, session_id: UUID) -> None:
+    branches = (
+        db.query(AgentSessionBranch)
+        .filter(AgentSessionBranch.session_id == session_id)
+        .filter(AgentSessionBranch.parent_branch_id.isnot(None))
+        .order_by(AgentSessionBranch.id.asc())
+        .all()
+    )
+    for branch in branches:
+        if branch.parent_branch_id is None:
+            continue
+        source_path = branch.branched_at_source_path
+        offset = int(branch.branched_at_offset) if branch.branched_at_offset is not None else None
+        if source_path is None or offset is None:
+            continue
+        _copy_source_prefix(
+            db,
+            session_id=session_id,
+            from_branch_id=int(branch.parent_branch_id),
+            to_branch_id=int(branch.id),
+            source_path=source_path,
+            offset=offset,
+        )
+        _copy_event_prefix(
+            db,
+            session_id=session_id,
+            from_branch_id=int(branch.parent_branch_id),
+            to_branch_id=int(branch.id),
+            source_path=source_path,
+            offset=offset,
+        )
+    if branches:
+        db.flush()
+
+
+def _copy_source_prefix(
+    db: Session,
+    *,
+    session_id: UUID,
+    from_branch_id: int,
+    to_branch_id: int,
+    source_path: str,
+    offset: int,
+) -> None:
+    parent_rows = (
+        db.query(AgentSourceLine)
+        .filter(AgentSourceLine.session_id == session_id)
+        .filter(AgentSourceLine.branch_id == from_branch_id)
+        .order_by(AgentSourceLine.source_path.asc(), AgentSourceLine.source_offset.asc(), AgentSourceLine.revision.asc())
+        .all()
+    )
+    latest_by_offset: dict[tuple[str, int], AgentSourceLine] = {}
+    for row in parent_rows:
+        key = (row.source_path, int(row.source_offset))
+        prev = latest_by_offset.get(key)
+        if prev is None or int(row.revision) > int(prev.revision):
+            latest_by_offset[key] = row
+
+    for row in latest_by_offset.values():
+        row_offset = int(row.source_offset)
+        if row.source_path == source_path and row_offset >= offset:
+            continue
+        exists = (
+            db.query(AgentSourceLine.id)
+            .filter(AgentSourceLine.session_id == session_id)
+            .filter(AgentSourceLine.branch_id == to_branch_id)
+            .filter(AgentSourceLine.source_path == row.source_path)
+            .filter(AgentSourceLine.source_offset == row_offset)
+            .filter(AgentSourceLine.line_hash == row.line_hash)
+            .first()
+        )
+        if exists is not None:
+            continue
+        db.add(
+            AgentSourceLine(
+                session_id=session_id,
+                source_path=row.source_path,
+                source_offset=row_offset,
+                branch_id=to_branch_id,
+                revision=1,
+                is_branch_copy=1,
+                raw_json=row.raw_json,
+                raw_json_z=row.raw_json_z,
+                raw_json_codec=row.raw_json_codec,
+                line_hash=row.line_hash,
+            )
+        )
+
+
+def _copy_event_prefix(
+    db: Session,
+    *,
+    session_id: UUID,
+    from_branch_id: int,
+    to_branch_id: int,
+    source_path: str,
+    offset: int,
+) -> None:
+    parent_events = (
+        db.query(AgentEvent)
+        .filter(AgentEvent.session_id == session_id)
+        .filter(AgentEvent.branch_id == from_branch_id)
+        .filter(durable_transcript_event_predicate())
+        .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
+        .all()
+    )
+    for event in parent_events:
+        event_offset = int(event.source_offset) if event.source_offset is not None else None
+        if event.source_path == source_path and event_offset is not None and event_offset >= offset:
+            continue
+        exists = (
+            db.query(AgentEvent.id)
+            .filter(AgentEvent.session_id == session_id)
+            .filter(AgentEvent.branch_id == to_branch_id)
+            .filter(AgentEvent.source_path == event.source_path)
+            .filter(AgentEvent.source_offset == event.source_offset)
+            .filter(AgentEvent.event_hash == event.event_hash)
+            .first()
+        )
+        if exists is not None:
+            continue
+        db.add(
+            AgentEvent(
+                session_id=session_id,
+                branch_id=to_branch_id,
+                role=event.role,
+                content_text=event.content_text,
+                tool_name=event.tool_name,
+                tool_input_json=event.tool_input_json,
+                tool_output_text=event.tool_output_text,
+                tool_call_id=event.tool_call_id,
+                timestamp=event.timestamp,
+                source_path=event.source_path,
+                source_offset=event.source_offset,
+                event_hash=event.event_hash,
+                schema_version=event.schema_version,
+                raw_json=event.raw_json,
+                raw_json_z=event.raw_json_z,
+                raw_json_codec=event.raw_json_codec,
+                event_uuid=event.event_uuid,
+                parent_event_uuid=event.parent_event_uuid,
+                event_origin="durable",
+            )
+        )
 
 
 def _projection_count(db: Session, model, *, session_id: UUID | None) -> int:
