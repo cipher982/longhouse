@@ -17,7 +17,6 @@ from uuid import UUID
 
 from pydantic import BaseModel
 from pydantic import Field
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from zerg.metrics import managed_codex_bridge_freshness_total
@@ -25,7 +24,6 @@ from zerg.metrics import managed_codex_liveness_invariant_sessions
 from zerg.metrics import managed_codex_runtime_events_total
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionObservation
-from zerg.models.agents import SessionRuntimeEvent
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.session_observation_reducers import reduce_bridge_transcript_observation
 from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
@@ -564,34 +562,12 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
     updated_runtime_keys: list[str] = []
 
     for event in events:
-        payload_json = json.dumps(event.payload or {}, sort_keys=True, separators=(",", ":"))
         received_at = datetime.now(timezone.utc)
         observation_result = record_runtime_observation(db, event, received_at=received_at)
         if not observation_result.inserted:
             duplicates += 1
             _record_managed_codex_runtime_event(event, "duplicate")
             continue
-
-        insert_stmt = (
-            sqlite_insert(SessionRuntimeEvent)
-            .values(
-                runtime_key=event.runtime_key,
-                session_id=event.session_id,
-                provider=event.provider,
-                device_id=event.device_id,
-                source=event.source,
-                kind=event.kind,
-                phase=event.phase,
-                tool_name=event.tool_name,
-                occurred_at=normalize_utc(event.occurred_at),
-                freshness_ms=event.freshness_ms,
-                dedupe_key=event.dedupe_key,
-                payload_json=payload_json,
-                received_at=received_at,
-            )
-            .on_conflict_do_nothing(index_elements=["source", "dedupe_key"])
-        )
-        db.execute(insert_stmt)
 
         accepted += 1
         if _is_bridge_transcript_event(event):

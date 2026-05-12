@@ -16,7 +16,7 @@ from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.models.agents import AgentsBase
-from zerg.models.agents import SessionRuntimeEvent
+from zerg.models.agents import SessionObservation
 
 
 def _make_client(tmp_path):
@@ -94,18 +94,19 @@ def test_agents_ingest_persists_ship_trace_runtime_event(tmp_path):
 
         assert response.status_code == 200, response.text
         with factory() as db:
-            event = (
-                db.query(SessionRuntimeEvent)
-                .filter(SessionRuntimeEvent.session_id == session_id)
-                .filter(SessionRuntimeEvent.source == "agents_ingest_trace")
+            observation = (
+                db.query(SessionObservation)
+                .filter(SessionObservation.session_id == session_id)
+                .filter(SessionObservation.source == "agents_ingest_trace")
                 .one()
             )
-            stored = json.loads(event.payload_json)
-            assert stored["progress_kind"] == "ship_pipeline_trace"
-            assert stored["ship_trace"]["trace_id"] == trace["trace_id"]
-            assert stored["ship_trace"]["prepare_ms"] == 200
-            assert stored["ship_trace"]["prepare_open_db_ms"] == 12
-            assert stored["ship_trace"]["prepare_parse_ms"] == 45
-            assert stored["server_trace"]["store_write_ms"] >= 0
+            stored = json.loads(observation.payload_json)
+            runtime_payload = stored["payload"]
+            assert runtime_payload["progress_kind"] == "ship_pipeline_trace"
+            assert runtime_payload["ship_trace"]["trace_id"] == trace["trace_id"]
+            assert runtime_payload["ship_trace"]["prepare_ms"] == 200
+            assert runtime_payload["ship_trace"]["prepare_open_db_ms"] == 12
+            assert runtime_payload["ship_trace"]["prepare_parse_ms"] == 45
+            assert runtime_payload["server_trace"]["store_write_ms"] >= 0
     finally:
         api_app.dependency_overrides.clear()
