@@ -20,7 +20,6 @@ from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionRuntimeEvent
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents_store import AgentsStore
 from zerg.services.session_listing import SessionListParams
@@ -29,6 +28,8 @@ from zerg.services.session_pubsub import TOPIC_TIMELINE
 from zerg.services.session_pubsub import get_pubsub
 from zerg.services.session_pubsub import reset_pubsub_for_test
 from zerg.services.session_pubsub import topic_session
+from zerg.services.session_runtime import RuntimeEventIngest
+from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.timeline_session_listing import TimelineSessionListParams
 
 
@@ -86,6 +87,40 @@ def _seed_session(
     db.commit()
     db.refresh(session)
     return session
+
+
+def _ingest_live_transcript(
+    db,
+    *,
+    session_id,
+    occurred_at: datetime,
+    text: str,
+    provider: str = "codex",
+) -> None:
+    ingest_runtime_events(
+        db,
+        [
+            RuntimeEventIngest(
+                runtime_key=f"{provider}:{session_id}",
+                session_id=session_id,
+                provider=provider,
+                device_id="cinder",
+                source="codex_bridge_live",
+                kind="progress_signal",
+                occurred_at=occurred_at,
+                dedupe_key=f"bridge:live:{session_id}:thread-1:turn-1:1",
+                payload={
+                    "progress_kind": "bridge_live_transcript_delta",
+                    "live_text": text,
+                    "thread_id": "thread-1",
+                    "turn_id": "turn-1",
+                    "seq": 1,
+                    "method": "item/agentMessage/delta",
+                },
+            )
+        ],
+    )
+    db.commit()
 
 
 class _ConnectedRequest:
@@ -424,30 +459,12 @@ def test_timeline_stream_upserts_on_live_transcript_overlay_only_change(tmp_path
             next_event = asyncio.create_task(anext(stream))
             await asyncio.sleep(0)
             with session_local() as db:
-                db.add(
-                    SessionRuntimeEvent(
-                        runtime_key=f"codex:{session.id}",
-                        session_id=session.id,
-                        provider="codex",
-                        device_id="cinder",
-                        source="codex_bridge_live",
-                        kind="progress_signal",
-                        occurred_at=now,
-                        received_at=now,
-                        dedupe_key=f"bridge:live:{session.id}:1",
-                        payload_json=json.dumps(
-                            {
-                                "progress_kind": "bridge_live_transcript_delta",
-                                "live_text": "Bridge text arrived before the durable transcript.",
-                                "thread_id": "thread-1",
-                                "turn_id": "turn-1",
-                                "seq": 1,
-                                "method": "item/agentMessage/delta",
-                            }
-                        ),
-                    )
+                _ingest_live_transcript(
+                    db,
+                    session_id=session.id,
+                    occurred_at=now,
+                    text="Bridge text arrived before the durable transcript.",
                 )
-                db.commit()
             get_pubsub().publish(
                 TOPIC_TIMELINE,
                 {"kind": "runtime_update", "session_id": str(session.id)},
@@ -463,7 +480,11 @@ def test_timeline_stream_upserts_on_live_transcript_overlay_only_change(tmp_path
     assert initial["event"] == "session_upsert"
     assert upsert["event"] == "session_upsert"
     payload = json.loads(upsert["data"])
-    assert payload["session"]["head"]["live_transcript"]["text"] == "Bridge text arrived before the durable transcript."
+    assert payload["session"]["head"]["live_transcript"] is None
+    assert (
+        payload["session"]["head"]["transcript_preview"]["text"]
+        == "Bridge text arrived before the durable transcript."
+    )
     reset_pubsub_for_test()
 
 
@@ -502,33 +523,16 @@ def test_timeline_stream_known_session_update_skips_window_requery(tmp_path):
             next_event = asyncio.create_task(anext(stream))
             await asyncio.sleep(0)
             with session_local() as db:
-                db.add(
-                    SessionRuntimeEvent(
-                        runtime_key=f"claude:{session.id}",
-                        session_id=session.id,
-                        provider="claude",
-                        device_id="cinder",
-                        source="codex_bridge_live",
-                        kind="progress_signal",
-                        occurred_at=now,
-                        received_at=now,
-                        dedupe_key=f"bridge:live:{session.id}:targeted",
-                        payload_json=json.dumps(
-                            {
-                                "progress_kind": "bridge_live_transcript_delta",
-                                "live_text": "Targeted card update",
-                                "thread_id": "thread-1",
-                                "turn_id": "turn-1",
-                                "seq": 1,
-                                "method": "item/agentMessage/delta",
-                            }
-                        ),
-                    )
+                _ingest_live_transcript(
+                    db,
+                    session_id=session.id,
+                    occurred_at=now,
+                    text="Targeted card update",
+                    provider="codex",
                 )
-                db.commit()
             get_pubsub().publish(
                 TOPIC_TIMELINE,
-                {"kind": "runtime", "session_id": str(session.id), "provider": "claude"},
+                {"kind": "runtime", "session_id": str(session.id), "provider": "codex"},
             )
             targeted = await asyncio.wait_for(next_event, timeout=0.5)
             return connected, initial, targeted
@@ -547,7 +551,8 @@ def test_timeline_stream_known_session_update_skips_window_requery(tmp_path):
     assert targeted["event"] == "session_upsert"
     assert window_signature_calls == 1
     payload = json.loads(targeted["data"])
-    assert payload["session"]["head"]["live_transcript"]["text"] == "Targeted card update"
+    assert payload["session"]["head"]["live_transcript"] is None
+    assert payload["session"]["head"]["transcript_preview"]["text"] == "Targeted card update"
     reset_pubsub_for_test()
 
 

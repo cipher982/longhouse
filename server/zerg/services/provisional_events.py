@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -9,6 +10,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import and_
+from sqlalchemy import func
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -27,6 +29,16 @@ PROVISIONAL_SUPERSEDED = "superseded"
 
 PROVISIONAL_MATCH_WINDOW = timedelta(minutes=30)
 MIN_PREFIX_MATCH_CHARS = 12
+
+
+@dataclass(frozen=True)
+class TranscriptPreview:
+    event_id: int
+    text: str
+    event_origin: str
+    timestamp: datetime
+    provisional_cursor: str | None
+    provisional_complete: bool
 
 
 def visible_transcript_event_predicate():
@@ -102,7 +114,8 @@ def materialize_live_transcript_event(
     timestamp = normalize_utc(occurred_at) or normalize_utc(received_at) or datetime.now(timezone.utc)
     complete = 1 if bool(payload.get("turn_completed")) else 0
 
-    existing = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).filter(AgentEvent.provisional_key == key).first()
+    session_events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id)
+    existing = session_events.filter(AgentEvent.provisional_key == key).first()
     if existing is not None:
         existing_seq = existing.provisional_seq
         if seq is not None and existing_seq is not None and seq < existing_seq:
@@ -198,12 +211,56 @@ def reconcile_provisional_transcript_events(db: Session, *, session_id: UUID) ->
 
 
 def supersede_active_provisional_transcript_events(db: Session, *, session_id: UUID) -> int:
-    rows = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).filter(active_provisional_event_predicate()).all()
+    session_events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id)
+    rows = session_events.filter(active_provisional_event_predicate()).all()
     for row in rows:
         row.provisional_state = PROVISIONAL_SUPERSEDED
     if rows:
         db.flush()
     return len(rows)
+
+
+def load_active_provisional_preview_map(db: Session, session_ids: list[UUID]) -> dict[str, TranscriptPreview]:
+    if not session_ids:
+        return {}
+
+    ranked = (
+        db.query(
+            AgentEvent.id.label("event_id"),
+            AgentEvent.session_id.label("session_id"),
+            AgentEvent.content_text.label("text"),
+            AgentEvent.event_origin.label("event_origin"),
+            AgentEvent.timestamp.label("timestamp"),
+            AgentEvent.provisional_cursor.label("provisional_cursor"),
+            AgentEvent.provisional_complete.label("provisional_complete"),
+            func.row_number()
+            .over(
+                partition_by=AgentEvent.session_id,
+                order_by=(AgentEvent.timestamp.desc(), AgentEvent.id.desc()),
+            )
+            .label("rn"),
+        )
+        .filter(AgentEvent.session_id.in_(session_ids))
+        .filter(active_provisional_event_predicate())
+        .filter(AgentEvent.content_text.isnot(None))
+        .subquery()
+    )
+    rows = db.query(ranked).filter(ranked.c.rn == 1).all()
+
+    previews: dict[str, TranscriptPreview] = {}
+    for row in rows:
+        text = str(row.text or "").strip()
+        if not text:
+            continue
+        previews[str(row.session_id)] = TranscriptPreview(
+            event_id=int(row.event_id),
+            text=text,
+            event_origin=str(row.event_origin or EVENT_ORIGIN_LIVE_PROVISIONAL),
+            timestamp=row.timestamp,
+            provisional_cursor=row.provisional_cursor,
+            provisional_complete=bool(row.provisional_complete),
+        )
+    return previews
 
 
 def _match_durable_event(

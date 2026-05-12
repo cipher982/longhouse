@@ -69,23 +69,31 @@ function isAnimatedRuntimeTone(tone: string): boolean {
   return tone === "thinking" || tone === "running";
 }
 
-function getLiveTranscriptPreview(session: TimelineSessionCard["head"]): string | null {
-  const overlay = session.live_transcript;
-  if (!overlay) {
+type TranscriptPreviewCard = {
+  text: string;
+  fullText: string;
+  label: "Live output" | "Latest output";
+};
+
+function getTranscriptPreviewCard(session: TimelineSessionCard["head"]): TranscriptPreviewCard | null {
+  const preview = session.transcript_preview;
+  if (!preview || preview.is_stale) {
     return null;
   }
-  const text = overlay?.text?.trim();
+  const text = preview.text?.trim();
   if (!text) {
     return null;
   }
-  if (overlay.is_stale || overlay.freshness !== "current") {
-    return null;
-  }
   const compact = text.replace(/\s+/g, " ");
-  if (compact.length <= LIVE_TRANSCRIPT_PREVIEW_LIMIT) {
-    return compact;
-  }
-  return `${compact.slice(0, LIVE_TRANSCRIPT_PREVIEW_LIMIT - 1).trimEnd()}...`;
+  const previewText =
+    compact.length <= LIVE_TRANSCRIPT_PREVIEW_LIMIT
+      ? compact
+      : `${compact.slice(0, LIVE_TRANSCRIPT_PREVIEW_LIMIT - 1).trimEnd()}...`;
+  return {
+    text: previewText,
+    fullText: text,
+    label: preview.is_complete ? "Latest output" : "Live output",
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -193,7 +201,7 @@ export function SessionCard({
 
   const showKeywordSnippet = !isSemanticResult && !!highlightQuery && !!detailSession.match_snippet;
   const showSemanticSnippet = isSemanticResult && !!detailSession.match_snippet;
-  const liveTranscriptPreview = getLiveTranscriptPreview(session);
+  const transcriptPreview = getTranscriptPreviewCard(session);
   const cardActionLabel = groupedQueryMode ? "Open match" : "Open session";
   const hasControlPath = interaction.liveControlAvailable || interaction.hostReattachAvailable;
   // Lifecycle is the closure axis. The reducer only closes on explicit
@@ -210,7 +218,7 @@ export function SessionCard({
     !showKeywordSnippet &&
     !showSemanticSnippet &&
     !isClosedSession &&
-    liveTranscriptPreview != null;
+    transcriptPreview != null;
   const showSummary =
     !showLiveTranscript && !showKeywordSnippet && !showSemanticSnippet && !!session.summary;
   const showGenerating =
@@ -407,13 +415,13 @@ export function SessionCard({
             <div
               className="session-card-live-transcript"
               data-testid="session-card-live-transcript"
-              title={session.live_transcript?.text}
+              title={transcriptPreview?.fullText}
             >
               <span className="session-card-live-transcript__label">
-                {session.live_transcript?.is_complete ? "Latest output" : "Live output"}
+                {transcriptPreview?.label}
               </span>
               <span className="session-card-live-transcript__text">
-                {liveTranscriptPreview}
+                {transcriptPreview?.text}
               </span>
             </div>
           )}
