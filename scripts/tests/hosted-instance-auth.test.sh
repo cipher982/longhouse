@@ -164,4 +164,55 @@ if [[ "$(cat "$temp_json.body")" != '{"image":"ghcr.io/cipher982/longhouse-runti
   exit 1
 fi
 
+curl() {
+  local data=""
+  local output_file=""
+  local request_url=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -d)
+        data="$2"
+        shift 2
+        ;;
+      -o)
+        output_file="$2"
+        shift 2
+        ;;
+      -w|-H|-X|--connect-timeout|--max-time)
+        shift 2
+        ;;
+      *)
+        request_url="$1"
+        shift
+        ;;
+    esac
+  done
+
+  case "$request_url" in
+    */api/instances/7/reprovision)
+      printf '%s' "$request_url" >"$temp_json.request"
+      printf '%s' "$data" >"$temp_json.body"
+      printf 'cloudflare timeout' >"$output_file"
+      printf '524'
+      ;;
+    */api/health)
+      printf '%s' "$request_url" >"$temp_json.health-request"
+      printf '{"build":{"commit":"deadbeefcafebabedeadbeefcafebabedeadbeef"}}' >"$output_file"
+      printf '200'
+      ;;
+    *)
+      echo "Unexpected curl URL in reprovision timeout fallback test: $request_url" >&2
+      return 1
+      ;;
+  esac
+}
+
+export INSTANCE_SUBDOMAIN="demo"
+lh_hosted_reprovision "7" "ghcr.io/cipher982/longhouse-runtime:deadbeefcafebabedeadbeefcafebabedeadbeef"
+
+if [[ "$(cat "$temp_json.health-request")" != 'https://demo.longhouse.ai/api/health' ]]; then
+  echo "Expected reprovision timeout fallback to poll hosted runtime health"
+  exit 1
+fi
+
 echo "hosted-instance auth tests passed"
