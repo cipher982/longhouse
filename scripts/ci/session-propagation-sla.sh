@@ -7,6 +7,9 @@ ATTEMPTS="${SESSION_PROPAGATION_ATTEMPTS:-3}"
 SUBDOMAIN="${SESSION_PROPAGATION_SUBDOMAIN:-david010}"
 PROJECT="${SESSION_PROPAGATION_PROJECT:-zerg}"
 SLA_CASE="${SESSION_PROPAGATION_SLA_CASE:-managed_codex_warm_live_graceful_close}"
+PROFILE="${SESSION_PROPAGATION_PROFILE:-warm-live}"
+PROVIDER="${SESSION_PROPAGATION_PROVIDER:-codex}"
+OWNERSHIP="${SESSION_PROPAGATION_OWNERSHIP:-managed}"
 CODEX_EFFORT="${SESSION_PROPAGATION_CODEX_EFFORT:-low}"
 BASE_RUN_ID="${SESSION_PROPAGATION_RUN_ID:-session-propagation-$(date -u +%Y%m%dT%H%M%SZ)}"
 OUTPUT_ROOT="${SESSION_PROPAGATION_OUTPUT_ROOT:-$ROOT_DIR/artifacts/session-propagation-sla/$BASE_RUN_ID}"
@@ -21,6 +24,9 @@ summary="$OUTPUT_ROOT/summary.md"
   echo ""
   echo "- Run ID: \`$BASE_RUN_ID\`"
   echo "- SLA case: \`$SLA_CASE\`"
+  echo "- Profile: \`$PROFILE\`"
+  echo "- Provider: \`$PROVIDER\`"
+  echo "- Ownership: \`$OWNERSHIP\`"
   echo "- Subdomain: \`$SUBDOMAIN\`"
   echo "- Project: \`$PROJECT\`"
   echo "- Attempts: \`$ATTEMPTS\`"
@@ -78,17 +84,18 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
 
   cmd=(
     python3 "$PROFILER"
-    --profile warm-live
+    --profile "$PROFILE"
     --sla-case "$SLA_CASE"
-    --provider codex
-    --ownership managed
+    --provider "$PROVIDER"
+    --ownership "$OWNERSHIP"
     --subdomain "$SUBDOMAIN"
     --project "$PROJECT"
-    --trust-longhouse-codex-hooks
-    --codex-effort "$CODEX_EFFORT"
     --run-id "$attempt_run_id"
     --output-dir "$attempt_dir"
   )
+  if [[ "$PROVIDER" == "codex" && "$OWNERSHIP" == "managed" ]]; then
+    cmd+=(--trust-longhouse-codex-hooks --codex-effort "$CODEX_EFFORT")
+  fi
   cmd+=("$@")
 
   printf '%q ' "${cmd[@]}" > "$attempt_dir/command.txt"

@@ -74,6 +74,16 @@ Metric `legacy_aliases` entries exist only to bridge old artifact keys while
 the current profiler is being migrated. New metrics and reports should use the
 canonical metric IDs, not legacy aliases.
 
+`ci_mode` tells automation what to do with a case:
+
+- `gate`: run in CI and fail the job on product/SLA failure
+- `report`: runnable in CI as a non-gating experimental profile
+- `blocked`: intentionally specified, but not executable until its driver exists
+
+Blocked cases must name the missing driver work in `blocked_reason`. That keeps
+Claude/OpenCode coverage visible without pretending Codex's bridge mechanics
+apply to them.
+
 ## Current Required Path
 
 `managed_codex_warm_live_graceful_close`
@@ -117,10 +127,14 @@ important user-facing targets are:
 - cold timeline fresh navigation to target card paint: 2000ms target, 4000ms alarm
 - cold timeline fresh navigation to closed card paint: 2000ms target, 4000ms alarm
 - warm live output local truth to browser paint: 500ms target, 1000ms alarm
-- warm close local truth to timeline SSE: 500ms target, 1000ms alarm
 - warm graceful close local truth to browser paint: 1000ms target, 2000ms alarm
-- warm close SSE to browser paint: 100ms target, 250ms alarm
+- warm close local truth to Runtime Host DB state: 500ms target, 1000ms alarm
 - durable archive local transcript to hosted events: 3000ms target, 30000ms alarm
+
+The profiler still records close-SSE watcher timings, but those are diagnostic.
+The product SLA for close is the already-open browser card paint plus Runtime
+Host state, because the extra watcher can lag behind the page's own timeline
+stream and does not represent what the user saw.
 
 ## Experimental Paths
 
@@ -129,14 +143,18 @@ These should be measured and reported, but not treated as hard gates yet.
 Managed Claude warm live and graceful close:
 Claude uses native channel/MCP/stdin mechanics, not the Codex bridge. The
 profiler must record channel state and process identity when it classifies a
-Claude session.
+Claude session. This case is currently `ci_mode=blocked` until a safe
+non-interactive Claude channel driver and auth/cost controls exist.
 
 Managed OpenCode lifecycle:
 Lifecycle can be measured before remote send/interrupt is a product contract.
+This is `ci_mode=blocked` until managed OpenCode launch/control is first-class.
 
 Unmanaged Codex and Claude graceful close:
 These compatibility/import paths should be truthful, but they do not get the
-same terminal-class realtime promise as managed control paths.
+same terminal-class realtime promise as managed control paths. Unmanaged Codex
+is runnable as a report-only CI case; unmanaged Claude remains blocked until a
+safe direct-run driver exists.
 
 Managed Codex Ctrl-C, SSH disconnect, and provider kill:
 These require a real PTY or SSH harness. The purpose is to distinguish terminal
@@ -173,7 +191,9 @@ browser semantics.
 
 Manual/pre-push profiler:
 Run the required managed Codex warm-live path against the dogfood tenant and
-save artifacts.
+save artifacts. Use workflow dispatch with `include_experimental=true` to also
+run the report-only Codex cold timeline, durable archive, and unmanaged
+baseline cases.
 
 Nightly dogfood:
 Run required plus selected experimental paths repeatedly and compute p50/p95.
@@ -195,6 +215,11 @@ for managed-provider profiling and should fail the workflow as setup error.
 The GitHub workflow must run on a configured dogfood runner with `longhouse`,
 `longhouse-engine`, `codex`, Bun, and browser support available; generic
 hosted runners are not valid for this SLA.
+
+`SESSION_PROPAGATION_SLA_CASE`, `SESSION_PROPAGATION_PROFILE`,
+`SESSION_PROPAGATION_PROVIDER`, and `SESSION_PROPAGATION_OWNERSHIP` select a
+specific runnable case. The GitHub workflow uses those knobs to keep the
+required gate and report-only experimental Codex cases in one CI pipeline.
 
 Archive-path outliers should be debugged from `ship_trace.v1` before guessing.
 The trace keeps total `prepare_ms` and also reports `prepare_open_db_ms`,

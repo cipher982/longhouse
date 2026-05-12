@@ -108,13 +108,17 @@ long until the timeline shows the session as closed?
 
 Primary metrics:
 
-- `warm_close_local_to_sse_ms`
 - `warm_close_local_to_paint_ms`
-- `warm_close_sse_to_paint_ms`
+- `warm_close_local_to_db_ms`
 
 Diagnostic layer metrics:
 
-- `warm_close_local_to_db_ms`
+- `warm_close_local_to_sse_ms`
+- `warm_close_sse_to_paint_ms`
+
+The close-SSE watcher metrics are diagnostic only. They measure the profiler's
+extra observer, not the already-open page's own stream-to-paint path, so they
+must not be used as the user-visible close SLA.
 
 Target posture after the primary paths are stable: warm live and warm close
 should be p95 < 500ms on nominal network for managed sessions, with a hard
@@ -711,6 +715,8 @@ profiles are added. It currently covers:
 - provider precondition classification for Codex hooks needing review
 - `--profile warm-live` for managed Codex with browser-card and SSE warm
   preconditions before prompt send
+- case-aware CI selection through `config/session-propagation-sla.toml`; managed
+  Codex is the gate, and runnable Codex experimental paths are report-only
 - Markdown and JSON metrics artifacts with trust verdicts
 
 ## Next Implementation Slice

@@ -22,6 +22,9 @@ def test_session_propagation_sla_manifest_is_valid():
     assert summary["cases"]["required"] == 1
     assert summary["cases"]["experimental"] >= 9
     assert summary["cases"]["undefined"] >= 3
+    assert summary["ci_modes"]["gate"] == 1
+    assert summary["ci_modes"]["report"] >= 3
+    assert summary["ci_modes"]["blocked"] >= 6
     assert summary["metrics"] >= 10
 
 
@@ -36,6 +39,8 @@ def test_session_propagation_sla_manifest_keeps_codex_required_path():
     assert case["control_path"] == "managed"
     assert case["topology"] == "hosted_runtime_host"
     assert case["profile"] == "warm-live"
+    assert case["profiler_driver"] == "managed_codex_warm_live"
+    assert case["ci_mode"] == "gate"
     assert "timeline_sse" in case["required_observers"]
     assert "browser_card" in case["required_observers"]
     assert "warm_close_local_to_sse_ms" not in case["metrics"]
@@ -53,10 +58,34 @@ def test_session_propagation_sla_manifest_keeps_codex_required_path():
     assert cold_case["status"] == "experimental"
     assert cold_case["profile"] == "cold-timeline"
     assert cold_case["profile_class"] == "cold_timeline"
+    assert cold_case["ci_mode"] == "report"
     assert cold_case["metrics"] == [
         "cold_timeline_navigation_to_card_paint_ms",
         "cold_timeline_navigation_to_close_paint_ms",
     ]
+
+
+def test_session_propagation_sla_tracks_provider_coverage_and_ci_readiness():
+    sla_manifest = _load_sla_manifest_module()
+    manifest = sla_manifest.load_manifest()
+
+    cases = {case["id"]: case for case in manifest["cases"]}
+    assert cases["managed_claude_warm_live_graceful_close"]["ci_mode"] == "blocked"
+    assert "blocked_reason" in cases["managed_claude_warm_live_graceful_close"]
+    assert cases["unmanaged_codex_direct_graceful_close"]["ci_mode"] == "report"
+    assert cases["unmanaged_codex_direct_graceful_close"]["profiler_driver"] == "unmanaged_codex_baseline"
+    assert cases["managed_opencode_warm_lifecycle"]["ci_mode"] == "blocked"
+
+    explicit_combos = {
+        (case["provider"], case["control_path"])
+        for case in manifest["cases"]
+        if case["status"] != "undefined" and case["provider"] != "all"
+    }
+    assert ("codex", "managed") in explicit_combos
+    assert ("codex", "unmanaged") in explicit_combos
+    assert ("claude", "managed") in explicit_combos
+    assert ("claude", "unmanaged") in explicit_combos
+    assert ("opencode", "managed") in explicit_combos
 
 
 def test_session_propagation_sla_metric_aliases_support_existing_profiler_names():
