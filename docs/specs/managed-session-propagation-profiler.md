@@ -471,6 +471,14 @@ Claude requires an actual channel-backed Claude process. A headless `--no-attach
 
 Claude liveness is noisier because it depends heavily on process scan plus channel state. The profiler should record the channel state file and process identity every time it classifies Claude as live, detached, or closed.
 
+The first Claude slice is observation-only: `scripts/ops/probe-managed-claude-truth.py`
+attaches to an existing managed Claude session id and records the truth surfaces
+needed to design the real driver, including channel state, hook outbox phase
+rows, provider process identity, channel health, and hosted runtime truth. It
+should graduate into the shared profiler only after one live managed-Claude run
+proves which local signal is the primary clock for create, turn phase, and
+close.
+
 ## Measurements
 
 Every run should write a structured JSONL artifact. Each observation must include:

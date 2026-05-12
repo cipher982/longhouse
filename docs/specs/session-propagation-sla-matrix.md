@@ -145,6 +145,10 @@ Claude uses native channel/MCP/stdin mechanics, not the Codex bridge. The
 profiler must record channel state and process identity when it classifies a
 Claude session. This case is currently `ci_mode=blocked` until a safe
 non-interactive Claude channel driver and auth/cost controls exist.
+`make managed-claude-truth-probe ARGS="--session-id <id>"` is the current
+observation-only POC: it does not launch Claude, but it captures local-health,
+Claude channel state, hook outbox rows, provider/bridge PIDs, channel HTTP
+health, and hosted runtime truth for a live managed Claude session.
 
 Managed OpenCode lifecycle:
 Lifecycle can be measured before remote send/interrupt is a product contract.
