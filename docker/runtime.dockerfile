@@ -91,7 +91,6 @@ COPY --from=dependencies /repo/server/.venv ./.venv
 
 # Copy backend source
 COPY server/ ./
-COPY control-plane/longhouse_shared /app/longhouse_shared
 
 # Copy shared config
 COPY config/models.json /config/models.json
@@ -144,7 +143,6 @@ WORKDIR /app
 # context is sent, so importlib.resources.files("zerg") / "build_identity.json"
 # resolves inside the container with no extra COPY.
 COPY --from=backend-builder --chown=longhouse:longhouse /repo/server /app
-COPY --from=backend-builder --chown=longhouse:longhouse /app/longhouse_shared /app/longhouse_shared
 
 # Copy frontend dist to where backend expects it
 COPY --from=frontend-builder --chown=longhouse:longhouse /app/dist /app/web/dist
