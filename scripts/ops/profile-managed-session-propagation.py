@@ -3810,11 +3810,14 @@ def batch_local_health_preflight() -> dict[str, Any]:
         and int(transport_health.get("spool_pending") or 0) == 0
         and not outbox_stale
     )
+    ok = completed.returncode == 0 and not outbox_stale and (health_state == "healthy" or current_transport_ok)
     return {
-        "ok": completed.returncode == 0 and (health_state == "healthy" or current_transport_ok),
+        "ok": ok,
         "reason": (
-            "local_transport_currently_unhealthy"
-            if not current_transport_ok
+            "local_outbox_stale"
+            if outbox_stale
+            else "local_transport_currently_unhealthy"
+            if not (health_state == "healthy" or current_transport_ok)
             else None
         ),
         "health_state": health_state,
