@@ -65,6 +65,29 @@ Durable rows keep the existing source identity:
 - `event_hash`
 - provider-native `event_uuid` where available
 
+## Evidence Baseline
+
+Existing backend tests already prove that file-derived live ingest and archive
+ingest converge when they share `source_path`, `source_offset`, and event hash:
+`server/tests_lite/test_session_event_identity.py`.
+
+The managed Codex profiler artifact from
+`artifacts/managed-session-propagation/managed-phase2-20260507181856` shows the
+important bridge/archive mismatch:
+
+- bridge send returned `thread_id=019e04bc-f9ff-7d02-a5ff-4eb292419eaf` and
+  `turn_id=019e04bd-03ee-73b1-950d-0d0ee89d1c44`
+- local rollout contained the final assistant text in both
+  `event_msg.agent_message` and `response_item.message`
+- the rollout `task_complete` row carried the same `turn_id`
+- the source-backed assistant `response_item` did not expose a stable item id in
+  the archived row from that run
+
+That means the first reconciliation pass should not depend on a perfect provider
+item id. It should use the stable provisional turn key for upserts, then match
+or supersede provisional rows against durable assistant text once the archive
+arrives.
+
 ## Lifecycle
 
 ### Live Bridge Snapshot
