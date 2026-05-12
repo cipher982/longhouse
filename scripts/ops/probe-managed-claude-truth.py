@@ -350,6 +350,16 @@ def summarize_probe(
     hosted_source = hosted_database if isinstance(hosted_database, dict) else hosted
     runtime_state = hosted_source.get("runtime_state") if isinstance(hosted_source, dict) else None
     session = hosted_source.get("session") if isinstance(hosted_source, dict) else None
+    event_stats = hosted_source.get("event_stats") if isinstance(hosted_source, dict) else None
+    runtime_event_stats = hosted_source.get("runtime_event_stats") if isinstance(hosted_source, dict) else None
+    runtime_events = hosted_source.get("recent_runtime_events") if isinstance(hosted_source, dict) else []
+    terminal_events = [
+        event
+        for event in (runtime_events or [])
+        if isinstance(event, dict) and str(event.get("kind") or "").strip() == "terminal_signal"
+    ]
+    log_counts = hosted.get("log_counts") if isinstance(hosted, dict) else None
+    write_serializer = (log_counts or {}).get("write_serializer") if isinstance(log_counts, dict) else None
     hook_entries = hook_outbox.get("entries") if isinstance(hook_outbox, dict) else []
     latest_hook = hook_entries[0] if hook_entries else {}
     latest_hook_payload = latest_hook.get("payload") if isinstance(latest_hook, dict) else {}
@@ -378,6 +388,25 @@ def summarize_probe(
         "hosted_terminal_reason": (runtime_state or {}).get("terminal_reason") if isinstance(runtime_state, dict) else None,
         "hosted_terminal_source": (runtime_state or {}).get("terminal_source") if isinstance(runtime_state, dict) else None,
         "hosted_runtime_updated_at": (runtime_state or {}).get("updated_at") if isinstance(runtime_state, dict) else None,
+        "hosted_archive_event_count": (event_stats or {}).get("count") if isinstance(event_stats, dict) else None,
+        "hosted_archive_assistant_events": (event_stats or {}).get("assistant_events") if isinstance(event_stats, dict) else None,
+        "hosted_archive_tool_events": (event_stats or {}).get("tool_events") if isinstance(event_stats, dict) else None,
+        "hosted_session_user_messages": (session or {}).get("user_messages") if isinstance(session, dict) else None,
+        "hosted_session_assistant_messages": (session or {}).get("assistant_messages") if isinstance(session, dict) else None,
+        "hosted_transcript_revision": (session or {}).get("transcript_revision") if isinstance(session, dict) else None,
+        "hosted_runtime_event_count": (runtime_event_stats or {}).get("count")
+        if isinstance(runtime_event_stats, dict)
+        else None,
+        "hosted_terminal_event_count": len(terminal_events),
+        "hosted_terminal_event_sources": [
+            str(event.get("source") or "").strip() for event in terminal_events if str(event.get("source") or "").strip()
+        ],
+        "hosted_write_serializer_avg_wait_ms": (write_serializer or {}).get("avg_wait_ms")
+        if isinstance(write_serializer, dict)
+        else None,
+        "hosted_write_serializer_max_wait_ms": (write_serializer or {}).get("max_wait_ms")
+        if isinstance(write_serializer, dict)
+        else None,
     }
 
 
@@ -412,6 +441,13 @@ def write_summary(path: Path, summary: dict[str, Any]) -> None:
         f"- Hosted terminal reason: `{summary.get('hosted_terminal_reason') or '-'}`",
         f"- Hosted terminal source: `{summary.get('hosted_terminal_source') or '-'}`",
         f"- Hosted runtime updated: `{summary.get('hosted_runtime_updated_at') or '-'}`",
+        f"- Hosted archive events: `{summary.get('hosted_archive_event_count')}`",
+        f"- Hosted assistant archive events: `{summary.get('hosted_archive_assistant_events')}`",
+        f"- Hosted transcript revision: `{summary.get('hosted_transcript_revision')}`",
+        f"- Hosted runtime events: `{summary.get('hosted_runtime_event_count')}`",
+        f"- Hosted terminal event count: `{summary.get('hosted_terminal_event_count')}`",
+        f"- Hosted terminal event sources: `{', '.join(summary.get('hosted_terminal_event_sources') or []) or '-'}`",
+        f"- Hosted WriteSerializer avg/max wait ms: `{summary.get('hosted_write_serializer_avg_wait_ms')}` / `{summary.get('hosted_write_serializer_max_wait_ms')}`",
     ]
     path.write_text("\n".join(rows) + "\n", encoding="utf-8")
 

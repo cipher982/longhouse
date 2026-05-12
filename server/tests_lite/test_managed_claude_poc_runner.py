@@ -68,3 +68,15 @@ def test_assistant_transcript_match_finds_assistant_response(tmp_path, monkeypat
     assert matched is True
     assert path == str(transcript)
     assert line == 2
+
+
+def test_read_json_file_returns_dict_only(tmp_path):
+    runner = _load_runner()
+    valid = tmp_path / "summary.json"
+    valid.write_text(json.dumps({"hosted_archive_event_count": 2}), encoding="utf-8")
+    array = tmp_path / "array.json"
+    array.write_text(json.dumps([1, 2]), encoding="utf-8")
+
+    assert runner.read_json_file(valid) == {"hosted_archive_event_count": 2}
+    assert runner.read_json_file(array) is None
+    assert runner.read_json_file(tmp_path / "missing.json") is None

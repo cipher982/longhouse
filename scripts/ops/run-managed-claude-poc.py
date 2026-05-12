@@ -135,6 +135,16 @@ def assistant_transcript_contains(session_id: str, expected: str) -> tuple[bool,
     return False, None, None
 
 
+def read_json_file(path: Path | None) -> dict[str, Any] | None:
+    if path is None:
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def run_probe(session_id: str, *, output_dir: Path, run_id: str, duration_secs: float) -> subprocess.CompletedProcess[str]:
     probe = ROOT / "scripts" / "ops" / "probe-managed-claude-truth.py"
     return subprocess.run(
@@ -326,6 +336,7 @@ def main() -> int:
         post = run_probe(session_id, output_dir=post_close_dir, run_id=f"{args.run_id}-post-close", duration_secs=args.post_close_probe_secs)
         post_close_summary = post_close_dir / "summary.json"
         recorder.write("post_close_probe_finished", session_id=session_id, returncode=post.returncode, stdout=post.stdout[-1000:], stderr=post.stderr[-1000:])
+    post_close_data = read_json_file(post_close_summary)
 
     summary = {
         "run_id": args.run_id,
@@ -335,6 +346,16 @@ def main() -> int:
         "process_returncode": proc.returncode,
         "terminal_log": str(terminal_log),
         "post_close_summary": str(post_close_summary) if post_close_summary else None,
+        "hosted_terminal_state": (post_close_data or {}).get("hosted_terminal_state"),
+        "hosted_terminal_reason": (post_close_data or {}).get("hosted_terminal_reason"),
+        "hosted_terminal_source": (post_close_data or {}).get("hosted_terminal_source"),
+        "hosted_archive_event_count": (post_close_data or {}).get("hosted_archive_event_count"),
+        "hosted_archive_assistant_events": (post_close_data or {}).get("hosted_archive_assistant_events"),
+        "hosted_transcript_revision": (post_close_data or {}).get("hosted_transcript_revision"),
+        "hosted_terminal_event_count": (post_close_data or {}).get("hosted_terminal_event_count"),
+        "hosted_terminal_event_sources": (post_close_data or {}).get("hosted_terminal_event_sources"),
+        "hosted_write_serializer_avg_wait_ms": (post_close_data or {}).get("hosted_write_serializer_avg_wait_ms"),
+        "hosted_write_serializer_max_wait_ms": (post_close_data or {}).get("hosted_write_serializer_max_wait_ms"),
     }
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     lines = [
@@ -345,6 +366,11 @@ def main() -> int:
         f"- Prompt sent: `{sent_prompt}`",
         f"- Expected response observed: `{observed_expected}`",
         f"- Process return code: `{proc.returncode}`",
+        f"- Hosted terminal: `{summary.get('hosted_terminal_state') or '-'}` / `{summary.get('hosted_terminal_reason') or '-'}` / `{summary.get('hosted_terminal_source') or '-'}`",
+        f"- Hosted archive events: `{summary.get('hosted_archive_event_count')}`",
+        f"- Hosted assistant archive events: `{summary.get('hosted_archive_assistant_events')}`",
+        f"- Hosted terminal event sources: `{', '.join(summary.get('hosted_terminal_event_sources') or []) or '-'}`",
+        f"- Hosted WriteSerializer avg/max wait ms: `{summary.get('hosted_write_serializer_avg_wait_ms')}` / `{summary.get('hosted_write_serializer_max_wait_ms')}`",
         f"- Terminal log: `{terminal_log}`",
     ]
     (output_dir / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
