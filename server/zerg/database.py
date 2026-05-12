@@ -1083,6 +1083,20 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 conn.execute(text("ALTER TABLE events ADD COLUMN raw_json_z BLOB"))
             if columns and "raw_json_codec" not in columns:
                 conn.execute(text("ALTER TABLE events ADD COLUMN raw_json_codec INTEGER NOT NULL DEFAULT 0"))
+            if columns and "event_origin" not in columns:
+                conn.execute(text("ALTER TABLE events ADD COLUMN event_origin VARCHAR(32) NOT NULL DEFAULT 'durable'"))
+            if columns and "provisional_state" not in columns:
+                conn.execute(text("ALTER TABLE events ADD COLUMN provisional_state VARCHAR(32)"))
+            if columns and "provisional_key" not in columns:
+                conn.execute(text("ALTER TABLE events ADD COLUMN provisional_key VARCHAR(512)"))
+            if columns and "provisional_cursor" not in columns:
+                conn.execute(text("ALTER TABLE events ADD COLUMN provisional_cursor VARCHAR(512)"))
+            if columns and "provisional_seq" not in columns:
+                conn.execute(text("ALTER TABLE events ADD COLUMN provisional_seq INTEGER"))
+            if columns and "provisional_complete" not in columns:
+                conn.execute(text("ALTER TABLE events ADD COLUMN provisional_complete INTEGER NOT NULL DEFAULT 0"))
+            if columns and "reconciled_event_id" not in columns:
+                conn.execute(text("ALTER TABLE events ADD COLUMN reconciled_event_id INTEGER"))
             dedup_idx_sql_row = conn.execute(
                 text(
                     """
@@ -1128,6 +1142,17 @@ def _migrate_agents_columns(engine: Engine) -> None:
                     """
                 )
             )
+            conn.execute(
+                text(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS ix_events_provisional_key
+                    ON events(session_id, provisional_key)
+                    WHERE provisional_key IS NOT NULL
+                    """
+                )
+            )
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_events_event_origin ON events(event_origin)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_events_provisional_state ON events(provisional_state)"))
             conn.commit()
     except Exception:
         logger.debug("events table migration skipped (table may not exist yet)", exc_info=True)

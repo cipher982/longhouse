@@ -816,6 +816,11 @@ class EventResponse(UTCBaseModel):
     )
     branch_id: Optional[int] = Field(None, description="Session branch ID for rewind-aware projections")
     is_head_branch: bool = Field(True, description="True when event belongs to the active head branch")
+    event_origin: str = Field("durable", description="Event origin: durable|live_provisional")
+    provisional_state: Optional[str] = Field(None, description="Provisional lifecycle state when event_origin=live_provisional")
+    provisional_cursor: Optional[str] = Field(None, description="Monotonic live snapshot cursor for provisional events")
+    provisional_complete: bool = Field(False, description="True when the provider bridge reported the provisional turn complete")
+    reconciled_event_id: Optional[int] = Field(None, description="Durable event id that replaced this provisional event")
 
 
 class EventsListResponse(BaseModel):
@@ -1331,6 +1336,11 @@ def build_event_response(
         in_active_context=store.is_event_in_active_context(event, boundary) if boundary is not None else True,
         branch_id=event.branch_id,
         is_head_branch=(head_branch_id is None or event.branch_id in {None, head_branch_id}),
+        event_origin=event.event_origin or "durable",
+        provisional_state=event.provisional_state,
+        provisional_cursor=event.provisional_cursor,
+        provisional_complete=bool(event.provisional_complete),
+        reconciled_event_id=event.reconciled_event_id,
     )
 
 
