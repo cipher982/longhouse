@@ -538,6 +538,14 @@ export default function SessionsPage() {
                 <Button
                   variant="secondary"
                   size="md"
+                  onClick={() => setLaunchModalOpen(true)}
+                  data-testid="timeline-empty-start-session"
+                >
+                  Start session
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="md"
                   onClick={() => navigate("/runners")}
                   data-testid="timeline-empty-runner-action"
                 >
@@ -577,6 +585,14 @@ export default function SessionsPage() {
             </p>
           </div>
         </div>
+        <LaunchSessionModal
+          isOpen={launchModalOpen}
+          onClose={() => setLaunchModalOpen(false)}
+          onLaunched={(sessionId) => {
+            setLaunchModalOpen(false);
+            navigate(`/timeline/${sessionId}`);
+          }}
+        />
       </PageShell>
     );
   }
