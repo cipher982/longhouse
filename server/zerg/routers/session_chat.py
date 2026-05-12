@@ -479,6 +479,14 @@ async def launch_managed_local_this_device(
             detail="Managed local launch failed",
         )
 
+    from zerg.services.session_pubsub import publish_session_runtime_update
+
+    publish_session_runtime_update(
+        session_id=str(result.session.id),
+        provider=str(result.session.provider or body.provider or ""),
+        source="managed_local_launch",
+    )
+
     return _managed_local_launch_response(result)
 
 

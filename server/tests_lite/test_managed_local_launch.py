@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from types import SimpleNamespace
 
@@ -23,6 +24,9 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
+from zerg.services.session_pubsub import TOPIC_TIMELINE
+from zerg.services.session_pubsub import get_pubsub
+from zerg.services.session_pubsub import reset_pubsub_for_test
 
 
 def _make_db(tmp_path):
@@ -282,12 +286,14 @@ def test_this_device_launch_uses_token_device_id_for_runner_lookup(monkeypatch, 
 def test_this_device_launch_creates_native_codex_session(monkeypatch, tmp_path):
     from zerg.services import managed_local_launcher
 
+    reset_pubsub_for_test()
     SessionLocal = _make_db(tmp_path)
 
     with SessionLocal() as db:
         user, _runner = _seed_user_and_runner(db)
         device_token = SimpleNamespace(owner_id=user.id, device_id="cinder")
         client, api_app = _make_device_client(db, device_token)
+        timeline_seq = get_pubsub().peek_latest_seq(TOPIC_TIMELINE)
         monkeypatch.setattr(
             managed_local_launcher,
             "get_runner_connection_manager",
@@ -312,6 +318,12 @@ def test_this_device_launch_creates_native_codex_session(monkeypatch, tmp_path):
             db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == payload["session_id"]).one()
         )
 
+    async def _next_timeline_message():
+        with get_pubsub().subscribe(TOPIC_TIMELINE, since_seq=timeline_seq) as subscription:
+            return await subscription.next_message(timeout=0.1)
+
+    timeline_message = asyncio.run(_next_timeline_message())
+
     assert response.status_code == 200, response.text
     assert payload["managed_transport"] == "codex_app_server"
     assert payload["source_runner_id"] is None
@@ -319,3 +331,8 @@ def test_this_device_launch_creates_native_codex_session(monkeypatch, tmp_path):
     assert session.managed_transport == "codex_app_server"
     assert session.source_runner_id is None
     assert runtime_state.phase == "idle"
+    assert timeline_message is not None
+    assert timeline_message.payload["session_id"] == payload["session_id"]
+    assert timeline_message.payload["kind"] == "runtime"
+    assert timeline_message.payload["source"] == "managed_local_launch"
+    reset_pubsub_for_test()
