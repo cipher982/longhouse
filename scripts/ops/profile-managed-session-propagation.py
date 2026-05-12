@@ -47,7 +47,7 @@ BROWSER_UI_OBSERVER_SCRIPT = ROOT / "scripts" / "ops" / "managed_profiler" / "br
 HOSTED_CONTAINER_PREFIX = "longhouse-"
 HOSTED_RUNTIME_EVENT_LIMIT = 200
 METRICS_SCHEMA_VERSION = 3
-BATCH_METRICS_SCHEMA_VERSION = 1
+BATCH_METRICS_SCHEMA_VERSION = 2
 BATCH_METRIC_KEYS = (
     "warm_session_created_to_card_paint_ms",
     "warm_live_output_local_to_paint_ms",
@@ -61,6 +61,22 @@ BATCH_METRIC_KEYS = (
     "close_observed_ms",
     "bridge_live_ingest_lag_ms",
     "browser_timeline_card_from_session_id_ms",
+)
+BATCH_VERDICT_SEVERITY = {
+    "pass": 0,
+    "contaminated": 1,
+    "slow": 2,
+    "partial": 3,
+    "missing": 4,
+    "blocked": 5,
+    "provider_timeout": 5,
+    "fail": 5,
+    "error": 5,
+}
+BATCH_REQUIRED_NONPASS_VERDICTS = frozenset(
+    verdict
+    for verdict, severity in BATCH_VERDICT_SEVERITY.items()
+    if verdict != "pass" and severity >= 1
 )
 CODEX_TUI_PRECONDITION_PATTERNS = (
     (
@@ -3276,6 +3292,37 @@ def aggregate_batch_cases(cases: list[dict[str, Any]]) -> dict[str, Any]:
     return metrics
 
 
+def summarize_batch_verdicts(child_runs: list[dict[str, Any]]) -> dict[str, Any]:
+    counts: dict[str, int] = {}
+    for run in child_runs:
+        verdict = run.get("verdict") or "error"
+        counts[verdict] = counts.get(verdict, 0) + 1
+
+    batch_verdict = "pass"
+    max_severity = -1
+    for verdict in counts:
+        severity = BATCH_VERDICT_SEVERITY.get(verdict, BATCH_VERDICT_SEVERITY["error"])
+        if severity > max_severity:
+            batch_verdict = verdict
+            max_severity = severity
+
+    return {
+        "batch_verdict": batch_verdict,
+        "verdict_counts": counts,
+    }
+
+
+def batch_exit_code(*, child_runs: list[dict[str, Any]], sla_status: str | None) -> int:
+    if any(run.get("exit_code") for run in child_runs):
+        return 1
+    if sla_status == "required":
+        for run in child_runs:
+            verdict = run.get("verdict") or "error"
+            if verdict in BATCH_REQUIRED_NONPASS_VERDICTS:
+                return 1
+    return 0
+
+
 def target_for_metric(key: str) -> int | None:
     return metric_target_ms(sla_manifest(), key)
 
@@ -3293,13 +3340,25 @@ def write_batch_summary(
         "",
         f"- Batch ID: `{batch_id}`",
         f"- Runs: {len(child_runs)}",
+        f"- Batch verdict: `{aggregate.get('batch_verdict') or 'unknown'}`",
         f"- Generated: `{utc_now()}`",
         "",
-        "## Metrics",
+        "## Verdicts",
         "",
-        "| Metric | Count | Min | P50 | P95 | Max | Target |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Verdict | Count |",
+        "| --- | ---: |",
     ]
+    for verdict, count in sorted((aggregate.get("verdict_counts") or {}).items()):
+        rows.append(f"| {verdict} | {count} |")
+    rows.extend(
+        [
+            "",
+            "## Metrics",
+            "",
+            "| Metric | Count | Min | P50 | P95 | Max | Target |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
     for key in BATCH_METRIC_KEYS:
         item = aggregate.get(key) or {}
         rows.append(
@@ -3341,20 +3400,19 @@ def format_optional_ms(value: Any) -> str:
 def run_batch(args: argparse.Namespace) -> int:
     if args.iterations < 1:
         raise SystemExit("--iterations must be >= 1")
+    sla_case = resolve_sla_case(args)
     batch_id = args.run_id or slug_now()
     batch_dir = Path(args.output_dir or DEFAULT_OUTPUT_ROOT / batch_id)
     batch_dir.mkdir(parents=True, exist_ok=True)
 
     child_runs: list[dict[str, Any]] = []
     cases: list[dict[str, Any]] = []
-    exit_code = 0
     for index in range(args.iterations):
         child_args = Namespace(**vars(args))
         child_args.iterations = 1
         child_args.run_id = f"{batch_id}-i{index + 1:02d}"
         child_args.output_dir = str(batch_dir / child_args.run_id)
         code, summary_path = run_single(child_args)
-        exit_code = exit_code or code
         metrics_path = Path(child_args.output_dir) / "metrics.json"
         metrics = read_json(metrics_path) or {}
         case = next(iter(metrics.get("cases") or []), {})
@@ -3371,6 +3429,8 @@ def run_batch(args: argparse.Namespace) -> int:
         )
 
     aggregate = aggregate_batch_cases(cases)
+    aggregate.update(summarize_batch_verdicts(child_runs))
+    exit_code = batch_exit_code(child_runs=child_runs, sla_status=(sla_case or {}).get("status"))
     batch_metrics_path = batch_dir / "batch-metrics.json"
     batch_metrics_path.write_text(
         json.dumps(
