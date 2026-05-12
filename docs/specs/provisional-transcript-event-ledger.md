@@ -156,11 +156,13 @@ comes from event metadata, not a separate overlay object.
 ### Phase 3: API/UI Projection
 
 - Add event metadata fields to event responses.
-- Move timeline card live output rendering from `live_transcript` overlay to the
-  latest active provisional event.
-- Keep `live_transcript` as a deprecated compatibility field only if generated
-  clients still require it for one release.
-- Update frontend tests and fixture captures.
+- Add `transcript_preview` to session projections. It is sourced from the
+  latest active provisional ledger event, carries `is_provisional`, `is_stale`,
+  and cursor metadata, and is the only field timeline cards render for bridge
+  text.
+- Keep `live_transcript` as a deprecated compatibility field. Timeline
+  responses do not populate it.
+- Update frontend tests and fixture captures so cards ignore `live_transcript`.
 - Run UI capture for timeline card stress scenes.
 
 ### Phase 4: Final QA and Ship
@@ -181,7 +183,9 @@ comes from event metadata, not a separate overlay object.
 - Durable archive ingest reconciles matching provisional rows and does not create
   duplicate visible transcript messages.
 - Durable archive ingest supersedes stale unmatched provisional rows.
-- Timeline and detail read one transcript-shaped event projection.
+- Timeline cards read the same event-ledger-backed preview projection that
+  detail/tail can reconcile against. The deprecated runtime overlay no longer
+  drives visible card text.
 - Search, export, summaries, embeddings, and replay never consume provisional
   rows as durable truth.
 - Existing runtime/liveness behavior remains intact.

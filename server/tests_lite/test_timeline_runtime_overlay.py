@@ -6,7 +6,6 @@ Covers:
 - Fresh presence overrides ended_at for /agents/sessions/active
 """
 
-import json
 import asyncio
 from datetime import datetime
 from datetime import timedelta
@@ -19,16 +18,20 @@ from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentHeartbeat
+from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionRuntimeEvent
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import UnmanagedSessionBinding
-from zerg.session_execution_home import SessionExecutionHome
+from zerg.services.agents_store import AgentsStore
+from zerg.services.agents_store import EventIngest
+from zerg.services.agents_store import SessionIngest
+from zerg.services.session_runtime import RuntimeEventIngest
+from zerg.services.session_runtime import ingest_runtime_events
+from zerg.services.timeline_session_listing import TimelineSessionListParams
 from zerg.services.timeline_session_listing import build_timeline_cards_from_thread_rows
 from zerg.services.timeline_session_listing import list_timeline_sessions_for_browser
-from zerg.services.timeline_session_listing import TimelineSessionListParams
+from zerg.session_execution_home import SessionExecutionHome
 
 
 def _make_db(tmp_path, name="timeline_runtime_overlay.db"):
@@ -120,6 +123,44 @@ def _upsert_runtime_state(
         row.timeline_anchor_at = updated_at
         row.freshness_expires_at = updated_at + freshness_window
         row.runtime_version = (row.runtime_version or 0) + 1
+    db.commit()
+
+
+def _ingest_live_transcript(
+    db,
+    *,
+    session_id,
+    occurred_at: datetime,
+    text: str,
+    seq: int,
+    turn_completed: bool = False,
+    provider: str = "codex",
+) -> None:
+    ingest_runtime_events(
+        db,
+        [
+            RuntimeEventIngest(
+                runtime_key=f"{provider}:{session_id}",
+                session_id=session_id,
+                provider=provider,
+                device_id="cinder",
+                source="codex_bridge_live",
+                kind="progress_signal",
+                occurred_at=occurred_at,
+                dedupe_key=f"bridge:live:{session_id}:thread-1:turn-1:{seq}",
+                payload={
+                    "progress_kind": "bridge_live_transcript_delta",
+                    "thread_id": "thread-1",
+                    "turn_id": "turn-1",
+                    "seq": seq,
+                    "method": "item/agentMessage/delta",
+                    "delta": text[-1:],
+                    "live_text": text,
+                    "turn_completed": turn_completed,
+                },
+            )
+        ],
+    )
     db.commit()
 
 
@@ -235,33 +276,13 @@ def test_live_transcript_overlay_is_timeline_card_only(tmp_path):
             updated_at=now - timedelta(seconds=2),
             provider="codex",
         )
-        db.add(
-            SessionRuntimeEvent(
-                runtime_key=f"codex:{session.id}",
-                session_id=session.id,
-                provider="codex",
-                device_id="cinder",
-                source="codex_bridge_live",
-                kind="progress_signal",
-                occurred_at=now - timedelta(milliseconds=80),
-                received_at=now,
-                dedupe_key=f"bridge:live:{session.id}:thread-1:turn-1:4",
-                payload_json=json.dumps(
-                    {
-                        "progress_kind": "bridge_live_transcript_delta",
-                        "thread_id": "thread-1",
-                        "turn_id": "turn-1",
-                        "seq": 4,
-                        "method": "item/agentMessage/delta",
-                        "delta": "world",
-                        "live_text": "hello world",
-                        "turn_completed": False,
-                    },
-                    sort_keys=True,
-                ),
-            )
+        _ingest_live_transcript(
+            db,
+            session_id=session.id,
+            occurred_at=now - timedelta(milliseconds=80),
+            text="hello world",
+            seq=4,
         )
-        db.commit()
     finally:
         db.close()
 
@@ -275,6 +296,10 @@ def test_live_transcript_overlay_is_timeline_card_only(tmp_path):
 
     assert session_payload["id"] == str(session.id)
     assert session_payload["live_transcript"] is None
+    assert session_payload["transcript_preview"]["text"] == "hello world"
+    assert session_payload["transcript_preview"]["event_origin"] == "live_provisional"
+    assert session_payload["transcript_preview"]["is_provisional"] is True
+    assert session_payload["transcript_preview"]["is_stale"] is False
 
     db = factory()
     try:
@@ -285,25 +310,12 @@ def test_live_transcript_overlay_is_timeline_card_only(tmp_path):
     finally:
         db.close()
 
-    assert cards[0].head.live_transcript is not None
-    assert cards[0].head.live_transcript.model_dump(mode="json") == {
-        "text": "hello world",
-        "source": "codex_bridge_live",
-        "received_at": now.isoformat().replace("+00:00", "Z"),
-        "occurred_at": (now - timedelta(milliseconds=80)).isoformat().replace("+00:00", "Z"),
-        "thread_id": "thread-1",
-        "turn_id": "turn-1",
-        "seq": 4,
-        "method": "item/agentMessage/delta",
-        "is_complete": False,
-        "content_cursor": f"codex_bridge_live:{session.id}:thread-1:turn-1:4",
-        "overlay_at": (now - timedelta(milliseconds=80)).isoformat().replace("+00:00", "Z"),
-        "last_durable_at": session.started_at.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z"),
-        "freshness": "current",
-        "is_provisional": True,
-        "is_stale": False,
-        "stale_reason": None,
-    }
+    assert cards[0].head.live_transcript is None
+    assert cards[0].head.transcript_preview is not None
+    assert cards[0].head.transcript_preview.text == "hello world"
+    assert cards[0].head.transcript_preview.content_cursor == f"codex_bridge_live:{session.id}:thread-1:turn-1:4"
+    assert cards[0].head.transcript_preview.is_provisional is True
+    assert cards[0].head.transcript_preview.is_stale is False
 
 
 def test_timeline_compatibility_cards_include_live_transcript_overlay(tmp_path):
@@ -320,32 +332,13 @@ def test_timeline_compatibility_cards_include_live_transcript_overlay(tmp_path):
             execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
             managed_transport="codex_app_server",
         )
-        db.add(
-            SessionRuntimeEvent(
-                runtime_key=f"codex:{session.id}",
-                session_id=session.id,
-                provider="codex",
-                device_id="cinder",
-                source="codex_bridge_live",
-                kind="progress_signal",
-                occurred_at=now - timedelta(milliseconds=50),
-                received_at=now,
-                dedupe_key=f"bridge:live:{session.id}:thread-1:turn-1:5",
-                payload_json=json.dumps(
-                    {
-                        "progress_kind": "bridge_live_transcript_delta",
-                        "thread_id": "thread-1",
-                        "turn_id": "turn-1",
-                        "seq": 5,
-                        "method": "item/agentMessage/delta",
-                        "delta": "compat",
-                        "live_text": "timeline compat",
-                    },
-                    sort_keys=True,
-                ),
-            )
+        _ingest_live_transcript(
+            db,
+            session_id=session.id,
+            occurred_at=now - timedelta(milliseconds=50),
+            text="timeline compat",
+            seq=5,
         )
-        db.commit()
 
         result = asyncio.run(
             list_timeline_sessions_for_browser(
@@ -372,10 +365,10 @@ def test_timeline_compatibility_cards_include_live_transcript_overlay(tmp_path):
 
     assert result.compatibility_raw is True
     assert result.response.sessions[0].id == str(session.id)
-    assert result.response.sessions[0].live_transcript is not None
-    assert result.response.sessions[0].live_transcript.text == "timeline compat"
-    assert result.response.sessions[0].live_transcript.freshness == "current"
-    assert result.response.sessions[0].live_transcript.is_stale is False
+    assert result.response.sessions[0].live_transcript is None
+    assert result.response.sessions[0].transcript_preview is not None
+    assert result.response.sessions[0].transcript_preview.text == "timeline compat"
+    assert result.response.sessions[0].transcript_preview.is_stale is False
 
 
 def test_sessions_list_hides_live_transcript_overlay_after_durable_activity_catches_up(tmp_path):
@@ -392,31 +385,31 @@ def test_sessions_list_hides_live_transcript_overlay_after_durable_activity_catc
             execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
             managed_transport="codex_app_server",
         )
-        session.last_activity_at = now - timedelta(seconds=1)
-        db.add(
-            SessionRuntimeEvent(
-                runtime_key=f"codex:{session.id}",
-                session_id=session.id,
+        _ingest_live_transcript(
+            db,
+            session_id=session.id,
+            occurred_at=now - timedelta(seconds=5),
+            text="older partial",
+            seq=4,
+        )
+        AgentsStore(db).ingest_session(
+            SessionIngest(
+                id=session.id,
                 provider="codex",
-                device_id="cinder",
-                source="codex_bridge_live",
-                kind="progress_signal",
-                occurred_at=now - timedelta(seconds=5),
-                received_at=now,
-                dedupe_key=f"bridge:live:{session.id}:thread-1:turn-1:4",
-                payload_json=json.dumps(
-                    {
-                        "progress_kind": "bridge_live_transcript_delta",
-                        "thread_id": "thread-1",
-                        "turn_id": "turn-1",
-                        "seq": 4,
-                        "method": "item/agentMessage/delta",
-                        "delta": "older partial",
-                        "live_text": "older partial",
-                        "turn_completed": False,
-                    },
-                    sort_keys=True,
-                ),
+                environment="production",
+                project="codex-live-overlay-superseded",
+                started_at=session.started_at,
+                execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
+                events=[
+                    EventIngest(
+                        role="assistant",
+                        content_text="older partial finalized in durable transcript",
+                        timestamp=now - timedelta(seconds=1),
+                        source_path="/tmp/codex-rollout.jsonl",
+                        source_offset=1,
+                        raw_json='{"type":"response_item"}',
+                    )
+                ],
             )
         )
         db.commit()
@@ -434,6 +427,7 @@ def test_sessions_list_hides_live_transcript_overlay_after_durable_activity_catc
     assert session_payload["id"] == str(session.id)
     assert session_payload["last_activity_at"] == (now - timedelta(seconds=1)).isoformat().replace("+00:00", "Z")
     assert session_payload["live_transcript"] is None
+    assert session_payload["transcript_preview"] is None
 
     db = factory()
     try:
@@ -445,6 +439,7 @@ def test_sessions_list_hides_live_transcript_overlay_after_durable_activity_catc
         db.close()
 
     assert cards[0].head.live_transcript is None
+    assert cards[0].head.transcript_preview is None
 
 
 def test_timeline_cards_mark_old_unsuperseded_live_transcript_stale(tmp_path):
@@ -461,33 +456,13 @@ def test_timeline_cards_mark_old_unsuperseded_live_transcript_stale(tmp_path):
             execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
             managed_transport="codex_app_server",
         )
-        db.add(
-            SessionRuntimeEvent(
-                runtime_key=f"codex:{session.id}",
-                session_id=session.id,
-                provider="codex",
-                device_id="cinder",
-                source="codex_bridge_live",
-                kind="progress_signal",
-                occurred_at=now - timedelta(minutes=5),
-                received_at=now - timedelta(minutes=5),
-                dedupe_key=f"bridge:live:{session.id}:thread-1:turn-1:2",
-                payload_json=json.dumps(
-                    {
-                        "progress_kind": "bridge_live_transcript_delta",
-                        "thread_id": "thread-1",
-                        "turn_id": "turn-1",
-                        "seq": 2,
-                        "method": "item/agentMessage/delta",
-                        "delta": "old partial",
-                        "live_text": "old partial",
-                        "turn_completed": False,
-                    },
-                    sort_keys=True,
-                ),
-            )
+        _ingest_live_transcript(
+            db,
+            session_id=session.id,
+            occurred_at=now - timedelta(minutes=5),
+            text="old partial",
+            seq=2,
         )
-        db.commit()
 
         cards = build_timeline_cards_from_thread_rows(
             db=db,
@@ -496,14 +471,13 @@ def test_timeline_cards_mark_old_unsuperseded_live_transcript_stale(tmp_path):
     finally:
         db.close()
 
-    live = cards[0].head.live_transcript
-    assert live is not None
-    assert live.text == "old partial"
-    assert live.freshness == "stale"
-    assert live.is_provisional is True
-    assert live.is_stale is True
-    assert live.stale_reason == "freshness_window_expired"
-    assert live.last_durable_at == session.started_at.replace(tzinfo=timezone.utc)
+    assert cards[0].head.live_transcript is None
+    preview = cards[0].head.transcript_preview
+    assert preview is not None
+    assert preview.text == "old partial"
+    assert preview.is_provisional is True
+    assert preview.is_stale is True
+    assert preview.stale_reason == "freshness_window_expired"
 
 
 def test_sessions_list_marks_old_open_session_idle_without_live_signal(tmp_path):

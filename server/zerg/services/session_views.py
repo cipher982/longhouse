@@ -25,6 +25,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionTurn
 from zerg.services.agents_store import AgentsStore
 from zerg.services.managed_local_transport import build_managed_local_attach_command
+from zerg.services.provisional_events import TranscriptPreview
 from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_capabilities import build_session_capability_display
 from zerg.services.session_capabilities import project_current_session_capabilities
@@ -493,6 +494,24 @@ class SessionLiveTranscriptResponse(UTCBaseModel):
     )
 
 
+class SessionTranscriptPreviewResponse(UTCBaseModel):
+    event_id: int = Field(..., description="AgentEvent id for this preview row")
+    text: str = Field(..., description="Transcript preview text from the event ledger")
+    event_origin: str = Field(..., description="Event origin: durable|live_provisional")
+    timestamp: datetime = Field(..., description="Event timestamp used for transcript ordering")
+    is_provisional: bool = Field(..., description="True when the preview is from an active provisional event")
+    is_complete: bool = Field(
+        False,
+        description="True when the provider bridge reported this provisional turn complete",
+    )
+    content_cursor: Optional[str] = Field(None, description="Monotonic live snapshot cursor for provisional previews")
+    is_stale: bool = Field(False, description="True when the provisional preview is too old to render as live output")
+    stale_reason: Optional[Literal["freshness_window_expired", "missing_preview_timestamp"]] = Field(
+        None,
+        description="Why a provisional preview is stale, when known.",
+    )
+
+
 class HostObservationResponse(UTCBaseModel):
     state: str = Field("unknown", description="Observed host state: online|stale|offline|unknown")
     last_seen_at: Optional[datetime] = Field(None, description="When the host last heartbeated, when known")
@@ -627,7 +646,14 @@ class SessionResponse(UTCBaseModel):
             "timeline-card projections; durable events remain canonical."
         ),
     )
-    timeline_card: TimelineCardPresentationResponse = Field(..., description="Server-derived timeline-card presentation")
+    transcript_preview: Optional[SessionTranscriptPreviewResponse] = Field(
+        None,
+        description="Latest renderable transcript preview sourced from the event ledger.",
+    )
+    timeline_card: TimelineCardPresentationResponse = Field(
+        ...,
+        description="Server-derived timeline-card presentation",
+    )
     loop_mode: SessionLoopMode = Field(SessionLoopMode.ASSIST, description="Session loop mode: assist|autopilot")
     user_state: str = Field("active", description="User classification: active|parked|snoozed|archived")
 
@@ -1110,6 +1136,7 @@ def build_session_response(
     match_score: float | None = None,
     binding_overlay=None,
     live_transcript_overlay: SessionLiveTranscriptOverlay | None = None,
+    transcript_preview: TranscriptPreview | None = None,
     include_live_transcript: bool = False,
 ) -> SessionResponse:
     cache = thread_cache if thread_cache is not None else {}
@@ -1214,12 +1241,47 @@ def build_session_response(
             if include_live_transcript
             else None
         ),
+        transcript_preview=build_session_transcript_preview_response(transcript_preview),
         timeline_card=build_session_timeline_card_response(
             runtime_facts=runtime_facts,
             capability_flags=capability_flags,
         ),
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
         user_state=session.user_state or "active",
+    )
+
+
+def build_session_transcript_preview_response(
+    preview: TranscriptPreview | None,
+    *,
+    now: datetime | None = None,
+) -> SessionTranscriptPreviewResponse | None:
+    if preview is None:
+        return None
+    preview_at = normalize_utc(preview.timestamp)
+    now_utc = normalize_utc(now) or datetime.now(timezone.utc)
+    if preview.provisional_complete:
+        max_age = LIVE_TRANSCRIPT_COMPLETE_FRESHNESS
+    else:
+        max_age = LIVE_TRANSCRIPT_PARTIAL_FRESHNESS
+    is_stale = False
+    stale_reason = None
+    if preview_at is None:
+        is_stale = True
+        stale_reason = "missing_preview_timestamp"
+    elif preview.event_origin == "live_provisional" and now_utc - preview_at > max_age:
+        is_stale = True
+        stale_reason = "freshness_window_expired"
+    return SessionTranscriptPreviewResponse(
+        event_id=preview.event_id,
+        text=preview.text,
+        event_origin=preview.event_origin,
+        timestamp=preview.timestamp,
+        is_provisional=preview.event_origin == "live_provisional",
+        is_complete=preview.provisional_complete,
+        content_cursor=preview.provisional_cursor,
+        is_stale=is_stale,
+        stale_reason=stale_reason,
     )
 
 

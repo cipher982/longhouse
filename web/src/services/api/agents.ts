@@ -45,6 +45,7 @@ export interface AgentSession {
   runtime_facts?: SessionLivenessFacts | null;
   timeline_card?: TimelineCardPresentation | null;
   live_transcript?: SessionLiveTranscript | null;
+  transcript_preview?: SessionTranscriptPreview | null;
   user_messages: number;
   assistant_messages: number;
   tool_calls: number;
@@ -87,6 +88,18 @@ export interface SessionLiveTranscript {
   is_provisional: boolean;
   is_stale: boolean;
   stale_reason?: "freshness_window_expired" | "missing_overlay_timestamp" | null;
+}
+
+export interface SessionTranscriptPreview {
+  event_id: number;
+  text: string;
+  event_origin: string;
+  timestamp: string;
+  is_provisional: boolean;
+  is_complete: boolean;
+  content_cursor?: string | null;
+  is_stale: boolean;
+  stale_reason?: "freshness_window_expired" | "missing_preview_timestamp" | null;
 }
 
 export interface SessionRuntimeDisplay {
