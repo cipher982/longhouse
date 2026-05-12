@@ -1447,6 +1447,7 @@ class AgentsStore:
         _since_commit = 0
         inserted_event_ids: list[int] = []
         needs_session_wide_fts_backfill = False
+        provider_events_received_at = datetime.now(timezone.utc)
 
         try:
             for event_data in data.events:
@@ -1476,6 +1477,7 @@ class AgentsStore:
                     raw_json=event_data.raw_json,
                     event_uuid=event_uuid,
                     parent_event_uuid=parent_event_uuid,
+                    received_at=provider_events_received_at,
                 )
                 if observation_result.observation is not None:
                     reduction = reduce_provider_event_observation(self.db, observation_result.observation)

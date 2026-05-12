@@ -567,6 +567,82 @@ def test_session_observation_rebuild_preserves_agent_api_surface_parity(tmp_path
     assert before["export_jsonl"] == assistant_line + "\n"
 
 
+def test_session_observation_rebuild_preserves_multi_batch_transcript_revision(tmp_path):
+    SessionLocal = _make_initialized_sessionmaker(tmp_path, "observation_rebuild_multi_batch_revision.db")
+    now = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)
+    source_path = "/tmp/multi-batch.jsonl"
+    first_line = '{"type":"assistant","text":"first batch"}'
+    same_batch_line = '{"type":"assistant","text":"same ingest batch"}'
+    second_line = '{"type":"assistant","text":"second batch"}'
+
+    with SessionLocal() as db:
+        created = AgentsStore(db).ingest_session(
+            SessionIngest(
+                provider="claude",
+                environment="test",
+                project="observation-rebuild",
+                device_id="cinder",
+                cwd="/tmp/project",
+                started_at=now,
+                events=[
+                    EventIngest(
+                        role="assistant",
+                        content_text="first batch",
+                        timestamp=now + timedelta(seconds=1),
+                        source_path=source_path,
+                        source_offset=10,
+                        raw_json=first_line,
+                    ),
+                    EventIngest(
+                        role="assistant",
+                        content_text="same ingest batch",
+                        timestamp=now + timedelta(seconds=2),
+                        source_path=source_path,
+                        source_offset=20,
+                        raw_json=same_batch_line,
+                    ),
+                ],
+                source_lines=[
+                    SourceLineIngest(source_path=source_path, source_offset=10, raw_json=first_line),
+                    SourceLineIngest(source_path=source_path, source_offset=20, raw_json=same_batch_line),
+                ],
+            )
+        )
+        session_id = created.session_id
+        AgentsStore(db).ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="claude",
+                environment="test",
+                project="observation-rebuild",
+                device_id="cinder",
+                cwd="/tmp/project",
+                started_at=now,
+                events=[
+                    EventIngest(
+                        role="assistant",
+                        content_text="second batch",
+                        timestamp=now + timedelta(seconds=3),
+                        source_path=source_path,
+                        source_offset=30,
+                        raw_json=second_line,
+                    )
+                ],
+                source_lines=[SourceLineIngest(source_path=source_path, source_offset=30, raw_json=second_line)],
+            )
+        )
+        before_revision = db.query(AgentSession.transcript_revision).filter(AgentSession.id == session_id).scalar()
+        _damage_session_metadata(db, session_id)
+
+        result = rebuild_session_observation_projections(db, session_id=session_id)
+        db.commit()
+        after_revision = db.query(AgentSession.transcript_revision).filter(AgentSession.id == session_id).scalar()
+
+    assert result.reducer_errors == ()
+    assert before_revision == 2
+    assert after_revision == before_revision
+
+
 def test_session_observation_rebuild_preserves_source_line_revision_history(tmp_path):
     SessionLocal = _make_sessionmaker(tmp_path, "observation_rebuild_source_revision.db")
     now = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)

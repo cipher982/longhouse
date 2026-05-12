@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
+from sqlalchemy import and_
 from sqlalchemy import func
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -144,13 +145,12 @@ def rebuild_session_observation_projections(
 
 
 def _load_observations(db: Session, *, session_id: UUID | None, runtime_key: str | None) -> list[SessionObservation]:
-    query = db.query(SessionObservation)
-    filters = []
-    if session_id is not None:
-        filters.append(SessionObservation.session_id == session_id)
-    if runtime_key:
-        filters.append(SessionObservation.runtime_key == runtime_key)
-    return query.filter(or_(*filters)).order_by(SessionObservation.id.asc()).all()
+    return (
+        db.query(SessionObservation)
+        .filter(_session_runtime_scope(SessionObservation, session_id=session_id, runtime_key=runtime_key))
+        .order_by(SessionObservation.id.asc())
+        .all()
+    )
 
 
 def _clear_projection_rows(db: Session, *, session_id: UUID | None, runtime_key: str | None) -> None:
@@ -159,14 +159,24 @@ def _clear_projection_rows(db: Session, *, session_id: UUID | None, runtime_key:
         db.query(AgentSourceLine).filter(AgentSourceLine.session_id == session_id).delete(synchronize_session=False)
 
     runtime_query = db.query(SessionRuntimeState)
-    runtime_filters = []
-    if session_id is not None:
-        runtime_filters.append(SessionRuntimeState.session_id == session_id)
-    if runtime_key:
-        runtime_filters.append(SessionRuntimeState.runtime_key == runtime_key)
-    if runtime_filters:
-        runtime_query.filter(or_(*runtime_filters)).delete(synchronize_session=False)
+    if session_id is not None or runtime_key:
+        runtime_query.filter(_session_runtime_scope(SessionRuntimeState, session_id=session_id, runtime_key=runtime_key)).delete(
+            synchronize_session=False
+        )
     db.flush()
+
+
+def _session_runtime_scope(model, *, session_id: UUID | None, runtime_key: str | None):
+    if session_id is not None and runtime_key:
+        return or_(
+            model.session_id == session_id,
+            and_(model.session_id.is_(None), model.runtime_key == runtime_key),
+        )
+    if session_id is not None:
+        return model.session_id == session_id
+    if runtime_key:
+        return model.runtime_key == runtime_key
+    raise ValueError("rebuild requires session_id or runtime_key")
 
 
 def _rebuild_branch_prefix_projections(db: Session, *, session_id: UUID) -> None:
@@ -374,11 +384,10 @@ def _projection_count(db: Session, model, *, session_id: UUID | None) -> int:
 
 
 def _runtime_state_count(db: Session, *, session_id: UUID | None, runtime_key: str | None) -> int:
-    filters = []
-    if session_id is not None:
-        filters.append(SessionRuntimeState.session_id == session_id)
-    if runtime_key:
-        filters.append(SessionRuntimeState.runtime_key == runtime_key)
-    if not filters:
+    if session_id is None and not runtime_key:
         return 0
-    return int(db.query(SessionRuntimeState).filter(or_(*filters)).count())
+    return int(
+        db.query(SessionRuntimeState)
+        .filter(_session_runtime_scope(SessionRuntimeState, session_id=session_id, runtime_key=runtime_key))
+        .count()
+    )
