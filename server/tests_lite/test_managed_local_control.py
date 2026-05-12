@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections import deque
+from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
 from uuid import uuid4
@@ -18,8 +19,8 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeEvent
-from zerg.models.agents import SessionRuntimeState
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
@@ -29,6 +30,9 @@ from zerg.services.managed_local_control import await_managed_local_turn_termina
 from zerg.services.managed_local_control import interrupt_managed_local_session
 from zerg.services.managed_local_control import send_text_to_managed_local_session
 from zerg.services.managed_local_control import validate_managed_local_chat_done_payload
+from zerg.services.session_observations import record_runtime_observation
+from zerg.services.session_runtime import RuntimeEventIngest
+from zerg.services.session_runtime import ingest_runtime_events
 from zerg.session_execution_home import ManagedSessionTransport
 
 
@@ -91,19 +95,23 @@ def _seed_user_runner_and_session(db, *, provider: str = "claude"):
     return user, runner, session
 
 
-def _materialize_hook_runtime_state(
-    db,
+@dataclass(frozen=True)
+class _HookRuntimeRecord:
+    id: int
+    occurred_at: datetime
+
+
+def _hook_runtime_ingest(
     *,
     session: AgentSession,
     phase: str,
     occurred_at: datetime,
-    event_id: int | None = None,
     tool_name: str | None = None,
-):
-    runtime_key = f"{session.provider}:{session.id}"
-    event = SessionRuntimeEvent(
-        id=event_id,
-        runtime_key=runtime_key,
+    dedupe_suffix: str | None = None,
+) -> RuntimeEventIngest:
+    dedupe_tail = dedupe_suffix or f"{phase}:{occurred_at.timestamp()}"
+    return RuntimeEventIngest(
+        runtime_key=f"{session.provider}:{session.id}",
         session_id=session.id,
         provider=session.provider,
         device_id=session.device_id,
@@ -113,47 +121,57 @@ def _materialize_hook_runtime_state(
         tool_name=tool_name,
         occurred_at=occurred_at,
         freshness_ms=90_000,
-        dedupe_key=f"hook:{session.id}:{phase}:{occurred_at.timestamp()}",
-        payload_json="{}",
+        dedupe_key=f"hook:{session.id}:{dedupe_tail}",
+        payload={},
     )
-    db.add(event)
-    db.flush()
 
-    state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).first()
-    if state is None:
-        state = SessionRuntimeState(
-            runtime_key=runtime_key,
-            session_id=session.id,
-            provider=session.provider,
-            device_id=session.device_id,
-            phase=phase,
-            phase_source="semantic",
-            active_tool=tool_name,
-            phase_started_at=occurred_at,
-            last_runtime_signal_at=occurred_at,
-            last_progress_at=None,
-            last_live_at=occurred_at,
-            timeline_anchor_at=occurred_at,
-            freshness_expires_at=occurred_at,
-            terminal_state=None,
-            terminal_at=None,
-            runtime_version=1,
-        )
-        db.add(state)
-    else:
-        state.phase = phase
-        state.phase_source = "semantic"
-        state.active_tool = tool_name
-        state.phase_started_at = occurred_at
-        state.last_runtime_signal_at = occurred_at
-        state.last_live_at = occurred_at
-        state.timeline_anchor_at = occurred_at
-        state.freshness_expires_at = occurred_at
-        state.terminal_state = None
-        state.terminal_at = None
-        state.runtime_version = int(getattr(state, "runtime_version", 0) or 0) + 1
+
+def _hook_observation_record(db, *, event: RuntimeEventIngest) -> _HookRuntimeRecord:
+    observation_id = f"runtime:{event.source}:{event.dedupe_key}"
+    row = db.query(SessionObservation).filter(SessionObservation.observation_id == observation_id).one()
+    return _HookRuntimeRecord(id=int(row.id), occurred_at=event.occurred_at)
+
+
+def _record_hook_observation_only(
+    db,
+    *,
+    session: AgentSession,
+    phase: str,
+    occurred_at: datetime,
+    tool_name: str | None = None,
+    dedupe_suffix: str,
+) -> _HookRuntimeRecord:
+    event = _hook_runtime_ingest(
+        session=session,
+        phase=phase,
+        occurred_at=occurred_at,
+        tool_name=tool_name,
+        dedupe_suffix=dedupe_suffix,
+    )
+    record_runtime_observation(db, event)
     db.flush()
-    return event
+    return _hook_observation_record(db, event=event)
+
+
+def _materialize_hook_runtime_state(
+    db,
+    *,
+    session: AgentSession,
+    phase: str,
+    occurred_at: datetime,
+    event_id: int | None = None,
+    tool_name: str | None = None,
+):
+    del event_id
+    event = _hook_runtime_ingest(
+        session=session,
+        phase=phase,
+        occurred_at=occurred_at,
+        tool_name=tool_name,
+    )
+    ingest_runtime_events(db, [event])
+    db.flush()
+    return _hook_observation_record(db, event=event)
 
 
 class _FakeDispatcher:
@@ -436,21 +454,13 @@ def test_await_managed_local_hook_phase_update_ignores_stale_active_event_insert
         async def _insert_later():
             await asyncio.sleep(0.05)
             with SessionLocal() as event_db:
-                event_db.add(
-                    SessionRuntimeEvent(
-                        runtime_key=f"claude:{session.id}",
-                        session_id=session.id,
-                        provider="claude",
-                        device_id="cinder",
-                        source="claude_hook",
-                        kind="phase_signal",
-                        phase="running",
-                        tool_name="Bash",
-                        occurred_at=baseline_occurred_at,
-                        freshness_ms=600_000,
-                        dedupe_key=f"hook:{session.id}:running-stale-after-cursor",
-                        payload_json="{}",
-                    )
+                _record_hook_observation_only(
+                    event_db,
+                    session=session,
+                    phase="running",
+                    tool_name="Bash",
+                    occurred_at=baseline_occurred_at,
+                    dedupe_suffix="running-stale-after-cursor",
                 )
                 event_db.commit()
 
@@ -864,21 +874,12 @@ def test_await_managed_local_turn_terminal_ignores_stale_terminal_inserted_after
         async def _insert_later():
             await asyncio.sleep(0.05)
             with SessionLocal() as event_db:
-                event_db.add(
-                    SessionRuntimeEvent(
-                        runtime_key=f"claude:{session.id}",
-                        session_id=session.id,
-                        provider="claude",
-                        device_id="cinder",
-                        source="claude_hook",
-                        kind="phase_signal",
-                        phase="idle",
-                        tool_name=None,
-                        occurred_at=baseline_occurred_at,
-                        freshness_ms=600_000,
-                        dedupe_key=f"hook:{session.id}:idle-stale-after-cursor",
-                        payload_json="{}",
-                    )
+                _record_hook_observation_only(
+                    event_db,
+                    session=session,
+                    phase="idle",
+                    occurred_at=baseline_occurred_at,
+                    dedupe_suffix="idle-stale-after-cursor",
                 )
                 event_db.commit()
 
