@@ -1530,6 +1530,7 @@ class AgentsStore:
         }
 
         source_lines_inserted = 0
+        source_lines_received_at = datetime.now(timezone.utc)
         _since_commit = 0
         for line_data in source_lines:
             line_hash = self._compute_line_hash(line_data.raw_json)
@@ -1573,7 +1574,8 @@ class AgentsStore:
                     revision=revision,
                     line_hash=line_hash,
                     raw_json=line_data.raw_json,
-                    observed_at=_normalize_utc_naive(data.started_at) or datetime.now(timezone.utc),
+                    observed_at=source_lines_received_at,
+                    received_at=source_lines_received_at,
                 )
                 _since_commit += 1
 

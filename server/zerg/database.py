@@ -1260,29 +1260,6 @@ def _migrate_agents_columns(engine: Engine) -> None:
                         """
                     )
                 )
-            else:
-                observation_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(session_observations)"))}
-                if observation_columns and "runtime_key" not in observation_columns:
-                    conn.execute(text("ALTER TABLE session_observations ADD COLUMN runtime_key VARCHAR(255)"))
-                if observation_columns and "source_path" not in observation_columns:
-                    conn.execute(text("ALTER TABLE session_observations ADD COLUMN source_path TEXT"))
-                if observation_columns and "source_offset" not in observation_columns:
-                    conn.execute(text("ALTER TABLE session_observations ADD COLUMN source_offset BIGINT"))
-                if observation_columns and "source_cursor" not in observation_columns:
-                    conn.execute(text("ALTER TABLE session_observations ADD COLUMN source_cursor VARCHAR(512)"))
-                if observation_columns and "payload_json_z" not in observation_columns:
-                    conn.execute(text("ALTER TABLE session_observations ADD COLUMN payload_json_z BLOB"))
-                if observation_columns and "payload_json_codec" not in observation_columns:
-                    conn.execute(text("ALTER TABLE session_observations ADD COLUMN payload_json_codec INTEGER NOT NULL DEFAULT 0"))
-
-            conn.execute(
-                text(
-                    """
-                    CREATE UNIQUE INDEX IF NOT EXISTS ix_session_observations_observation_id
-                    ON session_observations(observation_id)
-                    """
-                )
-            )
             conn.execute(
                 text(
                     """
@@ -1316,8 +1293,8 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 )
             )
             conn.commit()
-    except Exception:
-        logger.debug("session_observations table migration skipped", exc_info=True)
+    except Exception as exc:
+        raise RuntimeError("Failed to initialize session_observations table") from exc
 
     # job_runs table migrations
     try:

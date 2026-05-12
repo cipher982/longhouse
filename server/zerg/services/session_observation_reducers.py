@@ -27,6 +27,8 @@ def reduce_bridge_transcript_observation(db: Session, observation: SessionObserv
     bridge_payload = payload.get("payload")
     if not isinstance(bridge_payload, dict):
         return None
+    bridge_payload = dict(bridge_payload)
+    bridge_payload["_session_observation_id"] = observation.observation_id
 
     return materialize_bridge_transcript_event(
         db,

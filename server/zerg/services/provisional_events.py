@@ -120,6 +120,13 @@ def materialize_bridge_transcript_event(
         existing_seq = existing.provisional_seq
         if seq is not None and existing_seq is not None and seq < existing_seq:
             return existing
+        if seq is not None and existing_seq is not None and seq == existing_seq:
+            incoming_observation_id = _payload_observation_id(payload)
+            existing_observation_id = _existing_observation_id(existing)
+            if existing_observation_id is not None and (
+                incoming_observation_id is None or incoming_observation_id >= existing_observation_id
+            ):
+                return existing
         if seq is None and existing_seq is not None:
             return existing
         if existing.provisional_state in {PROVISIONAL_RECONCILED, PROVISIONAL_SUPERSEDED}:
@@ -347,3 +354,25 @@ def _encode_provisional_raw_json(payload: dict[str, Any]) -> str:
         sort_keys=True,
         separators=(",", ":"),
     )
+
+
+def _payload_observation_id(payload: dict[str, Any]) -> str | None:
+    value = payload.get("_session_observation_id")
+    text = str(value or "").strip()
+    return text or None
+
+
+def _existing_observation_id(event: AgentEvent) -> str | None:
+    raw_json = event.raw_json
+    if not raw_json:
+        return None
+    try:
+        encoded = json.loads(raw_json)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(encoded, dict):
+        return None
+    payload = encoded.get("payload")
+    if not isinstance(payload, dict):
+        return None
+    return _payload_observation_id(payload)

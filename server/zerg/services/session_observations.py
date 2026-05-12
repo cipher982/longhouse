@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
 from typing import Any
@@ -28,6 +29,12 @@ OBS_KIND_RUNTIME_SIGNAL = "runtime_signal"
 OBS_KIND_BRIDGE_TRANSCRIPT_DELTA = "bridge_transcript_delta"
 
 
+@dataclass(frozen=True)
+class ObservationWriteResult:
+    observation: SessionObservation | None
+    inserted: bool
+
+
 def record_session_observation(
     db: Session,
     *,
@@ -45,7 +52,7 @@ def record_session_observation(
     source_path: str | None = None,
     source_offset: int | None = None,
     source_cursor: str | None = None,
-) -> SessionObservation | None:
+) -> ObservationWriteResult:
     payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     stmt = (
         sqlite_insert(SessionObservation)
@@ -72,15 +79,18 @@ def record_session_observation(
     result = db.execute(stmt)
     if result.rowcount:
         db.flush()
-    return db.query(SessionObservation).filter(SessionObservation.observation_id == observation_id).first()
+        observation = db.query(SessionObservation).filter(SessionObservation.observation_id == observation_id).first()
+        return ObservationWriteResult(observation=observation, inserted=True)
+    return ObservationWriteResult(observation=None, inserted=False)
 
 
-def record_runtime_observation(db: Session, event: Any, *, received_at: datetime | None = None) -> SessionObservation | None:
+def record_runtime_observation(db: Session, event: Any, *, received_at: datetime | None = None) -> ObservationWriteResult:
     payload = event.payload or {}
+    dedupe_key = _runtime_dedupe_key(event, payload)
     kind = OBS_KIND_BRIDGE_TRANSCRIPT_DELTA if _is_bridge_transcript_delta(event, payload) else OBS_KIND_RUNTIME_SIGNAL
     return record_session_observation(
         db,
-        observation_id=f"runtime:{event.source}:{event.dedupe_key}",
+        observation_id=f"runtime:{event.source}:{dedupe_key}",
         session_id=event.session_id,
         runtime_key=event.runtime_key,
         provider=event.provider,
@@ -88,7 +98,7 @@ def record_runtime_observation(db: Session, event: Any, *, received_at: datetime
         source_domain=SOURCE_DOMAIN_RUNTIME,
         source=event.source,
         kind=kind,
-        source_cursor=f"{event.kind}:{event.dedupe_key}",
+        source_cursor=f"{event.kind}:{dedupe_key}",
         observed_at=event.occurred_at,
         received_at=received_at,
         payload={
@@ -116,7 +126,7 @@ def record_source_line_observation(
     raw_json: str,
     observed_at: datetime,
     received_at: datetime | None = None,
-) -> SessionObservation | None:
+) -> ObservationWriteResult:
     observation_id = "source_line:" + _hash_parts(
         str(session_id),
         str(branch_id),
@@ -154,6 +164,17 @@ def _is_bridge_transcript_delta(event: Any, payload: dict[str, Any]) -> bool:
         and (event.source or "").strip().lower() == "codex_bridge_live"
         and event.kind == "progress_signal"
         and payload.get("progress_kind") == "bridge_live_transcript_delta"
+    )
+
+
+def _runtime_dedupe_key(event: Any, payload: dict[str, Any]) -> str:
+    raw = str(getattr(event, "dedupe_key", "") or "").strip()
+    if raw:
+        return raw
+    return "payload:" + _hash_parts(
+        str(getattr(event, "runtime_key", "") or ""),
+        str(getattr(event, "kind", "") or ""),
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str),
     )
 
 
