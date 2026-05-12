@@ -201,10 +201,12 @@ class Profiler:
         self.started_monotonic_ms = monotonic_ms()
         self.project = args.project
         self.subdomain = args.subdomain
-        self.profile_class = args.profile_class or profile_class_for(args.profile)
         self.container = args.container or f"{HOSTED_CONTAINER_PREFIX}{self.subdomain}"
         self.browser_ui_base_url = args.browser_ui_base_url or f"https://{self.subdomain}.longhouse.ai"
         self.sla_case = resolve_sla_case(args)
+        self.profile_class = args.profile_class or (
+            self.sla_case.get("profile_class") if self.sla_case else profile_class_for(args.profile)
+        )
         self.remote_clock_skew_ms = self.measure_remote_clock_skew_ms()
         self._observe_lock = threading.Lock()
         self._browser_session_cookie: str | None = None
@@ -1937,7 +1939,7 @@ except Exception as exc:
             payload={"path": str(path), **compact_snapshot(payload)},
         )
 
-    def write_summary(self, results: list[dict[str, Any]], errors: list[str]) -> None:
+    def write_summary(self, results: list[dict[str, Any]], errors: list[str]) -> list[dict[str, Any]]:
         metrics: list[dict[str, Any]] = []
         lines = [
             "# Managed Session Propagation Profile",
@@ -1995,8 +1997,27 @@ except Exception as exc:
                 default=str,
             )
         )
+        return metrics
 
     def verdict_for(self, case_id: str, session_id: str, nonce: str) -> tuple[str, str, dict[str, Any]]:
+        active_metrics = set(self.sla_case.get("metrics") or []) if self.sla_case else set()
+        requires_live = not active_metrics or any(
+            metric in active_metrics
+            for metric in (
+                "warm_live_output_local_to_paint_ms",
+                "warm_live_output_sse_to_paint_ms",
+            )
+        )
+        requires_close = not active_metrics or any(
+            metric in active_metrics
+            for metric in (
+                "warm_close_local_to_sse_ms",
+                "warm_close_local_to_paint_ms",
+                "warm_close_sse_to_paint_ms",
+                "warm_close_local_to_db_ms",
+            )
+        )
+        requires_durable = not active_metrics or "durable_archive_local_to_hosted_ms" in active_metrics
         hosted = self.hosted_db_direct(session_id) or {}
         session = hosted.get("session") or {}
         runtime = hosted.get("runtime_state") or {}
@@ -2104,6 +2125,30 @@ except Exception as exc:
             "assistant_response_local",
             "browser_transcript_preview_nonce_painted",
         )
+        browser_live_first_from_local_wall_latency = self.event_wall_delta_ms(
+            case_id,
+            session_id,
+            "assistant_response_local",
+            "browser_live_transcript_first_painted",
+        )
+        browser_live_full_from_local_wall_latency = self.event_wall_delta_ms(
+            case_id,
+            session_id,
+            "assistant_response_local",
+            "browser_live_transcript_nonce_painted",
+        )
+        browser_live_first_from_live_truth_wall_latency = self.event_wall_delta_ms(
+            case_id,
+            session_id,
+            "timeline_live_transcript_sse_first_visible",
+            "browser_live_transcript_first_painted",
+        )
+        browser_live_full_from_live_truth_wall_latency = self.event_wall_delta_ms(
+            case_id,
+            session_id,
+            "timeline_live_transcript_sse_visible",
+            "browser_live_transcript_nonce_painted",
+        )
         browser_first_after_sse_latency = self.event_delta_any_order_ms(
             case_id,
             session_id,
@@ -2197,6 +2242,10 @@ except Exception as exc:
             "browser_live_tail_from_prompt_ms": browser_live_full_latency,
             "browser_live_first_from_local_raw_ms": browser_live_first_from_local_latency,
             "browser_live_tail_from_local_raw_ms": browser_live_full_from_local_latency,
+            "browser_live_first_from_local_wall_ms": browser_live_first_from_local_wall_latency,
+            "browser_live_tail_from_local_wall_ms": browser_live_full_from_local_wall_latency,
+            "browser_live_first_from_live_truth_wall_ms": browser_live_first_from_live_truth_wall_latency,
+            "browser_live_tail_from_live_truth_wall_ms": browser_live_full_from_live_truth_wall_latency,
             "browser_live_first_after_sse_raw_ms": browser_first_after_sse_latency,
             "browser_live_tail_after_sse_raw_ms": browser_full_after_sse_latency,
             "warm_ready_to_prompt_ms": warm_ready_to_prompt_latency,
@@ -2241,20 +2290,42 @@ except Exception as exc:
             return "missing", "hosted session row not observed", metrics
         precondition = self.provider_precondition_for(case_id, session_id)
 
-        live_first_from_local_latency = browser_live_first_from_local_latency
-        live_full_from_local_latency = browser_live_full_from_local_latency
+        live_first_from_local_latency = (
+            browser_live_first_from_live_truth_wall_latency
+            if browser_live_first_from_live_truth_wall_latency is not None
+            else browser_live_first_from_local_wall_latency
+            if browser_live_first_from_local_wall_latency is not None
+            else browser_live_first_from_local_latency
+        )
+        live_full_from_local_latency = (
+            browser_live_full_from_live_truth_wall_latency
+            if browser_live_full_from_live_truth_wall_latency is not None
+            else browser_live_full_from_local_wall_latency
+            if browser_live_full_from_local_wall_latency is not None
+            else browser_live_full_from_local_latency
+        )
         live_ui_source = "browser_ui"
+        live_timing_source = (
+            "live_transcript_occurred_at"
+            if browser_live_first_from_live_truth_wall_latency is not None
+            else "payload_wall"
+            if browser_live_first_from_local_wall_latency is not None
+            else "harness_observed"
+        )
         if live_first_from_local_latency is None:
             live_first_from_local_latency = first_live_sse_from_local_latency
             live_full_from_local_latency = live_sse_from_local_latency
             live_ui_source = "sse"
+            live_timing_source = "harness_observed"
         if live_first_from_local_latency is None:
             live_first_from_local_latency = first_live_http_from_local_latency
             live_full_from_local_latency = live_http_from_local_latency
             live_ui_source = "http"
+            live_timing_source = "harness_observed"
         metrics["live_first_from_local_ms"] = live_first_from_local_latency
         metrics["warm_live_output_local_to_paint_ms"] = live_first_from_local_latency
         metrics["live_first_source"] = live_ui_source if live_first_from_local_latency is not None else None
+        metrics["live_first_timing_source"] = live_timing_source if live_first_from_local_latency is not None else None
         metrics["live_tail_non_slo_from_local_ms"] = live_full_from_local_latency
         if live_first_from_local_latency is not None:
             metrics["live_first_pass"] = live_first_from_local_latency <= live_first_output_target_ms()
@@ -2269,6 +2340,7 @@ except Exception as exc:
             live_ui = (
                 f"live_first={live_state} "
                 f"source={live_ui_source} "
+                f"timing={live_timing_source} "
                 f"first_from_local={live_first_from_local_latency}ms "
                 f"target={live_first_output_target_ms()}ms"
             )
@@ -2310,6 +2382,14 @@ except Exception as exc:
             transcript += f" browser_first_live_from_local={browser_live_first_from_local_latency}ms"
         if browser_live_full_from_local_latency is not None:
             transcript += f" browser_live_from_local={browser_live_full_from_local_latency}ms"
+        if browser_live_first_from_local_wall_latency is not None:
+            transcript += f" browser_first_live_from_local_wall={browser_live_first_from_local_wall_latency}ms"
+        if browser_live_full_from_local_wall_latency is not None:
+            transcript += f" browser_live_from_local_wall={browser_live_full_from_local_wall_latency}ms"
+        if browser_live_first_from_live_truth_wall_latency is not None:
+            transcript += f" browser_first_live_from_live_truth={browser_live_first_from_live_truth_wall_latency}ms"
+        if browser_live_full_from_live_truth_wall_latency is not None:
+            transcript += f" browser_live_from_live_truth={browser_live_full_from_live_truth_wall_latency}ms"
         if browser_first_after_sse_latency is not None:
             transcript += f" sse_to_browser_first_live={browser_first_after_sse_latency}ms"
         if browser_full_after_sse_latency is not None:
@@ -2405,17 +2485,27 @@ except Exception as exc:
                 f"{close_note}; ownership={ownership}, transport={transport}"
             )
             return "provider_timeout", metrics["notes"], metrics
-        if not contains:
+        if transport_failure is not None and (
+            (requires_live and metrics["live_first_pass"] is not True)
+            or (requires_durable and not contains)
+        ):
+            metrics["verdict"] = "contaminated"
+            metrics["notes"] = (
+                f"{live_ui}; transcript={transcript}; {close_note}; "
+                f"transport_failure={transport_failure}; ownership={ownership}, transport={transport}"
+            )
+            return "contaminated", metrics["notes"], metrics
+        if requires_durable and not contains:
             verdict = "partial" if closed else "missing"
             metrics["verdict"] = verdict
             metrics["notes"] = f"{live_ui}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
             return verdict, metrics["notes"], metrics
         is_managed_case = case_id == "B1" or ownership == "managed_local"
-        if is_managed_case and metrics["live_first_pass"] is not True:
+        if requires_live and is_managed_case and metrics["live_first_pass"] is not True:
             metrics["verdict"] = "fail"
             metrics["notes"] = f"{live_ui}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
             return "fail", metrics["notes"], metrics
-        if not closed:
+        if requires_close and not closed:
             phase = runtime.get("phase") or runtime.get("terminal_state") or "-"
             if transport_failure is not None:
                 metrics["verdict"] = "contaminated"
@@ -2429,7 +2519,8 @@ except Exception as exc:
             metrics["notes"] = f"{live_ui}; nonce synced; close not confirmed yet; phase={phase}; ownership={ownership}, transport={transport}"
             return "partial", metrics["notes"], metrics
         if transport_failure is not None and (
-            metrics["close_pass"] is False or metrics["durable_archive_pass"] is False
+            (requires_close and metrics["close_pass"] is False)
+            or (requires_durable and metrics["durable_archive_pass"] is False)
         ):
             metrics["verdict"] = "contaminated"
             metrics["notes"] = (
@@ -2437,11 +2528,11 @@ except Exception as exc:
                 f"transport_failure={transport_failure}; ownership={ownership}, transport={transport}"
             )
             return "contaminated", metrics["notes"], metrics
-        if is_managed_case and metrics["close_pass"] is False:
+        if requires_close and is_managed_case and metrics["close_pass"] is False:
             metrics["verdict"] = "slow"
             metrics["notes"] = f"{live_ui}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
             return "slow", metrics["notes"], metrics
-        if metrics["durable_archive_pass"] is False:
+        if requires_durable and metrics["durable_archive_pass"] is False:
             metrics["verdict"] = "slow"
             metrics["notes"] = f"{live_ui}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
             return "slow", metrics["notes"], metrics
@@ -2483,6 +2574,30 @@ except Exception as exc:
                 observed = row.get("observed_at_monotonic_ms")
                 if isinstance(observed, int):
                     return observed
+        return None
+
+    def event_wall_delta_ms(
+        self,
+        case_id: str,
+        session_id: str,
+        start_event: str,
+        end_event: str,
+    ) -> int | None:
+        start = self.event_payload_wall_ms(case_id, session_id, start_event)
+        end = self.event_payload_wall_ms(case_id, session_id, end_event)
+        if start is None or end is None:
+            return None
+        return end - start
+
+    def event_payload_wall_ms(self, case_id: str, session_id: str, event: str) -> int | None:
+        for row in self.observations:
+            if row.get("case_id") != case_id or row.get("session_id") != session_id:
+                continue
+            if row.get("event") != event:
+                continue
+            timestamp = payload_wall_timestamp(row)
+            if timestamp is not None:
+                return timestamp
         return None
 
     def wait_for_observation(
@@ -2648,6 +2763,56 @@ def find_local_assistant_event(path: Path, nonce: str) -> dict[str, Any] | None:
                 "payload_type": payload.get("type"),
             }
     return None
+
+
+def payload_wall_timestamp(row: dict[str, Any]) -> int | None:
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    for path in payload_wall_candidate_paths(str(row.get("event") or "")):
+        value = nested_get(payload, path)
+        parsed = parse_iso_wall_ms(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def payload_wall_candidate_paths(event: str) -> tuple[tuple[str, ...], ...]:
+    if event == "assistant_response_local":
+        return (("timestamp",),)
+    if event.startswith("timeline_live_transcript_sse"):
+        return (
+            ("live_transcript", "occurred_at"),
+            ("live_transcript", "overlay_at"),
+            ("live_transcript", "received_at"),
+        )
+    if event.startswith("browser_"):
+        return (
+            ("card", "page_painted_at_wall"),
+            ("card", "page_observed_at_wall"),
+            ("observer_observed_at_wall",),
+        )
+    return ()
+
+
+def nested_get(value: dict[str, Any], path: tuple[str, ...]) -> Any:
+    current: Any = value
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def parse_iso_wall_ms(value: Any) -> int | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    raw = value.strip()
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp() * 1000)
 
 
 def find_codex_tui_precondition(path: Path) -> dict[str, Any] | None:
@@ -3264,9 +3429,9 @@ def run_single(args: argparse.Namespace) -> tuple[int, Path]:
             event="mismatch_detected",
             payload={"error": str(exc)},
         )
-    profiler.write_summary(results, errors)
+    metrics = profiler.write_summary(results, errors)
     print(profiler.summary_path)
-    return (1 if errors else 0), profiler.summary_path
+    return single_exit_code(errors=errors, metrics=metrics, sla_status=(profiler.sla_case or {}).get("status")), profiler.summary_path
 
 
 def percentile(values: list[int], pct: float) -> int | None:
@@ -3318,6 +3483,17 @@ def batch_exit_code(*, child_runs: list[dict[str, Any]], sla_status: str | None)
     if sla_status == "required":
         for run in child_runs:
             verdict = run.get("verdict") or "error"
+            if verdict in BATCH_REQUIRED_NONPASS_VERDICTS:
+                return 1
+    return 0
+
+
+def single_exit_code(*, errors: list[str], metrics: list[dict[str, Any]], sla_status: str | None) -> int:
+    if errors:
+        return 1
+    if sla_status == "required":
+        for case in metrics:
+            verdict = case.get("verdict") or "error"
             if verdict in BATCH_REQUIRED_NONPASS_VERDICTS:
                 return 1
     return 0

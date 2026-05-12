@@ -116,7 +116,11 @@ async function waitForCard(kind, timeoutMs) {
       closeObserved = true;
     }
     await afterPaint();
-    emit(kind, { dom_matched_elapsed_ms: domMatchedElapsedMs, card });
+    const paintStamp = await page.evaluate(() => ({
+      page_painted_at_wall: new Date().toISOString(),
+      page_painted_performance_now_ms: performance.now(),
+    }));
+    emit(kind, { dom_matched_elapsed_ms: domMatchedElapsedMs, card: { ...card, ...paintStamp } });
   } catch (error) {
     if (!closeObserved) {
       emit(`${kind}_timeout`, { error: String(error).slice(0, 500) });
