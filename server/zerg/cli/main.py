@@ -220,7 +220,7 @@ def rebuild_session(
     ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
-    """Rebuild one session's derived projections from SessionObservation."""
+    """Rebuild one session's projections; reducer errors are reported after committing partial output."""
     from uuid import UUID
 
     from zerg import database as database_module
