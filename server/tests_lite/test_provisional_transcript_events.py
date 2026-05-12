@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -11,6 +12,7 @@ from zerg.database import make_engine
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionObservation
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
@@ -106,6 +108,7 @@ def test_live_bridge_snapshots_upsert_one_active_provisional_event(tmp_path):
         db.commit()
 
         rows = db.query(AgentEvent).filter(AgentEvent.session_id == session.id).all()
+        observations = db.query(SessionObservation).filter(SessionObservation.session_id == session.id).order_by(SessionObservation.id).all()
         visible = AgentsStore(db).get_session_events(session.id)
 
     assert result.accepted == 2
@@ -117,6 +120,10 @@ def test_live_bridge_snapshots_upsert_one_active_provisional_event(tmp_path):
     assert rows[0].provisional_cursor == f"codex_bridge_live:{session.id}:thread-1:turn-1:2"
     assert rows[0].provisional_seq == 2
     assert rows[0].content_text == "hello"
+    assert [observation.kind for observation in observations] == ["bridge_transcript_delta", "bridge_transcript_delta"]
+    assert observations[0].source_domain == "runtime"
+    assert observations[0].source == "codex_bridge_live"
+    assert json.loads(observations[1].payload_json or "{}")["payload"]["live_text"] == "hello"
     assert [event.id for event in visible] == [rows[0].id]
 
 
@@ -172,6 +179,7 @@ def test_durable_ingest_reconciles_matching_provisional_event(tmp_path):
         )
 
         rows = db.query(AgentEvent).filter(AgentEvent.session_id == session.id).order_by(AgentEvent.id.asc()).all()
+        observations = db.query(SessionObservation).filter(SessionObservation.session_id == session.id).order_by(SessionObservation.id.asc()).all()
         visible = AgentsStore(db).get_session_events(session.id)
 
     assert ingest_result.events_inserted == 1
@@ -179,6 +187,14 @@ def test_durable_ingest_reconciles_matching_provisional_event(tmp_path):
     assert rows[0].provisional_state == "reconciled"
     assert rows[0].reconciled_event_id == rows[1].id
     assert rows[1].content_text == "hello world"
+    kinds = [observation.kind for observation in observations]
+    assert "bridge_transcript_delta" in kinds
+    assert "provider_source_line" in kinds
+    source_observation = next(observation for observation in observations if observation.kind == "provider_source_line")
+    assert source_observation.source_domain == "transcript"
+    assert source_observation.source_path == source_path
+    assert source_observation.source_offset == 100
+    assert json.loads(source_observation.payload_json or "{}")["raw_json"] == assistant_line
     assert [event.id for event in visible] == [rows[1].id]
 
 

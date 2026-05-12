@@ -1227,6 +1227,98 @@ def _migrate_agents_columns(engine: Engine) -> None:
     except Exception:
         logger.debug("source_lines table migration skipped", exc_info=True)
 
+    # session_observations table migrations (raw append-only session observation bus)
+    try:
+        with engine.connect() as conn:
+            observations_exists = (
+                conn.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_observations' LIMIT 1")).fetchone()
+                is not None
+            )
+            if not observations_exists:
+                conn.execute(
+                    text(
+                        """
+                        CREATE TABLE IF NOT EXISTS session_observations (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            observation_id VARCHAR(512) NOT NULL UNIQUE,
+                            session_id CHAR(36),
+                            runtime_key VARCHAR(255),
+                            provider VARCHAR(64) NOT NULL,
+                            device_id VARCHAR(255),
+                            source_domain VARCHAR(32) NOT NULL,
+                            source VARCHAR(128) NOT NULL,
+                            kind VARCHAR(64) NOT NULL,
+                            source_path TEXT,
+                            source_offset BIGINT,
+                            source_cursor VARCHAR(512),
+                            observed_at DATETIME NOT NULL,
+                            received_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            payload_json TEXT,
+                            payload_json_z BLOB,
+                            payload_json_codec INTEGER NOT NULL DEFAULT 0
+                        )
+                        """
+                    )
+                )
+            else:
+                observation_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(session_observations)"))}
+                if observation_columns and "runtime_key" not in observation_columns:
+                    conn.execute(text("ALTER TABLE session_observations ADD COLUMN runtime_key VARCHAR(255)"))
+                if observation_columns and "source_path" not in observation_columns:
+                    conn.execute(text("ALTER TABLE session_observations ADD COLUMN source_path TEXT"))
+                if observation_columns and "source_offset" not in observation_columns:
+                    conn.execute(text("ALTER TABLE session_observations ADD COLUMN source_offset BIGINT"))
+                if observation_columns and "source_cursor" not in observation_columns:
+                    conn.execute(text("ALTER TABLE session_observations ADD COLUMN source_cursor VARCHAR(512)"))
+                if observation_columns and "payload_json_z" not in observation_columns:
+                    conn.execute(text("ALTER TABLE session_observations ADD COLUMN payload_json_z BLOB"))
+                if observation_columns and "payload_json_codec" not in observation_columns:
+                    conn.execute(text("ALTER TABLE session_observations ADD COLUMN payload_json_codec INTEGER NOT NULL DEFAULT 0"))
+
+            conn.execute(
+                text(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS ix_session_observations_observation_id
+                    ON session_observations(observation_id)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_session_observations_session_observed
+                    ON session_observations(session_id, observed_at, id)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_session_observations_domain_kind
+                    ON session_observations(source_domain, kind, observed_at)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_session_observations_source_cursor
+                    ON session_observations(source, source_cursor)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_session_observations_runtime_key
+                    ON session_observations(runtime_key)
+                    """
+                )
+            )
+            conn.commit()
+    except Exception:
+        logger.debug("session_observations table migration skipped", exc_info=True)
+
     # job_runs table migrations
     try:
         with engine.connect() as conn:

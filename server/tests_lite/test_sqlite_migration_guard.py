@@ -18,6 +18,7 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionTurn
 from zerg.models.models import JobRun
 
@@ -120,6 +121,7 @@ def test_sqlite_migration_adds_current_model_columns(tmp_path):
     event_columns = _table_columns(engine, "events")
     branch_columns = _table_columns(engine, "session_branches")
     source_line_columns = _table_columns(engine, "source_lines")
+    observation_columns = _table_columns(engine, "session_observations")
     job_run_columns = _table_columns(engine, "job_runs")
     session_turn_columns = _table_columns(engine, "session_turns")
 
@@ -127,6 +129,7 @@ def test_sqlite_migration_adds_current_model_columns(tmp_path):
     expected_event_columns = {col.name for col in AgentEvent.__table__.columns}
     expected_branch_columns = {col.name for col in AgentSessionBranch.__table__.columns}
     expected_source_line_columns = {col.name for col in AgentSourceLine.__table__.columns}
+    expected_observation_columns = {col.name for col in SessionObservation.__table__.columns}
     expected_job_run_columns = {col.name for col in JobRun.__table__.columns}
     expected_session_turn_columns = {col.name for col in SessionTurn.__table__.columns}
 
@@ -134,6 +137,7 @@ def test_sqlite_migration_adds_current_model_columns(tmp_path):
     missing_event_columns = sorted(expected_event_columns - event_columns)
     missing_branch_columns = sorted(expected_branch_columns - branch_columns)
     missing_source_line_columns = sorted(expected_source_line_columns - source_line_columns)
+    missing_observation_columns = sorted(expected_observation_columns - observation_columns)
     missing_job_run_columns = sorted(expected_job_run_columns - job_run_columns)
     missing_session_turn_columns = sorted(expected_session_turn_columns - session_turn_columns)
 
@@ -141,5 +145,6 @@ def test_sqlite_migration_adds_current_model_columns(tmp_path):
     assert not missing_event_columns, f"events migration missing columns: {missing_event_columns}"
     assert not missing_branch_columns, f"session_branches migration missing columns: {missing_branch_columns}"
     assert not missing_source_line_columns, f"source_lines migration missing columns: {missing_source_line_columns}"
+    assert not missing_observation_columns, f"session_observations migration missing columns: {missing_observation_columns}"
     assert not missing_job_run_columns, f"job_runs migration missing columns: {missing_job_run_columns}"
     assert not missing_session_turn_columns, f"session_turns migration missing columns: {missing_session_turn_columns}"
