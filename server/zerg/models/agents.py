@@ -341,6 +341,42 @@ class AgentSourceLine(AgentsBase):
     )
 
 
+class SessionObservation(AgentsBase):
+    """Append-only raw observation bus for session-related facts.
+
+    Reducers materialize transcript, archive, runtime, and timeline read models
+    from these observations. The deterministic ``observation_id`` is the first
+    idempotency boundary.
+    """
+
+    __tablename__ = "session_observations"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    observation_id = Column(String(512), nullable=False)
+    session_id = Column(GUID(), nullable=True, index=True)
+    runtime_key = Column(String(255), nullable=True, index=True)
+    provider = Column(String(64), nullable=False)
+    device_id = Column(String(255), nullable=True)
+    source_domain = Column(String(32), nullable=False, index=True)
+    source = Column(String(128), nullable=False, index=True)
+    kind = Column(String(64), nullable=False, index=True)
+    source_path = Column(Text, nullable=True)
+    source_offset = Column(BigInteger, nullable=True)
+    source_cursor = Column(String(512), nullable=True)
+    observed_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    received_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    payload_json = Column(Text, nullable=True)
+    payload_json_z = Column(LargeBinary, nullable=True)
+    payload_json_codec = Column(Integer, nullable=False, server_default=text("0"))
+
+    __table_args__ = (
+        UniqueConstraint("observation_id", name="uq_session_observations_observation_id"),
+        Index("ix_session_observations_session_observed", "session_id", "observed_at", "id"),
+        Index("ix_session_observations_domain_kind", "source_domain", "kind", "observed_at"),
+        Index("ix_session_observations_source_cursor", "source", "source_cursor"),
+    )
+
+
 class AgentHeartbeat(AgentsBase):
     """Periodic health check from a running engine daemon.
 

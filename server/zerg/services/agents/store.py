@@ -40,6 +40,7 @@ from zerg.services.raw_json_compression import CODEC_PLAIN
 from zerg.services.raw_json_compression import CODEC_ZSTD
 from zerg.services.raw_json_compression import compress_raw_json
 from zerg.services.raw_json_compression import decode_raw_json
+from zerg.services.session_observations import record_source_line_observation
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_execution_home import coerce_execution_home
 from zerg.session_execution_home import execution_home_for_continuation_kind
@@ -1560,6 +1561,20 @@ class AgentsStore:
             if result.rowcount and result.rowcount > 0:
                 latest_state[key] = (revision, line_hash)
                 source_lines_inserted += 1
+                record_source_line_observation(
+                    self.db,
+                    session_id=session_id,
+                    provider=data.provider,
+                    device_id=data.device_id,
+                    source="agents_ingest",
+                    source_path=line_data.source_path,
+                    source_offset=source_offset,
+                    branch_id=ingest_branch.id,
+                    revision=revision,
+                    line_hash=line_hash,
+                    raw_json=line_data.raw_json,
+                    observed_at=_normalize_utc_naive(data.started_at) or datetime.now(timezone.utc),
+                )
                 _since_commit += 1
 
             if _since_commit >= _INGEST_CHUNK:
