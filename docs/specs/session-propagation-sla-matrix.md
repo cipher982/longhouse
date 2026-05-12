@@ -78,14 +78,21 @@ canonical metric IDs, not legacy aliases.
 
 `managed_codex_warm_live_graceful_close`
 
-This is the only path currently promoted to `required`.
+This is the primary warm realtime path currently promoted to `required`.
 
 It proves the warm managed Codex happy path:
 
 - managed session card appears with correct ownership and capability truth
 - live output reaches timeline SSE and browser card on the live lane
 - graceful bridge shutdown closes the card without waiting for a slow backstop
-- durable archive catches up separately
+- durable archive is observed but scored separately
+
+`managed_codex_durable_archive`
+
+This is the experimental durability companion for the same managed Codex happy
+path. It proves canonical hosted transcript/archive catch-up without
+deciding whether the already-open timeline felt realtime. Promote it only
+after archive-path variance and provider preconditions are stable in batches.
 
 Current target budgets are in `config/session-propagation-sla.toml`. The
 important user-facing targets are:
@@ -151,6 +158,8 @@ save artifacts.
 
 Nightly dogfood:
 Run required plus selected experimental paths repeatedly and compute p50/p95.
+Report warm realtime and durable archive verdicts separately even when they
+share one launch.
 
 Release confidence:
 Run one hosted warm-live and one hosted warm-close probe. Gate only on gross

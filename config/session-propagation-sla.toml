@@ -109,9 +109,23 @@ metrics = [
   "warm_close_local_to_paint_ms",
   "warm_close_sse_to_paint_ms",
   "warm_close_local_to_db_ms",
-  "durable_archive_local_to_hosted_ms",
 ]
-notes = "Current optimized happy path. This is the first SLA candidate for release confidence."
+notes = "Current optimized happy path for already-open timeline realtime truth. Durable archive is tracked as a separate case."
+
+[[cases]]
+id = "managed_codex_durable_archive"
+status = "experimental"
+provider = "codex"
+control_path = "managed"
+topology = "hosted_runtime_host"
+profile = "warm-live"
+profile_class = "durable_archive"
+launch = "longhouse codex --no-attach"
+shutdown = "longhouse-engine codex-bridge stop"
+truth_source = "provider_transcript"
+required_observers = ["provider_transcript", "managed_sessions_snapshot", "hosted_db"]
+metrics = ["durable_archive_local_to_hosted_ms"]
+notes = "Canonical hosted transcript/archive durability for the same managed Codex happy path, scored separately from warm realtime UI truth. Keep experimental until prepare-path variance and provider preconditions are boring."
 
 [[cases]]
 id = "managed_claude_warm_live_graceful_close"

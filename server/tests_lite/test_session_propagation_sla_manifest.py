@@ -20,7 +20,7 @@ def test_session_propagation_sla_manifest_is_valid():
     summary = sla_manifest.manifest_summary(manifest)
     assert summary["schema_version"] == 1
     assert summary["cases"]["required"] == 1
-    assert summary["cases"]["experimental"] >= 8
+    assert summary["cases"]["experimental"] >= 9
     assert summary["cases"]["undefined"] >= 3
     assert summary["metrics"] >= 10
 
@@ -38,6 +38,13 @@ def test_session_propagation_sla_manifest_keeps_codex_required_path():
     assert case["profile"] == "warm-live"
     assert "timeline_sse" in case["required_observers"]
     assert "browser_card" in case["required_observers"]
+    assert "durable_archive_local_to_hosted_ms" not in case["metrics"]
+
+    durable_case = sla_manifest.case_by_id(manifest, "managed_codex_durable_archive")
+    assert durable_case is not None
+    assert durable_case["status"] == "experimental"
+    assert durable_case["profile_class"] == "durable_archive"
+    assert durable_case["metrics"] == ["durable_archive_local_to_hosted_ms"]
 
 
 def test_session_propagation_sla_metric_aliases_support_existing_profiler_names():
