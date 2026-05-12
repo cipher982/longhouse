@@ -8,6 +8,7 @@ from datetime import timezone
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
+import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 from typer.testing import CliRunner
@@ -30,8 +31,10 @@ from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
 from zerg.services.agents_store import SourceLineIngest
 from zerg.services.raw_json_compression import decode_raw_json
+from zerg.services.session_observation_rebuild import SessionObservationRebuildCoverageError
 from zerg.services.session_observation_rebuild import rebuild_session_observation_projections
 from zerg.services.session_observations import OBS_KIND_PROVIDER_EVENT
+from zerg.services.session_observations import SOURCE_DOMAIN_TRANSCRIPT
 from zerg.services.session_observations import record_session_observation
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
@@ -810,6 +813,99 @@ def test_session_observation_rebuild_cli_restores_projection_rows(tmp_path):
     assert session.transcript_revision == 1
     assert events[0]["content_text"] == "restored by cli"
     assert source_lines[0]["raw_json"] == raw_line
+
+
+def test_session_observation_rebuild_refuses_uncovered_transcript_projection(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "observation_rebuild_uncovered_transcript.db")
+    now = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
+        db.add(
+            AgentEvent(
+                session_id=session.id,
+                role="assistant",
+                content_text="direct projection row",
+                timestamp=now,
+            )
+        )
+        db.commit()
+
+        with pytest.raises(SessionObservationRebuildCoverageError, match="no transcript observations"):
+            rebuild_session_observation_projections(db, session_id=session.id)
+
+        events = _event_snapshot(db, session.id)
+
+    assert [event["content_text"] for event in events] == ["direct projection row"]
+
+
+def test_session_observation_rebuild_refuses_newer_observation_coverage(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "observation_rebuild_newer_coverage.db")
+    now = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
+        db.add(
+            AgentEvent(
+                session_id=session.id,
+                role="assistant",
+                content_text="older direct projection row",
+                timestamp=now,
+            )
+        )
+        record_session_observation(
+            db,
+            observation_id=f"provider_event:newer:{session.id}",
+            session_id=session.id,
+            runtime_key=None,
+            provider="codex",
+            device_id="cinder",
+            source_domain=SOURCE_DOMAIN_TRANSCRIPT,
+            source="test",
+            kind=OBS_KIND_PROVIDER_EVENT,
+            observed_at=now + timedelta(seconds=1),
+            payload={"branch_id": 1},
+        )
+        db.commit()
+
+        with pytest.raises(SessionObservationRebuildCoverageError, match="newer than oldest transcript projection"):
+            rebuild_session_observation_projections(db, session_id=session.id)
+
+        events = _event_snapshot(db, session.id)
+
+    assert [event["content_text"] for event in events] == ["older direct projection row"]
+
+
+def test_session_observation_rebuild_cli_refuses_uncovered_projection_rows(tmp_path):
+    db_url = f"sqlite:///{tmp_path / 'observation_rebuild_cli_refuse.db'}"
+    engine = make_engine(db_url)
+    initialize_database(engine)
+    SessionLocal = sessionmaker(bind=engine)
+    now = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
+        db.add(
+            AgentEvent(
+                session_id=session.id,
+                role="assistant",
+                content_text="keep me",
+                timestamp=now,
+            )
+        )
+        db.commit()
+        session_id = session.id
+
+    cli_result = CliRunner().invoke(cli_app, ["rebuild-session", str(session_id), "--database-url", db_url, "--json"])
+    assert cli_result.exit_code == 1, cli_result.output
+    payload = json.loads(cli_result.output)
+    assert payload["error"] == "coverage_gap"
+    assert "no transcript observations" in payload["detail"]
+
+    with SessionLocal() as db:
+        events = _event_snapshot(db, session_id)
+
+    assert [event["content_text"] for event in events] == ["keep me"]
 
 
 def test_session_observation_rebuild_preserves_rewind_branch_head_projection(tmp_path):

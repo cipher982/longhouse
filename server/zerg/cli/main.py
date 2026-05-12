@@ -227,6 +227,7 @@ def rebuild_session(
     from zerg.database import initialize_database
     from zerg.database import make_engine
     from zerg.database import make_sessionmaker
+    from zerg.services.session_observation_rebuild import SessionObservationRebuildCoverageError
     from zerg.services.session_observation_rebuild import rebuild_session_observation_projections
 
     try:
@@ -245,7 +246,15 @@ def rebuild_session(
         raise typer.Exit(code=2)
 
     with session_factory() as db:
-        result = rebuild_session_observation_projections(db, session_id=parsed_session_id, runtime_key=runtime_key)
+        try:
+            result = rebuild_session_observation_projections(db, session_id=parsed_session_id, runtime_key=runtime_key)
+        except SessionObservationRebuildCoverageError as exc:
+            db.rollback()
+            if json_output:
+                typer.echo(json.dumps({"error": "coverage_gap", "detail": str(exc)}, indent=2, sort_keys=True))
+            else:
+                typer.echo(f"Refusing rebuild: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
         db.commit()
 
     payload = {
