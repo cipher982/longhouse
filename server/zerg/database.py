@@ -652,6 +652,18 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN loop_thread_id INTEGER"))
             if "is_sidechain" not in columns:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN is_sidechain INTEGER NOT NULL DEFAULT 0"))
+            if "launch_state" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN launch_state VARCHAR(32)"))
+            if "launch_error_code" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN launch_error_code VARCHAR(64)"))
+            if "launch_error_message" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN launch_error_message TEXT"))
+            if "launch_lease_until" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN launch_lease_until DATETIME"))
+            if "launch_command_id" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN launch_command_id VARCHAR(64)"))
+            if "launch_client_request_id" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN launch_client_request_id VARCHAR(64)"))
             if "thread_root_session_id" not in columns:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN thread_root_session_id CHAR(36)"))
             if "continued_from_session_id" not in columns:

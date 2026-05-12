@@ -549,6 +549,14 @@ class SessionResponse(UTCBaseModel):
     )
     loop_mode: SessionLoopMode = Field(SessionLoopMode.ASSIST, description="Session loop mode: assist|autopilot")
     user_state: str = Field("active", description="User classification: active|parked|snoozed|archived")
+    launch_state: Optional[str] = Field(
+        None,
+        description="Remote-launch lifecycle: launching|live|launching_unknown|launch_failed|launch_orphaned; null for pre-migration rows",
+    )
+    launch_error_code: Optional[str] = Field(None, description="Remote-launch error code when launch_state=launch_failed/launch_orphaned")
+    launch_error_message: Optional[str] = Field(
+        None, description="Remote-launch error message when launch_state=launch_failed/launch_orphaned"
+    )
 
 
 class SessionSummaryResponse(UTCBaseModel):
@@ -1127,6 +1135,9 @@ def build_session_response(
         ),
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
         user_state=session.user_state or "active",
+        launch_state=getattr(session, "launch_state", None),
+        launch_error_code=getattr(session, "launch_error_code", None),
+        launch_error_message=getattr(session, "launch_error_message", None),
     )
 
 
