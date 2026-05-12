@@ -147,6 +147,8 @@ def _event_snapshot(db, session_id) -> list[dict]:
             "role": row.role,
             "content_text": row.content_text,
             "tool_name": row.tool_name,
+            "tool_input_json": row.tool_input_json,
+            "tool_output_text": row.tool_output_text,
             "tool_call_id": row.tool_call_id,
             "timestamp": row.timestamp.isoformat(),
             "source_path": row.source_path,
@@ -346,6 +348,17 @@ def _api_surface_snapshot(client: TestClient, session_id) -> dict:
     }
 
 
+def _damage_session_metadata(db, session_id) -> None:
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+    session.user_messages = 0
+    session.assistant_messages = 0
+    session.tool_calls = 0
+    session.transcript_revision = 0
+    session.needs_embedding = 0
+    session.last_activity_at = session.started_at
+    db.flush()
+
+
 def test_session_observation_rebuild_recovers_transcript_archive_and_runtime(tmp_path):
     SessionLocal = _make_sessionmaker(tmp_path, "observation_rebuild.db")
     now = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)
@@ -460,6 +473,7 @@ def test_session_observation_rebuild_preserves_product_surface_parity(tmp_path):
         db.commit()
 
         before = _product_surface_snapshot(db, session.id)
+        _damage_session_metadata(db, session.id)
         result = rebuild_session_observation_projections(db, session_id=session.id, runtime_key=f"codex:{session.id}")
         db.commit()
         after = _product_surface_snapshot(db, session.id)
@@ -530,6 +544,7 @@ def test_session_observation_rebuild_preserves_agent_api_surface_parity(tmp_path
         client = _api_client(SessionLocal)
         before = _api_surface_snapshot(client, session_id)
         with SessionLocal() as db:
+            _damage_session_metadata(db, session_id)
             result = rebuild_session_observation_projections(db, session_id=session_id, runtime_key=f"codex:{session_id}")
             db.commit()
         after = _api_surface_snapshot(client, session_id)
@@ -584,6 +599,81 @@ def test_session_observation_rebuild_preserves_source_line_revision_history(tmp_
     assert [(row["revision"], row["raw_json"]) for row in before_source_lines] == [
         (1, first_line),
         (2, second_line),
+    ]
+
+
+def test_session_observation_rebuild_preserves_tool_call_pairing_fields(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "observation_rebuild_tool_pairing.db")
+    now = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)
+    source_path = "/tmp/tool-session.jsonl"
+
+    with SessionLocal() as db:
+        result = AgentsStore(db).ingest_session(
+            SessionIngest(
+                provider="claude",
+                environment="test",
+                project="observation-rebuild",
+                device_id="cinder",
+                cwd="/tmp/project",
+                started_at=now,
+                events=[
+                    EventIngest(
+                        role="assistant",
+                        tool_name="Bash",
+                        tool_input_json={"command": "ls -la"},
+                        tool_call_id="toolu_rebuild",
+                        timestamp=now + timedelta(seconds=1),
+                        source_path=source_path,
+                        source_offset=10,
+                        raw_json='{"type":"assistant","tool":"Bash"}',
+                    ),
+                    EventIngest(
+                        role="tool",
+                        tool_name="Bash",
+                        tool_output_text="total 8",
+                        tool_call_id="toolu_rebuild",
+                        timestamp=now + timedelta(seconds=2),
+                        source_path=source_path,
+                        source_offset=20,
+                        raw_json='{"type":"tool_result","content":"total 8"}',
+                    ),
+                ],
+            )
+        )
+        session_id = result.session_id
+        db.commit()
+
+        before_events = _event_snapshot(db, session_id)
+        rebuild_result = rebuild_session_observation_projections(db, session_id=session_id)
+        db.commit()
+        after_events = _event_snapshot(db, session_id)
+
+    assert rebuild_result.reducer_errors == ()
+    assert after_events == before_events
+    assert [
+        {
+            "role": event["role"],
+            "tool_name": event["tool_name"],
+            "tool_input_json": event["tool_input_json"],
+            "tool_output_text": event["tool_output_text"],
+            "tool_call_id": event["tool_call_id"],
+        }
+        for event in before_events
+    ] == [
+        {
+            "role": "assistant",
+            "tool_name": "Bash",
+            "tool_input_json": {"command": "ls -la"},
+            "tool_output_text": None,
+            "tool_call_id": "toolu_rebuild",
+        },
+        {
+            "role": "tool",
+            "tool_name": "Bash",
+            "tool_input_json": None,
+            "tool_output_text": "total 8",
+            "tool_call_id": "toolu_rebuild",
+        },
     ]
 
 
@@ -733,6 +823,7 @@ def test_session_observation_rebuild_is_idempotent(tmp_path):
     assert second.agent_events == 1
     assert len(events) == 1
     assert events[0].content_text == "same after replay"
+    assert events[0].provisional_state == "active"
 
 
 def test_session_observation_rebuild_reports_reducer_errors(tmp_path):
