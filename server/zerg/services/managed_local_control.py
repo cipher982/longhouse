@@ -31,6 +31,7 @@ from zerg.services.managed_local_transport import ManagedLocalTransportError
 from zerg.services.managed_local_transport import build_managed_local_interrupt_command
 from zerg.services.managed_local_transport import build_managed_local_send_text_command
 from zerg.services.managed_local_transport import build_managed_local_steer_text_command
+from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.utils.time import normalize_utc
@@ -167,6 +168,7 @@ def _fetch_managed_local_events_since(*, db_bind, session_id: UUID, after_event_
             poll_db.query(AgentEvent)
             .filter(AgentEvent.session_id == session_id)
             .filter(AgentEvent.id > after_event_id)
+            .filter(durable_transcript_event_predicate())
             .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
             .all()
         )

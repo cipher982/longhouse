@@ -25,6 +25,7 @@ from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEARTBEAT_STALE
 from zerg.services.agent_heartbeat_health import MachineTransportHealthSummary
 from zerg.services.agent_heartbeat_health import load_machine_transport_health_map
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
+from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.write_serializer import get_write_serializer
 from zerg.utils.time import normalize_utc
 from zerg.utils.time import utc_now
@@ -216,7 +217,11 @@ def materialize_managed_transcript_turns(
             return 0
 
     events = (
-        db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc()).all()
+        db.query(AgentEvent)
+        .filter(AgentEvent.session_id == session_id)
+        .filter(durable_transcript_event_predicate())
+        .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
+        .all()
     )
     if not events:
         return 0
@@ -664,6 +669,7 @@ def maybe_mark_session_turn_durable(
                 AgentEvent.session_id == session_id,
                 AgentEvent.id > baseline_event_id,
             )
+            .filter(durable_transcript_event_predicate())
             .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
             .all()
         )

@@ -18,6 +18,7 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.services.agents_store import AgentsStore
+from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.session_runtime import load_live_transcript_overlay_map
 from zerg.services.session_views import RecallMatch
 from zerg.services.session_views import RecallResponse
@@ -117,6 +118,7 @@ async def semantic_search_sessions(
                 matched_event = (
                     db.query(AgentEvent)
                     .filter(AgentEvent.session_id == session.id)
+                    .filter(durable_transcript_event_predicate())
                     .order_by(AgentEvent.timestamp, AgentEvent.id)
                     .offset(event_start)
                     .limit(1)
@@ -217,6 +219,7 @@ async def recall_sessions(
         all_events = (
             db.query(AgentEvent)
             .filter(AgentEvent.session_id.in_(ordered_session_ids))
+            .filter(durable_transcript_event_predicate())
             .order_by(AgentEvent.session_id, AgentEvent.timestamp, AgentEvent.id)
             .all()
         )

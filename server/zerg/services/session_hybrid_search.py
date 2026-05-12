@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.services.agents_store import AgentsStore
+from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.session_listing_types import SessionListingError
 from zerg.services.session_listing_types import SessionListParams
 from zerg.services.session_listing_types import SessionListResult
@@ -184,7 +185,15 @@ def _load_semantic_event_snippets(
         if estart is None:
             continue
         count = max(1, (eend or estart) - estart + 1)
-        events = db.query(AgentEvent).filter(AgentEvent.session_id == tsid).order_by(AgentEvent.id).offset(estart).limit(count).all()
+        events = (
+            db.query(AgentEvent)
+            .filter(AgentEvent.session_id == tsid)
+            .filter(durable_transcript_event_predicate())
+            .order_by(AgentEvent.id)
+            .offset(estart)
+            .limit(count)
+            .all()
+        )
         for ev in events:
             content_text = (ev.content_text or "").strip()
             if len(content_text) > 20:

@@ -858,6 +858,9 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
         if phase_started_at is None or phase_started_at < occurred_at:
             state.phase_started_at = occurred_at
         if terminal_state == "session_ended" and event.session_id is not None:
+            from zerg.services.provisional_events import supersede_active_provisional_transcript_events
+
+            supersede_active_provisional_transcript_events(db, session_id=event.session_id)
             session = db.query(AgentSession).filter(AgentSession.id == event.session_id).first()
             if session is not None:
                 session.ended_at = occurred_at

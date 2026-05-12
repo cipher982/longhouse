@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session as SQLAlchemySession
 from zerg.models.agents import AgentEvent
 from zerg.services.agents_store import AgentsStore
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
+from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.session_turns import get_session_turn_snapshot
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,7 @@ def fetch_managed_local_events_since(*, db_bind, session_id: UUID, after_event_i
             poll_db.query(AgentEvent)
             .filter(AgentEvent.session_id == session_id)
             .filter(AgentEvent.id > after_event_id)
+            .filter(durable_transcript_event_predicate())
             .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
             .all()
         )
@@ -50,6 +52,7 @@ def fetch_managed_local_events_between_ids(
             .filter(AgentEvent.session_id == session_id)
             .filter(AgentEvent.id >= int(start_event_id))
             .filter(AgentEvent.id <= int(end_event_id))
+            .filter(durable_transcript_event_predicate())
             .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
             .all()
         )

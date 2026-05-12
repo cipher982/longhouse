@@ -197,6 +197,15 @@ def reconcile_provisional_transcript_events(db: Session, *, session_id: UUID) ->
     return changed
 
 
+def supersede_active_provisional_transcript_events(db: Session, *, session_id: UUID) -> int:
+    rows = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).filter(active_provisional_event_predicate()).all()
+    for row in rows:
+        row.provisional_state = PROVISIONAL_SUPERSEDED
+    if rows:
+        db.flush()
+    return len(rows)
+
+
 def _match_durable_event(
     provisional: AgentEvent,
     durable_rows: list[AgentEvent],

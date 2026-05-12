@@ -37,6 +37,7 @@ from zerg.models.connector import Connector
 from zerg.models.user import User
 from zerg.models_config import get_model_for_use_case
 from zerg.services import gmail_api
+from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.session_processing import summarize_events
 from zerg.utils import crypto
 
@@ -148,7 +149,12 @@ def fetch_sessions_for_day(db: Session, target_date: datetime) -> list[SessionDa
 
 def _fetch_events_as_dicts(db: Session, session_id: str) -> list[dict]:
     """Fetch AgentEvent rows and convert to dicts for build_transcript()."""
-    stmt = select(AgentEvent).where(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp)
+    stmt = (
+        select(AgentEvent)
+        .where(AgentEvent.session_id == session_id)
+        .where(durable_transcript_event_predicate())
+        .order_by(AgentEvent.timestamp)
+    )
     events = db.execute(stmt).scalars().all()
 
     return [
