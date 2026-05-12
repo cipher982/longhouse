@@ -25,6 +25,9 @@ The repo already has most of the underlying verification primitives. What is mis
   - demo runtime
   - hosted canary
 
+It may also show hosted control-plane health for operator context. That state is
+external to this public repo and is not a public deploy gate for this monitor.
+
 ### The local/agent boundary is the weak link
 
 - There is no repo-local `ship-monitor` command today.
