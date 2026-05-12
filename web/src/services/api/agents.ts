@@ -68,6 +68,10 @@ export interface AgentSession {
   capabilities?: SessionCapabilities | null;
   loop_mode: SessionLoopMode;
   user_state?: string;
+  /** Remote-launch lifecycle state; null for sessions created before remote-launch. */
+  launch_state?: "launching" | "live" | "launching_unknown" | "launch_failed" | "launch_orphaned" | null;
+  launch_error_code?: string | null;
+  launch_error_message?: string | null;
 }
 
 export interface SessionTranscriptPreview {

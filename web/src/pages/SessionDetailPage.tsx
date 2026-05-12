@@ -218,12 +218,40 @@ function SessionDetailWorkspaceRoute({
       : "session-workspace-route--unmanaged",
   ].join(" ");
 
+  const launchPendingBanner = (() => {
+    const state = session.launch_state;
+    if (state === "launching" || state === "launching_unknown") {
+      return (
+        <div className="launch-pending-banner" role="status" data-testid="launch-pending-banner">
+          <Spinner size="sm" />
+          <span>
+            Starting session on {runtimeHostLabel}…{" "}
+            {state === "launching_unknown" ? "waiting for the machine to confirm." : ""}
+          </span>
+        </div>
+      );
+    }
+    if (state === "launch_failed" || state === "launch_orphaned") {
+      return (
+        <div className="launch-failed-banner" role="alert" data-testid="launch-failed-banner">
+          <strong>Launch failed</strong>
+          <span>
+            {session.launch_error_code ? `${session.launch_error_code}: ` : ""}
+            {session.launch_error_message || "The machine did not start this session."}
+          </span>
+        </div>
+      );
+    }
+    return null;
+  })();
+
   return (
     <div
       className={workspaceClassName}
       data-control-path={interaction.isManagedLocalSession ? "managed" : "unmanaged"}
       data-runtime-tone={runtime.tone}
     >
+      {launchPendingBanner}
       <WorkspaceShell
         sidebar={
           <SessionContextPane
