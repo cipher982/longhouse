@@ -171,8 +171,6 @@ def _configure_sqlite_engine(engine: Engine, *, busy_timeout_ms: int | None = No
             cursor.execute(f"PRAGMA foreign_keys={foreign_keys}")
             cursor.execute(f"PRAGMA busy_timeout={_busy_timeout_ms}")
             cursor.execute(f"PRAGMA wal_autocheckpoint={wal_autocheckpoint}")
-            # Analyze query planner stats on first connect for long-lived connections
-            cursor.execute("PRAGMA optimize=0x10002")
         finally:
             cursor.close()
 
