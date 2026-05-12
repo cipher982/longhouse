@@ -34,3 +34,25 @@ def test_sqlite_pragmas_configured(tmp_path, monkeypatch):
     assert int(foreign_keys) == 1
     assert int(synchronous) == 2  # FULL
     assert int(wal_autocheckpoint) == 2000
+
+
+def test_sqlite_connect_does_not_need_writer_lock(tmp_path):
+    import sqlite3
+
+    db_path = tmp_path / "zerg.db"
+    seed_engine = make_engine(f"sqlite:///{db_path}")
+    with seed_engine.begin() as conn:
+        conn.exec_driver_sql("CREATE TABLE lock_probe (id INTEGER PRIMARY KEY)")
+
+    locker = sqlite3.connect(str(db_path), timeout=0.1, isolation_level=None)
+    try:
+        locker.execute("PRAGMA journal_mode=WAL")
+        locker.execute("BEGIN IMMEDIATE")
+        locker.execute("INSERT INTO lock_probe DEFAULT VALUES")
+
+        engine = make_engine(f"sqlite:///{db_path}", busy_timeout_ms=1)
+        with engine.connect() as conn:
+            assert conn.exec_driver_sql("SELECT COUNT(*) FROM lock_probe").scalar() == 0
+    finally:
+        locker.rollback()
+        locker.close()
