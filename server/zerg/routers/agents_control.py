@@ -16,6 +16,7 @@ from zerg.database import get_session_factory
 from zerg.models.device_token import DeviceToken
 from zerg.routers.device_tokens import validate_device_token
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
+from zerg.services.remote_session_launch import reconcile_launch_from_command_result
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +106,14 @@ async def machine_control_websocket(websocket: WebSocket) -> None:
                 await registry.mark_seen(owner_id=owner_id, device_id=device_id)
             elif message_type == "command_result":
                 await registry.mark_seen(owner_id=owner_id, device_id=device_id)
-                await registry.complete_command(message, owner_id=owner_id, device_id=device_id)
+                matched = await registry.complete_command(message, owner_id=owner_id, device_id=device_id)
+                if not matched:
+                    # The original launcher call may have timed out; persist the
+                    # late outcome on the sessions row so the client can see it.
+                    try:
+                        reconcile_launch_from_command_result(db, message)
+                    except Exception:  # noqa: BLE001
+                        logger.exception("Failed to reconcile late launch result command_id=%s", message.get("command_id"))
             else:
                 logger.warning("Unknown machine control message type from %s: %s", device_id, message_type)
     finally:
