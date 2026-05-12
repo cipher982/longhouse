@@ -47,6 +47,8 @@ describe("Timeline session stream", () => {
 
   it("connects with cookie auth and routes session upsert events", () => {
     const onSessionUpsert = vi.fn();
+    const onTimelineStreamEvent = vi.fn();
+    window.addEventListener("longhouse:timeline-stream", onTimelineStreamEvent);
     const disconnect = connectTimelineSessionsStream(
       {
         project: "zerg",
@@ -68,8 +70,12 @@ describe("Timeline session stream", () => {
     expect(MockEventSource.instances[0].url).toContain("commis=17");
     expect(MockEventSource.instances[0].options).toEqual({ withCredentials: true });
 
+    MockEventSource.instances[0].emit("connected", { message: "ok" });
+
     MockEventSource.instances[0].emit("session_upsert", {
       session: {
+        thread_id: "session-1",
+        head: { id: "session-1" },
         id: "session-1",
         provider: "claude",
         project: "zerg",
@@ -110,8 +116,14 @@ describe("Timeline session stream", () => {
         has_real_sessions: true,
       }),
     );
+    const streamEventDetails = onTimelineStreamEvent.mock.calls.map(([event]) => (event as CustomEvent).detail);
+    expect(streamEventDetails).toContainEqual(expect.objectContaining({ kind: "connected" }));
+    expect(streamEventDetails).toContainEqual(
+      expect.objectContaining({ kind: "session_upsert", session_id: "session-1" }),
+    );
 
     disconnect();
+    window.removeEventListener("longhouse:timeline-stream", onTimelineStreamEvent);
     expect(MockEventSource.instances[0].close).toHaveBeenCalledTimes(1);
   });
 });

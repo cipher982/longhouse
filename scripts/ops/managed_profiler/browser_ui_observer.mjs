@@ -1,4 +1,5 @@
 import { chromium } from "playwright";
+import { promises as fs } from "fs";
 
 const [baseUrlArg, token, sid, project, nonce] = process.argv.slice(2);
 
@@ -10,6 +11,8 @@ if (!baseUrlArg || !token || !sid || !project || !nonce) {
 }
 
 const baseUrl = new URL(baseUrlArg);
+let sessionId = sid;
+const sessionIdFile = process.env.LONGHOUSE_BROWSER_OBSERVER_SESSION_ID_FILE || "";
 const started = performance.now();
 const onceKinds = new Set([
   "ui_loaded",
@@ -107,7 +110,7 @@ async function waitForCard(kind, timeoutMs) {
         }
         return false;
       },
-      { sessionId: sid, targetKind: kind, targetNonce: nonce },
+      { sessionId, targetKind: kind, targetNonce: nonce },
       { timeout: timeoutMs, polling: "raf" },
     );
     const domMatchedElapsedMs = elapsedMs();
@@ -129,6 +132,22 @@ async function waitForCard(kind, timeoutMs) {
   }
 }
 
+async function waitForSessionIdFile(timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const value = (await fs.readFile(sessionIdFile, "utf8")).trim();
+      if (value) {
+        return value;
+      }
+    } catch {
+      // Keep waiting for the harness to publish the managed session id.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`timed out waiting for session id file: ${sessionIdFile}`);
+}
+
 try {
   browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
@@ -145,6 +164,18 @@ try {
   ]);
 
   page = await context.newPage();
+  await page.exposeFunction("__longhouseProfilerTimelineStreamEvent", (detail) => {
+    if (!detail || typeof detail !== "object") {
+      return;
+    }
+    const kind = typeof detail.kind === "string" ? detail.kind : "unknown";
+    emit(`timeline_stream_${kind}`, { detail });
+  });
+  await page.addInitScript(() => {
+    window.addEventListener("longhouse:timeline-stream", (event) => {
+      window.__longhouseProfilerTimelineStreamEvent?.(event.detail);
+    });
+  });
   page.on("console", (message) => {
     const type = message.type();
     if (type === "error" || type === "warning") {
@@ -164,6 +195,15 @@ try {
   await page.goto(url.toString(), { waitUntil: "domcontentloaded", timeout: 30000 });
   await afterPaint();
   emit("ui_loaded", { url: page.url() });
+
+  if (sessionId === "-") {
+    if (!sessionIdFile) {
+      throw new Error("sid '-' requires LONGHOUSE_BROWSER_OBSERVER_SESSION_ID_FILE");
+    }
+    emit("awaiting_session_id", { session_id_file: sessionIdFile });
+    sessionId = await waitForSessionIdFile(60000);
+    emit("session_id_received", { session_id: sessionId });
+  }
 
   void waitForCard("card_painted", 30000);
   void waitForCard("preview_first_painted", 95000);
