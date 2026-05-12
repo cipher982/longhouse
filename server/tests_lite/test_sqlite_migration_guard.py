@@ -103,7 +103,7 @@ def test_sqlite_migration_adds_current_model_columns(tmp_path):
                 user_event_id INTEGER,
                 durable_assistant_event_id INTEGER,
                 baseline_event_id INTEGER,
-                baseline_observation_cursor INTEGER,
+                baseline_runtime_cursor INTEGER,
                 user_submitted_at DATETIME NOT NULL,
                 send_accepted_at DATETIME,
                 active_phase_observed_at DATETIME,
@@ -112,6 +112,18 @@ def test_sqlite_migration_adds_current_model_columns(tmp_path):
                 created_at DATETIME,
                 updated_at DATETIME
             )
+            """
+        )
+        conn.exec_driver_sql(
+            """
+            INSERT INTO session_turns (
+                session_id,
+                request_id,
+                state,
+                baseline_runtime_cursor,
+                user_submitted_at
+            )
+            VALUES ('session-1', 'req-1', 'created', 42, '2026-05-12T16:00:00Z')
             """
         )
 
@@ -148,3 +160,9 @@ def test_sqlite_migration_adds_current_model_columns(tmp_path):
     assert not missing_observation_columns, f"session_observations migration missing columns: {missing_observation_columns}"
     assert not missing_job_run_columns, f"job_runs migration missing columns: {missing_job_run_columns}"
     assert not missing_session_turn_columns, f"session_turns migration missing columns: {missing_session_turn_columns}"
+
+    with engine.connect() as conn:
+        copied_cursor = conn.execute(
+            text("SELECT baseline_observation_cursor FROM session_turns WHERE request_id='req-1'")
+        ).scalar_one()
+    assert copied_cursor == 42

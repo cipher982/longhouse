@@ -818,6 +818,17 @@ def _migrate_agents_columns(engine: Engine) -> None:
                     conn.execute(text("ALTER TABLE session_turns ADD COLUMN expected_user_text_hash VARCHAR(64)"))
                 if "baseline_observation_cursor" not in columns:
                     conn.execute(text("ALTER TABLE session_turns ADD COLUMN baseline_observation_cursor INTEGER"))
+                if "baseline_runtime_cursor" in columns:
+                    conn.execute(
+                        text(
+                            """
+                            UPDATE session_turns
+                            SET baseline_observation_cursor = baseline_runtime_cursor
+                            WHERE baseline_observation_cursor IS NULL
+                              AND baseline_runtime_cursor IS NOT NULL
+                            """
+                        )
+                    )
                 conn.execute(
                     text(
                         """
