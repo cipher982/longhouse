@@ -155,6 +155,112 @@ print("\t".join(
 PY
 }
 
+_lh_hosted_parse_health_commit() {
+  local response_file="$1"
+  local python_bin
+  python_bin="$(_lh_hosted_python_bin)" || return 1
+
+  "$python_bin" - "$response_file" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        payload = json.load(handle)
+except Exception:
+    print("", end="")
+    raise SystemExit(0)
+
+build = payload.get("build") or {}
+print(str(build.get("commit") or build.get("commit_short") or ""), end="")
+PY
+}
+
+_lh_hosted_image_tag() {
+  local image="$1"
+  local tag="${image##*:}"
+
+  if [[ -z "$image" || "$tag" == "$image" || "$image" == *@* ]]; then
+    printf ''
+    return 0
+  fi
+
+  printf '%s' "$tag"
+}
+
+_lh_hosted_commit_matches_image_tag() {
+  local commit="$1"
+  local tag="$2"
+
+  if [[ -z "$tag" || "$tag" == "latest" ]]; then
+    return 0
+  fi
+
+  [[ -n "$commit" && ( "$commit" == "$tag"* || "$tag" == "$commit"* ) ]]
+}
+
+_lh_hosted_reprovision_api_url() {
+  local subdomain="${LH_TARGET_SUBDOMAIN:-${LH_INSTANCE_SUBDOMAIN:-${INSTANCE_SUBDOMAIN:-}}}"
+
+  if [[ -n "${LH_TARGET_API_URL:-}" ]]; then
+    printf '%s\n' "$LH_TARGET_API_URL"
+  elif [[ -n "${LH_INSTANCE_URL:-}" ]]; then
+    printf '%s\n' "$LH_INSTANCE_URL"
+  elif [[ -n "${API_URL:-}" ]]; then
+    printf '%s\n' "$API_URL"
+  elif [[ -n "${INSTANCE_URL:-}" ]]; then
+    printf '%s\n' "$INSTANCE_URL"
+  elif [[ -n "$subdomain" ]]; then
+    printf 'https://%s.longhouse.ai\n' "$subdomain"
+  fi
+}
+
+_lh_hosted_wait_for_runtime_image() {
+  local api_url="$1"
+  local image="$2"
+  local timeout="${3:-240}"
+  local expected_tag=""
+  local deadline=0
+  local response_file=""
+  local http_code=""
+  local commit=""
+  local last_error=""
+
+  if [[ -z "$api_url" ]]; then
+    echo "Cannot poll reprovision result without an instance API URL" >&2
+    return 1
+  fi
+
+  expected_tag="$(_lh_hosted_image_tag "$image")"
+  deadline=$(( $(date +%s) + timeout ))
+
+  while [[ "$(date +%s)" -lt "$deadline" ]]; do
+    response_file="$(mktemp)"
+    if ! http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
+      --connect-timeout 5 --max-time 10 \
+      "${api_url%/}/api/health")"; then
+      http_code="000"
+    fi
+
+    if [[ "$http_code" == "200" ]]; then
+      commit="$(_lh_hosted_parse_health_commit "$response_file")"
+      if _lh_hosted_commit_matches_image_tag "$commit" "$expected_tag"; then
+        rm -f "$response_file"
+        return 0
+      fi
+      last_error="healthy commit=${commit:-unknown}, expected image tag=${expected_tag:-any}"
+    else
+      last_error="HTTP ${http_code}"
+    fi
+
+    rm -f "$response_file"
+    sleep 3
+  done
+
+  echo "Timed out waiting for ${api_url%/}/api/health to report image ${image:-unknown}: ${last_error}" >&2
+  return 1
+}
+
 _lh_hosted_export_instance_payload() {
   local parsed="$1"
   local fallback_subdomain="${2:-}"
@@ -772,6 +878,7 @@ _lh_hosted_post_instance_action() {
   local payload="${3:-}"
   local response_file=""
   local http_code=""
+  LH_HOSTED_LAST_HTTP_CODE=""
 
   if [[ -z "$instance_id" ]]; then
     echo "Missing instance id for ${action} request" >&2
@@ -794,6 +901,8 @@ _lh_hosted_post_instance_action() {
       -H "X-Admin-Token: ${CONTROL_PLANE_ADMIN_TOKEN}" \
       "${CONTROL_PLANE_URL%/}/api/instances/${instance_id}/${action}")"
   fi
+  LH_HOSTED_LAST_HTTP_CODE="$http_code"
+  export LH_HOSTED_LAST_HTTP_CODE
 
   if [[ "$http_code" != "200" ]]; then
     echo "Failed to ${action} instance ${instance_id} (HTTP ${http_code})" >&2
@@ -809,12 +918,25 @@ lh_hosted_reprovision() {
   local instance_id="${1:-${LH_INSTANCE_ID:-}}"
   local image="${2:-}"
   local payload=""
+  local api_url=""
+  local http_code=""
 
   if [[ -n "$image" ]]; then
     payload="$(_lh_hosted_json_object image "$image")" || return 1
   fi
 
-  _lh_hosted_post_instance_action "$instance_id" "reprovision" "$payload"
+  if _lh_hosted_post_instance_action "$instance_id" "reprovision" "$payload"; then
+    return 0
+  fi
+
+  http_code="${LH_HOSTED_LAST_HTTP_CODE:-}"
+  if [[ "$http_code" != "524" && "$http_code" != "000" ]]; then
+    return 1
+  fi
+
+  api_url="$(_lh_hosted_reprovision_api_url)"
+  echo "Reprovision returned HTTP ${http_code}; polling hosted runtime health for the requested image..." >&2
+  _lh_hosted_wait_for_runtime_image "$api_url" "$image" 240
 }
 
 lh_hosted_deprovision() {
