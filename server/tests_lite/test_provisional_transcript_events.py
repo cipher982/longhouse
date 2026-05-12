@@ -17,6 +17,7 @@ from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
 from zerg.services.agents_store import SourceLineIngest
+from zerg.services.session_observation_reducers import reduce_bridge_transcript_observation
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.session_execution_home import SessionExecutionHome
@@ -125,6 +126,39 @@ def test_live_bridge_snapshots_upsert_one_active_provisional_event(tmp_path):
     assert observations[0].source == "codex_bridge_live"
     assert json.loads(observations[1].payload_json or "{}")["payload"]["live_text"] == "hello"
     assert [event.id for event in visible] == [rows[0].id]
+
+
+def test_bridge_transcript_observation_rebuilds_provisional_event(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "provisional_observation_rebuild.db")
+    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
+        ingest_runtime_events(
+            db,
+            [
+                _bridge_transcript_event(
+                    session_id=session.id,
+                    occurred_at=now,
+                    seq=7,
+                    live_text="rebuild me",
+                )
+            ],
+        )
+        db.commit()
+
+        observation = db.query(SessionObservation).filter(SessionObservation.session_id == session.id).one()
+        db.query(AgentEvent).filter(AgentEvent.session_id == session.id).delete(synchronize_session=False)
+        db.commit()
+
+        rebuilt = reduce_bridge_transcript_observation(db, observation)
+        db.commit()
+        visible = AgentsStore(db).get_session_events(session.id)
+
+    assert rebuilt is not None
+    assert rebuilt.content_text == "rebuild me"
+    assert rebuilt.provisional_key == f"codex_bridge_live:{session.id}:thread-1:turn-1"
+    assert [event.content_text for event in visible] == ["rebuild me"]
 
 
 def test_durable_ingest_reconciles_matching_provisional_event(tmp_path):

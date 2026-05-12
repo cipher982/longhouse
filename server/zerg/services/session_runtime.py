@@ -26,6 +26,7 @@ from zerg.metrics import managed_codex_runtime_events_total
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionRuntimeEvent
 from zerg.models.agents import SessionRuntimeState
+from zerg.services.session_observation_reducers import reduce_bridge_transcript_observation
 from zerg.services.session_observations import record_runtime_observation
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
@@ -588,20 +589,10 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
             continue
 
         accepted += 1
-        record_runtime_observation(db, event, received_at=received_at)
+        observation = record_runtime_observation(db, event, received_at=received_at)
         if _is_bridge_transcript_event(event):
-            from zerg.services.provisional_events import materialize_bridge_transcript_event
-
-            if event.session_id is not None:
-                materialize_bridge_transcript_event(
-                    db,
-                    session_id=event.session_id,
-                    provider=event.provider,
-                    source=event.source,
-                    occurred_at=event.occurred_at,
-                    received_at=received_at,
-                    payload=event.payload or {},
-                )
+            if observation is not None:
+                reduce_bridge_transcript_observation(db, observation)
             outcome = "stored_provisional_transcript"
             _record_managed_codex_runtime_event(event, outcome)
             if event.runtime_key not in updated_runtime_keys:
