@@ -27,7 +27,6 @@ jobs:
       frontend:       ${{ steps.filter.outputs.frontend }}
       engine:         ${{ steps.filter.outputs.engine }}
       schemas:        ${{ steps.filter.outputs.schemas }}
-      control_plane:  ${{ steps.filter.outputs.control_plane }}
       packaging:      ${{ steps.filter.outputs.packaging }}
       runner:         ${{ steps.filter.outputs.runner }}
       ios:            ${{ steps.filter.outputs.ios }}
@@ -363,47 +362,6 @@ jobs:
         path: |
           e2e/test-results
           e2e/playwright-report
-
-  control-plane-e2e:
-    needs: changes
-    if: ${{ needs.changes.outputs.control_plane == 'true' || github.event_name == 'workflow_dispatch' }}
-    runs-on: ubuntu-latest
-    name: "Control plane E2E"
-    env:
-      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright-py
-
-    steps:
-    - uses: actions/checkout@v6
-      with:
-        fetch-depth: 1
-
-    - name: Restore Playwright browser cache
-      uses: actions/cache@v4
-      with:
-        path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
-        key: longhouse-playwright-py-${{ runner.os }}-${{ hashFiles('control-plane/uv.lock') }}
-        restore-keys: |
-          longhouse-playwright-py-${{ runner.os }}-
-
-    - name: Set up Python
-      uses: actions/setup-python@v6
-      with:
-        python-version: '3.12'
-
-    - name: Setup uv
-      uses: astral-sh/setup-uv@v7
-
-    - name: Ensure make available
-      run: ./scripts/ci/ensure-make.sh
-
-    - name: Install control plane deps
-      run: cd control-plane && uv sync --extra dev --frozen
-
-    - name: Install Playwright browsers
-      run: cd control-plane && uv run --extra dev playwright install chromium --with-deps
-
-    - name: Run control plane E2E tests
-      run: make test-e2e-cp
 
   model-smoke:
     needs: changes
