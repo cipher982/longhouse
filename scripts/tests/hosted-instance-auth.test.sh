@@ -137,7 +137,7 @@ curl() {
         : >"$2"
         shift 2
         ;;
-      -w|-H|-X)
+      -w|-H|-X|--connect-timeout|--max-time)
         shift 2
         ;;
       *)
