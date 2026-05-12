@@ -91,7 +91,7 @@ The product should never make users understand shell bootstrap, launchd, or help
    Browser, native, MCP, and future assistants consume the same session model.
 
 7. **SQLite is the only core database requirement.**
-   Postgres is control-plane only.
+   Hosted account, billing, and provisioning state belongs outside this public core.
 
 8. **Self-host first, hosted later.**
    The product must be understandable and useful before hosted provisioning exists.

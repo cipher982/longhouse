@@ -21,7 +21,7 @@ Repo-local skills live in `.agents/skills/`, but Claude Code only discovers proj
 - **Optimize for the launch loop.** Import or start sessions, find them fast, steer them later.
 - **One session, one execution owner.** Do not reintroduce magical local-to-cloud takeover as an implicit behavior.
 - **Self-hosted and user-owned machines are the default truth.** Hosted is convenience, not the core product contract.
-- **SQLite-only core.** Postgres is control-plane only.
+- **SQLite-only core.** Hosted account, billing, and provisioning state belongs outside this public core.
 - **`/api/agents/*` is the canonical machine surface.** The browser and MCP sit on top of it.
 - **Keep behavior explicit.** No hidden fallbacks, silent mode switches, or duplicated capability logic.
 - **Prefer obvious seams over clever reuse.** If two flows behave differently, split them.
@@ -33,7 +33,7 @@ Repo-local skills live in `.agents/skills/`, but Claude Code only discovers proj
 
 Use these nouns consistently. Do not say just "the daemon" without clarifying which one.
 
-- **Control Plane**: hosted-only signup, billing, and provisioning. Never part of the self-hosted local install.
+- **Control Plane**: hosted-only signup, billing, and provisioning. It lives outside this public repo; the public Runtime Host only consumes it through an explicit `CONTROL_PLANE_URL` service boundary.
 - **Runtime Host**: the main Longhouse backend product runtime: FastAPI API, bundled web UI, and database-backed state. In self-host mode this is what `longhouse serve` runs. In hosted mode we run it for the user.
 - **Machine Agent**: the Rust engine (`longhouse-engine`). It drains local hook outbox files, ships events, retries spool, writes `~/.claude/engine-status.json`, and emits heartbeats. It is the shipping path.
 - **Desktop App**: macOS `Longhouse.app`. Native local status/setup/repair/menu bar surface. It is not the Runtime Host and not the Machine Agent.
@@ -43,7 +43,7 @@ Use these nouns consistently. Do not say just "the daemon" without clarifying wh
 - **CLI / Package Layer**: the current delivery and orchestration layer. PyPI `longhouse` installs the CLI plus Runtime Host entrypoint and manages Machine Agent/Desktop App installation. It installs Longhouse pieces, not provider CLIs. Treat this as first-class for agents and power users, but not the desired human product boundary.
 
 ### Things we built
-- website landing page, website admin control plane, website 'main app you do everything', macos menu bar, ios app with widget, rust daemon to ship sessions
+- website landing page, website 'main app you do everything', macos menu bar, ios app with widget, rust daemon to ship sessions
 
 ## Install Topology
 
@@ -51,7 +51,7 @@ The Machine Agent runs where work happens. The Runtime Host runs where durabilit
 
 - **Trying it out**: Machine Agent + Runtime Host both on a laptop. Works, but stops when the laptop sleeps. Good for first use and demos.
 - **Self-hosted durable**: Machine Agent on dev machines. Runtime Host on an always-on box (VPS, homelab, Mac mini). The recommended setup for power users.
-- **Hosted paid plan**: Machine Agent on dev machines. We run Control Plane + Runtime Host.
+- **Hosted paid plan**: Machine Agent on dev machines. We run the private Control Plane plus the public Runtime Host.
 
 Install channels:
 
@@ -80,7 +80,7 @@ Boundary rules:
 - **Four or five agents may be working in this exact directory on this laptop right now.** The filesystem, index, and `main` are shared. Plan for interference, do not assume exclusivity.
 - "Latest" is not evidence. Branch-latest workflow lists, generic tails, and recent logs often belong to another agent or another deploy.
 - Any CI or deploy claim must be anchored to an exact commit SHA, workflow run id, session id, or container/service name.
-- If deployment matters, verify live surface SHAs too; demo, control plane, and canary can be on different commits during rollout.
+- If deployment matters, verify live surface SHAs too; demo and canary can be on different commits during rollout. Hosted control-plane state is external to this public repo.
 - **Always `git status` before committing.** The index is shared. Plain `git add <file> && git commit` can sweep another agent's staged files into your commit. Prefer `git commit <paths>` / `git commit -o <path>` to commit only the files you touched.
 - **Never reset or force-push a commit that already landed on `main`.** If you accidentally bundled another agent's work into your commit, roll forward — the mess is cheaper than a force-push race. "Atomic commits" is a preference; not losing pushed work is a hard rule.
 - **A failing CI check on your commit isn't automatically yours.** Read the failing job first — path, test name, whether the regression predates your SHA. Parallel agents deploy concurrently; a hosted-chat smoke failure on a backend-only commit is usually someone else's in-flight fix.
@@ -101,7 +101,7 @@ Boundary rules:
 
 Start with `VISION.md`, `README.md`, `docs/specs/agents-machine-surface.md`, and `docs/specs/distribution-update-loop.md`.
 
-Then read the component README you are touching: `server/README.md`, `control-plane/README.md`, or `runner/README.md`.
+Then read the component README you are touching: `server/README.md` or `runner/README.md`.
 
 ## Quick Commands
 
@@ -114,7 +114,6 @@ make dogfood-check
 make test
 make test-frontend
 make test-engine
-make test-control-plane
 make test-runner
 make test-e2e
 make test-ci
@@ -133,7 +132,6 @@ Run the tier that matches the change. Do not over-test.
 - `make test` for backend Python changes in `server/zerg/` and `server/tests_lite/`
 - `make test-frontend` for `web/`
 - `make test-engine` for `engine/`
-- `make test-control-plane` for `control-plane/`
 - `make test-runner` for `runner/`
 - For `ios/` changes: run the Xcode `Longhouse` scheme tests via `xcodebuild ... test` (or the in-editor test action). There is no `make` target for iOS.
 - `make test-e2e` for UI changes and before push when runtime behavior changed
@@ -234,7 +232,6 @@ If you touch a secondary area, either simplify it toward the core story or expla
 Hosted push lanes:
 
 - Runtime paths (`server/`, `web/`, `engine/`, `config/`, `docker/runtime.dockerfile`) rebuild the runtime image and roll demo + canary.
-- `control-plane/` changes deploy the control plane.
 - `runner/` changes use the runner lane.
 - Docs/scripts/tests may run CI only.
 
@@ -318,5 +315,5 @@ If asked about Sauron, private cron packs, or job failures outside the core prod
 - iOS `SessionView` loads session detail and tail events in parallel; a timeline events-route failure surfaces as "Couldn't load session" even when `/timeline/sessions/{id}` succeeds. Keep browser-cookie timeline wrappers parameter-compatible with their `/agents/sessions/*` delegates.
 - Server-side runtime truth lives only in `session_runtime_state`. The old `session_presence` TTL cache and its `presence_cache` service are gone — `/api/agents/presence` now emits `RuntimeEventIngest` rows through the reducer. Do not re-introduce a parallel presence cache; if you need richer overlay semantics, extend `build_runtime_view` / `resolve_runtime_overlay`.
 - Timeline empty-state E2E is not stable after first load because `SessionsPage` auto-seeds demo sessions when the timeline is empty. For no-runner browser tests, assert that `Machines` stays reachable via either the empty-state CTA or the global nav, not that the blank state persists.
-- Build identity and release version are different nouns. Release version is a single lockstep semver for all five manifests, bumped only via `scripts/ops/release.sh` (which delegates to `bump-my-version` per `.bumpversion.toml`). Build identity is per-binary (`.build/build-identity.json`, regenerated by `scripts/build/generate_build_identity.py`) and is what CLI/health/engine/menu bar/iOS should display. Never hand-edit component manifests to bump versions, and never display release version where build identity is meaningful — two different commits can share a release version but never a build identity. The control-plane FastAPI does not pin `version=`: the service runs as a source checkout (not an installed distribution) so `importlib.metadata.version(...)` fails, and its OpenAPI `info.version` is low-signal. Leave it unset; do not "fix" it by re-introducing a hardcoded release version.
+- Build identity and release version are different nouns. Release version is a single lockstep semver for public manifests, bumped only via `scripts/ops/release.sh` (which delegates to `bump-my-version` per `.bumpversion.toml`). Build identity is per-binary (`.build/build-identity.json`, regenerated by `scripts/build/generate_build_identity.py`) and is what CLI/health/engine/menu bar/iOS should display. Never hand-edit component manifests to bump versions, and never display release version where build identity is meaningful — two different commits can share a release version but never a build identity.
 - `needs_user` is often the provider's normal idle prompt after an assistant response, not durable unfinished work. When an explicit machine snapshot says a previously observed unmanaged process binding disappeared, mark that binding stale so lifecycle closes as `process_gone`; do not shorten `needs_user` freshness to hide stale attention.
