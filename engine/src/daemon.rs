@@ -1671,6 +1671,11 @@ fn is_active_phase(phase: &str) -> bool {
     matches!(phase, "thinking" | "running")
 }
 
+struct PreparedPathJobFile {
+    prepared: shipper::PreparedFile,
+    trace_timings: shipper::PrepareTraceTimings,
+}
+
 #[tracing::instrument(
     level = "info",
     name = "engine.ship.prepare",
@@ -1683,7 +1688,7 @@ fn is_active_phase(phase: &str) -> bool {
 async fn prepare_file_for_job(
     job: &PathJob,
     task_context: &PathTaskContext,
-) -> Result<Option<shipper::PreparedFile>> {
+) -> Result<Option<PreparedPathJobFile>> {
     let path = job.path.clone();
     let provider = job.provider;
     let work_context_label = work_context(job.priority);
@@ -1705,7 +1710,10 @@ async fn prepare_file_for_job(
 
     tokio::task::spawn_blocking(move || {
         let _enter = blocking_span.enter();
+        let mut trace_timings = shipper::PrepareTraceTimings::default();
+        let open_db_started = Instant::now();
         let conn = open_db(db_path.as_deref())?;
+        trace_timings.open_db_ms = Some(open_db_started.elapsed().as_millis() as u64);
         let canonical = std::fs::canonicalize(&path)
             .unwrap_or_else(|_| path.clone())
             .to_string_lossy()
@@ -1745,8 +1753,9 @@ async fn prepare_file_for_job(
             binding_wait_ms,
             "Prepared session identity for ship job"
         );
+        trace_timings.binding_wait_ms = Some(binding_wait_ms);
 
-        shipper::prepare_file_batches_with_source_line_mode_and_parse_tracker(
+        let prepared = shipper::prepare_file_batches_with_source_line_mode_parse_tracker_and_trace(
             &path,
             provider,
             algo,
@@ -1755,7 +1764,12 @@ async fn prepare_file_for_job(
             session_id_override.as_deref(),
             Some(&parse_tracker),
             source_line_mode,
-        )
+            Some(&mut trace_timings),
+        )?;
+        Ok(prepared.map(|prepared| PreparedPathJobFile {
+            prepared,
+            trace_timings,
+        }))
     })
     .await?
 }
@@ -1845,7 +1859,11 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
     let file_start = Instant::now();
     let prepare_started_at_ms = chrono::Utc::now().timestamp_millis();
     match prepare_file_for_job(&result.job, &task_context).await {
-        Ok(Some(prepared)) => {
+        Ok(Some(prepared_for_job)) => {
+            let PreparedPathJobFile {
+                prepared,
+                trace_timings,
+            } = prepared_for_job;
             let prepare_finished_at_ms = chrono::Utc::now().timestamp_millis();
             let event_count = prepared.total_event_count();
             let byte_count = prepared.new_offset.saturating_sub(prepared.offset);
@@ -1860,6 +1878,9 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                 job_started_at_ms,
                 prepare_started_at_ms,
                 prepare_finished_at_ms,
+                prepare_open_db_ms: trace_timings.open_db_ms,
+                prepare_binding_wait_ms: trace_timings.binding_wait_ms,
+                prepare_parse_ms: trace_timings.parse_ms,
                 session_id_hint: result.job.observation.session_id.clone(),
                 turn_id: result.job.observation.turn_id.clone(),
                 wake_reason: result.job.observation.wake_reason.clone(),
@@ -3003,7 +3024,10 @@ mod tests {
             100,
         ));
 
-        assert_eq!(latest_wakes.get(Path::new("/tmp/session.jsonl")), Some(&200));
+        assert_eq!(
+            latest_wakes.get(Path::new("/tmp/session.jsonl")),
+            Some(&200)
+        );
     }
 
     #[test]

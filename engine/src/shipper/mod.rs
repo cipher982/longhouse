@@ -9,7 +9,7 @@ mod types;
 pub use types::*;
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use rusqlite::Connection;
@@ -777,6 +777,34 @@ pub(crate) fn prepare_path_range_with_parse_tracker(
     rewind_hint: Option<&compressor::SourceRewindHint>,
     source_line_mode: SourceLineMode,
 ) -> Result<Option<PreparedFile>> {
+    prepare_path_range_with_parse_tracker_and_trace(
+        path,
+        provider,
+        offset,
+        end_offset_cap,
+        algo,
+        max_batch_bytes,
+        session_id_override,
+        parse_tracker,
+        rewind_hint,
+        source_line_mode,
+        None,
+    )
+}
+
+pub(crate) fn prepare_path_range_with_parse_tracker_and_trace(
+    path: &Path,
+    provider: &str,
+    offset: u64,
+    end_offset_cap: Option<u64>,
+    algo: CompressionAlgo,
+    max_batch_bytes: u64,
+    session_id_override: Option<&str>,
+    parse_tracker: Option<&RecentIssueTracker>,
+    rewind_hint: Option<&compressor::SourceRewindHint>,
+    source_line_mode: SourceLineMode,
+    mut prepare_trace: Option<&mut PrepareTraceTimings>,
+) -> Result<Option<PreparedFile>> {
     let path_str = path.to_string_lossy().to_string();
     let file_size = match std::fs::metadata(path) {
         Ok(m) => m.len(),
@@ -786,14 +814,21 @@ pub(crate) fn prepare_path_range_with_parse_tracker(
         }
     };
 
+    let parse_started = Instant::now();
     let parse_result = match parser::parse_session_file(path, offset) {
         Ok(result) => result,
         Err(e) => {
+            if let Some(trace) = prepare_trace.as_deref_mut() {
+                trace.parse_ms = Some(parse_started.elapsed().as_millis() as u64);
+            }
             record_parse_issue(parse_tracker);
             tracing::warn!("Skip {}: {}", path_str, e);
             return Ok(None);
         }
     };
+    if let Some(trace) = prepare_trace.as_deref_mut() {
+        trace.parse_ms = Some(parse_started.elapsed().as_millis() as u64);
+    }
 
     let new_offset = end_offset_cap
         .map(|cap| parse_result.last_good_offset.min(cap))
@@ -922,6 +957,30 @@ pub(crate) fn prepare_file_batches_with_source_line_mode_and_parse_tracker(
     parse_tracker: Option<&RecentIssueTracker>,
     source_line_mode: SourceLineMode,
 ) -> Result<Option<PreparedFile>> {
+    prepare_file_batches_with_source_line_mode_parse_tracker_and_trace(
+        path,
+        provider,
+        algo,
+        conn,
+        max_batch_bytes,
+        session_id_override,
+        parse_tracker,
+        source_line_mode,
+        None,
+    )
+}
+
+pub(crate) fn prepare_file_batches_with_source_line_mode_parse_tracker_and_trace(
+    path: &Path,
+    provider: &str,
+    algo: CompressionAlgo,
+    conn: &Connection,
+    max_batch_bytes: u64,
+    session_id_override: Option<&str>,
+    parse_tracker: Option<&RecentIssueTracker>,
+    source_line_mode: SourceLineMode,
+    prepare_trace: Option<&mut PrepareTraceTimings>,
+) -> Result<Option<PreparedFile>> {
     let path_str = path.to_string_lossy().to_string();
     let file_state = FileState::new(conn);
     let live_file_state = LiveFileState::new(conn);
@@ -987,7 +1046,7 @@ pub(crate) fn prepare_file_batches_with_source_line_mode_and_parse_tracker(
         current_offset
     };
 
-    prepare_path_range_with_parse_tracker(
+    prepare_path_range_with_parse_tracker_and_trace(
         path,
         provider,
         offset,
@@ -998,6 +1057,7 @@ pub(crate) fn prepare_file_batches_with_source_line_mode_and_parse_tracker(
         parse_tracker,
         rewind_hint.as_ref(),
         source_line_mode,
+        prepare_trace,
     )
 }
 
@@ -1047,6 +1107,9 @@ async fn attempt_ship(
             "job_started_at_ms": trace.job_started_at_ms,
             "prepare_started_at_ms": trace.prepare_started_at_ms,
             "prepare_finished_at_ms": trace.prepare_finished_at_ms,
+            "prepare_open_db_ms": trace.prepare_open_db_ms,
+            "prepare_binding_wait_ms": trace.prepare_binding_wait_ms,
+            "prepare_parse_ms": trace.prepare_parse_ms,
             "http_send_started_at_ms": http_send_started_at_ms,
             "observation_to_enqueue_ms": trace.enqueued_at_ms.saturating_sub(trace.observed_at_ms),
             "observation_to_wake_ms": trace.wake_received_at_ms.map(|wake_ms| wake_ms.saturating_sub(trace.observed_at_ms)),

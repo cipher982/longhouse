@@ -26,10 +26,20 @@ pub struct ShipTraceContext {
     pub job_started_at_ms: i64,
     pub prepare_started_at_ms: i64,
     pub prepare_finished_at_ms: i64,
+    pub prepare_open_db_ms: Option<u64>,
+    pub prepare_binding_wait_ms: Option<u64>,
+    pub prepare_parse_ms: Option<u64>,
     pub session_id_hint: Option<String>,
     pub turn_id: Option<String>,
     pub wake_reason: Option<String>,
     pub file_len_hint: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct PrepareTraceTimings {
+    pub open_db_ms: Option<u64>,
+    pub binding_wait_ms: Option<u64>,
+    pub parse_ms: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -173,6 +173,11 @@ code `0` means pass, `1` means an SLA/tool failure, and `2` means the run was
 contaminated by infrastructure/runtime transport conditions and should be
 retried or bucketed separately.
 
+Archive-path outliers should be debugged from `ship_trace.v1` before guessing.
+The trace keeps total `prepare_ms` and also reports `prepare_open_db_ms`,
+`prepare_binding_wait_ms`, and `prepare_parse_ms` when the current engine
+emits them.
+
 Release confidence:
 Run one hosted warm-live and one hosted warm-close probe. Gate only on gross
 fidelity failures until nightly distributions are boring.
