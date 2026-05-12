@@ -74,6 +74,17 @@ def test_managed_claude_truth_probe_summarizes_channel_process_truth(monkeypatch
         },
         hosted={
             "database": {
+                "event_stats": {
+                    "assistant_events": 1,
+                    "count": 2,
+                    "tool_events": 0,
+                },
+                "recent_runtime_events": [
+                    {"kind": "terminal_signal", "source": "claude_channel_scan"},
+                    {"kind": "terminal_signal", "source": "claude_channel_wrapper"},
+                    {"kind": "phase_signal", "source": "claude_hook"},
+                ],
+                "runtime_event_stats": {"count": 8},
                 "session": {"id": "session-1"},
                 "runtime_state": {
                     "phase": "idle",
@@ -101,6 +112,11 @@ def test_managed_claude_truth_probe_summarizes_channel_process_truth(monkeypatch
     assert summary["hosted_terminal_state"] == "process_gone"
     assert summary["hosted_terminal_reason"] == "process_gone"
     assert summary["hosted_terminal_source"] == "engine_attached_lease"
+    assert summary["hosted_archive_event_count"] == 2
+    assert summary["hosted_archive_assistant_events"] == 1
+    assert summary["hosted_runtime_event_count"] == 8
+    assert summary["hosted_terminal_event_count"] == 2
+    assert summary["hosted_terminal_event_sources"] == ["claude_channel_scan", "claude_channel_wrapper"]
 
 
 def test_managed_claude_truth_probe_records_profile_metadata(tmp_path):

@@ -267,7 +267,18 @@ if table_exists("session_runtime_events"):
     )
     payload["recent_runtime_events"] = rows(
         """
-        SELECT kind, phase, tool_name, occurred_at, received_at, freshness_ms
+        SELECT
+            kind,
+            source,
+            phase,
+            tool_name,
+            occurred_at,
+            received_at,
+            freshness_ms,
+            dedupe_key,
+            json_extract(payload_json, '$.terminal_state') AS terminal_state,
+            json_extract(payload_json, '$.terminal_reason') AS terminal_reason,
+            json_extract(payload_json, '$.terminal_source') AS terminal_source
         FROM session_runtime_events
         WHERE session_id=?
         ORDER BY occurred_at DESC
@@ -478,8 +489,10 @@ compact(
 header("Recent Runtime Events")
 for row in sqlite_payload.get("recent_runtime_events", []):
     print(
-        f"{row.get('occurred_at')} {row.get('kind')} phase={row.get('phase') or ''} "
-        f"tool={row.get('tool_name') or ''} received={row.get('received_at')} freshness_ms={row.get('freshness_ms') or ''}"
+        f"{row.get('occurred_at')} {row.get('kind')} source={row.get('source') or ''} "
+        f"phase={row.get('phase') or ''} tool={row.get('tool_name') or ''} "
+        f"terminal={row.get('terminal_state') or ''}/{row.get('terminal_reason') or ''}/{row.get('terminal_source') or ''} "
+        f"received={row.get('received_at')} freshness_ms={row.get('freshness_ms') or ''}"
     )
 
 header("Recent Events")
