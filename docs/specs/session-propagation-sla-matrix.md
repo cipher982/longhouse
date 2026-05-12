@@ -94,9 +94,20 @@ path. It proves canonical hosted transcript/archive catch-up without
 deciding whether the already-open timeline felt realtime. Promote it only
 after archive-path variance and provider preconditions are stable in batches.
 
+`managed_codex_cold_timeline_closed`
+
+This is the first cold timeline path. It creates and closes a managed Codex
+session, waits for hosted truth, then opens a fresh browser timeline page. It
+measures page navigation to target card paint and page navigation to closed
+card paint. It is intentionally separate from the warm realtime SLA: cold load
+answers "does a newly opened timeline show current truth quickly?" rather than
+"did an already-open page update immediately?"
+
 Current target budgets are in `config/session-propagation-sla.toml`. The
 important user-facing targets are:
 
+- cold timeline fresh navigation to target card paint: 2000ms target, 4000ms alarm
+- cold timeline fresh navigation to closed card paint: 2000ms target, 4000ms alarm
 - warm live output local truth to browser paint: 500ms target, 1000ms alarm
 - warm close local truth to timeline SSE: 500ms target, 1000ms alarm
 - warm graceful close local truth to browser paint: 1000ms target, 2000ms alarm

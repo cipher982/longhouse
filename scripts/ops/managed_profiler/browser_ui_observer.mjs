@@ -13,6 +13,7 @@ const baseUrl = new URL(baseUrlArg);
 const started = performance.now();
 const onceKinds = new Set([
   "ui_loaded",
+  "navigation_started",
   "card_painted",
   "preview_first_painted",
   "preview_word_painted",
@@ -159,6 +160,7 @@ try {
   url.searchParams.set("provider", "codex");
   url.searchParams.set("limit", "20");
   url.searchParams.set("hide_autonomous", "true");
+  emit("navigation_started", { url: url.toString() });
   await page.goto(url.toString(), { waitUntil: "domcontentloaded", timeout: 30000 });
   await afterPaint();
   emit("ui_loaded", { url: page.url() });

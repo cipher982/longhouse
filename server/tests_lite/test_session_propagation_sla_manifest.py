@@ -46,6 +46,16 @@ def test_session_propagation_sla_manifest_keeps_codex_required_path():
     assert durable_case["profile_class"] == "durable_archive"
     assert durable_case["metrics"] == ["durable_archive_local_to_hosted_ms"]
 
+    cold_case = sla_manifest.case_by_id(manifest, "managed_codex_cold_timeline_closed")
+    assert cold_case is not None
+    assert cold_case["status"] == "experimental"
+    assert cold_case["profile"] == "cold-timeline"
+    assert cold_case["profile_class"] == "cold_timeline"
+    assert cold_case["metrics"] == [
+        "cold_timeline_navigation_to_card_paint_ms",
+        "cold_timeline_navigation_to_close_paint_ms",
+    ]
+
 
 def test_session_propagation_sla_metric_aliases_support_existing_profiler_names():
     sla_manifest = _load_sla_manifest_module()
@@ -54,6 +64,7 @@ def test_session_propagation_sla_metric_aliases_support_existing_profiler_names(
     assert sla_manifest.metric_target_ms(manifest, "live_first_from_local_ms") == 500
     assert sla_manifest.metric_target_ms(manifest, "close_observed_ms") == 1000
     assert sla_manifest.metric_target_ms(manifest, "durable_archive_local_to_hosted_ms") == 3000
+    assert sla_manifest.metric_target_ms(manifest, "cold_timeline_navigation_to_card_paint_ms") == 2000
 
 
 def test_session_propagation_sla_undefined_cases_do_not_declare_observers_or_metrics():
