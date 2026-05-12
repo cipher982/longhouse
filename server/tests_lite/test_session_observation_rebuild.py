@@ -549,6 +549,44 @@ def test_session_observation_rebuild_preserves_agent_api_surface_parity(tmp_path
     assert before["export_jsonl"] == assistant_line + "\n"
 
 
+def test_session_observation_rebuild_preserves_source_line_revision_history(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "observation_rebuild_source_revision.db")
+    now = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)
+    source_path = "/tmp/revision-session.jsonl"
+    first_line = '{"type":"assistant","text":"first revision"}'
+    second_line = '{"type":"assistant","text":"second revision"}'
+
+    with SessionLocal() as db:
+        result = AgentsStore(db).ingest_session(
+            SessionIngest(
+                provider="claude",
+                environment="test",
+                project="observation-rebuild",
+                device_id="cinder",
+                cwd="/tmp/project",
+                started_at=now,
+                source_lines=[
+                    SourceLineIngest(source_path=source_path, source_offset=10, raw_json=first_line),
+                    SourceLineIngest(source_path=source_path, source_offset=10, raw_json=second_line),
+                ],
+            )
+        )
+        session_id = result.session_id
+        db.commit()
+
+        before_source_lines = _source_line_snapshot(db, session_id)
+        result = rebuild_session_observation_projections(db, session_id=session_id)
+        db.commit()
+        after_source_lines = _source_line_snapshot(db, session_id)
+
+    assert result.reducer_errors == ()
+    assert after_source_lines == before_source_lines
+    assert [(row["revision"], row["raw_json"]) for row in before_source_lines] == [
+        (1, first_line),
+        (2, second_line),
+    ]
+
+
 def test_session_observation_rebuild_preserves_rewind_branch_head_projection(tmp_path):
     SessionLocal = _make_sessionmaker(tmp_path, "observation_rebuild_rewind_branch.db")
     now = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)
