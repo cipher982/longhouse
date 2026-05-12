@@ -152,10 +152,14 @@ Claude session. This case is still experimental, but it now has two POC tools:
   before/after truth probes.
 
 The current POC proves managed-Claude channel send and local transcript response
-can work. It does not yet meet the managed close contract: a smooth `/exit`
-can leave hosted runtime state at `idle` with no terminal event. That path must
-emit a managed-Claude terminal runtime event from the channel/control wrapper or
-an equivalent immediate process-exit observer before it can be promoted.
+can work. The first run exposed the close gap: a smooth `/exit` could remove
+the provider process locally while hosted runtime stayed `idle`. The current
+implementation now has two live close lanes: `claude_channel_wrapper` posts
+graceful `session_ended/provider_exit` when the wrapper observes provider exit,
+and the Machine Agent's `claude_channel_scan` posts `process_gone` when a
+previously observed managed Claude channel loses its provider PID or state file.
+This path is still experimental until repeated profiler runs prove the browser
+warm lane and durable archive lane independently.
 
 Managed OpenCode lifecycle:
 Lifecycle can be measured before remote send/interrupt is a product contract.
