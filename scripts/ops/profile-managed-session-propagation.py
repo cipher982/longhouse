@@ -3769,13 +3769,16 @@ def write_batch_summary(
             "",
             "## Runs",
             "",
-            "| Run | Verdict | Summary |",
-            "| --- | --- | --- |",
+            "| Run | Verdict | Reason | Summary |",
+            "| --- | --- | --- | --- |",
         ]
     )
     for run in child_runs:
+        reason = run.get("reason") or "-"
+        if isinstance(reason, dict):
+            reason = reason.get("reason") or reason.get("health_state") or "preflight"
         rows.append(
-            f"| `{run['run_id']}` | {run.get('verdict') or '-'} | `{run.get('summary_path')}` |"
+            f"| `{run['run_id']}` | {run.get('verdict') or '-'} | {reason} | `{run.get('summary_path')}` |"
         )
     summary_path.write_text("\n".join(rows) + "\n")
     return summary_path
@@ -3783,6 +3786,43 @@ def write_batch_summary(
 
 def format_optional_ms(value: Any) -> str:
     return "-" if value is None else str(value)
+
+
+def batch_local_health_preflight() -> dict[str, Any]:
+    completed = run_cmd(["longhouse", "local-health", "--json"], timeout=30)
+    data = safe_json_loads(completed.stdout)
+    if not isinstance(data, dict):
+        return {
+            "ok": False,
+            "reason": "local_health_unparseable",
+            "returncode": completed.returncode,
+            "stderr": (completed.stderr or "")[-1000:],
+        }
+    health_state = str(data.get("health_state") or "unknown")
+    transport_health = data.get("transport_health") or {}
+    outbox = data.get("outbox") or {}
+    outbox_oldest_age = outbox.get("oldest_age_seconds")
+    outbox_stale = isinstance(outbox_oldest_age, (int, float)) and outbox_oldest_age > 10
+    current_transport_ok = (
+        str(transport_health.get("status") or "") != "offline"
+        and transport_health.get("last_ship_result") == "ok"
+        and int(transport_health.get("consecutive_failures") or 0) == 0
+        and int(transport_health.get("spool_pending") or 0) == 0
+        and not outbox_stale
+    )
+    return {
+        "ok": completed.returncode == 0 and (health_state == "healthy" or current_transport_ok),
+        "reason": (
+            "local_transport_currently_unhealthy"
+            if not current_transport_ok
+            else None
+        ),
+        "health_state": health_state,
+        "headline": data.get("headline"),
+        "reasons": data.get("reasons") or [],
+        "transport_health": transport_health,
+        "outbox": outbox,
+    }
 
 
 def run_batch(args: argparse.Namespace) -> int:
@@ -3796,10 +3836,34 @@ def run_batch(args: argparse.Namespace) -> int:
     child_runs: list[dict[str, Any]] = []
     cases: list[dict[str, Any]] = []
     for index in range(args.iterations):
+        health = batch_local_health_preflight()
+        if not health.get("ok"):
+            print(
+                f"[batch] aborting before iteration {index + 1}/{args.iterations}: "
+                f"{health.get('reason')} health={health.get('health_state')}",
+                file=sys.stderr,
+                flush=True,
+            )
+            child_runs.append(
+                {
+                    "run_id": f"{batch_id}-preflight-i{index + 1:02d}",
+                    "summary_path": "",
+                    "metrics_path": "",
+                    "exit_code": 2,
+                    "verdict": "contaminated",
+                    "reason": health,
+                }
+            )
+            break
         child_args = Namespace(**vars(args))
         child_args.iterations = 1
         child_args.run_id = f"{batch_id}-i{index + 1:02d}"
         child_args.output_dir = str(batch_dir / child_args.run_id)
+        print(
+            f"[batch] starting iteration {index + 1}/{args.iterations}: {child_args.run_id}",
+            file=sys.stderr,
+            flush=True,
+        )
         code, summary_path = run_single(child_args)
         metrics_path = Path(child_args.output_dir) / "metrics.json"
         metrics = read_json(metrics_path) or {}
@@ -3815,6 +3879,20 @@ def run_batch(args: argparse.Namespace) -> int:
                 "verdict": case.get("verdict") if case else "error",
             }
         )
+        print(
+            f"[batch] completed iteration {index + 1}/{args.iterations}: "
+            f"exit={code} verdict={child_runs[-1]['verdict']}",
+            file=sys.stderr,
+            flush=True,
+        )
+        if code == 2:
+            child_runs[-1]["reason"] = "contaminated_child_run"
+            print(
+                f"[batch] stopping after contaminated iteration {index + 1}/{args.iterations}",
+                file=sys.stderr,
+                flush=True,
+            )
+            break
 
     aggregate = aggregate_batch_cases(cases)
     aggregate.update(summarize_batch_verdicts(child_runs))
