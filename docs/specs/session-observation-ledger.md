@@ -70,6 +70,12 @@ The UI and APIs should never read provider-specific write-side ledgers directly.
   projection for liveness and timeline badges.
 - `session_runtime_events` / `SessionRuntimeEvent` is a temporary diagnostic tee
   for old runtime-event inspection paths, not an authority.
+- `session_branches` / `AgentSessionBranch` is still write-side branch topology.
+  It must either become observation-derived or stay explicitly outside the cold
+  rebuild promise before we claim a full single-ledger session kernel.
+- `session_turns` / `SessionTurn` is still a managed-turn projection with its
+  own lifecycle rules. It is not covered by the current observation rebuild
+  service.
 
 ## Proposed Model
 
@@ -184,6 +190,11 @@ Current implementation:
 - `rebuild_session_observation_projections()` clears a session's transcript,
   source archive, and runtime-state projections and replays observations with
   reducer counts and explicit reducer errors.
+- Rebuild parity is currently validated for service-level transcript visibility,
+  source export, FTS-backed search/listing, timeline-card runtime fields,
+  out-of-order runtime signals, and rewind branch-prefix projections. It does
+  not yet validate managed-local control waits, managed lease history, full
+  route-level API responses, branch topology rebuild, or `SessionTurn` rebuild.
 
 ### Phase 3: Runtime Event Collapse
 

@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionRuntimeEvent
+from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents_store import AgentsStore
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
@@ -32,6 +32,8 @@ from zerg.services.managed_local_transport import build_managed_local_interrupt_
 from zerg.services.managed_local_transport import build_managed_local_send_text_command
 from zerg.services.managed_local_transport import build_managed_local_steer_text_command
 from zerg.services.provisional_events import durable_transcript_event_predicate
+from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
+from zerg.services.session_runtime import runtime_event_from_observation
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.utils.time import normalize_utc
@@ -92,6 +94,14 @@ class ManagedLocalTerminalResult:
     occurred_at: datetime | None = None
 
 
+@dataclass(frozen=True)
+class _ManagedLocalHookObservation:
+    id: int
+    phase: str | None
+    occurred_at: datetime | None
+    source: str
+
+
 def _managed_control_transport_error(
     session: AgentSession,
     *,
@@ -149,14 +159,15 @@ def get_managed_local_latest_event_id(*, db: Session, session_id: UUID) -> int:
 
 
 def get_managed_local_latest_hook_runtime_event_id(*, db: Session, session_id: UUID) -> int:
-    """Return the latest hook-driven runtime event id for a managed-local session."""
+    """Return the latest hook-driven runtime observation cursor for a managed-local session."""
     row = (
-        db.query(SessionRuntimeEvent.id)
+        db.query(SessionObservation.id)
         .filter(
-            SessionRuntimeEvent.session_id == session_id,
-            SessionRuntimeEvent.source == _MANAGED_LOCAL_HOOK_RUNTIME_SOURCE,
+            SessionObservation.session_id == session_id,
+            SessionObservation.source == _MANAGED_LOCAL_HOOK_RUNTIME_SOURCE,
+            SessionObservation.kind == OBS_KIND_RUNTIME_SIGNAL,
         )
-        .order_by(SessionRuntimeEvent.id.desc())
+        .order_by(SessionObservation.id.desc())
         .first()
     )
     return int(row[0]) if row else 0
@@ -179,18 +190,40 @@ def _fetch_managed_local_hook_runtime_events_since(
     db_bind,
     session_id: UUID,
     after_runtime_event_id: int,
-) -> list[SessionRuntimeEvent]:
+) -> list[_ManagedLocalHookObservation]:
     with Session(bind=db_bind) as poll_db:
-        return (
-            poll_db.query(SessionRuntimeEvent)
+        observations = (
+            poll_db.query(SessionObservation)
             .filter(
-                SessionRuntimeEvent.session_id == session_id,
-                SessionRuntimeEvent.source == _MANAGED_LOCAL_HOOK_RUNTIME_SOURCE,
-                SessionRuntimeEvent.id > after_runtime_event_id,
+                SessionObservation.session_id == session_id,
+                SessionObservation.source == _MANAGED_LOCAL_HOOK_RUNTIME_SOURCE,
+                SessionObservation.kind == OBS_KIND_RUNTIME_SIGNAL,
+                SessionObservation.id > after_runtime_event_id,
             )
-            .order_by(SessionRuntimeEvent.id.asc())
+            .order_by(SessionObservation.id.asc())
             .all()
         )
+    events: list[_ManagedLocalHookObservation] = []
+    for observation in observations:
+        try:
+            runtime_event = runtime_event_from_observation(observation)
+        except ValueError:
+            logger.warning(
+                "Skipping malformed managed-local hook observation %s",
+                getattr(observation, "observation_id", None),
+            )
+            continue
+        if runtime_event is None or runtime_event.kind != "phase_signal":
+            continue
+        events.append(
+            _ManagedLocalHookObservation(
+                id=int(getattr(observation, "id", 0) or 0),
+                phase=runtime_event.phase,
+                occurred_at=normalize_utc(runtime_event.occurred_at),
+                source=runtime_event.source,
+            )
+        )
+    return events
 
 
 def _load_managed_local_runtime_state(*, db_bind, session_id: UUID) -> SessionRuntimeState | None:
@@ -207,7 +240,7 @@ def _hook_runtime_event_matches_canonical_state(
     *,
     db_bind,
     session_id: UUID,
-    event: SessionRuntimeEvent,
+    event: _ManagedLocalHookObservation,
 ) -> bool:
     state = _load_managed_local_runtime_state(db_bind=db_bind, session_id=session_id)
     if state is None:
@@ -230,9 +263,9 @@ async def await_managed_local_hook_phase_update(
 ) -> ManagedLocalPhaseUpdate | None:
     """Wait for a new hook-driven runtime phase after the provided cursor.
 
-    The `/api/agents/presence` endpoint materializes SessionRuntimeEvent rows
-    via RuntimeEventIngest, so polling that table is the single source of
-    truth for hook-driven phase updates.
+    The `/api/agents/presence` endpoint records hook RuntimeEventIngest rows as
+    SessionObservation facts, so this polls the raw observation cursor and
+    verifies the canonical SessionRuntimeState reducer output before returning.
     """
 
     loop = asyncio.get_running_loop()
@@ -276,9 +309,9 @@ async def await_managed_local_turn_terminal(
 ) -> ManagedLocalTerminalResult | None:
     """Wait for a new terminal phase for a managed-local turn.
 
-    Polls SessionRuntimeEvent rows keyed by the session's runtime-event
+    Polls SessionObservation rows keyed by the session's hook observation
     cursor. Callers pass a pre-send cursor, so any newer idle/needs_user/
-    blocked row still belongs to the in-flight managed-local turn.
+    blocked observation still belongs to the in-flight managed-local turn.
     """
 
     loop = asyncio.get_running_loop()

@@ -5,6 +5,7 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 
+from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 
 from zerg.database import initialize_database
@@ -101,6 +102,24 @@ def _phase_event(*, session_id, occurred_at: datetime) -> RuntimeEventIngest:
     )
 
 
+def _terminal_event(*, session_id, occurred_at: datetime) -> RuntimeEventIngest:
+    return RuntimeEventIngest(
+        runtime_key=f"codex:{session_id}",
+        session_id=session_id,
+        provider="codex",
+        device_id="cinder",
+        source="codex_bridge",
+        kind="terminal_signal",
+        occurred_at=occurred_at,
+        dedupe_key=f"terminal:{session_id}:1",
+        payload={
+            "terminal_state": "session_ended",
+            "terminal_reason": "process_exit",
+            "terminal_source": "codex_bridge",
+        },
+    )
+
+
 def _event_snapshot(db, session_id) -> list[dict]:
     rows = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc()).all()
     return [
@@ -170,6 +189,8 @@ def _runtime_snapshot(db, session_id) -> list[dict]:
 
 def _product_surface_snapshot(db, session_id) -> dict:
     store = AgentsStore(db)
+    session = store.get_session(session_id)
+    assert session is not None
     visible_events = store.get_session_events(session_id, limit=20)
     export_result = store.export_session_jsonl(session_id)
     query_sessions, query_total = store.list_sessions(
@@ -218,6 +239,17 @@ def _product_surface_snapshot(db, session_id) -> dict:
             for event in visible_events
         ],
         "visible_event_count": store.count_session_events(session_id),
+        "session_counts": {
+            "user_messages": session.user_messages,
+            "assistant_messages": session.assistant_messages,
+            "tool_calls": session.tool_calls,
+            "last_activity_at": session.last_activity_at.isoformat() if session.last_activity_at else None,
+            "transcript_revision": session.transcript_revision,
+        },
+        "fts_row_count": int(
+            db.execute(text("SELECT count(*) FROM events_fts JOIN events e ON e.id = events_fts.rowid WHERE e.session_id = :sid"), {"sid": str(session_id)}).scalar()
+            or 0
+        ),
         "query_total": query_total,
         "query_session_ids": [str(session.id) for session in query_sessions],
         "export_jsonl": export_result[0].decode("utf-8"),
@@ -470,6 +502,32 @@ def test_session_observation_rebuild_preserves_rewind_branch_head_projection(tmp
     assert after_head_events == before_head_events
     assert after_head_export == before_head_export == "\n".join([line0, line10_new, line30_new]) + "\n"
     assert after_all_export == before_all_export == "\n".join([line0, line10_old, line20_old, line10_new, line30_new]) + "\n"
+
+
+def test_session_observation_rebuild_preserves_out_of_order_runtime_state(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "observation_rebuild_out_of_order_runtime.db")
+    now = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
+        ingest_runtime_events(
+            db,
+            [
+                _terminal_event(session_id=session.id, occurred_at=now + timedelta(seconds=10)),
+                _phase_event(session_id=session.id, occurred_at=now + timedelta(seconds=5)),
+            ],
+        )
+        db.commit()
+
+        before_runtime = _runtime_snapshot(db, session.id)
+        result = rebuild_session_observation_projections(db, session_id=session.id, runtime_key=f"codex:{session.id}")
+        db.commit()
+        after_runtime = _runtime_snapshot(db, session.id)
+
+    assert result.reducer_errors == ()
+    assert after_runtime == before_runtime
+    assert after_runtime[0]["terminal_state"] == "session_ended"
+    assert after_runtime[0]["phase"] == "finished"
 
 
 def test_session_observation_rebuild_is_idempotent(tmp_path):
