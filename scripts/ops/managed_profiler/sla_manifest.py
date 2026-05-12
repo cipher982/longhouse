@@ -10,7 +10,13 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_MANIFEST_PATH = ROOT / "config" / "session-propagation-sla.toml"
 ALLOWED_STATUSES = {"required", "experimental", "undefined"}
+ALLOWED_CI_MODES = {"blocked", "gate", "report"}
 ALLOWED_PROVIDERS = {"all", "claude", "codex", "opencode"}
+IMPLEMENTED_PROFILER_DRIVERS = {
+    "managed_codex_cold_timeline",
+    "managed_codex_warm_live",
+    "unmanaged_codex_baseline",
+}
 ALLOWED_PROFILE_CLASSES = {
     "cold_timeline",
     "warm_realtime",
@@ -106,6 +112,19 @@ def validate_manifest(manifest: dict[str, Any]) -> list[str]:
         status = case.get("status")
         if status not in ALLOWED_STATUSES:
             errors.append(f"case {case_id} status must be one of {sorted(ALLOWED_STATUSES)}")
+        ci_mode = case.get("ci_mode")
+        profiler_driver = case.get("profiler_driver")
+        if status != "undefined":
+            if ci_mode not in ALLOWED_CI_MODES:
+                errors.append(f"case {case_id} ci_mode must be one of {sorted(ALLOWED_CI_MODES)}")
+            if not isinstance(profiler_driver, str) or not profiler_driver.strip():
+                errors.append(f"case {case_id} profiler_driver must be a non-empty string")
+            elif ci_mode in {"gate", "report"} and profiler_driver not in IMPLEMENTED_PROFILER_DRIVERS:
+                errors.append(f"case {case_id} profiler_driver {profiler_driver!r} is not implemented for ci_mode={ci_mode}")
+            if ci_mode == "blocked":
+                blocked_reason = case.get("blocked_reason")
+                if not isinstance(blocked_reason, str) or not blocked_reason.strip():
+                    errors.append(f"case {case_id} ci_mode=blocked requires blocked_reason")
         provider = case.get("provider")
         if provider not in ALLOWED_PROVIDERS:
             errors.append(f"case {case_id} provider must be one of {sorted(ALLOWED_PROVIDERS)}")
@@ -144,6 +163,8 @@ def validate_manifest(manifest: dict[str, Any]) -> list[str]:
                 errors.append(f"case {case_id} is undefined but declares observers")
             if case.get("truth_source") != "none":
                 errors.append(f"case {case_id} is undefined but truth_source is not none")
+            if case.get("ci_mode") and case.get("ci_mode") != "blocked":
+                errors.append(f"case {case_id} is undefined but ci_mode is not blocked")
 
     required_cases = [case for case in cases if isinstance(case, dict) and case.get("status") == "required"]
     if not required_cases:
@@ -191,12 +212,24 @@ def cases_by_status(manifest: dict[str, Any], status: str) -> list[dict[str, Any
     ]
 
 
+def cases_by_ci_mode(manifest: dict[str, Any], ci_mode: str) -> list[dict[str, Any]]:
+    return [
+        case
+        for case in manifest.get("cases") or []
+        if isinstance(case, dict) and case.get("ci_mode") == ci_mode
+    ]
+
+
 def manifest_summary(manifest: dict[str, Any]) -> dict[str, Any]:
     return {
         "schema_version": manifest.get("schema_version"),
         "cases": {
             status: len(cases_by_status(manifest, status))
             for status in ("required", "experimental", "undefined")
+        },
+        "ci_modes": {
+            ci_mode: len(cases_by_ci_mode(manifest, ci_mode))
+            for ci_mode in ("gate", "report", "blocked")
         },
         "metrics": len(manifest.get("metrics") or []),
     }

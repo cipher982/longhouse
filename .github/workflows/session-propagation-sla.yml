@@ -20,6 +20,11 @@ on:
         required: false
         default: 'zerg'
         type: string
+      include_experimental:
+        description: 'Also run report-only experimental Codex cases'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -29,19 +34,52 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  warm-realtime:
-    name: "managed-codex-warm-realtime"
+  profiler:
+    name: "${{ matrix.name }}"
     runs-on: cube-deploy
     timeout-minutes: 30
     if: ${{ github.event_name != 'schedule' || vars.SESSION_PROPAGATION_SLA_ENABLED == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: managed-codex-warm-realtime
+            case: managed_codex_warm_live_graceful_close
+            profile: warm-live
+            provider: codex
+            ownership: managed
+            experimental: false
+          - name: managed-codex-cold-timeline
+            case: managed_codex_cold_timeline_closed
+            profile: cold-timeline
+            provider: codex
+            ownership: managed
+            experimental: true
+          - name: managed-codex-durable-archive
+            case: managed_codex_durable_archive
+            profile: warm-live
+            provider: codex
+            ownership: managed
+            experimental: true
+          - name: unmanaged-codex-baseline
+            case: unmanaged_codex_direct_graceful_close
+            profile: baseline
+            provider: codex
+            ownership: unmanaged
+            experimental: true
     env:
       SESSION_PROPAGATION_ATTEMPTS: ${{ inputs.attempts || '3' }}
       SESSION_PROPAGATION_SUBDOMAIN: ${{ inputs.subdomain || 'david010' }}
       SESSION_PROPAGATION_PROJECT: ${{ inputs.project || 'zerg' }}
-      SESSION_PROPAGATION_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
-      SESSION_PROPAGATION_OUTPUT_ROOT: ${{ github.workspace }}/artifacts/session-propagation-sla/gha-${{ github.run_id }}-${{ github.run_attempt }}
+      SESSION_PROPAGATION_SLA_CASE: ${{ matrix.case }}
+      SESSION_PROPAGATION_PROFILE: ${{ matrix.profile }}
+      SESSION_PROPAGATION_PROVIDER: ${{ matrix.provider }}
+      SESSION_PROPAGATION_OWNERSHIP: ${{ matrix.ownership }}
+      SESSION_PROPAGATION_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.case }}
+      SESSION_PROPAGATION_OUTPUT_ROOT: ${{ github.workspace }}/artifacts/session-propagation-sla/gha-${{ github.run_id }}-${{ github.run_attempt }}/${{ matrix.case }}
       SESSION_PROPAGATION_CODEX_EFFORT: low
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
+      INCLUDE_EXPERIMENTAL: ${{ inputs.include_experimental || 'false' }}
 
     steps:
       - uses: actions/checkout@v6
@@ -86,15 +124,31 @@ jobs:
       - name: Install Playwright browser
         run: cd e2e && bunx playwright install chromium
 
+      - name: Select matrix case
+        id: selection
+        run: |
+          should_run=true
+          if [[ "${{ matrix.experimental }}" == "true" && "$INCLUDE_EXPERIMENTAL" != "true" ]]; then
+            should_run=false
+          fi
+          echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
+          if [[ "$should_run" != "true" ]]; then
+            echo "Skipping experimental case $SESSION_PROPAGATION_SLA_CASE. Re-run workflow_dispatch with include_experimental=true to execute it."
+          fi
+
       - name: Run session propagation SLA
         id: profiler
+        if: steps.selection.outputs.should_run == 'true'
         run: |
           set +e
           ./scripts/ci/session-propagation-sla.sh
           code=$?
           set -e
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
-          if [[ "$code" == "1" || "$code" == "3" ]]; then
+          if [[ "${{ matrix.experimental }}" != "true" && ( "$code" == "1" || "$code" == "3" ) ]]; then
+            exit 1
+          fi
+          if [[ "${{ matrix.experimental }}" == "true" && "$code" == "3" ]]; then
             exit 1
           fi
 
@@ -105,6 +159,9 @@ jobs:
           {
             echo "## Session Propagation SLA"
             echo ""
+            echo "- Case: \`$SESSION_PROPAGATION_SLA_CASE\`"
+            echo "- Experimental: \`${{ matrix.experimental }}\`"
+            echo "- Ran: \`${{ steps.selection.outputs.should_run || 'false' }}\`"
             echo "- Instance: \`$SESSION_PROPAGATION_SUBDOMAIN\`"
             echo "- Project: \`$SESSION_PROPAGATION_PROJECT\`"
             echo "- Exit code: \`${{ steps.profiler.outputs.exit_code || 'skipped' }}\`"
@@ -119,7 +176,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: session-propagation-sla-${{ github.run_id }}-${{ github.run_attempt }}
+          name: session-propagation-sla-${{ matrix.case }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.SESSION_PROPAGATION_OUTPUT_ROOT }}
           if-no-files-found: ignore
           retention-days: 30
