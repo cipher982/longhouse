@@ -81,6 +81,17 @@ type AgentSession = {
     method?: string | null;
     is_complete: boolean;
   } | null;
+  transcript_preview?: {
+    event_id: number;
+    text: string;
+    event_origin: string;
+    timestamp: string;
+    is_provisional: boolean;
+    is_complete: boolean;
+    content_cursor?: string | null;
+    is_stale: boolean;
+    stale_reason?: "freshness_window_expired" | "missing_preview_timestamp" | null;
+  } | null;
   user_messages: number;
   assistant_messages: number;
   tool_calls: number;
@@ -215,6 +226,7 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     confidence: null,
     runtime_facts: null,
     live_transcript: null,
+    transcript_preview: null,
     user_messages: 10,
     assistant_messages: 10,
     tool_calls: 6,
@@ -295,17 +307,18 @@ export function buildTimelineCardStressFixture(): {
       summary_title: "Secure Hybrid Auth Shipped: Web, iOS, and Deployments",
       summary:
         "Delivered unified hybrid auth architecture with /login route, refactored web components, and integrated iOS updates including post-review fixes.",
-      live_transcript: {
+      live_transcript: null,
+      transcript_preview: {
+        event_id: 1001,
         text:
-          "I have the bridge live overlay visible on the timeline now; this preview should arrive before the slower durable transcript poll catches up.",
-        source: "codex_bridge_live",
-        received_at: "2026-04-15T16:11:40Z",
-        occurred_at: "2026-04-15T16:11:39Z",
-        thread_id: "fixture-live-thread",
-        turn_id: "fixture-live-turn",
-        seq: 24,
-        method: "item/agentMessage/delta",
+          "I have the provisional event preview visible on the timeline now; this should arrive before the slower durable transcript poll catches up.",
+        event_origin: "live_provisional",
+        timestamp: "2026-04-15T16:11:39Z",
+        is_provisional: true,
         is_complete: false,
+        content_cursor: "codex_bridge_live:live-codex-head:fixture-live-thread:fixture-live-turn:24",
+        is_stale: false,
+        stale_reason: null,
       },
       status: "working",
       presence_state: "running",
@@ -625,17 +638,18 @@ export function buildTimelineCardStressFixture(): {
     summary_title: "Current Writable Head",
     summary:
       "This is the newest writable continuation, left here to stress Head and Started badge wrapping with a longer branch name and a reattach capability pill.",
-    live_transcript: {
+    live_transcript: null,
+    transcript_preview: {
+      event_id: 1002,
       text:
-        "I have the mobile card fixture wired now; the live preview should stay clipped, readable, and distinct from the durable summary while the turn is still streaming.",
-      source: "codex_bridge_live",
-      received_at: "2026-04-15T16:11:30Z",
-      occurred_at: "2026-04-15T16:11:29Z",
-      thread_id: "fixture-thread",
-      turn_id: "fixture-turn",
-      seq: 18,
-      method: "item/agentMessage/delta",
+        "I have the mobile card fixture wired now; the provisional preview should stay clipped, readable, and distinct from the durable summary while the turn is still streaming.",
+      event_origin: "live_provisional",
+      timestamp: "2026-04-15T16:11:29Z",
+      is_provisional: true,
       is_complete: false,
+      content_cursor: "codex_bridge_live:continuation-head:fixture-thread:fixture-turn:18",
+      is_stale: false,
+      stale_reason: null,
     },
     status: "working",
     presence_state: "needs_user",

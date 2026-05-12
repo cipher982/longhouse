@@ -5724,6 +5724,33 @@ export interface components {
              * @default true
              */
             is_head_branch: boolean;
+            /**
+             * Event Origin
+             * @description Event origin: durable|live_provisional
+             * @default durable
+             */
+            event_origin: string;
+            /**
+             * Provisional State
+             * @description Provisional lifecycle state when event_origin=live_provisional
+             */
+            provisional_state?: string | null;
+            /**
+             * Provisional Cursor
+             * @description Monotonic live snapshot cursor for provisional events
+             */
+            provisional_cursor?: string | null;
+            /**
+             * Provisional Complete
+             * @description True when the provider bridge reported the provisional turn complete
+             * @default false
+             */
+            provisional_complete: boolean;
+            /**
+             * Reconciled Event Id
+             * @description Durable event id that replaced this provisional event
+             */
+            reconciled_event_id?: number | null;
         };
         /**
          * EventsListResponse
@@ -8478,6 +8505,8 @@ export interface components {
             runtime_facts?: components["schemas"]["SessionLivenessFactsResponse"] | null;
             /** @description Low-latency managed bridge transcript overlay. Populated only for timeline-card projections; durable events remain canonical. */
             live_transcript?: components["schemas"]["SessionLiveTranscriptResponse"] | null;
+            /** @description Latest renderable transcript preview sourced from the event ledger. */
+            transcript_preview?: components["schemas"]["SessionTranscriptPreviewResponse"] | null;
             /** @description Server-derived timeline-card presentation */
             timeline_card: components["schemas"]["TimelineCardPresentationResponse"];
             /**
@@ -8680,6 +8709,57 @@ export interface components {
             head_session_id: string;
             /** Sessions */
             sessions: components["schemas"]["SessionResponse"][];
+        };
+        /** SessionTranscriptPreviewResponse */
+        SessionTranscriptPreviewResponse: {
+            /**
+             * Event Id
+             * @description AgentEvent id for this preview row
+             */
+            event_id: number;
+            /**
+             * Text
+             * @description Transcript preview text from the event ledger
+             */
+            text: string;
+            /**
+             * Event Origin
+             * @description Event origin: durable|live_provisional
+             */
+            event_origin: string;
+            /**
+             * Timestamp
+             * Format: date-time
+             * @description Event timestamp used for transcript ordering
+             */
+            timestamp: string;
+            /**
+             * Is Provisional
+             * @description True when the preview is from an active provisional event
+             */
+            is_provisional: boolean;
+            /**
+             * Is Complete
+             * @description True when the provider bridge reported this provisional turn complete
+             * @default false
+             */
+            is_complete: boolean;
+            /**
+             * Content Cursor
+             * @description Monotonic live snapshot cursor for provisional previews
+             */
+            content_cursor?: string | null;
+            /**
+             * Is Stale
+             * @description True when the provisional preview is too old to render as live output
+             * @default false
+             */
+            is_stale: boolean;
+            /**
+             * Stale Reason
+             * @description Why a provisional preview is stale, when known.
+             */
+            stale_reason?: ("freshness_window_expired" | "missing_preview_timestamp") | null;
         };
         /**
          * SessionTurnEnvelopeResponse
