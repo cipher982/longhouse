@@ -1698,6 +1698,65 @@ def test_heartbeat_missing_managed_lease_closes_immediately_with_stable_anchor(t
     engine.dispose()
 
 
+def test_heartbeat_missing_managed_lease_uses_observations_without_runtime_event_projection(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_managed_missing_observation_only.db")
+    now = datetime.now(timezone.utc)
+    last_real_lease_at = now - timedelta(minutes=2)
+
+    with SessionLocal() as db:
+        session = _seed_session(
+            db,
+            provider="codex",
+            started_at=now - timedelta(hours=3),
+        )
+        session.execution_home = "managed_local"
+        session.managed_transport = "codex_app_server"
+        session_id = session.id
+        runtime_key = runtime_key_for_session("codex", str(session_id))
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session_id,
+                    provider="codex",
+                    device_id="runtime-device",
+                    source="engine_attached_lease",
+                    kind="phase_signal",
+                    phase="idle",
+                    occurred_at=last_real_lease_at,
+                    freshness_ms=15 * 60 * 1000,
+                    dedupe_key="managed-lease-observation-only",
+                    payload={"state": "attached"},
+                )
+            ],
+        )
+        db.query(SessionRuntimeEvent).filter(SessionRuntimeEvent.runtime_key == runtime_key).delete(
+            synchronize_session=False
+        )
+        db.commit()
+
+    for client in _client(SessionLocal):
+        response = client.post(
+            "/agents/heartbeat",
+            json={
+                "version": "test",
+                "daemon_pid": 123,
+                "managed_sessions": [],
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert response.status_code == 204, response.text
+
+    with SessionLocal() as db:
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        assert state.phase == "finished"
+        assert state.terminal_state == "process_gone"
+        assert state.timeline_anchor_at.replace(tzinfo=timezone.utc) == last_real_lease_at
+
+    engine.dispose()
+
+
 def test_heartbeat_omitted_managed_sessions_field_does_not_detach_old_engine(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_managed_missing_legacy_engine.db")
     now = datetime.now(timezone.utc)
