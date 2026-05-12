@@ -34,9 +34,13 @@ Several mitigations already landed:
 Those fixes reduce spend and queue churn, but the system is still carrying too
 much hash-driven derived identity.
 
-## Canonical Truth
+## Raw Truth
 
-`AgentSourceLine` is the canonical transcript ledger.
+`SessionObservation` is the raw session-history ledger. Durable provider source
+lines arrive as `provider_source_line` observations, and parsed durable
+transcript events arrive as `provider_event` observations.
+
+`AgentSourceLine` remains the source archive/export projection.
 
 Canonical identity is:
 
@@ -47,7 +51,16 @@ Canonical identity is:
 - `revision`
 - `line_hash`
 
-Canonical mutations are:
+Source archive projection identity is:
+
+- session
+- branch
+- `source_path`
+- `source_offset`
+- `revision`
+- `line_hash`
+
+Source archive projection mutations are:
 
 - append a new source line at a new offset
 - rewrite an existing `(source_path, source_offset)` with a new `line_hash`

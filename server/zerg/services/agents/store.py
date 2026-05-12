@@ -24,7 +24,6 @@ from sqlalchemy import func
 from sqlalchemy import or_
 from sqlalchemy import select
 from sqlalchemy import text
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentEvent
@@ -36,10 +35,10 @@ from zerg.services.provisional_events import active_provisional_event_predicate
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.provisional_events import reconcile_provisional_transcript_events
 from zerg.services.provisional_events import visible_transcript_event_predicate
-from zerg.services.raw_json_compression import CODEC_PLAIN
-from zerg.services.raw_json_compression import CODEC_ZSTD
-from zerg.services.raw_json_compression import compress_raw_json
 from zerg.services.raw_json_compression import decode_raw_json
+from zerg.services.session_observation_reducers import reduce_provider_event_observation
+from zerg.services.session_observation_reducers import reduce_source_line_observation
+from zerg.services.session_observations import record_provider_event_observation
 from zerg.services.session_observations import record_source_line_observation
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_execution_home import coerce_execution_home
@@ -1457,10 +1456,12 @@ class AgentsStore:
                 if event_leaf_uuid:
                     leaf_uuid_hint = event_leaf_uuid
 
-                _ev_raw = event_data.raw_json
-                _ev_raw_z = compress_raw_json(_ev_raw) if _ev_raw is not None else None
-                stmt = sqlite_insert(AgentEvent).values(
+                observation_result = record_provider_event_observation(
+                    self.db,
                     session_id=session_id,
+                    provider=data.provider,
+                    device_id=data.device_id,
+                    source="agents_ingest",
                     branch_id=ingest_branch.id,
                     role=event_data.role,
                     content_text=event_data.content_text,
@@ -1472,24 +1473,19 @@ class AgentsStore:
                     source_path=event_data.source_path,
                     source_offset=event_data.source_offset,
                     event_hash=event_hash,
-                    raw_json=None,
-                    raw_json_z=_ev_raw_z,
-                    raw_json_codec=CODEC_ZSTD if _ev_raw_z else CODEC_PLAIN,
-                    schema_version=1,
+                    raw_json=event_data.raw_json,
                     event_uuid=event_uuid,
                     parent_event_uuid=parent_event_uuid,
                 )
-
-                if event_data.source_path or event_uuid:
-                    stmt = stmt.on_conflict_do_nothing()
-
-                result = self.db.execute(stmt)
-                if result.rowcount > 0:
+                if observation_result.observation is not None:
+                    reduction = reduce_provider_event_observation(self.db, observation_result.observation)
+                else:
+                    reduction = None
+                if reduction is not None and reduction.inserted:
                     events_inserted += 1
                     if fts_triggers_dropped:
-                        lastrowid = getattr(result, "lastrowid", None)
-                        if isinstance(lastrowid, int) and lastrowid > 0:
-                            inserted_event_ids.append(lastrowid)
+                        if reduction.event is not None and isinstance(reduction.event.id, int) and reduction.event.id > 0:
+                            inserted_event_ids.append(reduction.event.id)
                         else:
                             needs_session_wide_fts_backfill = True
                     normalized_timestamp = _normalize_utc_naive(event_data.timestamp)
@@ -1541,7 +1537,7 @@ class AgentsStore:
                 continue
 
             revision = prev_revision + 1
-            record_source_line_observation(
+            observation_result = record_source_line_observation(
                 self.db,
                 session_id=session_id,
                 provider=data.provider,
@@ -1556,25 +1552,12 @@ class AgentsStore:
                 observed_at=source_lines_received_at,
                 received_at=source_lines_received_at,
             )
-            _sl_raw = line_data.raw_json
-            _sl_raw_z = compress_raw_json(_sl_raw) if _sl_raw is not None else None
-            stmt = sqlite_insert(AgentSourceLine).values(
-                session_id=session_id,
-                source_path=line_data.source_path,
-                source_offset=source_offset,
-                branch_id=ingest_branch.id,
-                revision=revision,
-                is_branch_copy=0,
-                raw_json="" if _sl_raw_z else (_sl_raw or ""),
-                raw_json_z=_sl_raw_z,
-                raw_json_codec=CODEC_ZSTD if _sl_raw_z else CODEC_PLAIN,
-                line_hash=line_hash,
+            row = (
+                reduce_source_line_observation(self.db, observation_result.observation)
+                if observation_result.observation is not None
+                else None
             )
-            stmt = stmt.on_conflict_do_nothing(
-                index_elements=["session_id", "branch_id", "source_path", "source_offset", "line_hash"],
-            )
-            result = self.db.execute(stmt)
-            if result.rowcount and result.rowcount > 0:
+            if row is not None:
                 latest_state[key] = (revision, line_hash)
                 source_lines_inserted += 1
                 _since_commit += 1

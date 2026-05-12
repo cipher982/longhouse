@@ -316,7 +316,19 @@ def _get_head_branch_id(db: Session, session_id: UUID) -> int | None:
         .order_by(AgentSessionBranch.id.desc())
         .first()
     )
-    return int(row[0]) if row else None
+    if row:
+        return int(row[0])
+    branch = AgentSessionBranch(
+        session_id=session_id,
+        parent_branch_id=None,
+        branched_at_source_path=None,
+        branched_at_offset=None,
+        branch_reason="root",
+        is_head=1,
+    )
+    db.add(branch)
+    db.flush()
+    return int(branch.id)
 
 
 def _clean_identity_part(value: str | None, *, fallback: str) -> str:
