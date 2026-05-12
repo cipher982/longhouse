@@ -357,6 +357,7 @@ def main() -> int:
         "hosted_write_serializer_avg_wait_ms": (post_close_data or {}).get("hosted_write_serializer_avg_wait_ms"),
         "hosted_write_serializer_max_wait_ms": (post_close_data or {}).get("hosted_write_serializer_max_wait_ms"),
     }
+    summary["expected_terminal_source_ok"] = summary.get("hosted_terminal_source") == "claude_channel_wrapper"
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     lines = [
         "# Managed Claude POC",
@@ -367,6 +368,7 @@ def main() -> int:
         f"- Expected response observed: `{observed_expected}`",
         f"- Process return code: `{proc.returncode}`",
         f"- Hosted terminal: `{summary.get('hosted_terminal_state') or '-'}` / `{summary.get('hosted_terminal_reason') or '-'}` / `{summary.get('hosted_terminal_source') or '-'}`",
+        f"- Expected graceful terminal source: `{summary.get('expected_terminal_source_ok')}`",
         f"- Hosted archive events: `{summary.get('hosted_archive_event_count')}`",
         f"- Hosted assistant archive events: `{summary.get('hosted_archive_assistant_events')}`",
         f"- Hosted terminal event sources: `{', '.join(summary.get('hosted_terminal_event_sources') or []) or '-'}`",
@@ -375,7 +377,7 @@ def main() -> int:
     ]
     (output_dir / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(output_dir / "summary.md")
-    return 0 if session_id and sent_prompt and observed_expected and proc.returncode == 0 else 1
+    return 0 if session_id and sent_prompt and observed_expected and proc.returncode == 0 and summary["expected_terminal_source_ok"] else 1
 
 
 if __name__ == "__main__":

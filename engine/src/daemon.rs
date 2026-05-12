@@ -148,7 +148,6 @@ struct ClaudeLiveChannelSession {
     session_id: String,
     provider_session_id: Option<String>,
     claude_pid: Option<u32>,
-    updated_at: String,
 }
 
 #[derive(Debug, Clone)]
@@ -1111,7 +1110,6 @@ fn reconcile_claude_terminal_signals(
                     session_id: obs.session_id.clone(),
                     provider_session_id: obs.provider_session_id.clone(),
                     claude_pid: obs.claude_pid,
-                    updated_at: obs.updated_at.clone(),
                 },
             );
             continue;
@@ -1138,8 +1136,7 @@ fn reconcile_claude_terminal_signals(
         let pid = obs
             .claude_pid
             .or_else(|| previous.as_ref().and_then(|seen| seen.claude_pid));
-        let dedupe_key =
-            claude_terminal_dedupe_key(&obs.session_id, pid, &obs.updated_at, "process_gone");
+        let dedupe_key = claude_terminal_dedupe_key(&obs.session_id, pid, "process_gone");
         pending_signals
             .entry(dedupe_key.clone())
             .or_insert_with(|| ClaudeTerminalSignal {
@@ -1169,12 +1166,8 @@ fn reconcile_claude_terminal_signals(
             .provider_session_id
             .clone()
             .unwrap_or_else(|| seen.session_id.clone());
-        let dedupe_key = claude_terminal_dedupe_key(
-            &seen.session_id,
-            seen.claude_pid,
-            &seen.updated_at,
-            "channel_state_gone",
-        );
+        let dedupe_key =
+            claude_terminal_dedupe_key(&seen.session_id, seen.claude_pid, "channel_state_gone");
         pending_signals
             .entry(dedupe_key.clone())
             .or_insert_with(|| ClaudeTerminalSignal {
@@ -1194,17 +1187,11 @@ fn reconcile_claude_terminal_signals(
     }
 }
 
-fn claude_terminal_dedupe_key(
-    session_id: &str,
-    pid: Option<u32>,
-    updated_at: &str,
-    reason: &str,
-) -> String {
+fn claude_terminal_dedupe_key(session_id: &str, pid: Option<u32>, reason: &str) -> String {
     format!(
-        "claude-channel-scan:terminal:{session_id}:{}:{reason}:{}",
+        "claude-channel-scan:terminal:{session_id}:{}:{reason}",
         pid.map(|value| value.to_string())
-            .unwrap_or_else(|| "unknown".to_string()),
-        updated_at.trim()
+            .unwrap_or_else(|| "unknown".to_string())
     )
 }
 
@@ -2541,6 +2528,42 @@ mod tests {
         );
         assert_eq!(signal.event["payload"]["terminal_state"], "process_gone");
         assert!(live.is_empty());
+    }
+
+    #[test]
+    fn test_claude_terminal_signal_generated_from_dead_channel_file_without_live_cache() {
+        let mut live = HashMap::new();
+        let mut pending = HashMap::new();
+        let observed_at = chrono::DateTime::parse_from_rfc3339("2026-05-12T20:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let dead_obs = managed_claude_scan::ClaudeChannelObservation {
+            session_id: "session-123".to_string(),
+            provider_session_id: Some("provider-123".to_string()),
+            state_file: PathBuf::from("/tmp/session-123.json"),
+            claude_pid: Some(123),
+            bridge_pid: Some(456),
+            ready: true,
+            updated_at: "2026-05-12T20:00:00Z".to_string(),
+            claude_alive: false,
+            bridge_alive: false,
+        };
+
+        reconcile_claude_terminal_signals(
+            &mut live,
+            &mut pending,
+            "cinder",
+            &[dead_obs],
+            observed_at,
+        );
+
+        assert_eq!(pending.len(), 1);
+        let signal = pending.values().next().unwrap();
+        assert_eq!(
+            signal.dedupe_key,
+            "claude-channel-scan:terminal:session-123:123:process_gone"
+        );
+        assert_eq!(signal.event["payload"]["terminal_reason"], "process_gone");
     }
 
     #[test]
