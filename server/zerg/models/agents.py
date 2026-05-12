@@ -519,7 +519,7 @@ class SessionTurn(AgentsBase):
 
 
 class SessionRuntimeState(AgentsBase):
-    """Materialized runtime truth for a session/runtime key."""
+    """Reducer-owned runtime projection for a session/runtime key."""
 
     __tablename__ = "session_runtime_state"
 
@@ -551,7 +551,11 @@ class SessionRuntimeState(AgentsBase):
 
 
 class SessionRuntimeEvent(AgentsBase):
-    """Append-only runtime events used to materialize runtime state."""
+    """Diagnostic runtime-event tee.
+
+    Raw runtime authority lives in SessionObservation. This table remains only
+    for compatibility diagnostics while old inspection paths are collapsed.
+    """
 
     __tablename__ = "session_runtime_events"
 

@@ -24,9 +24,11 @@ from zerg.metrics import managed_codex_bridge_freshness_total
 from zerg.metrics import managed_codex_liveness_invariant_sessions
 from zerg.metrics import managed_codex_runtime_events_total
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeEvent
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.session_observation_reducers import reduce_bridge_transcript_observation
+from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
 from zerg.services.session_observations import record_runtime_observation
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
@@ -509,35 +511,36 @@ def managed_codex_liveness_invariant_counts(db: Session) -> dict[str, int]:
         .filter(SessionRuntimeState.last_runtime_signal_at.isnot(None))
         .all()
     )
-    latest_managed_event_by_runtime_key: dict[str, SessionRuntimeEvent] = {}
+    latest_managed_observation_by_runtime_key: dict[str, SessionObservation] = {}
     runtime_keys = [state.runtime_key for state in states]
     if runtime_keys:
-        latest_managed_events = (
-            db.query(SessionRuntimeEvent)
-            .filter(SessionRuntimeEvent.runtime_key.in_(runtime_keys))
-            .filter(SessionRuntimeEvent.provider == "codex")
-            .filter(SessionRuntimeEvent.source.in_(MANAGED_CODEX_RUNTIME_SOURCES))
-            .filter(SessionRuntimeEvent.kind == "phase_signal")
+        latest_managed_observations = (
+            db.query(SessionObservation)
+            .filter(SessionObservation.runtime_key.in_(runtime_keys))
+            .filter(SessionObservation.provider == "codex")
+            .filter(SessionObservation.source.in_(MANAGED_CODEX_RUNTIME_SOURCES))
+            .filter(SessionObservation.kind == OBS_KIND_RUNTIME_SIGNAL)
+            .filter(SessionObservation.payload_json.like('%"kind":"phase_signal"%'))
             .order_by(
-                SessionRuntimeEvent.runtime_key.asc(),
-                SessionRuntimeEvent.occurred_at.desc(),
-                SessionRuntimeEvent.id.desc(),
+                SessionObservation.runtime_key.asc(),
+                SessionObservation.observed_at.desc(),
+                SessionObservation.id.desc(),
             )
             .all()
         )
-        for event in latest_managed_events:
-            latest_managed_event_by_runtime_key.setdefault(event.runtime_key, event)
+        for observation in latest_managed_observations:
+            latest_managed_observation_by_runtime_key.setdefault(observation.runtime_key, observation)
 
     for state in states:
         last_signal_at = normalize_utc(state.last_runtime_signal_at)
         freshness_expires_at = normalize_utc(state.freshness_expires_at)
         if last_signal_at is None or freshness_expires_at is None:
             continue
-        latest_managed_event = latest_managed_event_by_runtime_key.get(state.runtime_key)
-        if latest_managed_event is None:
+        latest_managed_observation = latest_managed_observation_by_runtime_key.get(state.runtime_key)
+        if latest_managed_observation is None:
             continue
-        latest_managed_event_at = normalize_utc(latest_managed_event.occurred_at)
-        if latest_managed_event_at is None or latest_managed_event_at != last_signal_at:
+        latest_managed_observation_at = normalize_utc(latest_managed_observation.observed_at)
+        if latest_managed_observation_at is None or latest_managed_observation_at != last_signal_at:
             continue
         if freshness_expires_at - last_signal_at < MANAGED_CODEX_FRESHNESS:
             short_freshness += 1
@@ -601,7 +604,9 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
                 updated_runtime_keys.append(event.runtime_key)
             continue
 
-        outcome = _apply_runtime_event(db, event)
+        if observation_result.observation is None:
+            raise RuntimeError("accepted runtime observation was not readable after insert")
+        outcome = reduce_runtime_signal_observation(db, observation_result.observation)
         _record_managed_codex_runtime_event(event, outcome)
         if outcome == "applied" and event.runtime_key not in updated_runtime_keys:
             updated_runtime_keys.append(event.runtime_key)
@@ -611,6 +616,80 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
         duplicates=duplicates,
         updated_runtime_keys=updated_runtime_keys,
     )
+
+
+def runtime_event_from_observation(observation) -> RuntimeEventIngest | None:
+    if observation.kind != OBS_KIND_RUNTIME_SIGNAL:
+        return None
+    payload = _observation_payload(observation)
+    kind = str(payload.get("kind") or "").strip()
+    if kind not in {"phase_signal", "progress_signal", "terminal_signal", "binding_signal"}:
+        raise ValueError(f"runtime_signal observation {observation.observation_id} has invalid kind {kind!r}")
+    return RuntimeEventIngest(
+        runtime_key=observation.runtime_key or runtime_key_for_session(observation.provider, str(observation.session_id or "unknown")),
+        session_id=observation.session_id,
+        provider=observation.provider,
+        device_id=observation.device_id,
+        source=observation.source,
+        kind=kind,  # type: ignore[arg-type]
+        phase=_optional_payload_str(payload.get("phase")),
+        tool_name=_optional_payload_str(payload.get("tool_name")),
+        occurred_at=normalize_utc(observation.observed_at) or datetime.now(timezone.utc),
+        freshness_ms=_optional_payload_int(payload.get("freshness_ms")),
+        dedupe_key=_dedupe_key_from_observation(observation, kind=kind),
+        payload=payload.get("payload") if isinstance(payload.get("payload"), dict) else {},
+    )
+
+
+def reduce_runtime_signal_observation(db: Session, observation) -> RuntimeEventApplyOutcome:
+    event = runtime_event_from_observation(observation)
+    if event is None:
+        return "ignored"
+    return _apply_runtime_event(db, event)
+
+
+def _observation_payload(observation) -> dict[str, Any]:
+    raw = getattr(observation, "payload_json", None)
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _dedupe_key_from_observation(observation, *, kind: str) -> str:
+    payload = _observation_payload(observation)
+    dedupe_key = str(payload.get("dedupe_key") or "").strip()
+    if dedupe_key:
+        return dedupe_key
+    source_cursor = str(getattr(observation, "source_cursor", "") or "")
+    prefix = f"{kind}:"
+    if source_cursor.startswith(prefix) and len(source_cursor) > len(prefix):
+        return source_cursor[len(prefix) :]
+    observation_id = str(getattr(observation, "observation_id", "") or "")
+    source_prefix = f"runtime:{observation.source}:"
+    if observation_id.startswith(source_prefix) and len(observation_id) > len(source_prefix):
+        return observation_id[len(source_prefix) :]
+    raise ValueError(f"runtime_signal observation {observation_id!r} has no reconstructable dedupe key")
+
+
+def _optional_payload_str(value) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
+def _optional_payload_int(value) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _state_snapshot(state: SessionRuntimeState | None) -> tuple[Any, ...] | None:
