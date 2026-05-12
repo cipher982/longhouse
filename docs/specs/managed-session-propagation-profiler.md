@@ -484,6 +484,33 @@ clock, hook outbox phase rows are the turn-state clock, and provider/bridge PID
 truth is the close/degraded clock. Hosted runtime and browser paint are
 downstream propagation layers, not primary Claude truth.
 
+Current POC driver: `scripts/ops/run-managed-claude-poc.py`, exposed as
+`make managed-claude-poc`. It launches `longhouse claude` in a PTY, confirms
+Claude's development-channel prompt, sends one channel message, waits for a
+real assistant message in the local Claude transcript, exits with `/exit`, and
+runs the managed-Claude truth probe around the lifecycle. The transcript gate
+is intentional: matching terminal text is insufficient because Claude displays
+the injected prompt text before any assistant response exists.
+
+Initial clean finding from 2026-05-12: managed Claude channel send works and a
+Haiku-backed assistant response was durable in the local transcript about 3.3s
+after channel injection. Smooth local `/exit` removed the provider process in
+about 600ms. Hosted runtime did not receive a terminal close event for that run
+and stayed `idle`; that is a lifecycle propagation failure for managed Claude,
+not a provider-response failure. A Sonnet run during the same session was
+classified as provider-contaminated because Anthropic returned repeated 529
+overload errors and no assistant message was produced.
+
+The same session also found a lower-layer transport issue: machine presence
+POSTs without a user agent were blocked by Cloudflare (`403`/`1010`) while
+`curl` succeeded. The engine now sends an explicit `longhouse-engine/<version>`
+user agent and caps presence POSTs with a short timeout plus one in-flight
+presence drain. These fixes keep local hooks from piling up behind blocked or
+slow `/api/agents/presence` calls, but they do not solve hosted write-serializer
+backpressure under heavy concurrent agent traffic. If hosted ingest or presence
+is slow, classify the run as infrastructure/runtime contaminated before using
+it for provider-specific SLA claims.
+
 ## Measurements
 
 Every run should write a structured JSONL artifact. Each observation must include:

@@ -143,12 +143,19 @@ These should be measured and reported, but not treated as hard gates yet.
 Managed Claude warm live and graceful close:
 Claude uses native channel/MCP/stdin mechanics, not the Codex bridge. The
 profiler must record channel state and process identity when it classifies a
-Claude session. This case is currently `ci_mode=blocked` until a safe
-non-interactive Claude channel driver and auth/cost controls exist.
-`make managed-claude-truth-probe ARGS="--session-id <id>"` is the current
-observation-only POC: it does not launch Claude, but it captures local-health,
-Claude channel state, hook outbox rows, provider/bridge PIDs, channel HTTP
-health, and hosted runtime truth for a live managed Claude session.
+Claude session. This case is still experimental, but it now has two POC tools:
+
+- `make managed-claude-truth-probe ARGS="--session-id <id>"` captures
+  observation-only truth surfaces for an existing managed Claude session.
+- `make managed-claude-poc` launches a managed Claude PTY, sends one channel
+  message, waits for a real assistant transcript response, exits, and captures
+  before/after truth probes.
+
+The current POC proves managed-Claude channel send and local transcript response
+can work. It does not yet meet the managed close contract: a smooth `/exit`
+can leave hosted runtime state at `idle` with no terminal event. That path must
+emit a managed-Claude terminal runtime event from the channel/control wrapper or
+an equivalent immediate process-exit observer before it can be promoted.
 
 Managed OpenCode lifecycle:
 Lifecycle can be measured before remote send/interrupt is a product contract.

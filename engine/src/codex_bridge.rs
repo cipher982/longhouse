@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
+use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -707,7 +708,14 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     // notification and posts idle once it knows which thread to drive.
     initialize_client(&mut client).await?;
 
+    let mut runtime_headers = HeaderMap::new();
+    runtime_headers.insert(
+        USER_AGENT,
+        HeaderValue::from_str(&format!("longhouse-engine/{}", env!("CARGO_PKG_VERSION")))
+            .context("invalid runtime user-agent header value")?,
+    );
     let runtime_http = reqwest::Client::builder()
+        .default_headers(runtime_headers)
         .timeout(Duration::from_secs(5))
         .pool_max_idle_per_host(4)
         .build()

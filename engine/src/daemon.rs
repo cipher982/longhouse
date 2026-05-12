@@ -575,7 +575,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         offline.is_offline,
                     );
                 }
-                if !offline.is_offline && !outbox_result.posts.is_empty() {
+                if !offline.is_offline
+                    && !outbox_result.posts.is_empty()
+                    && outbox_post_tasks.is_empty()
+                {
                     let client = client.clone();
                     outbox_post_tasks.spawn_local(async move {
                         outbox::post_pending_presence_files(&client, outbox_result.posts).await
