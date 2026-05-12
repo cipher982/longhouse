@@ -23,6 +23,7 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.session_summaries import summarize_and_persist
 from zerg.services.session_views import BackfillEmbeddingsProgressResponse
 from zerg.services.session_views import BackfillEmbeddingsResponse
@@ -163,7 +164,13 @@ async def _run_backfill(
                             _backfill_state["skipped"] += 1
                             return
 
-                        events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp).all()
+                        events = (
+                            db.query(AgentEvent)
+                            .filter(AgentEvent.session_id == session_id)
+                            .filter(durable_transcript_event_predicate())
+                            .order_by(AgentEvent.timestamp)
+                            .all()
+                        )
                         if not events:
                             _backfill_state["skipped"] += 1
                             return
@@ -307,7 +314,13 @@ async def _run_embedding_backfill(
                             _embedding_backfill_state["skipped"] += 1
                             return
 
-                        events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp).all()
+                        events = (
+                            db.query(AgentEvent)
+                            .filter(AgentEvent.session_id == session_id)
+                            .filter(durable_transcript_event_predicate())
+                            .order_by(AgentEvent.timestamp)
+                            .all()
+                        )
                         if not events:
                             _embedding_backfill_state["skipped"] += 1
                             return

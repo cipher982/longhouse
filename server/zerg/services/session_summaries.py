@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from zerg.config import get_settings
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.services.provisional_events import durable_transcript_event_predicate
 
 logger = logging.getLogger(__name__)
 
@@ -214,11 +215,21 @@ async def generate_summary_impl(session_id: str) -> None:
         expected_summary_event_count = session.summary_event_count or 0
         if cursor_id is not None:
             new_events = (
-                db.query(AgentEvent).filter(AgentEvent.session_id == session_id, AgentEvent.id > cursor_id).order_by(AgentEvent.id).all()
+                db.query(AgentEvent)
+                .filter(AgentEvent.session_id == session_id, AgentEvent.id > cursor_id)
+                .filter(durable_transcript_event_predicate())
+                .order_by(AgentEvent.id)
+                .all()
             )
         else:
             old_count = expected_summary_event_count
-            all_events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.id).all()
+            all_events = (
+                db.query(AgentEvent)
+                .filter(AgentEvent.session_id == session_id)
+                .filter(durable_transcript_event_predicate())
+                .order_by(AgentEvent.id)
+                .all()
+            )
             new_events = all_events[old_count:]
 
         if not new_events:
@@ -332,11 +343,18 @@ async def generate_summary_impl(session_id: str) -> None:
                     new_events = (
                         retry_db.query(AgentEvent)
                         .filter(AgentEvent.session_id == session_id, AgentEvent.id > cursor_id)
+                        .filter(durable_transcript_event_predicate())
                         .order_by(AgentEvent.id)
                         .all()
                     )
                 else:
-                    all_events = retry_db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.id).all()
+                    all_events = (
+                        retry_db.query(AgentEvent)
+                        .filter(AgentEvent.session_id == session_id)
+                        .filter(durable_transcript_event_predicate())
+                        .order_by(AgentEvent.id)
+                        .all()
+                    )
                     new_events = all_events[expected_summary_event_count:]
                 if not new_events:
                     return
@@ -418,7 +436,13 @@ async def generate_embeddings_impl(session_id: str) -> None:
         if not config:
             return
 
-        events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp).all()
+        events = (
+            db.query(AgentEvent)
+            .filter(AgentEvent.session_id == session_id)
+            .filter(durable_transcript_event_predicate())
+            .order_by(AgentEvent.timestamp)
+            .all()
+        )
         if not events:
             return
 

@@ -6,6 +6,7 @@ from datetime import timezone
 
 from sqlalchemy.orm import sessionmaker
 
+from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentsBase
@@ -23,6 +24,12 @@ def _make_sessionmaker(tmp_path, name: str):
     engine = make_engine(f"sqlite:///{tmp_path / name}")
     engine = engine.execution_options(schema_translate_map={"agents": None})
     AgentsBase.metadata.create_all(bind=engine)
+    return sessionmaker(bind=engine)
+
+
+def _make_initialized_sessionmaker(tmp_path, name: str):
+    engine = make_engine(f"sqlite:///{tmp_path / name}")
+    initialize_database(engine)
     return sessionmaker(bind=engine)
 
 
@@ -232,3 +239,110 @@ def test_durable_ingest_supersedes_unmatched_older_provisional_event(tmp_path):
     assert rows[0].provisional_state == "superseded"
     assert rows[0].reconciled_event_id is None
     assert [event.content_text for event in visible] == ["fresh durable reply"]
+
+
+def test_cross_session_search_ignores_provisional_only_text(tmp_path):
+    SessionLocal = _make_initialized_sessionmaker(tmp_path, "provisional_search.db")
+    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+    source_path = "/tmp/codex-rollout.jsonl"
+    durable_line = (
+        '{"type":"response_item","timestamp":"2026-05-11T12:00:04Z",'
+        '"payload":{"type":"message","role":"assistant",'
+        '"content":[{"type":"output_text","text":"durable searchable text"}]}}'
+    )
+
+    with SessionLocal() as db:
+        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
+        ingest_runtime_events(
+            db,
+            [
+                _live_event(
+                    session_id=session.id,
+                    occurred_at=now,
+                    seq=1,
+                    live_text="only provisional needle",
+                )
+            ],
+        )
+        db.commit()
+
+        store = AgentsStore(db)
+        provisional_sessions, provisional_total = store.list_sessions(include_test=True, query="needle")
+        assert provisional_sessions == []
+        assert provisional_total == 0
+
+        store.ingest_session(
+            SessionIngest(
+                id=session.id,
+                provider="codex",
+                environment="test",
+                project="provisional-events",
+                device_id="cinder",
+                cwd="/tmp/project",
+                started_at=now - timedelta(minutes=1),
+                events=[
+                    EventIngest(
+                        role="assistant",
+                        content_text="durable searchable text",
+                        timestamp=now + timedelta(seconds=4),
+                        source_path=source_path,
+                        source_offset=100,
+                        raw_json=durable_line,
+                    )
+                ],
+                source_lines=[
+                    SourceLineIngest(source_path=source_path, source_offset=100, raw_json=durable_line),
+                ],
+            )
+        )
+
+        durable_sessions, durable_total = store.list_sessions(include_test=True, query="searchable")
+
+    assert durable_total == 1
+    assert [session.id for session in durable_sessions] == [session.id]
+
+
+def test_terminal_signal_supersedes_active_provisional_event(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "provisional_terminal.db")
+    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
+        ingest_runtime_events(
+            db,
+            [
+                _live_event(
+                    session_id=session.id,
+                    occurred_at=now,
+                    seq=1,
+                    live_text="unfinished live output",
+                )
+            ],
+        )
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=f"codex:{session.id}",
+                    session_id=session.id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="codex_bridge",
+                    kind="terminal_signal",
+                    occurred_at=now + timedelta(seconds=10),
+                    dedupe_key=f"bridge:terminal:{session.id}:1",
+                    payload={
+                        "terminal_state": "session_ended",
+                        "terminal_reason": "bridge_stop",
+                        "terminal_source": "codex_bridge",
+                    },
+                )
+            ],
+        )
+        db.commit()
+
+        row = db.query(AgentEvent).filter(AgentEvent.session_id == session.id).one()
+        visible = AgentsStore(db).get_session_events(session.id)
+
+    assert row.provisional_state == "superseded"
+    assert visible == []

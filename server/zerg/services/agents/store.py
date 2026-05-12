@@ -618,8 +618,9 @@ class AgentsStore:
                     INSERT INTO events_fts(rowid, content_text, tool_output_text, tool_name, role, session_id)
                     SELECT e.id, e.content_text, e.tool_output_text, e.tool_name, e.role, e.session_id
                     FROM events e
-                    WHERE e.session_id = :sid
-                      AND e.id NOT IN (SELECT rowid FROM events_fts)
+                WHERE e.session_id = :sid
+                  AND COALESCE(e.event_origin, 'durable') = 'durable'
+                  AND e.id NOT IN (SELECT rowid FROM events_fts)
                 """),
                 {"sid": str(session_id)},
             )
@@ -637,6 +638,7 @@ class AgentsStore:
                 FROM events e
                 LEFT JOIN events_fts f ON f.rowid = e.id
                 WHERE e.id IN :event_ids
+                  AND COALESCE(e.event_origin, 'durable') = 'durable'
                   AND f.rowid IS NULL
             """).bindparams(bindparam("event_ids", expanding=True))
             for index in range(0, len(event_ids), 200):
@@ -709,6 +711,7 @@ class AgentsStore:
                     JOIN events e ON e.id = events_fts.rowid
                     WHERE events_fts MATCH :query
                       AND e.session_id IN :session_ids
+                      AND COALESCE(e.event_origin, 'durable') = 'durable'
                 )
                 SELECT session_id, event_id, role, tool_name, content_text, tool_output_text
                 FROM ranked
@@ -805,7 +808,15 @@ class AgentsStore:
             raise RuntimeError("FTS5 is required for session search but is not available.")
         try:
             rows = self.db.execute(
-                text("SELECT DISTINCT session_id FROM events_fts WHERE events_fts MATCH :query"),
+                text(
+                    """
+                    SELECT DISTINCT e.session_id
+                    FROM events_fts
+                    JOIN events e ON e.id = events_fts.rowid
+                    WHERE events_fts MATCH :query
+                      AND COALESCE(e.event_origin, 'durable') = 'durable'
+                    """
+                ),
                 {"query": self._fts_query(query)},
             ).fetchall()
             session_ids: list[UUID] = []
@@ -1245,6 +1256,7 @@ class AgentsStore:
             .select_from(AgentEvent)
             .filter(AgentEvent.session_id == session_id)
             .filter(AgentEvent.branch_id == head_branch_id)
+            .filter(durable_transcript_event_predicate())
             .filter(AgentEvent.role == "user")
             .filter(
                 or_(
@@ -1260,6 +1272,7 @@ class AgentsStore:
             .select_from(AgentEvent)
             .filter(AgentEvent.session_id == session_id)
             .filter(AgentEvent.branch_id == head_branch_id)
+            .filter(durable_transcript_event_predicate())
             .filter(AgentEvent.role == "assistant")
             .filter(AgentEvent.tool_name.is_(None))
             .scalar()
@@ -1270,6 +1283,7 @@ class AgentsStore:
             .select_from(AgentEvent)
             .filter(AgentEvent.session_id == session_id)
             .filter(AgentEvent.branch_id == head_branch_id)
+            .filter(durable_transcript_event_predicate())
             .filter(AgentEvent.role == "assistant")
             .filter(AgentEvent.tool_name.isnot(None))
             .scalar()
@@ -2134,6 +2148,7 @@ class AgentsStore:
             .select_from(AgentEvent)
             .outerjoin(heads_subq, AgentEvent.session_id == heads_subq.c.session_id)
             .where(AgentEvent.session_id.in_(session_ids))
+            .where(durable_transcript_event_predicate())
             .where(AgentEvent.role == role)
             .where(AgentEvent.content_text.isnot(None))
             .where(
@@ -2246,6 +2261,7 @@ class AgentsStore:
         rows = (
             self.db.query(AgentEvent.session_id, sa_func.max(AgentEvent.timestamp))
             .filter(AgentEvent.session_id.in_(session_ids))
+            .filter(durable_transcript_event_predicate())
             .filter(AgentEvent.role == role)
             .group_by(AgentEvent.session_id)
             .all()
@@ -2261,6 +2277,7 @@ class AgentsStore:
         rows = (
             self.db.query(AgentEvent.session_id, sa_func.max(AgentEvent.timestamp))
             .filter(AgentEvent.session_id.in_(session_ids))
+            .filter(durable_transcript_event_predicate())
             .filter(AgentEvent.role == "assistant")
             .filter(AgentEvent.tool_name.isnot(None))
             .group_by(AgentEvent.session_id)
@@ -2296,7 +2313,14 @@ class AgentsStore:
         try:
             rows = self.db.execute(
                 text(
-                    "SELECT e.id FROM events_fts JOIN events e ON e.id = events_fts.rowid WHERE events_fts MATCH :q AND e.session_id = :sid"
+                    """
+                    SELECT e.id
+                    FROM events_fts
+                    JOIN events e ON e.id = events_fts.rowid
+                    WHERE events_fts MATCH :q
+                      AND e.session_id = :sid
+                      AND COALESCE(e.event_origin, 'durable') = 'durable'
+                    """
                 ),
                 {"q": self._fts_query(query), "sid": str(session_id)},
             ).fetchall()
