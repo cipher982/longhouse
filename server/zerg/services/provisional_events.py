@@ -123,9 +123,12 @@ def materialize_bridge_transcript_event(
         if seq is not None and existing_seq is not None and seq == existing_seq:
             incoming_observation_id = _payload_observation_id(payload)
             existing_observation_id = _existing_observation_id(existing)
-            if existing_observation_id is not None and (
-                incoming_observation_id is None or incoming_observation_id >= existing_observation_id
-            ):
+            if existing_observation_id is None:
+                # Rows created before the observation reducer did not persist a
+                # source observation id. Keep those rows stable instead of
+                # letting same-seq replays overwrite them.
+                return existing
+            if incoming_observation_id is None or incoming_observation_id >= existing_observation_id:
                 return existing
         if seq is None and existing_seq is not None:
             return existing

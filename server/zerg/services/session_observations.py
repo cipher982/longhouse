@@ -86,7 +86,7 @@ def record_session_observation(
 
 def record_runtime_observation(db: Session, event: Any, *, received_at: datetime | None = None) -> ObservationWriteResult:
     payload = event.payload or {}
-    dedupe_key = _runtime_dedupe_key(event, payload)
+    dedupe_key = _runtime_dedupe_key(event)
     kind = OBS_KIND_BRIDGE_TRANSCRIPT_DELTA if _is_bridge_transcript_delta(event, payload) else OBS_KIND_RUNTIME_SIGNAL
     return record_session_observation(
         db,
@@ -167,15 +167,11 @@ def _is_bridge_transcript_delta(event: Any, payload: dict[str, Any]) -> bool:
     )
 
 
-def _runtime_dedupe_key(event: Any, payload: dict[str, Any]) -> str:
+def _runtime_dedupe_key(event: Any) -> str:
     raw = str(getattr(event, "dedupe_key", "") or "").strip()
     if raw:
         return raw
-    return "payload:" + _hash_parts(
-        str(getattr(event, "runtime_key", "") or ""),
-        str(getattr(event, "kind", "") or ""),
-        json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str),
-    )
+    raise ValueError("runtime observations require a non-empty dedupe_key")
 
 
 def _hash_parts(*parts: str) -> str:

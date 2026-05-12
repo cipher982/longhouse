@@ -1541,6 +1541,21 @@ class AgentsStore:
                 continue
 
             revision = prev_revision + 1
+            record_source_line_observation(
+                self.db,
+                session_id=session_id,
+                provider=data.provider,
+                device_id=data.device_id,
+                source="agents_ingest",
+                source_path=line_data.source_path,
+                source_offset=source_offset,
+                branch_id=ingest_branch.id,
+                revision=revision,
+                line_hash=line_hash,
+                raw_json=line_data.raw_json,
+                observed_at=source_lines_received_at,
+                received_at=source_lines_received_at,
+            )
             _sl_raw = line_data.raw_json
             _sl_raw_z = compress_raw_json(_sl_raw) if _sl_raw is not None else None
             stmt = sqlite_insert(AgentSourceLine).values(
@@ -1562,21 +1577,6 @@ class AgentsStore:
             if result.rowcount and result.rowcount > 0:
                 latest_state[key] = (revision, line_hash)
                 source_lines_inserted += 1
-                record_source_line_observation(
-                    self.db,
-                    session_id=session_id,
-                    provider=data.provider,
-                    device_id=data.device_id,
-                    source="agents_ingest",
-                    source_path=line_data.source_path,
-                    source_offset=source_offset,
-                    branch_id=ingest_branch.id,
-                    revision=revision,
-                    line_hash=line_hash,
-                    raw_json=line_data.raw_json,
-                    observed_at=source_lines_received_at,
-                    received_at=source_lines_received_at,
-                )
                 _since_commit += 1
 
             if _since_commit >= _INGEST_CHUNK:
