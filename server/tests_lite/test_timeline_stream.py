@@ -89,7 +89,7 @@ def _seed_session(
     return session
 
 
-def _ingest_live_transcript(
+def _ingest_bridge_transcript(
     db,
     *,
     session_id,
@@ -431,7 +431,7 @@ def test_timeline_stream_wakes_on_topic_timeline_publish(tmp_path):
     reset_pubsub_for_test()
 
 
-def test_timeline_stream_upserts_on_live_transcript_overlay_only_change(tmp_path):
+def test_timeline_stream_upserts_on_bridge_transcript_preview_only_change(tmp_path):
     reset_pubsub_for_test()
     session_local = _make_db(tmp_path, "timeline_stream_live_overlay.db")
     now = datetime.now(timezone.utc)
@@ -440,7 +440,7 @@ def test_timeline_stream_upserts_on_live_transcript_overlay_only_change(tmp_path
         session = _seed_session(
             db,
             started_at=now - timedelta(minutes=5),
-            project="live-overlay-stream",
+            project="bridge-preview-stream",
         )
         session.provider = "codex"
         db.commit()
@@ -459,7 +459,7 @@ def test_timeline_stream_upserts_on_live_transcript_overlay_only_change(tmp_path
             next_event = asyncio.create_task(anext(stream))
             await asyncio.sleep(0)
             with session_local() as db:
-                _ingest_live_transcript(
+                _ingest_bridge_transcript(
                     db,
                     session_id=session.id,
                     occurred_at=now,
@@ -480,7 +480,6 @@ def test_timeline_stream_upserts_on_live_transcript_overlay_only_change(tmp_path
     assert initial["event"] == "session_upsert"
     assert upsert["event"] == "session_upsert"
     payload = json.loads(upsert["data"])
-    assert payload["session"]["head"]["live_transcript"] is None
     assert (
         payload["session"]["head"]["transcript_preview"]["text"]
         == "Bridge text arrived before the durable transcript."
@@ -523,7 +522,7 @@ def test_timeline_stream_known_session_update_skips_window_requery(tmp_path):
             next_event = asyncio.create_task(anext(stream))
             await asyncio.sleep(0)
             with session_local() as db:
-                _ingest_live_transcript(
+                _ingest_bridge_transcript(
                     db,
                     session_id=session.id,
                     occurred_at=now,
@@ -551,7 +550,6 @@ def test_timeline_stream_known_session_update_skips_window_requery(tmp_path):
     assert targeted["event"] == "session_upsert"
     assert window_signature_calls == 1
     payload = json.loads(targeted["data"])
-    assert payload["session"]["head"]["live_transcript"] is None
     assert payload["session"]["head"]["transcript_preview"]["text"] == "Targeted card update"
     reset_pubsub_for_test()
 

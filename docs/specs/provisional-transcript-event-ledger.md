@@ -1,14 +1,14 @@
 # Provisional Transcript Event Ledger
 
-Status: Implementation plan
+Status: Implemented on `provisional-event-ledger`
 Owner: Longhouse session kernel
 Updated: 2026-05-11
 
 ## Problem
 
-Managed Codex currently has two transcript-looking surfaces:
+Managed Codex used to have two transcript-looking surfaces:
 
-- bridge live text in `session_runtime_events`, projected as `live_transcript`
+- bridge text in `session_runtime_events`, projected through a runtime overlay
 - source-backed transcript rows in `events` / `source_lines`
 
 That made the timeline card faster, but it also made the data model harder to
@@ -28,7 +28,7 @@ identity:
 - source-backed ingest creates durable event rows from provider transcript files
 - reconciliation marks provisional rows as replaced when durable truth catches up
 - timeline/detail clients read one ordered event projection instead of a second
-  live transcript overlay projection
+  provisional transcript preview projection
 
 ## First Principles
 
@@ -160,9 +160,10 @@ comes from event metadata, not a separate overlay object.
   latest active provisional ledger event, carries `is_provisional`, `is_stale`,
   and cursor metadata, and is the only field timeline cards render for bridge
   text.
-- Keep `live_transcript` as a deprecated compatibility field. Timeline
-  responses do not populate it.
-- Update frontend tests and fixture captures so cards ignore `live_transcript`.
+- Remove the previous runtime-overlay response field so clients have one
+  transcript preview contract.
+- Update frontend tests and fixture captures so cards render only
+  `transcript_preview`.
 - Run UI capture for timeline card stress scenes.
 
 ### Phase 4: Final QA and Ship
@@ -184,8 +185,8 @@ comes from event metadata, not a separate overlay object.
   duplicate visible transcript messages.
 - Durable archive ingest supersedes stale unmatched provisional rows.
 - Timeline cards read the same event-ledger-backed preview projection that
-  detail/tail can reconcile against. The deprecated runtime overlay no longer
-  drives visible card text.
+  detail/tail can reconcile against. The previous runtime overlay is no longer
+  part of the API.
 - Search, export, summaries, embeddings, and replay never consume provisional
   rows as durable truth.
 - Existing runtime/liveness behavior remains intact.

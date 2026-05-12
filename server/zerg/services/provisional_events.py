@@ -78,7 +78,7 @@ def build_provisional_cursor(*, key: str, seq: int | None) -> str:
     return f"{key}:{seq}" if seq is not None else f"{key}:unknown-seq"
 
 
-def materialize_live_transcript_event(
+def materialize_bridge_transcript_event(
     db: Session,
     *,
     session_id: UUID,

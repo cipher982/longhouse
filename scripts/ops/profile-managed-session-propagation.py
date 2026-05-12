@@ -662,7 +662,7 @@ print(json.dumps(payload))
         )
         return last
 
-    def poll_timeline_live_transcript(
+    def poll_timeline_transcript_preview(
         self,
         session_id: str,
         nonce: str,
@@ -679,7 +679,7 @@ print(json.dumps(payload))
         while time.monotonic() < deadline:
             data = self.timeline_session(session_id)
             last = data if isinstance(data, dict) else None
-            transcripts = timeline_live_transcripts(last or {})
+            transcripts = timeline_transcript_previews(last or {})
             if transcripts and not first_observed:
                 first_observed = True
                 self.observe(
@@ -687,17 +687,17 @@ print(json.dumps(payload))
                     provider="codex",
                     ownership=ownership,
                     source="hosted_http",
-                    event="timeline_live_transcript_first_visible",
+                    event="timeline_transcript_preview_first_visible",
                     session_id=session_id,
                     payload=compact_timeline(last or {}),
                 )
-            if last is not None and timeline_live_transcript_contains(last, nonce):
+            if last is not None and timeline_transcript_preview_contains(last, nonce):
                 self.observe(
                     case_id=case_id,
                     provider="codex",
                     ownership=ownership,
                     source="hosted_http",
-                    event="timeline_live_transcript_visible",
+                    event="timeline_transcript_preview_visible",
                     session_id=session_id,
                     payload=compact_timeline(last),
                 )
@@ -710,7 +710,7 @@ print(json.dumps(payload))
                 provider="codex",
                 ownership=ownership,
                 source="hosted_http",
-                event="timeline_live_transcript_first_visible_timeout",
+                event="timeline_transcript_preview_first_visible_timeout",
                 session_id=session_id,
                 payload=compact_timeline(last or {}),
             )
@@ -719,13 +719,13 @@ print(json.dumps(payload))
             provider="codex",
             ownership=ownership,
             source="hosted_http",
-            event="timeline_live_transcript_visible_timeout",
+            event="timeline_transcript_preview_visible_timeout",
             session_id=session_id,
             payload=compact_timeline(last or {}),
         )
         return last
 
-    def stream_timeline_live_transcript_sse(
+    def stream_timeline_transcript_preview_sse(
         self,
         session_id: str,
         nonce: str,
@@ -740,7 +740,7 @@ print(json.dumps(payload))
                 provider="codex",
                 ownership=ownership,
                 source="hosted_sse",
-                event="timeline_live_transcript_sse_first_timeout",
+                event="timeline_transcript_preview_sse_first_timeout",
                 session_id=session_id,
                 payload={"error": "could not mint browser session cookie"},
             )
@@ -764,7 +764,7 @@ data_lines = []
 first_observed = False
 started = time.monotonic()
 
-def live_transcript_from_event(data):
+def transcript_preview_from_event(data):
     try:
         obj = json.loads(data)
     except Exception:
@@ -781,16 +781,13 @@ def live_transcript_from_event(data):
         preview = candidate.get("transcript_preview")
         if isinstance(preview, dict) and preview.get("text"):
             return preview
-        live = candidate.get("live_transcript")
-        if isinstance(live, dict) and live.get("text"):
-            return live
     return None
 
-def emit(kind, live=None, error=None):
+def emit(kind, preview=None, error=None):
     payload = {
         "kind": kind,
         "elapsed_ms": int((time.monotonic() - started) * 1000),
-        "live_transcript": live,
+        "transcript_preview": preview,
         "error": error,
     }
     print(json.dumps(payload, default=str), flush=True)
@@ -805,15 +802,15 @@ def flush_event():
     data_lines = []
     if current_event != "session_upsert":
         return False
-    live = live_transcript_from_event(data)
-    if not live:
+    preview = transcript_preview_from_event(data)
+    if not preview:
         return False
-    text = str(live.get("text") or "")
+    text = str(preview.get("text") or "")
     if not first_observed:
         first_observed = True
-        emit("first", live)
+        emit("first", preview)
     if nonce in text:
-        emit("full", live)
+        emit("full", preview)
         return True
     return False
 
@@ -888,7 +885,7 @@ except Exception as exc:
                     provider="codex",
                     ownership=ownership,
                     source="hosted_sse",
-                    event="timeline_live_transcript_sse_ready",
+                    event="timeline_transcript_preview_sse_ready",
                     session_id=session_id,
                     payload=data,
                 )
@@ -899,7 +896,7 @@ except Exception as exc:
                     provider="codex",
                     ownership=ownership,
                     source="hosted_sse",
-                    event="timeline_live_transcript_sse_first_visible",
+                    event="timeline_transcript_preview_sse_first_visible",
                     session_id=session_id,
                     payload=data,
                 )
@@ -910,7 +907,7 @@ except Exception as exc:
                     provider="codex",
                     ownership=ownership,
                     source="hosted_sse",
-                    event="timeline_live_transcript_sse_visible",
+                    event="timeline_transcript_preview_sse_visible",
                     session_id=session_id,
                     payload=data,
                 )
@@ -921,7 +918,7 @@ except Exception as exc:
                     provider="codex",
                     ownership=ownership,
                     source="hosted_sse",
-                    event=f"timeline_live_transcript_sse_{kind}",
+                    event=f"timeline_transcript_preview_sse_{kind}",
                     session_id=session_id,
                     payload=data,
                 )
@@ -940,7 +937,7 @@ except Exception as exc:
                 provider="codex",
                 ownership=ownership,
                 source="hosted_sse",
-                event="timeline_live_transcript_sse_first_visible_timeout",
+                event="timeline_transcript_preview_sse_first_visible_timeout",
                 session_id=session_id,
                 payload={"returncode": proc.returncode, "stderr": stderr[-1000:]},
             )
@@ -950,7 +947,7 @@ except Exception as exc:
                 provider="codex",
                 ownership=ownership,
                 source="hosted_sse",
-                event="timeline_live_transcript_sse_visible_timeout",
+                event="timeline_transcript_preview_sse_visible_timeout",
                 session_id=session_id,
                 payload={"returncode": proc.returncode, "stderr": stderr[-1000:]},
             )
@@ -1193,16 +1190,16 @@ except Exception as exc:
         event_map = {
             "ui_loaded": "browser_ui_loaded",
             "card_painted": "browser_timeline_card_painted",
-            "live_first_painted": "browser_live_transcript_first_painted",
-            "live_word_painted": "browser_live_transcript_word_painted",
-            "live_nonce_painted": "browser_live_transcript_nonce_painted",
+            "preview_first_painted": "browser_transcript_preview_first_painted",
+            "preview_word_painted": "browser_transcript_preview_word_painted",
+            "preview_nonce_painted": "browser_transcript_preview_nonce_painted",
             "close_painted": "browser_close_card_painted",
         }
         timeout_map = {
             "card_painted_timeout": "browser_timeline_card_painted_timeout",
-            "live_first_painted_timeout": "browser_live_transcript_first_painted_timeout",
-            "live_word_painted_timeout": "browser_live_transcript_word_painted_timeout",
-            "live_nonce_painted_timeout": "browser_live_transcript_nonce_painted_timeout",
+            "preview_first_painted_timeout": "browser_transcript_preview_first_painted_timeout",
+            "preview_word_painted_timeout": "browser_transcript_preview_word_painted_timeout",
+            "preview_nonce_painted_timeout": "browser_transcript_preview_nonce_painted_timeout",
             "close_painted_timeout": "browser_close_card_painted_timeout",
         }
         for line in proc.stdout:
@@ -1254,7 +1251,7 @@ except Exception as exc:
         ownership: str,
     ) -> threading.Thread:
         thread = threading.Thread(
-            target=lambda: self.poll_timeline_live_transcript(
+            target=lambda: self.poll_timeline_transcript_preview(
                 session_id,
                 nonce,
                 case_id=case_id,
@@ -1275,7 +1272,7 @@ except Exception as exc:
         ownership: str,
     ) -> threading.Thread:
         thread = threading.Thread(
-            target=lambda: self.stream_timeline_live_transcript_sse(
+            target=lambda: self.stream_timeline_transcript_preview_sse(
                 session_id,
                 nonce,
                 case_id=case_id,
@@ -1516,7 +1513,7 @@ except Exception as exc:
             sse_ready = self.wait_for_observation(
                 case_id,
                 session_id,
-                "timeline_live_transcript_sse_ready",
+                "timeline_transcript_preview_sse_ready",
                 timeout=10,
             )
             if browser_ready and sse_ready:
@@ -2023,85 +2020,85 @@ except Exception as exc:
             case_id,
             session_id,
             "prompt_sent_started",
-            "timeline_live_transcript_visible",
+            "timeline_transcript_preview_visible",
         )
         first_live_http_latency = self.event_delta_ms(
             case_id,
             session_id,
             "prompt_sent_started",
-            "timeline_live_transcript_first_visible",
+            "timeline_transcript_preview_first_visible",
         )
         live_http_from_local_latency = self.event_delta_ms(
             case_id,
             session_id,
             "assistant_response_local",
-            "timeline_live_transcript_visible",
+            "timeline_transcript_preview_visible",
         )
         first_live_http_from_local_latency = self.event_delta_ms(
             case_id,
             session_id,
             "assistant_response_local",
-            "timeline_live_transcript_first_visible",
+            "timeline_transcript_preview_first_visible",
         )
         live_sse_latency = self.event_delta_ms(
             case_id,
             session_id,
             "prompt_sent_started",
-            "timeline_live_transcript_sse_visible",
+            "timeline_transcript_preview_sse_visible",
         )
         first_live_sse_latency = self.event_delta_ms(
             case_id,
             session_id,
             "prompt_sent_started",
-            "timeline_live_transcript_sse_first_visible",
+            "timeline_transcript_preview_sse_first_visible",
         )
         live_sse_from_local_latency = self.event_delta_any_order_ms(
             case_id,
             session_id,
             "assistant_response_local",
-            "timeline_live_transcript_sse_visible",
+            "timeline_transcript_preview_sse_visible",
         )
         first_live_sse_from_local_latency = self.event_delta_any_order_ms(
             case_id,
             session_id,
             "assistant_response_local",
-            "timeline_live_transcript_sse_first_visible",
+            "timeline_transcript_preview_sse_first_visible",
         )
         browser_live_first_latency = self.event_delta_ms(
             case_id,
             session_id,
             "prompt_sent_started",
-            "browser_live_transcript_first_painted",
+            "browser_transcript_preview_first_painted",
         )
         browser_live_full_latency = self.event_delta_ms(
             case_id,
             session_id,
             "prompt_sent_started",
-            "browser_live_transcript_nonce_painted",
+            "browser_transcript_preview_nonce_painted",
         )
         browser_live_first_from_local_latency = self.event_delta_any_order_ms(
             case_id,
             session_id,
             "assistant_response_local",
-            "browser_live_transcript_first_painted",
+            "browser_transcript_preview_first_painted",
         )
         browser_live_full_from_local_latency = self.event_delta_any_order_ms(
             case_id,
             session_id,
             "assistant_response_local",
-            "browser_live_transcript_nonce_painted",
+            "browser_transcript_preview_nonce_painted",
         )
         browser_first_after_sse_latency = self.event_delta_any_order_ms(
             case_id,
             session_id,
-            "timeline_live_transcript_sse_first_visible",
-            "browser_live_transcript_first_painted",
+            "timeline_transcript_preview_sse_first_visible",
+            "browser_transcript_preview_first_painted",
         )
         browser_full_after_sse_latency = self.event_delta_any_order_ms(
             case_id,
             session_id,
-            "timeline_live_transcript_sse_visible",
-            "browser_live_transcript_nonce_painted",
+            "timeline_transcript_preview_sse_visible",
+            "browser_transcript_preview_nonce_painted",
         )
         warm_ready_to_prompt_latency = self.event_delta_ms(
             case_id,
@@ -2755,8 +2752,8 @@ def bridge_live_details(
 
     assembled = ""
     for _id, event, payload in sorted(live_events, key=lambda item: item[0]):
-        fragment = str(payload.get("live_text") or payload.get("delta") or "")
-        if payload.get("live_text"):
+        fragment = str(payload.get("preview_text") or payload.get("delta") or "")
+        if payload.get("preview_text"):
             assembled = fragment
         else:
             assembled += fragment
@@ -2906,7 +2903,6 @@ def compact_timeline(data: dict[str, Any]) -> dict[str, Any]:
                 "timeline_card",
                 "capabilities",
                 "transcript_preview",
-                "live_transcript",
             ]
         },
         "matches": [
@@ -2919,7 +2915,6 @@ def compact_timeline(data: dict[str, Any]) -> dict[str, Any]:
                     "timeline_card": (card.get("head") or {}).get("timeline_card"),
                     "runtime_display": (card.get("head") or {}).get("runtime_display"),
                     "transcript_preview": (card.get("head") or {}).get("transcript_preview"),
-                    "live_transcript": (card.get("head") or {}).get("live_transcript"),
                 },
             }
             for card in matches[:3]
@@ -2931,21 +2926,19 @@ def timeline_has_card(data: dict[str, Any]) -> bool:
     return data.get("detail_status") == 200 and bool(data.get("matches"))
 
 
-def timeline_live_transcript_contains(data: dict[str, Any], nonce: str) -> bool:
-    for live in timeline_live_transcripts(data):
-        text = str(live.get("text") or live.get("preview") or "")
+def timeline_transcript_preview_contains(data: dict[str, Any], nonce: str) -> bool:
+    for preview in timeline_transcript_previews(data):
+        text = str(preview.get("text") or preview.get("preview") or "")
         if nonce in text:
             return True
     return False
 
 
-def timeline_live_transcripts(data: dict[str, Any]) -> list[dict[str, Any]]:
+def timeline_transcript_previews(data: dict[str, Any]) -> list[dict[str, Any]]:
     transcripts: list[dict[str, Any]] = []
     detail = data.get("detail")
     if isinstance(detail, dict) and isinstance(detail.get("transcript_preview"), dict):
         transcripts.append(detail["transcript_preview"])
-    if isinstance(detail, dict) and isinstance(detail.get("live_transcript"), dict):
-        transcripts.append(detail["live_transcript"])
     for card in data.get("matches") or []:
         if not isinstance(card, dict):
             continue
@@ -2953,8 +2946,6 @@ def timeline_live_transcripts(data: dict[str, Any]) -> list[dict[str, Any]]:
             value = card.get(key)
             if isinstance(value, dict) and isinstance(value.get("transcript_preview"), dict):
                 transcripts.append(value["transcript_preview"])
-            if isinstance(value, dict) and isinstance(value.get("live_transcript"), dict):
-                transcripts.append(value["live_transcript"])
     return transcripts
 
 

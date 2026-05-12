@@ -32,7 +32,6 @@ from zerg.services.session_capabilities import project_current_session_capabilit
 from zerg.services.session_capabilities import project_current_session_capabilities_from_facts
 from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_runner_state import managed_runner_host_state
-from zerg.services.session_runtime import SessionLiveTranscriptOverlay
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_runtime import should_include_runtime_view
 from zerg.services.session_runtime_display import build_session_runtime_display
@@ -45,8 +44,8 @@ from zerg.utils.time import normalize_utc
 
 logger = logging.getLogger(__name__)
 
-LIVE_TRANSCRIPT_PARTIAL_FRESHNESS = timedelta(minutes=2)
-LIVE_TRANSCRIPT_COMPLETE_FRESHNESS = timedelta(minutes=10)
+PROVISIONAL_TRANSCRIPT_PARTIAL_FRESHNESS = timedelta(minutes=2)
+PROVISIONAL_TRANSCRIPT_COMPLETE_FRESHNESS = timedelta(minutes=10)
 
 # ---------------------------------------------------------------------------
 # Coercion helpers
@@ -134,80 +133,6 @@ def build_session_runtime_display_response(
         lifecycle=display.lifecycle,
         host_state=display.host_state,
         terminal_reason=display.terminal_reason,
-    )
-
-
-def _live_transcript_superseded_by_durable_activity(
-    overlay: SessionLiveTranscriptOverlay,
-    *,
-    last_activity_at: datetime | None,
-) -> bool:
-    if last_activity_at is None:
-        return False
-    activity_at = normalize_utc(last_activity_at)
-    overlay_at = normalize_utc(overlay.occurred_at) or normalize_utc(overlay.received_at)
-    if activity_at is None or overlay_at is None:
-        return False
-    return activity_at > overlay_at
-
-
-def _live_transcript_overlay_at(overlay: SessionLiveTranscriptOverlay) -> datetime | None:
-    return normalize_utc(overlay.occurred_at) or normalize_utc(overlay.received_at)
-
-
-def _live_transcript_content_cursor(overlay: SessionLiveTranscriptOverlay) -> str:
-    parts = [
-        overlay.source,
-        overlay.session_id or "unknown-session",
-        overlay.thread_id or "unknown-thread",
-        overlay.turn_id or "unknown-turn",
-        str(overlay.seq) if overlay.seq is not None else "unknown-seq",
-    ]
-    return ":".join(parts)
-
-
-def build_live_transcript_response(
-    overlay: SessionLiveTranscriptOverlay | None,
-    *,
-    last_activity_at: datetime | None = None,
-    now: datetime | None = None,
-) -> SessionLiveTranscriptResponse | None:
-    if overlay is None:
-        return None
-    if _live_transcript_superseded_by_durable_activity(
-        overlay,
-        last_activity_at=last_activity_at,
-    ):
-        return None
-    now_utc = normalize_utc(now) or datetime.now(timezone.utc)
-    overlay_at = _live_transcript_overlay_at(overlay)
-    last_durable_at = normalize_utc(last_activity_at)
-    max_age = LIVE_TRANSCRIPT_COMPLETE_FRESHNESS if overlay.is_complete else LIVE_TRANSCRIPT_PARTIAL_FRESHNESS
-    is_stale = False
-    stale_reason = None
-    if overlay_at is None:
-        is_stale = True
-        stale_reason = "missing_overlay_timestamp"
-    elif now_utc - overlay_at > max_age:
-        is_stale = True
-        stale_reason = "freshness_window_expired"
-    return SessionLiveTranscriptResponse(
-        text=overlay.text,
-        source=overlay.source,
-        received_at=overlay.received_at,
-        occurred_at=overlay.occurred_at,
-        thread_id=overlay.thread_id,
-        turn_id=overlay.turn_id,
-        seq=overlay.seq,
-        method=overlay.method,
-        is_complete=overlay.is_complete,
-        content_cursor=_live_transcript_content_cursor(overlay),
-        overlay_at=overlay_at,
-        last_durable_at=last_durable_at,
-        freshness="stale" if is_stale else "current",
-        is_provisional=not overlay.is_complete,
-        is_stale=is_stale,
-        stale_reason=stale_reason,
     )
 
 
@@ -469,31 +394,6 @@ class SessionRuntimeDisplayResponse(BaseModel):
     )
 
 
-class SessionLiveTranscriptResponse(UTCBaseModel):
-    text: str = Field(..., description="Latest live transcript text snapshot from a managed provider bridge")
-    source: str = Field(..., description="Runtime source for the live transcript overlay")
-    received_at: datetime = Field(..., description="When the Runtime Host received this live text snapshot")
-    occurred_at: Optional[datetime] = Field(None, description="When the bridge observed this live text snapshot")
-    thread_id: Optional[str] = Field(None, description="Provider thread id for the live text snapshot")
-    turn_id: Optional[str] = Field(None, description="Provider turn id for the live text snapshot")
-    seq: Optional[int] = Field(None, description="Monotonic sequence within the provider turn")
-    method: Optional[str] = Field(None, description="Provider notification method that produced the snapshot")
-    is_complete: bool = Field(False, description="True when this snapshot is the final live text for the turn")
-    content_cursor: str = Field(..., description="Session-scoped overlay cursor for card freshness/debugging")
-    overlay_at: Optional[datetime] = Field(None, description="Timestamp used to compare the overlay against durable transcript activity")
-    last_durable_at: Optional[datetime] = Field(None, description="Durable transcript activity timestamp used for freshness comparison")
-    freshness: Literal["current", "stale"] = Field(
-        ...,
-        description="Server-owned card preview freshness. Superseded overlays are omitted instead of returned.",
-    )
-    is_provisional: bool = Field(..., description="True when the bridge snapshot is an incomplete in-flight turn")
-    is_stale: bool = Field(..., description="True when clients must not render this overlay as live/current output")
-    stale_reason: Optional[Literal["freshness_window_expired", "missing_overlay_timestamp"]] = Field(
-        None,
-        description="Why is_stale is true, when known",
-    )
-
-
 class SessionTranscriptPreviewResponse(UTCBaseModel):
     event_id: int = Field(..., description="AgentEvent id for this preview row")
     text: str = Field(..., description="Transcript preview text from the event ledger")
@@ -639,13 +539,6 @@ class SessionResponse(UTCBaseModel):
     capabilities: SessionCapabilitiesResponse = Field(..., description="Canonical session capability flags")
     runtime_display: Optional[SessionRuntimeDisplayResponse] = Field(None, description="Server-derived display state for clients")
     runtime_facts: Optional[SessionLivenessFactsResponse] = Field(None, description="Observed liveness facts with timestamps and sources")
-    live_transcript: Optional[SessionLiveTranscriptResponse] = Field(
-        None,
-        description=(
-            "Low-latency managed bridge transcript overlay. Populated only for "
-            "timeline-card projections; durable events remain canonical."
-        ),
-    )
     transcript_preview: Optional[SessionTranscriptPreviewResponse] = Field(
         None,
         description="Latest renderable transcript preview sourced from the event ledger.",
@@ -775,13 +668,6 @@ class ActiveSessionResponse(UTCBaseModel):
     capabilities: SessionCapabilitiesResponse = Field(..., description="Canonical session capability flags")
     runtime_display: Optional[SessionRuntimeDisplayResponse] = Field(None, description="Server-derived display state for clients")
     runtime_facts: Optional[SessionLivenessFactsResponse] = Field(None, description="Observed liveness facts with timestamps and sources")
-    live_transcript: Optional[SessionLiveTranscriptResponse] = Field(
-        None,
-        description=(
-            "Low-latency managed bridge transcript overlay. Populated only for "
-            "timeline-card projections; durable events remain canonical."
-        ),
-    )
     loop_mode: SessionLoopMode = Field(SessionLoopMode.ASSIST, description="Session loop mode: assist|autopilot")
 
 
@@ -1135,9 +1021,7 @@ def build_session_response(
     match_role: str | None = None,
     match_score: float | None = None,
     binding_overlay=None,
-    live_transcript_overlay: SessionLiveTranscriptOverlay | None = None,
     transcript_preview: TranscriptPreview | None = None,
-    include_live_transcript: bool = False,
 ) -> SessionResponse:
     cache = thread_cache if thread_cache is not None else {}
     thread_head_session_id, thread_continuation_count = get_thread_meta(store, session, cache)
@@ -1233,14 +1117,6 @@ def build_session_response(
         ),
         runtime_display=runtime_display,
         runtime_facts=runtime_facts,
-        live_transcript=(
-            build_live_transcript_response(
-                live_transcript_overlay,
-                last_activity_at=last_activity_at,
-            )
-            if include_live_transcript
-            else None
-        ),
         transcript_preview=build_session_transcript_preview_response(
             transcript_preview,
             last_activity_at=last_activity_at,
@@ -1265,9 +1141,9 @@ def build_session_transcript_preview_response(
     preview_at = normalize_utc(preview.timestamp)
     now_utc = normalize_utc(now) or datetime.now(timezone.utc)
     if preview.provisional_complete:
-        max_age = LIVE_TRANSCRIPT_COMPLETE_FRESHNESS
+        max_age = PROVISIONAL_TRANSCRIPT_COMPLETE_FRESHNESS
     else:
-        max_age = LIVE_TRANSCRIPT_PARTIAL_FRESHNESS
+        max_age = PROVISIONAL_TRANSCRIPT_PARTIAL_FRESHNESS
     durable_activity_at = normalize_utc(last_activity_at)
     is_stale = False
     stale_reason = None
@@ -1304,7 +1180,6 @@ def build_active_session_response(
     attention: str,
     now: datetime,
     binding_overlay=None,
-    live_transcript_overlay: SessionLiveTranscriptOverlay | None = None,
 ) -> ActiveSessionResponse:
     capability_flags = build_session_capabilities(session)
     _started = (
@@ -1379,10 +1254,6 @@ def build_active_session_response(
         ),
         runtime_display=runtime_display,
         runtime_facts=runtime_facts,
-        live_transcript=build_live_transcript_response(
-            live_transcript_overlay,
-            last_activity_at=last_activity_at,
-        ),
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
     )
 

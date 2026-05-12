@@ -25,7 +25,6 @@ async def list_hybrid_sessions(
     *,
     db: Session,
     params: SessionListParams,
-    include_live_transcript: bool = False,
 ) -> SessionListResult:
     if params.offset > 0:
         raise SessionListingError(
@@ -101,7 +100,6 @@ async def list_hybrid_sessions(
         match_map=match_map,
         semantic_snippet_map=semantic_snippet_map,
         sem_score_map=sem_score_map,
-        include_live_transcript=include_live_transcript,
     )
 
     response = SessionsListResponse(

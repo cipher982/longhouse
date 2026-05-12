@@ -11,7 +11,7 @@ from fastapi import status
 from sqlalchemy.orm import Session
 
 from zerg.services.agents_store import AgentsStore
-from zerg.services.session_runtime import load_live_transcript_overlay_map
+from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.session_views import SessionProjectionItemResponse
@@ -77,7 +77,7 @@ def build_session_workspace(
     now = datetime.now(timezone.utc)
     with timing.span("load_runtime"):
         runtime_state_map = load_runtime_state_map(db, [item.id for item in thread_sessions])
-        live_transcript_map = load_live_transcript_overlay_map(db, [item.id for item in thread_sessions])
+        transcript_preview_map = load_active_provisional_preview_map(db, [item.id for item in thread_sessions])
         binding_overlay_map = load_binding_overlay(db, [item.id for item in thread_sessions], now=now)
     with timing.span("build_thread_responses"):
         thread_response_map = {
@@ -94,7 +94,7 @@ def build_session_workspace(
                 ),
                 first_user_message=first_user_map.get(item.id),
                 binding_overlay=binding_overlay_map.get(item.id),
-                live_transcript_overlay=live_transcript_map.get(str(item.id)),
+                transcript_preview=transcript_preview_map.get(str(item.id)),
             )
             for item in thread_sessions
         }
@@ -114,7 +114,7 @@ def build_session_workspace(
             ),
             first_user_message=first_user_map.get(session.id),
             binding_overlay=binding_overlay_map.get(session.id),
-            live_transcript_overlay=live_transcript_map.get(str(session.id)),
+            transcript_preview=transcript_preview_map.get(str(session.id)),
         )
 
     active_context_boundary_cache: dict[UUID, int | None] = {}

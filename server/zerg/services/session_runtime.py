@@ -17,7 +17,6 @@ from uuid import UUID
 
 from pydantic import BaseModel
 from pydantic import Field
-from sqlalchemy import func
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
@@ -32,7 +31,7 @@ from zerg.session_execution_home import SessionExecutionHome
 from zerg.utils.time import normalize_utc
 
 RuntimeEventKind = Literal["phase_signal", "progress_signal", "terminal_signal", "binding_signal"]
-RuntimeEventApplyOutcome = Literal["applied", "ignored", "protected_session_ended", "stored_overlay"]
+RuntimeEventApplyOutcome = Literal["applied", "ignored", "protected_session_ended", "stored_provisional_transcript"]
 
 PHASE_FRESHNESS = {
     "thinking": timedelta(seconds=90),
@@ -172,20 +171,6 @@ class SessionRuntimeView:
     confidence: str | None
     timeline_anchor_at: datetime
     freshness_expires_at: datetime | None = None
-
-
-@dataclass(frozen=True)
-class SessionLiveTranscriptOverlay:
-    session_id: str | None
-    text: str
-    source: str
-    received_at: datetime
-    occurred_at: datetime | None
-    thread_id: str | None
-    turn_id: str | None
-    seq: int | None
-    method: str | None
-    is_complete: bool
 
 
 def _confidence_for_state(state: SessionRuntimeState, *, now: datetime) -> str:
@@ -467,63 +452,7 @@ def load_runtime_state_map(db: Session, session_ids: list[UUID]) -> dict[str, Se
     return state_by_session
 
 
-def load_live_transcript_overlay_map(
-    db: Session,
-    session_ids: list[UUID],
-) -> dict[str, SessionLiveTranscriptOverlay]:
-    """Latest managed Codex live-text snapshot per session.
-
-    This is an additive live overlay. File-backed transcript ingest remains the
-    durable canonical history and reconciliation path.
-    """
-    if not session_ids:
-        return {}
-
-    latest = (
-        db.query(
-            SessionRuntimeEvent.session_id.label("session_id"),
-            func.max(SessionRuntimeEvent.id).label("max_id"),
-        )
-        .filter(SessionRuntimeEvent.session_id.in_(session_ids))
-        .filter(SessionRuntimeEvent.source == "codex_bridge_live")
-        .filter(SessionRuntimeEvent.kind == "progress_signal")
-        .group_by(SessionRuntimeEvent.session_id)
-        .subquery()
-    )
-    rows = db.query(SessionRuntimeEvent).join(latest, SessionRuntimeEvent.id == latest.c.max_id).all()
-
-    overlays: dict[str, SessionLiveTranscriptOverlay] = {}
-    for row in rows:
-        if row.session_id is None:
-            continue
-        try:
-            payload = json.loads(row.payload_json or "{}")
-        except Exception:
-            continue
-        if not isinstance(payload, dict):
-            continue
-        if payload.get("progress_kind") != "bridge_live_transcript_delta":
-            continue
-        text = str(payload.get("live_text") or "").strip()
-        if not text:
-            continue
-        seq = payload.get("seq")
-        overlays[str(row.session_id)] = SessionLiveTranscriptOverlay(
-            session_id=str(row.session_id),
-            text=text,
-            source=row.source,
-            received_at=normalize_utc(row.received_at) or row.received_at,
-            occurred_at=normalize_utc(row.occurred_at),
-            thread_id=str(payload.get("thread_id") or "").strip() or None,
-            turn_id=str(payload.get("turn_id") or "").strip() or None,
-            seq=seq if isinstance(seq, int) and not isinstance(seq, bool) else None,
-            method=str(payload.get("method") or "").strip() or None,
-            is_complete=bool(payload.get("turn_completed")),
-        )
-    return overlays
-
-
-def _is_live_transcript_overlay_event(event: RuntimeEventIngest) -> bool:
+def _is_bridge_transcript_event(event: RuntimeEventIngest) -> bool:
     payload = event.payload or {}
     return (
         (event.provider or "").strip().lower() == "codex"
@@ -658,11 +587,11 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
             continue
 
         accepted += 1
-        if _is_live_transcript_overlay_event(event):
-            from zerg.services.provisional_events import materialize_live_transcript_event
+        if _is_bridge_transcript_event(event):
+            from zerg.services.provisional_events import materialize_bridge_transcript_event
 
             if event.session_id is not None:
-                materialize_live_transcript_event(
+                materialize_bridge_transcript_event(
                     db,
                     session_id=event.session_id,
                     provider=event.provider,
@@ -671,7 +600,7 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
                     received_at=received_at,
                     payload=event.payload or {},
                 )
-            outcome = "stored_overlay"
+            outcome = "stored_provisional_transcript"
             _record_managed_codex_runtime_event(event, outcome)
             if event.runtime_key not in updated_runtime_keys:
                 updated_runtime_keys.append(event.runtime_key)

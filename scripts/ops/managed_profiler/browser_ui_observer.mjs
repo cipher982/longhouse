@@ -14,9 +14,9 @@ const started = performance.now();
 const onceKinds = new Set([
   "ui_loaded",
   "card_painted",
-  "live_first_painted",
-  "live_word_painted",
-  "live_nonce_painted",
+  "preview_first_painted",
+  "preview_word_painted",
+  "preview_nonce_painted",
   "close_painted",
 ]);
 const emitted = new Set();
@@ -69,7 +69,7 @@ async function waitForCard(kind, timeoutMs) {
           return false;
         }
 
-        const live = card.querySelector('[data-testid="session-card-live-transcript"]');
+        const preview = card.querySelector('[data-testid="session-card-transcript-preview"]');
         const closed = card.querySelector('[data-testid="session-card-closed-state"]');
         const runtime = card.querySelector('[data-testid="session-card-runtime"]');
         const snapshot = {
@@ -81,7 +81,7 @@ async function waitForCard(kind, timeoutMs) {
           control_path: card.getAttribute("data-control-path"),
           page_observed_at_wall: new Date().toISOString(),
           page_performance_now_ms: performance.now(),
-          live_text: live?.textContent?.trim() ?? "",
+          preview_text: preview?.textContent?.trim() ?? "",
           closed_text: closed?.textContent?.trim() ?? "",
           runtime_text: runtime?.textContent?.trim() ?? "",
         };
@@ -89,13 +89,13 @@ async function waitForCard(kind, timeoutMs) {
         if (targetKind === "card_painted") {
           return snapshot;
         }
-        if (targetKind === "live_first_painted" && snapshot.live_text) {
+        if (targetKind === "preview_first_painted" && snapshot.preview_text) {
           return snapshot;
         }
-        if (targetKind === "live_word_painted" && /\b\S+\b/.test(snapshot.live_text)) {
+        if (targetKind === "preview_word_painted" && /\b\S+\b/.test(snapshot.preview_text)) {
           return snapshot;
         }
-        if (targetKind === "live_nonce_painted" && snapshot.live_text.includes(targetNonce)) {
+        if (targetKind === "preview_nonce_painted" && snapshot.preview_text.includes(targetNonce)) {
           return snapshot;
         }
         if (
@@ -160,9 +160,9 @@ try {
   emit("ui_loaded", { url: page.url() });
 
   void waitForCard("card_painted", 30000);
-  void waitForCard("live_first_painted", 95000);
-  void waitForCard("live_word_painted", 95000);
-  void waitForCard("live_nonce_painted", 95000);
+  void waitForCard("preview_first_painted", 95000);
+  void waitForCard("preview_word_painted", 95000);
+  void waitForCard("preview_nonce_painted", 95000);
   await waitForCard("close_painted", 420000);
 } catch (error) {
   emit("error", { error: String(error).slice(0, 1000) });

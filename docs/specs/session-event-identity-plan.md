@@ -59,7 +59,7 @@ Longhouse currently has three relevant mechanisms:
 
 ## Goals
 
-1. Make live transcript overlays explicit as provisional timeline-card preview.
+1. Make provisional transcript previews explicit as provisional timeline-card preview.
 2. Prove that file-derived live and archive ingest share event identity.
 3. Measure divergence between bridge overlay, live file ingest, and full archive
    ingest before removing or merging any pipeline pieces.
@@ -111,8 +111,8 @@ Longhouse currently has three relevant mechanisms:
 
 ### Operational Safety
 
-- Existing hosted and iOS clients tolerate the transition through additive fields
-  or one release of deprecation.
+- This branch removes the older runtime-overlay transcript projection outright;
+  pre-launch clients should consume the event-ledger preview contract.
 - No launch-critical behavior depends on a browser-only contract.
 - Shipping preserves the live-lane latency budget and archive correctness.
 
@@ -123,8 +123,9 @@ Longhouse currently has three relevant mechanisms:
 - Document this plan.
 - Add focused tests proving file-derived identity convergence and source-line
   backfill after EventOnly-style ingest.
-- Keep live transcript overlays provisional in naming and API descriptions.
-- Stop expanding `live_transcript` into additional generic surfaces.
+- Keep bridge transcript observations provisional in naming and API descriptions.
+- Route preview text through the event-ledger-backed `transcript_preview`
+  contract only.
 
 ### Phase 2: Measure Divergence
 

@@ -17,6 +17,7 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentsBase
+from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionRuntimeEvent
 from zerg.models.agents import SessionRuntimeState
@@ -32,7 +33,6 @@ from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import build_runtime_view
 from zerg.services.session_runtime import current_presence_state_for_session
 from zerg.services.session_runtime import ingest_runtime_events
-from zerg.services.session_runtime import load_live_transcript_overlay_map
 from zerg.services.session_runtime import managed_codex_liveness_invariant_counts
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
@@ -280,8 +280,8 @@ def test_runtime_reducer_preserves_terminal_disconnected_reason(tmp_path):
     engine.dispose()
 
 
-def test_live_transcript_overlay_uses_latest_snapshot_and_dedupes(tmp_path):
-    engine, SessionLocal = _make_db(tmp_path, "live_transcript_overlay.db")
+def test_bridge_transcript_event_materializes_latest_provisional_event(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "bridge_transcript_preview.db")
     now = datetime.now(timezone.utc)
 
     with SessionLocal() as db:
@@ -352,20 +352,20 @@ def test_live_transcript_overlay_uses_latest_snapshot_and_dedupes(tmp_path):
             ],
         )
 
-        overlay = load_live_transcript_overlay_map(db, [session.id])[str(session.id)]
+        event = db.query(AgentEvent).filter(AgentEvent.session_id == session.id).one()
         state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).first()
 
     assert result.accepted == 2
     assert result.duplicates == 1
     assert result.updated_runtime_keys == [runtime_key]
     assert state is None
-    assert overlay.text == "hello"
-    assert overlay.source == "codex_bridge_live"
-    assert overlay.thread_id == "thread-1"
-    assert overlay.turn_id == "turn-1"
-    assert overlay.seq == 2
-    assert overlay.method == "item/agentMessage/delta"
-    assert overlay.is_complete is True
+    assert event.content_text == "hello"
+    assert event.event_origin == "live_provisional"
+    assert event.provisional_state == "active"
+    assert event.provisional_key == f"codex_bridge_live:{session.id}:thread-1:turn-1"
+    assert event.provisional_cursor == f"codex_bridge_live:{session.id}:thread-1:turn-1:2"
+    assert event.provisional_seq == 2
+    assert event.provisional_complete == 1
     engine.dispose()
 
 

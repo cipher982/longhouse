@@ -105,7 +105,6 @@ async def list_timeline_sessions_for_browser(
                     db=db,
                     auth=None,
                     params=params.to_agent_params(),
-                    include_live_transcript=False,
                 )
         except SessionListingError:
             raise
@@ -160,7 +159,6 @@ def build_timeline_cards_from_thread_rows(
     response_map = build_session_response_map(
         db=db,
         session_ids=representative_ids,
-        include_live_transcript=False,
     )
     representative_rows = []
     for thread_id, session_id, thread_anchor in thread_rows:
@@ -178,7 +176,6 @@ def build_timeline_cards_from_thread_rows(
         build_session_response_map(
             db=db,
             session_ids=supplemental_ids,
-            include_live_transcript=False,
         )
     )
 

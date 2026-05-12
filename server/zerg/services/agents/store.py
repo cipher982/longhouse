@@ -1442,7 +1442,7 @@ class AgentsStore:
         _INGEST_CHUNK = 200
         _FTS_TRIGGER_DISABLE_THRESHOLD = 100
         # Disabling triggers only pays off for genuinely large batches.
-        # Small live transcript appends should keep trigger maintenance inline.
+        # Small transcript appends should keep trigger maintenance inline.
         fts_triggers_dropped = len(data.events) >= _FTS_TRIGGER_DISABLE_THRESHOLD and self._disable_fts_triggers()
         _since_commit = 0
         inserted_event_ids: list[int] = []
