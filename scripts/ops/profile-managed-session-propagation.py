@@ -73,11 +73,12 @@ BATCH_VERDICT_SEVERITY = {
     "fail": 5,
     "error": 5,
 }
-BATCH_REQUIRED_NONPASS_VERDICTS = frozenset(
+BATCH_REQUIRED_FAIL_VERDICTS = frozenset(
     verdict
     for verdict, severity in BATCH_VERDICT_SEVERITY.items()
-    if verdict != "pass" and severity >= 1
+    if verdict not in {"pass", "contaminated"} and severity >= 1
 )
+BATCH_REQUIRED_INFRA_VERDICTS = frozenset({"contaminated"})
 CODEX_TUI_PRECONDITION_PATTERNS = (
     (
         re.compile(
@@ -3478,13 +3479,18 @@ def summarize_batch_verdicts(child_runs: list[dict[str, Any]]) -> dict[str, Any]
 
 
 def batch_exit_code(*, child_runs: list[dict[str, Any]], sla_status: str | None) -> int:
-    if any(run.get("exit_code") for run in child_runs):
+    if any(run.get("exit_code") == 1 for run in child_runs):
         return 1
+    saw_infra = any(run.get("exit_code") == 2 for run in child_runs)
     if sla_status == "required":
         for run in child_runs:
             verdict = run.get("verdict") or "error"
-            if verdict in BATCH_REQUIRED_NONPASS_VERDICTS:
+            if verdict in BATCH_REQUIRED_FAIL_VERDICTS:
                 return 1
+            if verdict in BATCH_REQUIRED_INFRA_VERDICTS:
+                saw_infra = True
+    if saw_infra:
+        return 2
     return 0
 
 
@@ -3492,10 +3498,15 @@ def single_exit_code(*, errors: list[str], metrics: list[dict[str, Any]], sla_st
     if errors:
         return 1
     if sla_status == "required":
+        saw_infra = False
         for case in metrics:
             verdict = case.get("verdict") or "error"
-            if verdict in BATCH_REQUIRED_NONPASS_VERDICTS:
+            if verdict in BATCH_REQUIRED_FAIL_VERDICTS:
                 return 1
+            if verdict in BATCH_REQUIRED_INFRA_VERDICTS:
+                saw_infra = True
+        if saw_infra:
+            return 2
     return 0
 
 
