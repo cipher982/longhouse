@@ -4,12 +4,18 @@ import asyncio
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from types import SimpleNamespace
 
+from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 
+from zerg.database import get_db
 from zerg.database import initialize_database
 from zerg.database import make_engine
+from zerg.dependencies.agents_auth import require_single_tenant
+from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.main import api_app
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import AgentsBase
@@ -42,6 +48,20 @@ def _make_initialized_sessionmaker(tmp_path, name: str):
     engine = make_engine(f"sqlite:///{tmp_path / name}")
     initialize_database(engine)
     return sessionmaker(bind=engine)
+
+
+def _api_client(SessionLocal) -> TestClient:
+    def override_get_db():
+        with SessionLocal() as db:
+            yield db
+
+    def override_verify_agents_token():
+        return SimpleNamespace(device_id="observation-rebuild-test", id="token-1", owner_id=1)
+
+    api_app.dependency_overrides[get_db] = override_get_db
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+    api_app.dependency_overrides[require_single_tenant] = lambda: None
+    return TestClient(api_app)
 
 
 def _seed_managed_codex_session(db, *, started_at: datetime) -> AgentSession:
@@ -271,6 +291,61 @@ def _product_surface_snapshot(db, session_id) -> dict:
     }
 
 
+def _api_surface_snapshot(client: TestClient, session_id) -> dict:
+    headers = {"X-Agents-Token": "dev"}
+    list_response = client.get(
+        "/agents/sessions?include_test=true&hide_autonomous=false&project=observation-rebuild&provider=codex&query=durable&limit=10",
+        headers=headers,
+    )
+    detail_response = client.get(f"/agents/sessions/{session_id}", headers=headers)
+    events_response = client.get(f"/agents/sessions/{session_id}/events?limit=20", headers=headers)
+    export_response = client.get(f"/agents/sessions/{session_id}/export", headers=headers)
+
+    assert list_response.status_code == 200, list_response.text
+    assert detail_response.status_code == 200, detail_response.text
+    assert events_response.status_code == 200, events_response.text
+    assert export_response.status_code == 200, export_response.text
+
+    list_payload = list_response.json()
+    session_row = next(row for row in list_payload["sessions"] if row["id"] == str(session_id))
+    detail_payload = detail_response.json()
+    events_payload = events_response.json()
+    return {
+        "list_total": list_payload["total"],
+        "list_session": {
+            "id": session_row["id"],
+            "project": session_row["project"],
+            "provider": session_row["provider"],
+            "transcript_preview": session_row.get("transcript_preview"),
+            "display_phase": session_row.get("display_phase"),
+            "status": session_row.get("status"),
+            "runtime_phase": session_row.get("runtime_phase"),
+        },
+        "detail": {
+            "id": detail_payload["id"],
+            "project": detail_payload["project"],
+            "provider": detail_payload["provider"],
+            "transcript_preview": detail_payload.get("transcript_preview"),
+            "display_phase": detail_payload.get("display_phase"),
+            "status": detail_payload.get("status"),
+            "runtime_phase": detail_payload.get("runtime_phase"),
+        },
+        "events": {
+            "total": events_payload["total"],
+            "items": [
+                {
+                    "role": event["role"],
+                    "content_text": event["content_text"],
+                    "event_origin": event.get("event_origin"),
+                    "provisional_state": event.get("provisional_state"),
+                }
+                for event in events_payload["events"]
+            ],
+        },
+        "export_jsonl": export_response.content.decode("utf-8"),
+    }
+
+
 def test_session_observation_rebuild_recovers_transcript_archive_and_runtime(tmp_path):
     SessionLocal = _make_sessionmaker(tmp_path, "observation_rebuild.db")
     now = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)
@@ -400,6 +475,77 @@ def test_session_observation_rebuild_preserves_product_surface_parity(tmp_path):
         }
     ]
     assert before["query_session_ids"] == [str(session.id)]
+    assert before["export_jsonl"] == assistant_line + "\n"
+
+
+def test_session_observation_rebuild_preserves_agent_api_surface_parity(tmp_path):
+    SessionLocal = _make_initialized_sessionmaker(tmp_path, "observation_rebuild_api_surface_parity.db")
+    now = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)
+    source_path = "/tmp/codex-api-rollout.jsonl"
+    assistant_line = (
+        '{"type":"response_item","timestamp":"2026-05-12T12:00:02Z",'
+        '"payload":{"type":"message","role":"assistant",'
+        '"content":[{"type":"output_text","text":"durable API transcript"}]}}'
+    )
+
+    try:
+        with SessionLocal() as db:
+            session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
+            ingest_runtime_events(
+                db,
+                [
+                    _bridge_transcript_event(
+                        session_id=session.id,
+                        occurred_at=now,
+                        live_text="durable API transcript",
+                    )
+                ],
+            )
+            AgentsStore(db).ingest_session(
+                SessionIngest(
+                    id=session.id,
+                    provider="codex",
+                    environment="test",
+                    project="observation-rebuild",
+                    device_id="cinder",
+                    cwd="/tmp/project",
+                    started_at=now - timedelta(minutes=1),
+                    events=[
+                        EventIngest(
+                            role="assistant",
+                            content_text="durable API transcript",
+                            timestamp=now + timedelta(seconds=2),
+                            source_path=source_path,
+                            source_offset=100,
+                            raw_json=assistant_line,
+                        )
+                    ],
+                    source_lines=[SourceLineIngest(source_path=source_path, source_offset=100, raw_json=assistant_line)],
+                )
+            )
+            ingest_runtime_events(db, [_phase_event(session_id=session.id, occurred_at=now + timedelta(seconds=5))])
+            db.commit()
+            session_id = session.id
+
+        client = _api_client(SessionLocal)
+        before = _api_surface_snapshot(client, session_id)
+        with SessionLocal() as db:
+            result = rebuild_session_observation_projections(db, session_id=session_id, runtime_key=f"codex:{session_id}")
+            db.commit()
+        after = _api_surface_snapshot(client, session_id)
+    finally:
+        api_app.dependency_overrides.clear()
+
+    assert result.reducer_errors == ()
+    assert after == before
+    assert before["events"]["items"] == [
+        {
+            "role": "assistant",
+            "content_text": "durable API transcript",
+            "event_origin": "durable",
+            "provisional_state": None,
+        }
+    ]
     assert before["export_jsonl"] == assistant_line + "\n"
 
 
