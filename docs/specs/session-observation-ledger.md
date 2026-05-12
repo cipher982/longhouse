@@ -145,7 +145,13 @@ overlay semantics.
 - Add an idempotent writer service.
 - Record observations for runtime events, bridge transcript deltas, and source
   archive lines.
+- Use observation insertion as the duplicate/acceptance boundary for runtime
+  ingest, while the existing `session_runtime_events` table remains a temporary
+  diagnostic/read-model tee until Phase 3 removes it.
 - Keep current reducers writing existing read models.
+- `provider_event` observations for event-only ingest are not covered in this
+  phase; they are added when durable transcript reduction moves fully behind the
+  observation boundary.
 - Add tests proving one managed Codex bridge delta and one durable archive line
   land in the same observation table and still reconcile in the current read
   model.

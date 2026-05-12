@@ -21,6 +21,7 @@ from zerg.services.agents_store import SourceLineIngest
 from zerg.services.raw_json_compression import decode_raw_json
 from zerg.services.session_observation_reducers import reduce_bridge_transcript_observation
 from zerg.services.session_observation_reducers import reduce_source_line_observation
+from zerg.services.session_observations import record_session_observation
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.session_execution_home import SessionExecutionHome
@@ -87,6 +88,48 @@ def _bridge_transcript_event(
             "turn_completed": turn_completed,
         },
     )
+
+
+def _record_bridge_observation(
+    db,
+    *,
+    session_id,
+    observation_id: str,
+    occurred_at: datetime,
+    seq: int,
+    live_text: str,
+) -> SessionObservation:
+    result = record_session_observation(
+        db,
+        observation_id=observation_id,
+        session_id=session_id,
+        runtime_key=f"codex:{session_id}",
+        provider="codex",
+        device_id="cinder",
+        source_domain="runtime",
+        source="codex_bridge_live",
+        kind="bridge_transcript_delta",
+        source_cursor=f"progress_signal:{observation_id}",
+        observed_at=occurred_at,
+        payload={
+            "kind": "progress_signal",
+            "phase": None,
+            "tool_name": None,
+            "freshness_ms": None,
+            "payload": {
+                "progress_kind": "bridge_live_transcript_delta",
+                "managed_transport": "codex_app_server",
+                "thread_id": "thread-1",
+                "turn_id": "turn-1",
+                "seq": seq,
+                "method": "item/agentMessage/delta",
+                "delta": live_text[-1:],
+                "live_text": live_text,
+            },
+        },
+    )
+    assert result.observation is not None
+    return result.observation
 
 
 def test_live_bridge_snapshots_upsert_one_active_provisional_event(tmp_path):
@@ -162,6 +205,64 @@ def test_bridge_transcript_observation_rebuilds_provisional_event(tmp_path):
     assert rebuilt.content_text == "rebuild me"
     assert rebuilt.provisional_key == f"codex_bridge_live:{session.id}:thread-1:turn-1"
     assert [event.content_text for event in visible] == ["rebuild me"]
+
+
+def test_bridge_transcript_observation_replay_is_idempotent(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "provisional_observation_replay.db")
+    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
+        observation = _record_bridge_observation(
+            db,
+            session_id=session.id,
+            observation_id="runtime:codex_bridge_live:same-observation",
+            occurred_at=now,
+            seq=1,
+            live_text="same replay",
+        )
+
+        reduce_bridge_transcript_observation(db, observation)
+        reduce_bridge_transcript_observation(db, observation)
+        db.commit()
+        rows = db.query(AgentEvent).filter(AgentEvent.session_id == session.id).all()
+
+    assert len(rows) == 1
+    assert rows[0].content_text == "same replay"
+
+
+def test_bridge_transcript_same_seq_collision_is_deterministic(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "provisional_same_seq_collision.db")
+    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+
+    def _run(order: tuple[str, str]) -> str:
+        with SessionLocal() as db:
+            session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
+            observations = {
+                "a": _record_bridge_observation(
+                    db,
+                    session_id=session.id,
+                    observation_id=f"runtime:codex_bridge_live:{session.id}:a",
+                    occurred_at=now,
+                    seq=4,
+                    live_text="alpha same seq",
+                ),
+                "b": _record_bridge_observation(
+                    db,
+                    session_id=session.id,
+                    observation_id=f"runtime:codex_bridge_live:{session.id}:b",
+                    occurred_at=now,
+                    seq=4,
+                    live_text="beta same seq",
+                ),
+            }
+            for key in order:
+                reduce_bridge_transcript_observation(db, observations[key])
+            db.commit()
+            return db.query(AgentEvent).filter(AgentEvent.session_id == session.id).one().content_text
+
+    assert _run(("a", "b")) == "alpha same seq"
+    assert _run(("b", "a")) == "alpha same seq"
 
 
 def test_durable_ingest_reconciles_matching_provisional_event(tmp_path):

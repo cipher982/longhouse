@@ -563,6 +563,12 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
     for event in events:
         payload_json = json.dumps(event.payload or {}, sort_keys=True, separators=(",", ":"))
         received_at = datetime.now(timezone.utc)
+        observation_result = record_runtime_observation(db, event, received_at=received_at)
+        if not observation_result.inserted:
+            duplicates += 1
+            _record_managed_codex_runtime_event(event, "duplicate")
+            continue
+
         insert_stmt = (
             sqlite_insert(SessionRuntimeEvent)
             .values(
@@ -582,17 +588,12 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
             )
             .on_conflict_do_nothing(index_elements=["source", "dedupe_key"])
         )
-        result = db.execute(insert_stmt)
-        if not result.rowcount:
-            duplicates += 1
-            _record_managed_codex_runtime_event(event, "duplicate")
-            continue
+        db.execute(insert_stmt)
 
         accepted += 1
-        observation = record_runtime_observation(db, event, received_at=received_at)
         if _is_bridge_transcript_event(event):
-            if observation is not None:
-                reduce_bridge_transcript_observation(db, observation)
+            if observation_result.observation is not None:
+                reduce_bridge_transcript_observation(db, observation_result.observation)
             outcome = "stored_provisional_transcript"
             _record_managed_codex_runtime_event(event, outcome)
             if event.runtime_key not in updated_runtime_keys:
