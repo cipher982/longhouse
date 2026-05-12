@@ -12,11 +12,6 @@
 !web/
 !web/**
 
-!control-plane/
-control-plane/*
-!control-plane/longhouse_shared/
-!control-plane/longhouse_shared/**
-
 !config/
 config/*
 !config/models.json
@@ -55,6 +50,3 @@ web/node_modules
 web/node_modules/**
 web/dist
 web/dist/**
-
-control-plane/.venv
-control-plane/.venv/**
