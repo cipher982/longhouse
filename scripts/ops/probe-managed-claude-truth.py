@@ -197,6 +197,16 @@ def filter_local_health(local_health: dict[str, Any] | None, session_id: str) ->
             or str(row.get("provider_session_id") or "") == session_id
         )
     ]
+    engine_payload = (local_health.get("engine_status") or {}).get("payload") or {}
+    phase_ledger = [
+        row
+        for row in engine_payload.get("phase_ledger") or []
+        if isinstance(row, dict)
+        and (
+            str(row.get("session_id") or "") == session_id
+            or str(row.get("provider_session_id") or "") == session_id
+        )
+    ]
     return {
         "health_state": local_health.get("health_state"),
         "severity": local_health.get("severity"),
@@ -209,6 +219,7 @@ def filter_local_health(local_health: dict[str, Any] | None, session_id: str) ->
             "path": (local_health.get("engine_status") or {}).get("path"),
         },
         "managed": managed,
+        "phase_ledger": phase_ledger,
     }
 
 
@@ -330,19 +341,28 @@ def summarize_probe(
     hosted: dict[str, Any] | None,
 ) -> dict[str, Any]:
     local_rows = []
+    phase_ledger_rows = []
     if session_id and isinstance(local_health, dict):
         filtered = filter_local_health(local_health, session_id)
         local_rows = (filtered or {}).get("managed") or []
-    runtime_state = hosted.get("runtime_state") if isinstance(hosted, dict) else None
-    session = hosted.get("session") if isinstance(hosted, dict) else None
+        phase_ledger_rows = (filtered or {}).get("phase_ledger") or []
+    hosted_database = hosted.get("database") if isinstance(hosted, dict) else None
+    hosted_source = hosted_database if isinstance(hosted_database, dict) else hosted
+    runtime_state = hosted_source.get("runtime_state") if isinstance(hosted_source, dict) else None
+    session = hosted_source.get("session") if isinstance(hosted_source, dict) else None
     hook_entries = hook_outbox.get("entries") if isinstance(hook_outbox, dict) else []
     latest_hook = hook_entries[0] if hook_entries else {}
     latest_hook_payload = latest_hook.get("payload") if isinstance(latest_hook, dict) else {}
+    latest_phase_ledger = phase_ledger_rows[0] if phase_ledger_rows else {}
     return {
         "session_id": session_id,
         "local_health_has_managed_claude": bool(local_rows),
         "local_health_state": local_rows[0].get("state") if local_rows else None,
         "local_health_phase": local_rows[0].get("raw_phase") if local_rows else None,
+        "local_phase_ledger_entries": len(phase_ledger_rows),
+        "latest_phase_ledger_phase": latest_phase_ledger.get("phase") if isinstance(latest_phase_ledger, dict) else None,
+        "latest_phase_ledger_source": latest_phase_ledger.get("source") if isinstance(latest_phase_ledger, dict) else None,
+        "latest_phase_ledger_observed_at": latest_phase_ledger.get("observed_at") if isinstance(latest_phase_ledger, dict) else None,
         "channel_state_exists": channel_state is not None,
         "channel_ready": bool((channel_state or {}).get("ready")),
         "channel_health_available": channel_health is not None,
@@ -353,8 +373,11 @@ def summarize_probe(
         "latest_hook_mtime": latest_hook.get("mtime") if isinstance(latest_hook, dict) else None,
         "hosted_session_exists": bool(session),
         "hosted_runtime_phase": (runtime_state or {}).get("phase") if isinstance(runtime_state, dict) else None,
+        "hosted_phase_source": (runtime_state or {}).get("phase_source") if isinstance(runtime_state, dict) else None,
         "hosted_terminal_state": (runtime_state or {}).get("terminal_state") if isinstance(runtime_state, dict) else None,
-        "hosted_runtime_source": (runtime_state or {}).get("source") if isinstance(runtime_state, dict) else None,
+        "hosted_terminal_reason": (runtime_state or {}).get("terminal_reason") if isinstance(runtime_state, dict) else None,
+        "hosted_terminal_source": (runtime_state or {}).get("terminal_source") if isinstance(runtime_state, dict) else None,
+        "hosted_runtime_updated_at": (runtime_state or {}).get("updated_at") if isinstance(runtime_state, dict) else None,
     }
 
 
@@ -370,6 +393,10 @@ def write_summary(path: Path, summary: dict[str, Any]) -> None:
         f"- Local managed Claude row: `{summary.get('local_health_has_managed_claude')}`",
         f"- Local state: `{summary.get('local_health_state') or '-'}`",
         f"- Local phase: `{summary.get('local_health_phase') or '-'}`",
+        f"- Local phase ledger entries: `{summary.get('local_phase_ledger_entries')}`",
+        f"- Latest phase ledger phase: `{summary.get('latest_phase_ledger_phase') or '-'}`",
+        f"- Latest phase ledger source: `{summary.get('latest_phase_ledger_source') or '-'}`",
+        f"- Latest phase ledger observed: `{summary.get('latest_phase_ledger_observed_at') or '-'}`",
         f"- Channel state file: `{summary.get('channel_state_exists')}`",
         f"- Channel ready: `{summary.get('channel_ready')}`",
         f"- Channel HTTP health: `{summary.get('channel_health_available')}`",
@@ -380,8 +407,11 @@ def write_summary(path: Path, summary: dict[str, Any]) -> None:
         f"- Latest hook mtime: `{summary.get('latest_hook_mtime') or '-'}`",
         f"- Hosted session exists: `{summary.get('hosted_session_exists')}`",
         f"- Hosted runtime phase: `{summary.get('hosted_runtime_phase') or '-'}`",
+        f"- Hosted phase source: `{summary.get('hosted_phase_source') or '-'}`",
         f"- Hosted terminal state: `{summary.get('hosted_terminal_state') or '-'}`",
-        f"- Hosted runtime source: `{summary.get('hosted_runtime_source') or '-'}`",
+        f"- Hosted terminal reason: `{summary.get('hosted_terminal_reason') or '-'}`",
+        f"- Hosted terminal source: `{summary.get('hosted_terminal_source') or '-'}`",
+        f"- Hosted runtime updated: `{summary.get('hosted_runtime_updated_at') or '-'}`",
     ]
     path.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
