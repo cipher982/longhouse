@@ -26,6 +26,10 @@ class _FakeResponse:
     def json(self) -> dict:
         return self._json_data
 
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
 
 class _FakeClient:
     def __init__(self, *, response: _FakeResponse):
@@ -320,6 +324,37 @@ def test_run_claude_auth_status_uses_bare_claude(monkeypatch):
 
     assert completed.returncode == 0
     assert calls == [["claude", "auth", "status", "--json"]]
+
+
+def test_post_claude_terminal_signal_posts_runtime_event(monkeypatch):
+    fake_client = _FakeClient(response=_FakeResponse(status_code=200, json_data={"accepted": 1}))
+    monkeypatch.setattr(claude_cli.httpx, "Client", lambda timeout: fake_client)
+    monkeypatch.setattr(claude_cli, "get_machine_name_label", lambda: "work-laptop")
+
+    ok = claude_cli._post_claude_terminal_signal(
+        base_url="https://longhouse.test",
+        token="zdt_test_token",
+        session_id="11111111-1111-4111-8111-111111111111",
+        provider_session_id="provider-123",
+        exit_code=0,
+    )
+
+    assert ok is True
+    assert len(fake_client.calls) == 1
+    call = fake_client.calls[0]
+    assert call["url"] == "https://longhouse.test/api/agents/runtime/events/batch"
+    assert call["headers"] == {"X-Agents-Token": "zdt_test_token"}
+    event = call["json"]["events"][0]
+    assert event["runtime_key"] == "claude:provider-123"
+    assert event["session_id"] == "11111111-1111-4111-8111-111111111111"
+    assert event["provider"] == "claude"
+    assert event["device_id"] == "work-laptop"
+    assert event["source"] == "claude_channel_wrapper"
+    assert event["kind"] == "terminal_signal"
+    assert event["payload"]["terminal_state"] == "session_ended"
+    assert event["payload"]["terminal_reason"] == "provider_exit"
+    assert event["payload"]["terminal_source"] == "claude_channel_wrapper"
+    assert event["payload"]["exit_code"] == 0
 
 
 def test_collect_claude_launch_env_filters_empty_values(monkeypatch):
