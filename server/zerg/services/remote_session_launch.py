@@ -250,6 +250,14 @@ async def launch_remote_session(
         session.launch_lease_until = None
         db.commit()
         db.refresh(session)
+        elapsed_ms = int((datetime.now(timezone.utc) - now).total_seconds() * 1000)
+        logger.info(
+            "remote_launch session=%s device=%s provider=%s state=live duration_ms=%s",
+            session_uuid,
+            device_id,
+            provider,
+            elapsed_ms,
+        )
         return RemoteLaunchResult(session_id=session_uuid, launch_state="live")
 
     error = message.get("error") or {}
@@ -262,6 +270,13 @@ async def launch_remote_session(
     session.ended_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(session)
+    logger.warning(
+        "remote_launch session=%s device=%s provider=%s state=launch_failed code=%s",
+        session_uuid,
+        device_id,
+        provider,
+        code,
+    )
     return RemoteLaunchResult(
         session_id=session_uuid,
         launch_state="launch_failed",
