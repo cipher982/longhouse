@@ -1084,6 +1084,7 @@ try:
         if response.status_code != 200:
             emit("error", error=f"status={response.status_code} body={response.text[:500]}")
             raise SystemExit(0)
+        emit("ready")
         deadline = time.monotonic() + 10
         for line in response.iter_lines():
             if time.monotonic() > deadline:
@@ -1129,13 +1130,25 @@ except Exception as exc:
         proc.stdin.close()
 
         saw_closed = False
+        saw_terminal = False
         for line in proc.stdout:
             data = safe_json_loads(line.strip())
             if not isinstance(data, dict):
                 continue
             kind = data.get("kind")
-            if kind == "closed":
+            if kind == "ready":
+                self.observe(
+                    case_id=case_id,
+                    provider="codex",
+                    ownership=ownership,
+                    source="hosted_sse",
+                    event="timeline_close_sse_ready",
+                    session_id=session_id,
+                    payload=data,
+                )
+            elif kind == "closed":
                 saw_closed = True
+                saw_terminal = True
                 self.observe(
                     case_id=case_id,
                     provider="codex",
@@ -1146,7 +1159,8 @@ except Exception as exc:
                     payload=data,
                 )
                 break
-            if kind in {"timeout", "error"}:
+            elif kind in {"timeout", "error"}:
+                saw_terminal = True
                 self.observe(
                     case_id=case_id,
                     provider="codex",
@@ -1165,7 +1179,7 @@ except Exception as exc:
             proc.wait(timeout=2)
 
         stderr = proc.stderr.read().strip()
-        if not saw_closed:
+        if not saw_closed and not saw_terminal:
             self.observe(
                 case_id=case_id,
                 provider="codex",
@@ -1664,6 +1678,21 @@ except Exception as exc:
             case_id=case_id,
             ownership=ownership,
         )
+        close_sse_ready = self.wait_for_observation(
+            case_id,
+            session_id,
+            "timeline_close_sse_ready",
+            timeout=10,
+        )
+        if not close_sse_ready:
+            self.observe(
+                case_id=case_id,
+                provider="codex",
+                ownership=ownership,
+                source="harness",
+                event="timeline_close_sse_precondition_timeout",
+                session_id=session_id,
+            )
         self.observe(
             case_id=case_id,
             provider="codex",
@@ -2186,11 +2215,24 @@ except Exception as exc:
             "shutdown_requested",
             "hosted_runtime_closed",
         )
-        close_sse_latency = self.event_delta_any_order_ms(
-            case_id,
-            session_id,
-            "shutdown_requested",
-            "timeline_close_sse_visible",
+        close_sse_ready_before_shutdown = (
+            self.event_delta_ms(
+                case_id,
+                session_id,
+                "timeline_close_sse_ready",
+                "shutdown_requested",
+            )
+            is not None
+        )
+        close_sse_latency = (
+            self.event_delta_ms(
+                case_id,
+                session_id,
+                "shutdown_requested",
+                "timeline_close_sse_visible",
+            )
+            if close_sse_ready_before_shutdown
+            else None
         )
         close_browser_latency = self.event_delta_any_order_ms(
             case_id,
@@ -2204,11 +2246,15 @@ except Exception as exc:
             "hosted_runtime_closed",
             "browser_close_card_painted",
         )
-        close_browser_after_sse_latency = self.event_delta_any_order_ms(
-            case_id,
-            session_id,
-            "timeline_close_sse_visible",
-            "browser_close_card_painted",
+        close_browser_after_sse_latency = (
+            self.event_delta_any_order_ms(
+                case_id,
+                session_id,
+                "timeline_close_sse_visible",
+                "browser_close_card_painted",
+            )
+            if close_sse_ready_before_shutdown
+            else None
         )
         close_latency = (
             close_browser_latency
