@@ -165,7 +165,7 @@ struct LaunchSessionSheet: View {
         submitting = true
         submitError = nil
         defer { submitting = false }
-        let clientRequestId = "launch-\(selectedDeviceId)-\(Int(Date().timeIntervalSince1970 * 1000))"
+        let clientRequestId = "launch-\(UUID().uuidString)"
         do {
             let response = try await api.launchRemoteSession(
                 deviceId: selectedDeviceId,

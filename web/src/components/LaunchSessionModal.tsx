@@ -91,7 +91,7 @@ export default function LaunchSessionModal({
         provider: PROVIDER,
         cwd: cwd.trim(),
         display_name: displayName.trim() || null,
-        client_request_id: `launch-${deviceId}-${Date.now()}`,
+        client_request_id: `launch-${crypto.randomUUID()}`,
       });
       onLaunched(result.session_id);
     } catch (err) {
