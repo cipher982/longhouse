@@ -20,7 +20,6 @@ from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionObservation
-from zerg.models.agents import SessionRuntimeEvent
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
@@ -28,6 +27,7 @@ from zerg.services.managed_local_control import await_managed_local_hook_phase_u
 from zerg.services.managed_local_control import await_managed_local_turn_events
 from zerg.services.managed_local_control import await_managed_local_turn_terminal
 from zerg.services.managed_local_control import interrupt_managed_local_session
+from zerg.services.managed_local_control import ManagedLocalPhaseUpdate
 from zerg.services.managed_local_control import send_text_to_managed_local_session
 from zerg.services.managed_local_control import validate_managed_local_chat_done_payload
 from zerg.services.session_observations import record_runtime_observation
@@ -583,20 +583,11 @@ def test_send_text_to_managed_local_session_can_require_active_hook_phase_for_co
         assert timeout_secs == 2.5
         assert after_runtime_event_id >= 0
         assert phases == {"thinking", "running"}
-        return SessionRuntimeEvent(
-            id=after_runtime_event_id + 1,
-            runtime_key=f"codex:{session_id}",
-            session_id=session_id,
-            provider="codex",
-            device_id="cinder",
-            source="claude_hook",
-            kind="phase_signal",
+        return ManagedLocalPhaseUpdate(
+            runtime_event_id=after_runtime_event_id + 1,
             phase="thinking",
-            tool_name=None,
+            source="claude_hook",
             occurred_at=datetime.now(timezone.utc),
-            freshness_ms=90_000,
-            dedupe_key=f"hook:{session_id}:thinking",
-            payload_json="{}",
         )
 
     monkeypatch.setattr(
@@ -676,20 +667,11 @@ def test_send_text_to_managed_local_session_verifies_codex_via_hook_activity(mon
         assert timeout_secs == 2.5
         assert after_runtime_event_id >= 0
         assert phases == {"thinking", "running"}
-        return SessionRuntimeEvent(
-            id=after_runtime_event_id + 1,
-            runtime_key=f"codex:{session_id}",
-            session_id=session_id,
-            provider="codex",
-            device_id="cinder",
-            source="claude_hook",
-            kind="phase_signal",
+        return ManagedLocalPhaseUpdate(
+            runtime_event_id=after_runtime_event_id + 1,
             phase="thinking",
-            tool_name=None,
+            source="claude_hook",
             occurred_at=datetime.now(timezone.utc),
-            freshness_ms=90_000,
-            dedupe_key=f"hook:{session_id}:thinking",
-            payload_json="{}",
         )
 
     monkeypatch.setattr(
