@@ -996,7 +996,7 @@
     opacity: 0.9;
   }
 
-  .session-card-live-transcript {
+  .session-card-transcript-preview {
     display: flex;
     flex-direction: column;
     gap: 3px;
@@ -1012,7 +1012,7 @@
       );
   }
 
-  .session-card-live-transcript__label {
+  .session-card-transcript-preview__label {
     font-size: 10px;
     line-height: 1;
     font-weight: var(--font-weight-semibold);
@@ -1021,7 +1021,7 @@
     letter-spacing: 0.04em;
   }
 
-  .session-card-live-transcript__text {
+  .session-card-transcript-preview__text {
     display: -webkit-box;
     -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;

@@ -19,7 +19,7 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.services.agents_store import AgentsStore
 from zerg.services.provisional_events import durable_transcript_event_predicate
-from zerg.services.session_runtime import load_live_transcript_overlay_map
+from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.session_views import RecallMatch
 from zerg.services.session_views import RecallResponse
 from zerg.services.session_views import SemanticSearchResponse
@@ -143,7 +143,7 @@ async def semantic_search_sessions(
 
     matched_sessions = [session for session, _snippet, _score in matched_rows]
     thread_cache = store.batch_thread_meta(matched_sessions)
-    live_transcript_map = load_live_transcript_overlay_map(db, [session.id for session in matched_sessions])
+    transcript_preview_map = load_active_provisional_preview_map(db, [session.id for session in matched_sessions])
     sessions = [
         build_session_response(
             store,
@@ -151,7 +151,7 @@ async def semantic_search_sessions(
             thread_cache=thread_cache,
             match_snippet=snippet,
             match_score=score,
-            live_transcript_overlay=live_transcript_map.get(str(session.id)),
+            transcript_preview=transcript_preview_map.get(str(session.id)),
         )
         for session, snippet, score in matched_rows
     ]

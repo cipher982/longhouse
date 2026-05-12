@@ -1266,7 +1266,7 @@ describe("SessionsPage", () => {
     expect(screen.queryByText("In progress")).not.toBeInTheDocument();
   });
 
-  it("shows live transcript output on open managed session cards", async () => {
+  it("shows transcript preview output on open managed session cards", async () => {
     const receivedAt = new Date(Date.now() - 45_000).toISOString();
     mockUseAgentSessions.mockReturnValue({
       data: {
@@ -1308,15 +1308,15 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
-    const liveTranscript = await screen.findByTestId("session-card-live-transcript");
-    expect(liveTranscript).toHaveTextContent("Live output");
-    expect(liveTranscript).toHaveTextContent(
+    const transcriptPreview = await screen.findByTestId("session-card-transcript-preview");
+    expect(transcriptPreview).toHaveTextContent("Live output");
+    expect(transcriptPreview).toHaveTextContent(
       "The provider already streamed this answer",
     );
     expect(screen.queryByText("Older generated summary.")).not.toBeInTheDocument();
   });
 
-  it("does not let stale partial live transcript output replace card summaries", async () => {
+  it("does not let stale partial transcript preview output replace card summaries", async () => {
     const staleReceivedAt = new Date(Date.now() - 45_000).toISOString();
     mockUseAgentSessions.mockReturnValue({
       data: {
@@ -1348,10 +1348,10 @@ describe("SessionsPage", () => {
     renderSessionsPage();
 
     expect(await screen.findByText("Current durable summary.")).toBeInTheDocument();
-    expect(screen.queryByTestId("session-card-live-transcript")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("session-card-transcript-preview")).not.toBeInTheDocument();
   });
 
-  it("uses server live transcript freshness instead of local age heuristics", async () => {
+  it("uses server transcript preview freshness instead of local age heuristics", async () => {
     const oldButServerCurrent = new Date(Date.now() - 5 * 60_000).toISOString();
     mockUseAgentSessions.mockReturnValue({
       data: {
@@ -1382,9 +1382,9 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
-    const liveTranscript = await screen.findByTestId("session-card-live-transcript");
-    expect(liveTranscript).toHaveTextContent("Latest output");
-    expect(liveTranscript).toHaveTextContent("Server says this complete bridge snapshot");
+    const transcriptPreview = await screen.findByTestId("session-card-transcript-preview");
+    expect(transcriptPreview).toHaveTextContent("Latest output");
+    expect(transcriptPreview).toHaveTextContent("Server says this complete bridge snapshot");
     expect(screen.queryByText("Durable summary should stay behind the current server preview.")).not.toBeInTheDocument();
   });
 

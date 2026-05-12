@@ -4704,8 +4704,6 @@ export interface components {
             runtime_display?: components["schemas"]["SessionRuntimeDisplayResponse"] | null;
             /** @description Observed liveness facts with timestamps and sources */
             runtime_facts?: components["schemas"]["SessionLivenessFactsResponse"] | null;
-            /** @description Low-latency managed bridge transcript overlay. Populated only for timeline-card projections; durable events remain canonical. */
-            live_transcript?: components["schemas"]["SessionLiveTranscriptResponse"] | null;
             /**
              * @description Session loop mode: assist|autopilot
              * @default assist
@@ -7942,92 +7940,6 @@ export interface components {
              */
             released_lock: boolean;
         };
-        /** SessionLiveTranscriptResponse */
-        SessionLiveTranscriptResponse: {
-            /**
-             * Text
-             * @description Latest live transcript text snapshot from a managed provider bridge
-             */
-            text: string;
-            /**
-             * Source
-             * @description Runtime source for the live transcript overlay
-             */
-            source: string;
-            /**
-             * Received At
-             * Format: date-time
-             * @description When the Runtime Host received this live text snapshot
-             */
-            received_at: string;
-            /**
-             * Occurred At
-             * @description When the bridge observed this live text snapshot
-             */
-            occurred_at?: string | null;
-            /**
-             * Thread Id
-             * @description Provider thread id for the live text snapshot
-             */
-            thread_id?: string | null;
-            /**
-             * Turn Id
-             * @description Provider turn id for the live text snapshot
-             */
-            turn_id?: string | null;
-            /**
-             * Seq
-             * @description Monotonic sequence within the provider turn
-             */
-            seq?: number | null;
-            /**
-             * Method
-             * @description Provider notification method that produced the snapshot
-             */
-            method?: string | null;
-            /**
-             * Is Complete
-             * @description True when this snapshot is the final live text for the turn
-             * @default false
-             */
-            is_complete: boolean;
-            /**
-             * Content Cursor
-             * @description Session-scoped overlay cursor for card freshness/debugging
-             */
-            content_cursor: string;
-            /**
-             * Overlay At
-             * @description Timestamp used to compare the overlay against durable transcript activity
-             */
-            overlay_at?: string | null;
-            /**
-             * Last Durable At
-             * @description Durable transcript activity timestamp used for freshness comparison
-             */
-            last_durable_at?: string | null;
-            /**
-             * Freshness
-             * @description Server-owned card preview freshness. Superseded overlays are omitted instead of returned.
-             * @enum {string}
-             */
-            freshness: "current" | "stale";
-            /**
-             * Is Provisional
-             * @description True when the bridge snapshot is an incomplete in-flight turn
-             */
-            is_provisional: boolean;
-            /**
-             * Is Stale
-             * @description True when clients must not render this overlay as live/current output
-             */
-            is_stale: boolean;
-            /**
-             * Stale Reason
-             * @description Why is_stale is true, when known
-             */
-            stale_reason?: ("freshness_window_expired" | "missing_overlay_timestamp") | null;
-        };
         /**
          * SessionLivenessFactsResponse
          * @description Observed facts only.
@@ -8503,8 +8415,6 @@ export interface components {
             runtime_display?: components["schemas"]["SessionRuntimeDisplayResponse"] | null;
             /** @description Observed liveness facts with timestamps and sources */
             runtime_facts?: components["schemas"]["SessionLivenessFactsResponse"] | null;
-            /** @description Low-latency managed bridge transcript overlay. Populated only for timeline-card projections; durable events remain canonical. */
-            live_transcript?: components["schemas"]["SessionLiveTranscriptResponse"] | null;
             /** @description Latest renderable transcript preview sourced from the event ledger. */
             transcript_preview?: components["schemas"]["SessionTranscriptPreviewResponse"] | null;
             /** @description Server-derived timeline-card presentation */

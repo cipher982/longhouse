@@ -70,17 +70,6 @@ type AgentSession = {
   active_tool?: string | null;
   confidence?: string | null;
   runtime_facts?: SessionLivenessFacts | null;
-  live_transcript?: {
-    text: string;
-    source: string;
-    received_at: string | null;
-    occurred_at: string | null;
-    thread_id?: string | null;
-    turn_id?: string | null;
-    seq?: number | null;
-    method?: string | null;
-    is_complete: boolean;
-  } | null;
   transcript_preview?: {
     event_id: number;
     text: string;
@@ -225,7 +214,6 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     active_tool: null,
     confidence: null,
     runtime_facts: null,
-    live_transcript: null,
     transcript_preview: null,
     user_messages: 10,
     assistant_messages: 10,
@@ -307,7 +295,6 @@ export function buildTimelineCardStressFixture(): {
       summary_title: "Secure Hybrid Auth Shipped: Web, iOS, and Deployments",
       summary:
         "Delivered unified hybrid auth architecture with /login route, refactored web components, and integrated iOS updates including post-review fixes.",
-      live_transcript: null,
       transcript_preview: {
         event_id: 1001,
         text:
@@ -638,7 +625,6 @@ export function buildTimelineCardStressFixture(): {
     summary_title: "Current Writable Head",
     summary:
       "This is the newest writable continuation, left here to stress Head and Started badge wrapping with a longer branch name and a reattach capability pill.",
-    live_transcript: null,
     transcript_preview: {
       event_id: 1002,
       text:

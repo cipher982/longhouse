@@ -28,7 +28,7 @@ import {
 // ---------------------------------------------------------------------------
 
 const SESSION_CARD_HOVER_PREFETCH_DELAY_MS = 180;
-const LIVE_TRANSCRIPT_PREVIEW_LIMIT = 180;
+const TRANSCRIPT_PREVIEW_CHAR_LIMIT = 180;
 
 type TimelineStatusLike = {
   label: string;
@@ -86,9 +86,9 @@ function getTranscriptPreviewCard(session: TimelineSessionCard["head"]): Transcr
   }
   const compact = text.replace(/\s+/g, " ");
   const previewText =
-    compact.length <= LIVE_TRANSCRIPT_PREVIEW_LIMIT
+    compact.length <= TRANSCRIPT_PREVIEW_CHAR_LIMIT
       ? compact
-      : `${compact.slice(0, LIVE_TRANSCRIPT_PREVIEW_LIMIT - 1).trimEnd()}...`;
+      : `${compact.slice(0, TRANSCRIPT_PREVIEW_CHAR_LIMIT - 1).trimEnd()}...`;
   return {
     text: previewText,
     fullText: text,
@@ -214,15 +214,15 @@ export function SessionCard({
     (lifecycle != null
       ? lifecycle === "closed"
       : isSessionClosed(session) && !hasCurrentControlledPresence);
-  const showLiveTranscript =
+  const showTranscriptPreview =
     !showKeywordSnippet &&
     !showSemanticSnippet &&
     !isClosedSession &&
     transcriptPreview != null;
   const showSummary =
-    !showLiveTranscript && !showKeywordSnippet && !showSemanticSnippet && !!session.summary;
+    !showTranscriptPreview && !showKeywordSnippet && !showSemanticSnippet && !!session.summary;
   const showGenerating =
-    !showLiveTranscript &&
+    !showTranscriptPreview &&
     !showKeywordSnippet &&
     !showSemanticSnippet &&
     !session.summary &&
@@ -411,16 +411,16 @@ export function SessionCard({
           {showSummary && (
             <div className="session-card-summary">{session.summary}</div>
           )}
-          {showLiveTranscript && (
+          {showTranscriptPreview && (
             <div
-              className="session-card-live-transcript"
-              data-testid="session-card-live-transcript"
+              className="session-card-transcript-preview"
+              data-testid="session-card-transcript-preview"
               title={transcriptPreview?.fullText}
             >
-              <span className="session-card-live-transcript__label">
+              <span className="session-card-transcript-preview__label">
                 {transcriptPreview?.label}
               </span>
-              <span className="session-card-live-transcript__text">
+              <span className="session-card-transcript-preview__text">
                 {transcriptPreview?.text}
               </span>
             </div>

@@ -126,7 +126,7 @@ def _upsert_runtime_state(
     db.commit()
 
 
-def _ingest_live_transcript(
+def _ingest_bridge_transcript(
     db,
     *,
     session_id,
@@ -255,8 +255,8 @@ def test_sessions_list_uses_recent_activity_anchor_for_old_live_session(tmp_path
         assert top["timeline_anchor_at"] >= recent_idle.started_at.isoformat().replace("+00:00", "Z")
 
 
-def test_live_transcript_overlay_is_timeline_card_only(tmp_path):
-    factory = _make_db(tmp_path, "codex_live_transcript_overlay.db")
+def test_bridge_transcript_preview_is_timeline_card_only(tmp_path):
+    factory = _make_db(tmp_path, "codex_bridge_transcript_preview.db")
     now = datetime.now(timezone.utc)
 
     db = factory()
@@ -264,7 +264,7 @@ def test_live_transcript_overlay_is_timeline_card_only(tmp_path):
         session = _seed_session(
             db,
             provider="codex",
-            project="codex-live-overlay",
+            project="codex-bridge-preview",
             started_at=now - timedelta(minutes=10),
             execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
             managed_transport="codex_app_server",
@@ -276,7 +276,7 @@ def test_live_transcript_overlay_is_timeline_card_only(tmp_path):
             updated_at=now - timedelta(seconds=2),
             provider="codex",
         )
-        _ingest_live_transcript(
+        _ingest_bridge_transcript(
             db,
             session_id=session.id,
             occurred_at=now - timedelta(milliseconds=80),
@@ -288,14 +288,13 @@ def test_live_transcript_overlay_is_timeline_card_only(tmp_path):
 
     for client in _client(factory):
         resp = client.get(
-            "/agents/sessions?project=codex-live-overlay&provider=codex&limit=5",
+            "/agents/sessions?project=codex-bridge-preview&provider=codex&limit=5",
             headers={"X-Agents-Token": "dev"},
         )
         assert resp.status_code == 200, resp.text
         session_payload = resp.json()["sessions"][0]
 
     assert session_payload["id"] == str(session.id)
-    assert session_payload["live_transcript"] is None
     assert session_payload["transcript_preview"]["text"] == "hello world"
     assert session_payload["transcript_preview"]["event_origin"] == "live_provisional"
     assert session_payload["transcript_preview"]["is_provisional"] is True
@@ -309,8 +308,6 @@ def test_live_transcript_overlay_is_timeline_card_only(tmp_path):
         )
     finally:
         db.close()
-
-    assert cards[0].head.live_transcript is None
     assert cards[0].head.transcript_preview is not None
     assert cards[0].head.transcript_preview.text == "hello world"
     assert cards[0].head.transcript_preview.content_cursor == f"codex_bridge_live:{session.id}:thread-1:turn-1:4"
@@ -318,8 +315,8 @@ def test_live_transcript_overlay_is_timeline_card_only(tmp_path):
     assert cards[0].head.transcript_preview.is_stale is False
 
 
-def test_timeline_compatibility_cards_include_live_transcript_overlay(tmp_path):
-    factory = _make_db(tmp_path, "codex_live_transcript_timeline_compat.db")
+def test_timeline_compatibility_cards_include_bridge_transcript_preview(tmp_path):
+    factory = _make_db(tmp_path, "codex_bridge_transcript_timeline_compat.db")
     now = datetime.now(timezone.utc)
 
     db = factory()
@@ -332,7 +329,7 @@ def test_timeline_compatibility_cards_include_live_transcript_overlay(tmp_path):
             execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
             managed_transport="codex_app_server",
         )
-        _ingest_live_transcript(
+        _ingest_bridge_transcript(
             db,
             session_id=session.id,
             occurred_at=now - timedelta(milliseconds=50),
@@ -365,14 +362,13 @@ def test_timeline_compatibility_cards_include_live_transcript_overlay(tmp_path):
 
     assert result.compatibility_raw is True
     assert result.response.sessions[0].id == str(session.id)
-    assert result.response.sessions[0].live_transcript is None
     assert result.response.sessions[0].transcript_preview is not None
     assert result.response.sessions[0].transcript_preview.text == "timeline compat"
     assert result.response.sessions[0].transcript_preview.is_stale is False
 
 
-def test_sessions_list_hides_live_transcript_overlay_after_durable_activity_catches_up(tmp_path):
-    factory = _make_db(tmp_path, "codex_live_transcript_superseded.db")
+def test_sessions_list_hides_bridge_transcript_preview_after_durable_activity_catches_up(tmp_path):
+    factory = _make_db(tmp_path, "codex_bridge_transcript_superseded.db")
     now = datetime.now(timezone.utc)
 
     db = factory()
@@ -380,12 +376,12 @@ def test_sessions_list_hides_live_transcript_overlay_after_durable_activity_catc
         session = _seed_session(
             db,
             provider="codex",
-            project="codex-live-overlay-superseded",
+            project="codex-bridge-preview-superseded",
             started_at=now - timedelta(minutes=10),
             execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
             managed_transport="codex_app_server",
         )
-        _ingest_live_transcript(
+        _ingest_bridge_transcript(
             db,
             session_id=session.id,
             occurred_at=now - timedelta(seconds=5),
@@ -397,7 +393,7 @@ def test_sessions_list_hides_live_transcript_overlay_after_durable_activity_catc
                 id=session.id,
                 provider="codex",
                 environment="production",
-                project="codex-live-overlay-superseded",
+                project="codex-bridge-preview-superseded",
                 started_at=session.started_at,
                 execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
                 events=[
@@ -418,7 +414,7 @@ def test_sessions_list_hides_live_transcript_overlay_after_durable_activity_catc
 
     for client in _client(factory):
         resp = client.get(
-            "/agents/sessions?project=codex-live-overlay-superseded&provider=codex&limit=5",
+            "/agents/sessions?project=codex-bridge-preview-superseded&provider=codex&limit=5",
             headers={"X-Agents-Token": "dev"},
         )
         assert resp.status_code == 200, resp.text
@@ -426,7 +422,6 @@ def test_sessions_list_hides_live_transcript_overlay_after_durable_activity_catc
 
     assert session_payload["id"] == str(session.id)
     assert session_payload["last_activity_at"] == (now - timedelta(seconds=1)).isoformat().replace("+00:00", "Z")
-    assert session_payload["live_transcript"] is None
     assert session_payload["transcript_preview"] is None
 
     db = factory()
@@ -437,13 +432,11 @@ def test_sessions_list_hides_live_transcript_overlay_after_durable_activity_catc
         )
     finally:
         db.close()
-
-    assert cards[0].head.live_transcript is None
     assert cards[0].head.transcript_preview is None
 
 
-def test_timeline_cards_mark_old_unsuperseded_live_transcript_stale(tmp_path):
-    factory = _make_db(tmp_path, "codex_live_transcript_stale.db")
+def test_timeline_cards_mark_old_unsuperseded_bridge_transcript_stale(tmp_path):
+    factory = _make_db(tmp_path, "codex_bridge_transcript_stale.db")
     now = datetime.now(timezone.utc)
 
     db = factory()
@@ -451,12 +444,12 @@ def test_timeline_cards_mark_old_unsuperseded_live_transcript_stale(tmp_path):
         session = _seed_session(
             db,
             provider="codex",
-            project="codex-live-overlay-stale",
+            project="codex-bridge-preview-stale",
             started_at=now - timedelta(minutes=10),
             execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
             managed_transport="codex_app_server",
         )
-        _ingest_live_transcript(
+        _ingest_bridge_transcript(
             db,
             session_id=session.id,
             occurred_at=now - timedelta(minutes=5),
@@ -470,8 +463,6 @@ def test_timeline_cards_mark_old_unsuperseded_live_transcript_stale(tmp_path):
         )
     finally:
         db.close()
-
-    assert cards[0].head.live_transcript is None
     preview = cards[0].head.transcript_preview
     assert preview is not None
     assert preview.text == "old partial"
@@ -481,7 +472,7 @@ def test_timeline_cards_mark_old_unsuperseded_live_transcript_stale(tmp_path):
 
 
 def test_timeline_cards_mark_preview_stale_when_durable_activity_is_newer(tmp_path):
-    factory = _make_db(tmp_path, "codex_live_transcript_durable_newer.db")
+    factory = _make_db(tmp_path, "codex_bridge_transcript_durable_newer.db")
     now = datetime.now(timezone.utc)
 
     db = factory()
@@ -489,12 +480,12 @@ def test_timeline_cards_mark_preview_stale_when_durable_activity_is_newer(tmp_pa
         session = _seed_session(
             db,
             provider="codex",
-            project="codex-live-overlay-durable-newer",
+            project="codex-bridge-preview-durable-newer",
             started_at=now - timedelta(minutes=10),
             execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
             managed_transport="codex_app_server",
         )
-        _ingest_live_transcript(
+        _ingest_bridge_transcript(
             db,
             session_id=session.id,
             occurred_at=now - timedelta(seconds=30),
@@ -510,8 +501,6 @@ def test_timeline_cards_mark_preview_stale_when_durable_activity_is_newer(tmp_pa
         )
     finally:
         db.close()
-
-    assert cards[0].head.live_transcript is None
     preview = cards[0].head.transcript_preview
     assert preview is not None
     assert preview.text == "older bridge preview"

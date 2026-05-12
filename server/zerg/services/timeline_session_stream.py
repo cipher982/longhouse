@@ -271,15 +271,17 @@ def _load_timeline_stream_window_signature(
         context_mode=params.context_mode,
         include_total=False,
     )
-    overlay_heads = _load_live_transcript_overlay_heads(db=db, rows=rows)
-    return tuple((*row, overlay_heads.get(row[1])) for row in rows)
+    bridge_transcript_heads = _load_bridge_runtime_event_heads(db=db, rows=rows)
+    return tuple((*row, bridge_transcript_heads.get(row[1])) for row in rows)
 
 
-def _load_live_transcript_overlay_heads(
+def _load_bridge_runtime_event_heads(
     *,
     db: Session,
     rows: tuple[tuple[str, str, datetime | None, datetime | None, datetime | None, int], ...],
 ) -> dict[str, int]:
+    # Bridge transcript previews materialize from runtime events synchronously,
+    # so the runtime event head is the stream signature for provisional preview updates.
     session_ids: list[UUID] = []
     for row in rows:
         try:

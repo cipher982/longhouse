@@ -51,7 +51,7 @@ def _seed_managed_codex_session(db, *, started_at: datetime) -> AgentSession:
     return session
 
 
-def _live_event(
+def _bridge_transcript_event(
     *,
     session_id,
     occurred_at: datetime,
@@ -93,14 +93,14 @@ def test_live_bridge_snapshots_upsert_one_active_provisional_event(tmp_path):
         result = ingest_runtime_events(
             db,
             [
-                _live_event(session_id=session.id, occurred_at=now, seq=1, live_text="hel"),
-                _live_event(
+                _bridge_transcript_event(session_id=session.id, occurred_at=now, seq=1, live_text="hel"),
+                _bridge_transcript_event(
                     session_id=session.id,
                     occurred_at=now + timedelta(milliseconds=20),
                     seq=2,
                     live_text="hello",
                 ),
-                _live_event(session_id=session.id, occurred_at=now + timedelta(milliseconds=40), seq=1, live_text="h"),
+                _bridge_transcript_event(session_id=session.id, occurred_at=now + timedelta(milliseconds=40), seq=1, live_text="h"),
             ],
         )
         db.commit()
@@ -135,7 +135,7 @@ def test_durable_ingest_reconciles_matching_provisional_event(tmp_path):
         ingest_runtime_events(
             db,
             [
-                _live_event(
+                _bridge_transcript_event(
                     session_id=session.id,
                     occurred_at=now,
                     seq=3,
@@ -193,7 +193,7 @@ def test_late_live_snapshot_does_not_reactivate_reconciled_provisional_event(tmp
         ingest_runtime_events(
             db,
             [
-                _live_event(
+                _bridge_transcript_event(
                     session_id=session.id,
                     occurred_at=now,
                     seq=3,
@@ -231,11 +231,11 @@ def test_late_live_snapshot_does_not_reactivate_reconciled_provisional_event(tmp
         ingest_runtime_events(
             db,
             [
-                _live_event(
+                _bridge_transcript_event(
                     session_id=session.id,
                     occurred_at=now - timedelta(seconds=1),
                     seq=4,
-                    live_text="stale live text after durable",
+                    live_text="stale bridge text after durable",
                 )
             ],
         )
@@ -260,7 +260,7 @@ def test_null_seq_live_snapshot_does_not_replace_known_newer_snapshot(tmp_path):
         ingest_runtime_events(
             db,
             [
-                _live_event(session_id=session.id, occurred_at=now, seq=5, live_text="newer text"),
+                _bridge_transcript_event(session_id=session.id, occurred_at=now, seq=5, live_text="newer text"),
                 RuntimeEventIngest(
                     runtime_key=f"codex:{session.id}",
                     session_id=session.id,
@@ -304,7 +304,7 @@ def test_durable_ingest_supersedes_unmatched_older_provisional_event(tmp_path):
         ingest_runtime_events(
             db,
             [
-                _live_event(
+                _bridge_transcript_event(
                     session_id=session.id,
                     occurred_at=now,
                     seq=1,
@@ -363,7 +363,7 @@ def test_cross_session_search_ignores_provisional_only_text(tmp_path):
         ingest_runtime_events(
             db,
             [
-                _live_event(
+                _bridge_transcript_event(
                     session_id=session.id,
                     occurred_at=now,
                     seq=1,
@@ -418,11 +418,11 @@ def test_closed_terminal_signal_supersedes_active_provisional_event(tmp_path):
         ingest_runtime_events(
             db,
             [
-                _live_event(
+                _bridge_transcript_event(
                     session_id=session.id,
                     occurred_at=now,
                     seq=1,
-                    live_text="unfinished live output",
+                    live_text="unfinished bridge output",
                 )
             ],
         )

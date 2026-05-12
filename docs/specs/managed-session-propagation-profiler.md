@@ -722,17 +722,18 @@ The first warm-live run that reached warm-ready showed:
 - browser card ready before prompt send
 - timeline SSE stream ready before prompt send
 - Codex provider response local in ~2s
-- no managed live transcript on timeline SSE or browser card
+- no managed transcript preview on timeline SSE or browser card
 - transcript archive arrived later through the outbox/shipper path
 
 Required behavior for the next slice:
 
-1. Add or repair a bridge-emitted live transcript/progress event for managed
+1. Add or repair a bridge-emitted transcript progress event for managed
    Codex turns.
 2. Timestamp the local bridge emission separately from harness polling.
-3. Ensure Runtime Host reduces that event into timeline live transcript state.
+3. Ensure Runtime Host materializes that event into the provisional transcript
+   ledger.
 4. Ensure `/api/timeline/sessions/stream` emits a `session_upsert` for that
-   live transcript before durable archive ingest completes.
+   transcript preview before durable archive ingest completes.
 5. Keep the browser metric split as `bridge -> SSE`, `SSE -> paint`, and
    `bridge -> paint`.
 6. Re-run `--profile warm-live` after the bridge/live-lane change.

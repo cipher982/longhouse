@@ -15,7 +15,6 @@ Timeline and session projections may return:
 
 ```json
 {
-  "live_transcript": null,
   "transcript_preview": {
     "event_id": 12345,
     "text": "partial answer...",
@@ -30,8 +29,7 @@ Timeline and session projections may return:
 }
 ```
 
-`live_transcript` is deprecated compatibility data. Timeline responses should
-leave it `null`; visible preview text comes from `transcript_preview`.
+Visible preview text comes only from `transcript_preview`.
 
 ## Freshness Rules
 
@@ -56,8 +54,8 @@ else:
 
 Freshness budgets are owned by `server/zerg/services/session_views.py`:
 
-- `LIVE_TRANSCRIPT_PARTIAL_FRESHNESS`: incomplete provisional budget.
-- `LIVE_TRANSCRIPT_COMPLETE_FRESHNESS`: complete provisional budget.
+- `PROVISIONAL_TRANSCRIPT_PARTIAL_FRESHNESS`: incomplete provisional budget.
+- `PROVISIONAL_TRANSCRIPT_COMPLETE_FRESHNESS`: complete provisional budget.
 
 ## UI Rules
 
@@ -70,7 +68,6 @@ Timeline cards:
 - Prefer keyword/semantic search snippets over transcript preview.
 - Prefer durable summary when the preview is missing, stale, superseded, or the
   session is closed.
-- Ignore `live_transcript` for rendering.
 
 Session detail:
 
