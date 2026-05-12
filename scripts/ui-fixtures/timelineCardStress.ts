@@ -90,7 +90,7 @@ type AgentSession = {
     is_complete: boolean;
     content_cursor?: string | null;
     is_stale: boolean;
-    stale_reason?: "freshness_window_expired" | "missing_preview_timestamp" | null;
+    stale_reason?: "freshness_window_expired" | "missing_preview_timestamp" | "superseded_by_durable" | null;
   } | null;
   user_messages: number;
   assistant_messages: number;

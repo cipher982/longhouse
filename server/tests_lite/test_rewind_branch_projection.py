@@ -13,6 +13,8 @@ from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
 from zerg.services.agents_store import SourceLineIngest
 from zerg.services.agents_store import SourceRewindHintIngest
+from zerg.services.provisional_events import EVENT_ORIGIN_LIVE_PROVISIONAL
+from zerg.services.provisional_events import PROVISIONAL_ACTIVE
 
 
 def _make_store(tmp_path):
@@ -143,6 +145,108 @@ def test_rewind_branch_head_vs_forensic_projection(tmp_path):
         ]
     finally:
         db.close()
+
+
+def test_rewind_branch_does_not_copy_provisional_events_as_durable(tmp_path):
+    db, store = _make_store(tmp_path)
+    try:
+        source_path = "/tmp/rewind-provisional-session.jsonl"
+        line0 = '{"type":"user","text":"start"}'
+        line10_old = '{"type":"assistant","text":"old tail"}'
+        line10_new = '{"type":"assistant","text":"rewritten tail"}'
+
+        first = store.ingest_session(
+            SessionIngest(
+                provider="codex",
+                environment="test",
+                project="zerg",
+                device_id="dev-machine",
+                cwd="/tmp",
+                started_at=_ts(0),
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="start",
+                        timestamp=_ts(1),
+                        source_path=source_path,
+                        source_offset=0,
+                        raw_json=line0,
+                    ),
+                    EventIngest(
+                        role="assistant",
+                        content_text="old tail",
+                        timestamp=_ts(2),
+                        source_path=source_path,
+                        source_offset=10,
+                        raw_json=line10_old,
+                    ),
+                ],
+                source_lines=[
+                    SourceLineIngest(source_path=source_path, source_offset=0, raw_json=line0),
+                    SourceLineIngest(source_path=source_path, source_offset=10, raw_json=line10_old),
+                ],
+            )
+        )
+        session_id = first.session_id
+        parent_branch_id = store.get_head_branch_id(session_id)
+        assert parent_branch_id is not None
+        db.add(
+            AgentEvent(
+                session_id=session_id,
+                branch_id=parent_branch_id,
+                role="assistant",
+                content_text="provisional bridge text",
+                timestamp=_ts(3),
+                event_hash="provisional-hash",
+                event_origin=EVENT_ORIGIN_LIVE_PROVISIONAL,
+                provisional_state=PROVISIONAL_ACTIVE,
+                provisional_key=f"codex_bridge_live:{session_id}:thread-1:turn-1",
+                provisional_cursor=f"codex_bridge_live:{session_id}:thread-1:turn-1:1",
+                provisional_seq=1,
+                provisional_complete=0,
+            )
+        )
+        db.commit()
+
+        store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="codex",
+                environment="test",
+                project="zerg",
+                device_id="dev-machine",
+                cwd="/tmp",
+                started_at=_ts(0),
+                events=[
+                    EventIngest(
+                        role="assistant",
+                        content_text="rewritten tail",
+                        timestamp=_ts(4),
+                        source_path=source_path,
+                        source_offset=10,
+                        raw_json=line10_new,
+                    )
+                ],
+                source_lines=[
+                    SourceLineIngest(source_path=source_path, source_offset=10, raw_json=line10_new),
+                ],
+            )
+        )
+
+        head_events = store.get_session_events(session_id, branch_mode="head", limit=100)
+        all_provisional = (
+            db.query(AgentEvent)
+            .filter(AgentEvent.session_id == session_id)
+            .filter(AgentEvent.content_text == "provisional bridge text")
+            .all()
+        )
+
+    finally:
+        db.close()
+
+    assert [event.content_text for event in head_events if event.content_text] == ["start", "rewritten tail"]
+    assert len(all_provisional) == 1
+    assert all_provisional[0].event_origin == EVENT_ORIGIN_LIVE_PROVISIONAL
 
 
 def test_partial_historical_replay_does_not_fork_branch(tmp_path):

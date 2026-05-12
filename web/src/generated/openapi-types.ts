@@ -8759,7 +8759,7 @@ export interface components {
              * Stale Reason
              * @description Why a provisional preview is stale, when known.
              */
-            stale_reason?: ("freshness_window_expired" | "missing_preview_timestamp") | null;
+            stale_reason?: ("freshness_window_expired" | "missing_preview_timestamp" | "superseded_by_durable") | null;
         };
         /**
          * SessionTurnEnvelopeResponse

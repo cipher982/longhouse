@@ -179,6 +179,7 @@ class AgentsStore:
         stmt = self.db.query(func.max(AgentEvent.id)).filter(AgentEvent.session_id == session_id)
         if head_branch_id is not None:
             stmt = stmt.filter(AgentEvent.branch_id == head_branch_id)
+        stmt = stmt.filter(durable_transcript_event_predicate())
         return stmt.scalar()
 
     def _has_novel_source_content(self, session: AgentSession, data: SessionIngest) -> bool:
@@ -1198,6 +1199,7 @@ class AgentsStore:
             self.db.query(AgentEvent)
             .filter(AgentEvent.session_id == session_id)
             .filter(AgentEvent.branch_id == from_branch_id)
+            .filter(durable_transcript_event_predicate())
             .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
             .all()
         )
