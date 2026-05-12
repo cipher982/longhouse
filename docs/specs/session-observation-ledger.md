@@ -193,8 +193,10 @@ Current implementation:
 - Rebuild parity is currently validated for service-level transcript visibility,
   source export, FTS-backed search/listing, timeline-card runtime fields,
   out-of-order runtime signals, and rewind branch-prefix projections. It does
-  not yet validate managed-local control waits, managed lease history, full
-  route-level API responses, branch topology rebuild, or `SessionTurn` rebuild.
+  not yet validate full route-level API responses, branch topology rebuild, or
+  `SessionTurn` rebuild.
+- Managed-local hook waits and managed lease-history closure now read
+  `SessionObservation` cursors instead of `session_runtime_events`.
 
 ### Phase 3: Runtime Event Collapse
 
