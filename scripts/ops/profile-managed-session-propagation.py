@@ -61,6 +61,9 @@ BATCH_METRIC_KEYS = (
     "close_observed_ms",
     "bridge_live_ingest_lag_ms",
     "browser_timeline_card_from_session_id_ms",
+    "ship_trace_prepare_open_db_ms",
+    "ship_trace_prepare_binding_wait_ms",
+    "ship_trace_prepare_parse_ms",
 )
 BATCH_VERDICT_SEVERITY = {
     "pass": 0,
@@ -2270,6 +2273,9 @@ except Exception as exc:
             "bridge_live_method": None,
             "ship_trace_source": None,
             "ship_trace_wake_reason": None,
+            "ship_trace_prepare_open_db_ms": None,
+            "ship_trace_prepare_binding_wait_ms": None,
+            "ship_trace_prepare_parse_ms": None,
             "failure_classification": transport_failure,
             "local_health_state": latest_health_state,
             "provider_timeout": self.event_observed_at_ms(
@@ -2439,12 +2445,22 @@ except Exception as exc:
                 ("enqueue_to_job_ms", "enqueue_to_job"),
                 ("observed_to_job_ms", "observed_to_job"),
                 ("prepare_ms", "prepare"),
+                ("prepare_open_db_ms", "open_db"),
+                ("prepare_binding_wait_ms", "binding_wait"),
+                ("prepare_parse_ms", "parse"),
                 ("job_to_http_ms", "job_to_http"),
                 ("http_to_handler_ms", "http_to_handler"),
                 ("store_write_ms", "store"),
             ):
                 if ship_trace.get(key) is not None:
                     parts.append(f"{label}={ship_trace[key]}ms")
+            for key in (
+                "prepare_open_db_ms",
+                "prepare_binding_wait_ms",
+                "prepare_parse_ms",
+            ):
+                if ship_trace.get(key) is not None:
+                    metrics[f"ship_trace_{key}"] = ship_trace[key]
             if parts:
                 transcript += " ship_trace=" + ",".join(parts)
         close_note = "close=missing"
@@ -2980,6 +2996,9 @@ def ship_trace_details(data: dict[str, Any], remote_clock_skew_ms: int | None) -
             "enqueue_to_job_ms",
             "observed_to_job_ms",
             "prepare_ms",
+            "prepare_open_db_ms",
+            "prepare_binding_wait_ms",
+            "prepare_parse_ms",
             "job_to_http_ms",
         ):
             if isinstance(ship_trace.get(key), int | float):

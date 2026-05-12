@@ -58,6 +58,9 @@ def test_agents_ingest_persists_ship_trace_runtime_event(tmp_path):
             "job_started_at_ms": 1778219999000,
             "prepare_started_at_ms": 1778219999100,
             "prepare_finished_at_ms": 1778219999300,
+            "prepare_open_db_ms": 12,
+            "prepare_binding_wait_ms": 0,
+            "prepare_parse_ms": 45,
             "http_send_started_at_ms": 1778220000000,
             "prepare_ms": 200,
             "job_to_http_ms": 1000,
@@ -101,6 +104,8 @@ def test_agents_ingest_persists_ship_trace_runtime_event(tmp_path):
             assert stored["progress_kind"] == "ship_pipeline_trace"
             assert stored["ship_trace"]["trace_id"] == trace["trace_id"]
             assert stored["ship_trace"]["prepare_ms"] == 200
+            assert stored["ship_trace"]["prepare_open_db_ms"] == 12
+            assert stored["ship_trace"]["prepare_parse_ms"] == 45
             assert stored["server_trace"]["store_write_ms"] >= 0
     finally:
         api_app.dependency_overrides.clear()
