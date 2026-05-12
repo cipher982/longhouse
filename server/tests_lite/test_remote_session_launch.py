@@ -517,6 +517,77 @@ def test_reap_orphaned_launches_expires_stale_rows(tmp_path):
         assert row.ended_at is not None
 
 
+def _make_admin_client(SessionLocal, *, owner_id: int = OWNER_ID):
+    from zerg.dependencies.auth import get_current_user
+    from zerg.dependencies.auth import require_admin
+    from zerg.main import api_app
+    from zerg.main import app
+
+    def override_get_db():
+        with SessionLocal() as db:
+            yield db
+
+    def override_user():
+        return SimpleNamespace(id=owner_id, email="admin@example.com", role="ADMIN")
+
+    api_app.dependency_overrides[get_db] = override_get_db
+    api_app.dependency_overrides[get_current_user] = override_user
+    api_app.dependency_overrides[require_admin] = override_user
+    api_app.dependency_overrides[require_single_tenant] = lambda: None
+    return TestClient(app, backend="asyncio"), api_app
+
+
+def test_admin_launch_debug_lists_non_live_rows(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as db:
+        for state in ("launching_unknown", "launch_failed", "launch_orphaned", "live"):
+            sid = uuid4()
+            db.add(
+                AgentSession(
+                    id=sid,
+                    provider="codex",
+                    environment="development",
+                    project="repo",
+                    device_id="cinder",
+                    cwd="/Users/me/repo",
+                    started_at=now,
+                    thread_root_session_id=sid,
+                    continued_from_session_id=None,
+                    continuation_kind="local",
+                    origin_label="cinder",
+                    user_messages=0,
+                    assistant_messages=0,
+                    tool_calls=0,
+                    is_writable_head=1,
+                    is_sidechain=0,
+                    execution_home="managed_local",
+                    launch_state=state,
+                )
+            )
+        db.commit()
+
+    client, api_app = _make_admin_client(SessionLocal)
+    try:
+        resp = client.get("/api/admin/launches/debug")
+    finally:
+        api_app.dependency_overrides.clear()
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    states = sorted(e["launch_state"] for e in body["entries"])
+    assert states == ["launch_failed", "launch_orphaned", "launching_unknown"]
+
+    client, api_app = _make_admin_client(SessionLocal)
+    try:
+        resp_all = client.get("/api/admin/launches/debug?include_live=true")
+    finally:
+        api_app.dependency_overrides.clear()
+    assert resp_all.status_code == 200
+    assert len(resp_all.json()["entries"]) == 4
+
+
 def test_http_endpoint_offline_machine_is_409(tmp_path):
     SessionLocal = _make_db(tmp_path)
     _seed_user_and_device(SessionLocal)
