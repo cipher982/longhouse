@@ -19,6 +19,7 @@ from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
 from zerg.services.agents_store import SourceLineIngest
 from zerg.services.raw_json_compression import decode_raw_json
+from zerg.services.provisional_events import materialize_bridge_transcript_event
 from zerg.services.session_observation_reducers import reduce_bridge_transcript_observation
 from zerg.services.session_observation_reducers import reduce_source_line_observation
 from zerg.services.session_observations import record_session_observation
@@ -263,6 +264,43 @@ def test_bridge_transcript_same_seq_collision_is_deterministic(tmp_path):
 
     assert _run(("a", "b")) == "alpha same seq"
     assert _run(("b", "a")) == "alpha same seq"
+
+
+def test_same_seq_observation_does_not_overwrite_existing_row_without_observation_id(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "provisional_same_seq_legacy_row.db")
+    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
+        materialize_bridge_transcript_event(
+            db,
+            session_id=session.id,
+            provider="codex",
+            source="codex_bridge_live",
+            occurred_at=now,
+            received_at=now,
+            payload={
+                "progress_kind": "bridge_live_transcript_delta",
+                "thread_id": "thread-1",
+                "turn_id": "turn-1",
+                "seq": 2,
+                "live_text": "legacy same seq",
+            },
+        )
+        observation = _record_bridge_observation(
+            db,
+            session_id=session.id,
+            observation_id=f"runtime:codex_bridge_live:{session.id}:new",
+            occurred_at=now,
+            seq=2,
+            live_text="new same seq",
+        )
+
+        reduce_bridge_transcript_observation(db, observation)
+        db.commit()
+        row = db.query(AgentEvent).filter(AgentEvent.session_id == session.id).one()
+
+    assert row.content_text == "legacy same seq"
 
 
 def test_durable_ingest_reconciles_matching_provisional_event(tmp_path):

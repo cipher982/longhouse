@@ -592,8 +592,9 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
 
         accepted += 1
         if _is_bridge_transcript_event(event):
-            if observation_result.observation is not None:
-                reduce_bridge_transcript_observation(db, observation_result.observation)
+            if observation_result.observation is None:
+                raise RuntimeError("accepted bridge transcript observation was not readable after insert")
+            reduce_bridge_transcript_observation(db, observation_result.observation)
             outcome = "stored_provisional_transcript"
             _record_managed_codex_runtime_event(event, outcome)
             if event.runtime_key not in updated_runtime_keys:
