@@ -157,6 +157,8 @@ install_cli_from_source() {
   log "==> Generating build identity"
   python3 "$ROOT_DIR/scripts/build/generate_build_identity.py"
 
+  ensure_frontend_dist
+
   log "==> Building Longhouse CLI wheel from current repo source"
   local wheel_dir="$ROOT_DIR/.build/wheel"
   rm -rf "$wheel_dir"
@@ -172,6 +174,43 @@ install_cli_from_source() {
 
   log "CLI ready at $(command -v longhouse)"
   log "CLI version: $(longhouse --version)"
+}
+
+ensure_frontend_dist() {
+  local dist_index="$ROOT_DIR/web/dist/index.html"
+  local needs_build=0
+  local reason="missing"
+
+  if [[ -f "$dist_index" ]]; then
+    reason="stale"
+    needs_build=0
+    if find \
+      "$ROOT_DIR/web/src" \
+      "$ROOT_DIR/web/public" \
+      "$ROOT_DIR/web/index.html" \
+      "$ROOT_DIR/web/package.json" \
+      "$ROOT_DIR/web/vite.config.ts" \
+      "$ROOT_DIR/bun.lock" \
+      -newer "$dist_index" -print -quit | grep -q .; then
+      needs_build=1
+    fi
+  else
+    needs_build=1
+  fi
+
+  if (( needs_build == 0 )); then
+    log "==> Reusing existing frontend dist"
+    return
+  fi
+
+  require_cmd bun
+  log "==> Building frontend dist for CLI wheel ($reason)"
+  (
+    cd "$ROOT_DIR"
+    bun install --frozen-lockfile --silent
+    cd "$ROOT_DIR/web"
+    bun run build >/dev/null
+  )
 }
 
 build_desktop_app_bundle() {
