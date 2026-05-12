@@ -7,6 +7,7 @@ struct TimelineView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var viewModel = TimelineViewModel()
     @State private var path: [SessionRoute] = []
+    @State private var launchSheetPresented = false
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -24,9 +25,23 @@ struct TimelineView: View {
             .navigationTitle("Timeline")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    if viewModel.isRefreshing && !viewModel.isInitialLoading {
-                        ProgressView().controlSize(.small)
+                    HStack(spacing: 12) {
+                        if viewModel.isRefreshing && !viewModel.isInitialLoading {
+                            ProgressView().controlSize(.small)
+                        }
+                        Button {
+                            launchSheetPresented = true
+                        } label: {
+                            Image(systemName: "plus.circle.fill")
+                                .accessibilityLabel("Start session")
+                        }
                     }
+                }
+            }
+            .sheet(isPresented: $launchSheetPresented) {
+                LaunchSessionSheet { sessionId in
+                    launchSheetPresented = false
+                    path.append(SessionRoute(sessionId: sessionId, fallbackTitle: "New session"))
                 }
             }
             .refreshable { await viewModel.refresh(using: appState, reloadWidget: true) }
