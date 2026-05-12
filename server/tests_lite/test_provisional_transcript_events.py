@@ -10,6 +10,7 @@ from sqlalchemy.orm import sessionmaker
 from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.models.agents import AgentEvent
+from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionObservation
@@ -17,7 +18,9 @@ from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
 from zerg.services.agents_store import SourceLineIngest
+from zerg.services.raw_json_compression import decode_raw_json
 from zerg.services.session_observation_reducers import reduce_bridge_transcript_observation
+from zerg.services.session_observation_reducers import reduce_source_line_observation
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.session_execution_home import SessionExecutionHome
@@ -230,6 +233,53 @@ def test_durable_ingest_reconciles_matching_provisional_event(tmp_path):
     assert source_observation.source_offset == 100
     assert json.loads(source_observation.payload_json or "{}")["raw_json"] == assistant_line
     assert [event.id for event in visible] == [rows[1].id]
+
+
+def test_source_line_observation_rebuilds_archive_row(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "source_line_observation_rebuild.db")
+    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+    source_path = "/tmp/codex-rollout.jsonl"
+    assistant_line = '{"type":"response_item","payload":{"type":"message","role":"assistant"}}'
+
+    with SessionLocal() as db:
+        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
+        AgentsStore(db).ingest_session(
+            SessionIngest(
+                id=session.id,
+                provider="codex",
+                environment="test",
+                project="provisional-events",
+                device_id="cinder",
+                cwd="/tmp/project",
+                started_at=now - timedelta(minutes=1),
+                events=[
+                    EventIngest(
+                        role="assistant",
+                        content_text="durable text",
+                        timestamp=now + timedelta(seconds=2),
+                        source_path=source_path,
+                        source_offset=100,
+                        raw_json=assistant_line,
+                    )
+                ],
+                source_lines=[
+                    SourceLineIngest(source_path=source_path, source_offset=100, raw_json=assistant_line),
+                ],
+            )
+        )
+        observation = db.query(SessionObservation).filter(SessionObservation.kind == "provider_source_line").one()
+        db.query(AgentSourceLine).filter(AgentSourceLine.session_id == session.id).delete(synchronize_session=False)
+        db.commit()
+
+        rebuilt = reduce_source_line_observation(db, observation)
+        db.commit()
+        rebuilt_values = (
+            rebuilt.source_path if rebuilt is not None else None,
+            rebuilt.source_offset if rebuilt is not None else None,
+            decode_raw_json(rebuilt) if rebuilt is not None else None,
+        )
+
+    assert rebuilt_values == (source_path, 100, assistant_line)
 
 
 def test_late_live_snapshot_does_not_reactivate_reconciled_provisional_event(tmp_path):
