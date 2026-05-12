@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
+from datetime import timezone
 from uuid import UUID
 
 from sqlalchemy import and_
@@ -26,6 +28,10 @@ from zerg.services.session_observations import OBS_KIND_PROVIDER_EVENT
 from zerg.services.session_observations import OBS_KIND_PROVIDER_SOURCE_LINE
 from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
 from zerg.services.session_runtime import reduce_runtime_signal_observation
+
+
+class SessionObservationRebuildCoverageError(RuntimeError):
+    """Raised when existing projections are not covered by observations."""
 
 
 @dataclass(frozen=True)
@@ -70,6 +76,7 @@ def rebuild_session_observation_projections(
         raise ValueError("rebuild requires session_id or runtime_key")
 
     observations = _load_observations(db, session_id=session_id, runtime_key=runtime_key)
+    _assert_projection_coverage(db, session_id=session_id, observations=observations)
     _clear_projection_rows(db, session_id=session_id, runtime_key=runtime_key)
 
     provider_events_reduced = 0
@@ -151,6 +158,63 @@ def _load_observations(db: Session, *, session_id: UUID | None, runtime_key: str
         .order_by(SessionObservation.id.asc())
         .all()
     )
+
+
+def _assert_projection_coverage(db: Session, *, session_id: UUID | None, observations: list[SessionObservation]) -> None:
+    if session_id is None:
+        return
+
+    existing_events = int(db.query(AgentEvent.id).filter(AgentEvent.session_id == session_id).count())
+    existing_source_lines = int(db.query(AgentSourceLine.id).filter(AgentSourceLine.session_id == session_id).count())
+    if existing_events == 0 and existing_source_lines == 0:
+        return
+
+    transcript_observations = [
+        observation
+        for observation in observations
+        if observation.session_id == session_id and observation.kind in (OBS_KIND_PROVIDER_EVENT, OBS_KIND_BRIDGE_TRANSCRIPT_DELTA)
+    ]
+    source_observations = [
+        observation
+        for observation in observations
+        if observation.session_id == session_id and observation.kind == OBS_KIND_PROVIDER_SOURCE_LINE
+    ]
+
+    if existing_events and not transcript_observations:
+        raise SessionObservationRebuildCoverageError(
+            f"refusing to rebuild session {session_id}: {existing_events} transcript projection rows exist, "
+            "but no transcript observations cover them"
+        )
+    if existing_source_lines and not source_observations:
+        raise SessionObservationRebuildCoverageError(
+            f"refusing to rebuild session {session_id}: {existing_source_lines} source archive rows exist, "
+            "but no source-line observations cover them"
+        )
+
+    if existing_events:
+        oldest_event_at = _as_utc_naive(db.query(func.min(AgentEvent.timestamp)).filter(AgentEvent.session_id == session_id).scalar())
+        oldest_observation_at = min(
+            (
+                _as_utc_naive(observation.observed_at or observation.received_at)
+                for observation in transcript_observations
+                if observation.observed_at is not None or observation.received_at is not None
+            ),
+            default=None,
+        )
+        if oldest_event_at is not None and oldest_observation_at is not None and oldest_observation_at > oldest_event_at:
+            raise SessionObservationRebuildCoverageError(
+                f"refusing to rebuild session {session_id}: oldest transcript observation "
+                f"{oldest_observation_at.isoformat()} is newer than oldest transcript projection "
+                f"{oldest_event_at.isoformat()}"
+            )
+
+
+def _as_utc_naive(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def _clear_projection_rows(db: Session, *, session_id: UUID | None, runtime_key: str | None) -> None:
