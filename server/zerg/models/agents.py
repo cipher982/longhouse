@@ -242,6 +242,13 @@ class AgentEvent(AgentsBase):
     raw_json_codec = Column(Integer, nullable=False, server_default=text("0"))
     event_uuid = Column(String(255), nullable=True, index=True)  # Raw line uuid (Claude/Codex/Gemini event id)
     parent_event_uuid = Column(String(255), nullable=True, index=True)  # Raw parent linkage id (Claude parentUuid)
+    event_origin = Column(String(32), nullable=False, server_default=text("'durable'"), index=True)
+    provisional_state = Column(String(32), nullable=True, index=True)
+    provisional_key = Column(String(512), nullable=True)
+    provisional_cursor = Column(String(512), nullable=True)
+    provisional_seq = Column(Integer, nullable=True)
+    provisional_complete = Column(Integer, nullable=False, server_default=text("0"))
+    reconciled_event_id = Column(Integer, nullable=True)
 
     # Relationships
     session = relationship("AgentSession", back_populates="events")
@@ -267,6 +274,14 @@ class AgentEvent(AgentsBase):
             unique=True,
             postgresql_where=(event_uuid.isnot(None)),
             sqlite_where=(event_uuid.isnot(None)),
+        ),
+        Index(
+            "ix_events_provisional_key",
+            "session_id",
+            "provisional_key",
+            unique=True,
+            postgresql_where=(provisional_key.isnot(None)),
+            sqlite_where=(provisional_key.isnot(None)),
         ),
         Index("ix_events_session_timestamp", "session_id", "timestamp"),
         Index("ix_events_session_branch_timestamp", "session_id", "branch_id", "timestamp"),

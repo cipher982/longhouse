@@ -32,6 +32,10 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionRuntimeState
+from zerg.services.provisional_events import active_provisional_event_predicate
+from zerg.services.provisional_events import durable_transcript_event_predicate
+from zerg.services.provisional_events import reconcile_provisional_transcript_events
+from zerg.services.provisional_events import visible_transcript_event_predicate
 from zerg.services.raw_json_compression import CODEC_PLAIN
 from zerg.services.raw_json_compression import CODEC_ZSTD
 from zerg.services.raw_json_compression import compress_raw_json
@@ -1567,6 +1571,8 @@ class AgentsStore:
                     session_obj.last_activity_at = latest_inserted_timestamp
 
         if events_inserted > 0 and transcript_changed:
+            reconcile_provisional_transcript_events(self.db, session_id=session_id)
+
             from zerg.services.ingest_task_queue import enqueue_ingest_tasks
 
             enqueue_ingest_tasks(self.db, str(session_id))
@@ -2269,6 +2275,7 @@ class AgentsStore:
             .where(AgentEvent.session_id == session_id)
             .where(AgentEvent.role.in_(["user", "assistant"]))
             .where(AgentEvent.content_text.isnot(None))
+            .where(visible_transcript_event_predicate())
             .order_by(AgentEvent.timestamp.desc())
             .limit(last_n)
         )
@@ -2426,7 +2433,7 @@ class AgentsStore:
         head_branch_id = self.get_head_branch_id(session_id)
         if head_branch_id is None:
             return stmt
-        return stmt.where(AgentEvent.branch_id == head_branch_id)
+        return stmt.where(or_(AgentEvent.branch_id == head_branch_id, active_provisional_event_predicate()))
 
     def get_session_events(
         self,
@@ -2442,7 +2449,12 @@ class AgentsStore:
         load_from_end: bool = False,
     ) -> List[AgentEvent]:
         """Get events for a session with optional filtering."""
-        stmt = select(AgentEvent).where(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp, AgentEvent.id)
+        stmt = (
+            select(AgentEvent)
+            .where(AgentEvent.session_id == session_id)
+            .where(visible_transcript_event_predicate())
+            .order_by(AgentEvent.timestamp, AgentEvent.id)
+        )
         stmt = self._apply_branch_mode_filter(stmt, session_id, branch_mode)
 
         if context_mode == "active_context":
@@ -2481,7 +2493,12 @@ class AgentsStore:
         branch_mode: str = "head",
     ) -> int:
         """Count events for a session with the same filters as get_session_events."""
-        stmt = select(func.count()).select_from(AgentEvent).where(AgentEvent.session_id == session_id)
+        stmt = (
+            select(func.count())
+            .select_from(AgentEvent)
+            .where(AgentEvent.session_id == session_id)
+            .where(visible_transcript_event_predicate())
+        )
         stmt = self._apply_branch_mode_filter(stmt, session_id, branch_mode)
 
         if context_mode == "active_context":
@@ -2624,6 +2641,7 @@ class AgentsStore:
         events_stmt = (
             select(AgentEvent)
             .where(AgentEvent.session_id == session_id)
+            .where(durable_transcript_event_predicate())
             .order_by(AgentEvent.source_offset.asc(), AgentEvent.timestamp.asc(), AgentEvent.id.asc())
             .limit(10000)
         )

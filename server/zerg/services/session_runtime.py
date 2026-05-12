@@ -658,6 +658,18 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
 
         accepted += 1
         if _is_live_transcript_overlay_event(event):
+            from zerg.services.provisional_events import materialize_live_transcript_event
+
+            if event.session_id is not None:
+                materialize_live_transcript_event(
+                    db,
+                    session_id=event.session_id,
+                    provider=event.provider,
+                    source=event.source,
+                    occurred_at=event.occurred_at,
+                    received_at=received_at,
+                    payload=event.payload or {},
+                )
             outcome = "stored_overlay"
             _record_managed_codex_runtime_event(event, outcome)
             if event.runtime_key not in updated_runtime_keys:
