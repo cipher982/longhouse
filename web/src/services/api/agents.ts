@@ -432,6 +432,13 @@ export interface TimelineSessionStreamOptions {
   skipInitialReplay?: boolean;
 }
 
+function dispatchTimelineStreamEvent(kind: string, payload: Record<string, unknown> = {}) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.dispatchEvent(new CustomEvent("longhouse:timeline-stream", { detail: { kind, ...payload } }));
+}
+
 // ---------------------------------------------------------------------------
 // API Functions
 // ---------------------------------------------------------------------------
@@ -597,11 +604,13 @@ export function connectTimelineSessionsStream(
   const eventSource = new EventSource(url, { withCredentials: true });
 
   eventSource.addEventListener("connected", () => {
+    dispatchTimelineStreamEvent("connected");
     handlers.onConnected?.();
   });
 
   eventSource.addEventListener("heartbeat", (event: MessageEvent) => {
     const data = parseStreamEventData<{ timestamp: string }>(event);
+    dispatchTimelineStreamEvent("heartbeat", { timestamp: data?.timestamp });
     if (data?.timestamp) {
       handlers.onHeartbeat?.(data.timestamp);
     }
@@ -610,6 +619,9 @@ export function connectTimelineSessionsStream(
   eventSource.addEventListener("session_upsert", (event: MessageEvent) => {
     const data = parseStreamEventData<TimelineSessionUpsertEvent>(event);
     if (data?.session) {
+      dispatchTimelineStreamEvent("session_upsert", {
+        session_id: data.session.head?.id ?? data.session.thread_id,
+      });
       handlers.onSessionUpsert?.(data);
     }
   });
@@ -617,6 +629,7 @@ export function connectTimelineSessionsStream(
   eventSource.addEventListener("session_remove", (event: MessageEvent) => {
     const data = parseStreamEventData<TimelineSessionRemoveEvent>(event);
     if (data?.thread_id) {
+      dispatchTimelineStreamEvent("session_remove", { thread_id: data.thread_id });
       handlers.onSessionRemove?.(data);
     }
   });

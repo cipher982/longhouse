@@ -48,6 +48,7 @@ HOSTED_CONTAINER_PREFIX = "longhouse-"
 HOSTED_RUNTIME_EVENT_LIMIT = 200
 METRICS_SCHEMA_VERSION = 3
 BATCH_METRICS_SCHEMA_VERSION = 2
+PENDING_BROWSER_SESSION_ID = "__pending_browser_session__"
 BATCH_METRIC_KEYS = (
     "cold_timeline_navigation_to_card_paint_ms",
     "cold_timeline_navigation_to_close_paint_ms",
@@ -127,6 +128,10 @@ def live_first_output_target_ms() -> int:
 
 def durable_archive_target_ms() -> int:
     return metric_target_ms(sla_manifest(), "durable_archive_local_to_hosted_ms", 3_000) or 3_000
+
+
+def warm_session_created_target_ms() -> int:
+    return metric_target_ms(sla_manifest(), "warm_session_created_to_card_paint_ms", 500) or 500
 
 
 def managed_close_target_ms() -> int:
@@ -1209,6 +1214,7 @@ except Exception as exc:
         case_id: str,
         ownership: str,
         observer_kind: str = "warm",
+        session_id_file: Path | None = None,
     ) -> None:
         token = self.browser_session_cookie()
         if not token:
@@ -1223,8 +1229,12 @@ except Exception as exc:
             )
             return
 
+        current_session_id: str | None = None if session_id == "-" else session_id
         script_path = self.output_dir / f"{session_id}-browser-ui-observer.mjs"
         script_path.write_text(BROWSER_UI_OBSERVER_SCRIPT.read_text())
+        env = os.environ.copy()
+        if session_id_file is not None:
+            env["LONGHOUSE_BROWSER_OBSERVER_SESSION_ID_FILE"] = str(session_id_file)
 
         proc = subprocess.Popen(
             [
@@ -1237,6 +1247,7 @@ except Exception as exc:
                 nonce,
             ],
             cwd=str(ROOT),
+            env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -1252,6 +1263,12 @@ except Exception as exc:
             "preview_word_painted": "browser_transcript_preview_word_painted",
             "preview_nonce_painted": "browser_transcript_preview_nonce_painted",
             "close_painted": "browser_close_card_painted",
+            "awaiting_session_id": "browser_awaiting_session_id",
+            "session_id_received": "browser_session_id_received",
+            "timeline_stream_connected": "browser_timeline_stream_connected",
+            "timeline_stream_heartbeat": "browser_timeline_stream_heartbeat",
+            "timeline_stream_session_upsert": "browser_timeline_stream_session_upsert",
+            "timeline_stream_session_remove": "browser_timeline_stream_session_remove",
         }
         timeout_map = {
             "card_painted_timeout": "browser_timeline_card_painted_timeout",
@@ -1279,13 +1296,17 @@ except Exception as exc:
                 event = f"browser_{'cold_' if observer_kind == 'cold' else ''}ui_{kind}"
             if event is None:
                 continue
+            if kind == "session_id_received":
+                received = data.get("session_id")
+                if isinstance(received, str) and received:
+                    current_session_id = received
             self.observe(
                 case_id=case_id,
                 provider="codex",
                 ownership=ownership,
                 source="browser_ui",
                 event=event,
-                session_id=session_id,
+                session_id=current_session_id or PENDING_BROWSER_SESSION_ID,
                 payload=data,
             )
             if event in {"browser_close_card_painted", "browser_cold_close_card_painted"}:
@@ -1359,6 +1380,7 @@ except Exception as exc:
         case_id: str,
         ownership: str,
         observer_kind: str = "warm",
+        session_id_file: Path | None = None,
     ) -> threading.Thread | None:
         if self.args.skip_browser_ui:
             return None
@@ -1369,6 +1391,7 @@ except Exception as exc:
                 case_id=case_id,
                 ownership=ownership,
                 observer_kind=observer_kind,
+                session_id_file=session_id_file,
             ),
             name=f"browser-{observer_kind}-ui-{session_id}",
             daemon=True,
@@ -1402,6 +1425,38 @@ except Exception as exc:
         name = f"{self.args.name_prefix}-managed-{self.run_id}"
         self.browser_session_cookie()
         self.prepare_codex_hooks(case_id=case_id, ownership=ownership)
+        browser_ui = None
+        staged_session_id_file: Path | None = None
+        if self.args.profile == "warm-live" and not self.args.skip_browser_ui:
+            staged_session_id_file = self.output_dir / "browser-session-id.txt"
+            try:
+                staged_session_id_file.unlink()
+            except FileNotFoundError:
+                pass
+            browser_ui = self.start_browser_ui_observer(
+                "-",
+                nonce,
+                case_id=case_id,
+                ownership=ownership,
+                session_id_file=staged_session_id_file,
+            )
+            browser_ready = self.wait_for_observation(
+                case_id,
+                PENDING_BROWSER_SESSION_ID,
+                "browser_ui_loaded",
+                timeout=30,
+            )
+            stream_ready = self.wait_for_observation(
+                case_id,
+                PENDING_BROWSER_SESSION_ID,
+                "browser_timeline_stream_connected",
+                timeout=10,
+            )
+            if not browser_ready or not stream_ready:
+                raise RuntimeError(
+                    "warm browser observer did not reach ready state before managed launch: "
+                    f"browser_ready={browser_ready} stream_ready={stream_ready}"
+                )
         self.observe(
             case_id=case_id,
             provider="codex",
@@ -1447,8 +1502,9 @@ except Exception as exc:
             provider_session_id=session_id,
             payload={"ws_url": ws_url},
         )
-        browser_ui = None
-        if self.args.profile != "cold-timeline":
+        if staged_session_id_file is not None:
+            staged_session_id_file.write_text(session_id + "\n")
+        if self.args.profile not in {"cold-timeline", "warm-live"}:
             browser_ui = self.start_browser_ui_observer(
                 session_id,
                 nonce,
@@ -2082,6 +2138,7 @@ except Exception as exc:
 
     def verdict_for(self, case_id: str, session_id: str, nonce: str) -> tuple[str, str, dict[str, Any]]:
         active_metrics = set(self.sla_case.get("metrics") or []) if self.sla_case else set()
+        requires_create = not active_metrics or "warm_session_created_to_card_paint_ms" in active_metrics
         requires_live = not active_metrics or any(
             metric in active_metrics
             for metric in (
@@ -2355,6 +2412,12 @@ except Exception as exc:
             "live_first_source": None,
             "live_tail_non_slo_from_local_ms": None,
             "warm_session_created_to_card_paint_ms": browser_card_latency,
+            "warm_session_created_target_ms": warm_session_created_target_ms(),
+            "warm_session_created_pass": (
+                browser_card_latency <= warm_session_created_target_ms()
+                if browser_card_latency is not None
+                else None
+            ),
             "warm_live_output_local_to_paint_ms": None,
             "warm_live_output_sse_to_paint_ms": browser_first_after_sse_latency,
             "warm_close_local_to_sse_ms": close_sse_latency,
@@ -2470,6 +2533,17 @@ except Exception as exc:
         metrics["live_tail_non_slo_from_local_ms"] = live_full_from_local_latency
         if live_first_from_local_latency is not None:
             metrics["live_first_pass"] = live_first_from_local_latency <= live_first_output_target_ms()
+
+        create_note = "create=not_applicable"
+        if requires_create:
+            if browser_card_latency is None:
+                create_note = "create=missing"
+            else:
+                create_state = "pass" if browser_card_latency <= warm_session_created_target_ms() else "slow"
+                create_note = (
+                    f"create={create_state} card_from_session_id={browser_card_latency}ms "
+                    f"target={warm_session_created_target_ms()}ms"
+                )
 
         live_ui = "live_first=missing"
         if requires_cold and not requires_live:
@@ -2660,6 +2734,8 @@ except Exception as exc:
             )
             return "provider_timeout", metrics["notes"], metrics
         if transport_failure is not None and (
+            (requires_create and metrics["warm_session_created_pass"] is not True)
+            or
             (requires_live and metrics["live_first_pass"] is not True)
             or (
                 requires_cold
@@ -2682,9 +2758,20 @@ except Exception as exc:
             metrics["notes"] = f"{live_ui}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
             return verdict, metrics["notes"], metrics
         is_managed_case = case_id == "B1" or ownership == "managed_local"
+        if requires_create and is_managed_case and metrics["warm_session_created_pass"] is not True:
+            verdict = "missing" if browser_card_latency is None else "slow"
+            metrics["verdict"] = verdict
+            metrics["notes"] = (
+                f"{create_note}; {live_ui}; transcript={transcript}; {close_note}; "
+                f"ownership={ownership}, transport={transport}"
+            )
+            return verdict, metrics["notes"], metrics
         if requires_live and is_managed_case and metrics["live_first_pass"] is not True:
             metrics["verdict"] = "fail"
-            metrics["notes"] = f"{live_ui}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
+            metrics["notes"] = (
+                f"{create_note}; {live_ui}; transcript={transcript}; {close_note}; "
+                f"ownership={ownership}, transport={transport}"
+            )
             return "fail", metrics["notes"], metrics
         if requires_cold and (
             metrics["cold_timeline_card_pass"] is not True
@@ -2731,7 +2818,11 @@ except Exception as exc:
             return "slow", metrics["notes"], metrics
         metrics["verdict"] = "pass"
         extra = f"; {cold_note}" if requires_cold else ""
-        metrics["notes"] = f"{live_ui}{extra}; transcript={transcript}; {close_note}; ownership={ownership}, transport={transport}"
+        create_extra = f"{create_note}; " if requires_create else ""
+        metrics["notes"] = (
+            f"{create_extra}{live_ui}{extra}; transcript={transcript}; {close_note}; "
+            f"ownership={ownership}, transport={transport}"
+        )
         return "pass", metrics["notes"], metrics
 
     def event_delta_ms(self, case_id: str, session_id: str, start_event: str, end_event: str) -> int | None:
