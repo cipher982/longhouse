@@ -72,6 +72,9 @@ def validate_manifest(manifest: dict[str, Any]) -> list[str]:
             continue
         metric_id = str(metric.get("id") or "")
         _validate_profile_class(metric.get("profile_class"), f"metric {metric_id}", errors)
+        diagnostic = metric.get("diagnostic", False)
+        if not isinstance(diagnostic, bool):
+            errors.append(f"metric {metric_id} diagnostic must be a boolean")
         for field in ("target_ms", "hard_alarm_ms"):
             value = metric.get(field)
             if not isinstance(value, int) or value <= 0:
@@ -154,6 +157,11 @@ def metric_target_ms(manifest: dict[str, Any], metric_id_or_alias: str, default:
         return default
     value = metric.get("target_ms")
     return value if isinstance(value, int) else default
+
+
+def metric_is_diagnostic(manifest: dict[str, Any], metric_id_or_alias: str) -> bool:
+    metric = metric_by_id_or_legacy_alias(manifest, metric_id_or_alias)
+    return bool(metric and metric.get("diagnostic") is True)
 
 
 def metric_by_id_or_legacy_alias(manifest: dict[str, Any], metric_id_or_alias: str) -> dict[str, Any] | None:

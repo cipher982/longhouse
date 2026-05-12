@@ -52,9 +52,10 @@ description = "Browser reaction time after timeline SSE delivered the live-outpu
 id = "warm_close_local_to_sse_ms"
 profile_class = "warm_realtime"
 layer = "timeline_sse"
+diagnostic = true
 target_ms = 500
 hard_alarm_ms = 1000
-description = "Timeline SSE delivery after local managed shutdown truth is observed."
+description = "Diagnostic latency for the profiler's dedicated close SSE watcher after local managed shutdown truth is observed. This is not the user-visible close SLA."
 
 [[metrics]]
 id = "warm_close_local_to_paint_ms"
@@ -69,9 +70,10 @@ description = "Warm browser paint after local managed shutdown truth is observed
 id = "warm_close_sse_to_paint_ms"
 profile_class = "warm_realtime"
 layer = "browser_card"
+diagnostic = true
 target_ms = 100
 hard_alarm_ms = 250
-description = "Browser reaction time after timeline SSE delivered the close update."
+description = "Diagnostic ordering between the profiler close SSE watcher and browser paint. The browser can paint first from its own timeline stream."
 
 [[metrics]]
 id = "warm_close_local_to_db_ms"
@@ -121,12 +123,10 @@ metrics = [
   "warm_session_created_to_card_paint_ms",
   "warm_live_output_local_to_paint_ms",
   "warm_live_output_sse_to_paint_ms",
-  "warm_close_local_to_sse_ms",
   "warm_close_local_to_paint_ms",
-  "warm_close_sse_to_paint_ms",
   "warm_close_local_to_db_ms",
 ]
-notes = "Current optimized happy path for already-open timeline realtime truth. Durable archive is tracked as a separate case."
+notes = "Current optimized happy path for already-open timeline realtime truth. Close is gated on browser-card paint and Runtime Host state, not the profiler's diagnostic close-SSE watcher. Durable archive is tracked as a separate case."
 
 [[cases]]
 id = "managed_codex_cold_timeline_closed"
@@ -254,7 +254,7 @@ launch = "longhouse codex attached TUI"
 shutdown = "graceful bridge stop while provider turn is active"
 truth_source = "codex_bridge"
 required_observers = ["managed_sessions_snapshot", "timeline_sse", "browser_card", "hosted_db"]
-metrics = ["warm_close_local_to_sse_ms", "warm_close_local_to_paint_ms", "warm_close_sse_to_paint_ms"]
+metrics = ["warm_close_local_to_paint_ms", "warm_close_local_to_db_ms"]
 notes = "Validates that active-turn shutdown does not leave stale working state on the card."
 
 [[cases]]

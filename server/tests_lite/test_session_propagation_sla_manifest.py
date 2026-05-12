@@ -38,6 +38,8 @@ def test_session_propagation_sla_manifest_keeps_codex_required_path():
     assert case["profile"] == "warm-live"
     assert "timeline_sse" in case["required_observers"]
     assert "browser_card" in case["required_observers"]
+    assert "warm_close_local_to_sse_ms" not in case["metrics"]
+    assert "warm_close_sse_to_paint_ms" not in case["metrics"]
     assert "durable_archive_local_to_hosted_ms" not in case["metrics"]
 
     durable_case = sla_manifest.case_by_id(manifest, "managed_codex_durable_archive")
@@ -65,6 +67,15 @@ def test_session_propagation_sla_metric_aliases_support_existing_profiler_names(
     assert sla_manifest.metric_target_ms(manifest, "close_observed_ms") == 1000
     assert sla_manifest.metric_target_ms(manifest, "durable_archive_local_to_hosted_ms") == 3000
     assert sla_manifest.metric_target_ms(manifest, "cold_timeline_navigation_to_card_paint_ms") == 2000
+
+
+def test_session_propagation_sla_marks_close_watcher_metrics_diagnostic():
+    sla_manifest = _load_sla_manifest_module()
+    manifest = sla_manifest.load_manifest()
+
+    assert sla_manifest.metric_is_diagnostic(manifest, "warm_close_local_to_sse_ms") is True
+    assert sla_manifest.metric_is_diagnostic(manifest, "warm_close_sse_to_paint_ms") is True
+    assert sla_manifest.metric_is_diagnostic(manifest, "warm_close_local_to_paint_ms") is False
 
 
 def test_session_propagation_sla_undefined_cases_do_not_declare_observers_or_metrics():
