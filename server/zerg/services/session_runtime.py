@@ -44,6 +44,7 @@ PHASE_FRESHNESS = {
     "needs_user": timedelta(minutes=10),
 }
 MANAGED_CODEX_FRESHNESS = timedelta(minutes=15)
+EXPLICIT_CLOSED_TERMINAL_STATES = {"session_ended", "finished", "user_closed", "process_gone"}
 LIVE_EXECUTION_PHASES = {"thinking", "running"}
 ATTENTION_PHASES = {"blocked"}
 KNOWN_PHASES = {"thinking", "running", "blocked", "needs_user", "idle", "finished"}
@@ -857,7 +858,7 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
         phase_started_at = normalize_utc(state.phase_started_at)
         if phase_started_at is None or phase_started_at < occurred_at:
             state.phase_started_at = occurred_at
-        if terminal_state in {"session_ended", "finished", "user_closed", "process_gone"} and event.session_id is not None:
+        if terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES and event.session_id is not None:
             from zerg.services.provisional_events import supersede_active_provisional_transcript_events
 
             supersede_active_provisional_transcript_events(db, session_id=event.session_id)

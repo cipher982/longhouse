@@ -124,6 +124,8 @@ def materialize_live_transcript_event(
             return existing
         if existing.provisional_state in {PROVISIONAL_RECONCILED, PROVISIONAL_SUPERSEDED}:
             return existing
+        # Keep a still-active provisional row attached to the current head if
+        # the durable archive forked after the bridge first observed the turn.
         existing.branch_id = _get_head_branch_id(db, session_id)
         existing.role = "assistant"
         existing.content_text = text
