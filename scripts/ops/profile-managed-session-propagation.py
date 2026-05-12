@@ -34,6 +34,7 @@ from managed_profiler.sla_manifest import case_by_id
 from managed_profiler.sla_manifest import format_case_inventory
 from managed_profiler.sla_manifest import load_manifest
 from managed_profiler.sla_manifest import manifest_summary
+from managed_profiler.sla_manifest import metric_is_diagnostic
 from managed_profiler.sla_manifest import metric_target_ms
 
 
@@ -3803,7 +3804,10 @@ def errors_contaminated(errors: list[str]) -> bool:
 
 
 def target_for_metric(key: str) -> int | None:
-    return metric_target_ms(sla_manifest(), key)
+    manifest = sla_manifest()
+    if metric_is_diagnostic(manifest, key):
+        return None
+    return metric_target_ms(manifest, key)
 
 
 def write_batch_summary(
