@@ -82,6 +82,15 @@ BATCH_REQUIRED_FAIL_VERDICTS = frozenset(
     if verdict not in {"pass", "contaminated"} and severity >= 1
 )
 BATCH_REQUIRED_INFRA_VERDICTS = frozenset({"contaminated"})
+TRANSPORT_FAILURE_PATTERNS = (
+    "Request timed out connecting",
+    "status of 524",
+    "status=524",
+    "ReadTimeout",
+    "ERR_QUIC_PROTOCOL_ERROR",
+    "IPC stop timed out",
+    "server responded with a status of 524",
+)
 CODEX_TUI_PRECONDITION_PATTERNS = (
     (
         re.compile(
@@ -2675,16 +2684,12 @@ except Exception as exc:
             if not isinstance(payload, dict):
                 continue
             payload_text = json.dumps(payload, sort_keys=True, default=str)
-            if row.get("event") == "shutdown_completed" and "IPC stop timed out" in payload_text:
+            if row.get("event") == "shutdown_completed" and any(
+                marker in payload_text for marker in TRANSPORT_FAILURE_PATTERNS
+            ):
                 local_degraded = True
             if row.get("source") in {"hosted_http", "hosted_sse", "browser_ui"} and any(
-                marker in payload_text
-                for marker in (
-                    "ReadTimeout",
-                    "timed out",
-                    "status of 524",
-                    "ERR_QUIC_PROTOCOL_ERROR",
-                )
+                marker in payload_text for marker in TRANSPORT_FAILURE_PATTERNS
             ):
                 hosted_degraded = True
         if local_degraded and hosted_degraded:
@@ -3515,6 +3520,8 @@ def batch_exit_code(*, child_runs: list[dict[str, Any]], sla_status: str | None)
 
 def single_exit_code(*, errors: list[str], metrics: list[dict[str, Any]], sla_status: str | None) -> int:
     if errors:
+        if errors_contaminated(errors):
+            return 2
         return 1
     if sla_status == "required":
         saw_infra = False
@@ -3527,6 +3534,11 @@ def single_exit_code(*, errors: list[str], metrics: list[dict[str, Any]], sla_st
         if saw_infra:
             return 2
     return 0
+
+
+def errors_contaminated(errors: list[str]) -> bool:
+    text = "\n".join(errors)
+    return any(marker in text for marker in TRANSPORT_FAILURE_PATTERNS)
 
 
 def target_for_metric(key: str) -> int | None:
