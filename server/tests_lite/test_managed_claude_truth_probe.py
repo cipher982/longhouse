@@ -52,6 +52,14 @@ def test_managed_claude_truth_probe_summarizes_channel_process_truth(monkeypatch
         },
         channel_state={"ready": True, "claude_pid": 101, "bridge_pid": 202},
         channel_health={"ready": True},
+        hook_outbox={
+            "entries": [
+                {
+                    "mtime": "2026-05-12T18:00:00+00:00",
+                    "payload": {"state": "thinking"},
+                }
+            ]
+        },
         hosted={"session": {"id": "session-1"}, "runtime_state": {"phase": "idle", "source": "engine_attached_lease"}},
     )
 
@@ -60,6 +68,8 @@ def test_managed_claude_truth_probe_summarizes_channel_process_truth(monkeypatch
     assert summary["channel_ready"] is True
     assert summary["claude_pid_alive"] is True
     assert summary["bridge_pid_alive"] is True
+    assert summary["hook_outbox_entries"] == 1
+    assert summary["latest_hook_state"] == "thinking"
     assert summary["hosted_runtime_phase"] == "idle"
 
 

@@ -479,6 +479,11 @@ should graduate into the shared profiler only after one live managed-Claude run
 proves which local signal is the primary clock for create, turn phase, and
 close.
 
+Current hypothesis to validate: channel-state `ready` is the create/attach
+clock, hook outbox phase rows are the turn-state clock, and provider/bridge PID
+truth is the close/degraded clock. Hosted runtime and browser paint are
+downstream propagation layers, not primary Claude truth.
+
 ## Measurements
 
 Every run should write a structured JSONL artifact. Each observation must include:

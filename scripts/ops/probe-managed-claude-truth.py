@@ -105,6 +105,13 @@ def read_json_file(path: Path) -> dict[str, Any] | None:
     return strip_sensitive_keys(raw) if isinstance(raw, dict) else None
 
 
+def file_mtime_iso(path: Path) -> str | None:
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
+    except OSError:
+        return None
+
+
 def http_json(url: str, *, timeout: float = 3) -> dict[str, Any] | None:
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
@@ -229,15 +236,10 @@ def collect_hook_outbox(*, longhouse_home: Path, session_id: str, limit: int = 2
             continue
         if str(payload.get("session_id") or "") != session_id:
             continue
-        try:
-            stat = path.stat()
-            mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
-        except OSError:
-            mtime = None
         entries.append(
             {
                 "path": str(path),
-                "mtime": mtime,
+                "mtime": file_mtime_iso(path),
                 "payload": payload,
             }
         )
@@ -324,6 +326,7 @@ def summarize_probe(
     local_health: dict[str, Any] | None,
     channel_state: dict[str, Any] | None,
     channel_health: dict[str, Any] | None,
+    hook_outbox: dict[str, Any] | None,
     hosted: dict[str, Any] | None,
 ) -> dict[str, Any]:
     local_rows = []
@@ -332,6 +335,9 @@ def summarize_probe(
         local_rows = (filtered or {}).get("managed") or []
     runtime_state = hosted.get("runtime_state") if isinstance(hosted, dict) else None
     session = hosted.get("session") if isinstance(hosted, dict) else None
+    hook_entries = hook_outbox.get("entries") if isinstance(hook_outbox, dict) else []
+    latest_hook = hook_entries[0] if hook_entries else {}
+    latest_hook_payload = latest_hook.get("payload") if isinstance(latest_hook, dict) else {}
     return {
         "session_id": session_id,
         "local_health_has_managed_claude": bool(local_rows),
@@ -342,6 +348,9 @@ def summarize_probe(
         "channel_health_available": channel_health is not None,
         "claude_pid_alive": pid_alive((channel_state or {}).get("claude_pid")),
         "bridge_pid_alive": pid_alive((channel_state or {}).get("bridge_pid")),
+        "hook_outbox_entries": len(hook_entries),
+        "latest_hook_state": latest_hook_payload.get("state") if isinstance(latest_hook_payload, dict) else None,
+        "latest_hook_mtime": latest_hook.get("mtime") if isinstance(latest_hook, dict) else None,
         "hosted_session_exists": bool(session),
         "hosted_runtime_phase": (runtime_state or {}).get("phase") if isinstance(runtime_state, dict) else None,
         "hosted_terminal_state": (runtime_state or {}).get("terminal_state") if isinstance(runtime_state, dict) else None,
@@ -366,6 +375,9 @@ def write_summary(path: Path, summary: dict[str, Any]) -> None:
         f"- Channel HTTP health: `{summary.get('channel_health_available')}`",
         f"- Claude PID alive: `{summary.get('claude_pid_alive')}`",
         f"- Bridge PID alive: `{summary.get('bridge_pid_alive')}`",
+        f"- Hook outbox entries: `{summary.get('hook_outbox_entries')}`",
+        f"- Latest hook state: `{summary.get('latest_hook_state') or '-'}`",
+        f"- Latest hook mtime: `{summary.get('latest_hook_mtime') or '-'}`",
         f"- Hosted session exists: `{summary.get('hosted_session_exists')}`",
         f"- Hosted runtime phase: `{summary.get('hosted_runtime_phase') or '-'}`",
         f"- Hosted terminal state: `{summary.get('hosted_terminal_state') or '-'}`",
@@ -434,6 +446,7 @@ def main() -> int:
 
         channel_state = None
         channel_health = None
+        hook_outbox = None
         if selected_session_id:
             state_path = state_file_for(selected_session_id, claude_dir=args.claude_dir)
             channel_state = read_json_file(state_path)
@@ -444,14 +457,15 @@ def main() -> int:
                 event="snapshot",
                 session_id=selected_session_id,
                 provider_session_id=selected_provider_session_id,
-                payload={"path": str(state_path), "state": channel_state},
+                payload={"path": str(state_path), "mtime": file_mtime_iso(state_path), "state": channel_state},
             )
+            hook_outbox = collect_hook_outbox(longhouse_home=args.longhouse_home, session_id=selected_session_id)
             recorder.write(
                 source="hook_outbox",
                 event="snapshot",
                 session_id=selected_session_id,
                 provider_session_id=selected_provider_session_id,
-                payload=collect_hook_outbox(longhouse_home=args.longhouse_home, session_id=selected_session_id),
+                payload=hook_outbox,
             )
             if channel_state:
                 for key in ("claude_pid", "bridge_pid"):
@@ -489,6 +503,7 @@ def main() -> int:
             local_health=local,
             channel_state=channel_state,
             channel_health=channel_health,
+            hook_outbox=hook_outbox,
             hosted=hosted,
         )
         if time.monotonic() < deadline:
