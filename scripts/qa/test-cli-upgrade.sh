@@ -136,6 +136,7 @@ prepare_pkg() {
     --output "$target/.build/build-identity.json" \
     --pyproject-path "$target/server/pyproject.toml" \
     >/dev/null
+  cp "$target/.build/build-identity.json" "$target/server/zerg/build_identity.json"
   (
     cd "$target/server"
     uv build --wheel >/dev/null
