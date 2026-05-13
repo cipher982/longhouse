@@ -557,6 +557,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/launches/debug": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Remote Launch Debug
+         * @description Admin-only view of remote launches that are not cleanly live.
+         *
+         *     Surfaces launching / launching_unknown / launch_failed / launch_orphaned
+         *     rows so an operator can debug propagation or control-channel issues.
+         */
+        get: operations["list_remote_launch_debug_admin_launches_debug_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/bootstrap/runners": {
         parameters: {
             query?: never;
@@ -2880,6 +2903,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sessions/launch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Launch Remote Session Endpoint
+         * @description Start a session on a user-owned machine via the Machine Agent control channel.
+         *
+         *     See docs/specs/remote-session-launch.md. Pre-allocates a session UUID,
+         *     inserts the ``sessions`` row in ``launch_state=launching``, and dispatches
+         *     ``session.launch`` over the existing control WebSocket.
+         */
+        post: operations["launch_remote_session_endpoint_sessions_launch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/sessions/{session_id}/lock": {
         parameters: {
             query?: never;
@@ -3064,6 +3111,26 @@ export interface paths {
          *     with event-driven refresh.
          */
         get: operations["stream_session_workspace_timeline_sessions__session_id__workspace_stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/timeline/machines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Browser Machines
+         * @description Browser machines directory. Same body shape as ``/api/agents/machines``.
+         */
+        get: operations["list_browser_machines_timeline_machines_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3409,6 +3476,26 @@ export interface paths {
          *     - Triggers async background summary/embedding/turn-loop work after successful ingest
          */
         post: operations["ingest_session_agents_ingest_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/machines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Machines
+         * @description List enrolled machines for this owner with live control-channel status.
+         */
+        get: operations["list_machines_agents_machines_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -6275,6 +6362,44 @@ export interface components {
             /** Tools */
             tools?: string[];
         };
+        /** MachineDirectoryEntry */
+        MachineDirectoryEntry: {
+            /**
+             * Device Id
+             * @description Canonical device id used for routing
+             */
+            device_id: string;
+            /**
+             * Machine Name
+             * @description Display label; may equal device_id
+             */
+            machine_name: string;
+            /**
+             * Online
+             * @description True iff the control channel is currently connected
+             */
+            online: boolean;
+            /**
+             * Supports
+             * @description Capabilities announced by the Machine Agent on its last hello frame. Empty when offline.
+             */
+            supports?: string[];
+            /**
+             * Last Seen At
+             * @description Most recent control-channel activity or device-token use; null if never observed.
+             */
+            last_seen_at?: string | null;
+            /**
+             * Engine Build
+             * @description Engine build string from the last hello frame; null when offline.
+             */
+            engine_build?: string | null;
+        };
+        /** MachineDirectoryResponse */
+        MachineDirectoryResponse: {
+            /** Machines */
+            machines?: components["schemas"]["MachineDirectoryEntry"][];
+        };
         /** MachineHealthItemResponse */
         MachineHealthItemResponse: {
             /** Device Id */
@@ -6929,6 +7054,99 @@ export interface components {
             matches: components["schemas"]["RecallMatch"][];
             /** Total */
             total: number;
+        };
+        /** RemoteLaunchDebugEntry */
+        RemoteLaunchDebugEntry: {
+            /** Session Id */
+            session_id: string;
+            /** Device Id */
+            device_id: string | null;
+            /** Provider */
+            provider: string;
+            /** Cwd */
+            cwd: string | null;
+            /** Launch State */
+            launch_state: string;
+            /** Launch Error Code */
+            launch_error_code: string | null;
+            /** Launch Error Message */
+            launch_error_message: string | null;
+            /** Launch Lease Until */
+            launch_lease_until: string | null;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Ended At */
+            ended_at: string | null;
+        };
+        /** RemoteLaunchDebugResponse */
+        RemoteLaunchDebugResponse: {
+            /** Entries */
+            entries: components["schemas"]["RemoteLaunchDebugEntry"][];
+            /** Total */
+            total: number;
+        };
+        /**
+         * RemoteSessionLaunchRequest
+         * @description User-initiated remote session launch request.
+         */
+        RemoteSessionLaunchRequest: {
+            /**
+             * Device Id
+             * @description Target enrolled device id
+             */
+            device_id: string;
+            /**
+             * Provider
+             * @description Provider CLI to launch (v1: codex only)
+             */
+            provider: string;
+            /**
+             * Cwd
+             * @description Absolute working directory on the target machine
+             */
+            cwd: string;
+            /**
+             * Git Repo
+             * @description Optional git repository path
+             */
+            git_repo?: string | null;
+            /**
+             * Git Branch
+             * @description Optional git branch name
+             */
+            git_branch?: string | null;
+            /**
+             * Project
+             * @description Optional project label
+             */
+            project?: string | null;
+            /**
+             * Display Name
+             * @description Optional display name
+             */
+            display_name?: string | null;
+            /**
+             * Client Request Id
+             * @description Optional idempotency key; repeated calls with the same value return the same session
+             */
+            client_request_id?: string | null;
+        };
+        /**
+         * RemoteSessionLaunchResponse
+         * @description Response from POST /api/sessions/launch.
+         */
+        RemoteSessionLaunchResponse: {
+            /** Session Id */
+            session_id: string;
+            /** Launch State */
+            launch_state: string;
+            /** Launch Error Code */
+            launch_error_code?: string | null;
+            /** Launch Error Message */
+            launch_error_message?: string | null;
         };
         /**
          * ResetType
@@ -8430,6 +8648,21 @@ export interface components {
              * @default active
              */
             user_state: string;
+            /**
+             * Launch State
+             * @description Remote-launch lifecycle: launching|live|launching_unknown|launch_failed|launch_orphaned; null for pre-migration rows
+             */
+            launch_state?: string | null;
+            /**
+             * Launch Error Code
+             * @description Remote-launch error code when launch_state=launch_failed/launch_orphaned
+             */
+            launch_error_code?: string | null;
+            /**
+             * Launch Error Message
+             * @description Remote-launch error message when launch_state=launch_failed/launch_orphaned
+             */
+            launch_error_message?: string | null;
         };
         /** SessionRuntimeDisplayResponse */
         SessionRuntimeDisplayResponse: {
@@ -11028,6 +11261,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminUserDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_remote_launch_debug_admin_launches_debug_get: {
+        parameters: {
+            query?: {
+                /** @description Max rows to return */
+                limit?: number;
+                /** @description Include launch_state=live rows (default: only show non-healthy) */
+                include_live?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteLaunchDebugResponse"];
                 };
             };
             /** @description Validation Error */
@@ -14752,6 +15019,42 @@ export interface operations {
             };
         };
     };
+    launch_remote_session_endpoint_sessions_launch_post: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoteSessionLaunchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteSessionLaunchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_session_lock_status_sessions__session_id__lock_get: {
         parameters: {
             query?: {
@@ -15120,6 +15423,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_browser_machines_timeline_machines_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachineDirectoryResponse"];
                 };
             };
         };
@@ -15823,6 +16146,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IngestResponse"];
+                };
+            };
+        };
+    };
+    list_machines_agents_machines_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachineDirectoryResponse"];
                 };
             };
         };
