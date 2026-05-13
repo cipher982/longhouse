@@ -127,7 +127,8 @@ def get_engine_executable() -> str:
     Resolution order:
     1. Installed runtime artifact (canonical local install)
     2. Repo dev builds (release then debug)
-    3. Binary on PATH via runtime artifact lookup
+    3. Binary on PATH via runtime artifact lookup. If PATH and repo builds
+       both exist, prefer the repo build; PATH is only the last fallback.
 
     Raises:
         RuntimeError: If the binary cannot be found anywhere.
