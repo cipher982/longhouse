@@ -45,6 +45,7 @@ pub fn spawn_control_channel(config: ShipperConfig) -> Option<JoinHandle<()>> {
 
 async fn run_reconnect_loop(config: ShipperConfig) {
     let mut backoff = Duration::from_secs(1);
+    let mut last_error: Option<String> = None;
     let mut completed_commands = CompletedCommandCache::new(
         COMPLETED_COMMAND_CACHE_CAPACITY,
         Duration::from_secs(COMPLETED_COMMAND_CACHE_TTL_SECS),
@@ -54,14 +55,28 @@ async fn run_reconnect_loop(config: ShipperConfig) {
             Ok(()) => {
                 tracing::info!("Machine control channel disconnected");
                 backoff = Duration::from_secs(1);
+                last_error = None;
             }
             Err(err) => {
-                tracing::debug!("Machine control channel connection failed: {err}");
+                let error_chain = format_error_chain(&err);
+                if last_error.as_deref() == Some(error_chain.as_str()) {
+                    tracing::debug!(error = %error_chain, "Machine control channel connection failed");
+                } else {
+                    tracing::warn!(error = %error_chain, "Machine control channel connection failed");
+                    last_error = Some(error_chain);
+                }
             }
         }
         tokio::time::sleep(backoff).await;
         backoff = (backoff * 2).min(Duration::from_secs(30));
     }
+}
+
+fn format_error_chain(err: &anyhow::Error) -> String {
+    err.chain()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(": ")
 }
 
 async fn run_once(
@@ -217,13 +232,10 @@ async fn execute_command(
             }
 
             let api_url = config.api_url.clone();
-            let api_token = config
-                .api_token
-                .clone()
-                .ok_or_else(|| CommandError {
-                    code: "provider_launch_failed".to_string(),
-                    message: "Machine Agent has no device token configured".to_string(),
-                })?;
+            let api_token = config.api_token.clone().ok_or_else(|| CommandError {
+                code: "provider_launch_failed".to_string(),
+                message: "Machine Agent has no device token configured".to_string(),
+            })?;
 
             let summary = cmd_codex_bridge_start(BridgeStartConfig {
                 session_id: session_id.clone(),

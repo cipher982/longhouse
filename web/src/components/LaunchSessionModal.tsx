@@ -225,17 +225,31 @@ function EmptyState({ machines }: { machines: MachineDirectoryEntry[] }) {
       </div>
     );
   }
+  const online = machines.filter((m) => m.online);
+  const offline = machines.filter((m) => !m.online);
+  const offlinePreview = offline.slice(0, 3);
+  const hiddenOfflineCount = Math.max(offline.length - offlinePreview.length, 0);
+
   return (
     <div className="modal-empty-state" data-testid="launch-no-launchable">
-      <p>No machines are online with Codex support right now.</p>
-      <ul>
-        {machines.map((m) => (
-          <li key={m.device_id}>
-            <strong>{m.machine_name}</strong> — {m.online ? "online" : "offline"}
-            {!m.supports.includes(LAUNCH_CAP) ? " · does not advertise codex.launch" : ""}
-          </li>
-        ))}
-      </ul>
+      <p>No online machine is advertising Codex launch right now.</p>
+      {online.length > 0 && (
+        <ul>
+          {online.map((m) => (
+            <li key={m.device_id}>
+              <strong>{m.machine_name}</strong> — online, missing <code>{LAUNCH_CAP}</code>
+            </li>
+          ))}
+        </ul>
+      )}
+      {offline.length > 0 && (
+        <p>
+          {offline.length === 1 ? "1 enrolled machine is" : `${offline.length} enrolled machines are`} offline
+          {offlinePreview.length > 0 ? `: ${offlinePreview.map((m) => m.machine_name).join(", ")}` : ""}
+          {hiddenOfflineCount > 0 ? `, plus ${hiddenOfflineCount} more` : ""}.
+        </p>
+      )}
+      <p>Restart or upgrade the Machine Agent on the target machine, then reopen this sheet.</p>
     </div>
   );
 }
