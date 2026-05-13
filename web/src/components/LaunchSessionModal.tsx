@@ -92,6 +92,10 @@ export default function LaunchSessionModal({
         display_name: displayName.trim() || null,
         client_request_id: `launch-${crypto.randomUUID()}`,
       });
+      if (result.launch_state === "launch_failed" || result.launch_state === "launch_orphaned") {
+        setError(formatLaunchFailure(result));
+        return;
+      }
       onLaunched(result.session_id);
     } catch (err) {
       if (err instanceof ApiError) {
@@ -171,7 +175,7 @@ export default function LaunchSessionModal({
                   spellCheck={false}
                   data-testid="launch-cwd-input"
                 />
-                <small>Must be absolute and under $HOME on the target machine.</small>
+                <small>Must be an absolute path to a git worktree under $HOME on the target machine.</small>
               </label>
 
               <label className="form-field">
@@ -276,4 +280,16 @@ function machineSummary(machines: MachineDirectoryEntry[], reason: string): stri
   const names = preview.map((m) => m.machine_name).join(", ");
   const prefix = machines.length === 1 ? "1 enrolled machine" : `${machines.length} enrolled machines`;
   return `${prefix} ${reason}${names ? `: ${names}` : ""}${hidden > 0 ? `, plus ${hidden} more` : ""}.`;
+}
+
+function formatLaunchFailure(result: {
+  launch_error_code: string | null;
+  launch_error_message: string | null;
+}): string {
+  const code = result.launch_error_code?.trim();
+  const message = result.launch_error_message?.trim();
+  if (code && message) return `${code}: ${message}`;
+  if (message) return message;
+  if (code) return code;
+  return "Launch failed";
 }

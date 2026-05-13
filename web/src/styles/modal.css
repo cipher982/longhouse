@@ -78,6 +78,26 @@
     flex: 1;
   }
 
+  .modal-content form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+
+  .modal-content .form-field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin: 0;
+  }
+
+  .modal-content .form-field small {
+    display: block;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    line-height: var(--font-line-height-normal);
+  }
+
   .modal-loading,
   .modal-error {
     display: flex;

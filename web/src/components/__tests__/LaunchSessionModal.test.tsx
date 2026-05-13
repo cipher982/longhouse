@@ -193,4 +193,37 @@ describe("LaunchSessionModal", () => {
       }),
     );
   });
+
+  it("keeps immediate launch failures in the modal instead of navigating", async () => {
+    apiMocks.listMachines.mockResolvedValue({
+      machines: [
+        machine({
+          device_id: "cinder",
+          machine_name: "cinder",
+          online: true,
+          can_launch_codex: true,
+          launch_blocked_by: null,
+        }),
+      ],
+    });
+    apiMocks.launchRemoteSession.mockResolvedValue({
+      session_id: "failed-session-id",
+      launch_state: "launch_failed",
+      launch_error_code: "cwd_not_allowed",
+      launch_error_message: "cwd /Users/davidrose/git/zerg is outside the Machine Agent's launch allowlist",
+    });
+
+    const onLaunched = vi.fn();
+    const user = userEvent.setup();
+    renderModal({ onLaunched });
+
+    const cwdInput = await screen.findByTestId("launch-cwd-input");
+    await user.type(cwdInput, "/Users/davidrose/git/zerg");
+    await user.click(screen.getByTestId("launch-submit"));
+
+    expect(await screen.findByTestId("launch-error")).toHaveTextContent(
+      "cwd_not_allowed: cwd /Users/davidrose/git/zerg is outside the Machine Agent's launch allowlist",
+    );
+    expect(onLaunched).not.toHaveBeenCalled();
+  });
 });
