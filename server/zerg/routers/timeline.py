@@ -526,10 +526,18 @@ async def get_timeline_session_workspace(
     branch_mode: str = Query("head", description="Branch projection mode: head|all"),
     limit: int = Query(100, ge=1, le=1000, description="Max projected items"),
     db: Session = Depends(get_db),
+    current_user=Depends(get_current_browser_user),
 ):
     timing = ServerTimingRecorder()
     response.headers["Cache-Control"] = "private, max-age=5"
-    result = build_session_workspace(db=db, session_id=session_id, branch_mode=branch_mode, limit=limit, timing=timing)
+    result = build_session_workspace(
+        db=db,
+        session_id=session_id,
+        branch_mode=branch_mode,
+        limit=limit,
+        timing=timing,
+        owner_id=int(current_user.id),
+    )
     timing.apply(response)
     return result
 

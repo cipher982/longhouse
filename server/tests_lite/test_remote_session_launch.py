@@ -30,16 +30,20 @@ from zerg.database import make_engine  # noqa: E402
 from zerg.dependencies.agents_auth import require_single_tenant  # noqa: E402
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user  # noqa: E402
 from zerg.models import User  # noqa: E402
-from zerg.models.agents import AgentSession  # noqa: E402
 from zerg.models.agents import AgentsBase  # noqa: E402
+from zerg.models.agents import AgentSession  # noqa: E402
 from zerg.models.device_token import DeviceToken  # noqa: E402
 from zerg.services.machine_control_channel import MachineControlChannelRegistry  # noqa: E402
 from zerg.services.machine_control_channel import MachineControlCommandResponse  # noqa: E402
+from zerg.services.machine_control_channel import get_machine_control_channel_registry  # noqa: E402
 from zerg.services.remote_session_launch import RemoteLaunchError  # noqa: E402
 from zerg.services.remote_session_launch import RemoteLaunchParams  # noqa: E402
 from zerg.services.remote_session_launch import launch_remote_session  # noqa: E402
 from zerg.services.remote_session_launch import reap_orphaned_launches  # noqa: E402
 from zerg.services.remote_session_launch import reconcile_launch_from_command_result  # noqa: E402
+from zerg.services.session_runtime import RuntimeEventIngest  # noqa: E402
+from zerg.services.session_runtime import ingest_runtime_events  # noqa: E402
+from zerg.services.session_workspace import build_session_workspace  # noqa: E402
 
 OWNER_ID = 77
 
@@ -413,6 +417,64 @@ def test_client_request_id_is_idempotent(tmp_path):
 
     assert first.session_id == second.session_id
     assert len(registry.sent) == 1  # second call short-circuits
+
+
+def test_launched_codex_workspace_exposes_live_engine_control(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    launch_registry = _StubRegistry()
+    _register_online(launch_registry, owner_id=OWNER_ID, device_id="cinder")
+
+    global_registry = get_machine_control_channel_registry()
+    asyncio.run(global_registry.clear_for_tests())
+    _register_online(
+        global_registry,
+        owner_id=OWNER_ID,
+        device_id="cinder",
+        supports=("codex.launch", "codex.send", "codex.interrupt", "codex.steer"),
+    )
+
+    try:
+        with SessionLocal() as db:
+            result = asyncio.run(
+                launch_remote_session(
+                    db,
+                    RemoteLaunchParams(
+                        owner_id=OWNER_ID,
+                        device_id="cinder",
+                        provider="codex",
+                        cwd="/Users/me/repo",
+                    ),
+                    registry=launch_registry,
+                )
+            )
+            ingest_runtime_events(
+                db,
+                [
+                    RuntimeEventIngest(
+                        runtime_key=f"codex:{result.session_id}",
+                        session_id=result.session_id,
+                        provider="codex",
+                        device_id="cinder",
+                        source="codex_bridge",
+                        kind="phase_signal",
+                        phase="idle",
+                        tool_name=None,
+                        occurred_at=datetime.now(timezone.utc),
+                        freshness_ms=60_000,
+                        dedupe_key=f"test-launch-ready:{result.session_id}",
+                        payload={"managed_transport": "codex_app_server", "thread_id": "thread-1"},
+                    )
+                ],
+            )
+            workspace = build_session_workspace(db=db, session_id=result.session_id, owner_id=OWNER_ID)
+    finally:
+        asyncio.run(global_registry.clear_for_tests())
+
+    assert workspace.session.launch_state == "live"
+    assert workspace.session.capabilities.live_control_available is True
+    assert workspace.session.capabilities.can_queue_next_input is True
+    assert workspace.session.capabilities.can_steer_active_turn is False
 
 
 def test_late_result_reconciliation_moves_unknown_to_live(tmp_path):

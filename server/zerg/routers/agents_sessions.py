@@ -23,12 +23,14 @@ from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
+from zerg.models.device_token import DeviceToken
 from zerg.services.agents_store import AgentsStore
 from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.session_archive import SessionArchiveBundleResponse
 from zerg.services.session_archive import SessionArchiveManifestResponse
 from zerg.services.session_archive import build_session_archive_bundle
 from zerg.services.session_archive import build_session_archive_manifest_item
+from zerg.services.session_chat_impl import _resolve_agents_owner_id
 from zerg.services.session_coordination import acknowledge_session_message as acknowledge_session_message_for_session
 from zerg.services.session_coordination import list_session_messages
 from zerg.services.session_coordination import load_session_tail
@@ -1037,13 +1039,21 @@ async def get_session_workspace(
     branch_mode: str = Query("head", description="Branch projection mode: head|all"),
     limit: int = Query(100, ge=1, le=1000, description="Max projected items"),
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
+    _auth: DeviceToken | ManagedLocalHookToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SessionWorkspaceResponse:
     """Get the focused session, its thread, and the first projection page in one round trip."""
     timing = ServerTimingRecorder()
     response.headers["Cache-Control"] = "private, max-age=5"
-    result = build_session_workspace(db=db, session_id=session_id, branch_mode=branch_mode, limit=limit, timing=timing)
+    owner_id = _resolve_agents_owner_id(db, _auth if isinstance(_auth, DeviceToken) else None)
+    result = build_session_workspace(
+        db=db,
+        session_id=session_id,
+        branch_mode=branch_mode,
+        limit=limit,
+        timing=timing,
+        owner_id=owner_id,
+    )
     timing.apply(response)
     return result
 

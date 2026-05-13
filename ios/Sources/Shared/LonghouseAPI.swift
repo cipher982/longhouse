@@ -386,7 +386,7 @@ public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
     public let machineName: String
     public let online: Bool
     public let supports: [String]
-    public let lastSeenAt: Date?
+    public let lastSeenAt: String?
     public let engineBuild: String?
 
     public var supportsCodexLaunch: Bool { supports.contains("codex.launch") }

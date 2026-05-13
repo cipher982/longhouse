@@ -1,6 +1,6 @@
 # Remote Session Launch
 
-Status: Proposed. Phase 0 implementable now. Phase 1+ gated on companion-view stability (see Deferral Gate).
+Status: Implemented in `remote-session-launch` as a Codex-only v1. Directory picker, presets, Claude launch, and richer SLA telemetry remain deferred.
 Owner: machine control + mobile/web launch UX
 Updated: 2026-05-12
 
@@ -38,35 +38,30 @@ session rather than act on an existing one.
 - No continuation of a prior session into a fresh launch in v1. Fresh
   sessions only.
 
-## Deferral Gate (ship Phase 0 only)
+## Release Scope
 
-Phase 0 (machines endpoint + projection) ships now. It is useful on its
-own for a machines page and derisks the data shape.
+The release scope is the narrow Codex v1:
 
-Phase 1+ (the `session.launch` command, `launch_state` lifecycle on
-`sessions`, the launch sheet UI) are **deferred until all of**:
+- machine directory endpoints for browser and machine clients
+- `POST /api/sessions/launch`
+- `session.launch` over the Machine Agent control WebSocket
+- headless Codex bridge startup with thread creation
+- web and iOS launch sheets
+- launch lifecycle fields on `sessions`
+- launch reaper and admin debug endpoint
 
-- `ios-session-workspace-contract` is fully landed on TestFlight builds
-- observation ledger has been dogfooded for two weeks with no new ingest
-  bugs reported
-- managed Codex send/interrupt/steer on the engine channel (not legacy
-  runner) is the default transport and has been green on the propagation
-  SLA dashboard for two weeks
-
-Why: companion view is the current chapter. Remote launch is the next
-chapter. We spec it now so we are ready; we do not build it until the
-substrate is boring.
-
-Before re-opening Phase 1, revisit this spec's Open Questions and confirm
-none have become decisions.
+Directory picker, workspace presets, Claude launch, queued offline
+launch, and propagation SLA dashboard integration are intentionally
+deferred.
 
 ## Product Shape
 
 ### Launch sheet — cold path first
 
 A new user has no sessions. The UX leads with **machines** (what they
-just enrolled) and a **directory picker served by the target Machine
-Agent** (which is authoritative for cwd). Presets are additive.
+just enrolled) and a typed cwd on the target Machine Agent (which is
+authoritative for cwd validation). A directory picker and presets are
+additive follow-ups.
 
 ```
 Start Session
@@ -76,25 +71,20 @@ Machine
   [homelab] offline              (disabled)
 
 Workspace on cinder
-  /Users/david/git/zerg         · main     (recent)
-  /Users/david/git/me           · master   (recent)
-  Browse this machine…                     (opens picker)
+  /Users/david/git/zerg
 
 Provider     [Codex]
-
-Initial prompt (optional)  ___________________________
 
                                                 [Start]
 ```
 
 - Machine list is first — it is what new users actually have.
-- Workspace is a directory picker backed by the Machine Agent. Recent
-  workspaces for the selected machine surface at the top once history
-  exists, as an affordance — not as the only path.
+- Workspace is a typed absolute cwd in v1. A directory picker backed by
+  the Machine Agent and recent workspaces are deferred accelerators.
 - Provider defaults to the only one in v1 (Codex).
-- Initial prompt is optional. If provided, it is sent as a follow-up
-  `session.send_text` once the session is created, not bundled into the
-  launch frame (keeps launch semantics narrow).
+- Initial prompt is deferred from the Codex v1 release. The v1 launch
+  creates a steerable empty session; the user sends the first prompt from
+  session detail.
 
 ### After "Start"
 
@@ -118,9 +108,9 @@ Initial prompt (optional)  ___________________________
    reality. Recents are an accelerator, not the bootstrap.
 
 3. **No hidden state transfer.**
-   Launch carries only declared parameters: cwd, provider, optional repo
-   context, optional initial prompt. No silent copy of files, secrets, or
-   env from the requester's device.
+   Launch carries only declared parameters: cwd, provider, and optional
+   repo context. No silent copy of files, secrets, or env from the
+   requester's device.
 
 4. **Online-only placement.**
    Target machine must have an active control-channel connection at the
@@ -275,7 +265,7 @@ The list reads from the control-channel in-memory registry for
 online/supports/last_seen, joined with persisted device metadata for
 machines that are currently offline but have been seen before.
 
-### Launch (Phase 1 — gated)
+### Launch (Phase 1)
 
 - `POST /api/sessions/launch`
   body:
@@ -287,8 +277,7 @@ machines that are currently offline but have been seen before.
     "git_repo": "zerg",
     "git_branch": "main",
     "project": "zerg",
-    "display_name": null,
-    "initial_prompt": null
+    "display_name": null
   }
   ```
   returns:
@@ -353,9 +342,9 @@ Failure codes (mapped to `launch_error_code`): `cwd_not_found`,
 - Runtime Host verifies:
   - `device_id` belongs to this user (via device registration ownership)
   - target is the user's — no cross-account launch
-- `initial_prompt`, when provided, is sent as a follow-up
-  `session.send_text`. Launch permission implies send permission; no
-  separate check needed.
+- Initial prompt is deferred from v1. Launch permission creates the
+  managed session; the follow-up send uses the existing live-session
+  permission path.
 
 **Why no 2FA in v1**: Device enrollment already granted code-running
 trust. The existing `send_text` primitive can already steer an LLM that
@@ -414,7 +403,7 @@ Acceptance:
   known supports are not persisted — avoid implying stale truth).
 - Unknown users return `[]` (not 404).
 
-### Phase 1 — `session.launch` + `launch_state` on `sessions` (gated)
+### Phase 1 — `session.launch` + `launch_state` on `sessions`
 
 - DB migration: add `launch_state`, `launch_error_code`,
   `launch_error_message`, `launch_lease_until` to `sessions`.
@@ -441,32 +430,31 @@ Acceptance:
 - No new table created. `launch_state` column is nullable and NULL for
   all pre-migration rows (= equivalent to `live`).
 
-### Phase 2 — Web launch sheet (gated)
+### Phase 2 — Web launch sheet
 
-- Launch sheet UI using `/timeline/machines` + directory picker.
+- Launch sheet UI using `/timeline/machines` + typed cwd.
 - Machine-first ordering in the UI.
 - Presets surface under the selected machine once history exists.
 - Deep-link on success.
 
 Acceptance:
-- Zero-history user can complete a launch via directory picker.
-- Second-session user sees their recent workspace as a preset under
-  that machine.
+- Zero-history user can complete a launch by entering a cwd.
+- Second-session user can reuse a cwd manually.
 - Offline machine visually disabled with clear copy.
 - E2E test covers happy-path launch from click to transcript render.
 
-### Phase 3 — iOS launch sheet (gated)
+### Phase 3 — iOS launch sheet
 
 - Mirror web UX.
 - Existing user-cookie auth (no machine token).
 - Xcode UI test covers happy-path launch.
 
-### Phase 4 — telemetry (gated)
+### Phase 4 — telemetry/admin debug
 
-- Propagation metric: POST-to-first-transcript-byte for remote launches,
-  tracked alongside existing managed-op SLAs.
 - Hidden admin view of sessions filtered by `launch_state !=
   {live, NULL}` for debugging.
+- Propagation metric: POST-to-first-transcript-byte for remote launches,
+  tracked alongside existing managed-op SLAs. Deferred.
 
 ## Directory Picker (Phase 2/3 sub-spec)
 
@@ -524,10 +512,9 @@ End-to-end (Phase 2/3):
    machine-agent-side "favorites" (bookmarks of common roots) from day
    one, or defer until users ask?
 
-2. `initial_prompt` policy. Current decision: send as follow-up
-   `session.send_text` after `launch` succeeds. That means a launch can
-   succeed and the prompt can fail independently. UX implication: if
-   send fails, the session exists but is empty. Acceptable?
+2. Initial prompt. Deferred from Codex v1. When added, prefer sending it
+   as a follow-up `session.send_text` after `launch` succeeds so launch
+   semantics stay narrow.
 
 3. Rate limiting. `already_running_for_cwd` is cheap on the engine.
    Do we need a Runtime Host rate limit, or is engine-side idempotency
@@ -571,5 +558,6 @@ This spec was revised after three independent reviews:
   better, agreed `session.launch` belongs on the control channel if the
   durable-FSM rule is respected.
 
-All three agreed on: drop the parallel table, lead UX with machines, wire
-`cwd_not_allowed` as a real policy, and ship Phase 0 only.
+All three agreed on: drop the parallel table, lead UX with machines, and
+wire `cwd_not_allowed` as a real policy. The original staged plan shipped
+Phase 0 first; the implementation branch now carries the full Codex v1.

@@ -848,6 +848,10 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     // launches already have a thread id; TUI launches capture it later from
     // thread/started notifications.
     write_state_file(&context.state_file, &context.state)?;
+    if config.start_thread && context.state.thread_id.is_some() {
+        let startup_phase = context.runtime_tracker.current_phase_update();
+        emit_runtime_updates(&config, &mut context, vec![startup_phase]).await;
+    }
 
     // Spawn IPC socket listener so `send` routes through the daemon's persistent connection
     let sock_path = ipc_socket_path(&context.state_file);
