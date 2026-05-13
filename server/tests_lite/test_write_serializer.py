@@ -62,6 +62,44 @@ async def test_high_priority_write_jumps_ahead_of_queued_background_work(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_runtime_and_archive_writes_jump_ahead_of_presence_chatter(tmp_path):
+    db_path = tmp_path / "write-serializer-priority.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    session_factory = make_sessionmaker(engine)
+
+    with engine.begin() as conn:
+        conn.exec_driver_sql("CREATE TABLE writes (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL)")
+
+    serializer = WriteSerializer()
+    serializer.configure(session_factory)
+
+    started = threading.Event()
+    run_order: list[str] = []
+
+    def _make_write(label: str, delay: float = 0.0):
+        def _write(db):
+            run_order.append(label)
+            if label == "first":
+                started.set()
+            if delay > 0:
+                time.sleep(delay)
+            db.execute(sa_text("INSERT INTO writes(label) VALUES (:label)"), {"label": label})
+
+        return _write
+
+    first = asyncio.create_task(serializer.execute(_make_write("first", delay=0.05), label="summary"))
+    await asyncio.to_thread(started.wait, 1.0)
+
+    presence = asyncio.create_task(serializer.execute(_make_write("presence"), label="presence"))
+    ingest = asyncio.create_task(serializer.execute(_make_write("ingest"), label="ingest"))
+    runtime = asyncio.create_task(serializer.execute(_make_write("runtime"), label="runtime-observations"))
+
+    await asyncio.gather(first, presence, ingest, runtime)
+
+    assert run_order == ["first", "runtime", "ingest", "presence"]
+
+
+@pytest.mark.asyncio
 async def test_cancelled_write_keeps_writer_slot_until_worker_thread_finishes(tmp_path):
     db_path = tmp_path / "write-serializer-cancel.db"
     engine = make_engine(f"sqlite:///{db_path}")

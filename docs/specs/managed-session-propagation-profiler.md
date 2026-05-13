@@ -330,7 +330,7 @@ The transcript shipper can and should be improved for archive freshness, but it 
 | Lane | Point Of Truth | Terminal Signal | Target Budget | Backstop Budget | Notes |
 | --- | --- | --- | --- | --- | --- |
 | Managed Codex bridge | `longhouse-engine codex-bridge` daemon | `terminal_signal` from `codex_bridge` with `terminal_state=session_ended`, `terminal_reason=bridge_stop` | target p50 < 250ms, p95 < 1000ms after graceful stop is requested | heartbeat missing lease < 2min until replaced | The bridge already owns API credentials and posts runtime phase/progress observations, so graceful stop is a push event. Until runtime observations are spooled, this primary path is best-effort when hosted is unreachable. |
-| Managed Claude channel | Claude native channel/control wrapper | `terminal_signal` from channel/control path with `terminal_reason=channel_closed` or `provider_exit` | target p50 < 250ms, p95 < 1000ms after provider exit is observed by the wrapper/channel | process scan / missing lease < 2min until replaced | Claude must not borrow Codex bridge semantics; it needs its own channel/process lifecycle source. |
+| Managed Claude channel | Claude native channel/control wrapper plus Machine Agent channel scan | `terminal_signal` from wrapper with `terminal_reason=provider_exit`; fallback `terminal_signal` from `claude_channel_scan` with `terminal_reason=process_gone` or `channel_state_gone` | target p50 < 250ms, p95 < 1000ms after provider exit is observed by the wrapper/channel | Machine Agent channel scan < 2s on a healthy awake machine | Claude must not borrow Codex bridge semantics; it needs its own channel/process lifecycle source. The wrapper is the graceful fast path; the scan is the process-truth backstop. |
 | Hooked unmanaged provider | provider hook/wrapper when available | `terminal_signal` with `terminal_reason=provider_exit` and exit metadata | p50 < 1s, p95 < 5s after provider exit | complete engine process snapshot < 2min | This is still not managed control. It is a truthful terminal observation from a local hook/wrapper. |
 | Scanned unmanaged provider | Machine Agent process snapshot | `terminal_signal` with `terminal_reason=process_gone` | no near-instant SLA | p95 < 2min after complete snapshot proves absence | This is a compatibility/backstop lane, not the trust-critical managed lane. |
 | Machine offline / network loss | Machine heartbeat and Runtime Host freshness | stale/offline state, not terminal close | p95 < 10s for stale machine indication once freshness expires | explicit reconnect repair | Offline is not closed. A session can be disconnected from hosted while the provider process remains alive. |
@@ -346,7 +346,7 @@ The profiler should fail a managed graceful shutdown if the first terminal event
    Persist terminal reason/source separately from `terminal_state` so the UI and profiler can distinguish `bridge_stop`, `provider_exit`, `process_gone`, `host_expired`, and `heartbeat_gap` without parsing payload JSON.
 
 3. **Managed Claude lifecycle event.**
-   Add the equivalent channel/control-path terminal event for managed Claude. Its implementation should follow Claude's actual process/channel mechanics, not Codex bridge state.
+   Add the equivalent channel/control-path terminal event for managed Claude. Its implementation should follow Claude's actual process/channel mechanics, not Codex bridge state. The current implementation has a wrapper graceful-exit signal and a Machine Agent `claude_channel_scan` process-gone backstop; the remaining promotion work is repeated profiling and durable archive reliability.
 
 4. **Unmanaged close improvements.**
    Add a best-effort provider exit hook/outbox event where available, then tighten the scanned unmanaged backstop separately. The product should communicate that scanned unmanaged close is less immediate than managed close.
@@ -470,6 +470,60 @@ Managed Claude uses:
 Claude requires an actual channel-backed Claude process. A headless `--no-attach` launch prepares state, but does not by itself create the provider process to measure.
 
 Claude liveness is noisier because it depends heavily on process scan plus channel state. The profiler should record the channel state file and process identity every time it classifies Claude as live, detached, or closed.
+
+The first Claude slice is observation-only: `scripts/ops/probe-managed-claude-truth.py`
+attaches to an existing managed Claude session id and records the truth surfaces
+needed to design the real driver, including channel state, hook outbox phase
+rows, provider process identity, channel health, and hosted runtime truth. It
+should graduate into the shared profiler only after one live managed-Claude run
+proves which local signal is the primary clock for create, turn phase, and
+close.
+
+Current hypothesis to validate: channel-state `ready` is the create/attach
+clock, hook outbox phase rows are the turn-state clock, and provider/bridge PID
+truth is the close/degraded clock. Hosted runtime and browser paint are
+downstream propagation layers, not primary Claude truth.
+
+Current POC driver: `scripts/ops/run-managed-claude-poc.py`, exposed as
+`make managed-claude-poc`. It launches `longhouse claude` in a PTY, confirms
+Claude's development-channel prompt, sends one channel message, waits for a
+real assistant message in the local Claude transcript, exits with `/exit`, and
+runs the managed-Claude truth probe around the lifecycle. The transcript gate
+is intentional: matching terminal text is insufficient because Claude displays
+the injected prompt text before any assistant response exists.
+
+Initial clean finding from 2026-05-12: managed Claude channel send works and a
+Haiku-backed assistant response was durable in the local transcript about 3.3s
+after channel injection. Smooth local `/exit` removed the provider process in
+about 600ms. Hosted runtime did not receive a terminal close event for that run
+and stayed `idle`; that is a lifecycle propagation failure for managed Claude,
+not a provider-response failure. A Sonnet run during the same session was
+classified as provider-contaminated because Anthropic returned repeated 529
+overload errors and no assistant message was produced.
+
+Follow-up implementation from the same investigation added two managed-Claude
+close lanes:
+
+- `claude_channel_wrapper` posts graceful `session_ended/provider_exit` when the
+  `longhouse claude` wrapper returns from the provider process.
+- `claude_channel_scan` runs in the Machine Agent and posts
+  `process_gone/process_gone` or `process_gone/channel_state_gone` when a
+  previously observed managed Claude channel loses its provider PID or channel
+  state file. This is the manual-attach and failed-wrapper-POST backstop.
+
+These live-lifecycle lanes do not prove durable archive correctness. Every
+managed-Claude POC report must continue to print both runtime terminal truth
+and durable hosted archive event counts.
+
+The same session also found a lower-layer transport issue: machine presence
+POSTs without a user agent were blocked by Cloudflare (`403`/`1010`) while
+`curl` succeeded. The engine now sends an explicit `longhouse-engine/<version>`
+user agent and caps presence POSTs with a short timeout plus one in-flight
+presence drain. These fixes keep local hooks from piling up behind blocked or
+slow `/api/agents/presence` calls, but they do not solve hosted write-serializer
+backpressure under heavy concurrent agent traffic. If hosted ingest or presence
+is slow, classify the run as infrastructure/runtime contaminated before using
+it for provider-specific SLA claims.
 
 ## Measurements
 

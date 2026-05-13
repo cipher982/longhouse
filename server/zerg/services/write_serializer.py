@@ -55,14 +55,18 @@ _LABEL_PRIORITIES: dict[str, int] = {
     "refresh-session": 0,
     "device-token-create": 0,
     "device-token-revoke": 0,
-    # Live managed-local shipping should beat maintenance work.
+    # Managed runtime events are the live UI truth lane and should cut ahead of
+    # hook presence chatter when the machine is busy.
+    "runtime-events": 5,
+    # Transcript ingest is durable archive truth. It can trail runtime events,
+    # but it should not sit behind high-volume presence retries.
+    "runtime-observations": 5,
     "ingest": 10,
-    "presence": 10,
     "runner-online": 10,
-    "presence-flush": 10,
-    "runtime-observations": 10,
     "session-turn-active": 15,
     "session-turn-terminal": 15,
+    "presence": 20,
+    "presence-flush": 20,
     "runner-output": 20,
     "runner-job-complete": 20,
     "runner-job-error": 20,

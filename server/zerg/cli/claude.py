@@ -6,6 +6,8 @@ import json
 import os
 import shlex
 import subprocess
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 
 import httpx
@@ -41,6 +43,7 @@ _CLAUDE_LAUNCH_ENV_KEYS = (
 )
 _FORCE_NATIVE_CLAUDE_CHANNELS_ENV = "LONGHOUSE_FORCE_NATIVE_CLAUDE_CHANNELS"
 EXIT_SETUP_FAILED = 78
+_CLAUDE_TERMINAL_POST_TIMEOUT_SECS = 2.0
 
 
 def _run_claude_auth_status() -> subprocess.CompletedProcess[str]:
@@ -289,7 +292,59 @@ def _run_native_claude_tui(
         hook_token=token,
     )
     completed = subprocess.run(shlex.split(command), check=False, cwd=str(cwd))
-    return int(completed.returncode)
+    exit_code = int(completed.returncode)
+    _post_claude_terminal_signal(
+        base_url=base_url,
+        token=token,
+        session_id=session_id,
+        provider_session_id=provider_session_id,
+        exit_code=exit_code,
+    )
+    return exit_code
+
+
+def _post_claude_terminal_signal(
+    *,
+    base_url: str,
+    token: str,
+    session_id: str,
+    provider_session_id: str,
+    exit_code: int,
+) -> bool:
+    occurred_at = datetime.now(timezone.utc).isoformat()
+    terminal_state = "session_ended" if exit_code == 0 else "process_gone"
+    event = {
+        "runtime_key": f"claude:{provider_session_id}",
+        "session_id": session_id,
+        "provider": "claude",
+        "device_id": get_machine_name_label(),
+        "source": "claude_channel_wrapper",
+        "kind": "terminal_signal",
+        "occurred_at": occurred_at,
+        "dedupe_key": f"claude-terminal:{provider_session_id}:{exit_code}:{occurred_at}",
+        "payload": {
+            "terminal_state": terminal_state,
+            "terminal_reason": "provider_exit",
+            "terminal_source": "claude_channel_wrapper",
+            "provider_session_id": provider_session_id,
+            "exit_code": exit_code,
+        },
+    }
+    try:
+        with httpx.Client(timeout=_CLAUDE_TERMINAL_POST_TIMEOUT_SECS) as client:
+            response = client.post(
+                f"{base_url.rstrip('/')}/api/agents/runtime/events/batch",
+                headers={"X-Agents-Token": token},
+                json={"events": [event]},
+            )
+            response.raise_for_status()
+            return True
+    except Exception as exc:
+        typer.secho(
+            f"Could not post Claude terminal lifecycle event ({exc}). Machine Agent will reconcile.",
+            fg=typer.colors.YELLOW,
+        )
+        return False
 
 
 def _finalize_native_claude_launch(
