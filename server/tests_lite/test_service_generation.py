@@ -102,6 +102,14 @@ def test_plist_uses_longhouse_agent_log_dir():
     assert "/tmp/.longhouse/agent/logs/engine.stdout.log" in plist
 
 
+def test_plist_sets_service_path_for_provider_clis():
+    config = _make_config()
+    plist = _generate_launchd_plist(config)
+    assert "<key>PATH</key>" in plist
+    assert "/opt/homebrew/bin" in plist
+    assert "/usr/local/bin" in plist
+
+
 def test_plist_embeds_machine_state_metadata_when_present():
     config = _make_config(
         machine_config_generation="20260414-test",
@@ -147,6 +155,14 @@ def test_systemd_uses_longhouse_agent_log_dir():
     config = _make_config(claude_dir="/tmp/.claude")
     unit = _generate_systemd_unit(config)
     assert 'Environment="LONGHOUSE_LOG_DIR=/tmp/.longhouse/agent/logs"' in unit
+
+
+def test_systemd_sets_service_path_for_provider_clis():
+    config = _make_config()
+    unit = _generate_systemd_unit(config)
+    assert 'Environment="PATH=' in unit
+    assert "/opt/homebrew/bin" in unit
+    assert "/usr/local/bin" in unit
 
 
 def test_systemd_embeds_machine_state_metadata_when_present():
