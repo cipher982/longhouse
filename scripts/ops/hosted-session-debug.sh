@@ -169,13 +169,45 @@ def one(sql: str, params=()) -> dict | None:
     return dict(row) if row else None
 
 
+def runtime_observation_rows(limit: int) -> list[dict]:
+    if not table_exists("session_observations"):
+        return []
+    records = rows(
+        """
+        SELECT id, source, observed_at, received_at, payload_json
+        FROM session_observations
+        WHERE session_id=? AND source_domain='runtime'
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (session_id, limit),
+    )
+    normalized = []
+    for record in records:
+        payload = json.loads(record.pop("payload_json") or "{}")
+        runtime_payload = payload.get("payload") if isinstance(payload, dict) else {}
+        if not isinstance(runtime_payload, dict):
+            runtime_payload = {}
+        normalized.append(
+            {
+                **record,
+                "kind": payload.get("kind") if isinstance(payload, dict) else None,
+                "phase": payload.get("phase") if isinstance(payload, dict) else None,
+                "tool_name": payload.get("tool_name") if isinstance(payload, dict) else None,
+                "freshness_ms": payload.get("freshness_ms") if isinstance(payload, dict) else None,
+                "payload": runtime_payload,
+            }
+        )
+    return normalized
+
+
 payload: dict[str, object] = {
     "db_path": db_path,
     "session_id": session_id,
     "tables": {
         "sessions": table_exists("sessions"),
         "events": table_exists("events"),
-        "session_runtime_events": table_exists("session_runtime_events"),
+        "session_observations": table_exists("session_observations"),
         "session_runtime_state": table_exists("session_runtime_state"),
         "session_turns": table_exists("session_turns"),
     },
@@ -251,33 +283,24 @@ else:
     payload["event_stats"] = None
     payload["recent_events"] = []
 
-if table_exists("session_runtime_events"):
-    payload["runtime_event_stats"] = one(
+if table_exists("session_observations"):
+    payload["runtime_observation_stats"] = one(
         """
         SELECT
             count(*) AS count,
-            min(occurred_at) AS first_occurred_at,
-            max(occurred_at) AS last_occurred_at,
+            min(observed_at) AS first_observed_at,
+            max(observed_at) AS last_observed_at,
             min(received_at) AS first_received_at,
             max(received_at) AS last_received_at
-        FROM session_runtime_events
-        WHERE session_id=?
+        FROM session_observations
+        WHERE session_id=? AND source_domain='runtime'
         """,
         (session_id,),
     )
-    payload["recent_runtime_events"] = rows(
-        """
-        SELECT kind, phase, tool_name, occurred_at, received_at, freshness_ms
-        FROM session_runtime_events
-        WHERE session_id=?
-        ORDER BY occurred_at DESC
-        LIMIT ?
-        """,
-        (session_id, limit),
-    )
+    payload["recent_runtime_observations"] = runtime_observation_rows(limit)
 else:
-    payload["runtime_event_stats"] = None
-    payload["recent_runtime_events"] = []
+    payload["runtime_observation_stats"] = None
+    payload["recent_runtime_observations"] = []
 
 if table_exists("session_turns"):
     payload["recent_turns"] = rows(
@@ -310,7 +333,7 @@ import sys
 text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
 payload = {
     "agents_ingest": text.count("/api/agents/ingest"),
-    "runtime_events_batch": text.count("/api/agents/runtime/events/batch"),
+    "runtime_ingest_batches": text.count("/api/agents/runtime/events/batch"),
     "agents_presence": text.count("/api/agents/presence"),
     "telemetry_canary_observation": text.count("/api/telemetry/canary-observation"),
     "write_serializer_warnings": text.count("WriteSerializer:"),
@@ -469,16 +492,16 @@ compact(
     ["count", "first_timestamp", "last_timestamp", "assistant_events", "tool_events", "tool_call_events"],
 )
 
-header("Runtime Event Stats")
+header("Runtime Observation Stats")
 compact(
-    sqlite_payload.get("runtime_event_stats"),
-    ["count", "first_occurred_at", "last_occurred_at", "first_received_at", "last_received_at"],
+    sqlite_payload.get("runtime_observation_stats"),
+    ["count", "first_observed_at", "last_observed_at", "first_received_at", "last_received_at"],
 )
 
-header("Recent Runtime Events")
-for row in sqlite_payload.get("recent_runtime_events", []):
+header("Recent Runtime Observations")
+for row in sqlite_payload.get("recent_runtime_observations", []):
     print(
-        f"{row.get('occurred_at')} {row.get('kind')} phase={row.get('phase') or ''} "
+        f"{row.get('observed_at')} {row.get('kind')} phase={row.get('phase') or ''} "
         f"tool={row.get('tool_name') or ''} received={row.get('received_at')} freshness_ms={row.get('freshness_ms') or ''}"
     )
 

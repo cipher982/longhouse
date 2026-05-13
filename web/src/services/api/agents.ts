@@ -285,7 +285,7 @@ export interface AgentSessionTurn {
   user_event_id: number | null;
   durable_assistant_event_id: number | null;
   baseline_event_id: number | null;
-  baseline_runtime_cursor: number | null;
+  baseline_observation_cursor: number | null;
   user_submitted_at: string;
   send_accepted_at: string | null;
   active_phase_observed_at: string | null;

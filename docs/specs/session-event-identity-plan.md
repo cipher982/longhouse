@@ -21,7 +21,8 @@ Longhouse currently has three relevant mechanisms:
 1. **Bridge live overlay**
    - Producer: managed Codex bridge/app-server notifications.
    - Server path: `/api/agents/runtime/events/batch`.
-   - Storage: `session_runtime_events` rows with `source="codex_bridge_live"`.
+   - Storage: `SessionObservation(kind="bridge_transcript_delta")` rows with
+     `source="codex_bridge_live"`.
    - Identity today: `source + dedupe_key`, where the dedupe key is scoped to
      session/thread/turn/sequence.
    - Limitation: bridge live rows do not carry transcript `source_path`,
@@ -151,9 +152,8 @@ Longhouse currently has three relevant mechanisms:
 
 ### Phase 5: Storage Cleanup
 
-- If measurements justify it, move latest bridge overlay text out of unreduced
-  `session_runtime_events` rows and into the smallest existing runtime state
-  surface that can answer timeline-card queries.
+- Keep latest bridge overlay text as reduced provisional transcript projection
+  rows; runtime state should only carry liveness fields.
 - Revisit cursor unification only after the measured behavior proves live and
   archive cursors no longer need different failure semantics.
 

@@ -1,6 +1,6 @@
-"""Engine ↔ server runtime-event protocol contract test.
+"""Engine ↔ server runtime-observation protocol contract test.
 
-The codex_bridge Rust module emits runtime events via the shape pinned in
+The codex_bridge Rust module emits runtime observations via the shape pinned in
 tests_lite/fixtures/codex_bridge_runtime_events.json. If the server's
 Pydantic RuntimeEventIngest model rejects that shape, the two sides have
 drifted and a live managed session will silently drop events.
