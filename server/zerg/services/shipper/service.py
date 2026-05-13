@@ -125,14 +125,20 @@ def get_engine_executable() -> str:
     """Get the absolute path to the longhouse-engine binary.
 
     Resolution order:
-    1. Repo dev builds (release then debug)
-    2. Installed runtime artifact (canonical local install)
+    1. Installed runtime artifact (canonical local install)
+    2. Repo dev builds (release then debug)
     3. Binary on PATH via runtime artifact lookup
 
     Raises:
         RuntimeError: If the binary cannot be found anywhere.
     """
-    # 1. Repo dev builds
+    path_fallback = None
+    artifact = resolve_installed_runtime_artifact(RuntimeComponent.ENGINE)
+    if artifact and artifact.source != "path":
+        return artifact.launch_path
+    path_fallback = artifact
+
+    # 2. Repo dev builds
     project_root = _find_project_root()
     if project_root:
         engine_dir = project_root.parent / "engine"
@@ -141,10 +147,9 @@ def get_engine_executable() -> str:
             if candidate.exists():
                 return str(candidate)
 
-    # 2/3. Canonical installed artifact or PATH fallback.
-    artifact = resolve_installed_runtime_artifact(RuntimeComponent.ENGINE)
-    if artifact:
-        return artifact.launch_path
+    # 3. PATH fallback.
+    if path_fallback:
+        return path_fallback.launch_path
 
     raise RuntimeError(
         "longhouse-engine not found. " "Install it from https://longhouse.ai/install or build engine (cargo build --release)."

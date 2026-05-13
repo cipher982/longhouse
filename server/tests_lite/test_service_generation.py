@@ -185,7 +185,9 @@ def test_systemd_machine_name_no_spaces():
     assert " " not in machine_part
 
 
-def test_get_engine_executable_prefers_repo_build_over_path(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_get_engine_executable_prefers_installed_runtime_over_repo_build(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
     project_root = tmp_path / "server"
     project_root.mkdir()
     engine_binary = tmp_path / "engine" / "target" / "release" / "longhouse-engine"
@@ -193,17 +195,43 @@ def test_get_engine_executable_prefers_repo_build_over_path(monkeypatch: pytest.
     engine_binary.write_text("", encoding="utf-8")
 
     monkeypatch.setattr(shipper_service, "_find_project_root", lambda: project_root)
-    monkeypatch.setattr(shipper_service.shutil, "which", lambda name: "/usr/local/bin/longhouse-engine")
+    monkeypatch.setattr(
+        shipper_service,
+        "resolve_installed_runtime_artifact",
+        lambda component: SimpleNamespace(
+            launch_path="/tmp/installed-longhouse-engine",
+            source="local-runtime-bin",
+        ),
+    )
+
+    assert get_engine_executable() == "/tmp/installed-longhouse-engine"
+
+
+def test_get_engine_executable_uses_repo_build_when_no_runtime_artifact(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    project_root = tmp_path / "server"
+    project_root.mkdir()
+    engine_binary = tmp_path / "engine" / "target" / "release" / "longhouse-engine"
+    engine_binary.parent.mkdir(parents=True)
+    engine_binary.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(shipper_service, "_find_project_root", lambda: project_root)
+    monkeypatch.setattr(
+        shipper_service,
+        "resolve_installed_runtime_artifact",
+        lambda component: None,
+    )
 
     assert get_engine_executable() == str(engine_binary)
 
 
-def test_get_engine_executable_uses_runtime_artifact(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_engine_executable_uses_path_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(shipper_service, "_find_project_root", lambda: None)
     monkeypatch.setattr(
         shipper_service,
         "resolve_installed_runtime_artifact",
-        lambda component: SimpleNamespace(launch_path="/tmp/longhouse-engine"),
+        lambda component: SimpleNamespace(launch_path="/tmp/longhouse-engine", source="path"),
     )
 
     assert get_engine_executable() == "/tmp/longhouse-engine"

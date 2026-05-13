@@ -186,7 +186,7 @@ install-engine: ## Build + install Rust engine binary
 	cd engine && cargo build --release
 	codesign -s - engine/target/release/longhouse-engine
 	@mkdir -p $$HOME/.local/bin
-	@ln -sf "$(CURDIR)/engine/target/release/longhouse-engine" "$$HOME/.local/bin/longhouse-engine"
+	@install -m 755 "$(CURDIR)/engine/target/release/longhouse-engine" "$$HOME/.local/bin/longhouse-engine"
 	@echo "longhouse-engine installed"
 
 install-cli: ## Reinstall the longhouse CLI from current repo source (no engine/hooks/app refresh)

@@ -146,7 +146,7 @@ install_engine_from_source() {
     codesign -s - "$ENGINE_DIR/target/release/longhouse-engine" >/dev/null
   fi
 
-  ln -sf "$ENGINE_DIR/target/release/longhouse-engine" "$HOME/.local/bin/longhouse-engine"
+  install -m 755 "$ENGINE_DIR/target/release/longhouse-engine" "$HOME/.local/bin/longhouse-engine"
   log "Engine ready at $HOME/.local/bin/longhouse-engine"
 }
 
