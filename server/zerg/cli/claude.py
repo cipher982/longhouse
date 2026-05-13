@@ -230,7 +230,7 @@ def _launch_managed_local_from_api(
         typer.secho(
             "Longhouse server rejected the launch request (422).\n"
             "Your CLI likely drifted from the server schema. Update with:\n"
-            "  cd ~/git/zerg/server && uv tool install -e .   # or: make dogfood-refresh\n"
+            "  cd ~/git/zerg/longhouse && make dogfood-refresh\n"
             f"Server detail: {errors}",
             fg=typer.colors.RED,
         )
