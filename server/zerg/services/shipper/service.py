@@ -60,6 +60,20 @@ ServiceStatus = Literal["running", "stopped", "not-installed"]
 # Service identifiers — kept stable so --uninstall works on existing installs
 LAUNCHD_LABEL = "com.longhouse.shipper"
 SYSTEMD_UNIT = "longhouse-shipper"
+COMMON_SERVICE_PATH_SUFFIXES = (
+    ".local/bin",
+    "bin",
+    "/opt/homebrew/bin",
+    "/opt/homebrew/sbin",
+    "/usr/local/bin",
+    "/usr/local/sbin",
+    "/home/linuxbrew/.linuxbrew/bin",
+    "/home/linuxbrew/.linuxbrew/sbin",
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+)
 
 # Legacy service names that were installed directly (before longhouse connect
 # --install managed the engine). Detected and superseded on install.
@@ -73,6 +87,15 @@ def _get_legacy_engine_plist_path() -> Path:
 
 def _get_legacy_systemd_unit_path() -> Path:
     return Path.home() / ".config" / "systemd" / "user" / _LEGACY_SYSTEMD_UNIT_NAME
+
+
+def _common_service_path() -> str:
+    home = Path.home()
+    parts = [
+        str(home / suffix) if not suffix.startswith("/") else suffix
+        for suffix in COMMON_SERVICE_PATH_SUFFIXES
+    ]
+    return ":".join(parts)
 
 
 @dataclass
@@ -305,6 +328,7 @@ def _generate_launchd_plist(config: ServiceConfig) -> str:
         "CLAUDE_CONFIG_DIR": str(claude_dir),
         "LONGHOUSE_HOME": str(longhouse_home),
         "LONGHOUSE_LOG_DIR": str(log_dir),
+        "PATH": _common_service_path(),
     }
     if config.machine_config_generation:
         environment["LONGHOUSE_MACHINE_GENERATION"] = config.machine_config_generation
@@ -370,6 +394,7 @@ def _generate_systemd_unit(config: ServiceConfig) -> str:
         f'Environment="CLAUDE_CONFIG_DIR={claude_dir}"',
         f'Environment="LONGHOUSE_HOME={longhouse_home}"',
         f'Environment="LONGHOUSE_LOG_DIR={log_dir}"',
+        f'Environment="PATH={_common_service_path()}"',
     ]
     if config.machine_config_generation:
         environment_lines.append(f'Environment="LONGHOUSE_MACHINE_GENERATION={config.machine_config_generation}"')
