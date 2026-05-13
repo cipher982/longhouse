@@ -11,7 +11,7 @@ Today the failure mode is predictable:
 
 - an agent pushes and says "done" before hosted deploy + QA actually finish
 - if asked to verify later, the agent often inspects the latest branch run instead of the run for its own commit
-- the user ends up manually mapping commits, workflow runs, demo state, control-plane state, and canary state
+- the user ends up manually mapping commits, workflow runs, demo state, and canary state
 
 The repo already has most of the underlying verification primitives. What is missing is one agent-facing, foreground, exact-SHA ship command that blocks until the pushed commit is either fully green or clearly failed.
 
@@ -23,8 +23,10 @@ The repo already has most of the underlying verification primitives. What is mis
 - `scripts/ops/coolify-deploy.sh` is already a good blocking wait primitive with real exit status.
 - `scripts/ops/deploy-status.sh` already reports live SHAs and health for:
   - demo runtime
-  - control plane
   - hosted canary
+
+It may also show hosted control-plane health for operator context. That state is
+external to this public repo and is not a public deploy gate for this monitor.
 
 ### The local/agent boundary is the weak link
 
@@ -37,7 +39,6 @@ The repo already has most of the underlying verification primitives. What is mis
 - Commit `d61f59e0e6...` had `contract-first-ci` and `runtime-image` green while `Deploy and Verify` was still running.
 - At the same moment, `deploy-status.sh` showed:
   - demo runtime on `d61f59e0e6`
-  - control plane on `d61f59e0e6`
   - hosted canary still on prior SHA `dd7f4abc2b`
 - That means "CI green" and even "demo updated" are still not enough to call a push done.
 
@@ -206,11 +207,6 @@ If `Deploy and Verify` ran and succeeded:
 - demo runtime health must be healthy
 - hosted canary health must be healthy
 
-If `Deploy Control Plane` ran and succeeded:
-
-- control plane SHA must match target SHA
-- control plane health must be healthy
-
 `deploy-status.sh` already exposes enough state for a first pass.
 
 ### Suggested exit codes
@@ -239,7 +235,6 @@ If `Deploy Control Plane` ran and succeeded:
   ],
   "live": {
     "demo_sha": "d61f59e0e6",
-    "control_plane_sha": "d61f59e0e6",
     "canary_sha": "d61f59e0e6"
   }
 }
@@ -284,7 +279,7 @@ Do not start here. The monitor should exist first.
 - Should a newer successful descendant SHA count as success for an earlier agent whose commit is an ancestor?
 - Do we want any push workflows to be explicitly advisory instead of blocking?
 - Should `ship` eventually support `--json` and `--open-failure-logs` helpers for agent UX?
-- Is `deploy-status.sh` enough for control-plane exact-SHA verification in every case, or do we want a narrower parser/helper?
+- Do we want a narrower parser/helper for hosted canary exact-SHA verification?
 
 ## Immediate Next Moves
 

@@ -8,7 +8,7 @@
 
 Today we can't answer "what commit am I running?" anywhere. `longhouse --version` says `0.1.15-local`. The app bundle says `0.1.15-local`. `/api/health` has no version field. Two different commits present themselves identically after `make dogfood-refresh`.
 
-Separately, we have four independent semvers that drift (`server 0.1.15`, `engine 0.1.0`, `runner 0.1.7`, `control-plane 0.1.0`, `ios 0.1.0 / 1`), so even the release number can't stand in for "product version."
+Separately, public component semvers have drifted (`server 0.1.15`, `engine 0.1.0`, `runner 0.1.7`, `ios 0.1.0 / 1`), so even the release number can't stand in for "product version."
 
 This spec fixes both.
 
@@ -16,7 +16,7 @@ This spec fixes both.
 
 Every build now has two orthogonal identities:
 
-1. **Release version** — a single shared semver that advances across the whole repo (server, engine, runner, control-plane, ios) in one shot. Only moves when someone runs `make release VERSION=vX.Y.Z`. This is the user-facing "Longhouse version."
+1. **Release version** — a single shared semver that advances across the public repo (server, engine, runner, ios) in one shot. Only moves when someone runs `make release VERSION=vX.Y.Z`. This is the user-facing "Longhouse version."
 2. **Build identity** — a per-build record: `{version, commit, commit_short, dirty, built_at, channel}`. Stamped at build time, embedded in every artifact. This is the "which commit specifically."
 
 Release version without build identity is a lie for any non-tagged build. Build identity without release version is hard for users to compare. We want both, everywhere.
@@ -54,25 +54,24 @@ Never show bare semver. If a surface only has room for one string, show the dev/
 
 ## Shared release versioning
 
-One release number advances all four component manifests plus iOS in one shot. This is the release version, not build identity — release version moves only on explicit release ceremonies; build identity advances every commit.
+One release number advances all public component manifests in one shot. This is the release version, not build identity — release version moves only on explicit release ceremonies; build identity advances every commit.
 
 **Tool:** `bump-my-version` (maintained successor to `bump2version`). Config in `.bumpversion.toml` at repo root. Files it edits:
 
 - `server/pyproject.toml`
 - `engine/Cargo.toml`
 - `runner/package.json`
-- `control-plane/pyproject.toml`
 - `ios/XcodeHarness/Configs/Version.xcconfig` — **new**; `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` move out of `project.yml` `settings.base` into this xcconfig so a key=value editor can touch them cleanly. `project.yml` gets `Version.xcconfig` added to `configFiles` so XcodeGen picks it up.
 
 `make release VERSION=vX.Y.Z`:
 1. Preflight: clean tree, on main, local == origin/main, tag doesn't exist.
-2. Run `bump-my-version bump --new-version X.Y.Z`. This edits all five files.
+2. Run `bump-my-version bump --new-version X.Y.Z`. This edits the public version manifests.
 3. Commit the bump, push to main, create GitHub release.
 4. Wait for `publish.yml` + `local-runtime-release.yml`, verify assets + notarization.
 
 ### Why share one number
 
-Split semvers exist to serve independent release cadence or external consumers. Longhouse has neither. Engine, runner, control-plane, and iOS ship from one monorepo with one dev. One shared number is the less-complex option — one number to reason about, one release to cut. iOS "wastes" a rebuild when iOS code didn't change; that's ~30s of Xcode for product coherence.
+Split semvers exist to serve independent release cadence or external consumers. Longhouse core has neither. Engine, runner, and iOS ship from one public repo with one release ceremony. One shared number is the less-complex option — one number to reason about, one release to cut. iOS "wastes" a rebuild when iOS code didn't change; that's ~30s of Xcode for product coherence.
 
 If we ever hire someone who owns `runner` as a product with its own cadence, split then. Unsplitting a drifted repo is the hard direction.
 
@@ -100,11 +99,11 @@ We collapse `/api/version` and `/api/system/info` version-adjacent fields into `
 
 Every artifact carries its identity **inside itself**. No home-directory or other shared mutable fallback — that would let two different binaries report the same SHA because they read the same external file. If a build surface can't find its bundled identity, that's a build bug, not a runtime case to paper over — fail loudly.
 
-### Python (server, control-plane)
+### Python (server)
 
-- `generate_build_identity.py` runs before any `uv build`. It writes `.build/build-identity.json` and simultaneously stages the file into each Python package tree (e.g. `server/zerg/build_identity.json`).
+- `generate_build_identity.py` runs before any `uv build`. It writes `.build/build-identity.json` and simultaneously stages the file into the Python package tree (e.g. `server/zerg/build_identity.json`).
 - Each package reads its own copy via `importlib.resources` — no cross-package imports.
-- Runtime reader: `zerg.build_info.load()` (and sibling in control-plane) reads the staged resource. Missing resource → raise `BuildIdentityMissing`; the CLI surfaces that as "build identity missing — rebuild."
+- Runtime reader: `zerg.build_info.load()` reads the staged resource. Missing resource → raise `BuildIdentityMissing`; the CLI surfaces that as "build identity missing — rebuild."
 - No editable-install fallback. `make dogfood-refresh` builds a wheel and installs it, not `uv pip install -e`. Wheel build adds ~25s per refresh; correctness is worth it.
 - **`make dev` (source-run backend):** `scripts/dev.sh` runs `generate_build_identity.py` first, which stages the resource into `server/zerg/build_identity.json`. Source runs read via `importlib.resources` like installed wheels — one read path, no env-var fallback. If the resource is missing → `BuildIdentityMissing`. Always explicit, never inferred.
 
@@ -152,7 +151,7 @@ The Makefile / `scripts/` sprawl problem is real but orthogonal. Tracked as a se
 
 - Hardcoded `"0.1.15-local"` fallback strings wherever they appear.
 - `/api/version` and version-duplicating fields on `/api/system/info` (collapsed into `/api/health`).
-- The `0.1.0` placeholder versions in `engine/Cargo.toml`, `runner/package.json`, `control-plane/pyproject.toml`, iOS xcconfig — all share the one release number.
+- The placeholder versions in `engine/Cargo.toml`, `runner/package.json`, and iOS xcconfig — all share the one release number.
 - `release.sh`'s custom Python in-line semver rewriter (replaced by `bump-my-version`).
 
 ## Phases

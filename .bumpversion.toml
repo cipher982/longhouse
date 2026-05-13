@@ -1,6 +1,6 @@
 # Shared release version for Longhouse.
 #
-# One semver advances all five component manifests in one shot. Edited
+# One semver advances all public component manifests in one shot. Edited
 # only by `bump-my-version bump` via `scripts/ops/release.sh` (or
 # `make release VERSION=vX.Y.Z`). Hand-editing these files drifts the
 # monorepo — if you need to bump mid-flight, run the tool instead.
@@ -40,12 +40,6 @@ replace = "version = \"{new_version}\""
 filename = "runner/package.json"
 search = "\"version\": \"{current_version}\""
 replace = "\"version\": \"{new_version}\""
-
-# Control plane (hosted-only).
-[[tool.bumpversion.files]]
-filename = "control-plane/pyproject.toml"
-search = "version = \"{current_version}\""
-replace = "version = \"{new_version}\""
 
 # iOS app + widget targets share this xcconfig, so one edit covers both.
 [[tool.bumpversion.files]]

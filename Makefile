@@ -8,7 +8,7 @@ COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/dock
 E2E_BACKEND_PORT ?=
 E2E_FRONTEND_PORT ?=
 
-.PHONY: help dev dev-demo stop test test-ios test-ios-helper test-frontend test-engine test-runner test-control-plane test-e2e test-e2e-core test-e2e-a11y test-e2e-cp test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-sdk validate-makefile validate-build-identity validate-managed-codex-contract validate-ship-monitor regen-ws generate-sdk qa-live qa-unmanaged render-canary session-propagation-sla managed-claude-truth-probe managed-claude-poc reprovision deploy-status ship-watch ship release ui-capture qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-e2e-continuation-provider test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest eval dogfood dogfood-refresh dogfood-check
+.PHONY: help dev dev-demo stop test test-ios test-ios-helper test-frontend test-engine test-runner test-e2e test-e2e-core test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-sdk validate-makefile validate-build-identity validate-managed-codex-contract validate-ship-monitor regen-ws generate-sdk qa-live qa-unmanaged render-canary session-propagation-sla managed-claude-truth-probe managed-claude-poc reprovision deploy-status ship-watch ship release ui-capture qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-e2e-continuation-provider test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest eval dogfood dogfood-refresh dogfood-check
 
 # ---------------------------------------------------------------------------
 # Help
@@ -46,7 +46,6 @@ stop: ## Stop dev services
 #  make test-frontend     frontend (web/)            ~15s
 #  make test-engine       engine (engine/)           ~20s
 #  make test-runner       runner (runner/)           ~5s
-#  make test-control-plane                           ~10s
 #  make test-e2e          browser E2E                ~2min
 #  make test-ci           pre-push                   ~3min
 #  make test-full         everything                 ~8min
@@ -75,9 +74,6 @@ test-engine: ## Rust engine tests (~20s)
 test-runner: ## Runner unit tests (~5s)
 	@cd runner && bun test
 
-test-control-plane: ## Control-plane tests
-	@cd control-plane && uv sync --extra dev --frozen >/dev/null && uv run --extra dev pytest tests -q
-
 test-e2e: ## Launch-surface E2E (core + a11y)
 	$(MAKE) test-e2e-core
 	$(MAKE) test-e2e-a11y
@@ -90,11 +86,6 @@ test-e2e-core: ## @internal Core E2E — no retries
 test-e2e-a11y: ## @internal Accessibility checks
 	@$(MAKE) ensure-playwright-browser
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/accessibility.spec.ts
-
-test-e2e-cp: ## Control plane E2E (Playwright)
-	@cd control-plane && uv sync --extra dev --frozen >/dev/null && \
-		uv run --extra dev playwright install chromium --with-deps >/dev/null 2>&1 || true && \
-		uv run --extra dev pytest e2e/ -v
 
 test-e2e-single: ## @internal Run one E2E spec (TEST=tests/foo.spec.ts)
 	@$(MAKE) ensure-playwright-browser
@@ -129,7 +120,6 @@ test-ci: ## Pre-push CI check (~3min)
 	$(MAKE) test-coolify-deploy
 	$(MAKE) test-web-entrypoint
 	$(MAKE) test
-	$(MAKE) test-control-plane
 	$(MAKE) test-frontend
 	$(MAKE) test-runner
 	$(MAKE) test-engine
@@ -138,7 +128,6 @@ test-ci: ## Pre-push CI check (~3min)
 
 test-full: ## Full suite — all tiers (~8min)
 	$(MAKE) test
-	$(MAKE) test-control-plane
 	$(MAKE) test-frontend
 	$(MAKE) test-runner
 	$(MAKE) test-engine

@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import importlib
 import os
-import sys
 import time
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter
@@ -19,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from zerg.auth import refresh_tokens
 from zerg.auth.jwt_utils import decode_jwt_with_secret_candidates
+from zerg.auth.redirects import normalize_local_return_to
 from zerg.auth.session_tokens import ACCESS_TOKEN_LIFETIME
 from zerg.auth.session_tokens import JWT_SECRET
 from zerg.auth.session_tokens import _issue_access_token
@@ -32,20 +30,6 @@ from zerg.database import get_db
 from zerg.schemas.schemas import TokenOut
 from zerg.services import sso_keys as sso_keys_service
 from zerg.services.write_serializer import get_write_serializer
-
-
-def _configure_shared_imports() -> None:
-    for parent in Path(__file__).resolve().parents:
-        for candidate in (parent, parent / "control-plane"):
-            if (candidate / "longhouse_shared" / "redirects.py").exists():
-                candidate_str = str(candidate)
-                if candidate_str not in sys.path:
-                    sys.path.append(candidate_str)
-                return
-
-
-_configure_shared_imports()
-normalize_local_return_to = importlib.import_module("longhouse_shared.redirects").normalize_local_return_to
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -157,7 +141,12 @@ async def accept_token(response: Response, body: dict[str, str], db: Session = D
 
 
 @router.get("/accept-token")
-async def accept_token_redirect(token: str, response: Response, return_to: str | None = None, db: Session = Depends(get_db)):
+async def accept_token_redirect(
+    token: str,
+    response: Response,
+    return_to: str | None = None,
+    db: Session = Depends(get_db),
+):
     """Accept a hosted login token, set the cookie, and continue to the app."""
     await _accept_token(response, token, db)
     redirect = RedirectResponse(normalize_local_return_to(return_to) or "/timeline", status_code=302)
