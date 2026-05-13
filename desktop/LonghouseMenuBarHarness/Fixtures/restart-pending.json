@@ -38,7 +38,7 @@
         "built_at": "2026-04-24T00:30:00Z",
         "channel": "dev"
       },
-      "binary_path": "/Users/davidrose/git/zerg/engine/target/release/longhouse-engine",
+      "binary_path": "/Users/davidrose/git/zerg/longhouse/engine/target/release/longhouse-engine",
       "binary_mtime": "2026-04-24T00:44:00Z",
       "daemon_started_at": "2026-04-24T00:30:05Z"
     },
