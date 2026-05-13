@@ -8,7 +8,7 @@
 
 Today we can't answer "what commit am I running?" anywhere. `longhouse --version` says `0.1.15-local`. The app bundle says `0.1.15-local`. `/api/health` has no version field. Two different commits present themselves identically after `make dogfood-refresh`.
 
-Separately, we have independent public semvers that drift (`server 0.1.15`, `engine 0.1.0`, `runner 0.1.7`, `ios 0.1.0 / 1`), so even the release number can't stand in for "product version."
+Separately, public component semvers have drifted (`server 0.1.15`, `engine 0.1.0`, `runner 0.1.7`, `ios 0.1.0 / 1`), so even the release number can't stand in for "product version."
 
 This spec fixes both.
 
