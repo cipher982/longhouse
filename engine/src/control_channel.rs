@@ -1,10 +1,12 @@
 //! Machine Agent managed-control WebSocket client.
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use futures_util::{SinkExt, StreamExt};
+use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
@@ -31,19 +33,161 @@ const LAUNCH_START_TIMEOUT_SECS: u64 = 45;
 const COMPLETED_COMMAND_CACHE_CAPACITY: usize = 256;
 const COMPLETED_COMMAND_CACHE_TTL_SECS: u64 = 5 * 60;
 const HEARTBEAT_INTERVAL_SECS: u64 = 25;
+const CONTROL_SUPPORTS: [&str; 4] = [
+    "codex.send",
+    "codex.interrupt",
+    "codex.steer",
+    "codex.launch",
+];
 
-pub fn spawn_control_channel(config: ShipperConfig) -> Option<JoinHandle<()>> {
+#[derive(Clone, Debug)]
+pub struct ControlChannelStatus {
+    inner: Arc<Mutex<ControlChannelStatusInner>>,
+}
+
+#[derive(Clone, Debug)]
+struct ControlChannelStatusInner {
+    enabled: bool,
+    status: String,
+    ws_url: Option<String>,
+    last_connected_at: Option<String>,
+    last_disconnected_at: Option<String>,
+    last_error_code: Option<String>,
+    last_error_message: Option<String>,
+    reconnect_backoff_seconds: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ControlChannelStatusSnapshot {
+    pub enabled: bool,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ws_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_connected_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_disconnected_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error_message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reconnect_backoff_seconds: Option<u64>,
+    pub supports: Vec<String>,
+}
+
+pub fn new_control_channel_status() -> ControlChannelStatus {
+    ControlChannelStatus {
+        inner: Arc::new(Mutex::new(ControlChannelStatusInner {
+            enabled: false,
+            status: "disabled".to_string(),
+            ws_url: None,
+            last_connected_at: None,
+            last_disconnected_at: None,
+            last_error_code: None,
+            last_error_message: None,
+            reconnect_backoff_seconds: None,
+        })),
+    }
+}
+
+impl ControlChannelStatus {
+    pub fn snapshot(&self) -> ControlChannelStatusSnapshot {
+        let inner = self
+            .inner
+            .lock()
+            .expect("control channel status lock poisoned");
+        ControlChannelStatusSnapshot {
+            enabled: inner.enabled,
+            status: inner.status.clone(),
+            ws_url: inner.ws_url.clone(),
+            last_connected_at: inner.last_connected_at.clone(),
+            last_disconnected_at: inner.last_disconnected_at.clone(),
+            last_error_code: inner.last_error_code.clone(),
+            last_error_message: inner.last_error_message.clone(),
+            reconnect_backoff_seconds: inner.reconnect_backoff_seconds,
+            supports: if inner.enabled {
+                CONTROL_SUPPORTS
+                    .iter()
+                    .map(|item| item.to_string())
+                    .collect()
+            } else {
+                Vec::new()
+            },
+        }
+    }
+
+    fn set_disabled(&self) {
+        let mut inner = self
+            .inner
+            .lock()
+            .expect("control channel status lock poisoned");
+        inner.enabled = false;
+        inner.status = "disabled".to_string();
+        inner.ws_url = None;
+        inner.reconnect_backoff_seconds = None;
+        inner.last_error_code = None;
+        inner.last_error_message = None;
+    }
+
+    fn set_connected(&self, ws_url: &str) {
+        let mut inner = self
+            .inner
+            .lock()
+            .expect("control channel status lock poisoned");
+        inner.enabled = true;
+        inner.status = "connected".to_string();
+        inner.ws_url = Some(ws_url.to_string());
+        inner.last_connected_at = Some(timestamp_now());
+        inner.reconnect_backoff_seconds = None;
+        inner.last_error_code = None;
+        inner.last_error_message = None;
+    }
+
+    fn set_disconnected(
+        &self,
+        ws_url: Option<&str>,
+        error_code: Option<&str>,
+        error_message: Option<&str>,
+        reconnect_backoff_seconds: Option<u64>,
+    ) {
+        let mut inner = self
+            .inner
+            .lock()
+            .expect("control channel status lock poisoned");
+        inner.enabled = true;
+        inner.status = "disconnected".to_string();
+        if let Some(ws_url) = ws_url {
+            inner.ws_url = Some(ws_url.to_string());
+        }
+        inner.last_disconnected_at = Some(timestamp_now());
+        inner.last_error_code = error_code.map(str::to_string);
+        inner.last_error_message = error_message.map(str::to_string);
+        inner.reconnect_backoff_seconds = reconnect_backoff_seconds;
+    }
+}
+
+fn timestamp_now() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+pub fn spawn_control_channel(
+    config: ShipperConfig,
+    status: ControlChannelStatus,
+) -> Option<JoinHandle<()>> {
     if config.api_token.as_deref().unwrap_or("").trim().is_empty() {
+        status.set_disabled();
         tracing::debug!("Machine control channel disabled because no device token is configured");
         return None;
     }
+    status.set_disconnected(None, None, None, None);
 
     Some(tokio::spawn(async move {
-        run_reconnect_loop(config).await;
+        run_reconnect_loop(config, status).await;
     }))
 }
 
-async fn run_reconnect_loop(config: ShipperConfig) {
+async fn run_reconnect_loop(config: ShipperConfig, status: ControlChannelStatus) {
     let mut backoff = Duration::from_secs(1);
     let mut last_error: Option<String> = None;
     let mut completed_commands = CompletedCommandCache::new(
@@ -51,14 +195,21 @@ async fn run_reconnect_loop(config: ShipperConfig) {
         Duration::from_secs(COMPLETED_COMMAND_CACHE_TTL_SECS),
     );
     loop {
-        match run_once(&config, &mut completed_commands).await {
+        match run_once(&config, &mut completed_commands, &status).await {
             Ok(()) => {
                 tracing::info!("Machine control channel disconnected");
+                status.set_disconnected(None, None, None, Some(backoff.as_secs()));
                 backoff = Duration::from_secs(1);
                 last_error = None;
             }
             Err(err) => {
                 let error_chain = format_error_chain(&err);
+                status.set_disconnected(
+                    None,
+                    Some("connect_failed"),
+                    Some(error_chain.as_str()),
+                    Some(backoff.as_secs()),
+                );
                 if last_error.as_deref() == Some(error_chain.as_str()) {
                     tracing::debug!(error = %error_chain, "Machine control channel connection failed");
                 } else {
@@ -82,8 +233,10 @@ fn format_error_chain(err: &anyhow::Error) -> String {
 async fn run_once(
     config: &ShipperConfig,
     completed_commands: &mut CompletedCommandCache,
+    status: &ControlChannelStatus,
 ) -> Result<()> {
     let ws_url = control_ws_url(&config.api_url)?;
+    status.set_disconnected(Some(&ws_url), None, None, None);
     let mut request = ws_url
         .as_str()
         .into_client_request()
@@ -106,12 +259,13 @@ async fn run_once(
         "device_id": config.machine_name,
         "machine_name": config.machine_name,
         "engine_build": build_identity::COMMIT_SHORT,
-        "supports": ["codex.send", "codex.interrupt", "codex.steer", "codex.launch"],
+        "supports": CONTROL_SUPPORTS,
     });
     write
         .send(Message::Text(hello.to_string()))
         .await
         .context("sending machine control hello")?;
+    status.set_connected(&ws_url);
     tracing::info!("Machine control channel connected to {ws_url}");
 
     let mut heartbeat = tokio::time::interval(Duration::from_secs(HEARTBEAT_INTERVAL_SECS));
@@ -584,6 +738,39 @@ mod tests {
     #[test]
     fn heartbeat_frame_uses_server_schema() {
         assert_eq!(heartbeat_frame(), json!({"type": "heartbeat"}));
+    }
+
+    #[test]
+    fn control_channel_status_tracks_connection_state() {
+        let status = new_control_channel_status();
+        assert_eq!(status.snapshot().enabled, false);
+        assert_eq!(status.snapshot().status, "disabled");
+
+        status.set_disconnected(
+            Some("wss://example.test/api/agents/control/ws"),
+            Some("connect_failed"),
+            Some("tls handshake failed"),
+            Some(4),
+        );
+        let disconnected = status.snapshot();
+        assert_eq!(disconnected.enabled, true);
+        assert_eq!(disconnected.status, "disconnected");
+        assert_eq!(
+            disconnected.ws_url.as_deref(),
+            Some("wss://example.test/api/agents/control/ws")
+        );
+        assert_eq!(
+            disconnected.last_error_code.as_deref(),
+            Some("connect_failed")
+        );
+        assert!(disconnected.supports.contains(&"codex.launch".to_string()));
+
+        status.set_connected("wss://example.test/api/agents/control/ws");
+        let connected = status.snapshot();
+        assert_eq!(connected.status, "connected");
+        assert_eq!(connected.last_error_code, None);
+        assert_eq!(connected.reconnect_backoff_seconds, None);
+        assert!(connected.last_connected_at.is_some());
     }
 
     #[tokio::test]
