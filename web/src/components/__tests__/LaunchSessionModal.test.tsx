@@ -58,10 +58,38 @@ describe("LaunchSessionModal", () => {
           last_seen_at: null,
           engine_build: null,
         },
+        {
+          device_id: "old-ci-1",
+          machine_name: "old-ci-1",
+          online: false,
+          supports: [],
+          last_seen_at: null,
+          engine_build: null,
+        },
+        {
+          device_id: "old-ci-2",
+          machine_name: "old-ci-2",
+          online: false,
+          supports: [],
+          last_seen_at: null,
+          engine_build: null,
+        },
+        {
+          device_id: "old-ci-3",
+          machine_name: "old-ci-3",
+          online: false,
+          supports: [],
+          last_seen_at: null,
+          engine_build: null,
+        },
       ],
     });
     renderModal();
     expect(await screen.findByTestId("launch-no-launchable")).toBeInTheDocument();
+    expect(
+      screen.getByText(/4 enrolled machines are offline: cinder, old-ci-1, old-ci-2, plus 1 more\./),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/does not advertise codex\.launch/)).not.toBeInTheDocument();
   });
 
   it("dismisses on Escape", async () => {
