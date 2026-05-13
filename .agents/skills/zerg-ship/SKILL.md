@@ -8,7 +8,7 @@ description: Zerg/Longhouse full ship cycle — test, deploy, QA, verify. Use wh
 ## Surfaces
 
 - **Public demo runtime** — `https://longhouse.ai` — Coolify app `longhouse-demo`
-- **Control plane** — `https://control.longhouse.ai` — Coolify app `longhouse-control-plane`
+- **Control plane** — `https://control.longhouse.ai` — private repo/service; public deploys only health-check it
 - **Hosted tenant runtime** — `https://david010.longhouse.ai` — reprovisioned runtime container managed by the control plane
 
 `longhouse.ai` is a demo-mode Longhouse runtime, not a static landing page.
@@ -17,8 +17,10 @@ description: Zerg/Longhouse full ship cycle — test, deploy, QA, verify. Use wh
 
 Do not blur these lanes:
 
-- **Hosted deploy** — updates Longhouse surfaces running on `zerg`:
-  public demo runtime, control plane, hosted tenant runtimes.
+- **Hosted deploy** — updates public Longhouse runtime surfaces running on `zerg`:
+  public demo runtime and hosted tenant runtimes. The hosted control plane is
+  an external private service for this public repo; runtime deploys may check
+  it, but do not ship it.
 - **CLI/package release** — updates the user-installed `longhouse` CLI from
   the GitHub release wheel used by `scripts/install.sh`. Existing users do not
   get this from a hosted deploy. They need a new install or upgrade:
