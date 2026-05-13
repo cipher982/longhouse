@@ -238,6 +238,98 @@ def test_managed_session_ended_terminal_overrides_nearby_newer_lease(tmp_path):
     engine.dispose()
 
 
+def test_managed_claude_wrapper_session_ended_wins_over_scan_process_gone(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_managed_claude_terminal_precedence.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        scan_first = _seed_session(db, provider="claude", started_at=now - timedelta(minutes=20))
+        scan_first.execution_home = "managed_local"
+        scan_first.managed_transport = "claude_channel_bridge"
+        scan_first_key = runtime_key_for_session("claude", str(scan_first.id))
+
+        wrapper_first = _seed_session(db, provider="claude", started_at=now - timedelta(minutes=20))
+        wrapper_first.execution_home = "managed_local"
+        wrapper_first.managed_transport = "claude_channel_bridge"
+        wrapper_first_key = runtime_key_for_session("claude", str(wrapper_first.id))
+
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=scan_first_key,
+                    session_id=scan_first.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_channel_scan",
+                    kind="terminal_signal",
+                    occurred_at=now,
+                    dedupe_key="scan-first-process-gone",
+                    payload={
+                        "terminal_state": "process_gone",
+                        "terminal_reason": "channel_state_gone",
+                        "terminal_source": "claude_channel_scan",
+                    },
+                ),
+                RuntimeEventIngest(
+                    runtime_key=scan_first_key,
+                    session_id=scan_first.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_channel_wrapper",
+                    kind="terminal_signal",
+                    occurred_at=now - timedelta(milliseconds=500),
+                    dedupe_key="scan-first-wrapper-ended",
+                    payload={
+                        "terminal_state": "session_ended",
+                        "terminal_reason": "provider_exit",
+                        "terminal_source": "claude_channel_wrapper",
+                    },
+                ),
+                RuntimeEventIngest(
+                    runtime_key=wrapper_first_key,
+                    session_id=wrapper_first.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_channel_wrapper",
+                    kind="terminal_signal",
+                    occurred_at=now,
+                    dedupe_key="wrapper-first-ended",
+                    payload={
+                        "terminal_state": "session_ended",
+                        "terminal_reason": "provider_exit",
+                        "terminal_source": "claude_channel_wrapper",
+                    },
+                ),
+                RuntimeEventIngest(
+                    runtime_key=wrapper_first_key,
+                    session_id=wrapper_first.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_channel_scan",
+                    kind="terminal_signal",
+                    occurred_at=now + timedelta(milliseconds=500),
+                    dedupe_key="wrapper-first-process-gone",
+                    payload={
+                        "terminal_state": "process_gone",
+                        "terminal_reason": "channel_state_gone",
+                        "terminal_source": "claude_channel_scan",
+                    },
+                ),
+            ],
+        )
+        db.commit()
+
+        for runtime_key in (scan_first_key, wrapper_first_key):
+            state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+            assert state.phase == "finished"
+            assert state.terminal_state == "session_ended"
+            assert state.terminal_reason == "provider_exit"
+            assert state.terminal_source == "claude_channel_wrapper"
+
+    engine.dispose()
+
+
 def test_runtime_reducer_preserves_terminal_disconnected_reason(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "runtime_terminal_disconnected.db")
     now = datetime.now(timezone.utc)
