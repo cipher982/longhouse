@@ -4,7 +4,16 @@ export type MachineDirectoryEntry = {
   device_id: string;
   machine_name: string;
   online: boolean;
+  control_channel_status: "connected" | "disconnected";
   supports: string[];
+  can_launch_codex: boolean;
+  launch_blocked_by:
+    | null
+    | "control_down"
+    | "no_codex_support"
+    | "engine_too_old"
+    | "auth_failed"
+    | "runtime_unreachable";
   last_seen_at: string | null;
   engine_build: string | null;
 };
