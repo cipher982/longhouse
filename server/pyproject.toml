@@ -90,8 +90,6 @@ packages = ["zerg"]
 "../desktop/LonghouseMenuBarHarness/Package.swift" = "zerg/_desktop/LonghouseMenuBarHarness/Package.swift"
 "../desktop/LonghouseMenuBarHarness/Sources" = "zerg/_desktop/LonghouseMenuBarHarness/Sources"
 "../desktop/LonghouseMenuBarHarness/Fixtures" = "zerg/_desktop/LonghouseMenuBarHarness/Fixtures"
-# Bundle shared auth redirect helpers used by hosted runtime and control plane.
-"../control-plane/longhouse_shared" = "longhouse_shared"
 # Bundle the shared model routing config so source/wheel installs can start
 # without requiring a sibling monorepo checkout.
 "../config/models.json" = "zerg/_config/models.json"
@@ -106,7 +104,6 @@ packages = ["zerg"]
 "../desktop/LonghouseMenuBarHarness/Package.swift" = "zerg/_desktop/LonghouseMenuBarHarness/Package.swift"
 "../desktop/LonghouseMenuBarHarness/Sources" = "zerg/_desktop/LonghouseMenuBarHarness/Sources"
 "../desktop/LonghouseMenuBarHarness/Fixtures" = "zerg/_desktop/LonghouseMenuBarHarness/Fixtures"
-"../control-plane/longhouse_shared" = "longhouse_shared"
 "../config/models.json" = "zerg/_config/models.json"
 
 [tool.uv]

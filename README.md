@@ -74,12 +74,20 @@ longhouse connect --install   # first install or force reinstall
 
 ## Architecture
 
-Two components, one product:
+Two public components, one product:
 
 - **Machine Agent** — Rust engine on each dev machine. Ships session events.
 - **Runtime Host** — FastAPI + bundled web UI + SQLite. Lives where durability should live.
 
 On a laptop both run together for trial use. For durability, separate them. See `VISION.md` for the full product thesis.
+
+## Open Core
+
+This repository is the Apache-2.0 Longhouse core: CLI, Machine Agent, Runtime Host, web UI, self-hosting, and client surfaces over the same machine contracts.
+
+Longhouse Cloud's hosted signup, billing, provisioning, fleet operations, and deployment automation are proprietary and live outside this repository. The public Runtime Host can integrate with a hosted control plane by URL, but self-hosted Longhouse does not require it.
+
+See `EDITIONS.md` and `TRADEMARKS.md` for the boundary.
 
 ## Contributing
 

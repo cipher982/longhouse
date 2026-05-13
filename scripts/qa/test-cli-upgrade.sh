@@ -114,7 +114,6 @@ prepare_pkg() {
   mkdir -p \
     "$target/server" \
     "$target/web" \
-    "$target/control-plane" \
     "$target/config" \
     "$target/desktop/LonghouseMenuBarHarness"
   rsync -a \
@@ -126,7 +125,6 @@ prepare_pkg() {
     --exclude '.venv' \
     "$ROOT_DIR/server/" "$target/server/"
   cp -R "$ROOT_DIR/web/dist" "$target/web/dist"
-  cp -R "$ROOT_DIR/control-plane/longhouse_shared" "$target/control-plane/longhouse_shared"
   cp "$ROOT_DIR/config/models.json" "$target/config/models.json"
   cp "$ROOT_DIR/desktop/LonghouseMenuBarHarness/Package.swift" "$target/desktop/LonghouseMenuBarHarness/Package.swift"
   cp -R "$ROOT_DIR/desktop/LonghouseMenuBarHarness/Sources" "$target/desktop/LonghouseMenuBarHarness/Sources"

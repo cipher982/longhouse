@@ -111,29 +111,25 @@ make qa-live
 make qa-live-conversations
 ```
 
-### Control-plane lane
+### Hosted Control Plane
 
-Changed paths typically include `control-plane/**`.
+The hosted control plane is no longer shipped from this public repo. Treat it
+as an external service that runtime deploys depend on through
+`CONTROL_PLANE_URL`.
 
-What ships:
-- Control plane only
+Runtime deploys may still wait for `https://control.longhouse.ai/health` and
+use the hosted instance helpers to reprovision canary instances. That is a
+service dependency check, not a public control-plane source deploy.
 
-Primary automation:
-- `deploy-control-plane.yml`
-
-The control-plane lane waits for the matching `contract-first-ci.yml` run for the same SHA before any remote deploy step. Anchor all checks on the pushed SHA; do not infer state from the latest branch run.
-
-Manual fallback:
-
-```bash
-./scripts/ops/coolify-deploy.sh longhouse-control-plane --timeout 900
-./scripts/qa/smoke-prod.sh --no-llm
-./scripts/ops/check-cp-credentials.sh
-```
+If the control-plane service itself needs changes, switch to the private
+control-plane repo and use its deploy instructions. Do not recreate
+`control-plane/**` or `deploy-control-plane.yml` here.
 
 ### Mixed commits
 
-If a commit touches both runtime and control-plane lanes, expect both workflows to matter. Do not assume the runtime workflow deploys the control plane for you.
+If a commit touches both public runtime code and the external hosted control
+plane, ship and verify each repository independently. Do not assume the public
+runtime workflow deploys the control plane for you.
 
 If a commit also changes local CLI/install behavior, that is a third concern:
 hosted deploys may still be needed, but they do not replace publishing a new

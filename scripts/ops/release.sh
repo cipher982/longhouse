@@ -10,7 +10,7 @@ Usage: release.sh VERSION
   VERSION is the tag to cut (e.g. v0.1.13).
 
 Cuts a stable Longhouse release:
-  1. Bumps every component manifest (server, engine, runner, control-plane,
+  1. Bumps every public component manifest (server, engine, runner,
      iOS xcconfig) to the same shared release version via bump-my-version.
      Note: this is the release version, not the per-commit build identity.
      Build identity advances on every commit; release version only moves
@@ -93,7 +93,6 @@ git -C "$ROOT" add \
   server/pyproject.toml \
   engine/Cargo.toml \
   runner/package.json \
-  control-plane/pyproject.toml \
   ios/XcodeHarness/Configs/Version.xcconfig \
   .bumpversion.toml
 git -C "$ROOT" commit -m "Bump version to $PYVER"

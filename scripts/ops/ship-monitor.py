@@ -24,13 +24,10 @@ EXIT_NO_RUNS = 12
 EXIT_LIVE_DRIFT = 13
 
 ACCEPTED_CONCLUSIONS = {"success", "neutral", "skipped"}
-CONTROL_PLANE_HEALTH = {"ok", "healthy"}
 RUNTIME_HEALTH = {"healthy"}
 DEPLOY_AND_VERIFY = "Deploy and Verify"
-DEPLOY_CONTROL_PLANE = "Deploy Control Plane"
 CI_WORKFLOW = "CI"
 DEPLOY_AND_VERIFY_JOB = "Deploy demo + canary + hosted live QA"
-DEPLOY_CONTROL_PLANE_JOB = "Deploy Control Plane"
 DEPLOY_GATE_JOB = "Queue deploy behind earlier main SHAs + green CI"
 RUNTIME_IMAGE_WORKFLOW = "Publish Runtime Image"
 RUNTIME_IMAGE_JOB = "build-and-push"
@@ -289,8 +286,6 @@ def select_load_bearing_runs(runs: list[RunInfo]) -> tuple[list[RunInfo], list[s
 
     if DEPLOY_AND_VERIFY in workflow_names:
         required_names.append(DEPLOY_AND_VERIFY)
-    if DEPLOY_CONTROL_PLANE in workflow_names:
-        required_names.append(DEPLOY_CONTROL_PLANE)
 
     if not required_names:
         return runs, []
@@ -657,12 +652,6 @@ def verify_live_state(root: Path, repo: str, sha: str, runs: list[RunInfo]) -> t
     ):
         require_surface("Demo runtime", RUNTIME_HEALTH, check_sha=runtime_image_published)
         require_surface(CANARY_SURFACE, RUNTIME_HEALTH, check_sha=runtime_image_published)
-
-    if any(
-        run.workflowName == DEPLOY_CONTROL_PLANE and job_succeeded(run, DEPLOY_CONTROL_PLANE_JOB)
-        for run in runs
-    ):
-        require_surface("Control plane", CONTROL_PLANE_HEALTH, check_sha=True)
 
     return surfaces, errors, raw
 
