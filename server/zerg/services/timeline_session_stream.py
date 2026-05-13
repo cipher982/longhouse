@@ -16,9 +16,10 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
 
-from zerg.models.agents import SessionRuntimeEvent
+from zerg.models.agents import SessionObservation
 from zerg.services.agents_store import AgentsStore
 from zerg.services.session_listing import SessionListingError
+from zerg.services.session_observations import OBS_KIND_BRIDGE_TRANSCRIPT_DELTA
 from zerg.services.session_pubsub import TOPIC_TIMELINE
 from zerg.services.session_pubsub import PubsubMessage
 from zerg.services.session_pubsub import get_pubsub
@@ -271,17 +272,17 @@ def _load_timeline_stream_window_signature(
         context_mode=params.context_mode,
         include_total=False,
     )
-    bridge_transcript_heads = _load_bridge_runtime_event_heads(db=db, rows=rows)
+    bridge_transcript_heads = _load_bridge_observation_heads(db=db, rows=rows)
     return tuple((*row, bridge_transcript_heads.get(row[1])) for row in rows)
 
 
-def _load_bridge_runtime_event_heads(
+def _load_bridge_observation_heads(
     *,
     db: Session,
     rows: tuple[tuple[str, str, datetime | None, datetime | None, datetime | None, int], ...],
 ) -> dict[str, int]:
-    # Bridge transcript previews materialize from runtime events synchronously,
-    # so the runtime event head is the stream signature for provisional preview updates.
+    # Bridge transcript previews materialize from observations synchronously,
+    # so the observation head is the stream signature for provisional preview updates.
     session_ids: list[UUID] = []
     for row in rows:
         try:
@@ -293,13 +294,13 @@ def _load_bridge_runtime_event_heads(
 
     result_rows = (
         db.query(
-            SessionRuntimeEvent.session_id.label("session_id"),
-            func.max(SessionRuntimeEvent.id).label("max_id"),
+            SessionObservation.session_id.label("session_id"),
+            func.max(SessionObservation.id).label("max_id"),
         )
-        .filter(SessionRuntimeEvent.session_id.in_(session_ids))
-        .filter(SessionRuntimeEvent.source == "codex_bridge_live")
-        .filter(SessionRuntimeEvent.kind == "progress_signal")
-        .group_by(SessionRuntimeEvent.session_id)
+        .filter(SessionObservation.session_id.in_(session_ids))
+        .filter(SessionObservation.source == "codex_bridge_live")
+        .filter(SessionObservation.kind == OBS_KIND_BRIDGE_TRANSCRIPT_DELTA)
+        .group_by(SessionObservation.session_id)
         .all()
     )
     heads: dict[str, int] = {}

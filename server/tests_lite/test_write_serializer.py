@@ -92,7 +92,7 @@ async def test_runtime_and_archive_writes_jump_ahead_of_presence_chatter(tmp_pat
 
     presence = asyncio.create_task(serializer.execute(_make_write("presence"), label="presence"))
     ingest = asyncio.create_task(serializer.execute(_make_write("ingest"), label="ingest"))
-    runtime = asyncio.create_task(serializer.execute(_make_write("runtime"), label="runtime-events"))
+    runtime = asyncio.create_task(serializer.execute(_make_write("runtime"), label="runtime-observations"))
 
     await asyncio.gather(first, presence, ingest, runtime)
 

@@ -737,6 +737,13 @@ def _migrate_agents_columns(engine: Engine) -> None:
         logger.debug("session runtime state truth normalization skipped (table may not exist yet)", exc_info=True)
 
     try:
+        with engine.begin() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS session_runtime_events"))
+    except Exception:
+        logger.exception("session_runtime_events table removal failed")
+        raise
+
+    try:
         with engine.connect() as conn:
             columns = {row[1] for row in conn.execute(text("PRAGMA table_info(agent_heartbeats)"))}
             if columns and "spool_dead" not in columns:
@@ -809,6 +816,19 @@ def _migrate_agents_columns(engine: Engine) -> None:
                     )
                 if "expected_user_text_hash" not in columns:
                     conn.execute(text("ALTER TABLE session_turns ADD COLUMN expected_user_text_hash VARCHAR(64)"))
+                if "baseline_observation_cursor" not in columns:
+                    conn.execute(text("ALTER TABLE session_turns ADD COLUMN baseline_observation_cursor INTEGER"))
+                if "baseline_runtime_cursor" in columns:
+                    conn.execute(
+                        text(
+                            """
+                            UPDATE session_turns
+                            SET baseline_observation_cursor = baseline_runtime_cursor
+                            WHERE baseline_observation_cursor IS NULL
+                              AND baseline_runtime_cursor IS NOT NULL
+                            """
+                        )
+                    )
                 conn.execute(
                     text(
                         """

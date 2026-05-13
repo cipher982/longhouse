@@ -773,7 +773,7 @@ class SessionTurnResponse(UTCBaseModel):
     user_event_id: Optional[int] = Field(None, description="Triggering durable user event id")
     durable_assistant_event_id: Optional[int] = Field(None, description="Durable assistant event id that closed the turn")
     baseline_event_id: Optional[int] = Field(None, description="Latest durable event id observed before the turn began")
-    baseline_runtime_cursor: Optional[int] = Field(None, description="Latest runtime cursor observed before the turn began")
+    baseline_observation_cursor: Optional[int] = Field(None, description="Latest runtime observation cursor before the turn began")
     user_submitted_at: datetime = Field(..., description="When the user prompt was accepted as a turn")
     send_accepted_at: Optional[datetime] = Field(None, description="When transport accepted the prompt send")
     active_phase_observed_at: Optional[datetime] = Field(None, description="When Longhouse first observed active runtime work")
@@ -1297,7 +1297,7 @@ def build_session_turn_response(turn: SessionTurn) -> SessionTurnResponse:
         user_event_id=turn.user_event_id,
         durable_assistant_event_id=turn.durable_assistant_event_id,
         baseline_event_id=turn.baseline_event_id,
-        baseline_runtime_cursor=turn.baseline_runtime_cursor,
+        baseline_observation_cursor=turn.baseline_observation_cursor,
         user_submitted_at=turn.user_submitted_at,
         send_accepted_at=turn.send_accepted_at,
         active_phase_observed_at=turn.active_phase_observed_at,

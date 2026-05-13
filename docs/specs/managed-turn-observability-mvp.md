@@ -86,7 +86,7 @@ Use `longhouse.*` attrs for product-specific detail:
 - `longhouse.turn.outcome`
 - `longhouse.turn.error_code`
 - `longhouse.turn.baseline_event_id`
-- `longhouse.turn.baseline_runtime_event_id`
+- `longhouse.turn.baseline_observation_id`
 - `longhouse.turn.user_submitted_at`
 - `longhouse.turn.send_observed_at`
 - `longhouse.turn.active_phase_observed_at`

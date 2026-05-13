@@ -36,19 +36,19 @@ router = APIRouter(prefix="/agents/runtime", tags=["agents"])
 
 
 @router.post("/events/batch", response_model=RuntimeEventBatchResult)
-async def ingest_runtime_event_batch(
+async def ingest_runtime_observation_batch(
     payload: RuntimeEventBatchIngest,
     db: Session = Depends(get_db),
     _token: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> RuntimeEventBatchResult:
-    """Ingest normalized runtime events and materialize runtime state."""
+    """Ingest normalized runtime observations and materialize runtime state."""
     try:
         ws = get_write_serializer()
         events = payload.events
 
-        # Event age at ingest: occurred_at (engine) -> now (server receive).
-        # Runtime events come from codex_bridge, always managed.
+        # Observation age at ingest: occurred_at (engine) -> now (server receive).
+        # Codex bridge runtime observations are always managed.
         now_utc = datetime.now(timezone.utc)
         for ev in events:
             ev_ts = ev.occurred_at
@@ -137,7 +137,7 @@ async def ingest_runtime_event_batch(
                     )
             return ingest_result, prepared
 
-        result, prepared_per_session = await ws.execute_or_direct(_do, db, label="runtime-events")
+        result, prepared_per_session = await ws.execute_or_direct(_do, db, label="runtime-observations")
 
         # Publish per-session after a successful write; SSE subscribers wake directly.
         updated_runtime_keys = set(result.updated_runtime_keys)
@@ -192,5 +192,5 @@ async def ingest_runtime_event_batch(
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to ingest runtime events",
+            detail="Failed to ingest runtime observations",
         ) from exc
