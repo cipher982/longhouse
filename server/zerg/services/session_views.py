@@ -30,6 +30,9 @@ from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_capabilities import build_session_capability_display
 from zerg.services.session_capabilities import project_current_session_capabilities
 from zerg.services.session_capabilities import project_current_session_capabilities_from_facts
+from zerg.services.session_current_control import engine_bridge_attached
+from zerg.services.session_current_control import engine_control_online
+from zerg.services.session_current_control import with_engine_control_capability
 from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_runner_state import managed_runner_host_state
 from zerg.services.session_runtime import SessionRuntimeView
@@ -549,6 +552,14 @@ class SessionResponse(UTCBaseModel):
     )
     loop_mode: SessionLoopMode = Field(SessionLoopMode.ASSIST, description="Session loop mode: assist|autopilot")
     user_state: str = Field("active", description="User classification: active|parked|snoozed|archived")
+    launch_state: Optional[str] = Field(
+        None,
+        description="Remote-launch lifecycle: launching|live|launching_unknown|launch_failed|launch_orphaned; null for pre-migration rows",
+    )
+    launch_error_code: Optional[str] = Field(None, description="Remote-launch error code when launch_state=launch_failed/launch_orphaned")
+    launch_error_message: Optional[str] = Field(
+        None, description="Remote-launch error message when launch_state=launch_failed/launch_orphaned"
+    )
 
 
 class SessionSummaryResponse(UTCBaseModel):
@@ -1022,17 +1033,27 @@ def build_session_response(
     match_score: float | None = None,
     binding_overlay=None,
     transcript_preview: TranscriptPreview | None = None,
+    owner_id: int | None = None,
 ) -> SessionResponse:
     cache = thread_cache if thread_cache is not None else {}
     thread_head_session_id, thread_continuation_count = get_thread_meta(store, session, cache)
     include_runtime = should_include_runtime_view(session=session, runtime_view=runtime_overlay)
     capability_flags = build_session_capabilities(session)
+    is_engine_control_online = engine_control_online(session, owner_id)
+    if is_engine_control_online:
+        capability_flags = with_engine_control_capability(
+            capability_flags,
+            engine_control_online=True,
+            engine_bridge_attached=engine_bridge_attached(runtime_overlay),
+        )
     binding_host_state = None
     binding_terminal_reason = None
     if binding_overlay is not None:
         binding_host_state = binding_overlay.host_state
         binding_terminal_reason = binding_overlay.terminal_reason
-    if capability_flags.live_control_available or capability_flags.host_reattach_available:
+    if is_engine_control_online:
+        binding_host_state = "online"
+    elif capability_flags.live_control_available or capability_flags.host_reattach_available:
         binding_host_state = managed_runner_host_state(store.db, session) or binding_host_state
     runtime_display = (
         build_session_runtime_display_response(
@@ -1127,6 +1148,9 @@ def build_session_response(
         ),
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
         user_state=session.user_state or "active",
+        launch_state=getattr(session, "launch_state", None),
+        launch_error_code=getattr(session, "launch_error_code", None),
+        launch_error_message=getattr(session, "launch_error_message", None),
     )
 
 

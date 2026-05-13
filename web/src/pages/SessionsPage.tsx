@@ -39,6 +39,7 @@ import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { RecallPanel } from "../components/RecallPanel";
 import { SessionCard } from "../components/sessions/SessionCard";
 import { FilterChip, FilterPopover } from "../components/sessions/SessionsFilter";
+import LaunchSessionModal from "../components/LaunchSessionModal";
 import {
   type SortOrder,
   type SessionsUrlState,
@@ -360,6 +361,7 @@ export default function SessionsPage() {
     prefetchSessionWorkspace(thread.detail.id);
   }, [prefetchSessionWorkspace]);
 
+  const [launchModalOpen, setLaunchModalOpen] = useState(false);
   const headerActions = (
     <div className="sessions-header-actions">
       {threadCards.length > 0 && (
@@ -367,6 +369,14 @@ export default function SessionsPage() {
           {groupedQueryMode ? `${threadCards.length} results` : `${threadCards.length} tasks`}
         </span>
       )}
+      <Button
+        variant="primary"
+        size="sm"
+        onClick={() => setLaunchModalOpen(true)}
+        data-testid="sessions-start-session"
+      >
+        Start session
+      </Button>
     </div>
   );
 
@@ -528,6 +538,14 @@ export default function SessionsPage() {
                 <Button
                   variant="secondary"
                   size="md"
+                  onClick={() => setLaunchModalOpen(true)}
+                  data-testid="timeline-empty-start-session"
+                >
+                  Start session
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="md"
                   onClick={() => navigate("/runners")}
                   data-testid="timeline-empty-runner-action"
                 >
@@ -567,6 +585,14 @@ export default function SessionsPage() {
             </p>
           </div>
         </div>
+        <LaunchSessionModal
+          isOpen={launchModalOpen}
+          onClose={() => setLaunchModalOpen(false)}
+          onLaunched={(sessionId) => {
+            setLaunchModalOpen(false);
+            navigate(`/timeline/${sessionId}`);
+          }}
+        />
       </PageShell>
     );
   }
@@ -822,6 +848,14 @@ export default function SessionsPage() {
           </div>
         )}
       </div>
+      <LaunchSessionModal
+        isOpen={launchModalOpen}
+        onClose={() => setLaunchModalOpen(false)}
+        onLaunched={(sessionId) => {
+          setLaunchModalOpen(false);
+          navigate(`/timeline/${sessionId}`);
+        }}
+      />
     </PageShell>
   );
 }

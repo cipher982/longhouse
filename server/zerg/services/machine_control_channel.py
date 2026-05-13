@@ -123,6 +123,10 @@ class MachineControlChannelRegistry:
         connection = self._connections.get((owner_id, device_id))
         return connection.info if connection is not None else None
 
+    def list_for_owner(self, *, owner_id: int) -> list[MachineControlConnectionInfo]:
+        """Return infos for every currently-connected machine belonging to owner."""
+        return [connection.info for (conn_owner, _device), connection in self._connections.items() if conn_owner == owner_id]
+
     def is_online(self, *, owner_id: int, device_id: str) -> bool:
         return (owner_id, device_id) in self._connections
 

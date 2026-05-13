@@ -58,6 +58,10 @@ pub struct BridgeStartConfig {
     pub longhouse_home: Option<PathBuf>,
     pub log_file: Option<PathBuf>,
     pub start_timeout_secs: u64,
+    /// When true, the bridge's run loop will invoke `thread/start` itself so
+    /// the managed session is driveable without a TUI attach. Default (false)
+    /// preserves the legacy behavior where a TUI creates the thread.
+    pub start_thread: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -77,6 +81,9 @@ pub struct BridgeRunConfig {
     pub longhouse_home: Option<PathBuf>,
     pub state_file: PathBuf,
     pub log_file: PathBuf,
+    /// When true, the bridge calls `thread/start` itself instead of waiting
+    /// for a TUI attach. Used by the headless remote-launch path.
+    pub start_thread: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -588,6 +595,9 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
     if config.auto_approve {
         child.arg("--auto-approve");
     }
+    if config.start_thread {
+        child.arg("--start-thread");
+    }
 
     #[cfg(unix)]
     {
@@ -702,11 +712,53 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     starting_state.app_server_ws_url = client.child_ws_url.clone();
     write_state_file(&config.state_file, &starting_state)?;
 
-    // Initialize the protocol handshake but do NOT call thread/start.
-    // The TUI (codex --enable tui_app_server --remote <ws_url>) will create
-    // the thread; the bridge captures the thread_id via the thread/started
-    // notification and posts idle once it knows which thread to drive.
+    // Initialize the protocol handshake. The normal TUI path creates the
+    // thread later; headless remote launch creates it below.
     initialize_client(&mut client).await?;
+
+    // Headless remote-launch path: create the thread ourselves so the session
+    // is driveable via send/interrupt/steer without a TUI attach. A TUI that
+    // attaches later can still create its own thread; bridge state captures
+    // the most recent thread via thread/started notifications.
+    if config.start_thread {
+        let params = json!({
+            "cwd": config.cwd.to_string_lossy(),
+            "approvalPolicy": config.approval_policy,
+            "sandbox": config.sandbox,
+            "model": config.model,
+        });
+        match send_request(&mut client, "thread/start", params).await {
+            Ok(response) => {
+                let thread_id = response
+                    .get("thread")
+                    .and_then(|thread| thread.get("id"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let thread_path = response
+                    .get("thread")
+                    .and_then(|thread| thread.get("path"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                starting_state.thread_id = thread_id;
+                starting_state.thread_path = thread_path;
+                write_state_file(&config.state_file, &starting_state)?;
+            }
+            Err(err) => {
+                starting_state.status = "error".to_string();
+                starting_state.last_error = Some(format!("thread/start failed: {err}"));
+                let _ = write_state_file(&config.state_file, &starting_state);
+                bail!("thread/start failed in headless bridge: {err}");
+            }
+        }
+    }
+
+    let initial_thread_id = starting_state.thread_id.clone();
+    let initial_thread_path = starting_state.thread_path.clone();
+    let initial_subscription_status = if initial_thread_id.is_some() {
+        ThreadSubscriptionStatus::WaitingForTurn
+    } else {
+        ThreadSubscriptionStatus::WaitingForThread
+    };
 
     let mut runtime_headers = HeaderMap::new();
     runtime_headers.insert(
@@ -729,7 +781,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         session_id: config.session_id.clone(),
         cwd: config.cwd.display().to_string(),
         machine_name: config.machine_name.clone(),
-        thread_id: None,
+        thread_id: initial_thread_id.clone(),
         local_db_path: None,
         runtime_tx: None,
         live_runtime_tx: None,
@@ -742,7 +794,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         session_id: config.session_id.clone(),
         cwd: config.cwd.display().to_string(),
         machine_name: config.machine_name.clone(),
-        thread_id: None,
+        thread_id: initial_thread_id.clone(),
         local_db_path: None,
         runtime_tx: None,
         live_runtime_tx: None,
@@ -757,8 +809,8 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
             cwd: config.cwd.display().to_string(),
             codex_bin: config.codex_bin.clone(),
             ws_url: Some(ws_url.clone()),
-            thread_id: None,
-            thread_path: None,
+            thread_id: initial_thread_id.clone(),
+            thread_path: initial_thread_path.clone(),
             pid,
             app_server_pid: client.child_pid,
             app_server_pgid: client.child_pgid,
@@ -768,11 +820,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
             active_turn_id: None,
             last_turn_status: None,
             last_error: None,
-            thread_subscription_status: Some(
-                ThreadSubscriptionStatus::WaitingForThread
-                    .as_str()
-                    .to_string(),
-            ),
+            thread_subscription_status: Some(initial_subscription_status.as_str().to_string()),
             thread_subscription_attempts: 0,
             thread_subscription_last_error: None,
             updated_at: Utc::now().to_rfc3339(),
@@ -784,7 +832,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
             session_id: config.session_id.clone(),
             cwd: config.cwd.display().to_string(),
             machine_name: config.machine_name.clone(),
-            thread_id: None,
+            thread_id: initial_thread_id,
             local_db_path: resolve_bridge_agent_db_path(config.longhouse_home.as_deref()).ok(),
             runtime_tx: Some(runtime_tx),
             live_runtime_tx: Some(live_runtime_tx),
@@ -796,9 +844,14 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         subscribed_thread_id: None,
         rejected_thread_ids: BTreeSet::new(),
     };
-    // Mark ready so the CLI can read ws_url and launch the TUI.
-    // idle is posted once the TUI creates a thread (thread/started notification).
+    // Mark ready so the CLI can read ws_url and launch the TUI. Headless
+    // launches already have a thread id; TUI launches capture it later from
+    // thread/started notifications.
     write_state_file(&context.state_file, &context.state)?;
+    if config.start_thread && context.state.thread_id.is_some() {
+        let startup_phase = context.runtime_tracker.current_phase_update();
+        emit_runtime_updates(&config, &mut context, vec![startup_phase]).await;
+    }
 
     // Spawn IPC socket listener so `send` routes through the daemon's persistent connection
     let sock_path = ipc_socket_path(&context.state_file);
@@ -3737,6 +3790,7 @@ mod tests {
             longhouse_home: Some(temp.path().to_path_buf()),
             state_file: temp.path().join("bridge-state.json"),
             log_file: temp.path().join("bridge.log"),
+            start_thread: false,
         }
     }
 

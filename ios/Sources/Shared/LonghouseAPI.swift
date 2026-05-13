@@ -379,6 +379,93 @@ struct LonghouseAPI: Sendable {
     }
 }
 
+// MARK: - Remote session launch
+
+public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
+    public let deviceId: String
+    public let machineName: String
+    public let online: Bool
+    public let supports: [String]
+    public let lastSeenAt: String?
+    public let engineBuild: String?
+
+    public var supportsCodexLaunch: Bool { supports.contains("codex.launch") }
+    public var isLaunchable: Bool { online && supportsCodexLaunch }
+}
+
+public struct MachineDirectoryResponse: Decodable, Sendable {
+    public let machines: [MachineDirectoryEntry]
+}
+
+public enum RemoteLaunchState: String, Decodable, Sendable {
+    case launching
+    case live
+    case launchingUnknown = "launching_unknown"
+    case launchFailed = "launch_failed"
+    case launchOrphaned = "launch_orphaned"
+}
+
+public struct RemoteSessionLaunchResponse: Decodable, Sendable {
+    public let sessionId: String
+    public let launchState: RemoteLaunchState
+    public let launchErrorCode: String?
+    public let launchErrorMessage: String?
+}
+
+extension LonghouseAPI {
+    func listMachines() async throws -> [MachineDirectoryEntry] {
+        var request = URLRequest(url: baseURL.appendingPathComponent("/api/timeline/machines"))
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+        let (data, httpResponse) = try await data(for: request)
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
+        return try JSONDecoder.snakeCase.decode(MachineDirectoryResponse.self, from: data).machines
+    }
+
+    func launchRemoteSession(
+        deviceId: String,
+        provider: String = "codex",
+        cwd: String,
+        displayName: String? = nil,
+        clientRequestId: String? = nil
+    ) async throws -> RemoteSessionLaunchResponse {
+        var request = URLRequest(url: baseURL.appendingPathComponent("/api/sessions/launch"))
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+        var body: [String: Any] = [
+            "device_id": deviceId,
+            "provider": provider,
+            "cwd": cwd,
+        ]
+        if let displayName, !displayName.isEmpty { body["display_name"] = displayName }
+        if let clientRequestId, !clientRequestId.isEmpty { body["client_request_id"] = clientRequestId }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, httpResponse) = try await data(for: request)
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            if let structured = Self.parseLaunchError(statusCode: httpResponse.statusCode, data: data) {
+                throw structured
+            }
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
+        return try JSONDecoder.snakeCase.decode(RemoteSessionLaunchResponse.self, from: data)
+    }
+
+    static func parseLaunchError(statusCode: Int, data: Data) -> LonghouseAPIError? {
+        guard
+            let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+            let detail = obj["detail"] as? [String: Any],
+            let code = detail["code"] as? String
+        else {
+            return nil
+        }
+        let message = (detail["message"] as? String) ?? ""
+        return .structured(status: statusCode, errorCode: code, message: message)
+    }
+}
+
 extension LonghouseAPI: SessionWorkspaceClient {}
 
 enum LonghouseAPIError: Error {

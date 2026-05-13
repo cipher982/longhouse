@@ -3078,6 +3078,7 @@ def test_runtime_view_aligns_codex_running_with_claude_semantics(tmp_path):
         view = build_runtime_view(state=state, session=session, now=now)
 
         assert state.phase == "running"
+        assert state.phase_source == "codex_bridge"
         assert state.active_tool == "shell"
         assert view.status == "working"
         assert view.runtime_phase == "running"

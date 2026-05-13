@@ -443,6 +443,11 @@ enum CodexBridgeCommands {
         #[arg(long, default_value_t = 25)]
         start_timeout_secs: u64,
 
+        /// Create the codex thread ourselves via thread/start; used by the
+        /// headless remote-launch path where no TUI will attach to create one.
+        #[arg(long)]
+        start_thread: bool,
+
         #[arg(long)]
         json: bool,
     },
@@ -493,6 +498,11 @@ enum CodexBridgeCommands {
 
         #[arg(long)]
         log_file: PathBuf,
+
+        /// When set, the bridge calls thread/start itself during startup so
+        /// remote launches produce a driveable session without a TUI attach.
+        #[arg(long)]
+        start_thread: bool,
     },
 
     /// Attach stock Codex TUI to a running managed bridge
@@ -953,6 +963,7 @@ fn main() -> anyhow::Result<()> {
                     isolation_root,
                     log_file,
                     start_timeout_secs,
+                    start_thread,
                     json,
                 } => {
                     let (state_root, longhouse_home) = resolve_codex_bridge_start_roots(
@@ -976,6 +987,7 @@ fn main() -> anyhow::Result<()> {
                         longhouse_home,
                         log_file,
                         start_timeout_secs,
+                        start_thread,
                     }))?;
                     if json {
                         println!("{}", serde_json::to_string_pretty(&summary)?);
@@ -1009,6 +1021,7 @@ fn main() -> anyhow::Result<()> {
                     longhouse_home,
                     state_file,
                     log_file,
+                    start_thread,
                 } => {
                     rt.block_on(cmd_codex_bridge_run(BridgeRunConfig {
                         session_id,
@@ -1026,6 +1039,7 @@ fn main() -> anyhow::Result<()> {
                         longhouse_home,
                         state_file,
                         log_file,
+                        start_thread,
                     }))?;
                 }
                 CodexBridgeCommands::Attach {
