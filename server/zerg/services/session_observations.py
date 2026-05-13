@@ -25,6 +25,7 @@ SOURCE_DOMAIN_TRANSCRIPT = "transcript"
 SOURCE_DOMAIN_RUNTIME = "runtime"
 
 OBS_KIND_PROVIDER_SOURCE_LINE = "provider_source_line"
+OBS_KIND_PROVIDER_EVENT = "provider_event"
 OBS_KIND_RUNTIME_SIGNAL = "runtime_signal"
 OBS_KIND_BRIDGE_TRANSCRIPT_DELTA = "bridge_transcript_delta"
 
@@ -106,6 +107,7 @@ def record_runtime_observation(db: Session, event: Any, *, received_at: datetime
             "phase": event.phase,
             "tool_name": event.tool_name,
             "freshness_ms": event.freshness_ms,
+            "dedupe_key": dedupe_key,
             "payload": payload,
         },
     )
@@ -154,6 +156,72 @@ def record_source_line_observation(
             "revision": revision,
             "line_hash": line_hash,
             "raw_json": raw_json,
+        },
+    )
+
+
+def record_provider_event_observation(
+    db: Session,
+    *,
+    session_id: UUID,
+    provider: str,
+    device_id: str | None,
+    source: str,
+    branch_id: int,
+    role: str,
+    timestamp: datetime,
+    event_hash: str,
+    content_text: str | None = None,
+    tool_name: str | None = None,
+    tool_input_json: Any | None = None,
+    tool_output_text: str | None = None,
+    tool_call_id: str | None = None,
+    source_path: str | None = None,
+    source_offset: int | None = None,
+    raw_json: str | None = None,
+    event_uuid: str | None = None,
+    parent_event_uuid: str | None = None,
+    received_at: datetime | None = None,
+) -> ObservationWriteResult:
+    identity = event_uuid or _hash_parts(
+        str(session_id),
+        str(branch_id),
+        source_path or "",
+        str(source_offset) if source_offset is not None else "",
+        event_hash,
+        role,
+        timestamp.isoformat(),
+    )
+    observation_id = "provider_event:" + _hash_parts(str(session_id), str(branch_id), identity)
+    return record_session_observation(
+        db,
+        observation_id=observation_id,
+        session_id=session_id,
+        runtime_key=None,
+        provider=provider,
+        device_id=device_id,
+        source_domain=SOURCE_DOMAIN_TRANSCRIPT,
+        source=source,
+        kind=OBS_KIND_PROVIDER_EVENT,
+        source_path=source_path,
+        source_offset=source_offset,
+        source_cursor=event_uuid
+        or (f"{source_path}:{source_offset}:{event_hash}" if source_path is not None and source_offset is not None else identity),
+        observed_at=timestamp,
+        received_at=received_at,
+        payload={
+            "branch_id": branch_id,
+            "role": role,
+            "content_text": content_text,
+            "tool_name": tool_name,
+            "tool_input_json": tool_input_json,
+            "tool_output_text": tool_output_text,
+            "tool_call_id": tool_call_id,
+            "timestamp": timestamp.isoformat(),
+            "event_hash": event_hash,
+            "raw_json": raw_json,
+            "event_uuid": event_uuid,
+            "parent_event_uuid": parent_event_uuid,
         },
     )
 

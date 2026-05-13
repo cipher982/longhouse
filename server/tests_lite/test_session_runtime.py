@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -19,12 +20,13 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionRuntimeEvent
+from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import SessionIngest
 from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_liveness_facts import build_session_liveness_facts
+from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
 from zerg.services.session_pubsub import TOPIC_TIMELINE
 from zerg.services.session_pubsub import get_pubsub
 from zerg.services.session_pubsub import reset_pubsub_for_test
@@ -37,6 +39,20 @@ from zerg.services.session_runtime import managed_codex_liveness_invariant_count
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
 from zerg.services.unmanaged_bindings import load_binding_overlay
+
+
+def _runtime_observations(db, runtime_key: str) -> list[SessionObservation]:
+    return (
+        db.query(SessionObservation)
+        .filter(SessionObservation.runtime_key == runtime_key)
+        .filter(SessionObservation.kind == OBS_KIND_RUNTIME_SIGNAL)
+        .order_by(SessionObservation.id.asc())
+        .all()
+    )
+
+
+def _runtime_observation_payload(observation: SessionObservation) -> dict:
+    return json.loads(observation.payload_json or "{}")
 
 
 def _make_db(tmp_path, name="session_runtime.db"):
@@ -556,7 +572,7 @@ def test_runtime_batch_endpoint_is_idempotent(tmp_path):
         }
 
     with SessionLocal() as db:
-        assert db.query(SessionRuntimeEvent).count() == 1
+        assert len(_runtime_observations(db, runtime_key)) == 1
         state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
         assert str(state.session_id) == str(session.id)
         assert state.phase == "thinking"
@@ -710,7 +726,7 @@ def test_presence_endpoint_mirrors_into_runtime_state(tmp_path):
         assert state.active_tool == "Bash"
         assert state.last_runtime_signal_at is not None
         assert state.freshness_expires_at is not None
-        assert db.query(SessionRuntimeEvent).filter(SessionRuntimeEvent.runtime_key == runtime_key).count() == 1
+        assert len(_runtime_observations(db, runtime_key)) == 1
 
     engine.dispose()
 
@@ -737,10 +753,10 @@ def test_presence_endpoint_uses_provider_source_and_wakes_subscribers(tmp_path):
         assert response.status_code == 204, response.text
 
     with SessionLocal() as db:
-        event = db.query(SessionRuntimeEvent).filter(SessionRuntimeEvent.runtime_key == runtime_key).one()
+        observation = _runtime_observations(db, runtime_key)[0]
         state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
-        assert event.provider == "codex"
-        assert event.source == "codex_hook"
+        assert observation.provider == "codex"
+        assert observation.source == "codex_hook"
         assert state.provider == "codex"
         assert state.phase == "thinking"
 
@@ -802,8 +818,8 @@ def test_runtime_event_ingest_stamps_received_at_in_python(tmp_path, monkeypatch
         )
         db.commit()
 
-        event = db.query(SessionRuntimeEvent).filter(SessionRuntimeEvent.runtime_key == runtime_key).one()
-        assert event.received_at.replace(tzinfo=timezone.utc) == received_at
+        observation = _runtime_observations(db, runtime_key)[0]
+        assert observation.received_at.replace(tzinfo=timezone.utc) == received_at
 
     engine.dispose()
 
@@ -1698,6 +1714,62 @@ def test_heartbeat_missing_managed_lease_closes_immediately_with_stable_anchor(t
     engine.dispose()
 
 
+def test_heartbeat_missing_managed_lease_uses_observations_without_runtime_event_projection(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_managed_missing_observation_only.db")
+    now = datetime.now(timezone.utc)
+    last_real_lease_at = now - timedelta(minutes=2)
+
+    with SessionLocal() as db:
+        session = _seed_session(
+            db,
+            provider="codex",
+            started_at=now - timedelta(hours=3),
+        )
+        session.execution_home = "managed_local"
+        session.managed_transport = "codex_app_server"
+        session_id = session.id
+        runtime_key = runtime_key_for_session("codex", str(session_id))
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session_id,
+                    provider="codex",
+                    device_id="runtime-device",
+                    source="engine_attached_lease",
+                    kind="phase_signal",
+                    phase="idle",
+                    occurred_at=last_real_lease_at,
+                    freshness_ms=15 * 60 * 1000,
+                    dedupe_key="managed-lease-observation-only",
+                    payload={"state": "attached"},
+                )
+            ],
+        )
+        db.commit()
+
+    for client in _client(SessionLocal):
+        response = client.post(
+            "/agents/heartbeat",
+            json={
+                "version": "test",
+                "daemon_pid": 123,
+                "managed_sessions": [],
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert response.status_code == 204, response.text
+
+    with SessionLocal() as db:
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        assert state.phase == "finished"
+        assert state.terminal_state == "process_gone"
+        assert state.timeline_anchor_at.replace(tzinfo=timezone.utc) == last_real_lease_at
+
+    engine.dispose()
+
+
 def test_heartbeat_omitted_managed_sessions_field_does_not_detach_old_engine(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_managed_missing_legacy_engine.db")
     now = datetime.now(timezone.utc)
@@ -2059,7 +2131,7 @@ def test_heartbeat_missing_managed_lease_ignores_already_terminal_session(tmp_pa
             ],
         )
         db.commit()
-        event_count = db.query(SessionRuntimeEvent).filter(SessionRuntimeEvent.runtime_key == runtime_key).count()
+        observation_count = len(_runtime_observations(db, runtime_key))
 
     for client in _client(SessionLocal):
         response = client.post(
@@ -2077,9 +2149,7 @@ def test_heartbeat_missing_managed_lease_ignores_already_terminal_session(tmp_pa
         state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
         assert state.phase == "finished"
         assert state.terminal_state == "process_gone"
-        assert (
-            db.query(SessionRuntimeEvent).filter(SessionRuntimeEvent.runtime_key == runtime_key).count() == event_count
-        )
+        assert len(_runtime_observations(db, runtime_key)) == observation_count
 
     engine.dispose()
 
@@ -2310,10 +2380,7 @@ def test_agents_store_ingest_mirrors_binding_and_progress_runtime_signals(tmp_pa
         assert state.timeline_anchor_at is not None
         assert state.phase_source in {"progress", "fallback"}
 
-        event_kinds = {
-            row.kind
-            for row in db.query(SessionRuntimeEvent).filter(SessionRuntimeEvent.runtime_key == runtime_key).all()
-        }
+        event_kinds = {_runtime_observation_payload(row)["kind"] for row in _runtime_observations(db, runtime_key)}
         assert event_kinds == {"binding_signal", "progress_signal"}
 
     engine.dispose()

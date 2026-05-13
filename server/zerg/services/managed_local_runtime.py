@@ -130,7 +130,7 @@ async def persist_managed_local_phase_signal(
             occurred_at=occurred_at,
         )
 
-    await ws.execute_or_direct(_do, db, label="runtime-events")
+    await ws.execute_or_direct(_do, db, label="runtime-observations")
 
 
 async def persist_managed_local_turn_idle(

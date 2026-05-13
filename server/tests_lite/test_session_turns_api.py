@@ -92,7 +92,7 @@ def _seed_turn(
         user_event_id=user_event_id,
         durable_assistant_event_id=durable_assistant_event_id,
         baseline_event_id=10,
-        baseline_runtime_cursor=5,
+        baseline_observation_cursor=5,
         user_submitted_at=user_submitted_at,
         send_accepted_at=send_accepted_at,
         active_phase_observed_at=active_phase_observed_at,

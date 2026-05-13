@@ -227,7 +227,7 @@ Target behavior:
 - `session.send_text` routes through the Codex app-server bridge/relay.
 - `session.interrupt` routes through the same bridge.
 - `session.steer_text` remains Codex-only.
-- Verification uses the same hook/runtime events currently used by
+- Verification uses the same hook/runtime observations currently used by
   `managed_local_control.py`.
 
 Avoid shelling out to `longhouse-engine codex-bridge ...` from the running

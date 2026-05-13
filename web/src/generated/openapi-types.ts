@@ -4152,10 +4152,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Ingest Runtime Event Batch
-         * @description Ingest normalized runtime events and materialize runtime state.
+         * Ingest Runtime Observation Batch
+         * @description Ingest normalized runtime observations and materialize runtime state.
          */
-        post: operations["ingest_runtime_event_batch_agents_runtime_events_batch_post"];
+        post: operations["ingest_runtime_observation_batch_agents_runtime_events_batch_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8729,10 +8729,10 @@ export interface components {
              */
             baseline_event_id?: number | null;
             /**
-             * Baseline Runtime Cursor
-             * @description Latest runtime cursor observed before the turn began
+             * Baseline Observation Cursor
+             * @description Latest runtime observation cursor before the turn began
              */
-            baseline_runtime_cursor?: number | null;
+            baseline_observation_cursor?: number | null;
             /**
              * User Submitted At
              * Format: date-time
@@ -17226,7 +17226,7 @@ export interface operations {
             };
         };
     };
-    ingest_runtime_event_batch_agents_runtime_events_batch_post: {
+    ingest_runtime_observation_batch_agents_runtime_events_batch_post: {
         parameters: {
             query?: never;
             header?: never;

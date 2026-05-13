@@ -1,17 +1,17 @@
 # Session Observation Ledger
 
-Status: Draft for implementation on `session-observation-ledger`
+Status: Active implementation
 Owner: Longhouse session kernel
 Updated: 2026-05-12
 
 ## Problem
 
-Longhouse now has an honest transcript preview contract, but the storage model
-still reflects the path it grew through:
+Longhouse now has an honest transcript preview contract. The session kernel has
+one raw fact table and reducer-owned read models:
 
 - `source_lines` stores durable provider archive rows.
 - `events` stores normalized transcript rows and active provisional bridge text.
-- `session_runtime_events` stores runtime/liveness signals.
+- `session_observations` stores raw transcript, source, and runtime facts.
 - the Machine Agent has a local phase ledger that is later reflected into hosted
   runtime state.
 
@@ -58,6 +58,22 @@ The UI and APIs should never read provider-specific write-side ledgers directly.
 - Durable provider archive rows are observations too; their authority comes from
   reducer rules, not from living in a special table.
 - Idempotency belongs at observation identity first, then reducer identity.
+
+## Vocabulary Freeze
+
+- `session_observations` / `SessionObservation` is the only raw session-history
+  ledger in the Runtime Host.
+- `events` / `AgentEvent` is the transcript projection used by timeline, detail,
+  tail, search, and summaries.
+- `source_lines` / `AgentSourceLine` is the source archive/export projection.
+- `session_runtime_state` / `SessionRuntimeState` is the runtime-state
+  projection for liveness and timeline badges.
+- `session_branches` / `AgentSessionBranch` is still write-side branch topology.
+  It must either become observation-derived or stay explicitly outside the cold
+  rebuild promise before we claim a full single-ledger session kernel.
+- `session_turns` / `SessionTurn` is still a managed-turn projection with its
+  own lifecycle rules. It is not covered by the current observation rebuild
+  service.
 
 ## Proposed Model
 
@@ -110,7 +126,8 @@ Observation identity examples:
 
 1. Machine Agent ships provider source lines and parsed events.
 2. Runtime Host writes `SessionObservation(kind=provider_source_line)` for each
-   source line and `provider_event` only when no source line exists.
+   source line and `SessionObservation(kind=provider_event)` for each parsed
+   durable transcript event.
 3. Transcript reducer derives durable transcript rows.
 4. Reconciliation links or supersedes active provisional rows from bridge
    observations.
@@ -125,13 +142,10 @@ Observation identity examples:
 
 ## Current Table Fate
 
-During implementation, existing tables can remain as reducer outputs while the
-observation path is introduced. They should lose "ledger" status:
+Existing projection tables remain only as reducer outputs:
 
 - `source_lines` becomes `SourceArchive`, a rebuildable export/read model.
 - `events` becomes `TranscriptEvent`, a rebuildable transcript read model.
-- `session_runtime_events` is deleted or demoted once `SessionObservation`
-  carries all runtime inputs.
 - `session_runtime_state` remains a materialized runtime read model.
 
 No new public compatibility field should be added for old `live_transcript` or
@@ -143,15 +157,13 @@ overlay semantics.
 
 - Add `SessionObservation`.
 - Add an idempotent writer service.
-- Record observations for runtime events, bridge transcript deltas, and source
+- Record observations for runtime signals, bridge transcript deltas, and source
   archive lines.
 - Use observation insertion as the duplicate/acceptance boundary for runtime
-  ingest, while the existing `session_runtime_events` table remains a temporary
-  diagnostic/read-model tee until Phase 3 removes it.
+  ingest.
 - Keep current reducers writing existing read models.
-- `provider_event` observations for event-only ingest are not covered in this
-  phase; they are added when durable transcript reduction moves fully behind the
-  observation boundary.
+- `provider_event` observations cover parsed durable transcript rows so normal
+  ingest and projection rebuild use the same reducer boundary.
 - Add tests proving one managed Codex bridge delta and one durable archive line
   land in the same observation table and still reconcile in the current read
   model.
@@ -163,13 +175,30 @@ overlay semantics.
 - Move durable transcript insertion behind the same reducer boundary.
 - Make rebuild from observations a testable command/service.
 
-### Phase 3: Runtime Event Collapse
+Current implementation:
 
-- Replace `session_runtime_events` writes with `SessionObservation` runtime
-  observations.
+- `record_provider_event_observation()` records durable parsed transcript events.
+- `reduce_provider_event_observation()` materializes `AgentEvent` rows.
+- `reduce_source_line_observation()` materializes `AgentSourceLine` rows.
+- `reduce_runtime_signal_observation()` materializes `SessionRuntimeState` rows.
+- `rebuild_session_observation_projections()` clears a session's transcript,
+  source archive, and runtime-state projections and replays observations with
+  reducer counts and explicit reducer errors.
+- Rebuild parity is currently validated for service-level transcript visibility,
+  source export, FTS-backed search/listing, timeline-card runtime fields,
+  out-of-order runtime signals, and rewind branch-prefix projections. It does
+  not yet validate full route-level API responses, branch topology rebuild, or
+  `SessionTurn` rebuild.
+- Managed-local hook waits and managed lease-history closure now read
+  `SessionObservation` cursors.
+
+### Phase 3: Runtime Observation Collapse
+
+- Runtime ingest writes `SessionObservation` runtime observations instead of
+  any parallel raw table.
 - Rebuild `session_runtime_state` directly from observations.
-- Remove direct runtime-event reads from timeline stream freshness signatures, or
-  point them at observation cursors.
+- Timeline stream freshness, managed-local hook waits, and managed lease-history
+  closure use observation cursors.
 
 ### Phase 4: Source Archive Collapse
 

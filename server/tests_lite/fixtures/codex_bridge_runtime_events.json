@@ -1,5 +1,5 @@
 {
-  "_note": "Frozen shape of runtime events emitted by engine/src/codex_bridge.rs. If this fixture fails to deserialize against server RuntimeEventIngest, engine and server protocols have drifted. Update both sides together.",
+  "_note": "Frozen shape of runtime observations emitted by engine/src/codex_bridge.rs. If this fixture fails to deserialize against server RuntimeEventIngest, engine and server protocols have drifted. Update both sides together.",
   "_source": "engine/src/codex_bridge.rs::BridgeRuntimeSink (post_phase + post_progress + post_runtime_events)",
   "events": [
     {
