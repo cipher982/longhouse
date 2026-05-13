@@ -340,8 +340,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     if let Some(parent) = status_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let control_channel_task =
-        crate::control_channel::spawn_control_channel(config.shipper_config.clone());
+    let control_channel_status = crate::control_channel::new_control_channel_status();
+    let control_channel_task = crate::control_channel::spawn_control_channel(
+        config.shipper_config.clone(),
+        control_channel_status.clone(),
+    );
     let (transcript_wake_tx, mut transcript_wake_rx) = mpsc::unbounded_channel();
     let transcript_wake_task = spawn_transcript_wake_listener(transcript_wake_tx)?;
 
@@ -711,6 +714,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &status_path,
                     &observations,
                     &claude_observations,
+                    serde_json::to_value(control_channel_status.snapshot()).ok(),
                     if reused_unmanaged_bindings {
                         last_unmanaged_session_bindings.as_deref()
                     } else {
@@ -797,6 +801,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &status_path,
                     &observations,
                     &claude_observations,
+                    serde_json::to_value(control_channel_status.snapshot()).ok(),
                     if reused_unmanaged_bindings {
                         last_unmanaged_session_bindings.as_deref()
                     } else {
@@ -848,6 +853,7 @@ fn write_local_status_snapshot(
     status_path: &Path,
     observations: &[managed_bridge_scan::CodexBridgeObservation],
     claude_observations: &[managed_claude_scan::ClaudeChannelObservation],
+    control_channel: Option<Value>,
     unmanaged_session_binding_override: Option<&[heartbeat::UnmanagedSessionBinding]>,
 ) -> heartbeat::HeartbeatPayload {
     let spool = Spool::new(conn);
@@ -907,7 +913,14 @@ fn write_local_status_snapshot(
                 )
             }
         };
-    heartbeat::write_status_file(&payload, &stats, phase_ledger, ledger_status, status_path);
+    heartbeat::write_status_file(
+        &payload,
+        &stats,
+        phase_ledger,
+        ledger_status,
+        control_channel,
+        status_path,
+    );
     payload
 }
 
@@ -2349,6 +2362,7 @@ mod tests {
             status.path(),
             &[],
             &[],
+            None,
             Some(&cached),
         );
 

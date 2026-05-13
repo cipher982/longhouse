@@ -428,6 +428,7 @@ pub fn write_status_file(
     stats: &HeartbeatStats<'_>,
     phase_ledger: Vec<PhaseLedgerRow>,
     ledger_status: PhaseLedgerStatus,
+    control_channel: Option<serde_json::Value>,
     status_path: &std::path::Path,
 ) {
     #[derive(Serialize)]
@@ -462,6 +463,11 @@ pub fn write_status_file(
         /// intentional ledger apart from a ledger that the engine couldn't
         /// read this tick.
         phase_ledger_status: PhaseLedgerStatus,
+        /// Machine Agent live-control WebSocket status. This is separate from
+        /// durable HTTPS shipping health; event shipping can be healthy while
+        /// remote launch/control is unavailable.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        control_channel: Option<serde_json::Value>,
         last_updated: String,
     }
 
@@ -486,6 +492,7 @@ pub fn write_status_file(
         recent_dead_letters,
         phase_ledger,
         phase_ledger_status: ledger_status,
+        control_channel,
         last_updated: now_utc.to_rfc3339(),
     };
 
@@ -942,6 +949,11 @@ mod tests {
             &stats,
             Vec::new(),
             PhaseLedgerStatus::Ok,
+            Some(serde_json::json!({
+                "enabled": true,
+                "status": "connected",
+                "supports": ["codex.launch"],
+            })),
             &status_path,
         );
 
@@ -968,6 +980,8 @@ mod tests {
         assert!(build["built_at"].is_string());
         assert!(build["channel"].is_string());
         assert!(build["dirty"].is_boolean());
+        assert_eq!(parsed["control_channel"]["status"], "connected");
+        assert_eq!(parsed["control_channel"]["supports"][0], "codex.launch");
     }
 
     #[test]
@@ -1043,6 +1057,7 @@ mod tests {
             &stats,
             phase_ledger,
             PhaseLedgerStatus::Ok,
+            None,
             &status_path,
         );
 
@@ -1108,6 +1123,7 @@ mod tests {
             &stats,
             Vec::new(),
             PhaseLedgerStatus::ReadFailed("db locked".to_string()),
+            None,
             &status_path,
         );
 

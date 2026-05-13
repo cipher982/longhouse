@@ -88,6 +88,22 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
     typer.echo(f"  ship failures: {payload.get('consecutive_ship_failures', 0)}")
     typer.echo(f"  offline: {'yes' if payload.get('is_offline') else 'no'}")
 
+    control_channel = dict(snapshot.get("control_channel") or {})
+    if control_channel:
+        typer.echo("")
+        typer.echo("Control Channel")
+        typer.echo(f"  status: {control_channel.get('status') or '-'}")
+        typer.echo(f"  ws url: {control_channel.get('ws_url') or '-'}")
+        typer.echo(f"  codex launch: {'yes' if control_channel.get('can_launch_codex') else 'no'}")
+        if control_channel.get("launch_blocked_by"):
+            typer.echo(f"  launch blocked by: {control_channel['launch_blocked_by']}")
+        if control_channel.get("last_error_code") or control_channel.get("last_error_message"):
+            typer.echo(
+                "  last error: "
+                f"{control_channel.get('last_error_code') or '-'}"
+                f" - {control_channel.get('last_error_message') or '-'}"
+            )
+
     provider_clis = dict(snapshot.get("provider_clis") or {})
     if provider_clis:
         typer.echo("")

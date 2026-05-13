@@ -72,6 +72,7 @@ CONTROL_PATH_UNMANAGED = "unmanaged"
 LIVENESS_MODEL_CODEX_BRIDGE = "codex_bridge"
 LIVENESS_MODEL_PROCESS_SCAN = "process_scan"
 LIVENESS_MODEL_ENGINE_STATUS = "engine_status"
+CODEX_LAUNCH_CAPABILITY = "codex.launch"
 
 
 def _utc_now() -> datetime:
@@ -2967,6 +2968,39 @@ def _serialize_transport_health(
     }
 
 
+def _collect_control_channel_health(engine_status: dict[str, Any]) -> dict[str, Any] | None:
+    if not bool(engine_status.get("exists")) or engine_status.get("error"):
+        return None
+    raw_payload = engine_status.get("payload")
+    if not isinstance(raw_payload, Mapping):
+        return None
+    raw_control = raw_payload.get("control_channel")
+    if not isinstance(raw_control, Mapping):
+        return None
+
+    supports = [str(item) for item in list(raw_control.get("supports") or []) if str(item).strip()]
+    status = str(raw_control.get("status") or "disabled").strip() or "disabled"
+    can_launch_codex = status == "connected" and CODEX_LAUNCH_CAPABILITY in supports
+    launch_blocked_by = None
+    if not can_launch_codex:
+        launch_blocked_by = "no_codex_support" if status == "connected" else "control_down"
+
+    return {
+        "source": "engine_status",
+        "enabled": bool(raw_control.get("enabled")),
+        "status": status,
+        "ws_url": raw_control.get("ws_url"),
+        "last_connected_at": raw_control.get("last_connected_at"),
+        "last_disconnected_at": raw_control.get("last_disconnected_at"),
+        "last_error_code": raw_control.get("last_error_code"),
+        "last_error_message": raw_control.get("last_error_message"),
+        "reconnect_backoff_seconds": raw_control.get("reconnect_backoff_seconds"),
+        "supports": supports,
+        "can_launch_codex": can_launch_codex,
+        "launch_blocked_by": launch_blocked_by,
+    }
+
+
 def _collect_managed_session_sources(
     base_dir: Path,
     *,
@@ -3022,6 +3056,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
     )
     launch_readiness = _collect_launch_readiness(resolved_base_dir, service=service)
     transport_sample, transport_assessment = _collect_transport_health(engine_status)
+    control_channel = _collect_control_channel_health(engine_status)
     health_state, severity, headline, reasons, suggested_actions = _classify_health(
         service=service,
         engine_status=engine_status,
@@ -3049,6 +3084,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
             sample=transport_sample,
             assessment=transport_assessment,
         ),
+        "control_channel": control_channel,
         "outbox": outbox,
         "provider_clis": provider_clis,
         "activity_summary": activity_summary,

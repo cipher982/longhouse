@@ -376,6 +376,57 @@ def test_collect_local_health_healthy(monkeypatch, tmp_path: Path):
     assert snapshot["launch_readiness"]["state"] == "unconfigured"
 
 
+def test_collect_local_health_surfaces_control_channel_status(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(
+        tmp_path,
+        age_seconds=5,
+        payload={
+            "control_channel": {
+                "enabled": True,
+                "status": "disconnected",
+                "ws_url": "wss://david010.longhouse.ai/api/agents/control/ws",
+                "last_error_code": "connect_failed",
+                "last_error_message": "tls handshake failed",
+                "reconnect_backoff_seconds": 4,
+                "supports": ["codex.send", "codex.launch"],
+            }
+        },
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    control = snapshot["control_channel"]
+    assert control["status"] == "disconnected"
+    assert control["can_launch_codex"] is False
+    assert control["launch_blocked_by"] == "control_down"
+    assert control["last_error_code"] == "connect_failed"
+    assert control["supports"] == ["codex.send", "codex.launch"]
+
+
+def test_collect_local_health_marks_connected_control_channel_launch_ready(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(
+        tmp_path,
+        age_seconds=5,
+        payload={
+            "control_channel": {
+                "enabled": True,
+                "status": "connected",
+                "ws_url": "wss://david010.longhouse.ai/api/agents/control/ws",
+                "supports": ["codex.launch"],
+            }
+        },
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["control_channel"]["can_launch_codex"] is True
+    assert snapshot["control_channel"]["launch_blocked_by"] is None
+
+
 def test_collect_local_health_ignores_fresh_outbox_file(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
