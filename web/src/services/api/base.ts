@@ -23,8 +23,18 @@ export class ApiError extends Error {
     let detailMessage = `Request failed (${status})`;
     if (isDemoReadOnlyBody(body)) {
       detailMessage = DEMO_READ_ONLY_MESSAGE;
-    } else if (body && typeof body === "object" && "detail" in body && typeof body.detail === "string") {
-      detailMessage = body.detail;
+    } else if (body && typeof body === "object" && "detail" in body) {
+      const detail = body.detail;
+      if (typeof detail === "string") {
+        detailMessage = detail;
+      } else if (
+        detail
+        && typeof detail === "object"
+        && "message" in detail
+        && typeof detail.message === "string"
+      ) {
+        detailMessage = detail.message;
+      }
     } else if (body && typeof body === "object" && "error" in body && typeof body.error === "string") {
       detailMessage = body.error;
     }

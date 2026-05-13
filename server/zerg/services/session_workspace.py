@@ -31,6 +31,7 @@ def build_session_workspace(
     branch_mode: str = "head",
     limit: int = 100,
     timing: ServerTimingRecorder | None = None,
+    owner_id: int | None = None,
 ) -> SessionWorkspaceResponse:
     """Build the focused session, thread, and initial projected transcript page."""
     store = AgentsStore(db)
@@ -95,6 +96,7 @@ def build_session_workspace(
                 first_user_message=first_user_map.get(item.id),
                 binding_overlay=binding_overlay_map.get(item.id),
                 transcript_preview=transcript_preview_map.get(str(item.id)),
+                owner_id=owner_id,
             )
             for item in thread_sessions
         }
@@ -115,6 +117,7 @@ def build_session_workspace(
             first_user_message=first_user_map.get(session.id),
             binding_overlay=binding_overlay_map.get(session.id),
             transcript_preview=transcript_preview_map.get(str(session.id)),
+            owner_id=owner_id,
         )
 
     active_context_boundary_cache: dict[UUID, int | None] = {}

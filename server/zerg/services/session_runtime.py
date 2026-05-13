@@ -771,7 +771,7 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
                 state.timeline_anchor_at = occurred_at
             state.phase_started_at = occurred_at
         state.phase = next_phase
-        state.phase_source = "semantic"
+        state.phase_source = str(event.source or "semantic").strip() or "semantic"
         if next_phase in {"running", "blocked"}:
             state.active_tool = next_active_tool
         else:
