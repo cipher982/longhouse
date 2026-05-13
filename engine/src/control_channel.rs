@@ -15,15 +15,19 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::build_identity;
 use crate::codex_bridge::{
-    cmd_codex_bridge_interrupt, cmd_codex_bridge_send, cmd_codex_bridge_steer,
-    validate_codex_bridge_attached, BridgeInterruptConfig, BridgeSendConfig, BridgeSteerConfig,
-    BridgeSteerError,
+    cmd_codex_bridge_interrupt, cmd_codex_bridge_send, cmd_codex_bridge_start,
+    cmd_codex_bridge_steer, validate_codex_bridge_attached, BridgeInterruptConfig,
+    BridgeSendConfig, BridgeStartConfig, BridgeSteerConfig, BridgeSteerError,
 };
 use crate::config::ShipperConfig;
+use std::path::PathBuf;
 
 const COMMAND_SEND_TEXT: &str = "session.send_text";
 const COMMAND_INTERRUPT: &str = "session.interrupt";
 const COMMAND_STEER_TEXT: &str = "session.steer_text";
+const COMMAND_LAUNCH: &str = "session.launch";
+const DEFAULT_CODEX_BIN: &str = "codex";
+const LAUNCH_START_TIMEOUT_SECS: u64 = 45;
 const COMPLETED_COMMAND_CACHE_CAPACITY: usize = 256;
 const COMPLETED_COMMAND_CACHE_TTL_SECS: u64 = 5 * 60;
 const HEARTBEAT_INTERVAL_SECS: u64 = 25;
@@ -87,7 +91,7 @@ async fn run_once(
         "device_id": config.machine_name,
         "machine_name": config.machine_name,
         "engine_build": build_identity::COMMIT_SHORT,
-        "supports": ["codex.send", "codex.interrupt", "codex.steer"],
+        "supports": ["codex.send", "codex.interrupt", "codex.steer", "codex.launch"],
     });
     write
         .send(Message::Text(hello.to_string()))
@@ -123,7 +127,7 @@ async fn run_once(
                     );
                     continue;
                 }
-                let result = handle_command_frame(frame, completed_commands).await;
+                let result = handle_command_frame(frame, completed_commands, config).await;
                 write
                     .send(Message::Text(result.to_string()))
                     .await
@@ -142,6 +146,7 @@ fn heartbeat_frame() -> Value {
 async fn handle_command_frame(
     frame: Value,
     completed_commands: &mut CompletedCommandCache,
+    config: &ShipperConfig,
 ) -> Value {
     let command_id = frame
         .get("command_id")
@@ -156,7 +161,7 @@ async fn handle_command_frame(
         return result;
     }
 
-    let result = execute_command(&frame).await;
+    let result = execute_command(&frame, config).await;
     let response = match result {
         Ok(result) => json!({
             "type": "command_result",
@@ -170,12 +175,90 @@ async fn handle_command_frame(
     response
 }
 
-async fn execute_command(frame: &Value) -> std::result::Result<Value, CommandError> {
+async fn execute_command(
+    frame: &Value,
+    config: &ShipperConfig,
+) -> std::result::Result<Value, CommandError> {
     let session_id = required_string(frame, "session_id")?;
     let command_type = required_string(frame, "command_type")?;
     let payload = frame.get("payload").cloned().unwrap_or_else(|| json!({}));
 
     match command_type.as_str() {
+        COMMAND_LAUNCH => {
+            let provider = payload_required_string(&payload, "provider")?;
+            if provider != "codex" {
+                return Err(CommandError {
+                    code: "provider_unsupported".to_string(),
+                    message: format!("provider={provider} is not supported by this engine build"),
+                });
+            }
+            let cwd_raw = payload_required_string(&payload, "cwd")?;
+            let cwd = PathBuf::from(&cwd_raw);
+            if !cwd.is_absolute() {
+                return Err(CommandError {
+                    code: "cwd_not_allowed".to_string(),
+                    message: "cwd must be absolute".to_string(),
+                });
+            }
+            if !cwd.is_dir() {
+                return Err(CommandError {
+                    code: "cwd_not_found".to_string(),
+                    message: format!("cwd does not exist: {}", cwd.display()),
+                });
+            }
+            if !cwd_under_allowed_roots(&cwd) {
+                return Err(CommandError {
+                    code: "cwd_not_allowed".to_string(),
+                    message: format!(
+                        "cwd {} is outside the Machine Agent's launch allowlist",
+                        cwd.display()
+                    ),
+                });
+            }
+
+            let api_url = config.api_url.clone();
+            let api_token = config
+                .api_token
+                .clone()
+                .ok_or_else(|| CommandError {
+                    code: "provider_launch_failed".to_string(),
+                    message: "Machine Agent has no device token configured".to_string(),
+                })?;
+
+            let summary = cmd_codex_bridge_start(BridgeStartConfig {
+                session_id: session_id.clone(),
+                cwd,
+                api_url,
+                api_token,
+                codex_bin: DEFAULT_CODEX_BIN.to_string(),
+                approval_policy: None,
+                sandbox: None,
+                model: None,
+                model_reasoning_effort: None,
+                machine_name: Some(config.machine_name.clone()),
+                auto_approve: false,
+                state_root: None,
+                longhouse_home: None,
+                log_file: None,
+                start_timeout_secs: LAUNCH_START_TIMEOUT_SECS,
+                // Headless: there is no TUI to create a thread, so we ask the
+                // bridge to call thread/start itself.
+                start_thread: true,
+            })
+            .await
+            .map_err(|err| CommandError {
+                code: "provider_launch_failed".to_string(),
+                message: err.to_string(),
+            })?;
+
+            Ok(json!({
+                "session_id": summary.session_id,
+                "provider": "codex",
+                "transport": "codex_app_server",
+                "ws_url": summary.ws_url,
+                "thread_id": summary.thread_id,
+            }))
+        }
         COMMAND_SEND_TEXT => {
             let text = payload_required_string(&payload, "text")?;
             validate_codex_bridge_attached(&session_id, None)
@@ -319,6 +402,64 @@ impl CompletedCommandCache {
     }
 }
 
+/// Local policy for launch cwds.
+///
+/// A cwd is allowed when all of:
+///   1. Canonical path lives under `$HOME` (or an explicit prefix listed in
+///      `~/.longhouse/launch-allowlist`, one per line).
+///   2. Canonical path contains a `.git` entry (file or directory) — i.e. it is
+///      the root of a repo, or a subtree inside one. This keeps cwd to places
+///      the user meaningfully uses for code work, instead of letting any path
+///      under `$HOME` be a launch target.
+///
+/// Fail closed when `$HOME` is unresolvable.
+fn cwd_under_allowed_roots(cwd: &std::path::Path) -> bool {
+    let canonical = match cwd.canonicalize() {
+        Ok(path) => path,
+        Err(_) => return false,
+    };
+    let home = std::env::var("HOME").ok().map(PathBuf::from);
+    let mut prefixes: Vec<PathBuf> = Vec::new();
+    if let Some(home) = home.as_ref() {
+        if let Ok(canon_home) = home.canonicalize() {
+            prefixes.push(canon_home);
+        }
+        let override_file = home.join(".longhouse").join("launch-allowlist");
+        if let Ok(contents) = std::fs::read_to_string(&override_file) {
+            for line in contents.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() || trimmed.starts_with('#') {
+                    continue;
+                }
+                let expanded = PathBuf::from(trimmed);
+                if let Ok(canon) = expanded.canonicalize() {
+                    prefixes.push(canon);
+                }
+            }
+        }
+    }
+    if prefixes.is_empty() {
+        return false;
+    }
+    let under_prefix = prefixes.iter().any(|root| canonical.starts_with(root));
+    if !under_prefix {
+        return false;
+    }
+    // Walk up the tree looking for a .git marker. Stops at the first allowlist
+    // prefix boundary so we don't leak above the allowed root.
+    let mut cursor: Option<&std::path::Path> = Some(&canonical);
+    while let Some(dir) = cursor {
+        if dir.join(".git").exists() {
+            return true;
+        }
+        if prefixes.iter().any(|root| dir == root.as_path()) {
+            return false;
+        }
+        cursor = dir.parent();
+    }
+    false
+}
+
 fn control_ws_url(api_url: &str) -> Result<String> {
     let base = api_url.trim().trim_end_matches('/');
     if let Some(rest) = base.strip_prefix("http://") {
@@ -407,6 +548,15 @@ mod tests {
         CompletedCommandCache::new(16, Duration::from_secs(60))
     }
 
+    fn test_config() -> ShipperConfig {
+        ShipperConfig {
+            api_url: "http://localhost:8000".to_string(),
+            api_token: Some("test-token".to_string()),
+            machine_name: "test-machine".to_string(),
+            ..ShipperConfig::default()
+        }
+    }
+
     #[test]
     fn control_ws_url_converts_http_and_https() {
         assert_eq!(
@@ -435,6 +585,7 @@ mod tests {
                 "payload": {"text": "continue"},
             }),
             &mut cache,
+            &test_config(),
         )
         .await;
 
@@ -454,6 +605,7 @@ mod tests {
                 "payload": {},
             }),
             &mut cache,
+            &test_config(),
         )
         .await;
 
@@ -474,6 +626,7 @@ mod tests {
                 "payload": {"text": "continue"},
             }),
             &mut cache,
+            &test_config(),
         )
         .await;
 
@@ -494,6 +647,7 @@ mod tests {
                 "payload": {},
             }),
             &mut cache,
+            &test_config(),
         )
         .await;
         let second = handle_command_frame(
@@ -505,6 +659,7 @@ mod tests {
                 "payload": {"text": "continue"},
             }),
             &mut cache,
+            &test_config(),
         )
         .await;
 
@@ -520,5 +675,110 @@ mod tests {
 
         assert_eq!(cache.get("cmd-1"), None);
         assert_eq!(cache.get("cmd-2").unwrap()["command_id"], "cmd-2");
+    }
+
+    #[tokio::test]
+    async fn launch_rejects_nonexistent_cwd() {
+        let mut cache = command_cache();
+        let result = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-launch-missing-cwd",
+                "session_id": "00000000-0000-0000-0000-000000000001",
+                "command_type": COMMAND_LAUNCH,
+                "payload": {
+                    "provider": "codex",
+                    "cwd": "/does/not/exist/anywhere-pls",
+                },
+            }),
+            &mut cache,
+            &test_config(),
+        )
+        .await;
+
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["error"]["code"], "cwd_not_found");
+    }
+
+    #[tokio::test]
+    async fn launch_rejects_relative_cwd() {
+        let mut cache = command_cache();
+        let result = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-launch-relative",
+                "session_id": "00000000-0000-0000-0000-000000000002",
+                "command_type": COMMAND_LAUNCH,
+                "payload": {
+                    "provider": "codex",
+                    "cwd": "relative/path",
+                },
+            }),
+            &mut cache,
+            &test_config(),
+        )
+        .await;
+
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["error"]["code"], "cwd_not_allowed");
+    }
+
+    #[tokio::test]
+    async fn launch_rejects_unsupported_provider() {
+        let mut cache = command_cache();
+        let result = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-launch-provider",
+                "session_id": "00000000-0000-0000-0000-000000000003",
+                "command_type": COMMAND_LAUNCH,
+                "payload": {
+                    "provider": "claude",
+                    "cwd": "/tmp",
+                },
+            }),
+            &mut cache,
+            &test_config(),
+        )
+        .await;
+
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["error"]["code"], "provider_unsupported");
+    }
+
+    #[test]
+    fn cwd_under_allowed_roots_rejects_outside_home() {
+        // /tmp is reliably not under $HOME on macOS/Linux
+        let tmp = std::path::Path::new("/tmp");
+        if tmp.exists() {
+            assert!(!cwd_under_allowed_roots(tmp));
+        }
+    }
+
+    #[test]
+    fn cwd_under_allowed_roots_requires_git_marker() {
+        use std::fs;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // Point $HOME at our sandbox so the policy check exercises the marker rule.
+        let old_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", tmp.path());
+
+        let no_git = tmp.path().join("project-no-git");
+        fs::create_dir_all(&no_git).unwrap();
+        assert!(!cwd_under_allowed_roots(&no_git));
+
+        let git_root = tmp.path().join("project-with-git");
+        fs::create_dir_all(git_root.join(".git")).unwrap();
+        assert!(cwd_under_allowed_roots(&git_root));
+
+        let nested = git_root.join("subdir");
+        fs::create_dir_all(&nested).unwrap();
+        assert!(cwd_under_allowed_roots(&nested));
+
+        if let Some(value) = old_home {
+            std::env::set_var("HOME", value);
+        } else {
+            std::env::remove_var("HOME");
+        }
     }
 }

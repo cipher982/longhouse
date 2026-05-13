@@ -33,6 +33,9 @@ from zerg.models.user import User
 from zerg.services.managed_local_launcher import ManagedLocalLaunchError
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.managed_local_launcher import launch_managed_local_session
+from zerg.services.remote_session_launch import RemoteLaunchError
+from zerg.services.remote_session_launch import RemoteLaunchParams
+from zerg.services.remote_session_launch import launch_remote_session
 from zerg.services.session_chat_impl import ManagedLocalSessionLaunchResponse
 from zerg.services.session_chat_impl import SessionDraftReplyResponse
 from zerg.services.session_chat_impl import SessionLockInfo
@@ -86,6 +89,33 @@ class SessionDraftReplyRequest(BaseModel):
     """Request a suggested next user message without sending it."""
 
     max_chars: int = Field(1200, ge=100, le=4000, description="Maximum draft length")
+
+
+class RemoteSessionLaunchRequest(BaseModel):
+    """User-initiated remote session launch request."""
+
+    device_id: str = Field(..., min_length=1, description="Target enrolled device id")
+    provider: str = Field(..., description="Provider CLI to launch (v1: codex only)")
+    cwd: str = Field(..., min_length=1, description="Absolute working directory on the target machine")
+    git_repo: str | None = Field(None, description="Optional git repository path")
+    git_branch: str | None = Field(None, description="Optional git branch name")
+    project: str | None = Field(None, description="Optional project label")
+    display_name: str | None = Field(None, description="Optional display name")
+    client_request_id: str | None = Field(
+        None,
+        min_length=1,
+        max_length=64,
+        description="Optional idempotency key; repeated calls with the same value return the same session",
+    )
+
+
+class RemoteSessionLaunchResponse(BaseModel):
+    """Response from POST /api/sessions/launch."""
+
+    session_id: str
+    launch_state: str
+    launch_error_code: str | None = None
+    launch_error_message: str | None = None
 
 
 class ManagedLocalThisDeviceLaunchRequest(BaseModel):
@@ -488,6 +518,49 @@ async def launch_managed_local_this_device(
     )
 
     return _managed_local_launch_response(result)
+
+
+@router.post("/launch", response_model=RemoteSessionLaunchResponse)
+async def launch_remote_session_endpoint(
+    body: RemoteSessionLaunchRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_browser_route_user),
+) -> RemoteSessionLaunchResponse:
+    """Start a session on a user-owned machine via the Machine Agent control channel.
+
+    See docs/specs/remote-session-launch.md. Pre-allocates a session UUID,
+    inserts the ``sessions`` row in ``launch_state=launching``, and dispatches
+    ``session.launch`` over the existing control WebSocket.
+    """
+    try:
+        result = await launch_remote_session(
+            db,
+            RemoteLaunchParams(
+                owner_id=int(current_user.id),
+                device_id=body.device_id,
+                provider=body.provider,
+                cwd=body.cwd,
+                git_repo=body.git_repo,
+                git_branch=body.git_branch,
+                project=body.project,
+                display_name=body.display_name,
+                client_request_id=body.client_request_id,
+            ),
+        )
+    except RemoteLaunchError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail={"code": exc.code, "message": exc.detail}) from exc
+    except Exception:
+        db.rollback()
+        logger.exception("Remote session launch failed unexpectedly")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Remote session launch failed")
+
+    return RemoteSessionLaunchResponse(
+        session_id=str(result.session_id),
+        launch_state=result.launch_state,
+        launch_error_code=result.launch_error_code,
+        launch_error_message=result.launch_error_message,
+    )
 
 
 @router.get("/{session_id}/lock")

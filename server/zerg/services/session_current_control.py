@@ -20,7 +20,7 @@ from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.session_execution_home import ManagedSessionTransport
 
 
-def _engine_control_online(session: AgentSession, owner_id: int | None) -> bool:
+def engine_control_online(session: AgentSession, owner_id: int | None) -> bool:
     return (
         select_managed_control_transport(
             session,
@@ -31,7 +31,7 @@ def _engine_control_online(session: AgentSession, owner_id: int | None) -> bool:
     )
 
 
-def _with_engine_control_capability(
+def with_engine_control_capability(
     capability_flags: SessionCapabilityFlags,
     *,
     engine_control_online: bool,
@@ -63,7 +63,7 @@ def _with_engine_control_capability(
     )
 
 
-def _engine_bridge_attached(runtime_overlay) -> bool:
+def engine_bridge_attached(runtime_overlay) -> bool:
     source = str(getattr(runtime_overlay, "runtime_source", "") or "").strip().lower()
     phase = str(getattr(runtime_overlay, "runtime_phase", "") or "").strip()
     return source in MANAGED_CODEX_RUNTIME_SOURCES and getattr(runtime_overlay, "confidence", None) == "live" and bool(phase)
@@ -77,7 +77,7 @@ def current_session_capabilities(
 ) -> SessionCapabilityFlags:
     """Return user-action capabilities backed by current runtime truth."""
     capability_flags = build_session_capabilities(session)
-    engine_control_online = _engine_control_online(session, owner_id)
+    is_engine_control_online = engine_control_online(session, owner_id)
     now = datetime.now(timezone.utc)
     last_activity_at = (
         getattr(session, "last_activity_at", None) or getattr(session, "ended_at", None) or getattr(session, "started_at", None)
@@ -89,13 +89,13 @@ def current_session_capabilities(
         runtime_state_map=runtime_state_map,
         now=now,
     )
-    capability_flags = _with_engine_control_capability(
+    capability_flags = with_engine_control_capability(
         capability_flags,
-        engine_control_online=engine_control_online,
-        engine_bridge_attached=_engine_bridge_attached(runtime_overlay),
+        engine_control_online=is_engine_control_online,
+        engine_bridge_attached=engine_bridge_attached(runtime_overlay),
     )
     binding_host_state = None
-    if engine_control_online:
+    if is_engine_control_online:
         binding_host_state = "online"
     elif capability_flags.live_control_available or capability_flags.host_reattach_available:
         binding_host_state = managed_runner_host_state(db, session)
@@ -106,3 +106,11 @@ def current_session_capabilities(
         binding_host_state=binding_host_state,
     )
     return project_current_session_capabilities_from_facts(capability_flags, liveness_facts=liveness_facts, now=now)
+
+
+__all__ = [
+    "current_session_capabilities",
+    "engine_bridge_attached",
+    "engine_control_online",
+    "with_engine_control_capability",
+]

@@ -40,6 +40,7 @@ from zerg.services.runner_connection_manager import get_runner_connection_manage
 # Usage service
 from zerg.services.usage_service import get_all_users_usage
 from zerg.services.usage_service import get_user_usage_detail
+from zerg.utils.time import UTCBaseModel
 
 router = APIRouter(
     prefix="/admin",
@@ -693,3 +694,62 @@ async def get_user_usage_details(
     if result is None:
         raise HTTPException(status_code=404, detail="User not found")
     return result
+
+
+# ---------------------------------------------------------------------------
+# Remote launch debug view (Phase 4 of remote-session-launch epic)
+# ---------------------------------------------------------------------------
+
+
+class RemoteLaunchDebugEntry(UTCBaseModel):
+    session_id: str
+    device_id: str | None
+    provider: str
+    cwd: str | None
+    launch_state: str
+    launch_error_code: str | None
+    launch_error_message: str | None
+    launch_lease_until: datetime | None
+    started_at: datetime
+    ended_at: datetime | None
+
+
+class RemoteLaunchDebugResponse(UTCBaseModel):
+    entries: list[RemoteLaunchDebugEntry]
+    total: int
+
+
+@router.get("/launches/debug", response_model=RemoteLaunchDebugResponse)
+async def list_remote_launch_debug(
+    limit: int = Query(50, ge=1, le=200, description="Max rows to return"),
+    include_live: bool = Query(False, description="Include launch_state=live rows (default: only show non-healthy)"),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_admin),
+):
+    """Admin-only view of remote launches that are not cleanly live.
+
+    Surfaces launching / launching_unknown / launch_failed / launch_orphaned
+    rows so an operator can debug propagation or control-channel issues.
+    """
+    q = db.query(AgentSession).filter(AgentSession.launch_state.is_not(None))
+    if not include_live:
+        q = q.filter(AgentSession.launch_state != "live")
+    q = q.order_by(AgentSession.started_at.desc())
+    rows = q.limit(limit).all()
+    total = q.count()
+    entries = [
+        RemoteLaunchDebugEntry(
+            session_id=str(row.id),
+            device_id=row.device_id,
+            provider=row.provider,
+            cwd=row.cwd,
+            launch_state=row.launch_state,
+            launch_error_code=row.launch_error_code,
+            launch_error_message=row.launch_error_message,
+            launch_lease_until=row.launch_lease_until,
+            started_at=row.started_at,
+            ended_at=row.ended_at,
+        )
+        for row in rows
+    ]
+    return RemoteLaunchDebugResponse(entries=entries, total=total)

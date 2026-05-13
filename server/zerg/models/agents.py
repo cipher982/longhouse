@@ -138,6 +138,15 @@ class AgentSession(AgentsBase):
     # Sidechain flag: True when session is a Task sub-agent (not a human-initiated session)
     is_sidechain = Column(Integer, nullable=False, server_default=text("0"))
 
+    # Remote-launch lifecycle (see docs/specs/remote-session-launch.md).
+    # NULL means "launched the old way"; treat as equivalent to 'live'.
+    launch_state = Column(String(32), nullable=True)
+    launch_error_code = Column(String(64), nullable=True)
+    launch_error_message = Column(Text, nullable=True)
+    launch_lease_until = Column(DateTime(timezone=True), nullable=True)
+    launch_command_id = Column(String(64), nullable=True, index=True)
+    launch_client_request_id = Column(String(64), nullable=True, index=True)
+
     # Relationships
     branches = relationship("AgentSessionBranch", back_populates="session", cascade="all, delete-orphan")
     events = relationship("AgentEvent", back_populates="session", cascade="all, delete-orphan")

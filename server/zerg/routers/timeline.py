@@ -40,6 +40,9 @@ from zerg.models.agents import AgentSession
 from zerg.routers import agents_demo as _demo_router
 from zerg.routers import agents_search as _search_router
 from zerg.routers import agents_sessions as _sessions_router
+from zerg.schemas.machines import MachineDirectoryEntry
+from zerg.schemas.machines import MachineDirectoryResponse
+from zerg.services.machines_directory import build_machines_directory
 from zerg.services.session_listing import SessionListingError
 from zerg.services.session_views import DemoSeedResponse
 from zerg.services.session_views import EventsListResponse
@@ -99,6 +102,16 @@ def _timeline_filters_cache_key(db: Session, *, days_back: int) -> tuple[str, in
     latest_session_update = db.query(func.max(AgentSession.updated_at)).scalar()
     latest_update_key = latest_session_update.isoformat() if latest_session_update is not None else None
     return bind_key, days_back, latest_update_key
+
+
+@router.get("/machines", response_model=MachineDirectoryResponse)
+async def list_browser_machines(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_browser_user),
+) -> MachineDirectoryResponse:
+    """Browser machines directory. Same body shape as ``/api/agents/machines``."""
+    entries = build_machines_directory(db, owner_id=int(current_user.id))
+    return MachineDirectoryResponse(machines=[MachineDirectoryEntry(**entry.to_response()) for entry in entries])
 
 
 @router.get("/sessions/semantic", response_model=SemanticSearchResponse)
@@ -513,10 +526,18 @@ async def get_timeline_session_workspace(
     branch_mode: str = Query("head", description="Branch projection mode: head|all"),
     limit: int = Query(100, ge=1, le=1000, description="Max projected items"),
     db: Session = Depends(get_db),
+    current_user=Depends(get_current_browser_user),
 ):
     timing = ServerTimingRecorder()
     response.headers["Cache-Control"] = "private, max-age=5"
-    result = build_session_workspace(db=db, session_id=session_id, branch_mode=branch_mode, limit=limit, timing=timing)
+    result = build_session_workspace(
+        db=db,
+        session_id=session_id,
+        branch_mode=branch_mode,
+        limit=limit,
+        timing=timing,
+        owner_id=int(current_user.id),
+    )
     timing.apply(response)
     return result
 

@@ -1537,6 +1537,31 @@
     color: var(--color-text-secondary);
   }
 
+  .launch-pending-banner,
+  .launch-failed-banner {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    margin: var(--space-3);
+    border-radius: var(--radius-md);
+    font-size: 0.9rem;
+  }
+
+  .launch-pending-banner {
+    background: color-mix(in srgb, rgba(100, 160, 220, 0.12) 80%, transparent);
+    border: 1px solid color-mix(in srgb, rgba(100, 160, 220, 0.28) 75%, transparent);
+    color: var(--color-text-secondary);
+  }
+
+  .launch-failed-banner {
+    background: color-mix(in srgb, rgba(220, 90, 90, 0.12) 80%, transparent);
+    border: 1px solid color-mix(in srgb, rgba(220, 90, 90, 0.32) 75%, transparent);
+    color: var(--color-text-primary);
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
   .session-branch-banner strong {
     color: var(--color-text-primary);
   }
