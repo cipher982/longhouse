@@ -60,6 +60,7 @@ _LABEL_PRIORITIES: dict[str, int] = {
     "runtime-events": 5,
     # Transcript ingest is durable archive truth. It can trail runtime events,
     # but it should not sit behind high-volume presence retries.
+    "runtime-observations": 5,
     "ingest": 10,
     "runner-online": 10,
     "session-turn-active": 15,

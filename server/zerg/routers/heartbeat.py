@@ -35,12 +35,13 @@ from zerg.metrics import agents_heartbeat_write_seconds
 from zerg.metrics import managed_session_heartbeat_lease_rows_total
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionRuntimeEvent
+from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import UnmanagedSessionBinding
 from zerg.models.device_token import DeviceToken
 from zerg.observability import get_tracer
 from zerg.observability import set_span_attributes
+from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_runtime import runtime_key_for_session
@@ -284,56 +285,69 @@ def _managed_lease_history_keys(db: Session, runtime_keys: list[str]) -> set[str
     if not runtime_keys:
         return set()
     rows = (
-        db.query(SessionRuntimeEvent.runtime_key)
-        .filter(SessionRuntimeEvent.runtime_key.in_(runtime_keys))
-        .filter(SessionRuntimeEvent.source == MANAGED_SESSION_LEASE_SOURCE)
+        db.query(SessionObservation.runtime_key)
+        .filter(SessionObservation.runtime_key.in_(runtime_keys))
+        .filter(SessionObservation.source == MANAGED_SESSION_LEASE_SOURCE)
+        .filter(SessionObservation.kind == OBS_KIND_RUNTIME_SIGNAL)
         .distinct()
         .all()
     )
     return {row[0] for row in rows}
 
 
-def _is_synthetic_missing_managed_lease_event(event: SessionRuntimeEvent) -> bool:
-    if (event.source or "").strip() != MANAGED_SESSION_LEASE_SOURCE:
-        return False
-    if (event.kind or "").strip() != "phase_signal":
-        return False
-    if (event.phase or "").strip() != "blocked":
-        return False
-    if (event.tool_name or "").strip() != "control path":
-        return False
-    payload_raw = event.payload_json
+def _runtime_observation_payload(observation: SessionObservation) -> dict:
+    payload_raw = observation.payload_json
     if isinstance(payload_raw, dict):
-        payload = payload_raw
-    else:
-        try:
-            payload = json.loads(payload_raw or "{}")
-        except (TypeError, json.JSONDecodeError):
-            payload = {}
-    return payload.get("state") == "missing"
+        return payload_raw
+    try:
+        payload = json.loads(payload_raw or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _is_synthetic_missing_managed_lease_observation(observation: SessionObservation) -> bool:
+    if (observation.source or "").strip() != MANAGED_SESSION_LEASE_SOURCE:
+        return False
+    if (observation.kind or "").strip() != OBS_KIND_RUNTIME_SIGNAL:
+        return False
+    payload = _runtime_observation_payload(observation)
+    if str(payload.get("kind") or "").strip() != "phase_signal":
+        return False
+    if str(payload.get("phase") or "").strip() != "blocked":
+        return False
+    if str(payload.get("tool_name") or "").strip() != "control path":
+        return False
+    event_payload = payload.get("payload")
+    return isinstance(event_payload, dict) and event_payload.get("state") == "missing"
 
 
 def _latest_real_managed_lease_at_by_key(db: Session, runtime_keys: list[str]) -> dict[str, datetime]:
     if not runtime_keys:
         return {}
     rows = (
-        db.query(SessionRuntimeEvent)
-        .filter(SessionRuntimeEvent.runtime_key.in_(runtime_keys))
-        .filter(SessionRuntimeEvent.source == MANAGED_SESSION_LEASE_SOURCE)
-        .order_by(SessionRuntimeEvent.runtime_key.asc(), SessionRuntimeEvent.occurred_at.desc())
+        db.query(SessionObservation)
+        .filter(SessionObservation.runtime_key.in_(runtime_keys))
+        .filter(SessionObservation.source == MANAGED_SESSION_LEASE_SOURCE)
+        .filter(SessionObservation.kind == OBS_KIND_RUNTIME_SIGNAL)
+        .order_by(
+            SessionObservation.runtime_key.asc(),
+            SessionObservation.observed_at.desc(),
+            SessionObservation.id.desc(),
+        )
         .all()
     )
     latest: dict[str, datetime] = {}
-    for event in rows:
+    for observation in rows:
         # Rows are ordered newest-first per runtime_key, so the first
         # non-synthetic row we keep is the latest real managed lease signal.
-        if event.runtime_key in latest:
+        if observation.runtime_key in latest:
             continue
-        if _is_synthetic_missing_managed_lease_event(event):
+        if _is_synthetic_missing_managed_lease_observation(observation):
             continue
-        occurred_at = normalize_utc(event.occurred_at)
+        occurred_at = normalize_utc(observation.observed_at)
         if occurred_at is not None:
-            latest[event.runtime_key] = occurred_at
+            latest[observation.runtime_key] = occurred_at
     return latest
 
 

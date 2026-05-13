@@ -20,6 +20,7 @@ REBUILD_FRONTEND="${INSTALLER_TEST_REBUILD_FRONTEND:-0}"
 ENABLE_E2E_BROWSER="${INSTALLER_TEST_E2E_BROWSER:-0}"
 BUILD_WHEEL="${INSTALLER_TEST_WHEEL:-0}"
 ENABLE_RUNTIME_ARTIFACT_SMOKE="${INSTALLER_TEST_RUNTIME_ARTIFACT_SMOKE:-0}"
+BUILD_IDENTITY_GENERATED=0
 
 usage() {
   cat <<'USAGE'
@@ -102,6 +103,15 @@ ensure_frontend_dist() {
     cd web
     bun run build
   )
+}
+
+ensure_build_identity() {
+  if [[ "$BUILD_IDENTITY_GENERATED" == "1" ]]; then
+    return 0
+  fi
+  log "🔖 Generating build identity..."
+  python3 "$ROOT_DIR/scripts/build/generate_build_identity.py" >/dev/null
+  BUILD_IDENTITY_GENERATED=1
 }
 
 build_desktop_app_bundle() {
@@ -646,8 +656,7 @@ if [[ "$BUILD_WHEEL" == "1" && "$INSTALLER_MODE" == "local" ]]; then
   ensure_frontend_dist
 
   require_cmd uv
-  log "🔖 Generating build identity..."
-  python3 "$ROOT_DIR/scripts/build/generate_build_identity.py" >/dev/null
+  ensure_build_identity
   log "📦 Building wheel from server/ ..."
   (
     cd "$ROOT_DIR/server"
@@ -670,8 +679,7 @@ fi
 # Build engine binary if in local mode and it doesn't already exist.
 # The engine is independent of the package source (wheel or directory).
 if [[ "$INSTALLER_MODE" == "local" ]]; then
-  log "🔖 Generating build identity..."
-  python3 "$ROOT_DIR/scripts/build/generate_build_identity.py" >/dev/null
+  ensure_build_identity
   if [[ ! -x "$ROOT_DIR/engine/target/release/longhouse-engine" ]]; then
     if command -v cargo >/dev/null 2>&1 || command -v rustup >/dev/null 2>&1; then
       log "🦀 Building local engine binary for installer validation..."

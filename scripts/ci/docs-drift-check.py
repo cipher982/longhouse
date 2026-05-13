@@ -177,24 +177,27 @@ def post_pr_comment(body: str) -> None:
     )
     existing_ids = [cid.strip() for cid in result.stdout.strip().split("\n") if cid.strip()]
 
-    try:
-        if existing_ids:
-            subprocess.run(
-                ["gh", "api", f"repos/{{owner}}/{{repo}}/issues/comments/{existing_ids[0]}",
-                 "--method", "PATCH", "-f", f"body={body}"],
-                check=True, capture_output=True, text=True, cwd=REPO_ROOT,
-            )
+    if existing_ids:
+        update = subprocess.run(
+            ["gh", "api", f"repos/{{owner}}/{{repo}}/issues/comments/{existing_ids[0]}",
+             "--method", "PATCH", "-f", f"body={body}"],
+            capture_output=True, text=True, cwd=REPO_ROOT,
+        )
+        if update.returncode == 0:
             print(f"  Updated existing PR comment {existing_ids[0]}")
-        else:
-            subprocess.run(
-                ["gh", "pr", "comment", pr_number, "--body", body],
-                check=True, capture_output=True, text=True, cwd=REPO_ROOT,
-            )
-            print("  Posted new PR comment")
-    except subprocess.CalledProcessError as exc:
-        print("  Could not post docs drift PR comment; continuing because the check result was computed.")
-        if exc.stderr:
-            print(f"  gh stderr: {exc.stderr.strip()}")
+            return
+        detail = (update.stderr or update.stdout).strip()
+        print(f"  Warning: failed to update docs drift comment {existing_ids[0]}: {detail}", file=sys.stderr)
+
+    create = subprocess.run(
+        ["gh", "pr", "comment", pr_number, "--body", body],
+        capture_output=True, text=True, cwd=REPO_ROOT,
+    )
+    if create.returncode == 0:
+        print("  Posted new PR comment")
+        return
+    detail = (create.stderr or create.stdout).strip()
+    print(f"  Warning: failed to post docs drift comment: {detail}", file=sys.stderr)
 
 
 def main():

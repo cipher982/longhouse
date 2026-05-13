@@ -135,6 +135,7 @@ prepare_pkg() {
   python3 "$ROOT_DIR/scripts/build/generate_build_identity.py" \
     --output "$target/.build/build-identity.json" \
     --pyproject-path "$target/server/pyproject.toml" \
+    --skip-python-package \
     >/dev/null
   cp "$target/.build/build-identity.json" "$target/server/zerg/build_identity.json"
   (

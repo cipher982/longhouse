@@ -75,7 +75,7 @@ class SessionTurnSnapshot:
     user_event_id: int | None
     durable_assistant_event_id: int | None
     baseline_event_id: int | None
-    baseline_runtime_cursor: int | None
+    baseline_observation_cursor: int | None
     user_submitted_at: datetime
     send_accepted_at: datetime | None
     active_phase_observed_at: datetime | None
@@ -167,7 +167,7 @@ def create_session_turn(
     source_kind: str = SESSION_TURN_SOURCE_MANAGED_LIVE,
     timing_confidence: str = SESSION_TURN_CONFIDENCE_EXACT,
     baseline_event_id: int | None = None,
-    baseline_runtime_cursor: int | None = None,
+    baseline_observation_cursor: int | None = None,
     user_submitted_at: datetime | None = None,
     expected_user_text: str | None = None,
 ) -> SessionTurn:
@@ -191,7 +191,9 @@ def create_session_turn(
         expected_user_text_hash=hash_user_text(expected_user_text) if expected_user_text else None,
         state=SESSION_TURN_STATE_CREATED,
         baseline_event_id=baseline_event_id if baseline_event_id and baseline_event_id > 0 else None,
-        baseline_runtime_cursor=baseline_runtime_cursor if baseline_runtime_cursor and baseline_runtime_cursor > 0 else None,
+        baseline_observation_cursor=baseline_observation_cursor
+        if baseline_observation_cursor and baseline_observation_cursor > 0
+        else None,
         user_submitted_at=normalize_utc(user_submitted_at) or datetime.now(timezone.utc),
     )
     db.add(turn)
@@ -514,7 +516,7 @@ def get_session_turn_snapshot(
             user_event_id=turn.user_event_id,
             durable_assistant_event_id=turn.durable_assistant_event_id,
             baseline_event_id=turn.baseline_event_id,
-            baseline_runtime_cursor=turn.baseline_runtime_cursor,
+            baseline_observation_cursor=turn.baseline_observation_cursor,
             user_submitted_at=normalize_utc(turn.user_submitted_at) or datetime.now(timezone.utc),
             send_accepted_at=normalize_utc(turn.send_accepted_at),
             active_phase_observed_at=normalize_utc(turn.active_phase_observed_at),

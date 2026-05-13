@@ -1,14 +1,19 @@
 # Provisional Transcript Event Ledger
 
-Status: Implemented on `provisional-event-ledger`
+Status: Superseded by `session-observation-ledger.md`
 Owner: Longhouse session kernel
-Updated: 2026-05-11
+Updated: 2026-05-12
+
+This note describes the provisional transcript projection that preceded
+`SessionObservation`. The current write-side authority is
+`session_observations`; bridge transcript deltas enter as observations and then
+materialize into provisional `AgentEvent` rows.
 
 ## Problem
 
 Managed Codex used to have two transcript-looking surfaces:
 
-- bridge text in `session_runtime_events`, projected through a runtime overlay
+- bridge text in runtime signals, projected through a runtime overlay
 - source-backed transcript rows in `events` / `source_lines`
 
 That made the timeline card faster, but it also made the data model harder to
@@ -193,9 +198,7 @@ comes from event metadata, not a separate overlay object.
 
 ## Non-Goals
 
-- Do not remove `session_runtime_events`; runtime diagnostics and liveness still
-  need an append-only runtime signal log.
 - Do not collapse live and archive shipping cursors. Their retry semantics are
   still different.
 - Do not make provisional rows source-backed or durable by naming convention.
-  They are ledger observations until reconciled.
+  They are observation-derived projection rows until reconciled.

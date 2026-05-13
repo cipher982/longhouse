@@ -61,7 +61,7 @@ or shorten hosted liveness.
 - A fresher attached idle lease supersedes older running/thinking/tool phase
   signals for the same session.
 - Engine-local `observed_at` is for ordering only. Server receive time owns
-  hosted expiry math. Lease-derived runtime events are ingested with
+  hosted expiry math. Lease-derived runtime observations are ingested with
   `occurred_at = server_received_at`.
 - Process checks for managed Codex are producer-side inputs or diagnostics.
   The hosted timeline consumes persisted runtime state, not ad hoc SSH polling.
@@ -207,9 +207,9 @@ or machine-specific free text.
 Runtime Host emits:
 
 - `managed_session_heartbeat_lease_rows_total{provider,state,phase}` for each
-  managed-session lease row observed in heartbeat payloads before runtime-event
+  managed-session lease row observed in heartbeat payloads before observation
   dedupe
-- `managed_codex_runtime_events_total{source,kind,outcome}` for reducer flow
+- `managed_codex_runtime_observations_total{source,kind,outcome}` for reducer flow
   through managed Codex sources
 - `managed_codex_bridge_freshness_total{outcome}` when Codex bridge phase
   signals receive the managed freshness budget
@@ -225,7 +225,7 @@ The initial invariants are:
   came from a managed Codex source
 
 The gauges are diagnostic overlays, not a second truth store. They refresh from
-`sessions`, `session_runtime_state`, and `session_runtime_events` during
+`sessions`, `session_runtime_state`, and `session_observations` during
 Prometheus scrape, so they can be rebuilt after a process restart or queried
 directly when debugging a customer report. They must not run in the heartbeat
 write lane.

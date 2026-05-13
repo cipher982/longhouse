@@ -20,7 +20,7 @@ bash scripts/ops/hosted-session-debug.sh --subdomain david010 --session <session
 It does the right order automatically:
 - resolve the tenant via the control plane
 - query the tenant SQLite DB on the host data path
-- summarize `sessions`, `events`, `session_runtime_events`, `session_runtime_state`, and `session_turns`
+- summarize `sessions`, `events`, runtime `session_observations`, `session_runtime_state`, and `session_turns`
 - summarize recent WriteSerializer pressure and request counts from tenant logs
 
 Prefer this over ad hoc `ssh` + guessed DB paths + nested heredoc quoting.
@@ -46,7 +46,7 @@ It uses the existing repo helper in `scripts/lib/hosted-instance.sh`, which alre
 
 1. Check `sessions` for execution ownership, managed transport, revisions, and misleading `ended_at`.
 2. Check `session_runtime_state` for current phase, active tool, terminal state, and live timestamps.
-3. Check recent `events` and `session_runtime_events` to see what ingested and when.
+3. Check recent `events` and runtime `session_observations` to see what ingested and when.
 4. Check WriteSerializer/request-count summaries to distinguish hosted ingest lag from provider-loop latency.
 5. Only then tail full logs.
 

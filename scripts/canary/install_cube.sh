@@ -58,7 +58,7 @@ echo "==> Writing systemd units to $SYSTEMD_USER_DIR"
 
 cat > "$SYSTEMD_USER_DIR/longhouse-canary-producer.service" <<EOF
 [Unit]
-Description=Longhouse canary producer (synthetic runtime events)
+Description=Longhouse canary producer (synthetic runtime observations)
 After=network-online.target
 Wants=network-online.target
 

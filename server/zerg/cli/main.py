@@ -209,6 +209,82 @@ def migrate(
         raise typer.Exit(code=1)
 
 
+@app.command(hidden=True, name="rebuild-session")
+def rebuild_session(
+    session_id: str = typer.Argument(..., help="Session UUID to rebuild from SessionObservation."),
+    runtime_key: str | None = typer.Option(None, "--runtime-key", help="Optional runtime key to include in the rebuild scope."),
+    database_url: str | None = typer.Option(
+        None,
+        "--database-url",
+        help="SQLite DATABASE_URL override (defaults to env).",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Rebuild one session's projections; reducer errors are reported after committing partial output."""
+    from uuid import UUID
+
+    from zerg import database as database_module
+    from zerg.database import initialize_database
+    from zerg.database import make_engine
+    from zerg.database import make_sessionmaker
+    from zerg.services.session_observation_rebuild import SessionObservationRebuildCoverageError
+    from zerg.services.session_observation_rebuild import rebuild_session_observation_projections
+
+    try:
+        parsed_session_id = UUID(str(session_id))
+    except ValueError as exc:
+        raise typer.BadParameter("session_id must be a UUID") from exc
+
+    if database_url:
+        engine = make_engine(database_url)
+        initialize_database(engine)
+        session_factory = make_sessionmaker(engine)
+    else:
+        initialize_database()
+        session_factory = database_module.default_session_factory
+    if session_factory is None:
+        raise typer.Exit(code=2)
+
+    with session_factory() as db:
+        try:
+            result = rebuild_session_observation_projections(db, session_id=parsed_session_id, runtime_key=runtime_key)
+        except SessionObservationRebuildCoverageError as exc:
+            db.rollback()
+            if json_output:
+                typer.echo(json.dumps({"error": "coverage_gap", "detail": str(exc)}, indent=2, sort_keys=True))
+            else:
+                typer.echo(f"Refusing rebuild: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        db.commit()
+
+    payload = {
+        "session_id": str(result.session_id) if result.session_id else None,
+        "runtime_key": result.runtime_key,
+        "observations_seen": result.observations_seen,
+        "newest_observation_db_id": result.newest_observation_db_id,
+        "provider_events_reduced": result.provider_events_reduced,
+        "bridge_events_reduced": result.bridge_events_reduced,
+        "source_lines_reduced": result.source_lines_reduced,
+        "runtime_signals_reduced": result.runtime_signals_reduced,
+        "skipped_observations": result.skipped_observations,
+        "reducer_errors": [error.__dict__ for error in result.reducer_errors],
+        "agent_events": result.agent_events,
+        "source_lines": result.source_lines,
+        "runtime_states": result.runtime_states,
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        typer.echo(
+            "Rebuilt session "
+            f"{parsed_session_id}: observations={result.observations_seen}, "
+            f"events={result.agent_events}, source_lines={result.source_lines}, "
+            f"runtime_states={result.runtime_states}, errors={len(result.reducer_errors)}"
+        )
+    if result.reducer_errors:
+        raise typer.Exit(code=1)
+
+
 for command in (onboard, doctor):
     app.command()(command)
 

@@ -150,7 +150,7 @@ Launch-minimum shape:
 - `user_event_id`
 - `durable_assistant_event_id`
 - `baseline_event_id`
-- `baseline_runtime_cursor`
+- `baseline_observation_cursor`
 - `user_submitted_at`
 - `send_accepted_at`
 - `active_phase_observed_at`
@@ -166,7 +166,7 @@ Deferred extension columns, only when a concrete producer exists:
 - `assistant_event_end_id`
 - `first_output_at`
 - `assistant_completed_at`
-- `terminal_runtime_event_id`
+- `terminal_observation_id`
 
 ### Launch-minimum invariants
 
@@ -177,7 +177,7 @@ Deferred extension columns, only when a concrete producer exists:
 - `active_phase_observed_at` must stay `NULL` until Longhouse observes a true runtime phase transition into `thinking` or `running`; transport acceptance alone is not sufficient
 - `terminal_at` implies `state in {terminal, durable}` and `terminal_phase IS NOT NULL`
 - `durable_at` implies `state = durable` and `durable_assistant_event_id IS NOT NULL`
-- `terminal_runtime_event_id` must be `NULL` unless the terminal observation came from a real runtime-event row
+- `terminal_observation_id` must be `NULL` unless a terminal runtime observation was recorded
 - state transitions may not regress
 
 ### Launch-minimum schema notes
@@ -190,7 +190,7 @@ Deferred extension columns, only when a concrete producer exists:
 - `state`: `String(20)`, not null
 - `terminal_phase`: nullable `String(32)`
 - `error_code`: nullable `String(64)`
-- `user_event_id`, `durable_assistant_event_id`, `baseline_event_id`, `baseline_runtime_cursor`: nullable integers
+- `user_event_id`, `durable_assistant_event_id`, `baseline_event_id`, `baseline_observation_cursor`: nullable integers
 - all timestamps: timezone-aware `DateTime(timezone=True)`
 
 Launch-minimum indexes and constraints:
@@ -242,13 +242,13 @@ Deferred identity:
 - `user_event_id`: durable transcript event for the triggering user prompt
 - `durable_assistant_event_id`: durable assistant event currently used to mark turn completion
 - `baseline_event_id`: latest durable event id before the turn began
-- `baseline_runtime_cursor`: latest runtime cursor before the turn began; backed by a runtime event id when one exists, but not modeled as a required FK-like link
+- `baseline_observation_cursor`: latest runtime observation id before the turn began; a cursor, not a required FK-like link
 
 Deferred linkage:
 
 - `assistant_event_start_id`: first durable assistant event attributed to the turn
 - `assistant_event_end_id`: last durable assistant event attributed to the turn
-- `terminal_runtime_event_id`: only populated when the terminal observation came from a real runtime-event row; cached presence fallbacks must normalize sentinel `0` to `NULL`
+- `terminal_observation_id`: raw observation id for the terminal runtime signal when available
 
 #### Timestamps
 
@@ -306,7 +306,7 @@ These do **not** belong in the canonical turn table:
 - precomputed duration columns as the primary truth
 - provider-specific transport payload blobs that are only useful for debugging
 
-Longhouse already retains runtime events as a core substrate for runtime-state materialization and recency anchoring. The design rule is that runtime events remain substrate, not the primary turn-truth model. The optional question is long-term retention depth beyond current operational needs.
+Longhouse already retains runtime observations as the substrate for runtime-state materialization and recency anchoring. The design rule is that observations remain substrate, not the primary turn-truth model. The optional question is long-term retention depth beyond current operational needs.
 
 ## Derived Durations
 
@@ -374,7 +374,7 @@ Expected posture:
 - `events`: durable archive
 - `session_turns`: durable product timing truth
 - `session_runtime_state`: latest-state overlay
-- optional runtime-event history: retained only if it proves operationally useful
+- optional runtime-observation history: retained only if it proves operationally useful
 
 If Longhouse later needs heavy multi-writer concurrency or large retained runtime history, that is an independent storage-engine discussion. The semantic model should still be the same.
 
@@ -504,7 +504,7 @@ For launch-quality UI:
 
 - make the launch-scoped canonical write path transactional or explicitly hard-failing
 - dual-write the current managed-local producer path into `session_turns`
-- normalize legacy sentinel runtime-event values such as `0` to `NULL` before writing canonical linkage fields
+- normalize sentinel observation cursor values such as `0` to `NULL` before writing canonical linkage fields
 - verify parity with `managed_local_turns`
 
 ### Phase 3
