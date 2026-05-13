@@ -670,6 +670,8 @@ fi
 # Build engine binary if in local mode and it doesn't already exist.
 # The engine is independent of the package source (wheel or directory).
 if [[ "$INSTALLER_MODE" == "local" ]]; then
+  log "🔖 Generating build identity..."
+  python3 "$ROOT_DIR/scripts/build/generate_build_identity.py" >/dev/null
   if [[ ! -x "$ROOT_DIR/engine/target/release/longhouse-engine" ]]; then
     if command -v cargo >/dev/null 2>&1 || command -v rustup >/dev/null 2>&1; then
       log "🦀 Building local engine binary for installer validation..."
