@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use rusqlite::Connection;
 use serde::Deserialize;
+use serde_json::{json, Value};
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
@@ -68,6 +69,10 @@ const TERMINAL_CATCHUP_DELAYS: [Duration; 3] = [
     Duration::from_secs(1),
     Duration::from_secs(3),
 ];
+const CLAUDE_TERMINAL_EVENT_TIMEOUT: Duration = Duration::from_secs(2);
+const CLAUDE_TERMINAL_EVENT_SOURCE: &str = "claude_channel_scan";
+const CLAUDE_TERMINAL_EVENT_STALE_SECS: i64 = 10 * 60;
+const CLAUDE_TERMINAL_EVENT_BATCH_LIMIT: usize = 128;
 
 /// Offline / connectivity state.
 struct OfflineState {
@@ -137,6 +142,25 @@ struct DeferredRetry {
 struct HeartbeatPostResult {
     signature: String,
     reason: &'static str,
+    result: Result<(), String>,
+}
+
+#[derive(Debug, Clone)]
+struct ClaudeLiveChannelSession {
+    session_id: String,
+    provider_session_id: Option<String>,
+    claude_pid: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+struct ClaudeTerminalSignal {
+    dedupe_key: String,
+    observed_at: chrono::DateTime<chrono::Utc>,
+    event: Value,
+}
+
+struct ClaudeTerminalPostResult {
+    dedupe_keys: Vec<String>,
     result: Result<(), String>,
 }
 
@@ -306,7 +330,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut bridge_reaper = ManagedBridgeReaper::from_env();
     let mut outbox_post_tasks: JoinSet<(usize, usize)> = JoinSet::new();
     let mut heartbeat_post_tasks: JoinSet<HeartbeatPostResult> = JoinSet::new();
+    let mut claude_terminal_post_tasks: JoinSet<ClaudeTerminalPostResult> = JoinSet::new();
     let mut outbox_signal_marks: HashSet<String> = HashSet::new();
+    let mut live_claude_channels: HashMap<String, ClaudeLiveChannelSession> = HashMap::new();
+    let mut pending_claude_terminal_signals: HashMap<String, ClaudeTerminalSignal> = HashMap::new();
 
     let outbox_dir = config::get_agent_outbox_dir()?;
     let status_path = config::get_agent_status_path()?;
@@ -458,6 +485,30 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
+            claude_terminal_post_result = claude_terminal_post_tasks.join_next(), if !claude_terminal_post_tasks.is_empty() => {
+                match claude_terminal_post_result {
+                    Some(Ok(result)) => {
+                        match result.result {
+                            Ok(()) => {
+                                for key in result.dedupe_keys {
+                                    pending_claude_terminal_signals.remove(&key);
+                                }
+                            }
+                            Err(err) => {
+                                tracing::debug!(
+                                    "Managed Claude terminal signal POST failed: {}",
+                                    err
+                                );
+                            }
+                        }
+                    }
+                    Some(Err(err)) => {
+                        tracing::warn!("Managed Claude terminal signal task failed: {}", err);
+                    }
+                    None => {}
+                }
+            }
+
             _ = &mut startup_reconciliation_timer, if startup_reconciliation_pending && !offline.is_offline => {
                 startup_reconciliation_pending = false;
                 maybe_start_reconciliation_scan(
@@ -576,10 +627,17 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     );
                 }
                 if !offline.is_offline && !outbox_result.posts.is_empty() {
-                    let client = client.clone();
-                    outbox_post_tasks.spawn_local(async move {
-                        outbox::post_pending_presence_files(&client, outbox_result.posts).await
-                    });
+                    if outbox_post_tasks.is_empty() {
+                        let client = client.clone();
+                        outbox_post_tasks.spawn_local(async move {
+                            outbox::post_pending_presence_files(&client, outbox_result.posts).await
+                        });
+                    } else {
+                        tracing::debug!(
+                            pending_posts = outbox_result.posts.len(),
+                            "Skipping outbox presence POST while previous POST is still in flight"
+                        );
+                    }
                 }
             }
 
@@ -606,6 +664,19 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             _ = local_status_timer.tick() => {
                 let observations = managed_bridge_scan::collect_observations();
                 let claude_observations = managed_claude_scan::collect_observations();
+                reconcile_claude_terminal_signals(
+                    &mut live_claude_channels,
+                    &mut pending_claude_terminal_signals,
+                    &config.shipper_config.machine_name,
+                    &claude_observations,
+                    chrono::Utc::now(),
+                );
+                maybe_spawn_claude_terminal_post(
+                    &mut claude_terminal_post_tasks,
+                    client.clone(),
+                    &pending_claude_terminal_signals,
+                    offline.is_offline,
+                );
                 schedule_transcript_catchups_for_codex_observations(
                     &mut transcript_catchups,
                     &mut active_transcript_polls,
@@ -679,6 +750,19 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             _ = heartbeat_timer.tick() => {
                 let observations = managed_bridge_scan::collect_observations();
                 let claude_observations = managed_claude_scan::collect_observations();
+                reconcile_claude_terminal_signals(
+                    &mut live_claude_channels,
+                    &mut pending_claude_terminal_signals,
+                    &config.shipper_config.machine_name,
+                    &claude_observations,
+                    chrono::Utc::now(),
+                );
+                maybe_spawn_claude_terminal_post(
+                    &mut claude_terminal_post_tasks,
+                    client.clone(),
+                    &pending_claude_terminal_signals,
+                    offline.is_offline,
+                );
                 schedule_transcript_catchups_for_codex_observations(
                     &mut transcript_catchups,
                     &mut active_transcript_polls,
@@ -1013,6 +1097,204 @@ fn spawn_heartbeat_post(
             result,
         }
     });
+}
+
+fn reconcile_claude_terminal_signals(
+    live_channels: &mut HashMap<String, ClaudeLiveChannelSession>,
+    pending_signals: &mut HashMap<String, ClaudeTerminalSignal>,
+    machine_name: &str,
+    observations: &[managed_claude_scan::ClaudeChannelObservation],
+    observed_at: chrono::DateTime<chrono::Utc>,
+) {
+    prune_stale_claude_terminal_signals(pending_signals, observed_at);
+    let mut observed_session_ids = HashSet::new();
+
+    for obs in observations {
+        observed_session_ids.insert(obs.session_id.clone());
+        if obs.claude_alive {
+            live_channels.insert(
+                obs.session_id.clone(),
+                ClaudeLiveChannelSession {
+                    session_id: obs.session_id.clone(),
+                    provider_session_id: obs.provider_session_id.clone(),
+                    claude_pid: obs.claude_pid,
+                },
+            );
+            continue;
+        }
+
+        let previous = live_channels.remove(&obs.session_id);
+        let should_close = previous.is_some()
+            || obs.claude_pid.is_some()
+            || obs.ready
+            || obs.bridge_alive
+            || obs.bridge_pid.is_some();
+        if !should_close {
+            continue;
+        }
+        let provider_session_id = obs
+            .provider_session_id
+            .clone()
+            .or_else(|| {
+                previous
+                    .as_ref()
+                    .and_then(|seen| seen.provider_session_id.clone())
+            })
+            .unwrap_or_else(|| obs.session_id.clone());
+        let pid = obs
+            .claude_pid
+            .or_else(|| previous.as_ref().and_then(|seen| seen.claude_pid));
+        let dedupe_key = claude_terminal_dedupe_key(&obs.session_id, pid, "process_gone");
+        pending_signals
+            .entry(dedupe_key.clone())
+            .or_insert_with(|| ClaudeTerminalSignal {
+                dedupe_key: dedupe_key.clone(),
+                observed_at,
+                event: claude_terminal_event(
+                    machine_name,
+                    &obs.session_id,
+                    &provider_session_id,
+                    "process_gone",
+                    "process_gone",
+                    pid,
+                    "process_gone",
+                    observed_at,
+                    &dedupe_key,
+                ),
+            });
+    }
+
+    let disappeared: Vec<ClaudeLiveChannelSession> = live_channels
+        .iter()
+        .filter(|(session_id, _)| !observed_session_ids.contains(*session_id))
+        .map(|(_, seen)| seen.clone())
+        .collect();
+    for seen in disappeared {
+        live_channels.remove(&seen.session_id);
+        let provider_session_id = seen
+            .provider_session_id
+            .clone()
+            .unwrap_or_else(|| seen.session_id.clone());
+        let dedupe_key =
+            claude_terminal_dedupe_key(&seen.session_id, seen.claude_pid, "channel_state_gone");
+        pending_signals
+            .entry(dedupe_key.clone())
+            .or_insert_with(|| ClaudeTerminalSignal {
+                dedupe_key: dedupe_key.clone(),
+                observed_at,
+                event: claude_terminal_event(
+                    machine_name,
+                    &seen.session_id,
+                    &provider_session_id,
+                    "process_gone",
+                    "channel_state_gone",
+                    seen.claude_pid,
+                    "channel_state_gone",
+                    observed_at,
+                    &dedupe_key,
+                ),
+            });
+    }
+}
+
+fn prune_stale_claude_terminal_signals(
+    pending_signals: &mut HashMap<String, ClaudeTerminalSignal>,
+    now: chrono::DateTime<chrono::Utc>,
+) {
+    pending_signals.retain(|_, signal| {
+        now.signed_duration_since(signal.observed_at).num_seconds()
+            <= CLAUDE_TERMINAL_EVENT_STALE_SECS
+    });
+}
+
+fn claude_terminal_dedupe_key(session_id: &str, pid: Option<u32>, reason: &str) -> String {
+    format!(
+        "claude-channel-scan:terminal:{session_id}:{}:{reason}",
+        pid.map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    )
+}
+
+fn claude_terminal_event(
+    machine_name: &str,
+    session_id: &str,
+    provider_session_id: &str,
+    terminal_state: &str,
+    terminal_reason: &str,
+    claude_pid: Option<u32>,
+    close_observation: &str,
+    observed_at: chrono::DateTime<chrono::Utc>,
+    dedupe_key: &str,
+) -> Value {
+    json!({
+        "runtime_key": format!("claude:{provider_session_id}"),
+        "session_id": session_id,
+        "provider": "claude",
+        "device_id": machine_name,
+        "source": CLAUDE_TERMINAL_EVENT_SOURCE,
+        "kind": "terminal_signal",
+        "phase": Value::Null,
+        "tool_name": Value::Null,
+        "occurred_at": observed_at.to_rfc3339(),
+        "dedupe_key": dedupe_key,
+        "payload": {
+            "terminal_state": terminal_state,
+            "terminal_reason": terminal_reason,
+            "terminal_source": CLAUDE_TERMINAL_EVENT_SOURCE,
+            "provider_session_id": provider_session_id,
+            "claude_pid": claude_pid,
+            "close_observation": close_observation,
+        },
+    })
+}
+
+fn maybe_spawn_claude_terminal_post(
+    tasks: &mut JoinSet<ClaudeTerminalPostResult>,
+    client: ShipperClient,
+    pending_signals: &HashMap<String, ClaudeTerminalSignal>,
+    offline: bool,
+) {
+    if offline || !tasks.is_empty() || pending_signals.is_empty() {
+        return;
+    }
+    let signals = pending_claude_terminal_batch(pending_signals);
+    tasks.spawn_local(async move { post_claude_terminal_signals(client, signals).await });
+}
+
+fn pending_claude_terminal_batch(
+    pending_signals: &HashMap<String, ClaudeTerminalSignal>,
+) -> Vec<ClaudeTerminalSignal> {
+    pending_signals
+        .values()
+        .take(CLAUDE_TERMINAL_EVENT_BATCH_LIMIT)
+        .cloned()
+        .collect()
+}
+
+async fn post_claude_terminal_signals(
+    client: ShipperClient,
+    signals: Vec<ClaudeTerminalSignal>,
+) -> ClaudeTerminalPostResult {
+    let dedupe_keys: Vec<String> = signals
+        .iter()
+        .map(|signal| signal.dedupe_key.clone())
+        .collect();
+    let events: Vec<Value> = signals.into_iter().map(|signal| signal.event).collect();
+    let result = match serde_json::to_vec(&json!({ "events": events })) {
+        Ok(body) => client
+            .post_json_with_timeout(
+                "/api/agents/runtime/events/batch",
+                body,
+                Some(CLAUDE_TERMINAL_EVENT_TIMEOUT),
+            )
+            .await
+            .map_err(|err| err.to_string()),
+        Err(err) => Err(err.to_string()),
+    };
+    ClaudeTerminalPostResult {
+        dedupe_keys,
+        result,
+    }
 }
 
 fn queue_pending_spool_paths(
@@ -2181,6 +2463,175 @@ mod tests {
         assert_ne!(
             runtime_truth_signature(&first),
             runtime_truth_signature(&second)
+        );
+    }
+
+    #[test]
+    fn test_claude_terminal_signal_generated_when_seen_process_dies() {
+        let mut live = HashMap::new();
+        let mut pending = HashMap::new();
+        let observed_at = chrono::DateTime::parse_from_rfc3339("2026-05-12T20:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let live_obs = managed_claude_scan::ClaudeChannelObservation {
+            session_id: "session-123".to_string(),
+            provider_session_id: Some("provider-123".to_string()),
+            state_file: PathBuf::from("/tmp/session-123.json"),
+            claude_pid: Some(123),
+            bridge_pid: Some(456),
+            ready: true,
+            updated_at: "2026-05-12T19:59:59Z".to_string(),
+            claude_alive: true,
+            bridge_alive: true,
+        };
+        let dead_obs = managed_claude_scan::ClaudeChannelObservation {
+            claude_alive: false,
+            bridge_alive: false,
+            updated_at: "2026-05-12T20:00:00Z".to_string(),
+            ..live_obs.clone()
+        };
+
+        reconcile_claude_terminal_signals(
+            &mut live,
+            &mut pending,
+            "cinder",
+            &[live_obs],
+            observed_at,
+        );
+        assert!(pending.is_empty());
+
+        reconcile_claude_terminal_signals(
+            &mut live,
+            &mut pending,
+            "cinder",
+            &[dead_obs],
+            observed_at,
+        );
+
+        assert_eq!(pending.len(), 1);
+        let signal = pending.values().next().unwrap();
+        assert_eq!(signal.event["runtime_key"], "claude:provider-123");
+        assert_eq!(signal.event["source"], CLAUDE_TERMINAL_EVENT_SOURCE);
+        assert_eq!(signal.event["kind"], "terminal_signal");
+        assert_eq!(signal.event["payload"]["terminal_state"], "process_gone");
+        assert_eq!(signal.event["payload"]["terminal_reason"], "process_gone");
+        assert_eq!(
+            signal.event["payload"]["terminal_source"],
+            CLAUDE_TERMINAL_EVENT_SOURCE
+        );
+        assert!(live.is_empty());
+    }
+
+    #[test]
+    fn test_claude_terminal_signal_generated_when_channel_state_disappears() {
+        let mut live = HashMap::new();
+        let mut pending = HashMap::new();
+        let observed_at = chrono::DateTime::parse_from_rfc3339("2026-05-12T20:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let live_obs = managed_claude_scan::ClaudeChannelObservation {
+            session_id: "session-123".to_string(),
+            provider_session_id: Some("provider-123".to_string()),
+            state_file: PathBuf::from("/tmp/session-123.json"),
+            claude_pid: Some(123),
+            bridge_pid: Some(456),
+            ready: true,
+            updated_at: "2026-05-12T19:59:59Z".to_string(),
+            claude_alive: true,
+            bridge_alive: true,
+        };
+
+        reconcile_claude_terminal_signals(
+            &mut live,
+            &mut pending,
+            "cinder",
+            &[live_obs],
+            observed_at,
+        );
+        reconcile_claude_terminal_signals(&mut live, &mut pending, "cinder", &[], observed_at);
+
+        assert_eq!(pending.len(), 1);
+        let signal = pending.values().next().unwrap();
+        assert_eq!(
+            signal.event["payload"]["close_observation"],
+            "channel_state_gone"
+        );
+        assert_eq!(signal.event["payload"]["terminal_state"], "process_gone");
+        assert!(live.is_empty());
+    }
+
+    #[test]
+    fn test_claude_terminal_signal_generated_from_dead_channel_file_without_live_cache() {
+        let mut live = HashMap::new();
+        let mut pending = HashMap::new();
+        let observed_at = chrono::DateTime::parse_from_rfc3339("2026-05-12T20:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let dead_obs = managed_claude_scan::ClaudeChannelObservation {
+            session_id: "session-123".to_string(),
+            provider_session_id: Some("provider-123".to_string()),
+            state_file: PathBuf::from("/tmp/session-123.json"),
+            claude_pid: Some(123),
+            bridge_pid: Some(456),
+            ready: true,
+            updated_at: "2026-05-12T20:00:00Z".to_string(),
+            claude_alive: false,
+            bridge_alive: false,
+        };
+
+        reconcile_claude_terminal_signals(
+            &mut live,
+            &mut pending,
+            "cinder",
+            &[dead_obs],
+            observed_at,
+        );
+
+        assert_eq!(pending.len(), 1);
+        let signal = pending.values().next().unwrap();
+        assert_eq!(
+            signal.dedupe_key,
+            "claude-channel-scan:terminal:session-123:123:process_gone"
+        );
+        assert_eq!(signal.event["payload"]["terminal_reason"], "process_gone");
+    }
+
+    #[test]
+    fn test_claude_terminal_signals_are_pruned_and_batched() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-05-12T20:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let fresh_at = now - chrono::Duration::seconds(30);
+        let stale_at = now - chrono::Duration::seconds(CLAUDE_TERMINAL_EVENT_STALE_SECS + 1);
+        let mut pending = HashMap::new();
+
+        pending.insert(
+            "stale".to_string(),
+            ClaudeTerminalSignal {
+                dedupe_key: "stale".to_string(),
+                observed_at: stale_at,
+                event: json!({"dedupe_key": "stale"}),
+            },
+        );
+        for index in 0..(CLAUDE_TERMINAL_EVENT_BATCH_LIMIT + 5) {
+            let key = format!("fresh-{index}");
+            pending.insert(
+                key.clone(),
+                ClaudeTerminalSignal {
+                    dedupe_key: key,
+                    observed_at: fresh_at,
+                    event: json!({"index": index}),
+                },
+            );
+        }
+
+        prune_stale_claude_terminal_signals(&mut pending, now);
+
+        assert!(!pending.contains_key("stale"));
+        assert_eq!(pending.len(), CLAUDE_TERMINAL_EVENT_BATCH_LIMIT + 5);
+        assert_eq!(
+            pending_claude_terminal_batch(&pending).len(),
+            CLAUDE_TERMINAL_EVENT_BATCH_LIMIT
         );
     }
 

@@ -195,6 +195,9 @@ def runtime_observation_rows(limit: int) -> list[dict]:
                 "phase": payload.get("phase") if isinstance(payload, dict) else None,
                 "tool_name": payload.get("tool_name") if isinstance(payload, dict) else None,
                 "freshness_ms": payload.get("freshness_ms") if isinstance(payload, dict) else None,
+                "terminal_state": runtime_payload.get("terminal_state"),
+                "terminal_reason": runtime_payload.get("terminal_reason"),
+                "terminal_source": runtime_payload.get("terminal_source"),
                 "payload": runtime_payload,
             }
         )
@@ -502,7 +505,9 @@ header("Recent Runtime Observations")
 for row in sqlite_payload.get("recent_runtime_observations", []):
     print(
         f"{row.get('observed_at')} {row.get('kind')} phase={row.get('phase') or ''} "
-        f"tool={row.get('tool_name') or ''} received={row.get('received_at')} freshness_ms={row.get('freshness_ms') or ''}"
+        f"tool={row.get('tool_name') or ''} "
+        f"terminal={row.get('terminal_state') or ''}/{row.get('terminal_reason') or ''}/{row.get('terminal_source') or ''} "
+        f"received={row.get('received_at')} freshness_ms={row.get('freshness_ms') or ''}"
     )
 
 header("Recent Events")

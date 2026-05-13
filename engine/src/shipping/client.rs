@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use rand::Rng;
-use reqwest::header::{HeaderMap, HeaderValue, CONTENT_ENCODING, CONTENT_TYPE};
+use reqwest::header::{HeaderMap, HeaderValue, CONTENT_ENCODING, CONTENT_TYPE, USER_AGENT};
 
 use crate::config::ShipperConfig;
 use crate::pipeline::compressor::{content_encoding, CompressionAlgo};
@@ -53,6 +53,11 @@ impl ShipperClient {
     /// Create a new client with specific compression algorithm.
     pub fn with_compression(config: &ShipperConfig, compression: CompressionAlgo) -> Result<Self> {
         let mut default_headers = HeaderMap::new();
+        default_headers.insert(
+            USER_AGENT,
+            HeaderValue::from_str(&format!("longhouse-engine/{}", env!("CARGO_PKG_VERSION")))
+                .context("invalid user-agent header value")?,
+        );
         default_headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         default_headers.insert(
             CONTENT_ENCODING,
@@ -186,17 +191,28 @@ impl ShipperClient {
     /// Returns Err on network errors AND on non-2xx HTTP status codes, so callers
     /// can distinguish success from server-side rejection.
     pub async fn post_json(&self, path_suffix: &str, body: Vec<u8>) -> Result<()> {
+        self.post_json_with_timeout(path_suffix, body, None).await
+    }
+
+    /// POST a small JSON payload with an optional request-level timeout.
+    pub async fn post_json_with_timeout(
+        &self,
+        path_suffix: &str,
+        body: Vec<u8>,
+        request_timeout: Option<Duration>,
+    ) -> Result<()> {
         let url = self.ingest_url.replace("/api/agents/ingest", path_suffix);
-        let resp = self
+        let mut request = self
             .client
             .post(&url)
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             // Remove Content-Encoding for uncompressed requests
             .header(reqwest::header::CONTENT_ENCODING, "identity")
-            .body(body)
-            .send()
-            .await
-            .context("POST failed")?;
+            .body(body);
+        if let Some(request_timeout) = request_timeout {
+            request = request.timeout(request_timeout);
+        }
+        let resp = request.send().await.context("POST failed")?;
         resp.error_for_status().context("POST returned non-2xx")?;
         Ok(())
     }

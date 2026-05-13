@@ -27,6 +27,7 @@ use crate::state::unmanaged_process_binding::{
 
 /// Maximum age for an outbox file before it is considered stale and deleted.
 const STALE_SECS: u64 = 600; // 10 minutes
+const PRESENCE_POST_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, Deserialize)]
 struct PresenceOutboxPayload {
@@ -330,10 +331,21 @@ pub async fn post_pending_presence_files(
     client: &ShipperClient,
     posts: Vec<PendingPresencePost>,
 ) -> (usize, usize) {
+    post_pending_presence_files_with_timeout(client, posts, PRESENCE_POST_TIMEOUT).await
+}
+
+async fn post_pending_presence_files_with_timeout(
+    client: &ShipperClient,
+    posts: Vec<PendingPresencePost>,
+    request_timeout: Duration,
+) -> (usize, usize) {
     let mut sent = 0usize;
     let mut kept = 0usize;
     for post in posts {
-        match client.post_json("/api/agents/presence", post.bytes).await {
+        match client
+            .post_json_with_timeout("/api/agents/presence", post.bytes, Some(request_timeout))
+            .await
+        {
             Ok(_) => {
                 let _ = std::fs::remove_file(&post.path);
                 sent += 1;
@@ -733,6 +745,45 @@ mod tests {
         assert_eq!(sent, 0);
         assert_eq!(kept, 1, "file must be kept when POST fails");
         assert!(f.exists(), "file must not be deleted on network error");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_presence_post_timeout_keeps_file() {
+        use crate::config::ShipperConfig;
+        use crate::pipeline::compressor::CompressionAlgo;
+        use crate::shipping::client::ShipperClient;
+        use tokio::io::AsyncReadExt;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 512];
+                    let _ = socket.read(&mut buf).await;
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                });
+            }
+        });
+
+        let url = format!("http://{}", addr);
+        let cfg = ShipperConfig::default().with_overrides(Some(&url), None, None, None, None, None);
+        let client = ShipperClient::with_compression(&cfg, CompressionAlgo::Gzip).unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let f = write_hook_style(dir.path(), "SLOW123", "sess-slow", "thinking");
+        let posts = collect_outbox_with_local_state_result(dir.path(), None).posts;
+
+        let (sent, kept) =
+            post_pending_presence_files_with_timeout(&client, posts, Duration::from_millis(50))
+                .await;
+
+        assert_eq!(sent, 0);
+        assert_eq!(kept, 1, "slow presence POST should be retried later");
+        assert!(f.exists(), "file must remain after a presence POST timeout");
+
+        server.abort();
     }
 
     #[tokio::test(flavor = "current_thread")]
