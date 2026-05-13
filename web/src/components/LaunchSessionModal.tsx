@@ -16,10 +16,9 @@ interface LaunchSessionModalProps {
 }
 
 const PROVIDER = "codex"; // v1
-const LAUNCH_CAP = `${PROVIDER}.launch`;
 
 function machineCanLaunch(m: MachineDirectoryEntry): boolean {
-  return m.online && m.supports.includes(LAUNCH_CAP);
+  return m.can_launch_codex;
 }
 
 export default function LaunchSessionModal({
@@ -225,31 +224,56 @@ function EmptyState({ machines }: { machines: MachineDirectoryEntry[] }) {
       </div>
     );
   }
-  const online = machines.filter((m) => m.online);
-  const offline = machines.filter((m) => !m.online);
-  const offlinePreview = offline.slice(0, 3);
-  const hiddenOfflineCount = Math.max(offline.length - offlinePreview.length, 0);
+  const blocked = machines.filter((m) => !m.can_launch_codex);
+  const offline = blocked.filter((m) => m.launch_blocked_by === "control_down");
+  const visibleBlocked = blocked.filter((m) => m.launch_blocked_by !== "control_down").slice(0, 5);
+  const hiddenBlockedCount = Math.max(
+    blocked.filter((m) => m.launch_blocked_by !== "control_down").length - visibleBlocked.length,
+    0,
+  );
 
   return (
     <div className="modal-empty-state" data-testid="launch-no-launchable">
-      <p>No online machine is advertising Codex launch right now.</p>
-      {online.length > 0 && (
+      <p>No machine can start Codex right now.</p>
+      {visibleBlocked.length > 0 && (
         <ul>
-          {online.map((m) => (
+          {visibleBlocked.map((m) => (
             <li key={m.device_id}>
-              <strong>{m.machine_name}</strong> — online, missing <code>{LAUNCH_CAP}</code>
+              <strong>{m.machine_name}</strong> — {launchBlockedLabel(m)}
             </li>
           ))}
+          {hiddenBlockedCount > 0 && <li>{hiddenBlockedCount} more connected machines are blocked.</li>}
         </ul>
       )}
       {offline.length > 0 && (
-        <p>
-          {offline.length === 1 ? "1 enrolled machine is" : `${offline.length} enrolled machines are`} offline
-          {offlinePreview.length > 0 ? `: ${offlinePreview.map((m) => m.machine_name).join(", ")}` : ""}
-          {hiddenOfflineCount > 0 ? `, plus ${hiddenOfflineCount} more` : ""}.
-        </p>
+        <p>{machineSummary(offline, "have no active control channel")}</p>
       )}
       <p>Restart or upgrade the Machine Agent on the target machine, then reopen this sheet.</p>
     </div>
   );
+}
+
+function launchBlockedLabel(machine: MachineDirectoryEntry): string {
+  switch (machine.launch_blocked_by) {
+    case "control_down":
+      return "control channel disconnected";
+    case "no_codex_support":
+      return "connected, but this engine does not advertise Codex launch";
+    case "engine_too_old":
+      return "engine too old for Codex launch";
+    case "auth_failed":
+      return "control channel auth failed";
+    case "runtime_unreachable":
+      return "runtime host unreachable";
+    default:
+      return machine.online ? "launch unavailable" : "control channel disconnected";
+  }
+}
+
+function machineSummary(machines: MachineDirectoryEntry[], reason: string): string {
+  const preview = machines.slice(0, 3);
+  const hidden = Math.max(machines.length - preview.length, 0);
+  const names = preview.map((m) => m.machine_name).join(", ");
+  const prefix = machines.length === 1 ? "1 enrolled machine" : `${machines.length} enrolled machines`;
+  return `${prefix} ${reason}${names ? `: ${names}` : ""}${hidden > 0 ? `, plus ${hidden} more` : ""}.`;
 }

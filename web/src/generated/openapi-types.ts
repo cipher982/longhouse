@@ -6380,10 +6380,26 @@ export interface components {
              */
             online: boolean;
             /**
+             * Control Channel Status
+             * @description Primitive live-control channel status: connected or disconnected.
+             * @enum {string}
+             */
+            control_channel_status: "connected" | "disconnected";
+            /**
              * Supports
              * @description Capabilities announced by the Machine Agent on its last hello frame. Empty when offline.
              */
             supports?: string[];
+            /**
+             * Can Launch Codex
+             * @description Derived launch readiness for Codex v1. Browser/iOS should gate Start on this field.
+             */
+            can_launch_codex: boolean;
+            /**
+             * Launch Blocked By
+             * @description Machine-readable reason Codex launch is unavailable; null when can_launch_codex is true.
+             */
+            launch_blocked_by?: ("control_down" | "no_codex_support" | "engine_too_old" | "auth_failed" | "runtime_unreachable") | null;
             /**
              * Last Seen At
              * @description Most recent control-channel activity or device-token use; null if never observed.

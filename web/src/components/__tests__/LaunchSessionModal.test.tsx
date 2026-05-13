@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import LaunchSessionModal from "../LaunchSessionModal";
+import type { MachineDirectoryEntry } from "../../services/api";
 
 const apiMocks = vi.hoisted(() => ({
   listMachines: vi.fn(),
@@ -34,6 +35,29 @@ function renderModal(props: Partial<React.ComponentProps<typeof LaunchSessionMod
   );
 }
 
+function machine(overrides: Partial<MachineDirectoryEntry> = {}): MachineDirectoryEntry {
+  const online = overrides.online ?? true;
+  const canLaunch = overrides.can_launch_codex ?? online;
+  const controlChannelStatus: MachineDirectoryEntry["control_channel_status"] = online ? "connected" : "disconnected";
+  const launchBlockedBy: MachineDirectoryEntry["launch_blocked_by"] = canLaunch
+    ? null
+    : online
+      ? "no_codex_support"
+      : "control_down";
+  return {
+    device_id: "cinder",
+    machine_name: "cinder",
+    online,
+    control_channel_status: controlChannelStatus,
+    supports: canLaunch ? ["codex.launch"] : [],
+    can_launch_codex: canLaunch,
+    launch_blocked_by: launchBlockedBy,
+    last_seen_at: null,
+    engine_build: null,
+    ...overrides,
+  };
+}
+
 describe("LaunchSessionModal", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -50,59 +74,75 @@ describe("LaunchSessionModal", () => {
   it("shows offline-only state when no launchable machines are available", async () => {
     apiMocks.listMachines.mockResolvedValue({
       machines: [
-        {
+        machine({
           device_id: "cinder",
           machine_name: "cinder",
           online: false,
-          supports: [],
-          last_seen_at: null,
-          engine_build: null,
-        },
-        {
+          control_channel_status: "disconnected",
+          can_launch_codex: false,
+          launch_blocked_by: "control_down",
+        }),
+        machine({
           device_id: "old-ci-1",
           machine_name: "old-ci-1",
           online: false,
-          supports: [],
-          last_seen_at: null,
-          engine_build: null,
-        },
-        {
+          control_channel_status: "disconnected",
+          can_launch_codex: false,
+          launch_blocked_by: "control_down",
+        }),
+        machine({
           device_id: "old-ci-2",
           machine_name: "old-ci-2",
           online: false,
-          supports: [],
-          last_seen_at: null,
-          engine_build: null,
-        },
-        {
+          control_channel_status: "disconnected",
+          can_launch_codex: false,
+          launch_blocked_by: "control_down",
+        }),
+        machine({
           device_id: "old-ci-3",
           machine_name: "old-ci-3",
           online: false,
-          supports: [],
-          last_seen_at: null,
-          engine_build: null,
-        },
+          control_channel_status: "disconnected",
+          can_launch_codex: false,
+          launch_blocked_by: "control_down",
+        }),
       ],
     });
     renderModal();
     expect(await screen.findByTestId("launch-no-launchable")).toBeInTheDocument();
     expect(
-      screen.getByText(/4 enrolled machines are offline: cinder, old-ci-1, old-ci-2, plus 1 more\./),
+      screen.getByText(/4 enrolled machines have no active control channel: cinder, old-ci-1, old-ci-2, plus 1 more\./),
     ).toBeInTheDocument();
     expect(screen.queryByText(/does not advertise codex\.launch/)).not.toBeInTheDocument();
+  });
+
+  it("shows connected machines blocked by missing Codex launch support", async () => {
+    apiMocks.listMachines.mockResolvedValue({
+      machines: [
+        machine({
+          device_id: "old-engine",
+          machine_name: "old-engine",
+          online: true,
+          supports: ["codex.send"],
+          can_launch_codex: false,
+          launch_blocked_by: "no_codex_support",
+        }),
+      ],
+    });
+    renderModal();
+    expect(await screen.findByTestId("launch-no-launchable")).toBeInTheDocument();
+    expect(screen.getByText(/old-engine/)).toBeInTheDocument();
+    expect(screen.getByText(/connected, but this engine does not advertise Codex launch/)).toBeInTheDocument();
   });
 
   it("dismisses on Escape", async () => {
     apiMocks.listMachines.mockResolvedValue({
       machines: [
-        {
+        machine({
           device_id: "cinder",
           machine_name: "cinder",
           online: true,
-          supports: ["codex.launch"],
-          last_seen_at: null,
-          engine_build: null,
-        },
+        }),
       ],
     });
     const onClose = vi.fn();
@@ -116,14 +156,17 @@ describe("LaunchSessionModal", () => {
   it("submits a launch and invokes onLaunched with the session id", async () => {
     apiMocks.listMachines.mockResolvedValue({
       machines: [
-        {
+        machine({
           device_id: "cinder",
           machine_name: "cinder",
           online: true,
+          control_channel_status: "connected",
           supports: ["codex.launch"],
+          can_launch_codex: true,
+          launch_blocked_by: null,
           last_seen_at: "2026-05-12T13:00:00Z",
           engine_build: "abc",
-        },
+        }),
       ],
     });
     apiMocks.launchRemoteSession.mockResolvedValue({

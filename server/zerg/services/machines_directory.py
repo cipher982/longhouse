@@ -25,12 +25,22 @@ from zerg.services.machine_control_channel import MachineControlChannelRegistry
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 
 
+CODEX_LAUNCH_CAPABILITY = "codex.launch"
+CONTROL_CONNECTED = "connected"
+CONTROL_DISCONNECTED = "disconnected"
+LAUNCH_BLOCKED_CONTROL_DOWN = "control_down"
+LAUNCH_BLOCKED_NO_CODEX_SUPPORT = "no_codex_support"
+
+
 @dataclass(frozen=True)
 class MachineEntry:
     device_id: str
     machine_name: str
     online: bool
+    control_channel_status: str
     supports: tuple[str, ...]
+    can_launch_codex: bool
+    launch_blocked_by: str | None
     last_seen_at: datetime | None
     engine_build: str | None
 
@@ -39,7 +49,10 @@ class MachineEntry:
             "device_id": self.device_id,
             "machine_name": self.machine_name,
             "online": self.online,
+            "control_channel_status": self.control_channel_status,
             "supports": list(self.supports),
+            "can_launch_codex": self.can_launch_codex,
+            "launch_blocked_by": self.launch_blocked_by,
             "last_seen_at": self.last_seen_at.isoformat() if self.last_seen_at else None,
             "engine_build": self.engine_build,
         }
@@ -84,11 +97,16 @@ def build_machines_directory(
     # Online first — authoritative for supports, engine_build, and
     # last_seen_at.
     for conn_info in reg.list_for_owner(owner_id=owner_id):
+        supports = tuple(sorted(conn_info.supports))
+        can_launch_codex = CODEX_LAUNCH_CAPABILITY in supports
         entry = MachineEntry(
             device_id=conn_info.device_id,
             machine_name=conn_info.machine_name or conn_info.device_id,
             online=True,
-            supports=tuple(sorted(conn_info.supports)),
+            control_channel_status=CONTROL_CONNECTED,
+            supports=supports,
+            can_launch_codex=can_launch_codex,
+            launch_blocked_by=None if can_launch_codex else LAUNCH_BLOCKED_NO_CODEX_SUPPORT,
             last_seen_at=conn_info.last_seen_at,
             engine_build=conn_info.engine_build,
         )
@@ -103,7 +121,10 @@ def build_machines_directory(
             device_id=device_id,
             machine_name=device_id,
             online=False,
+            control_channel_status=CONTROL_DISCONNECTED,
             supports=(),
+            can_launch_codex=False,
+            launch_blocked_by=LAUNCH_BLOCKED_CONTROL_DOWN,
             last_seen_at=_as_utc(last_used),
             engine_build=None,
         )
