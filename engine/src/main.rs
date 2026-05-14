@@ -733,13 +733,14 @@ fn main() -> anyhow::Result<()> {
             };
 
             // Keep LocalSet-based transcript jobs available while letting Send
-            // tasks such as the control WebSocket heartbeat run on another
-            // worker if local file processing stalls.
+            // tasks such as the control WebSocket heartbeat and HTTP egress
+            // work run on worker threads if local file processing stalls.
+            let default_worker_threads = (num_cpus::get() / 2).max(4);
             let worker_threads = std::env::var("LONGHOUSE_ENGINE_WORKER_THREADS")
                 .ok()
                 .and_then(|value| value.parse::<usize>().ok())
                 .filter(|value| *value > 0)
-                .unwrap_or(2);
+                .unwrap_or(default_worker_threads);
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(worker_threads)
                 .enable_all()

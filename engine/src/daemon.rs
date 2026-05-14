@@ -82,7 +82,7 @@ const CLAUDE_TERMINAL_EVENT_BATCH_LIMIT: usize = 128;
 struct OfflineState {
     is_offline: bool,
     offline_since: Option<Instant>,
-    consecutive_failures: u32,
+    consecutive_connect_failures: u32,
 }
 
 impl OfflineState {
@@ -90,13 +90,13 @@ impl OfflineState {
         Self {
             is_offline: false,
             offline_since: None,
-            consecutive_failures: 0,
+            consecutive_connect_failures: 0,
         }
     }
 
     fn record_connect_error(&mut self) -> bool {
-        self.consecutive_failures += 1;
-        if self.consecutive_failures < OFFLINE_CONNECT_FAILURE_THRESHOLD {
+        self.consecutive_connect_failures += 1;
+        if self.consecutive_connect_failures < OFFLINE_CONNECT_FAILURE_THRESHOLD {
             return false;
         }
         if self.is_offline {
@@ -108,7 +108,7 @@ impl OfflineState {
     }
 
     fn mark_online(&mut self) -> Option<Duration> {
-        self.consecutive_failures = 0;
+        self.consecutive_connect_failures = 0;
         if self.is_offline {
             let duration = self.offline_since.map(|t| t.elapsed());
             self.is_offline = false;
@@ -153,6 +153,8 @@ struct HeartbeatPostResult {
     signature: String,
     reason: &'static str,
     result: Result<(), String>,
+    join_elapsed_ms: u64,
+    task_elapsed_ms: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -172,6 +174,8 @@ struct ClaudeTerminalSignal {
 struct ClaudeTerminalPostResult {
     dedupe_keys: Vec<String>,
     result: Result<(), String>,
+    join_elapsed_ms: u64,
+    task_elapsed_ms: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -435,7 +439,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 );
                             } else {
                                 tracing::warn!(
-                                    consecutive_connect_errors = offline.consecutive_failures,
+                                    consecutive_connect_errors = offline.consecutive_connect_failures,
                                     threshold = OFFLINE_CONNECT_FAILURE_THRESHOLD,
                                     "Connection error while processing {}; keeping local shipping active",
                                     result.job.path.display()
@@ -534,10 +538,23 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             heartbeat_post_result = heartbeat_post_tasks.join_next(), if !heartbeat_post_tasks.is_empty() => {
                 match heartbeat_post_result {
                     Some(Ok(result)) => {
+                        let local_join_delay_ms =
+                            result.join_elapsed_ms.saturating_sub(result.task_elapsed_ms);
+                        if result.task_elapsed_ms > 1_000 || local_join_delay_ms > 1_000 {
+                            tracing::warn!(
+                                reason = result.reason,
+                                task_elapsed_ms = result.task_elapsed_ms,
+                                join_elapsed_ms = result.join_elapsed_ms,
+                                local_join_delay_ms,
+                                "Heartbeat POST was slow"
+                            );
+                        }
                         match result.result {
                             Ok(()) => {
                                 tracing::debug!(
                                     reason = result.reason,
+                                    task_elapsed_ms = result.task_elapsed_ms,
+                                    join_elapsed_ms = result.join_elapsed_ms,
                                     "Runtime truth snapshot sent after local process/control change"
                                 );
                                 last_runtime_truth_signature = Some(result.signature);
@@ -563,6 +580,16 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             claude_terminal_post_result = claude_terminal_post_tasks.join_next(), if !claude_terminal_post_tasks.is_empty() => {
                 match claude_terminal_post_result {
                     Some(Ok(result)) => {
+                        let local_join_delay_ms =
+                            result.join_elapsed_ms.saturating_sub(result.task_elapsed_ms);
+                        if result.task_elapsed_ms > 1_000 || local_join_delay_ms > 1_000 {
+                            tracing::warn!(
+                                task_elapsed_ms = result.task_elapsed_ms,
+                                join_elapsed_ms = result.join_elapsed_ms,
+                                local_join_delay_ms,
+                                "Managed Claude terminal signal POST was slow"
+                            );
+                        }
                         match result.result {
                             Ok(()) => {
                                 for key in result.dedupe_keys {
@@ -1260,13 +1287,30 @@ fn spawn_heartbeat_post(
     reason: &'static str,
 ) {
     tasks.spawn_local(async move {
-        let result = heartbeat::send_heartbeat(&client, &payload)
-            .await
-            .map_err(|err| err.to_string());
+        let join_started = Instant::now();
+        let heartbeat_task = tokio::spawn(async move {
+            let task_started = Instant::now();
+            let result = heartbeat::send_heartbeat(&client, &payload)
+                .await
+                .map_err(|err| err.to_string());
+            (result, task_started.elapsed().as_millis() as u64)
+        });
+        let (result, task_elapsed_ms) = match heartbeat_task.await {
+            Ok((result, task_elapsed_ms)) => (result, task_elapsed_ms),
+            Err(err) => {
+                let elapsed_ms = join_started.elapsed().as_millis() as u64;
+                (
+                    Err(format!("heartbeat POST worker task failed: {err}")),
+                    elapsed_ms,
+                )
+            }
+        };
         HeartbeatPostResult {
             signature,
             reason,
             result,
+            join_elapsed_ms: join_started.elapsed().as_millis() as u64,
+            task_elapsed_ms,
         }
     });
 }
@@ -1430,7 +1474,38 @@ fn maybe_spawn_claude_terminal_post(
         return;
     }
     let signals = pending_claude_terminal_batch(pending_signals);
-    tasks.spawn_local(async move { post_claude_terminal_signals(client, signals).await });
+    tasks.spawn_local(async move {
+        let join_started = Instant::now();
+        let signal_count = signals.len();
+        let post_task = tokio::spawn(async move {
+            let task_started = Instant::now();
+            let result = post_claude_terminal_signals(client, signals).await;
+            (result, task_started.elapsed().as_millis() as u64)
+        });
+        match post_task.await {
+            Ok((mut result, task_elapsed_ms)) => {
+                result.join_elapsed_ms = join_started.elapsed().as_millis() as u64;
+                result.task_elapsed_ms = task_elapsed_ms;
+                result
+            }
+            Err(err) => {
+                let elapsed_ms = join_started.elapsed().as_millis() as u64;
+                tracing::warn!(
+                    signal_count,
+                    "Managed Claude terminal signal POST worker task failed: {}",
+                    err
+                );
+                ClaudeTerminalPostResult {
+                    dedupe_keys: Vec::new(),
+                    result: Err(format!(
+                        "managed Claude terminal POST worker task failed: {err}"
+                    )),
+                    join_elapsed_ms: elapsed_ms,
+                    task_elapsed_ms: elapsed_ms,
+                }
+            }
+        }
+    });
 }
 
 fn pending_claude_terminal_batch(
@@ -1466,6 +1541,8 @@ async fn post_claude_terminal_signals(
     ClaudeTerminalPostResult {
         dedupe_keys,
         result,
+        join_elapsed_ms: 0,
+        task_elapsed_ms: 0,
     }
 }
 

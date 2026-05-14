@@ -190,13 +190,6 @@ impl ShipperClient {
         }
     }
 
-    /// POST a small JSON payload (non-compressed). Used for heartbeat and presence.
-    /// Returns Err on network errors AND on non-2xx HTTP status codes, so callers
-    /// can distinguish success from server-side rejection.
-    pub async fn post_json(&self, path_suffix: &str, body: Vec<u8>) -> Result<()> {
-        self.post_json_with_timeout(path_suffix, body, None).await
-    }
-
     /// POST a small JSON payload with an optional request-level timeout.
     pub async fn post_json_with_timeout(
         &self,
