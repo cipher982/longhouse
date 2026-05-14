@@ -32,7 +32,10 @@ const DEFAULT_CODEX_BIN: &str = "codex";
 const LAUNCH_START_TIMEOUT_SECS: u64 = 45;
 const COMPLETED_COMMAND_CACHE_CAPACITY: usize = 256;
 const COMPLETED_COMMAND_CACHE_TTL_SECS: u64 = 5 * 60;
-const HEARTBEAT_INTERVAL_SECS: u64 = 25;
+// Keep this below uvicorn/websockets' default ping timeout. Tungstenite may
+// queue protocol pongs internally and flush them on the next write, so the
+// app-level heartbeat also keeps server keepalive pongs moving through proxies.
+const HEARTBEAT_INTERVAL_SECS: u64 = 10;
 const CONTROL_CONNECT_TIMEOUT_SECS: u64 = 15;
 const CONTROL_SUPPORTS: [&str; 4] = [
     "codex.send",
@@ -755,6 +758,11 @@ mod tests {
     #[test]
     fn heartbeat_frame_uses_server_schema() {
         assert_eq!(heartbeat_frame(), json!({"type": "heartbeat"}));
+    }
+
+    #[test]
+    fn heartbeat_interval_stays_inside_server_keepalive_window() {
+        assert!(HEARTBEAT_INTERVAL_SECS <= 10);
     }
 
     #[test]
