@@ -5,13 +5,13 @@
 //! session-scoped channel token, so this module deliberately emits only pid and
 //! readiness metadata.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
 
 use serde::Deserialize;
-
-use crate::managed_bridge_scan::pid_alive;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaudeChannelObservation {
@@ -40,7 +40,8 @@ pub fn collect_observations() -> Vec<ClaudeChannelObservation> {
     let Some(state_dir) = default_claude_channel_state_dir() else {
         return Vec::new();
     };
-    collect_observations_from(&state_dir)
+    let process_commands = collect_process_commands_by_pid();
+    collect_observations_from_with_processes(&state_dir, &process_commands)
 }
 
 pub fn default_claude_channel_state_dir() -> Option<PathBuf> {
@@ -54,7 +55,40 @@ pub fn default_claude_channel_state_dir() -> Option<PathBuf> {
     )
 }
 
+#[cfg(test)]
 pub fn collect_observations_from(state_dir: &Path) -> Vec<ClaudeChannelObservation> {
+    let process_commands = collect_process_commands_by_pid();
+    collect_observations_from_with_processes(state_dir, &process_commands)
+}
+
+fn collect_process_commands_by_pid() -> HashMap<u32, String> {
+    let Ok(output) = Command::new("ps").args(["-axo", "pid=,command="]).output() else {
+        return HashMap::new();
+    };
+    if !output.status.success() {
+        return HashMap::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(parse_process_command)
+        .collect()
+}
+
+fn parse_process_command(line: &str) -> Option<(u32, String)> {
+    let trimmed = line.trim_start();
+    let (pid_text, command) = trimmed.split_once(char::is_whitespace)?;
+    let pid = pid_text.parse::<u32>().ok()?;
+    let command = command.trim().to_string();
+    if command.is_empty() {
+        return None;
+    }
+    Some((pid, command))
+}
+
+fn collect_observations_from_with_processes(
+    state_dir: &Path,
+    process_commands: &HashMap<u32, String>,
+) -> Vec<ClaudeChannelObservation> {
     let mut out = Vec::new();
     let Ok(entries) = fs::read_dir(state_dir) else {
         return out;
@@ -76,14 +110,10 @@ pub fn collect_observations_from(state_dir: &Path) -> Vec<ClaudeChannelObservati
         }
         let claude_alive = state
             .claude_pid
-            .and_then(|pid| i32::try_from(pid).ok())
-            .map(pid_alive)
-            .unwrap_or(false);
+            .is_some_and(|pid| claude_process_alive(process_commands, pid));
         let bridge_alive = state
             .bridge_pid
-            .and_then(|pid| i32::try_from(pid).ok())
-            .map(pid_alive)
-            .unwrap_or(false);
+            .is_some_and(|pid| claude_channel_bridge_alive(process_commands, pid));
 
         out.push(ClaudeChannelObservation {
             session_id,
@@ -99,6 +129,29 @@ pub fn collect_observations_from(state_dir: &Path) -> Vec<ClaudeChannelObservati
     }
     out.sort_by(|a, b| a.session_id.cmp(&b.session_id));
     out
+}
+
+fn claude_process_alive(process_commands: &HashMap<u32, String>, pid: u32) -> bool {
+    process_commands
+        .get(&pid)
+        .is_some_and(|command| command_contains_basename(command, "claude"))
+}
+
+fn claude_channel_bridge_alive(process_commands: &HashMap<u32, String>, pid: u32) -> bool {
+    process_commands.get(&pid).is_some_and(|command| {
+        command.contains("longhouse")
+            && command.contains("claude-channel")
+            && command.contains("serve")
+    })
+}
+
+fn command_contains_basename(command: &str, expected: &str) -> bool {
+    command.split_whitespace().any(|part| {
+        Path::new(part)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == expected)
+    })
 }
 
 #[cfg(test)]
@@ -148,27 +201,61 @@ mod tests {
     }
 
     #[test]
-    fn scan_marks_current_process_alive() {
+    fn scan_matches_process_commands_by_pid() {
         let tmp = tempfile::tempdir().unwrap();
-        let pid = std::process::id();
         fs::write(
             tmp.path().join("session.json"),
-            format!(
-                r#"{{
+            r#"{
                   "session_id": "09b68f98-1e31-458e-b78a-6dfd062ead75",
-                  "claude_pid": {pid},
-                  "bridge_pid": {pid},
+                  "claude_pid": 101,
+                  "bridge_pid": 102,
                   "ready": true,
                   "updated_at": "2026-05-07T20:03:50Z"
-                }}"#
-            ),
+                }"#,
         )
         .unwrap();
+        let process_commands = HashMap::from([
+            (101, "claude --dangerously-skip-permissions".to_string()),
+            (
+                102,
+                "/Users/test/.local/bin/longhouse claude-channel serve".to_string(),
+            ),
+        ]);
 
-        let observations = collect_observations_from(tmp.path());
+        let observations = collect_observations_from_with_processes(tmp.path(), &process_commands);
 
         assert_eq!(observations.len(), 1);
         assert!(observations[0].claude_alive);
         assert!(observations[0].bridge_alive);
+    }
+
+    #[test]
+    fn scan_rejects_reused_non_claude_pid() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("session.json"),
+            r#"{
+                  "session_id": "09b68f98-1e31-458e-b78a-6dfd062ead75",
+                  "claude_pid": 101,
+                  "bridge_pid": 102,
+                  "ready": true,
+                  "updated_at": "2026-05-07T20:03:50Z"
+                }"#,
+        )
+        .unwrap();
+        let process_commands = HashMap::from([
+            (
+                101,
+                "/System/Library/PrivateFrameworks/CascadeSets.framework/SetStoreUpdateService"
+                    .to_string(),
+            ),
+            (102, "/usr/libexec/some-other-helper".to_string()),
+        ]);
+
+        let observations = collect_observations_from_with_processes(tmp.path(), &process_commands);
+
+        assert_eq!(observations.len(), 1);
+        assert!(!observations[0].claude_alive);
+        assert!(!observations[0].bridge_alive);
     }
 }
