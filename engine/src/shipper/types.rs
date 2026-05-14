@@ -26,9 +26,13 @@ pub struct ShipTraceContext {
     pub job_started_at_ms: i64,
     pub prepare_started_at_ms: i64,
     pub prepare_finished_at_ms: i64,
+    pub prepare_blocking_queue_wait_ms: Option<u64>,
     pub prepare_open_db_ms: Option<u64>,
+    pub prepare_identity_ms: Option<u64>,
+    pub prepare_cursor_ms: Option<u64>,
     pub prepare_binding_wait_ms: Option<u64>,
     pub prepare_parse_ms: Option<u64>,
+    pub prepare_batch_build_ms: Option<u64>,
     pub session_id_hint: Option<String>,
     pub turn_id: Option<String>,
     pub wake_reason: Option<String>,
@@ -37,9 +41,13 @@ pub struct ShipTraceContext {
 
 #[derive(Clone, Debug, Default)]
 pub struct PrepareTraceTimings {
+    pub blocking_queue_wait_ms: Option<u64>,
     pub open_db_ms: Option<u64>,
+    pub identity_ms: Option<u64>,
+    pub cursor_ms: Option<u64>,
     pub binding_wait_ms: Option<u64>,
     pub parse_ms: Option<u64>,
+    pub batch_build_ms: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

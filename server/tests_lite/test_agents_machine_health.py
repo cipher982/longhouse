@@ -150,7 +150,7 @@ def test_machine_health_route_returns_latest_row_per_device_and_sorts_by_state(t
         assert broken["heartbeat_age_seconds"] == 60
         assert broken["ship_success_rate_1h"] == 0.6
         assert broken["spool_dead"] == 2
-        assert broken["reasons"] == ["spool_dead", "consecutive_failures", "connect_errors", "spool_pending"]
+        assert broken["reasons"] == ["spool_dead"]
         assert broken["last_ship_attempt_at"] == "2026-04-23T20:14:00Z"
 
         degraded = payload["machines"][1]

@@ -16,6 +16,9 @@ if TYPE_CHECKING:
 
 TRANSPORT_ERROR_DEGRADED_MIN_COUNT = 3
 TRANSPORT_ERROR_DEGRADED_MIN_RATE = 0.25
+CURRENT_TRANSPORT_ERROR_DEGRADED_MIN_COUNT = 2
+CONSECUTIVE_FAILURES_DEGRADED_MIN_COUNT = 2
+SPOOL_PENDING_DEGRADED_MIN_COUNT = 5
 ACTIVE_TRANSPORT_WINDOW_LABEL = "last 10 minutes"
 
 
@@ -166,7 +169,7 @@ def is_transport_error_burst(
     """Return True for current failure or sustained transport noise."""
     if error_count <= 0:
         return False
-    if last_ship_result == result_kind:
+    if last_ship_result == result_kind and error_count >= CURRENT_TRANSPORT_ERROR_DEGRADED_MIN_COUNT:
         return True
     if ship_attempts <= 0:
         return False
@@ -217,7 +220,7 @@ def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAss
         reasons.append("payload_too_large")
     if sample.parse_errors_1h > 0:
         reasons.append("parse_errors")
-    if sample.consecutive_failures > 0:
+    if sample.consecutive_failures >= CONSECUTIVE_FAILURES_DEGRADED_MIN_COUNT:
         reasons.append("consecutive_failures")
     if connect_error_burst:
         reasons.append("connect_errors")
@@ -227,7 +230,7 @@ def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAss
         reasons.append("rate_limited")
     if retryable_client_error_burst:
         reasons.append("retryable_client_errors")
-    if sample.spool_pending > 0:
+    if sample.spool_pending >= SPOOL_PENDING_DEGRADED_MIN_COUNT:
         reasons.append("spool_pending")
 
     if sample.spool_dead > 0:
@@ -250,7 +253,7 @@ def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAss
         status = "degraded"
         status_reason = "parse_errors"
         status_summary = f"{sample.parse_errors_1h} parse error(s) in the last hour."
-    elif sample.consecutive_failures > 0:
+    elif sample.consecutive_failures >= CONSECUTIVE_FAILURES_DEGRADED_MIN_COUNT:
         status = "degraded"
         status_reason = "consecutive_failures"
         status_summary = f"{sample.consecutive_failures} consecutive ship failure(s)."
@@ -286,7 +289,7 @@ def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAss
             retryable_summary,
             sample,
         )
-    elif sample.spool_pending > 0:
+    elif sample.spool_pending >= SPOOL_PENDING_DEGRADED_MIN_COUNT:
         status = "degraded"
         status_reason = "spool_pending"
         status_summary = f"{sample.spool_pending} pending spool item(s)."

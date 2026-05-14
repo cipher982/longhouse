@@ -120,6 +120,47 @@ def test_transport_health_keeps_single_transient_connect_error_healthy():
     assert assessment.reasons == ()
 
 
+def test_transport_health_keeps_single_current_connect_error_healthy():
+    sample = transport_health_sample_from_engine_status_payload(
+        {
+            "ship_attempts_1h": 12,
+            "ship_successes_1h": 11,
+            "ship_connect_errors_1h": 1,
+            "last_ship_result": "connect_error",
+            "consecutive_ship_failures": 1,
+            "spool_pending_count": 1,
+            "spool_dead_count": 0,
+        }
+    )
+
+    assessment = assess_transport_health(sample)
+
+    assert assessment.status == "healthy"
+    assert assessment.status_reason == "healthy"
+    assert assessment.status_summary == "Shipping healthy."
+    assert assessment.reasons == ()
+
+
+def test_transport_health_degrades_for_repeated_current_connect_errors():
+    sample = transport_health_sample_from_engine_status_payload(
+        {
+            "ship_attempts_1h": 12,
+            "ship_successes_1h": 10,
+            "ship_connect_errors_1h": 2,
+            "last_ship_result": "connect_error",
+            "consecutive_ship_failures": 2,
+            "spool_pending_count": 1,
+            "spool_dead_count": 0,
+        }
+    )
+
+    assessment = assess_transport_health(sample)
+
+    assert assessment.status == "degraded"
+    assert assessment.status_reason == "consecutive_failures"
+    assert assessment.reasons == ("consecutive_failures", "connect_errors")
+
+
 def test_transport_health_keeps_recovered_transient_connect_errors_healthy():
     sample = transport_health_sample_from_engine_status_payload(
         {
@@ -139,6 +180,41 @@ def test_transport_health_keeps_recovered_transient_connect_errors_healthy():
     assert assessment.status_reason == "healthy"
     assert assessment.status_summary == "Shipping healthy."
     assert assessment.reasons == ()
+
+
+def test_transport_health_keeps_small_spool_retry_healthy():
+    sample = transport_health_sample_from_engine_status_payload(
+        {
+            "ship_attempts_1h": 12,
+            "ship_successes_1h": 11,
+            "spool_pending_count": 1,
+            "spool_dead_count": 0,
+            "last_ship_result": "ok",
+        }
+    )
+
+    assessment = assess_transport_health(sample)
+
+    assert assessment.status == "healthy"
+    assert assessment.reasons == ()
+
+
+def test_transport_health_degrades_for_spool_backlog():
+    sample = transport_health_sample_from_engine_status_payload(
+        {
+            "ship_attempts_1h": 12,
+            "ship_successes_1h": 11,
+            "spool_pending_count": 5,
+            "spool_dead_count": 0,
+            "last_ship_result": "ok",
+        }
+    )
+
+    assessment = assess_transport_health(sample)
+
+    assert assessment.status == "degraded"
+    assert assessment.status_reason == "spool_pending"
+    assert assessment.reasons == ("spool_pending",)
 
 
 def test_transport_health_surfaces_last_transport_error_detail():
