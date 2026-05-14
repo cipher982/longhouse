@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agents/control", tags=["agents"])
 
-CONTROL_HEARTBEAT_TIMEOUT_SECS = 300
+CONTROL_HEARTBEAT_TIMEOUT_SECS = 90
 
 
 def _auth_disabled_identity(hello: Mapping[str, Any]) -> tuple[int, str]:

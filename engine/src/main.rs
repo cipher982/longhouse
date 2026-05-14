@@ -726,8 +726,16 @@ fn main() -> anyhow::Result<()> {
                 spool_replay_secs,
             };
 
-            // Use current_thread runtime for minimal resource usage
-            let rt = tokio::runtime::Builder::new_current_thread()
+            // Keep LocalSet-based transcript jobs available while letting Send
+            // tasks such as the control WebSocket heartbeat run on another
+            // worker if local file processing stalls.
+            let worker_threads = std::env::var("LONGHOUSE_ENGINE_WORKER_THREADS")
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(2);
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(worker_threads)
                 .enable_all()
                 .build()?;
             let local = tokio::task::LocalSet::new();
