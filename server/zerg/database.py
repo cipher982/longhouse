@@ -1507,6 +1507,27 @@ def _ensure_agents_fts(engine: Engine) -> None:
 _wal_checkpoint_task = None
 
 WAL_CHECKPOINT_INTERVAL = int(os.getenv("SQLITE_WAL_CHECKPOINT_INTERVAL", "60"))
+WAL_TRUNCATE_BYTES = int(os.getenv("SQLITE_WAL_TRUNCATE_BYTES", str(512 * 1024 * 1024)))
+
+
+def _sqlite_wal_path() -> Path | None:
+    if default_engine is None:
+        return None
+    database = getattr(default_engine.url, "database", None)
+    if not database:
+        return None
+    return Path(database).expanduser().resolve().with_name(Path(database).name + "-wal")
+
+
+def _checkpoint_counts(row) -> tuple[int, int, int, int]:
+    """Return (busy, log_frames, checkpointed_frames, remaining_frames)."""
+    if row is None:
+        return (0, 0, 0, 0)
+    busy = int(row[0] or 0)
+    log_frames = int(row[1] or 0)
+    checkpointed_frames = int(row[2] or 0)
+    remaining_frames = max(log_frames - checkpointed_frames, 0)
+    return busy, log_frames, checkpointed_frames, remaining_frames
 
 
 async def start_wal_checkpoint_loop() -> None:
@@ -1525,9 +1546,38 @@ async def start_wal_checkpoint_loop() -> None:
         if default_engine is not None:
             with default_engine.connect() as conn:
                 result = conn.exec_driver_sql("PRAGMA wal_checkpoint(PASSIVE)")
-                row = result.fetchone()
-                if row and row[1] > 0:
-                    logger.info("WAL checkpoint: %d pages written, %d remaining", row[1], row[2])
+                busy, log_frames, checkpointed_frames, remaining_frames = _checkpoint_counts(result.fetchone())
+                if log_frames > 0:
+                    logger.info(
+                        "WAL checkpoint: %d frames in log, %d checkpointed, %d remaining",
+                        log_frames,
+                        checkpointed_frames,
+                        remaining_frames,
+                    )
+                if busy or remaining_frames:
+                    return
+                wal_path = _sqlite_wal_path()
+                wal_size = wal_path.stat().st_size if wal_path is not None and wal_path.exists() else 0
+                if WAL_TRUNCATE_BYTES <= 0 or wal_size < WAL_TRUNCATE_BYTES:
+                    return
+                truncate_result = conn.exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)")
+                t_busy, t_log_frames, t_checkpointed_frames, t_remaining_frames = _checkpoint_counts(
+                    truncate_result.fetchone()
+                )
+                if t_busy:
+                    logger.warning(
+                        "WAL truncate checkpoint was busy: %d frames in log, %d checkpointed, %d remaining, size=%d",
+                        t_log_frames,
+                        t_checkpointed_frames,
+                        t_remaining_frames,
+                        wal_size,
+                    )
+                else:
+                    logger.info(
+                        "WAL truncated after passive checkpoint: size=%d threshold=%d",
+                        wal_size,
+                        WAL_TRUNCATE_BYTES,
+                    )
 
     async def _loop():
         while True:

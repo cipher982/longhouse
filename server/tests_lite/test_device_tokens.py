@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+from sqlalchemy import inspect as sa_inspect
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
@@ -15,6 +16,7 @@ from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
+from zerg.dependencies.agents_auth import _validate_device_token_for_request
 from zerg.dependencies.auth import get_current_user
 from zerg.main import api_app
 from zerg.models.device_token import DeviceToken
@@ -92,6 +94,39 @@ def test_validate_device_token_skips_last_used_write_when_serializer_configured(
         stored = db.query(DeviceToken).filter(DeviceToken.id == token_id).first()
         assert stored is not None
         assert stored.last_used_at is None
+
+
+def test_agents_token_validation_returns_detached_device_token(tmp_path):
+    """Agents auth should not keep its validation DB session checked out."""
+    factory = _make_db(tmp_path)
+    plain_token = generate_device_token()
+
+    with factory() as db:
+        user = User(id=1, email="alice@example.com", role="ADMIN")
+        db.add(user)
+        db.commit()
+
+        device_token = DeviceToken(
+            owner_id=user.id,
+            device_id="cinder",
+            token_hash=hash_token(plain_token),
+        )
+        db.add(device_token)
+        db.commit()
+
+    class _FakeSerializer:
+        is_configured = True
+
+    with (
+        patch("zerg.dependencies.agents_auth.get_session_factory", return_value=factory),
+        patch("zerg.routers.device_tokens.get_write_serializer", return_value=_FakeSerializer()),
+    ):
+        validated = _validate_device_token_for_request(plain_token)
+
+    assert validated is not None
+    assert validated.owner_id == 1
+    assert validated.device_id == "cinder"
+    assert sa_inspect(validated).detached
 
 
 def test_create_device_token_routes_write_through_serializer(tmp_path):

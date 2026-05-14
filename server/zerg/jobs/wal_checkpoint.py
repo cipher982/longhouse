@@ -33,24 +33,32 @@ async def run() -> dict[str, Any]:
     if "sqlite" not in url_str:
         return {"status": "skipped", "reason": "not sqlite"}
 
-    def _do_truncate() -> tuple[int, int, int]:
+    def _do_truncate() -> tuple[int, int, int, int]:
         with default_engine.connect() as conn:
             result = conn.exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)")
             row = result.fetchone()
-            # row = (busy, pages_checkpointed, pages_remaining)
-            return (row[0], row[1], row[2]) if row else (0, 0, 0)
+            # SQLite returns (busy, log_frames, checkpointed_frames).
+            if not row:
+                return (0, 0, 0, 0)
+            busy = int(row[0] or 0)
+            log_frames = int(row[1] or 0)
+            checkpointed_frames = int(row[2] or 0)
+            remaining_frames = max(log_frames - checkpointed_frames, 0)
+            return busy, log_frames, checkpointed_frames, remaining_frames
 
-    busy, checkpointed, remaining = await asyncio.to_thread(_do_truncate)
+    busy, log_frames, checkpointed, remaining = await asyncio.to_thread(_do_truncate)
 
     if busy:
         logger.warning(
-            "WAL TRUNCATE checkpoint was busy: %d pages checkpointed, %d remaining",
+            "WAL TRUNCATE checkpoint was busy: %d frames in log, %d checkpointed, %d remaining",
+            log_frames,
             checkpointed,
             remaining,
         )
     else:
         logger.info(
-            "WAL TRUNCATE checkpoint complete: %d pages checkpointed, %d remaining",
+            "WAL TRUNCATE checkpoint complete: %d frames in log, %d checkpointed, %d remaining",
+            log_frames,
             checkpointed,
             remaining,
         )
@@ -58,6 +66,7 @@ async def run() -> dict[str, Any]:
     return {
         "status": "success",
         "busy": busy,
+        "log_frames": log_frames,
         "pages_checkpointed": checkpointed,
         "pages_remaining": remaining,
     }

@@ -1,3 +1,4 @@
+from zerg.database import _checkpoint_counts
 from zerg.database import make_engine
 
 
@@ -56,3 +57,10 @@ def test_sqlite_connect_does_not_need_writer_lock(tmp_path):
     finally:
         locker.rollback()
         locker.close()
+
+
+def test_checkpoint_counts_interprets_sqlite_wal_tuple():
+    # SQLite returns (busy, log_frames, checkpointed_frames), not
+    # (busy, checkpointed, remaining).
+    assert _checkpoint_counts((0, 5521, 5521)) == (0, 5521, 5521, 0)
+    assert _checkpoint_counts((0, 5521, 5000)) == (0, 5521, 5000, 521)
