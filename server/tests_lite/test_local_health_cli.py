@@ -552,8 +552,8 @@ def test_collect_local_health_uses_shared_transport_burst_classifier(monkeypatch
         age_seconds=5,
         payload={
             "ship_attempts_1h": 20,
-            "ship_successes_1h": 18,
-            "ship_connect_errors_1h": 2,
+            "ship_successes_1h": 15,
+            "ship_connect_errors_1h": 5,
         },
     )
 
@@ -563,7 +563,31 @@ def test_collect_local_health_uses_shared_transport_burst_classifier(monkeypatch
     assert "connect_errors" in snapshot["reasons"]
     assert snapshot["transport_health"]["status"] == "degraded"
     assert snapshot["transport_health"]["status_reason"] == "connect_errors"
-    assert snapshot["transport_health"]["status_summary"] == "2 ship connect error(s) in the last hour."
+    assert snapshot["transport_health"]["status_summary"] == "5 ship connect error(s) in the last hour."
+
+
+def test_collect_local_health_keeps_recovered_transient_connect_errors_healthy(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(
+        tmp_path,
+        age_seconds=5,
+        payload={
+            "ship_attempts_1h": 14,
+            "ship_successes_1h": 12,
+            "ship_connect_errors_1h": 2,
+            "last_ship_result": "ok",
+            "consecutive_ship_failures": 0,
+            "spool_pending_count": 0,
+            "spool_dead_count": 0,
+        },
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "healthy"
+    assert snapshot["transport_health"]["status"] == "healthy"
+    assert "connect_errors" not in snapshot["reasons"]
 
 
 def test_collect_local_health_includes_last_transport_error_detail(monkeypatch, tmp_path: Path):
@@ -585,7 +609,10 @@ def test_collect_local_health_includes_last_transport_error_detail(monkeypatch, 
     snapshot = local_health_service.collect_local_health(tmp_path)
 
     assert snapshot["transport_health"]["status"] == "degraded"
-    assert snapshot["transport_health"]["status_summary"] == "2 ship connect error(s) in the last hour. Last error: timeout."
+    assert (
+        snapshot["transport_health"]["status_summary"]
+        == "2 ship connect error(s) in the last hour. Last error: timeout."
+    )
     assert snapshot["transport_health"]["last_ship_error_kind"] == "timeout"
     assert snapshot["transport_health"]["last_ship_error_message"] == "request timed out after 60s"
 
@@ -1730,7 +1757,10 @@ def test_local_health_command_fast_json_uses_fast_tier(monkeypatch, tmp_path: Pa
 def test_local_health_command_rejects_fast_and_deep(tmp_path: Path):
     runner = CliRunner()
 
-    result = runner.invoke(app, ["local-health", "--fast", "--deep", "--json", "--claude-dir", str(tmp_path / ".claude")])
+    result = runner.invoke(
+        app,
+        ["local-health", "--fast", "--deep", "--json", "--claude-dir", str(tmp_path / ".claude")],
+    )
 
     assert result.exit_code != 0
 
