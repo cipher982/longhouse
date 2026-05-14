@@ -283,6 +283,16 @@ pub fn get_agent_log_dir() -> Result<PathBuf> {
     Ok(get_agent_dir()?.join("logs"))
 }
 
+pub fn get_agent_flight_dir() -> Result<PathBuf> {
+    if let Ok(dir) = std::env::var("LONGHOUSE_ENGINE_FLIGHT_RECORDER_DIR") {
+        let trimmed = dir.trim();
+        if !trimmed.is_empty() {
+            return Ok(PathBuf::from(trimmed));
+        }
+    }
+    Ok(get_agent_dir()?.join("flight-recorder"))
+}
+
 pub fn get_longhouse_home() -> Result<PathBuf> {
     if let Ok(dir) = std::env::var("LONGHOUSE_HOME") {
         return Ok(PathBuf::from(dir));

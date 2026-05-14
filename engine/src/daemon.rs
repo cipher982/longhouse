@@ -5,7 +5,7 @@
 //! incrementally. Designed for 24/7 operation with minimal resources:
 //! - <10 MB RSS when idle
 //! - 0% CPU when idle (blocked on kernel filesystem events)
-//! - Current-thread tokio runtime, with blocking file work offloaded
+//! - Lightweight background work with bounded concurrency
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -23,6 +23,7 @@ use crate::config::{self, ShipperConfig};
 use crate::discovery::{self, ProviderConfig};
 use crate::error_tracker::ConsecutiveErrorTracker;
 use crate::error_tracker::RecentIssueTracker;
+use crate::flight::FlightRecorder;
 use crate::heartbeat;
 use crate::managed_bridge_scan;
 use crate::managed_claude_scan;
@@ -45,6 +46,7 @@ pub struct ConnectConfig {
     pub flush_interval: Duration,
     pub fallback_scan_secs: u64,
     pub spool_replay_secs: u64,
+    pub flight_recorder_dir: Option<PathBuf>,
 }
 
 const DAEMON_MAX_IN_FLIGHT_CAP: usize = 4;
@@ -56,6 +58,7 @@ const LIVE_LOCAL_RETRY_DELAY: Duration = Duration::from_millis(500);
 const STARTUP_RECONCILIATION_SCAN_DELAY: Duration = Duration::from_secs(120);
 const LOCAL_STATUS_INTERVAL_SECS: u64 = 1;
 const SERVER_HEARTBEAT_INTERVAL_SECS: u64 = 5 * 60;
+const FLIGHT_SAMPLE_INTERVAL_SECS: u64 = 5;
 const LOCAL_WORK_TICK_INTERVAL: Duration = Duration::from_millis(250);
 const OUTBOX_DRAIN_INTERVAL: Duration = Duration::from_millis(100);
 const ACTIVE_TRANSCRIPT_POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -119,6 +122,7 @@ struct PathTaskContext {
     tracker: ConsecutiveErrorTracker,
     parse_tracker: RecentIssueTracker,
     ship_stats: RecentShipStatsTracker,
+    flight_recorder: Option<FlightRecorder>,
 }
 
 struct PathTaskResult {
@@ -253,6 +257,24 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let tracker = ConsecutiveErrorTracker::new();
     let parse_tracker = RecentIssueTracker::new();
     let ship_stats = RecentShipStatsTracker::new();
+    let flight_recorder = config
+        .flight_recorder_dir
+        .clone()
+        .map(FlightRecorder::start)
+        .transpose()?;
+    if let Some(recorder) = flight_recorder.as_ref() {
+        recorder.record(json!({
+            "schema": "flight_event.v1",
+            "kind": "startup",
+            "machine_name": &config.shipper_config.machine_name,
+            "api_url": &config.shipper_config.api_url,
+            "flight_recorder_dir": config.flight_recorder_dir.as_ref().map(|path| path.to_string_lossy().to_string()),
+        }));
+        tracing::info!(
+            dir = %config.flight_recorder_dir.as_ref().map(|path| path.display().to_string()).unwrap_or_default(),
+            "Machine Agent flight recorder enabled"
+        );
+    }
     let task_context = PathTaskContext {
         shipper_config: config.shipper_config.clone(),
         client: client.clone(),
@@ -260,6 +282,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         tracker: tracker.clone(),
         parse_tracker: parse_tracker.clone(),
         ship_stats: ship_stats.clone(),
+        flight_recorder: flight_recorder.clone(),
     };
 
     // 6. Start file watcher before catch-up work so live changes queue immediately.
@@ -310,6 +333,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     heartbeat_timer.tick().await; // consume first immediate tick
     let mut local_status_timer =
         tokio::time::interval(Duration::from_secs(LOCAL_STATUS_INTERVAL_SECS));
+    let mut flight_sample_timer =
+        tokio::time::interval(Duration::from_secs(FLIGHT_SAMPLE_INTERVAL_SECS));
+    flight_sample_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    flight_sample_timer.tick().await; // consume first immediate tick
 
     let mut outbox_timer = tokio::time::interval(OUTBOX_DRAIN_INTERVAL);
     outbox_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -647,6 +674,25 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // Wake the loop when delayed local retry/catch-up work may now be ready.
             _ = local_retry_timer.tick(), if !deferred_retries.is_empty() || !transcript_catchups.is_empty() || !active_transcript_polls.is_empty() => {}
 
+            _ = flight_sample_timer.tick(), if flight_recorder.is_some() => {
+                if let Some(recorder) = flight_recorder.as_ref() {
+                    record_flight_sample(
+                        recorder,
+                        &conn,
+                        &outbox_dir,
+                        &control_channel_status,
+                        &ship_stats,
+                        &config.shipper_config.machine_name,
+                        in_flight.len(),
+                        scheduler.has_pending_work(),
+                        deferred_retries.len(),
+                        transcript_catchups.len(),
+                        active_transcript_polls.len(),
+                        offline.is_offline,
+                    );
+                }
+            }
+
             // Daily: prune stale file_state and session_binding entries
             _ = prune_timer.tick() => {
                 let fs = FileState::new(&conn);
@@ -934,6 +980,41 @@ fn live_local_work_pending(
         || !deferred_retries.is_empty()
         || !transcript_catchups.is_empty()
         || !active_transcript_polls.is_empty()
+}
+
+fn record_flight_sample(
+    recorder: &FlightRecorder,
+    conn: &rusqlite::Connection,
+    outbox_dir: &Path,
+    control_channel_status: &crate::control_channel::ControlChannelStatus,
+    ship_stats: &RecentShipStatsTracker,
+    machine_name: &str,
+    in_flight_jobs: usize,
+    scheduler_pending: bool,
+    deferred_retry_count: usize,
+    transcript_catchup_count: usize,
+    active_transcript_poll_count: usize,
+    offline: bool,
+) {
+    recorder.record(json!({
+        "schema": "flight_sample.v1",
+        "kind": "sample",
+        "machine_name": machine_name,
+        "outbox": crate::flight::outbox_snapshot(outbox_dir),
+        "spool": crate::flight::spool_snapshot(conn),
+        "process": crate::flight::process_snapshot(),
+        "disk": crate::flight::disk_snapshot(outbox_dir),
+        "control_channel": serde_json::to_value(control_channel_status.snapshot()).ok(),
+        "ship_stats": crate::flight::ship_stats_snapshot(ship_stats.summary()),
+        "runtime": {
+            "offline": offline,
+            "in_flight_jobs": in_flight_jobs,
+            "scheduler_pending": scheduler_pending,
+            "deferred_retry_count": deferred_retry_count,
+            "transcript_catchup_count": transcript_catchup_count,
+            "active_transcript_poll_count": active_transcript_poll_count,
+        },
+    }));
 }
 
 fn runtime_truth_signature(payload: &heartbeat::HeartbeatPayload) -> String {
@@ -2117,6 +2198,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
             task_context.shipper_config.max_batch_bytes,
             Some(&task_context.parse_tracker),
             Some(&task_context.ship_stats),
+            task_context.flight_recorder.as_ref(),
         )
         .await
         {
@@ -2188,6 +2270,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                 Some(&task_context.tracker),
                 Some(&task_context.ship_stats),
                 Some(&ship_trace),
+                task_context.flight_recorder.as_ref(),
             )
             .await
             {
@@ -3715,6 +3798,7 @@ mod tests {
             tracker: ConsecutiveErrorTracker::new(),
             parse_tracker: RecentIssueTracker::new(),
             ship_stats: RecentShipStatsTracker::new(),
+            flight_recorder: None,
         };
 
         let result = run_path_job(job, task_context).await;

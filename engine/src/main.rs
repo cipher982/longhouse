@@ -10,6 +10,7 @@ mod control_channel;
 mod daemon;
 mod discovery;
 mod error_tracker;
+mod flight;
 mod heartbeat;
 mod managed_bridge_scan;
 mod managed_claude_scan;
@@ -724,6 +725,11 @@ fn main() -> anyhow::Result<()> {
                 flush_interval: std::time::Duration::from_millis(flush_ms),
                 fallback_scan_secs,
                 spool_replay_secs,
+                flight_recorder_dir: if flight::flight_recorder_enabled() {
+                    Some(config::get_agent_flight_dir()?)
+                } else {
+                    None
+                },
             };
 
             // Keep LocalSet-based transcript jobs available while letting Send
