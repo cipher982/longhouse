@@ -361,7 +361,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut codex_terminal_catchup_marks: HashMap<PathBuf, String> = HashMap::new();
     let mut latest_transcript_wake_observed: HashMap<PathBuf, i64> = HashMap::new();
     let mut bridge_reaper = ManagedBridgeReaper::from_env();
-    let mut outbox_post_tasks: JoinSet<(usize, usize, u64)> = JoinSet::new();
+    let mut outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
     let mut heartbeat_post_tasks: JoinSet<HeartbeatPostResult> = JoinSet::new();
     let mut claude_terminal_post_tasks: JoinSet<ClaudeTerminalPostResult> = JoinSet::new();
     let mut outbox_signal_marks: HashSet<String> = HashSet::new();
@@ -496,24 +496,30 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
             outbox_post_result = outbox_post_tasks.join_next(), if !outbox_post_tasks.is_empty() => {
                 match outbox_post_result {
-                    Some(Ok((sent, kept, elapsed_ms))) => {
+                    Some(Ok((sent, kept, join_elapsed_ms, task_elapsed_ms))) => {
+                        let local_join_delay_ms = join_elapsed_ms.saturating_sub(task_elapsed_ms);
                         if kept > 0 {
                             tracing::warn!(
                                 sent,
                                 kept,
-                                elapsed_ms,
+                                task_elapsed_ms,
+                                join_elapsed_ms,
+                                local_join_delay_ms,
                                 "Outbox presence POST kept files for retry"
                             );
-                        } else if elapsed_ms > 1_000 {
+                        } else if join_elapsed_ms > 1_000 {
                             tracing::warn!(
                                 sent,
-                                elapsed_ms,
+                                task_elapsed_ms,
+                                join_elapsed_ms,
+                                local_join_delay_ms,
                                 "Outbox presence POST was slow"
                             );
                         } else if sent > 0 {
                             tracing::debug!(
                                 sent,
-                                elapsed_ms,
+                                task_elapsed_ms,
+                                join_elapsed_ms,
                                 "Outbox presence POST sent files"
                             );
                         }
@@ -700,12 +706,39 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 if !outbox_result.posts.is_empty() {
                     if outbox_post_tasks.is_empty() {
                         let client = client.clone();
+                        let post_count = outbox_result.posts.len();
                         outbox_post_tasks.spawn_local(async move {
-                            let started = Instant::now();
-                            let (sent, kept) =
-                                outbox::post_pending_presence_files(&client, outbox_result.posts)
-                                    .await;
-                            (sent, kept, started.elapsed().as_millis() as u64)
+                            let join_started = Instant::now();
+                            let post_task = tokio::spawn(async move {
+                                let task_started = Instant::now();
+                                let (sent, kept) = outbox::post_pending_presence_files(
+                                    &client,
+                                    outbox_result.posts,
+                                )
+                                .await;
+                                (sent, kept, task_started.elapsed().as_millis() as u64)
+                            });
+                            match post_task.await {
+                                Ok((sent, kept, task_elapsed_ms)) => (
+                                    sent,
+                                    kept,
+                                    join_started.elapsed().as_millis() as u64,
+                                    task_elapsed_ms,
+                                ),
+                                Err(err) => {
+                                    tracing::warn!(
+                                        post_count,
+                                        "Outbox presence POST worker task failed: {}",
+                                        err
+                                    );
+                                    (
+                                        0,
+                                        post_count,
+                                        join_started.elapsed().as_millis() as u64,
+                                        join_started.elapsed().as_millis() as u64,
+                                    )
+                                }
+                            }
                         });
                     } else {
                         tracing::debug!(
