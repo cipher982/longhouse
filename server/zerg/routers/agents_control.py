@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 from typing import Mapping
@@ -21,6 +22,8 @@ from zerg.services.remote_session_launch import reconcile_launch_from_command_re
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agents/control", tags=["agents"])
+
+CONTROL_HEARTBEAT_TIMEOUT_SECS = 90
 
 
 def _auth_disabled_identity(hello: Mapping[str, Any]) -> tuple[int, str]:
@@ -97,7 +100,17 @@ async def machine_control_websocket(websocket: WebSocket) -> None:
 
         while True:
             try:
-                message = await websocket.receive_json()
+                message = await asyncio.wait_for(
+                    websocket.receive_json(),
+                    timeout=CONTROL_HEARTBEAT_TIMEOUT_SECS,
+                )
+            except asyncio.TimeoutError:
+                logger.info(
+                    "Machine control websocket timed out waiting for heartbeat owner=%s device=%s",
+                    owner_id,
+                    device_id,
+                )
+                break
             except WebSocketDisconnect:
                 break
 

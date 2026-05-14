@@ -87,6 +87,7 @@ def test_serve_uses_saved_public_url_for_runtime_env(monkeypatch, tmp_path):
     assert os.environ["PUBLIC_SITE_URL"] == "https://saved.example.com"
     assert saved_configs == []
     assert uvicorn_calls[0][1]["host"] == "0.0.0.0"
+    assert uvicorn_calls[0][1]["ws_ping_interval"] is None
 
 
 def test_serve_keeps_explicit_runtime_public_url_when_no_domain_passed(monkeypatch, tmp_path):
