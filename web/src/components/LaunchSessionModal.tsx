@@ -3,9 +3,11 @@ import { useQuery } from "@tanstack/react-query";
 
 import {
   ApiError,
+  fetchAgentSessions,
   launchRemoteSession,
   listMachines,
   type MachineDirectoryEntry,
+  type TimelineSessionCard,
 } from "../services/api";
 import { Button, Spinner } from "./ui";
 
@@ -16,6 +18,7 @@ interface LaunchSessionModalProps {
 }
 
 const PROVIDER = "codex"; // v1
+const RECENT_CWD_LIMIT = 8;
 
 function machineCanLaunch(m: MachineDirectoryEntry): boolean {
   return m.can_launch_codex;
@@ -46,11 +49,30 @@ export default function LaunchSessionModal({
     [machinesQuery.data],
   );
 
+  const recentSessionsQuery = useQuery({
+    queryKey: ["launch-recent-cwds", deviceId],
+    queryFn: () => fetchAgentSessions({ device_id: deviceId, limit: 50, hide_autonomous: false }),
+    enabled: isOpen && !!deviceId,
+    refetchOnMount: "always",
+    staleTime: 15_000,
+  });
+
+  const cwdSuggestions = useMemo(
+    () => buildCwdSuggestions(recentSessionsQuery.data?.sessions ?? []),
+    [recentSessionsQuery.data],
+  );
+
   // Auto-select the first launchable machine.
   useEffect(() => {
     if (!isOpen || !launchable.length || deviceId) return;
     setDeviceId(launchable[0].device_id);
   }, [isOpen, launchable, deviceId]);
+
+  // Start with a path the user has actually used on this machine.
+  useEffect(() => {
+    if (!isOpen || cwd.trim() || cwdSuggestions.length === 0) return;
+    setCwd(cwdSuggestions[0]);
+  }, [isOpen, cwd, cwdSuggestions]);
 
   // Clear state on close.
   useEffect(() => {
@@ -153,7 +175,11 @@ export default function LaunchSessionModal({
                 <span>Machine</span>
                 <select
                   value={deviceId}
-                  onChange={(e) => setDeviceId(e.target.value)}
+                  onChange={(e) => {
+                    setDeviceId(e.target.value);
+                    setCwd("");
+                    setError(null);
+                  }}
                   data-testid="launch-machine-select"
                 >
                   {launchable.map((m) => (
@@ -171,12 +197,36 @@ export default function LaunchSessionModal({
                   type="text"
                   value={cwd}
                   onChange={(e) => setCwd(e.target.value)}
-                  placeholder="/Users/you/git/your-repo"
+                  placeholder="/Users/davidrose/git/zerg/longhouse"
                   autoComplete="off"
                   spellCheck={false}
                   data-testid="launch-cwd-input"
+                  list="launch-cwd-suggestions"
                 />
-                <small>Must be an absolute path to a git worktree under $HOME on the target machine.</small>
+                <datalist id="launch-cwd-suggestions">
+                  {cwdSuggestions.map((path) => (
+                    <option key={path} value={path} />
+                  ))}
+                </datalist>
+                {cwdSuggestions.length > 0 && (
+                  <div className="launch-path-suggestions" data-testid="launch-path-suggestions">
+                    {cwdSuggestions.slice(0, RECENT_CWD_LIMIT).map((path) => (
+                      <button
+                        key={path}
+                        type="button"
+                        className="launch-path-chip"
+                        onClick={() => {
+                          setCwd(path);
+                          setError(null);
+                          cwdInputRef.current?.focus();
+                        }}
+                      >
+                        {compactPath(path)}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <small>Must be an existing absolute directory on the target machine.</small>
               </label>
 
               <label className="form-field">
@@ -281,6 +331,42 @@ function machineSummary(machines: MachineDirectoryEntry[], reason: string): stri
   const names = preview.map((m) => m.machine_name).join(", ");
   const prefix = machines.length === 1 ? "1 enrolled machine" : `${machines.length} enrolled machines`;
   return `${prefix} ${reason}${names ? `: ${names}` : ""}${hidden > 0 ? `, plus ${hidden} more` : ""}.`;
+}
+
+function buildCwdSuggestions(cards: TimelineSessionCard[]): string[] {
+  const seen = new Set<string>();
+  const paths: string[] = [];
+
+  const add = (path: string | null | undefined) => {
+    if (!path || !path.startsWith("/") || seen.has(path)) return;
+    seen.add(path);
+    paths.push(path);
+  };
+
+  for (const card of cards) {
+    for (const session of [card.head, card.detail, card.root]) {
+      add(session.cwd);
+      add(parentPath(session.cwd));
+    }
+    if (paths.length >= RECENT_CWD_LIMIT * 2) break;
+  }
+
+  return paths.slice(0, RECENT_CWD_LIMIT * 2);
+}
+
+function parentPath(path: string | null | undefined): string | null {
+  if (!path) return null;
+  const normalized = path.replace(/\/+$/, "");
+  const index = normalized.lastIndexOf("/");
+  if (index <= 0) return null;
+  const parent = normalized.slice(0, index);
+  const parentName = parent.slice(parent.lastIndexOf("/") + 1);
+  if (!parentName || parentName === "git") return null;
+  return parent;
+}
+
+function compactPath(path: string): string {
+  return path.replace(/^\/Users\/[^/]+/, "~");
 }
 
 function formatLaunchFailure(result: {

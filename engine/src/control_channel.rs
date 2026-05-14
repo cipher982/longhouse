@@ -395,16 +395,6 @@ async fn execute_command(
                     message: format!("cwd does not exist: {}", cwd.display()),
                 });
             }
-            if !cwd_under_allowed_roots(&cwd) {
-                return Err(CommandError {
-                    code: "cwd_not_allowed".to_string(),
-                    message: format!(
-                        "cwd {} is outside the Machine Agent's launch allowlist",
-                        cwd.display()
-                    ),
-                });
-            }
-
             let api_url = config.api_url.clone();
             let api_token = config.api_token.clone().ok_or_else(|| CommandError {
                 code: "provider_launch_failed".to_string(),
@@ -586,64 +576,6 @@ impl CompletedCommandCache {
             self.entries.remove(&command_id);
         }
     }
-}
-
-/// Local policy for launch cwds.
-///
-/// A cwd is allowed when all of:
-///   1. Canonical path lives under `$HOME` (or an explicit prefix listed in
-///      `~/.longhouse/launch-allowlist`, one per line).
-///   2. Canonical path contains a `.git` entry (file or directory) — i.e. it is
-///      the root of a repo, or a subtree inside one. This keeps cwd to places
-///      the user meaningfully uses for code work, instead of letting any path
-///      under `$HOME` be a launch target.
-///
-/// Fail closed when `$HOME` is unresolvable.
-fn cwd_under_allowed_roots(cwd: &std::path::Path) -> bool {
-    let canonical = match cwd.canonicalize() {
-        Ok(path) => path,
-        Err(_) => return false,
-    };
-    let home = std::env::var("HOME").ok().map(PathBuf::from);
-    let mut prefixes: Vec<PathBuf> = Vec::new();
-    if let Some(home) = home.as_ref() {
-        if let Ok(canon_home) = home.canonicalize() {
-            prefixes.push(canon_home);
-        }
-        let override_file = home.join(".longhouse").join("launch-allowlist");
-        if let Ok(contents) = std::fs::read_to_string(&override_file) {
-            for line in contents.lines() {
-                let trimmed = line.trim();
-                if trimmed.is_empty() || trimmed.starts_with('#') {
-                    continue;
-                }
-                let expanded = PathBuf::from(trimmed);
-                if let Ok(canon) = expanded.canonicalize() {
-                    prefixes.push(canon);
-                }
-            }
-        }
-    }
-    if prefixes.is_empty() {
-        return false;
-    }
-    let under_prefix = prefixes.iter().any(|root| canonical.starts_with(root));
-    if !under_prefix {
-        return false;
-    }
-    // Walk up the tree looking for a .git marker. Stops at the first allowlist
-    // prefix boundary so we don't leak above the allowed root.
-    let mut cursor: Option<&std::path::Path> = Some(&canonical);
-    while let Some(dir) = cursor {
-        if dir.join(".git").exists() {
-            return true;
-        }
-        if prefixes.iter().any(|root| dir == root.as_path()) {
-            return false;
-        }
-        cursor = dir.parent();
-    }
-    false
 }
 
 fn control_ws_url(api_url: &str) -> Result<String> {
@@ -968,41 +900,5 @@ mod tests {
 
         assert_eq!(result["ok"], false);
         assert_eq!(result["error"]["code"], "provider_unsupported");
-    }
-
-    #[test]
-    fn cwd_under_allowed_roots_rejects_outside_home() {
-        // /tmp is reliably not under $HOME on macOS/Linux
-        let tmp = std::path::Path::new("/tmp");
-        if tmp.exists() {
-            assert!(!cwd_under_allowed_roots(tmp));
-        }
-    }
-
-    #[test]
-    fn cwd_under_allowed_roots_requires_git_marker() {
-        use std::fs;
-        let tmp = tempfile::tempdir().expect("tempdir");
-        // Point $HOME at our sandbox so the policy check exercises the marker rule.
-        let old_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", tmp.path());
-
-        let no_git = tmp.path().join("project-no-git");
-        fs::create_dir_all(&no_git).unwrap();
-        assert!(!cwd_under_allowed_roots(&no_git));
-
-        let git_root = tmp.path().join("project-with-git");
-        fs::create_dir_all(git_root.join(".git")).unwrap();
-        assert!(cwd_under_allowed_roots(&git_root));
-
-        let nested = git_root.join("subdir");
-        fs::create_dir_all(&nested).unwrap();
-        assert!(cwd_under_allowed_roots(&nested));
-
-        if let Some(value) = old_home {
-            std::env::set_var("HOME", value);
-        } else {
-            std::env::remove_var("HOME");
-        }
     }
 }

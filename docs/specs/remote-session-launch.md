@@ -131,13 +131,13 @@ Provider     [Codex]
    Runtime Host does not validate filesystem paths. The Machine Agent
    validates cwd exists, is a directory, and is allowed by local policy.
 
-8. **cwd allowlist is enforced locally.**
+8. **cwd policy is enforced locally.**
    `send_text` is bounded by the session's existing cwd. `launch` picks
    cwd, so it widens the implicit code-running surface. Machine Agent
-   applies a local allowlist (default: directory must be under `$HOME`
-   and contain a `.git`, OR match a cwd used by a prior session on this
-   device). Rejections return `cwd_not_allowed`. Users can relax the
-   policy per-machine via a config file (out of scope for v1 UI).
+   validates that cwd is absolute and exists as a directory. Rejections
+   return `cwd_not_allowed` for relative paths and `cwd_not_found` for
+   missing paths. The UI should make recent cwd choices available so users
+   rarely type full paths.
 
 ## Request Flow
 
