@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{Sink, SinkExt, StreamExt};
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::task::JoinHandle;
@@ -37,7 +37,11 @@ const COMPLETED_COMMAND_CACHE_TTL_SECS: u64 = 5 * 60;
 // app-level heartbeat also keeps server keepalive pongs moving through proxies.
 const HEARTBEAT_INTERVAL_SECS: u64 = 10;
 const CONTROL_CONNECT_TIMEOUT_SECS: u64 = 15;
-const CONTROL_RECONNECT_MAX_BACKOFF_SECS: u64 = 5;
+const CONTROL_WRITE_TIMEOUT_SECS: u64 = 5;
+const CONTROL_HEARTBEAT_LATE_WARN_MS: u128 = 500;
+const CONTROL_RECONNECT_SHORT_MAX_BACKOFF_SECS: u64 = 5;
+const CONTROL_RECONNECT_SUSTAINED_MAX_BACKOFF_SECS: u64 = 30;
+const CONTROL_RECONNECT_SHORT_WINDOW_SECS: u64 = 60;
 const CONTROL_SUPPORTS: [&str; 4] = [
     "codex.send",
     "codex.interrupt",
@@ -60,6 +64,10 @@ struct ControlChannelStatusInner {
     last_error_code: Option<String>,
     last_error_message: Option<String>,
     reconnect_backoff_seconds: Option<u64>,
+    last_heartbeat_lateness_ms: Option<u64>,
+    max_heartbeat_lateness_ms: Option<u64>,
+    last_write_elapsed_ms: Option<u64>,
+    max_write_elapsed_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -78,6 +86,14 @@ pub struct ControlChannelStatusSnapshot {
     pub last_error_message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reconnect_backoff_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_heartbeat_lateness_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_heartbeat_lateness_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_write_elapsed_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_write_elapsed_ms: Option<u64>,
     pub supports: Vec<String>,
 }
 
@@ -92,6 +108,10 @@ pub fn new_control_channel_status() -> ControlChannelStatus {
             last_error_code: None,
             last_error_message: None,
             reconnect_backoff_seconds: None,
+            last_heartbeat_lateness_ms: None,
+            max_heartbeat_lateness_ms: None,
+            last_write_elapsed_ms: None,
+            max_write_elapsed_ms: None,
         })),
     }
 }
@@ -111,6 +131,10 @@ impl ControlChannelStatus {
             last_error_code: inner.last_error_code.clone(),
             last_error_message: inner.last_error_message.clone(),
             reconnect_backoff_seconds: inner.reconnect_backoff_seconds,
+            last_heartbeat_lateness_ms: inner.last_heartbeat_lateness_ms,
+            max_heartbeat_lateness_ms: inner.max_heartbeat_lateness_ms,
+            last_write_elapsed_ms: inner.last_write_elapsed_ms,
+            max_write_elapsed_ms: inner.max_write_elapsed_ms,
             supports: if inner.enabled {
                 CONTROL_SUPPORTS
                     .iter()
@@ -133,6 +157,10 @@ impl ControlChannelStatus {
         inner.reconnect_backoff_seconds = None;
         inner.last_error_code = None;
         inner.last_error_message = None;
+        inner.last_heartbeat_lateness_ms = None;
+        inner.max_heartbeat_lateness_ms = None;
+        inner.last_write_elapsed_ms = None;
+        inner.max_write_elapsed_ms = None;
     }
 
     fn set_connected(&self, ws_url: &str) {
@@ -147,6 +175,10 @@ impl ControlChannelStatus {
         inner.reconnect_backoff_seconds = None;
         inner.last_error_code = None;
         inner.last_error_message = None;
+        inner.last_heartbeat_lateness_ms = None;
+        inner.max_heartbeat_lateness_ms = None;
+        inner.last_write_elapsed_ms = None;
+        inner.max_write_elapsed_ms = None;
     }
 
     fn set_disconnected(
@@ -170,6 +202,40 @@ impl ControlChannelStatus {
         inner.last_error_message = error_message.map(str::to_string);
         inner.reconnect_backoff_seconds = reconnect_backoff_seconds;
     }
+
+    fn record_heartbeat_lateness(&self, lateness: Duration) {
+        let millis = duration_millis_u64(lateness);
+        let mut inner = self
+            .inner
+            .lock()
+            .expect("control channel status lock poisoned");
+        inner.last_heartbeat_lateness_ms = Some(millis);
+        inner.max_heartbeat_lateness_ms = Some(
+            inner
+                .max_heartbeat_lateness_ms
+                .map(|current| current.max(millis))
+                .unwrap_or(millis),
+        );
+    }
+
+    fn record_write_elapsed(&self, elapsed: Duration) {
+        let millis = duration_millis_u64(elapsed);
+        let mut inner = self
+            .inner
+            .lock()
+            .expect("control channel status lock poisoned");
+        inner.last_write_elapsed_ms = Some(millis);
+        inner.max_write_elapsed_ms = Some(
+            inner
+                .max_write_elapsed_ms
+                .map(|current| current.max(millis))
+                .unwrap_or(millis),
+        );
+    }
+}
+
+fn duration_millis_u64(duration: Duration) -> u64 {
+    duration.as_millis().min(u128::from(u64::MAX)) as u64
 }
 
 fn timestamp_now() -> String {
@@ -195,16 +261,28 @@ pub fn spawn_control_channel(
 async fn run_reconnect_loop(config: ShipperConfig, status: ControlChannelStatus) {
     let mut backoff = Duration::from_secs(1);
     let mut last_error: Option<String> = None;
+    let mut outage_started: Option<Instant> = None;
     let mut completed_commands = CompletedCommandCache::new(
         COMPLETED_COMMAND_CACHE_CAPACITY,
         Duration::from_secs(COMPLETED_COMMAND_CACHE_TTL_SECS),
     );
     loop {
-        match run_once(&config, &mut completed_commands, &status).await {
+        let connected_before = status.snapshot().last_connected_at;
+        let result = run_once(&config, &mut completed_commands, &status).await;
+        let connected_during_attempt = status.snapshot().last_connected_at != connected_before;
+        let reconnect_delay = if connected_during_attempt {
+            outage_started = Some(Instant::now());
+            backoff = Duration::from_secs(1);
+            backoff
+        } else {
+            outage_started.get_or_insert_with(Instant::now);
+            backoff
+        };
+
+        match result {
             Ok(()) => {
                 tracing::info!("Machine control channel disconnected");
-                status.set_disconnected(None, None, None, Some(backoff.as_secs()));
-                backoff = Duration::from_secs(1);
+                status.set_disconnected(None, None, None, Some(reconnect_delay.as_secs()));
                 last_error = None;
             }
             Err(err) => {
@@ -213,7 +291,7 @@ async fn run_reconnect_loop(config: ShipperConfig, status: ControlChannelStatus)
                     None,
                     Some("connect_failed"),
                     Some(error_chain.as_str()),
-                    Some(backoff.as_secs()),
+                    Some(reconnect_delay.as_secs()),
                 );
                 if last_error.as_deref() == Some(error_chain.as_str()) {
                     tracing::debug!(error = %error_chain, "Machine control channel connection failed");
@@ -223,9 +301,21 @@ async fn run_reconnect_loop(config: ShipperConfig, status: ControlChannelStatus)
                 }
             }
         }
-        tokio::time::sleep(backoff).await;
-        backoff = (backoff * 2).min(Duration::from_secs(CONTROL_RECONNECT_MAX_BACKOFF_SECS));
+        tokio::time::sleep(reconnect_delay).await;
+        let outage_elapsed = outage_started
+            .map(|started| started.elapsed())
+            .unwrap_or(Duration::ZERO);
+        backoff = next_reconnect_backoff(reconnect_delay, outage_elapsed);
     }
+}
+
+fn next_reconnect_backoff(current: Duration, outage_elapsed: Duration) -> Duration {
+    let max_backoff = if outage_elapsed < Duration::from_secs(CONTROL_RECONNECT_SHORT_WINDOW_SECS) {
+        Duration::from_secs(CONTROL_RECONNECT_SHORT_MAX_BACKOFF_SECS)
+    } else {
+        Duration::from_secs(CONTROL_RECONNECT_SUSTAINED_MAX_BACKOFF_SECS)
+    };
+    (current * 2).min(max_backoff)
 }
 
 fn format_error_chain(err: &anyhow::Error) -> String {
@@ -268,24 +358,43 @@ async fn run_once(
         "engine_build": build_identity::COMMIT_SHORT,
         "supports": CONTROL_SUPPORTS,
     });
-    stream
-        .send(Message::Text(hello.to_string()))
-        .await
-        .context("sending machine control hello")?;
+    send_control_message(
+        &mut stream,
+        Message::Text(hello.to_string()),
+        "machine control hello",
+        status,
+    )
+    .await?;
     status.set_connected(&ws_url);
     tracing::info!("Machine control channel connected to {ws_url}");
 
+    let heartbeat_interval = Duration::from_secs(HEARTBEAT_INTERVAL_SECS);
     let mut heartbeat = tokio::time::interval(Duration::from_secs(HEARTBEAT_INTERVAL_SECS));
     heartbeat.set_missed_tick_behavior(MissedTickBehavior::Delay);
     heartbeat.tick().await;
+    let mut next_heartbeat_due = Instant::now() + heartbeat_interval;
 
     loop {
         tokio::select! {
             _ = heartbeat.tick() => {
-                stream
-                    .send(Message::Text(heartbeat_frame().to_string()))
-                    .await
-                    .context("sending machine control heartbeat")?;
+                let now = Instant::now();
+                let lateness = now.saturating_duration_since(next_heartbeat_due);
+                status.record_heartbeat_lateness(lateness);
+                if lateness.as_millis() > CONTROL_HEARTBEAT_LATE_WARN_MS {
+                    tracing::warn!(
+                        lateness_ms = duration_millis_u64(lateness),
+                        heartbeat_interval_secs = HEARTBEAT_INTERVAL_SECS,
+                        "Machine control heartbeat delayed; executor stall suspected"
+                    );
+                }
+                next_heartbeat_due = now + heartbeat_interval;
+                send_control_message(
+                    &mut stream,
+                    Message::Text(heartbeat_frame().to_string()),
+                    "machine control heartbeat",
+                    status,
+                )
+                .await?;
             }
             message = stream.next() => {
                 let Some(message) = message else {
@@ -299,10 +408,13 @@ async fn run_once(
                         break;
                     }
                     Message::Ping(payload) => {
-                        stream
-                            .send(Message::Pong(payload))
-                            .await
-                            .context("sending machine control pong")?;
+                        send_control_message(
+                            &mut stream,
+                            Message::Pong(payload),
+                            "machine control pong",
+                            status,
+                        )
+                        .await?;
                         continue;
                     }
                     _ => {
@@ -318,14 +430,46 @@ async fn run_once(
                     continue;
                 }
                 let result = handle_command_frame(frame, completed_commands, config).await;
-                stream
-                    .send(Message::Text(result.to_string()))
-                    .await
-                    .context("sending machine control command result")?;
+                send_control_message(
+                    &mut stream,
+                    Message::Text(result.to_string()),
+                    "machine control command result",
+                    status,
+                )
+                .await?;
             }
         }
     }
 
+    Ok(())
+}
+
+async fn send_control_message<S>(
+    stream: &mut S,
+    message: Message,
+    context: &'static str,
+    status: &ControlChannelStatus,
+) -> Result<()>
+where
+    S: Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
+{
+    let started = Instant::now();
+    tokio::time::timeout(
+        Duration::from_secs(CONTROL_WRITE_TIMEOUT_SECS),
+        stream.send(message),
+    )
+    .await
+    .map_err(|_| anyhow!("timed out sending {context}"))?
+    .with_context(|| format!("sending {context}"))?;
+    let elapsed = started.elapsed();
+    status.record_write_elapsed(elapsed);
+    if elapsed > Duration::from_secs(1) {
+        tracing::warn!(
+            context,
+            elapsed_ms = duration_millis_u64(elapsed),
+            "Machine control websocket send was slow"
+        );
+    }
     Ok(())
 }
 
@@ -699,8 +843,25 @@ mod tests {
     }
 
     #[test]
-    fn reconnect_backoff_stays_short_for_launch_availability() {
-        assert!(CONTROL_RECONNECT_MAX_BACKOFF_SECS <= 5);
+    fn reconnect_backoff_stays_short_then_backs_off_for_sustained_outages() {
+        let short_window = Duration::from_secs(CONTROL_RECONNECT_SHORT_WINDOW_SECS - 1);
+        assert_eq!(
+            next_reconnect_backoff(Duration::from_secs(4), short_window),
+            Duration::from_secs(CONTROL_RECONNECT_SHORT_MAX_BACKOFF_SECS)
+        );
+
+        let sustained = Duration::from_secs(CONTROL_RECONNECT_SHORT_WINDOW_SECS + 1);
+        assert_eq!(
+            next_reconnect_backoff(
+                Duration::from_secs(CONTROL_RECONNECT_SHORT_MAX_BACKOFF_SECS),
+                sustained
+            ),
+            Duration::from_secs(CONTROL_RECONNECT_SHORT_MAX_BACKOFF_SECS * 2)
+        );
+        assert_eq!(
+            next_reconnect_backoff(Duration::from_secs(20), sustained),
+            Duration::from_secs(CONTROL_RECONNECT_SUSTAINED_MAX_BACKOFF_SECS)
+        );
     }
 
     #[test]
