@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use anyhow::Result;
 use chrono::DateTime;
@@ -28,6 +29,8 @@ use crate::shipping_stats::RecentShipStatsTracker;
 use crate::state::session_phase::PhaseLedgerRow;
 use crate::state::spool::DeadLetterEntry;
 use crate::state::spool::Spool;
+
+const HEARTBEAT_POST_TIMEOUT: Duration = Duration::from_secs(6);
 
 /// Heartbeat payload sent to the server and written locally.
 #[derive(Debug, Serialize, Clone)]
@@ -414,7 +417,9 @@ fn load_managed_phase_overlay(conn: &rusqlite::Connection) -> HashMap<String, Ma
 )]
 pub async fn send_heartbeat(client: &ShipperClient, payload: &HeartbeatPayload) -> Result<()> {
     let json = serde_json::to_vec(payload)?;
-    client.post_json("/api/agents/heartbeat", json).await
+    client
+        .post_json_with_timeout("/api/agents/heartbeat", json, Some(HEARTBEAT_POST_TIMEOUT))
+        .await
 }
 
 /// Result of the caller's attempt to read fresh phase-ledger rows. Serializes
