@@ -104,6 +104,10 @@ async def machine_control_websocket(websocket: WebSocket) -> None:
             message_type = message.get("type")
             if message_type == "heartbeat":
                 await registry.mark_seen(owner_id=owner_id, device_id=device_id)
+                try:
+                    await websocket.send_json({"type": "heartbeat_ack"})
+                except WebSocketDisconnect:
+                    break
             elif message_type == "command_result":
                 await registry.mark_seen(owner_id=owner_id, device_id=device_id)
                 matched = await registry.complete_command(message, owner_id=owner_id, device_id=device_id)
