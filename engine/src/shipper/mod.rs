@@ -880,6 +880,7 @@ pub(crate) fn prepare_path_range_with_parse_tracker_and_trace(
 
     let has_reply_evidence = range_has_reply_evidence(&parse_result.events, offset, new_offset);
 
+    let batch_build_started = Instant::now();
     let actions = build_prepared_actions(
         &parse_result,
         &path_str,
@@ -892,6 +893,9 @@ pub(crate) fn prepare_path_range_with_parse_tracker_and_trace(
         rewind_hint,
         source_line_mode,
     )?;
+    if let Some(trace) = prepare_trace.as_deref_mut() {
+        trace.batch_build_ms = Some(batch_build_started.elapsed().as_millis() as u64);
+    }
 
     if actions.is_empty() {
         return Ok(None);
@@ -992,7 +996,7 @@ pub(crate) fn prepare_file_batches_with_source_line_mode_parse_tracker_and_trace
     session_id_override: Option<&str>,
     parse_tracker: Option<&RecentIssueTracker>,
     source_line_mode: SourceLineMode,
-    prepare_trace: Option<&mut PrepareTraceTimings>,
+    mut prepare_trace: Option<&mut PrepareTraceTimings>,
 ) -> Result<Option<PreparedFile>> {
     let path_str = path.to_string_lossy().to_string();
     let file_state = FileState::new(conn);
@@ -1002,6 +1006,7 @@ pub(crate) fn prepare_file_batches_with_source_line_mode_parse_tracker_and_trace
         SourceLineMode::EventOnly => CursorMode::Live,
     };
 
+    let cursor_started = Instant::now();
     let current_offset = match cursor_mode {
         CursorMode::Archive => file_state.get_offset(&path_str)?,
         CursorMode::Live => live_file_state.get_offset(&path_str)?,
@@ -1058,6 +1063,9 @@ pub(crate) fn prepare_file_batches_with_source_line_mode_parse_tracker_and_trace
     } else {
         current_offset
     };
+    if let Some(trace) = prepare_trace.as_deref_mut() {
+        trace.cursor_ms = Some(cursor_started.elapsed().as_millis() as u64);
+    }
 
     prepare_path_range_with_parse_tracker_and_trace(
         path,
@@ -1328,8 +1336,23 @@ fn build_ship_trace_value(
         );
         insert_json_field(
             &mut value,
+            "prepare_blocking_queue_wait_ms",
+            json!(trace.prepare_blocking_queue_wait_ms),
+        );
+        insert_json_field(
+            &mut value,
             "prepare_open_db_ms",
             json!(trace.prepare_open_db_ms),
+        );
+        insert_json_field(
+            &mut value,
+            "prepare_identity_ms",
+            json!(trace.prepare_identity_ms),
+        );
+        insert_json_field(
+            &mut value,
+            "prepare_cursor_ms",
+            json!(trace.prepare_cursor_ms),
         );
         insert_json_field(
             &mut value,
@@ -1340,6 +1363,11 @@ fn build_ship_trace_value(
             &mut value,
             "prepare_parse_ms",
             json!(trace.prepare_parse_ms),
+        );
+        insert_json_field(
+            &mut value,
+            "prepare_batch_build_ms",
+            json!(trace.prepare_batch_build_ms),
         );
         insert_json_field(
             &mut value,
@@ -2407,9 +2435,13 @@ mod tests {
             job_started_at_ms: 3,
             prepare_started_at_ms: 4,
             prepare_finished_at_ms: 5,
+            prepare_blocking_queue_wait_ms: Some(0),
             prepare_open_db_ms: Some(0),
+            prepare_identity_ms: Some(0),
+            prepare_cursor_ms: Some(0),
             prepare_binding_wait_ms: Some(0),
             prepare_parse_ms: Some(0),
+            prepare_batch_build_ms: Some(0),
             session_id_hint: None,
             turn_id: None,
             wake_reason: None,

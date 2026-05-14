@@ -72,6 +72,7 @@ const TERMINAL_CATCHUP_DELAYS: [Duration; 3] = [
     Duration::from_secs(1),
     Duration::from_secs(3),
 ];
+const OFFLINE_CONNECT_FAILURE_THRESHOLD: u32 = 3;
 const CLAUDE_TERMINAL_EVENT_TIMEOUT: Duration = Duration::from_secs(2);
 const CLAUDE_TERMINAL_EVENT_SOURCE: &str = "claude_channel_scan";
 const CLAUDE_TERMINAL_EVENT_STALE_SECS: i64 = 10 * 60;
@@ -93,20 +94,25 @@ impl OfflineState {
         }
     }
 
-    fn mark_offline(&mut self) {
-        if !self.is_offline {
-            self.is_offline = true;
-            self.offline_since = Some(Instant::now());
-        }
+    fn record_connect_error(&mut self) -> bool {
         self.consecutive_failures += 1;
+        if self.consecutive_failures < OFFLINE_CONNECT_FAILURE_THRESHOLD {
+            return false;
+        }
+        if self.is_offline {
+            return false;
+        }
+        self.is_offline = true;
+        self.offline_since = Some(Instant::now());
+        true
     }
 
     fn mark_online(&mut self) -> Option<Duration> {
+        self.consecutive_failures = 0;
         if self.is_offline {
             let duration = self.offline_since.map(|t| t.elapsed());
             self.is_offline = false;
             self.offline_since = None;
-            self.consecutive_failures = 0;
             duration
         } else {
             None
@@ -355,7 +361,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut codex_terminal_catchup_marks: HashMap<PathBuf, String> = HashMap::new();
     let mut latest_transcript_wake_observed: HashMap<PathBuf, i64> = HashMap::new();
     let mut bridge_reaper = ManagedBridgeReaper::from_env();
-    let mut outbox_post_tasks: JoinSet<(usize, usize)> = JoinSet::new();
+    let mut outbox_post_tasks: JoinSet<(usize, usize, u64)> = JoinSet::new();
     let mut heartbeat_post_tasks: JoinSet<HeartbeatPostResult> = JoinSet::new();
     let mut claude_terminal_post_tasks: JoinSet<ClaudeTerminalPostResult> = JoinSet::new();
     let mut outbox_signal_marks: HashSet<String> = HashSet::new();
@@ -421,13 +427,29 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             );
                         }
                         if result.had_connect_error {
-                            offline.mark_offline();
-                            tracing::warn!(
-                                "Connection error while processing {} — entering offline mode",
-                                result.job.path.display()
-                            );
-                        } else if result.events_shipped > 0 {
+                            if offline.record_connect_error() {
+                                tracing::warn!(
+                                    threshold = OFFLINE_CONNECT_FAILURE_THRESHOLD,
+                                    "Connection error threshold reached while processing {} — entering offline mode",
+                                    result.job.path.display()
+                                );
+                            } else {
+                                tracing::warn!(
+                                    consecutive_connect_errors = offline.consecutive_failures,
+                                    threshold = OFFLINE_CONNECT_FAILURE_THRESHOLD,
+                                    "Connection error while processing {}; keeping local shipping active",
+                                    result.job.path.display()
+                                );
+                            }
+                        } else if result.events_shipped > 0 || result.resolved_spool > 0 {
                             last_ship_at = Some(chrono::Utc::now().to_rfc3339());
+                            if let Some(duration) = offline.mark_online() {
+                                last_runtime_truth_signature = None;
+                                tracing::info!(
+                                    "Back online after {:.0}s — resuming shipping",
+                                    duration.as_secs_f64()
+                                );
+                            }
                         }
                     }
                     Some(Err(e)) => {
@@ -474,9 +496,26 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
             outbox_post_result = outbox_post_tasks.join_next(), if !outbox_post_tasks.is_empty() => {
                 match outbox_post_result {
-                    Some(Ok((sent, kept))) => {
-                        if sent > 0 || kept > 0 {
-                            tracing::debug!("Outbox presence POST: {} sent, {} pending", sent, kept);
+                    Some(Ok((sent, kept, elapsed_ms))) => {
+                        if kept > 0 {
+                            tracing::warn!(
+                                sent,
+                                kept,
+                                elapsed_ms,
+                                "Outbox presence POST kept files for retry"
+                            );
+                        } else if elapsed_ms > 1_000 {
+                            tracing::warn!(
+                                sent,
+                                elapsed_ms,
+                                "Outbox presence POST was slow"
+                            );
+                        } else if sent > 0 {
+                            tracing::debug!(
+                                sent,
+                                elapsed_ms,
+                                "Outbox presence POST sent files"
+                            );
                         }
                     }
                     Some(Err(err)) => {
@@ -570,8 +609,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
-            // File change events (primary path) — skip when offline
-            batch = watcher.next_batch(config.flush_interval), if !offline.is_offline => {
+            // File change events (primary path). Keep collecting changes during
+            // soft offline windows so short transport hiccups cannot stale the
+            // local outbox or miss session wakeups.
+            batch = watcher.next_batch(config.flush_interval) => {
                 match batch {
                     Some(events) if !events.is_empty() => {
                         for event in events {
@@ -656,11 +697,15 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         offline.is_offline,
                     );
                 }
-                if !offline.is_offline && !outbox_result.posts.is_empty() {
+                if !outbox_result.posts.is_empty() {
                     if outbox_post_tasks.is_empty() {
                         let client = client.clone();
                         outbox_post_tasks.spawn_local(async move {
-                            outbox::post_pending_presence_files(&client, outbox_result.posts).await
+                            let started = Instant::now();
+                            let (sent, kept) =
+                                outbox::post_pending_presence_files(&client, outbox_result.posts)
+                                    .await;
+                            (sent, kept, started.elapsed().as_millis() as u64)
                         });
                     } else {
                         tracing::debug!(
@@ -2083,13 +2128,17 @@ async fn prepare_file_for_job(
         longhouse.provider = %provider,
         longhouse.work_context = %work_context_label,
     );
+    let blocking_queued_at = Instant::now();
 
     tokio::task::spawn_blocking(move || {
         let _enter = blocking_span.enter();
         let mut trace_timings = shipper::PrepareTraceTimings::default();
+        trace_timings.blocking_queue_wait_ms =
+            Some(blocking_queued_at.elapsed().as_millis() as u64);
         let open_db_started = Instant::now();
         let conn = open_db(db_path.as_deref())?;
         trace_timings.open_db_ms = Some(open_db_started.elapsed().as_millis() as u64);
+        let identity_started = Instant::now();
         let canonical = std::fs::canonicalize(&path)
             .unwrap_or_else(|_| path.clone())
             .to_string_lossy()
@@ -2122,6 +2171,7 @@ async fn prepare_file_for_job(
                 "parsed"
             }
         };
+        trace_timings.identity_ms = Some(identity_started.elapsed().as_millis() as u64);
         tracing::debug!(
             path = %path.display(),
             provider,
@@ -2255,9 +2305,13 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                 job_started_at_ms,
                 prepare_started_at_ms,
                 prepare_finished_at_ms,
+                prepare_blocking_queue_wait_ms: trace_timings.blocking_queue_wait_ms,
                 prepare_open_db_ms: trace_timings.open_db_ms,
+                prepare_identity_ms: trace_timings.identity_ms,
+                prepare_cursor_ms: trace_timings.cursor_ms,
                 prepare_binding_wait_ms: trace_timings.binding_wait_ms,
                 prepare_parse_ms: trace_timings.parse_ms,
+                prepare_batch_build_ms: trace_timings.batch_build_ms,
                 session_id_hint: result.job.observation.session_id.clone(),
                 turn_id: result.job.observation.turn_id.clone(),
                 wake_reason: result.job.observation.wake_reason.clone(),

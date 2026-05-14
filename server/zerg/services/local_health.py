@@ -49,9 +49,9 @@ from zerg.services.transport_health import transport_health_sample_from_engine_s
 SCHEMA_VERSION = 1
 ENGINE_FRESH_SECONDS = 30
 ENGINE_STALE_SECONDS = 120
-OUTBOX_DEGRADED_AGE_SECONDS = 15
+OUTBOX_DEGRADED_AGE_SECONDS = 60
 OUTBOX_BROKEN_AGE_SECONDS = 120
-DEGRADED_BACKLOG_COUNT = 1
+DEGRADED_BACKLOG_COUNT = 10
 BROKEN_BACKLOG_COUNT = 25
 DISK_DEGRADED_BYTES = 5 * 1024 * 1024 * 1024
 DISK_BROKEN_BYTES = 1 * 1024 * 1024 * 1024
@@ -2667,7 +2667,7 @@ def _degraded_shipping_flag(
     if transport_assessment is not None and transport_assessment.status in ("offline", "degraded"):
         return True
     if (
-        outbox_count >= DEGRADED_BACKLOG_COUNT
+        outbox_count > 0
         and outbox_oldest is not None
         and outbox_oldest > OUTBOX_DEGRADED_AGE_SECONDS
     ):

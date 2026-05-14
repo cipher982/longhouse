@@ -440,6 +440,31 @@ def test_collect_local_health_ignores_fresh_outbox_file(monkeypatch, tmp_path: P
     assert "outbox_stuck" not in snapshot["reasons"]
 
 
+def test_collect_local_health_ignores_short_ephemeral_outbox_backlog(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(tmp_path, age_seconds=5)
+    _write_outbox_file(tmp_path, age_seconds=30)
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "healthy"
+    assert "outbox_backlog" not in snapshot["reasons"]
+    assert "outbox_stuck" not in snapshot["reasons"]
+
+
+def test_collect_local_health_degrades_for_old_outbox_file(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(tmp_path, age_seconds=5)
+    _write_outbox_file(tmp_path, age_seconds=90)
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "degraded"
+    assert "outbox_stuck" in snapshot["reasons"]
+
+
 def test_collect_local_health_surfaces_codex_provider_cli(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
