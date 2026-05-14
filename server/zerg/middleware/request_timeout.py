@@ -39,6 +39,7 @@ _TIMEOUT_OVERRIDES = {
     "/auth/accept-token": INTERACTIVE_AUTH_TIMEOUT_SECONDS,
     "/devices/tokens": INTERACTIVE_AUTH_TIMEOUT_SECONDS,
     "/agents/ingest": INGEST_TIMEOUT_SECONDS,
+    "/sessions/launch": MANAGED_LOCAL_LAUNCH_TIMEOUT_SECONDS,
     "/sessions/managed-local/this-device": MANAGED_LOCAL_LAUNCH_TIMEOUT_SECONDS,
     "/agents/sessions/": ARCHIVE_BUNDLE_TIMEOUT_SECONDS,
 }
