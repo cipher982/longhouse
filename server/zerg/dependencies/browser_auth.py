@@ -37,7 +37,7 @@ def get_current_browser_user(request: Request, db: Session = Depends(get_db)):
     return user
 
 
-def get_current_browser_user_id_short_lived(request: Request) -> int:
+def _get_current_browser_user_short_lived(request: Request):
     """Authenticate a browser stream without pinning a DB connection.
 
     FastAPI keeps generator dependencies alive until a streaming response ends.
@@ -52,11 +52,16 @@ def get_current_browser_user_id_short_lived(request: Request) -> int:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
         )
+    return user
+
+
+def get_current_browser_user_id_short_lived(request: Request) -> int:
+    user = _get_current_browser_user_short_lived(request)
     return int(user.id)
 
 
 def require_current_browser_user_short_lived(request: Request) -> None:
-    get_current_browser_user_id_short_lived(request)
+    _get_current_browser_user_short_lived(request)
 
 
 def get_optional_browser_user(request: Request, db: Session = Depends(get_db)):
