@@ -17,6 +17,7 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import SessionObservation
+from zerg.routers.agents_ingest import _write_serializer_label_for_ship_trace
 
 
 def _make_client(tmp_path):
@@ -39,6 +40,12 @@ def _make_client(tmp_path):
     api_app.dependency_overrides[get_db] = override
     api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
     return TestClient(api_app), factory
+
+
+def test_ship_trace_live_transcript_uses_live_ingest_label():
+    assert _write_serializer_label_for_ship_trace({"work_context": "live_transcript"}) == "ingest-live"
+    assert _write_serializer_label_for_ship_trace({"work_context": "reconciliation_scan"}) == "ingest"
+    assert _write_serializer_label_for_ship_trace(None) == "ingest"
 
 
 def test_agents_ingest_persists_ship_trace_runtime_event(tmp_path):
@@ -78,7 +85,7 @@ def test_agents_ingest_persists_ship_trace_runtime_event(tmp_path):
                     "timestamp": "2026-01-01T00:00:01Z",
                     "source_path": "/tmp/trace-rollout.jsonl",
                     "source_offset": 0,
-                    "raw_json": "{\"type\":\"assistant\",\"text\":\"hello\"}",
+                    "raw_json": '{"type":"assistant","text":"hello"}',
                 }
             ],
         }

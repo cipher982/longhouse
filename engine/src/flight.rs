@@ -167,6 +167,12 @@ pub fn ship_stats_snapshot(summary: ShipStatsSummary) -> Value {
         "ship_connect_errors_1h": summary.ship_connect_errors_1h,
         "ship_latency_p50_ms_1h": summary.ship_latency_p50_ms_1h,
         "ship_latency_p95_ms_1h": summary.ship_latency_p95_ms_1h,
+        "ship_attempts_10m": summary.ship_attempts_10m,
+        "ship_successes_10m": summary.ship_successes_10m,
+        "ship_rate_limited_10m": summary.ship_rate_limited_10m,
+        "ship_server_errors_10m": summary.ship_server_errors_10m,
+        "ship_retryable_client_errors_10m": summary.ship_retryable_client_errors_10m,
+        "ship_connect_errors_10m": summary.ship_connect_errors_10m,
     })
 }
 

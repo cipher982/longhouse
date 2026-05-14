@@ -57,6 +57,12 @@ class MachineTransportHealthSummary:
     ship_connect_errors_1h: int
     ship_latency_p50_ms_1h: int | None
     ship_latency_p95_ms_1h: int | None
+    ship_attempts_10m: int | None
+    ship_successes_10m: int | None
+    ship_rate_limited_10m: int | None
+    ship_server_errors_10m: int | None
+    ship_retryable_client_errors_10m: int | None
+    ship_connect_errors_10m: int | None
     spool_pending: int
     spool_dead: int
     parse_errors_1h: int
@@ -162,6 +168,12 @@ def build_machine_transport_health_summary(
     ship_payload_too_large_1h = sample.ship_payload_too_large_1h
     ship_retryable_client_errors_1h = sample.ship_retryable_client_errors_1h
     ship_connect_errors_1h = sample.ship_connect_errors_1h
+    ship_attempts_10m = sample.ship_attempts_10m
+    ship_successes_10m = sample.ship_successes_10m
+    ship_rate_limited_10m = sample.ship_rate_limited_10m
+    ship_server_errors_10m = sample.ship_server_errors_10m
+    ship_retryable_client_errors_10m = sample.ship_retryable_client_errors_10m
+    ship_connect_errors_10m = sample.ship_connect_errors_10m
     disk_free_bytes = int(row.disk_free_bytes or 0)
     is_offline = sample.is_offline
     is_stale = heartbeat_age_seconds > stale_after_seconds
@@ -204,6 +216,12 @@ def build_machine_transport_health_summary(
         ship_connect_errors_1h=ship_connect_errors_1h,
         ship_latency_p50_ms_1h=row.ship_latency_p50_ms_1h,
         ship_latency_p95_ms_1h=row.ship_latency_p95_ms_1h,
+        ship_attempts_10m=ship_attempts_10m,
+        ship_successes_10m=ship_successes_10m,
+        ship_rate_limited_10m=ship_rate_limited_10m,
+        ship_server_errors_10m=ship_server_errors_10m,
+        ship_retryable_client_errors_10m=ship_retryable_client_errors_10m,
+        ship_connect_errors_10m=ship_connect_errors_10m,
         spool_pending=spool_pending,
         spool_dead=spool_dead,
         parse_errors_1h=parse_errors_1h,

@@ -42,6 +42,12 @@ class MachineHealthItemResponse(UTCBaseModel):
     ship_connect_errors_1h: int
     ship_latency_p50_ms_1h: int | None = None
     ship_latency_p95_ms_1h: int | None = None
+    ship_attempts_10m: int | None = None
+    ship_successes_10m: int | None = None
+    ship_rate_limited_10m: int | None = None
+    ship_server_errors_10m: int | None = None
+    ship_retryable_client_errors_10m: int | None = None
+    ship_connect_errors_10m: int | None = None
     spool_pending: int
     spool_dead: int
     parse_errors_1h: int
