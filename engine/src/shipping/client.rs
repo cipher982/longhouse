@@ -74,7 +74,10 @@ impl ShipperClient {
         let client = reqwest::Client::builder()
             .default_headers(default_headers)
             .timeout(Duration::from_secs(config.timeout_seconds))
+            .connect_timeout(Duration::from_secs(5))
+            .pool_idle_timeout(Duration::from_secs(20))
             .pool_max_idle_per_host(4)
+            .tcp_keepalive(Duration::from_secs(30))
             .build()
             .context("building HTTP client")?;
 
