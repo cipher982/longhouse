@@ -37,6 +37,7 @@ const COMPLETED_COMMAND_CACHE_TTL_SECS: u64 = 5 * 60;
 // app-level heartbeat also keeps server keepalive pongs moving through proxies.
 const HEARTBEAT_INTERVAL_SECS: u64 = 10;
 const CONTROL_CONNECT_TIMEOUT_SECS: u64 = 15;
+const CONTROL_RECONNECT_MAX_BACKOFF_SECS: u64 = 5;
 const CONTROL_SUPPORTS: [&str; 4] = [
     "codex.send",
     "codex.interrupt",
@@ -223,7 +224,7 @@ async fn run_reconnect_loop(config: ShipperConfig, status: ControlChannelStatus)
             }
         }
         tokio::time::sleep(backoff).await;
-        backoff = (backoff * 2).min(Duration::from_secs(30));
+        backoff = (backoff * 2).min(Duration::from_secs(CONTROL_RECONNECT_MAX_BACKOFF_SECS));
     }
 }
 
@@ -695,6 +696,11 @@ mod tests {
     #[test]
     fn heartbeat_interval_stays_inside_server_keepalive_window() {
         assert!(HEARTBEAT_INTERVAL_SECS <= 10);
+    }
+
+    #[test]
+    fn reconnect_backoff_stays_short_for_launch_availability() {
+        assert!(CONTROL_RECONNECT_MAX_BACKOFF_SECS <= 5);
     }
 
     #[test]
