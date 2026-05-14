@@ -13,10 +13,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use rusqlite::Connection;
+use serde_json::{json, Value};
 use tokio::task;
 
 use crate::discovery::{self, ProviderConfig};
 use crate::error_tracker::{ConsecutiveErrorTracker, RecentIssueTracker};
+use crate::flight::FlightRecorder;
 use crate::pipeline::batcher::{self, PlannedRangeAction, ShipRange};
 use crate::pipeline::compressor::{self, CompressionAlgo};
 use crate::pipeline::parser::{self, ParseResult};
@@ -1064,7 +1066,7 @@ pub(crate) fn prepare_file_batches_with_source_line_mode_parse_tracker_and_trace
 #[tracing::instrument(
     level = "info",
     name = "engine.ship.attempt",
-    skip(item, client, tracker, ship_stats),
+    skip(item, client, tracker, ship_stats, flight_recorder),
     fields(
         otel.kind = "client",
         http.request.method = "POST",
@@ -1083,49 +1085,31 @@ async fn attempt_ship(
     tracker: Option<&ConsecutiveErrorTracker>,
     ship_stats: Option<&RecentShipStatsTracker>,
     ship_trace: Option<&ShipTraceContext>,
+    flight_recorder: Option<&FlightRecorder>,
 ) -> AttemptedShip {
     let http_send_started_at_ms = chrono::Utc::now().timestamp_millis();
-    let trace_header = ship_trace.and_then(|trace| {
-        serde_json::to_string(&serde_json::json!({
-            "schema": "ship_trace.v1",
-            "trace_id": format!("{}:{}:{}:{}", item.session_id, item.offset, item.new_offset, http_send_started_at_ms),
-            "provider": item.provider,
-            "session_id": item.session_id,
-            "work_context": trace.work_context,
-            "observation_source": trace.observation_source,
-            "wake_reason": trace.wake_reason,
-            "turn_id": trace.turn_id,
-            "session_id_hint": trace.session_id_hint,
-            "file_len_hint": trace.file_len_hint,
-            "event_count": item.event_count,
-            "offset": item.offset,
-            "new_offset": item.new_offset,
-            "range_bytes": item.new_offset.saturating_sub(item.offset),
-            "observed_at_ms": trace.observed_at_ms,
-            "wake_received_at_ms": trace.wake_received_at_ms,
-            "enqueued_at_ms": trace.enqueued_at_ms,
-            "job_started_at_ms": trace.job_started_at_ms,
-            "prepare_started_at_ms": trace.prepare_started_at_ms,
-            "prepare_finished_at_ms": trace.prepare_finished_at_ms,
-            "prepare_open_db_ms": trace.prepare_open_db_ms,
-            "prepare_binding_wait_ms": trace.prepare_binding_wait_ms,
-            "prepare_parse_ms": trace.prepare_parse_ms,
-            "http_send_started_at_ms": http_send_started_at_ms,
-            "observation_to_enqueue_ms": trace.enqueued_at_ms.saturating_sub(trace.observed_at_ms),
-            "observation_to_wake_ms": trace.wake_received_at_ms.map(|wake_ms| wake_ms.saturating_sub(trace.observed_at_ms)),
-            "wake_to_enqueue_ms": trace.wake_received_at_ms.map(|wake_ms| trace.enqueued_at_ms.saturating_sub(wake_ms)),
-            "enqueue_to_job_ms": trace.job_started_at_ms.saturating_sub(trace.enqueued_at_ms),
-            "observed_to_job_ms": trace.job_started_at_ms.saturating_sub(trace.observed_at_ms),
-            "prepare_ms": trace.prepare_finished_at_ms.saturating_sub(trace.prepare_started_at_ms),
-            "job_to_http_ms": http_send_started_at_ms.saturating_sub(trace.job_started_at_ms),
-        }))
-        .ok()
-    });
-    let payload = std::mem::take(&mut item.compressed);
-    let attempt_started = std::time::Instant::now();
     let request_timeout = ship_trace
         .filter(|trace| trace.work_context == "live_transcript")
         .map(|_| LIVE_TRANSCRIPT_INGEST_TIMEOUT);
+    let mut flight_record = build_ship_trace_value(&item, ship_trace, http_send_started_at_ms);
+    if let Some(timeout) = request_timeout {
+        insert_json_field(
+            &mut flight_record,
+            "request_timeout_ms",
+            json!(timeout.as_millis().min(u128::from(u64::MAX)) as u64),
+        );
+    } else {
+        insert_json_field(&mut flight_record, "request_timeout_ms", Value::Null);
+    }
+    let trace_header = ship_trace.and_then(|_| {
+        let mut header_record = flight_record.clone();
+        remove_json_field(&mut header_record, "kind");
+        remove_json_field(&mut header_record, "path");
+        remove_json_field(&mut header_record, "request_timeout_ms");
+        serde_json::to_string(&header_record).ok()
+    });
+    let payload = std::mem::take(&mut item.compressed);
+    let attempt_started = std::time::Instant::now();
     let result = if trace_header.is_none() && request_timeout.is_none() {
         client.ship(payload).await
     } else {
@@ -1134,6 +1118,7 @@ async fn attempt_ship(
             .await
     };
     let latency_ms = attempt_started.elapsed().as_millis() as u64;
+    let http_finished_at_ms = chrono::Utc::now().timestamp_millis();
     let span = tracing::Span::current();
     let (outcome, http_status) = classify_ship_attempt_result(&result);
     span.record(
@@ -1167,6 +1152,16 @@ async fn attempt_ship(
 
     match result {
         ShipResult::Ok => {
+            record_flight_attempt(
+                flight_recorder,
+                &flight_record,
+                http_finished_at_ms,
+                latency_ms,
+                outcome.as_str(),
+                http_status,
+                error_kind,
+                "shipped",
+            );
             if let Some(t) = tracker {
                 if let Some(n) = t.record_success() {
                     tracing::info!(
@@ -1187,6 +1182,16 @@ async fn attempt_ship(
         | ShipResult::ServerError(_, _)
         | ShipResult::ConnectError(_)
         | ShipResult::RetryableClientError(_, _) => {
+            record_flight_attempt(
+                flight_recorder,
+                &flight_record,
+                http_finished_at_ms,
+                latency_ms,
+                outcome.as_str(),
+                http_status,
+                error_kind,
+                "retryable",
+            );
             let error = error_message.unwrap_or_else(|| transient_error_message(&result));
             let should_log = tracker.map_or(true, |t| t.record_error());
             if should_log {
@@ -1221,6 +1226,16 @@ async fn attempt_ship(
             }
         }
         ShipResult::PayloadTooLarge(body) => {
+            record_flight_attempt(
+                flight_recorder,
+                &flight_record,
+                http_finished_at_ms,
+                latency_ms,
+                outcome.as_str(),
+                http_status,
+                error_kind,
+                "retryable_payload_too_large",
+            );
             tracing::warn!(
                 "Payload too large shipping {}: {}",
                 item.path_str,
@@ -1229,6 +1244,16 @@ async fn attempt_ship(
             AttemptedShip::PayloadTooLarge { item }
         }
         ShipResult::PayloadRejected(status_code, body) => {
+            record_flight_attempt(
+                flight_recorder,
+                &flight_record,
+                http_finished_at_ms,
+                latency_ms,
+                outcome.as_str(),
+                http_status,
+                error_kind,
+                "dead_letter",
+            );
             tracing::error!(
                 "Payload rejected shipping {}: {} {}",
                 item.path_str,
@@ -1241,6 +1266,154 @@ async fn attempt_ship(
                 body,
             }
         }
+    }
+}
+
+fn build_ship_trace_value(
+    item: &ShipItem,
+    trace: Option<&ShipTraceContext>,
+    http_send_started_at_ms: i64,
+) -> Value {
+    let mut value = json!({
+        "schema": "ship_trace.v1",
+        "kind": "ship_attempt",
+        "trace_id": format!("{}:{}:{}:{}", item.session_id, item.offset, item.new_offset, http_send_started_at_ms),
+        "provider": &item.provider,
+        "session_id": &item.session_id,
+        "path": &item.path_str,
+        "work_context": trace.map(|trace| trace.work_context).unwrap_or("untraced"),
+        "observation_source": trace.map(|trace| trace.observation_source).unwrap_or("unknown"),
+        "event_count": item.event_count,
+        "offset": item.offset,
+        "new_offset": item.new_offset,
+        "range_bytes": item.new_offset.saturating_sub(item.offset),
+        "http_send_started_at_ms": http_send_started_at_ms,
+    });
+
+    if let Some(trace) = trace {
+        insert_json_field(&mut value, "wake_reason", json!(trace.wake_reason));
+        insert_json_field(&mut value, "turn_id", json!(trace.turn_id));
+        insert_json_field(&mut value, "session_id_hint", json!(trace.session_id_hint));
+        insert_json_field(&mut value, "file_len_hint", json!(trace.file_len_hint));
+        insert_json_field(&mut value, "observed_at_ms", json!(trace.observed_at_ms));
+        insert_json_field(
+            &mut value,
+            "wake_received_at_ms",
+            json!(trace.wake_received_at_ms),
+        );
+        insert_json_field(&mut value, "enqueued_at_ms", json!(trace.enqueued_at_ms));
+        insert_json_field(
+            &mut value,
+            "job_started_at_ms",
+            json!(trace.job_started_at_ms),
+        );
+        insert_json_field(
+            &mut value,
+            "prepare_started_at_ms",
+            json!(trace.prepare_started_at_ms),
+        );
+        insert_json_field(
+            &mut value,
+            "prepare_finished_at_ms",
+            json!(trace.prepare_finished_at_ms),
+        );
+        insert_json_field(
+            &mut value,
+            "prepare_open_db_ms",
+            json!(trace.prepare_open_db_ms),
+        );
+        insert_json_field(
+            &mut value,
+            "prepare_binding_wait_ms",
+            json!(trace.prepare_binding_wait_ms),
+        );
+        insert_json_field(
+            &mut value,
+            "prepare_parse_ms",
+            json!(trace.prepare_parse_ms),
+        );
+        insert_json_field(
+            &mut value,
+            "observation_to_enqueue_ms",
+            json!(trace.enqueued_at_ms.saturating_sub(trace.observed_at_ms)),
+        );
+        insert_json_field(
+            &mut value,
+            "observation_to_wake_ms",
+            json!(trace
+                .wake_received_at_ms
+                .map(|wake_ms| wake_ms.saturating_sub(trace.observed_at_ms))),
+        );
+        insert_json_field(
+            &mut value,
+            "wake_to_enqueue_ms",
+            json!(trace
+                .wake_received_at_ms
+                .map(|wake_ms| trace.enqueued_at_ms.saturating_sub(wake_ms))),
+        );
+        insert_json_field(
+            &mut value,
+            "enqueue_to_job_ms",
+            json!(trace.job_started_at_ms.saturating_sub(trace.enqueued_at_ms)),
+        );
+        insert_json_field(
+            &mut value,
+            "observed_to_job_ms",
+            json!(trace.job_started_at_ms.saturating_sub(trace.observed_at_ms)),
+        );
+        insert_json_field(
+            &mut value,
+            "prepare_ms",
+            json!(trace
+                .prepare_finished_at_ms
+                .saturating_sub(trace.prepare_started_at_ms)),
+        );
+        insert_json_field(
+            &mut value,
+            "job_to_http_ms",
+            json!(http_send_started_at_ms.saturating_sub(trace.job_started_at_ms)),
+        );
+    }
+
+    value
+}
+
+fn record_flight_attempt(
+    recorder: Option<&FlightRecorder>,
+    base_record: &Value,
+    http_finished_at_ms: i64,
+    http_latency_ms: u64,
+    outcome: &str,
+    http_status: Option<u16>,
+    error_kind: Option<&str>,
+    retry_decision: &str,
+) {
+    let Some(recorder) = recorder else {
+        return;
+    };
+    let mut value = base_record.clone();
+    insert_json_field(
+        &mut value,
+        "http_finished_at_ms",
+        json!(http_finished_at_ms),
+    );
+    insert_json_field(&mut value, "http_latency_ms", json!(http_latency_ms));
+    insert_json_field(&mut value, "outcome", json!(outcome));
+    insert_json_field(&mut value, "http_status", json!(http_status));
+    insert_json_field(&mut value, "error_kind", json!(error_kind));
+    insert_json_field(&mut value, "retry_decision", json!(retry_decision));
+    recorder.record(value);
+}
+
+fn insert_json_field(value: &mut Value, key: &str, field_value: Value) {
+    if let Value::Object(map) = value {
+        map.insert(key.to_string(), field_value);
+    }
+}
+
+fn remove_json_field(value: &mut Value, key: &str) {
+    if let Value::Object(map) = value {
+        map.remove(key);
     }
 }
 
@@ -1292,7 +1465,7 @@ pub async fn ship_prepared_file(
     tracker: Option<&ConsecutiveErrorTracker>,
     ship_stats: Option<&RecentShipStatsTracker>,
 ) -> Result<ShipPreparedOutcome> {
-    ship_prepared_file_with_trace(prepared, client, conn, tracker, ship_stats, None).await
+    ship_prepared_file_with_trace(prepared, client, conn, tracker, ship_stats, None, None).await
 }
 
 pub async fn ship_prepared_file_with_trace(
@@ -1302,6 +1475,7 @@ pub async fn ship_prepared_file_with_trace(
     tracker: Option<&ConsecutiveErrorTracker>,
     ship_stats: Option<&RecentShipStatsTracker>,
     ship_trace: Option<&ShipTraceContext>,
+    flight_recorder: Option<&FlightRecorder>,
 ) -> Result<ShipPreparedOutcome> {
     let file_state = FileState::new(conn);
     let live_file_state = LiveFileState::new(conn);
@@ -1370,7 +1544,16 @@ pub async fn ship_prepared_file_with_trace(
                 }
             }
             PreparedAction::Ship(item) => {
-                match attempt_ship(item, client, tracker, ship_stats, ship_trace).await {
+                match attempt_ship(
+                    item,
+                    client,
+                    tracker,
+                    ship_stats,
+                    ship_trace,
+                    flight_recorder,
+                )
+                .await
+                {
                     AttemptedShip::Shipped(item) => {
                         match cursor_mode {
                             CursorMode::Archive => file_state.set_offset(
@@ -1616,6 +1799,7 @@ pub(crate) async fn replay_spool_batch_with_batch_bytes_and_parse_tracker(
         max_batch_bytes,
         parse_tracker,
         ship_stats,
+        None,
     )
     .await?;
 
@@ -1637,6 +1821,7 @@ pub(crate) async fn replay_spool_for_path_with_batch_bytes_and_parse_tracker(
     max_batch_bytes: u64,
     parse_tracker: Option<&RecentIssueTracker>,
     ship_stats: Option<&RecentShipStatsTracker>,
+    flight_recorder: Option<&FlightRecorder>,
 ) -> Result<ReplaySpoolOutcome> {
     let spool = Spool::new(conn);
     let pending = spool.pending_entries_for_path(&file_path.to_string_lossy(), limit)?;
@@ -1648,6 +1833,7 @@ pub(crate) async fn replay_spool_for_path_with_batch_bytes_and_parse_tracker(
         max_batch_bytes,
         parse_tracker,
         ship_stats,
+        flight_recorder,
     )
     .await
 }
@@ -1672,6 +1858,7 @@ pub(crate) async fn replay_spool_for_path_now_with_batch_bytes_and_parse_tracker
         max_batch_bytes,
         parse_tracker,
         ship_stats,
+        None,
     )
     .await
 }
@@ -1708,7 +1895,7 @@ async fn prepare_spool_entry_for_replay(
 #[tracing::instrument(
     level = "info",
     name = "engine.spool.replay",
-    skip(conn, client, pending, parse_tracker, ship_stats),
+    skip(conn, client, pending, parse_tracker, ship_stats, flight_recorder),
     fields(longhouse.spool.pending_entries = pending.len() as u64)
 )]
 async fn replay_spool_entries(
@@ -1719,6 +1906,7 @@ async fn replay_spool_entries(
     max_batch_bytes: u64,
     parse_tracker: Option<&RecentIssueTracker>,
     ship_stats: Option<&RecentShipStatsTracker>,
+    flight_recorder: Option<&FlightRecorder>,
 ) -> Result<ReplaySpoolOutcome> {
     let spool = Spool::new(conn);
     let file_state = FileState::new(conn);
@@ -1797,7 +1985,8 @@ async fn replay_spool_entries(
                     }
                 }
                 PreparedAction::Ship(item) => {
-                    match attempt_ship(item, client, None, ship_stats, None).await {
+                    match attempt_ship(item, client, None, ship_stats, None, flight_recorder).await
+                    {
                         AttemptedShip::Shipped(item) => {
                             outcome.events_shipped += item.event_count;
                             file_state.set_acked_offset(&entry.file_path, item.new_offset)?;
@@ -3356,6 +3545,7 @@ mod tests {
             10_000,
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -3425,6 +3615,7 @@ mod tests {
             10_000,
             None,
             Some(&ship_stats),
+            None,
         )
         .await
         .unwrap();
@@ -3483,6 +3674,7 @@ mod tests {
             &path,
             10,
             10_000,
+            None,
             None,
             None,
         )
@@ -4279,5 +4471,25 @@ mod tests {
         assert_eq!(row.1 as u64, full_end);
         assert_eq!(row.2, 1);
         assert_eq!(row.3, "pending");
+    }
+
+    #[test]
+    fn test_ship_trace_value_excludes_payload_content() {
+        let item = ShipItem {
+            path_str: "/tmp/session.jsonl".to_string(),
+            provider: "codex".to_string(),
+            offset: 10,
+            new_offset: 20,
+            event_count: 2,
+            session_id: "session-1".to_string(),
+            compressed: b"secret transcript payload".to_vec(),
+        };
+
+        let value = build_ship_trace_value(&item, None, 1234);
+        let encoded = serde_json::to_string(&value).unwrap();
+
+        assert!(encoded.contains("ship_trace.v1"));
+        assert!(!encoded.contains("secret transcript payload"));
+        assert_eq!(value.get("range_bytes").and_then(Value::as_u64), Some(10));
     }
 }
