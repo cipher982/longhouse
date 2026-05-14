@@ -557,6 +557,10 @@ def serve(
         reload=reload,
         workers=workers if not reload else 1,
         log_level="info",
+        # Machine Agent control uses an app-level heartbeat. Uvicorn protocol
+        # pings have been flaky behind hosted proxies for non-browser clients,
+        # and the control route has its own receive timeout for stale sockets.
+        ws_ping_interval=None,
     )
 
 
