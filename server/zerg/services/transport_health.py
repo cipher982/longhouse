@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
 TRANSPORT_ERROR_DEGRADED_MIN_COUNT = 3
 TRANSPORT_ERROR_DEGRADED_MIN_RATE = 0.25
+ACTIVE_TRANSPORT_WINDOW_LABEL = "last 10 minutes"
 
 
 def _normalize_int(value: Any) -> int:
@@ -46,6 +47,12 @@ class TransportHealthSample:
     ship_payload_too_large_1h: int = 0
     ship_retryable_client_errors_1h: int = 0
     ship_connect_errors_1h: int = 0
+    ship_attempts_10m: int | None = None
+    ship_successes_10m: int | None = None
+    ship_rate_limited_10m: int | None = None
+    ship_server_errors_10m: int | None = None
+    ship_retryable_client_errors_10m: int | None = None
+    ship_connect_errors_10m: int | None = None
     last_ship_result: str | None = None
     last_ship_http_status: int | None = None
     last_ship_error_kind: str | None = None
@@ -57,6 +64,32 @@ class TransportHealthSample:
         if self.ship_attempts_1h <= 0:
             return None
         return round(self.ship_successes_1h / self.ship_attempts_1h, 4)
+
+    @property
+    def has_active_window(self) -> bool:
+        return self.ship_attempts_10m is not None
+
+    @property
+    def ship_attempts_active(self) -> int:
+        return self.ship_attempts_10m if self.ship_attempts_10m is not None else self.ship_attempts_1h
+
+    @property
+    def ship_connect_errors_active(self) -> int:
+        return self.ship_connect_errors_10m if self.ship_connect_errors_10m is not None else self.ship_connect_errors_1h
+
+    @property
+    def ship_server_errors_active(self) -> int:
+        return self.ship_server_errors_10m if self.ship_server_errors_10m is not None else self.ship_server_errors_1h
+
+    @property
+    def ship_rate_limited_active(self) -> int:
+        return self.ship_rate_limited_10m if self.ship_rate_limited_10m is not None else self.ship_rate_limited_1h
+
+    @property
+    def ship_retryable_client_errors_active(self) -> int:
+        if self.ship_retryable_client_errors_10m is not None:
+            return self.ship_retryable_client_errors_10m
+        return self.ship_retryable_client_errors_1h
 
 
 @dataclass(frozen=True)
@@ -82,6 +115,12 @@ def transport_health_sample_from_heartbeat(row: AgentHeartbeat) -> TransportHeal
         ship_payload_too_large_1h=_normalize_int(getattr(row, "ship_payload_too_large_1h", 0)),
         ship_retryable_client_errors_1h=_normalize_int(getattr(row, "ship_retryable_client_errors_1h", 0)),
         ship_connect_errors_1h=_normalize_int(getattr(row, "ship_connect_errors_1h", 0)),
+        ship_attempts_10m=_normalize_present_int(raw, "ship_attempts_10m"),
+        ship_successes_10m=_normalize_present_int(raw, "ship_successes_10m"),
+        ship_rate_limited_10m=_normalize_present_int(raw, "ship_rate_limited_10m"),
+        ship_server_errors_10m=_normalize_present_int(raw, "ship_server_errors_10m"),
+        ship_retryable_client_errors_10m=_normalize_present_int(raw, "ship_retryable_client_errors_10m"),
+        ship_connect_errors_10m=_normalize_present_int(raw, "ship_connect_errors_10m"),
         last_ship_result=_normalize_optional_str(getattr(row, "last_ship_result", None) or raw.get("last_ship_result")),
         last_ship_http_status=_normalize_optional_int(
             getattr(row, "last_ship_http_status", None) or raw.get("last_ship_http_status")
@@ -107,6 +146,12 @@ def transport_health_sample_from_engine_status_payload(payload: Mapping[str, Any
         ship_payload_too_large_1h=_normalize_int(raw_payload.get("ship_payload_too_large_1h")),
         ship_retryable_client_errors_1h=_normalize_int(raw_payload.get("ship_retryable_client_errors_1h")),
         ship_connect_errors_1h=_normalize_int(raw_payload.get("ship_connect_errors_1h")),
+        ship_attempts_10m=_normalize_present_int(raw_payload, "ship_attempts_10m"),
+        ship_successes_10m=_normalize_present_int(raw_payload, "ship_successes_10m"),
+        ship_rate_limited_10m=_normalize_present_int(raw_payload, "ship_rate_limited_10m"),
+        ship_server_errors_10m=_normalize_present_int(raw_payload, "ship_server_errors_10m"),
+        ship_retryable_client_errors_10m=_normalize_present_int(raw_payload, "ship_retryable_client_errors_10m"),
+        ship_connect_errors_10m=_normalize_present_int(raw_payload, "ship_connect_errors_10m"),
         last_ship_result=_normalize_optional_str(raw_payload.get("last_ship_result")),
         last_ship_http_status=_normalize_optional_int(raw_payload.get("last_ship_http_status")),
         last_ship_error_kind=_normalize_optional_str(raw_payload.get("last_ship_error_kind")),
@@ -131,28 +176,32 @@ def is_transport_error_burst(
     )
 
 
+def _transport_window_phrase(sample: TransportHealthSample) -> str:
+    return f"in the {ACTIVE_TRANSPORT_WINDOW_LABEL}" if sample.has_active_window else "in the last hour"
+
+
 def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAssessment:
     connect_error_burst = is_transport_error_burst(
-        error_count=sample.ship_connect_errors_1h,
-        ship_attempts=sample.ship_attempts_1h,
+        error_count=sample.ship_connect_errors_active,
+        ship_attempts=sample.ship_attempts_active,
         last_ship_result=sample.last_ship_result,
         result_kind="connect_error",
     )
     server_error_burst = is_transport_error_burst(
-        error_count=sample.ship_server_errors_1h,
-        ship_attempts=sample.ship_attempts_1h,
+        error_count=sample.ship_server_errors_active,
+        ship_attempts=sample.ship_attempts_active,
         last_ship_result=sample.last_ship_result,
         result_kind="server_error",
     )
     rate_limited_burst = is_transport_error_burst(
-        error_count=sample.ship_rate_limited_1h,
-        ship_attempts=sample.ship_attempts_1h,
+        error_count=sample.ship_rate_limited_active,
+        ship_attempts=sample.ship_attempts_active,
         last_ship_result=sample.last_ship_result,
         result_kind="rate_limited",
     )
     retryable_client_error_burst = is_transport_error_burst(
-        error_count=sample.ship_retryable_client_errors_1h,
-        ship_attempts=sample.ship_attempts_1h,
+        error_count=sample.ship_retryable_client_errors_active,
+        ship_attempts=sample.ship_attempts_active,
         last_ship_result=sample.last_ship_result,
         result_kind="retryable_client_error",
     )
@@ -209,28 +258,32 @@ def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAss
         status = "degraded"
         status_reason = "connect_errors"
         status_summary = _append_last_ship_error_detail(
-            f"{sample.ship_connect_errors_1h} ship connect error(s) in the last hour.",
+            f"{sample.ship_connect_errors_active} ship connect error(s) {_transport_window_phrase(sample)}.",
             sample,
         )
     elif server_error_burst:
         status = "degraded"
         status_reason = "server_errors"
         status_summary = _append_last_ship_error_detail(
-            f"{sample.ship_server_errors_1h} ship server error(s) in the last hour.",
+            f"{sample.ship_server_errors_active} ship server error(s) {_transport_window_phrase(sample)}.",
             sample,
         )
     elif rate_limited_burst:
         status = "degraded"
         status_reason = "rate_limited"
         status_summary = _append_last_ship_error_detail(
-            f"{sample.ship_rate_limited_1h} rate-limit response(s) in the last hour.",
+            f"{sample.ship_rate_limited_active} rate-limit response(s) {_transport_window_phrase(sample)}.",
             sample,
         )
     elif retryable_client_error_burst:
         status = "degraded"
         status_reason = "retryable_client_errors"
+        retryable_summary = (
+            f"{sample.ship_retryable_client_errors_active} retryable client error(s) "
+            f"{_transport_window_phrase(sample)}."
+        )
         status_summary = _append_last_ship_error_detail(
-            f"{sample.ship_retryable_client_errors_1h} retryable client error(s) in the last hour.",
+            retryable_summary,
             sample,
         )
     elif sample.spool_pending > 0:
@@ -255,6 +308,12 @@ def _normalize_optional_int(value: Any) -> int | None:
     if value is None or str(value).strip() == "":
         return None
     return normalized
+
+
+def _normalize_present_int(payload: Mapping[str, Any], key: str) -> int | None:
+    if key not in payload:
+        return None
+    return _normalize_int(payload.get(key))
 
 
 def _normalize_optional_str(value: Any) -> str | None:

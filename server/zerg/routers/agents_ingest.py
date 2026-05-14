@@ -56,6 +56,12 @@ def _ship_trace_from_request(request: Request) -> dict | None:
     return value
 
 
+def _write_serializer_label_for_ship_trace(ship_trace: dict | None) -> str:
+    if ship_trace and ship_trace.get("work_context") == "live_transcript":
+        return "ingest-live"
+    return "ingest"
+
+
 def _persist_ship_trace_event(
     db: Session,
     *,
@@ -301,6 +307,7 @@ async def ingest_session(
             from zerg.services.write_serializer import get_write_serializer
 
             ws = get_write_serializer()
+            write_label = _write_serializer_label_for_ship_trace(ship_trace)
 
             def _do_ingest(write_db):
                 write_started_at_ms = _unix_ms()
@@ -325,7 +332,7 @@ async def ingest_session(
 
             with tracer.start_as_current_span("longhouse.ingest.write") as write_span:
                 write_started = time.monotonic()
-                result = await ws.execute_or_direct(_do_ingest, db, label="ingest")
+                result = await ws.execute_or_direct(_do_ingest, db, label=write_label)
                 write_ms = round((time.monotonic() - write_started) * 1000, 1)
                 agents_ingest_write_seconds.labels(provider=provider_label).observe(write_ms / 1000.0)
                 set_span_attributes(
@@ -336,6 +343,7 @@ async def ingest_session(
                         "longhouse.ingest.events_skipped": result.events_skipped,
                         "longhouse.ingest.session_created": result.session_created,
                         "longhouse.ingest.write_ms": write_ms,
+                        "longhouse.ingest.write_label": write_label,
                     },
                 )
                 agents_ingest_events_total.labels(provider=provider_label, kind="inserted").inc(result.events_inserted)

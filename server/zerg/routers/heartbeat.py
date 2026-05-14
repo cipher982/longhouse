@@ -133,6 +133,12 @@ class HeartbeatIn(BaseModel):
     ship_connect_errors_1h: int = 0
     ship_latency_p50_ms_1h: Optional[int] = None
     ship_latency_p95_ms_1h: Optional[int] = None
+    ship_attempts_10m: int = 0
+    ship_successes_10m: int = 0
+    ship_rate_limited_10m: int = 0
+    ship_server_errors_10m: int = 0
+    ship_retryable_client_errors_10m: int = 0
+    ship_connect_errors_10m: int = 0
     disk_free_bytes: int = 0
     is_offline: bool = False
     managed_sessions: list[ManagedSessionLeaseIn] = Field(default_factory=list)
@@ -201,7 +207,10 @@ def _is_managed_codex_session(session: AgentSession | None) -> bool:
         return False
     execution_home = str(getattr(session, "execution_home", "") or "").strip()
     managed_transport = str(getattr(session, "managed_transport", "") or "").strip()
-    return execution_home == SessionExecutionHome.MANAGED_LOCAL.value or managed_transport == ManagedSessionTransport.CODEX_APP_SERVER.value
+    return (
+        execution_home == SessionExecutionHome.MANAGED_LOCAL.value
+        or managed_transport == ManagedSessionTransport.CODEX_APP_SERVER.value
+    )
 
 
 def _is_managed_session(session: AgentSession | None) -> bool:
@@ -754,7 +763,9 @@ async def ingest_heartbeat(
                 last_ship_attempt_at: datetime | None = None
                 if payload.last_ship_attempt_at:
                     try:
-                        last_ship_attempt_at = datetime.fromisoformat(payload.last_ship_attempt_at.replace("Z", "+00:00"))
+                        last_ship_attempt_at = datetime.fromisoformat(
+                            payload.last_ship_attempt_at.replace("Z", "+00:00")
+                        )
                     except ValueError:
                         pass
 

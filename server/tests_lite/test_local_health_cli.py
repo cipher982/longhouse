@@ -590,6 +590,35 @@ def test_collect_local_health_keeps_recovered_transient_connect_errors_healthy(m
     assert "connect_errors" not in snapshot["reasons"]
 
 
+def test_collect_local_health_uses_active_transport_window_when_present(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(
+        tmp_path,
+        age_seconds=5,
+        payload={
+            "ship_attempts_1h": 32,
+            "ship_successes_1h": 20,
+            "ship_connect_errors_1h": 12,
+            "ship_attempts_10m": 4,
+            "ship_successes_10m": 4,
+            "ship_connect_errors_10m": 0,
+            "last_ship_result": "ok",
+            "consecutive_ship_failures": 0,
+            "spool_pending_count": 0,
+            "spool_dead_count": 0,
+        },
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "healthy"
+    assert snapshot["transport_health"]["status"] == "healthy"
+    assert snapshot["transport_health"]["ship_connect_errors_1h"] == 12
+    assert snapshot["transport_health"]["ship_connect_errors_10m"] == 0
+    assert "connect_errors" not in snapshot["reasons"]
+
+
 def test_collect_local_health_includes_last_transport_error_detail(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))

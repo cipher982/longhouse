@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const SHIP_STATS_WINDOW: Duration = Duration::from_secs(60 * 60);
+const SHIP_STATS_ACTIVE_WINDOW: Duration = Duration::from_secs(10 * 60);
 const SHIP_STATS_MAX_RECORDS: usize = 50_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +67,12 @@ pub struct ShipStatsSummary {
     pub ship_connect_errors_1h: u32,
     pub ship_latency_p50_ms_1h: Option<u64>,
     pub ship_latency_p95_ms_1h: Option<u64>,
+    pub ship_attempts_10m: u32,
+    pub ship_successes_10m: u32,
+    pub ship_rate_limited_10m: u32,
+    pub ship_server_errors_10m: u32,
+    pub ship_retryable_client_errors_10m: u32,
+    pub ship_connect_errors_10m: u32,
 }
 
 #[derive(Clone, Default)]
@@ -117,16 +124,43 @@ impl RecentShipStatsTracker {
             for record in guard.iter() {
                 summary.ship_attempts_1h += 1;
                 latencies.push(record.latency_ms);
+                let in_active_window = now.duration_since(record.at) <= SHIP_STATS_ACTIVE_WINDOW;
+                if in_active_window {
+                    summary.ship_attempts_10m += 1;
+                }
                 match record.outcome {
-                    ShipAttemptOutcome::Ok => summary.ship_successes_1h += 1,
-                    ShipAttemptOutcome::RateLimited => summary.ship_rate_limited_1h += 1,
-                    ShipAttemptOutcome::ServerError => summary.ship_server_errors_1h += 1,
+                    ShipAttemptOutcome::Ok => {
+                        summary.ship_successes_1h += 1;
+                        if in_active_window {
+                            summary.ship_successes_10m += 1;
+                        }
+                    }
+                    ShipAttemptOutcome::RateLimited => {
+                        summary.ship_rate_limited_1h += 1;
+                        if in_active_window {
+                            summary.ship_rate_limited_10m += 1;
+                        }
+                    }
+                    ShipAttemptOutcome::ServerError => {
+                        summary.ship_server_errors_1h += 1;
+                        if in_active_window {
+                            summary.ship_server_errors_10m += 1;
+                        }
+                    }
                     ShipAttemptOutcome::PayloadRejected => summary.ship_payload_rejections_1h += 1,
                     ShipAttemptOutcome::PayloadTooLarge => summary.ship_payload_too_large_1h += 1,
                     ShipAttemptOutcome::RetryableClientError => {
-                        summary.ship_retryable_client_errors_1h += 1
+                        summary.ship_retryable_client_errors_1h += 1;
+                        if in_active_window {
+                            summary.ship_retryable_client_errors_10m += 1;
+                        }
                     }
-                    ShipAttemptOutcome::ConnectError => summary.ship_connect_errors_1h += 1,
+                    ShipAttemptOutcome::ConnectError => {
+                        summary.ship_connect_errors_1h += 1;
+                        if in_active_window {
+                            summary.ship_connect_errors_10m += 1;
+                        }
+                    }
                 }
             }
 
@@ -265,6 +299,10 @@ mod tests {
         assert_eq!(summary.ship_successes_1h, 2);
         assert_eq!(summary.ship_server_errors_1h, 1);
         assert_eq!(summary.ship_connect_errors_1h, 1);
+        assert_eq!(summary.ship_attempts_10m, 4);
+        assert_eq!(summary.ship_successes_10m, 2);
+        assert_eq!(summary.ship_server_errors_10m, 1);
+        assert_eq!(summary.ship_connect_errors_10m, 1);
         assert_eq!(
             summary.last_ship_attempt_at.as_deref(),
             Some("2026-04-23T20:00:03Z")
@@ -309,6 +347,9 @@ mod tests {
         assert_eq!(summary.ship_attempts_1h, 1);
         assert_eq!(summary.ship_rate_limited_1h, 1);
         assert_eq!(summary.ship_successes_1h, 0);
+        assert_eq!(summary.ship_attempts_10m, 1);
+        assert_eq!(summary.ship_rate_limited_10m, 1);
+        assert_eq!(summary.ship_successes_10m, 0);
         assert_eq!(
             summary.last_ship_attempt_at.as_deref(),
             Some("2026-04-23T19:59:30Z")
@@ -337,5 +378,37 @@ mod tests {
         let message = summary.last_ship_error_message.unwrap();
         assert_eq!(message.chars().count(), 303);
         assert!(message.ends_with("..."));
+    }
+
+    #[test]
+    fn recent_ship_stats_keeps_active_window_separate_from_one_hour_window() {
+        let tracker = RecentShipStatsTracker::new();
+        let now = Instant::now();
+        tracker.record_at(
+            now - Duration::from_secs(20 * 60),
+            "2026-04-23T19:40:00Z".to_string(),
+            ShipAttemptOutcome::ConnectError,
+            3_000,
+            None,
+            Some("timeout".to_string()),
+            Some("request timed out".to_string()),
+        );
+        tracker.record_at(
+            now - Duration::from_secs(60),
+            "2026-04-23T19:59:00Z".to_string(),
+            ShipAttemptOutcome::Ok,
+            200,
+            None,
+            None,
+            None,
+        );
+
+        let summary = tracker.summary();
+
+        assert_eq!(summary.ship_attempts_1h, 2);
+        assert_eq!(summary.ship_connect_errors_1h, 1);
+        assert_eq!(summary.ship_attempts_10m, 1);
+        assert_eq!(summary.ship_connect_errors_10m, 0);
+        assert_eq!(summary.ship_successes_10m, 1);
     }
 }

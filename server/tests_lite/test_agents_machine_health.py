@@ -265,6 +265,62 @@ def test_machine_health_route_marks_transport_error_burst_degraded(tmp_path, mon
         api_app_ref.dependency_overrides = {}
 
 
+def test_machine_health_route_uses_active_transport_window_from_raw_json(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    pinned_now = datetime(2026, 4, 23, 20, 15, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+
+    with SessionLocal() as db:
+        db.add(
+            AgentHeartbeat(
+                device_id="recovered-machine",
+                received_at=pinned_now - timedelta(minutes=1),
+                version="0.6.0",
+                spool_pending=0,
+                spool_dead=0,
+                parse_errors_1h=0,
+                consecutive_failures=0,
+                ship_attempts_1h=32,
+                ship_successes_1h=20,
+                ship_connect_errors_1h=12,
+                ship_latency_p50_ms_1h=320,
+                ship_latency_p95_ms_1h=3400,
+                disk_free_bytes=100,
+                is_offline=0,
+                last_ship_result="ok",
+                raw_json=json.dumps(
+                    {
+                        "ship_attempts_10m": 4,
+                        "ship_successes_10m": 4,
+                        "ship_connect_errors_10m": 0,
+                        "last_ship_result": "ok",
+                    }
+                ),
+            )
+        )
+        db.commit()
+
+    client, api_app_ref = _make_client(SessionLocal)
+
+    try:
+        response = client.get("/api/agents/machines/health?device_id=recovered-machine&stale_after_seconds=3600")
+        assert response.status_code == 200
+
+        payload = response.json()
+        assert payload["total"] == 1
+        machine = payload["machines"][0]
+        assert machine["status"] == "healthy"
+        assert machine["status_reason"] == "healthy"
+        assert machine["status_summary"] == "Shipping healthy."
+        assert machine["ship_connect_errors_1h"] == 12
+        assert machine["ship_attempts_10m"] == 4
+        assert machine["ship_successes_10m"] == 4
+        assert machine["ship_connect_errors_10m"] == 0
+        assert machine["reasons"] == []
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
 def test_machine_health_route_filters_by_device_and_marks_stale_rows_offline(tmp_path, monkeypatch):
     SessionLocal = _make_db(tmp_path)
     pinned_now = datetime(2026, 4, 23, 20, 15, 0, tzinfo=timezone.utc)
