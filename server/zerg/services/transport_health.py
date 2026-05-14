@@ -14,8 +14,8 @@ if TYPE_CHECKING:
     # CLI-only entrypoints like `longhouse local-health`.
     from zerg.models.agents import AgentHeartbeat
 
-TRANSPORT_ERROR_DEGRADED_MIN_COUNT = 2
-TRANSPORT_ERROR_DEGRADED_MIN_RATE = 0.10
+TRANSPORT_ERROR_DEGRADED_MIN_COUNT = 3
+TRANSPORT_ERROR_DEGRADED_MIN_RATE = 0.25
 
 
 def _normalize_int(value: Any) -> int:
@@ -83,7 +83,9 @@ def transport_health_sample_from_heartbeat(row: AgentHeartbeat) -> TransportHeal
         ship_retryable_client_errors_1h=_normalize_int(getattr(row, "ship_retryable_client_errors_1h", 0)),
         ship_connect_errors_1h=_normalize_int(getattr(row, "ship_connect_errors_1h", 0)),
         last_ship_result=_normalize_optional_str(getattr(row, "last_ship_result", None) or raw.get("last_ship_result")),
-        last_ship_http_status=_normalize_optional_int(getattr(row, "last_ship_http_status", None) or raw.get("last_ship_http_status")),
+        last_ship_http_status=_normalize_optional_int(
+            getattr(row, "last_ship_http_status", None) or raw.get("last_ship_http_status")
+        ),
         last_ship_error_kind=_normalize_optional_str(raw.get("last_ship_error_kind")),
         last_ship_error_message=_normalize_optional_str(raw.get("last_ship_error_message")),
         is_offline=bool(getattr(row, "is_offline", False)),
@@ -113,31 +115,46 @@ def transport_health_sample_from_engine_status_payload(payload: Mapping[str, Any
     )
 
 
-def is_transport_error_burst(*, error_count: int, ship_attempts: int) -> bool:
-    """Return True only for sustained transport noise, not one-off blips."""
+def is_transport_error_burst(
+    *, error_count: int, ship_attempts: int, last_ship_result: str | None, result_kind: str
+) -> bool:
+    """Return True for current failure or sustained transport noise."""
     if error_count <= 0:
         return False
+    if last_ship_result == result_kind:
+        return True
     if ship_attempts <= 0:
         return False
-    return error_count >= TRANSPORT_ERROR_DEGRADED_MIN_COUNT and (error_count / ship_attempts) >= TRANSPORT_ERROR_DEGRADED_MIN_RATE
+    return (
+        error_count >= TRANSPORT_ERROR_DEGRADED_MIN_COUNT
+        and (error_count / ship_attempts) >= TRANSPORT_ERROR_DEGRADED_MIN_RATE
+    )
 
 
 def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAssessment:
     connect_error_burst = is_transport_error_burst(
         error_count=sample.ship_connect_errors_1h,
         ship_attempts=sample.ship_attempts_1h,
+        last_ship_result=sample.last_ship_result,
+        result_kind="connect_error",
     )
     server_error_burst = is_transport_error_burst(
         error_count=sample.ship_server_errors_1h,
         ship_attempts=sample.ship_attempts_1h,
+        last_ship_result=sample.last_ship_result,
+        result_kind="server_error",
     )
     rate_limited_burst = is_transport_error_burst(
         error_count=sample.ship_rate_limited_1h,
         ship_attempts=sample.ship_attempts_1h,
+        last_ship_result=sample.last_ship_result,
+        result_kind="rate_limited",
     )
     retryable_client_error_burst = is_transport_error_burst(
         error_count=sample.ship_retryable_client_errors_1h,
         ship_attempts=sample.ship_attempts_1h,
+        last_ship_result=sample.last_ship_result,
+        result_kind="retryable_client_error",
     )
 
     reasons: list[str] = []
