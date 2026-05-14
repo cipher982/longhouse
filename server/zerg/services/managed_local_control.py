@@ -24,6 +24,7 @@ from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_INTERRUPT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_STEER_TEXT
+from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
 from zerg.services.managed_control_dispatcher import MISSING_LEGACY_RUNNER_METADATA_ERROR
 from zerg.services.managed_control_dispatcher import dispatch_managed_control_command
 from zerg.services.managed_control_dispatcher import select_managed_control_transport
@@ -51,6 +52,12 @@ MANAGED_LOCAL_CONTROL_STATUS_NEEDS_USER = "needs_user"
 MANAGED_LOCAL_CONTROL_STATUS_BLOCKED = "blocked"
 MANAGED_LOCAL_CONTROL_STATUS_FAILED = "failed"
 _MANAGED_LOCAL_HOOK_RUNTIME_SOURCE = "claude_hook"
+_MANAGED_LOCAL_RUNTIME_PHASE_SOURCES = frozenset(
+    {
+        _MANAGED_LOCAL_HOOK_RUNTIME_SOURCE,
+        "codex_bridge",
+    }
+)
 _MANAGED_LOCAL_ACTIVE_HOOK_PHASES = frozenset({"thinking", "running"})
 _MANAGED_LOCAL_TERMINAL_PHASE_TO_CONTROL_STATUS = {
     "idle": MANAGED_LOCAL_CONTROL_STATUS_COMPLETED,
@@ -164,7 +171,7 @@ def get_managed_local_latest_hook_observation_id(*, db: Session, session_id: UUI
         db.query(SessionObservation.id)
         .filter(
             SessionObservation.session_id == session_id,
-            SessionObservation.source == _MANAGED_LOCAL_HOOK_RUNTIME_SOURCE,
+            SessionObservation.source.in_(tuple(_MANAGED_LOCAL_RUNTIME_PHASE_SOURCES)),
             SessionObservation.kind == OBS_KIND_RUNTIME_SIGNAL,
         )
         .order_by(SessionObservation.id.desc())
@@ -196,7 +203,7 @@ def _fetch_managed_local_hook_observations_since(
             poll_db.query(SessionObservation)
             .filter(
                 SessionObservation.session_id == session_id,
-                SessionObservation.source == _MANAGED_LOCAL_HOOK_RUNTIME_SOURCE,
+                SessionObservation.source.in_(tuple(_MANAGED_LOCAL_RUNTIME_PHASE_SOURCES)),
                 SessionObservation.kind == OBS_KIND_RUNTIME_SIGNAL,
                 SessionObservation.id > after_observation_id,
             )
@@ -594,6 +601,15 @@ async def send_text_to_managed_local_session(
         )
 
     if effective_verify:
+        if result.transport == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL:
+            turn_id = str(data.get("turn_id") or "").strip()
+            if turn_id:
+                return ManagedLocalSendResult(
+                    ok=True,
+                    exit_code=0,
+                    baseline_event_id=baseline_event_id,
+                    verified_turn_started=True,
+                )
         verification_timeout = float(
             verification_timeout_secs if verification_timeout_secs is not None else MANAGED_LOCAL_EVENT_TIMEOUT_SECS
         )
