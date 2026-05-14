@@ -113,6 +113,7 @@ describe("LaunchSessionModal", () => {
     expect(
       screen.getByText(/4 enrolled machines have no active control channel: cinder, old-ci-1, old-ci-2, plus 1 more\./),
     ).toBeInTheDocument();
+    expect(screen.getByText(/This sheet refreshes automatically\./)).toBeInTheDocument();
     expect(screen.queryByText(/does not advertise codex\.launch/)).not.toBeInTheDocument();
   });
 
