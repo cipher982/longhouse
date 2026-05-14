@@ -40,6 +40,22 @@ def test_managed_local_launch_route_uses_longer_timeout_budget():
     assert response.json() == {"ok": True}
 
 
+def test_remote_session_launch_route_uses_longer_timeout_budget():
+    app = FastAPI()
+    app.add_middleware(RequestTimeoutMiddleware, timeout=0.01)
+
+    @app.post("/api/sessions/launch")
+    async def remote_session_launch():
+        await asyncio.sleep(0.05)
+        return {"ok": True}
+
+    with TestClient(app) as client:
+        response = client.post("/api/sessions/launch")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
 def test_accept_token_route_uses_longer_timeout_budget():
     app = FastAPI()
     app.add_middleware(RequestTimeoutMiddleware, timeout=0.01)
