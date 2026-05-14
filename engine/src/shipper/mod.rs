@@ -1127,15 +1127,44 @@ async fn attempt_ship(
     });
     let payload = std::mem::take(&mut item.compressed);
     let attempt_started = std::time::Instant::now();
-    let result = if trace_header.is_none() && request_timeout.is_none() {
-        client.ship(payload).await
-    } else {
-        client
-            .ship_with_trace_and_timeout(payload, trace_header.as_deref(), request_timeout)
-            .await
+    let client_for_task = client.clone();
+    let trace_header_for_task = trace_header.clone();
+    let ship_task = tokio::spawn(async move {
+        let task_started = std::time::Instant::now();
+        let result = if trace_header_for_task.is_none() && request_timeout.is_none() {
+            client_for_task.ship(payload).await
+        } else {
+            client_for_task
+                .ship_with_trace_and_timeout(
+                    payload,
+                    trace_header_for_task.as_deref(),
+                    request_timeout,
+                )
+                .await
+        };
+        (result, task_started.elapsed().as_millis() as u64)
+    });
+    let (result, latency_ms) = match ship_task.await {
+        Ok(result) => result,
+        Err(err) => (
+            ShipResult::ConnectError(crate::shipping::client::ConnectErrorDetail {
+                kind: "task_join",
+                message: format!("HTTP ship task failed: {err}"),
+            }),
+            attempt_started.elapsed().as_millis() as u64,
+        ),
     };
-    let latency_ms = attempt_started.elapsed().as_millis() as u64;
+    let join_latency_ms = attempt_started.elapsed().as_millis() as u64;
     let http_finished_at_ms = chrono::Utc::now().timestamp_millis();
+    let local_join_delay_ms = join_latency_ms.saturating_sub(latency_ms);
+    if local_join_delay_ms > 1_000 {
+        tracing::warn!(
+            latency_ms,
+            join_latency_ms,
+            local_join_delay_ms,
+            "HTTP ship task completed slower from local scheduler perspective"
+        );
+    }
     let span = tracing::Span::current();
     let (outcome, http_status) = classify_ship_attempt_result(&result);
     span.record(
@@ -1174,6 +1203,7 @@ async fn attempt_ship(
                 &flight_record,
                 http_finished_at_ms,
                 latency_ms,
+                join_latency_ms,
                 outcome.as_str(),
                 http_status,
                 error_kind,
@@ -1204,6 +1234,7 @@ async fn attempt_ship(
                 &flight_record,
                 http_finished_at_ms,
                 latency_ms,
+                join_latency_ms,
                 outcome.as_str(),
                 http_status,
                 error_kind,
@@ -1248,6 +1279,7 @@ async fn attempt_ship(
                 &flight_record,
                 http_finished_at_ms,
                 latency_ms,
+                join_latency_ms,
                 outcome.as_str(),
                 http_status,
                 error_kind,
@@ -1266,6 +1298,7 @@ async fn attempt_ship(
                 &flight_record,
                 http_finished_at_ms,
                 latency_ms,
+                join_latency_ms,
                 outcome.as_str(),
                 http_status,
                 error_kind,
@@ -1420,6 +1453,7 @@ fn record_flight_attempt(
     base_record: &Value,
     http_finished_at_ms: i64,
     http_latency_ms: u64,
+    http_join_latency_ms: u64,
     outcome: &str,
     http_status: Option<u16>,
     error_kind: Option<&str>,
@@ -1435,6 +1469,11 @@ fn record_flight_attempt(
         json!(http_finished_at_ms),
     );
     insert_json_field(&mut value, "http_latency_ms", json!(http_latency_ms));
+    insert_json_field(
+        &mut value,
+        "http_join_elapsed_ms",
+        json!(http_join_latency_ms),
+    );
     insert_json_field(&mut value, "outcome", json!(outcome));
     insert_json_field(&mut value, "http_status", json!(http_status));
     insert_json_field(&mut value, "error_kind", json!(error_kind));
