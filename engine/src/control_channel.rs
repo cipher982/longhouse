@@ -4,7 +4,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -33,6 +33,7 @@ const LAUNCH_START_TIMEOUT_SECS: u64 = 45;
 const COMPLETED_COMMAND_CACHE_CAPACITY: usize = 256;
 const COMPLETED_COMMAND_CACHE_TTL_SECS: u64 = 5 * 60;
 const HEARTBEAT_INTERVAL_SECS: u64 = 25;
+const CONTROL_CONNECT_TIMEOUT_SECS: u64 = 15;
 const CONTROL_SUPPORTS: [&str; 4] = [
     "codex.send",
     "codex.interrupt",
@@ -248,9 +249,13 @@ async fn run_once(
         );
     }
 
-    let (stream, _) = connect_async(request)
-        .await
-        .with_context(|| format!("connecting machine control websocket {ws_url}"))?;
+    let (stream, _) = tokio::time::timeout(
+        Duration::from_secs(CONTROL_CONNECT_TIMEOUT_SECS),
+        connect_async(request),
+    )
+    .await
+    .map_err(|_| anyhow!("timed out connecting machine control websocket {ws_url}"))?
+    .with_context(|| format!("connecting machine control websocket {ws_url}"))?;
     let (mut write, mut read) = stream.split();
 
     let hello = json!({
@@ -285,8 +290,22 @@ async fn run_once(
                     break;
                 };
                 let message = message.context("reading machine control websocket message")?;
-                let Message::Text(text) = message else {
-                    continue;
+                let text = match message {
+                    Message::Text(text) => text,
+                    Message::Close(frame) => {
+                        tracing::info!(?frame, "Machine control channel received close frame");
+                        break;
+                    }
+                    Message::Ping(payload) => {
+                        write
+                            .send(Message::Pong(payload))
+                            .await
+                            .context("sending machine control pong")?;
+                        continue;
+                    }
+                    _ => {
+                        continue;
+                    }
                 };
                 let frame: Value = serde_json::from_str(&text).context("parsing machine control frame")?;
                 if frame.get("type").and_then(Value::as_str) != Some("command") {
