@@ -31,6 +31,7 @@ export default function LaunchSessionModal({
     queryFn: listMachines,
     enabled: isOpen,
     refetchOnMount: "always",
+    refetchInterval: isOpen ? 5000 : false,
   });
 
   const cwdInputRef = useRef<HTMLInputElement | null>(null);
@@ -252,7 +253,7 @@ function EmptyState({ machines }: { machines: MachineDirectoryEntry[] }) {
       {offline.length > 0 && (
         <p>{machineSummary(offline, "have no active control channel")}</p>
       )}
-      <p>Restart or upgrade the Machine Agent on the target machine, then reopen this sheet.</p>
+      <p>Restart or upgrade the Machine Agent on the target machine. This sheet refreshes automatically.</p>
     </div>
   );
 }
