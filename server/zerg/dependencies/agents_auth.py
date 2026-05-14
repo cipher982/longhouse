@@ -4,16 +4,14 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Request
 from fastapi import status
-from sqlalchemy.orm import Session
 
 from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
 from zerg.auth.managed_local_hook_tokens import validate_managed_local_hook_token
 from zerg.config import get_settings
-from zerg.database import get_db
+from zerg.database import get_session_factory
 from zerg.models.device_token import DeviceToken
 
 logger = logging.getLogger(__name__)
@@ -37,7 +35,36 @@ def _managed_local_hook_token_allowed(request: Request) -> bool:
     return (request.method.upper(), _normalized_agents_path(request)) in _MANAGED_LOCAL_HOOK_ALLOWED_ROUTES
 
 
-def verify_agents_token(request: Request, db: Session = Depends(get_db)) -> DeviceToken | ManagedLocalHookToken | None:
+def _validate_device_token_for_request(token: str) -> DeviceToken | None:
+    """Validate a device token without holding a DB session for the request lifetime."""
+
+    from zerg.routers.device_tokens import validate_device_token
+
+    db = get_session_factory()()
+    try:
+        device_token = validate_device_token(token, db)
+        if device_token is None:
+            return None
+
+        # Load the scalar fields used by downstream request handlers, then
+        # detach the row so FastAPI does not keep this auth session checked out
+        # while write-heavy endpoints wait on the SQLite WriteSerializer.
+        _ = (
+            device_token.id,
+            device_token.owner_id,
+            device_token.device_id,
+            device_token.token_hash,
+            device_token.created_at,
+            device_token.last_used_at,
+            device_token.revoked_at,
+        )
+        db.expunge(device_token)
+        return device_token
+    finally:
+        db.close()
+
+
+def verify_agents_token(request: Request) -> DeviceToken | ManagedLocalHookToken | None:
     """Verify the agents API token for write operations."""
     settings = get_settings()
     if settings.auth_disabled:
@@ -52,9 +79,7 @@ def verify_agents_token(request: Request, db: Session = Depends(get_db)) -> Devi
         )
 
     if provided_token.startswith("zdt_"):
-        from zerg.routers.device_tokens import validate_device_token
-
-        device_token = validate_device_token(provided_token, db)
+        device_token = _validate_device_token_for_request(provided_token)
         if device_token:
             logger.debug("Device token validated for device %s", device_token.device_id)
             request.state.agents_rate_key = f"device:{device_token.id}"
