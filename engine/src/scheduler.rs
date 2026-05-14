@@ -209,6 +209,31 @@ impl PathScheduler {
         None
     }
 
+    /// Return live work plus one bounded retry lane. This keeps foreground
+    /// transcript shipping hot while still allowing already-spooled ranges to
+    /// recover during long-running active sessions.
+    pub fn pop_launchable_live_or_retry(&mut self) -> Option<PathJob> {
+        if self.in_flight_count(WorkPriority::Retry) < RETRY_IN_FLIGHT_CAP
+            && self.in_flight_count(WorkPriority::Live) > 0
+        {
+            if let Some(job) = self.pop_ready_queue(WorkPriority::Retry) {
+                return Some(job);
+            }
+        }
+
+        if self.in_flight_count(WorkPriority::Live) < LIVE_IN_FLIGHT_CAP {
+            if let Some(job) = self.pop_ready_queue(WorkPriority::Live) {
+                return Some(job);
+            }
+        }
+
+        if self.in_flight_count(WorkPriority::Retry) < RETRY_IN_FLIGHT_CAP {
+            return self.pop_ready_queue(WorkPriority::Retry);
+        }
+
+        None
+    }
+
     /// Mark a path as completed. If the path was re-enqueued while running, or
     /// the task requests a follow-up pass, the path is queued again.
     pub fn complete(&mut self, path: &Path, task_rerun: Option<WorkPriority>) {
@@ -758,6 +783,34 @@ mod tests {
             scheduler.pop_launchable().unwrap().priority,
             WorkPriority::Scan
         );
+    }
+
+    #[test]
+    fn test_live_or_retry_launch_allows_one_retry_lane() {
+        let mut scheduler = PathScheduler::new(1);
+        let live_a = PathBuf::from("/tmp/live-a.jsonl");
+        let live_b = PathBuf::from("/tmp/live-b.jsonl");
+        let retry = PathBuf::from("/tmp/retry.jsonl");
+        let scan = PathBuf::from("/tmp/scan.jsonl");
+
+        scheduler.enqueue(live_a.clone(), "codex", WorkPriority::Live);
+        scheduler.enqueue(live_b.clone(), "codex", WorkPriority::Live);
+        scheduler.enqueue(retry.clone(), "claude", WorkPriority::Retry);
+        scheduler.enqueue(scan, "claude", WorkPriority::Scan);
+
+        let first = scheduler.pop_launchable_live_or_retry().unwrap();
+        assert_eq!(first.path, live_a);
+        assert_eq!(first.priority, WorkPriority::Live);
+
+        let second = scheduler.pop_launchable_live_or_retry().unwrap();
+        assert_eq!(second.path, retry);
+        assert_eq!(second.priority, WorkPriority::Retry);
+
+        let third = scheduler.pop_launchable_live_or_retry().unwrap();
+        assert_eq!(third.path, live_b);
+        assert_eq!(third.priority, WorkPriority::Live);
+
+        assert!(scheduler.pop_launchable_live_or_retry().is_none());
     }
 
     #[test]
