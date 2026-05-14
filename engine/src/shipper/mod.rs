@@ -29,6 +29,7 @@ use crate::state::live_file_state::LiveFileState;
 use crate::state::spool::Spool;
 
 const TARGET_BATCH_BYTES: u64 = 512 * 1024;
+const ARCHIVE_INGEST_TIMEOUT: Duration = Duration::from_secs(15);
 const LIVE_TRANSCRIPT_INGEST_TIMEOUT: Duration = Duration::from_secs(20);
 
 fn target_batch_bytes(max_batch_bytes: u64) -> u64 {
@@ -39,9 +40,10 @@ fn request_timeout_for_trace(ship_trace: Option<&ShipTraceContext>) -> Option<Du
     // Live transcript sends are user-visible, but they still go through the
     // durable ingest path. A very tight timeout creates retry storms during
     // normal hosted tail latency, which is worse than waiting a few seconds.
-    ship_trace
-        .filter(|trace| trace.work_context == "live_transcript")
-        .map(|_| LIVE_TRANSCRIPT_INGEST_TIMEOUT)
+    match ship_trace.map(|trace| trace.work_context) {
+        Some("live_transcript") => Some(LIVE_TRANSCRIPT_INGEST_TIMEOUT),
+        _ => Some(ARCHIVE_INGEST_TIMEOUT),
+    }
 }
 
 /// Parse and compress a single file from its current offset.
@@ -2426,11 +2428,17 @@ mod tests {
     }
 
     #[test]
-    fn non_live_transcript_uses_client_default_timeout() {
+    fn non_live_transcript_uses_archive_timeout() {
         let trace = make_ship_trace("reconciliation_scan");
 
-        assert_eq!(request_timeout_for_trace(Some(&trace)), None);
-        assert_eq!(request_timeout_for_trace(None), None);
+        assert_eq!(
+            request_timeout_for_trace(Some(&trace)),
+            Some(Duration::from_secs(15))
+        );
+        assert_eq!(
+            request_timeout_for_trace(None),
+            Some(Duration::from_secs(15))
+        );
     }
 
     // ---------------------------------------------------------------

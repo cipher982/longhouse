@@ -49,7 +49,7 @@ pub struct ConnectConfig {
     pub flight_recorder_dir: Option<PathBuf>,
 }
 
-const DAEMON_MAX_IN_FLIGHT_CAP: usize = 4;
+const DAEMON_MAX_IN_FLIGHT_CAP: usize = 2;
 const INITIAL_SPOOL_PATH_LIMIT: usize = 100;
 const PERIODIC_SPOOL_PATH_LIMIT: usize = 50;
 const PATH_SPOOL_REPLAY_LIMIT: usize = 50;

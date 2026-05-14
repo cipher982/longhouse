@@ -25,12 +25,6 @@ const FAIR_SEQUENCE: [WorkPriority; 6] = [
     WorkPriority::Retry,
     WorkPriority::Scan,
 ];
-const URGENT_SEQUENCE: [WorkPriority; 3] = [
-    WorkPriority::Live,
-    WorkPriority::Watch,
-    WorkPriority::Catchup,
-];
-const URGENT_OVERFLOW_CAP: usize = 2;
 const LIVE_IN_FLIGHT_CAP: usize = 8;
 const RETRY_IN_FLIGHT_CAP: usize = 1;
 const SCAN_IN_FLIGHT_CAP: usize = 1;
@@ -188,7 +182,7 @@ impl PathScheduler {
         }
 
         if self.in_flight.len() >= self.max_in_flight {
-            return self.pop_urgent_overflow();
+            return None;
         }
 
         for step in 0..FAIR_SEQUENCE.len() {
@@ -212,23 +206,6 @@ impl PathScheduler {
         if self.in_flight_count(WorkPriority::Live) < LIVE_IN_FLIGHT_CAP {
             return self.pop_ready_queue(WorkPriority::Live);
         }
-        None
-    }
-
-    fn pop_urgent_overflow(&mut self) -> Option<PathJob> {
-        if self.in_flight.len() >= self.max_in_flight + URGENT_OVERFLOW_CAP {
-            return None;
-        }
-
-        for priority in URGENT_SEQUENCE {
-            if !self.can_launch_priority(priority) {
-                continue;
-            }
-            if let Some(job) = self.pop_ready_queue(priority) {
-                return Some(job);
-            }
-        }
-
         None
     }
 
@@ -668,11 +645,11 @@ mod tests {
     }
 
     #[test]
-    fn test_urgent_work_can_overflow_full_scan_pool() {
+    fn test_watch_and_catchup_wait_when_archive_pool_is_full() {
         let mut scheduler = PathScheduler::new(1);
         let scan = PathBuf::from("/tmp/scan.jsonl");
         let catchup = PathBuf::from("/tmp/catchup.jsonl");
-        let retry = PathBuf::from("/tmp/retry.jsonl");
+        let watch = PathBuf::from("/tmp/watch.jsonl");
 
         scheduler.enqueue(scan.clone(), "codex", WorkPriority::Scan);
         assert_eq!(
@@ -680,17 +657,19 @@ mod tests {
             WorkPriority::Scan
         );
 
-        scheduler.enqueue(retry, "codex", WorkPriority::Retry);
+        scheduler.enqueue(watch, "codex", WorkPriority::Watch);
         assert!(scheduler.pop_launchable().is_none());
 
         scheduler.enqueue(catchup.clone(), "codex", WorkPriority::Catchup);
-        let urgent = scheduler.pop_launchable().unwrap();
-        assert_eq!(urgent.path, catchup);
-        assert_eq!(urgent.priority, WorkPriority::Catchup);
+        assert!(scheduler.pop_launchable().is_none());
+
+        scheduler.complete(&scan, None);
+        let next = scheduler.pop_launchable().unwrap();
+        assert_eq!(next.priority, WorkPriority::Watch);
     }
 
     #[test]
-    fn test_urgent_overflow_is_bounded() {
+    fn test_live_work_can_overflow_full_archive_pool() {
         let mut scheduler = PathScheduler::new(1);
 
         scheduler.enqueue(
@@ -702,20 +681,19 @@ mod tests {
 
         for idx in 0..3 {
             scheduler.enqueue(
-                PathBuf::from(format!("/tmp/catchup-{idx}.jsonl")),
+                PathBuf::from(format!("/tmp/live-{idx}.jsonl")),
                 "codex",
-                WorkPriority::Catchup,
+                WorkPriority::Live,
+            );
+            assert_eq!(
+                scheduler.pop_launchable().unwrap().priority,
+                WorkPriority::Live
             );
         }
-
-        for _ in 0..2 {
-            assert!(scheduler.pop_launchable().is_some());
-        }
-        assert!(scheduler.pop_launchable().is_none());
     }
 
     #[test]
-    fn test_live_work_has_dedicated_lane_beyond_urgent_overflow() {
+    fn test_live_work_has_dedicated_lane_beyond_full_archive_pool() {
         let mut scheduler = PathScheduler::new(1);
 
         scheduler.enqueue(
@@ -734,10 +712,7 @@ mod tests {
                 "codex",
                 WorkPriority::Catchup,
             );
-            assert_eq!(
-                scheduler.pop_launchable().unwrap().priority,
-                WorkPriority::Catchup
-            );
+            assert!(scheduler.pop_launchable().is_none());
         }
 
         scheduler.enqueue(
