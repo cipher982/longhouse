@@ -742,6 +742,12 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                 starting_state.thread_id = thread_id;
                 starting_state.thread_path = thread_path;
                 write_state_file(&config.state_file, &starting_state)?;
+                sync_thread_binding(
+                    &config,
+                    None,
+                    starting_state.thread_path.as_deref(),
+                    &config.session_id,
+                );
             }
             Err(err) => {
                 starting_state.status = "error".to_string();
