@@ -6,6 +6,7 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 from cryptography.fernet import Fernet
@@ -26,6 +27,7 @@ from zerg.models.user import User
 from zerg.services.managed_local_control import await_managed_local_hook_phase_update
 from zerg.services.managed_local_control import await_managed_local_turn_events
 from zerg.services.managed_local_control import await_managed_local_turn_terminal
+from zerg.services.managed_local_control import get_managed_local_latest_hook_observation_id
 from zerg.services.managed_local_control import interrupt_managed_local_session
 from zerg.services.managed_local_control import ManagedLocalPhaseUpdate
 from zerg.services.managed_local_control import send_text_to_managed_local_session
@@ -106,6 +108,7 @@ def _hook_runtime_ingest(
     session: AgentSession,
     phase: str,
     occurred_at: datetime,
+    source: str = "claude_hook",
     tool_name: str | None = None,
     dedupe_suffix: str | None = None,
 ) -> RuntimeEventIngest:
@@ -115,7 +118,7 @@ def _hook_runtime_ingest(
         session_id=session.id,
         provider=session.provider,
         device_id=session.device_id,
-        source="claude_hook",
+        source=source,
         kind="phase_signal",
         phase=phase,
         tool_name=tool_name,
@@ -138,6 +141,7 @@ def _record_hook_observation_only(
     session: AgentSession,
     phase: str,
     occurred_at: datetime,
+    source: str = "claude_hook",
     tool_name: str | None = None,
     dedupe_suffix: str,
 ) -> _HookRuntimeRecord:
@@ -145,6 +149,7 @@ def _record_hook_observation_only(
         session=session,
         phase=phase,
         occurred_at=occurred_at,
+        source=source,
         tool_name=tool_name,
         dedupe_suffix=dedupe_suffix,
     )
@@ -159,6 +164,7 @@ def _materialize_hook_runtime_state(
     session: AgentSession,
     phase: str,
     occurred_at: datetime,
+    source: str = "claude_hook",
     event_id: int | None = None,
     tool_name: str | None = None,
 ):
@@ -167,6 +173,7 @@ def _materialize_hook_runtime_state(
         session=session,
         phase=phase,
         occurred_at=occurred_at,
+        source=source,
         tool_name=tool_name,
     )
     ingest_runtime_events(db, [event])
@@ -482,6 +489,50 @@ def test_await_managed_local_hook_phase_update_ignores_stale_active_event_insert
         assert result is None
 
 
+def test_await_managed_local_hook_phase_update_accepts_codex_bridge_phase_source(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        _user, _runner, session = _seed_user_runner_and_session(db, provider="codex")
+        baseline_event = _materialize_hook_runtime_state(
+            db,
+            session=session,
+            phase="idle",
+            source="codex_bridge",
+            occurred_at=datetime.now(timezone.utc),
+        )
+        db.commit()
+        baseline_observation_id = get_managed_local_latest_hook_observation_id(
+            db=db,
+            session_id=session.id,
+        )
+        assert baseline_observation_id == baseline_event.id
+
+        _materialize_hook_runtime_state(
+            db,
+            session=session,
+            phase="thinking",
+            source="codex_bridge",
+            occurred_at=datetime.now(timezone.utc),
+        )
+        db.commit()
+
+        result = asyncio.run(
+            await_managed_local_hook_phase_update(
+                db_bind=db.get_bind(),
+                session_id=session.id,
+                after_observation_id=baseline_observation_id,
+                phases={"thinking", "running"},
+                timeout_secs=0.2,
+                poll_interval_secs=0.02,
+            )
+        )
+
+        assert result is not None
+        assert result.phase == "thinking"
+        assert result.source == "codex_bridge"
+
+
 def test_send_text_to_managed_local_session_uses_claude_channel_bridge_command(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path)
     dispatcher = _FakeDispatcher()
@@ -509,6 +560,63 @@ def test_send_text_to_managed_local_session_uses_claude_channel_bridge_command(m
         assert "exec longhouse claude-channel send --session-id" in command
         assert "--text" in command
         assert "continue from loop" in command
+
+
+def test_send_text_to_managed_local_session_trusts_engine_turn_start_ack(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    dispatch_calls: list[dict[str, object]] = []
+
+    async def _fake_dispatch_managed_control_command(**kwargs):
+        dispatch_calls.append(kwargs)
+        return SimpleNamespace(
+            ok=True,
+            transport="engine_channel",
+            data={
+                "exit_code": 0,
+                "stdout": "",
+                "stderr": "",
+                "turn_id": "turn-engine-1",
+                "turn_status": "inProgress",
+            },
+            error=None,
+        )
+
+    async def _unexpected_phase_wait(**_kwargs):
+        raise AssertionError("engine-channel Codex send should not wait for DB phase verification")
+
+    monkeypatch.setattr(
+        "zerg.services.managed_local_control._managed_control_transport_error",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "zerg.services.managed_local_control.dispatch_managed_control_command",
+        _fake_dispatch_managed_control_command,
+    )
+    monkeypatch.setattr(
+        "zerg.services.managed_local_control.await_managed_local_hook_phase_update",
+        _unexpected_phase_wait,
+    )
+
+    with SessionLocal() as db:
+        user, _runner, session = _seed_user_runner_and_session(db, provider="codex")
+
+        result = asyncio.run(
+            send_text_to_managed_local_session(
+                db=db,
+                owner_id=user.id,
+                session=session,
+                text="continue",
+                commis_id="managed-local-engine-verified",
+                verify_turn_started=True,
+                verification_timeout_secs=15.0,
+            )
+        )
+
+        assert result.ok is True
+        assert result.verified_turn_started is True
+        assert len(dispatch_calls) == 1
+        assert dispatch_calls[0]["command_type"] == "session.send_text"
+        assert dispatch_calls[0]["payload"] == {"text": "continue"}
 
 
 def test_validate_managed_local_chat_done_payload_accepts_successful_zero_exit_code():
@@ -832,6 +940,44 @@ def test_await_managed_local_turn_terminal_accepts_runtime_terminal_without_acti
                 await writer
 
         result = asyncio.run(_run_wait())
+
+        assert result is not None
+        assert result.phase == "idle"
+        assert result.control_status == "completed"
+
+
+def test_await_managed_local_turn_terminal_accepts_codex_bridge_terminal_phase(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        _user, _runner, session = _seed_user_runner_and_session(db, provider="codex")
+        active_event = _materialize_hook_runtime_state(
+            db,
+            session=session,
+            phase="thinking",
+            source="codex_bridge",
+            occurred_at=datetime.now(timezone.utc),
+        )
+        db.commit()
+
+        _materialize_hook_runtime_state(
+            db,
+            session=session,
+            phase="idle",
+            source="codex_bridge",
+            occurred_at=datetime.now(timezone.utc),
+        )
+        db.commit()
+
+        result = asyncio.run(
+            await_managed_local_turn_terminal(
+                db_bind=db.get_bind(),
+                session_id=session.id,
+                after_observation_id=active_event.id,
+                timeout_secs=0.2,
+                poll_interval_secs=0.02,
+            )
+        )
 
         assert result is not None
         assert result.phase == "idle"
