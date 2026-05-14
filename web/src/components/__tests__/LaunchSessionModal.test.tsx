@@ -6,6 +6,7 @@ import LaunchSessionModal from "../LaunchSessionModal";
 import type { MachineDirectoryEntry } from "../../services/api";
 
 const apiMocks = vi.hoisted(() => ({
+  fetchAgentSessions: vi.fn(),
   listMachines: vi.fn(),
   launchRemoteSession: vi.fn(),
 }));
@@ -61,6 +62,11 @@ function machine(overrides: Partial<MachineDirectoryEntry> = {}): MachineDirecto
 describe("LaunchSessionModal", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    apiMocks.fetchAgentSessions.mockResolvedValue({
+      sessions: [],
+      total: 0,
+      has_real_sessions: false,
+    });
   });
 
   it("shows an empty state when no machines are enrolled", async () => {
@@ -195,6 +201,32 @@ describe("LaunchSessionModal", () => {
     );
   });
 
+  it("prefills recent machine paths and offers a parent directory shortcut", async () => {
+    apiMocks.listMachines.mockResolvedValue({
+      machines: [machine({ device_id: "cinder", machine_name: "cinder", online: true })],
+    });
+    apiMocks.fetchAgentSessions.mockResolvedValue({
+      sessions: [
+        {
+          head: { cwd: "/Users/davidrose/git/zerg/longhouse" },
+          detail: { cwd: "/Users/davidrose/git/zerg/longhouse" },
+          root: { cwd: "/Users/davidrose/git/zerg/longhouse" },
+        },
+      ],
+      total: 1,
+      has_real_sessions: true,
+    } as any);
+
+    const user = userEvent.setup();
+    renderModal();
+
+    const cwdInput = await screen.findByTestId("launch-cwd-input");
+    await waitFor(() => expect(cwdInput).toHaveValue("/Users/davidrose/git/zerg/longhouse"));
+
+    await user.click(screen.getByRole("button", { name: "~/git/zerg" }));
+    expect(cwdInput).toHaveValue("/Users/davidrose/git/zerg");
+  });
+
   it("keeps immediate launch failures in the modal instead of navigating", async () => {
     apiMocks.listMachines.mockResolvedValue({
       machines: [
@@ -211,7 +243,7 @@ describe("LaunchSessionModal", () => {
       session_id: "failed-session-id",
       launch_state: "launch_failed",
       launch_error_code: "cwd_not_allowed",
-      launch_error_message: "cwd /Users/davidrose/git/zerg is outside the Machine Agent's launch allowlist",
+      launch_error_message: "cwd must be absolute",
     });
 
     const onLaunched = vi.fn();
@@ -223,7 +255,7 @@ describe("LaunchSessionModal", () => {
     await user.click(screen.getByTestId("launch-submit"));
 
     expect(await screen.findByTestId("launch-error")).toHaveTextContent(
-      "cwd_not_allowed: cwd /Users/davidrose/git/zerg is outside the Machine Agent's launch allowlist",
+      "cwd_not_allowed: cwd must be absolute",
     );
     expect(onLaunched).not.toHaveBeenCalled();
   });
