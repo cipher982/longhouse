@@ -29,10 +29,19 @@ use crate::state::live_file_state::LiveFileState;
 use crate::state::spool::Spool;
 
 const TARGET_BATCH_BYTES: u64 = 512 * 1024;
-const LIVE_TRANSCRIPT_INGEST_TIMEOUT: Duration = Duration::from_secs(3);
+const LIVE_TRANSCRIPT_INGEST_TIMEOUT: Duration = Duration::from_secs(20);
 
 fn target_batch_bytes(max_batch_bytes: u64) -> u64 {
     max_batch_bytes.min(TARGET_BATCH_BYTES).max(1)
+}
+
+fn request_timeout_for_trace(ship_trace: Option<&ShipTraceContext>) -> Option<Duration> {
+    // Live transcript sends are user-visible, but they still go through the
+    // durable ingest path. A very tight timeout creates retry storms during
+    // normal hosted tail latency, which is worse than waiting a few seconds.
+    ship_trace
+        .filter(|trace| trace.work_context == "live_transcript")
+        .map(|_| LIVE_TRANSCRIPT_INGEST_TIMEOUT)
 }
 
 /// Parse and compress a single file from its current offset.
@@ -1088,9 +1097,7 @@ async fn attempt_ship(
     flight_recorder: Option<&FlightRecorder>,
 ) -> AttemptedShip {
     let http_send_started_at_ms = chrono::Utc::now().timestamp_millis();
-    let request_timeout = ship_trace
-        .filter(|trace| trace.work_context == "live_transcript")
-        .map(|_| LIVE_TRANSCRIPT_INGEST_TIMEOUT);
+    let request_timeout = request_timeout_for_trace(ship_trace);
     let mut flight_record = build_ship_trace_value(&item, ship_trace, http_send_started_at_ms);
     if let Some(timeout) = request_timeout {
         insert_json_field(
@@ -2386,6 +2393,44 @@ mod tests {
         config.api_url = url.to_string();
         config.timeout_seconds = 5;
         ShipperClient::with_compression(&config, CompressionAlgo::Gzip).unwrap()
+    }
+
+    fn make_ship_trace(work_context: &'static str) -> ShipTraceContext {
+        ShipTraceContext {
+            work_context,
+            observation_source: "test",
+            observed_at_ms: 1,
+            wake_received_at_ms: None,
+            enqueued_at_ms: 2,
+            job_started_at_ms: 3,
+            prepare_started_at_ms: 4,
+            prepare_finished_at_ms: 5,
+            prepare_open_db_ms: Some(0),
+            prepare_binding_wait_ms: Some(0),
+            prepare_parse_ms: Some(0),
+            session_id_hint: None,
+            turn_id: None,
+            wake_reason: None,
+            file_len_hint: None,
+        }
+    }
+
+    #[test]
+    fn live_transcript_timeout_tolerates_hosted_tail_latency() {
+        let trace = make_ship_trace("live_transcript");
+
+        assert_eq!(
+            request_timeout_for_trace(Some(&trace)),
+            Some(Duration::from_secs(20))
+        );
+    }
+
+    #[test]
+    fn non_live_transcript_uses_client_default_timeout() {
+        let trace = make_ship_trace("reconciliation_scan");
+
+        assert_eq!(request_timeout_for_trace(Some(&trace)), None);
+        assert_eq!(request_timeout_for_trace(None), None);
     }
 
     // ---------------------------------------------------------------
