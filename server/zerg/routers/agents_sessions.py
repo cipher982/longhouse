@@ -93,6 +93,16 @@ VALID_USER_STATES = {"active", "parked", "snoozed", "archived"}
 _CURRENT_SESSION_HEADER = "X-Longhouse-Session-Id"
 
 
+def _no_viewer_owner_id() -> int | None:
+    return None
+
+
+def _owner_id_from_agents_auth(db: Session, auth: object) -> int | None:
+    if not isinstance(auth, DeviceToken):
+        return None
+    return _resolve_agents_owner_id(db, auth)
+
+
 def _parse_message_session_header(request: Request) -> UUID | None:
     raw = str(request.headers.get(_CURRENT_SESSION_HEADER, "") or "").strip()
     if not raw:
@@ -212,7 +222,8 @@ async def list_sessions(
             mode=mode,
             context_mode=context_mode,
         )
-        result = await list_agent_sessions(db=db, auth=_auth, params=params)
+        owner_id = _owner_id_from_agents_auth(db, _auth)
+        result = await list_agent_sessions(db=db, auth=_auth, params=params, owner_id=owner_id)
         if result.headers:
             return JSONResponse(
                 content=result.response.model_dump(mode="json"),
@@ -722,8 +733,9 @@ async def get_session(
     session_id: UUID,
     response: Response,
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
+    owner_id: int | None = Depends(_no_viewer_owner_id),
 ) -> SessionResponse:
     """Get a single session by ID."""
     store = AgentsStore(db)
@@ -748,6 +760,9 @@ async def get_session(
         transcript_preview_map = load_active_provisional_preview_map(db, [session.id])
         binding_overlay_map = load_binding_overlay(db, [session.id], now=now)
     with timing.span("build_response"):
+        effective_owner_id = owner_id
+        if effective_owner_id is None:
+            effective_owner_id = _owner_id_from_agents_auth(db, _auth)
         result = build_session_response(
             store,
             session,
@@ -761,6 +776,7 @@ async def get_session(
             first_user_message=first_user_map.get(session.id),
             binding_overlay=binding_overlay_map.get(session.id),
             transcript_preview=transcript_preview_map.get(str(session.id)),
+            owner_id=effective_owner_id,
         )
     timing.apply(response)
     return result
@@ -771,8 +787,9 @@ async def get_session_thread(
     session_id: UUID,
     response: Response,
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
+    owner_id: int | None = Depends(_no_viewer_owner_id),
 ) -> SessionThreadResponse:
     """Get all concrete continuations in a logical thread."""
     store = AgentsStore(db)
@@ -803,6 +820,9 @@ async def get_session_thread(
         binding_overlay_map = load_binding_overlay(db, [item.id for item in thread_sessions], now=now)
 
     with timing.span("build_response"):
+        effective_owner_id = owner_id
+        if effective_owner_id is None:
+            effective_owner_id = _owner_id_from_agents_auth(db, _auth)
         result = SessionThreadResponse(
             root_session_id=str(session.thread_root_session_id or session.id),
             head_session_id=str(head.id if head else session.id),
@@ -821,6 +841,7 @@ async def get_session_thread(
                     first_user_message=first_user_map.get(item.id),
                     transcript_preview=transcript_preview_map.get(str(item.id)),
                     binding_overlay=binding_overlay_map.get(item.id),
+                    owner_id=effective_owner_id,
                 )
                 for item in thread_sessions
             ],

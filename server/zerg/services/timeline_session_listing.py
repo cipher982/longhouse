@@ -91,6 +91,7 @@ async def list_timeline_sessions_for_browser(
     db: Session,
     params: TimelineSessionListParams,
     timing: ServerTimingRecorder | None = None,
+    owner_id: int | None = None,
 ) -> TimelineSessionListResult:
     effective_mode = params.mode or "lexical"
     if params.query is not None or effective_mode != "lexical":
@@ -105,6 +106,7 @@ async def list_timeline_sessions_for_browser(
                     db=db,
                     auth=None,
                     params=params.to_agent_params(),
+                    owner_id=owner_id,
                 )
         except SessionListingError:
             raise
@@ -134,7 +136,7 @@ async def list_timeline_sessions_for_browser(
             context_mode=params.context_mode,
         )
     with _timing_span(timing, "build_cards"):
-        sessions = build_timeline_cards_from_thread_rows(db=db, thread_rows=thread_rows)
+        sessions = build_timeline_cards_from_thread_rows(db=db, thread_rows=thread_rows, owner_id=owner_id)
     with _timing_span(timing, "has_real"):
         has_real_sessions_value = has_real_sessions(db, default_when_empty=total == 0)
 
@@ -151,6 +153,7 @@ def build_timeline_cards_from_thread_rows(
     *,
     db: Session,
     thread_rows: tuple[tuple[str, str, datetime | None], ...],
+    owner_id: int | None = None,
 ) -> list[TimelineSessionCardResponse]:
     if not thread_rows:
         return []
@@ -159,6 +162,7 @@ def build_timeline_cards_from_thread_rows(
     response_map = build_session_response_map(
         db=db,
         session_ids=representative_ids,
+        owner_id=owner_id,
     )
     representative_rows = []
     for thread_id, session_id, thread_anchor in thread_rows:
@@ -176,6 +180,7 @@ def build_timeline_cards_from_thread_rows(
         build_session_response_map(
             db=db,
             session_ids=supplemental_ids,
+            owner_id=owner_id,
         )
     )
 

@@ -34,6 +34,7 @@ from sse_starlette.sse import EventSourceResponse
 from zerg.database import get_db
 from zerg.database import get_session_factory
 from zerg.dependencies.agents_auth import require_single_tenant
+from zerg.dependencies.browser_auth import get_current_browser_user_id_short_lived
 from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.dependencies.browser_auth import require_current_browser_user_short_lived
 from zerg.models.agents import AgentSession
@@ -93,6 +94,16 @@ class _TimelineFiltersCacheEntry:
 
 _timeline_filters_cache: dict[tuple[str, int, str | None], _TimelineFiltersCacheEntry] = {}
 _timeline_filters_cache_lock = Lock()
+
+
+def _browser_owner_id(user) -> int | None:
+    raw_owner_id = getattr(user, "id", None)
+    if raw_owner_id is None:
+        return None
+    try:
+        return int(raw_owner_id)
+    except (TypeError, ValueError):
+        return None
 
 
 def _timeline_filters_cache_key(db: Session, *, days_back: int) -> tuple[str, int, str | None]:
@@ -185,6 +196,7 @@ async def list_timeline_sessions(
     mode: Optional[str] = Query("lexical", description="Search mode: lexical|semantic|hybrid. Default: lexical."),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
     db: Session = Depends(get_db),
+    current_user=Depends(get_current_browser_user),
 ):
     timing = ServerTimingRecorder()
     try:
@@ -206,6 +218,7 @@ async def list_timeline_sessions(
                 context_mode=context_mode,
             ),
             timing=timing,
+            owner_id=_browser_owner_id(current_user),
         )
     except SessionListingError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
@@ -248,6 +261,7 @@ async def stream_timeline_sessions(
         False,
         description="When true, subscribe without immediately replaying the already-fresh default timeline snapshot.",
     ),
+    current_user_id: int = Depends(get_current_browser_user_id_short_lived),
 ) -> EventSourceResponse:
     try:
         validate_timeline_stream_contract(query=query, sort=sort, mode=mode)
@@ -277,6 +291,7 @@ async def stream_timeline_sessions(
             session_factory=session_factory,
             params=params,
             skip_initial_replay=skip_initial_replay,
+            owner_id=current_user_id if isinstance(current_user_id, int) else None,
         )
     )
 
@@ -410,8 +425,16 @@ async def get_timeline_session(
     session_id: UUID,
     response: Response,
     db: Session = Depends(get_db),
+    current_user=Depends(get_current_browser_user),
 ):
-    return await _sessions_router.get_session(session_id=session_id, response=response, db=db, _auth=None, _single=None)
+    return await _sessions_router.get_session(
+        session_id=session_id,
+        response=response,
+        db=db,
+        _auth=None,
+        _single=None,
+        owner_id=_browser_owner_id(current_user),
+    )
 
 
 @router.get("/sessions/{session_id}/thread", response_model=SessionThreadResponse)
@@ -419,6 +442,7 @@ async def get_timeline_session_thread(
     session_id: UUID,
     response: Response,
     db: Session = Depends(get_db),
+    current_user=Depends(get_current_browser_user),
 ):
     return await _sessions_router.get_session_thread(
         session_id=session_id,
@@ -426,6 +450,7 @@ async def get_timeline_session_thread(
         db=db,
         _auth=None,
         _single=None,
+        owner_id=_browser_owner_id(current_user),
     )
 
 

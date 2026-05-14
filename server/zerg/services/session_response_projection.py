@@ -30,6 +30,7 @@ def build_session_response_list(
     match_map: Mapping[Any, Mapping[str, Any]] | None = None,
     semantic_snippet_map: Mapping[str, str] | None = None,
     sem_score_map: Mapping[Any, float] | None = None,
+    owner_id: int | None = None,
 ) -> list[SessionResponse]:
     if not sessions:
         return []
@@ -69,6 +70,7 @@ def build_session_response_list(
                 match_score=sem_score_map.get(session.id),
                 binding_overlay=binding_overlay_map.get(session.id),
                 transcript_preview=transcript_preview_map.get(str(session.id)),
+                owner_id=owner_id,
             )
         )
 
@@ -79,6 +81,7 @@ def build_session_response_map(
     *,
     db: Session,
     session_ids: list[str],
+    owner_id: int | None = None,
 ) -> dict[str, SessionResponse]:
     if not session_ids:
         return {}
@@ -90,6 +93,7 @@ def build_session_response_map(
         db=db,
         store=store,
         sessions=sessions,
+        owner_id=owner_id,
     )
     return {response.id: response for response in responses}
 

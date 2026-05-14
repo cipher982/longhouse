@@ -28,6 +28,7 @@ async def list_agent_sessions(
     db: Session,
     auth: object,
     params: SessionListParams,
+    owner_id: int | None = None,
 ) -> SessionListResult:
     """List sessions for the machine-facing agents API."""
 
@@ -39,12 +40,14 @@ async def list_agent_sessions(
         return await list_hybrid_sessions(
             db=db,
             params=params,
+            owner_id=owner_id,
         )
 
     return _list_lexical_sessions(
         db=db,
         params=params,
         effective_sort=effective_sort,
+        owner_id=owner_id,
     )
 
 
@@ -103,6 +106,7 @@ def _list_lexical_sessions(
     db: Session,
     params: SessionListParams,
     effective_sort: str,
+    owner_id: int | None = None,
 ) -> SessionListResult:
     store = AgentsStore(db)
     since = datetime.now(timezone.utc) - timedelta(days=params.days_back)
@@ -135,6 +139,7 @@ def _list_lexical_sessions(
         store=store,
         sessions=sessions,
         match_map=match_map,
+        owner_id=owner_id,
     )
 
     if effective_sort == "recency":
