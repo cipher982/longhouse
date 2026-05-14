@@ -22,6 +22,7 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionRuntimeState
+from zerg.services.agents_store import AgentsStore
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_capabilities import project_current_session_capabilities
@@ -33,8 +34,11 @@ from zerg.services.session_liveness_facts import LifecycleFact
 from zerg.services.session_liveness_facts import PhaseObservation
 from zerg.services.session_liveness_facts import ProcessObservation
 from zerg.services.session_liveness_facts import SessionLivenessFacts
+from zerg.services.session_runtime import load_runtime_state_map
+from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.session_runtime import runtime_key_for_session
 from zerg.services.session_views import build_session_capabilities_response
+from zerg.services.session_views import build_session_response
 from zerg.session_execution_home import ManagedSessionTransport
 
 NOW = datetime(2026, 5, 4, 15, 0, tzinfo=timezone.utc)
@@ -655,6 +659,74 @@ def test_current_session_capabilities_uses_engine_channel_without_runner_metadat
                 assert live.can_queue_next_input is True
                 assert live.can_steer_active_turn is True
                 assert live.host_reattach_available is False
+        finally:
+            await registry.clear_for_tests()
+
+    try:
+        asyncio.run(_run())
+    finally:
+        engine.dispose()
+
+
+def test_session_response_uses_owner_for_engine_channel_capability(monkeypatch, tmp_path):
+    engine, session_local = _make_db(tmp_path)
+
+    async def _run():
+        registry = get_machine_control_channel_registry()
+        await registry.clear_for_tests()
+        try:
+            with session_local() as db:
+                session = _seed_agent_session(
+                    db,
+                    source_runner_id=None,
+                    source_runner_name=None,
+                    device_id="cinder",
+                )
+                _upsert_runtime_state(
+                    db,
+                    session,
+                    phase="idle",
+                    phase_source="codex_bridge",
+                    freshness_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+                )
+
+                def _runner_state_should_not_be_used(_db, _session):
+                    raise AssertionError("engine-channel capability should not query runner host state")
+
+                monkeypatch.setattr(
+                    "zerg.services.session_views.managed_runner_host_state",
+                    _runner_state_should_not_be_used,
+                )
+                await registry.register(
+                    owner_id=7,
+                    device_id="cinder",
+                    machine_name="cinder",
+                    engine_build="abc123",
+                    supports=["codex.send", "codex.steer"],
+                    websocket=SimpleNamespace(),
+                )
+                runtime_overlay = resolve_runtime_overlay(
+                    session,
+                    last_activity_at=session.started_at,
+                    runtime_state_map=load_runtime_state_map(db, [session.id]),
+                    now=datetime.now(timezone.utc),
+                )
+
+                response = build_session_response(
+                    AgentsStore(db),
+                    session,
+                    last_activity_at=session.started_at,
+                    runtime_overlay=runtime_overlay,
+                    owner_id=7,
+                )
+
+                assert response.runtime_facts is not None
+                assert response.runtime_facts.host.state == "online"
+                assert response.capabilities.live_control_available is True
+                assert response.capabilities.reply_to_live_session_available is True
+                assert response.capabilities.can_queue_next_input is True
+                assert response.capabilities.host_reattach_available is False
+                assert response.capabilities.display_tone == "success"
         finally:
             await registry.clear_for_tests()
 

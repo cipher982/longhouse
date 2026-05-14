@@ -62,6 +62,7 @@ async def stream_timeline_sessions_for_browser(
     session_factory: sessionmaker,
     params: TimelineSessionListParams,
     skip_initial_replay: bool,
+    owner_id: int | None = None,
 ):
     previous_signatures: dict[str, str] = {}
     previous_session_threads: dict[str, str] = {}
@@ -102,6 +103,7 @@ async def stream_timeline_sessions_for_browser(
                             db=db,
                             thread_id=targeted_thread_id,
                             session_id=targeted_session_id,
+                            owner_id=owner_id,
                         )
                     if targeted_card is not None:
                         payload, signature = _session_payload_signature(targeted_card)
@@ -137,7 +139,7 @@ async def stream_timeline_sessions_for_browser(
                 previous_window_signature = current_window_signature
 
             with session_factory() as db:
-                result = await list_timeline_sessions_for_browser(db=db, params=params)
+                result = await list_timeline_sessions_for_browser(db=db, params=params, owner_id=owner_id)
                 response = _expect_threaded_response(result.response, compatibility_raw=result.compatibility_raw)
 
             current_payloads: dict[str, dict] = {}
@@ -237,8 +239,9 @@ def _load_timeline_stream_card(
     db: Session,
     thread_id: str,
     session_id: str,
+    owner_id: int | None = None,
 ) -> TimelineSessionCardResponse | None:
-    cards = build_timeline_cards_from_thread_rows(db=db, thread_rows=((thread_id, session_id, None),))
+    cards = build_timeline_cards_from_thread_rows(db=db, thread_rows=((thread_id, session_id, None),), owner_id=owner_id)
     return cards[0] if cards else None
 
 

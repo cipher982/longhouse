@@ -25,6 +25,7 @@ async def list_hybrid_sessions(
     *,
     db: Session,
     params: SessionListParams,
+    owner_id: int | None = None,
 ) -> SessionListResult:
     if params.offset > 0:
         raise SessionListingError(
@@ -100,6 +101,7 @@ async def list_hybrid_sessions(
         match_map=match_map,
         semantic_snippet_map=semantic_snippet_map,
         sem_score_map=sem_score_map,
+        owner_id=owner_id,
     )
 
     response = SessionsListResponse(
