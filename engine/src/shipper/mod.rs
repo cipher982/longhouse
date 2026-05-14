@@ -2009,12 +2009,12 @@ async fn replay_spool_entries(
                             error,
                             is_connect_error,
                         } => {
+                            spool.mark_failed(entry.id, &error)?;
+                            outcome.failed += 1;
                             if is_connect_error {
                                 outcome.had_connect_error = true;
                                 break 'entry_loop;
                             }
-                            spool.mark_failed(entry.id, &error)?;
-                            outcome.failed += 1;
                             continue 'entry_loop;
                         }
                         AttemptedShip::PayloadTooLarge { item: _ } => {
@@ -3672,6 +3672,82 @@ mod tests {
         assert_eq!(summary.ship_successes_1h, 1);
         assert_eq!(summary.last_ship_result.as_deref(), Some("ok"));
         assert_eq!(summary.last_ship_http_status, None);
+    }
+
+    #[tokio::test]
+    async fn test_replay_spool_connect_error_records_backoff() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("replay-connect-1111-2222-3333-444455556666.jsonl");
+        std::fs::write(&path, claude_session_lines()).unwrap();
+
+        let file_state = FileState::new(&conn);
+        let spool = Spool::new(&conn);
+        let path_str = path.to_string_lossy().to_string();
+        let file_len = std::fs::metadata(&path).unwrap().len();
+
+        file_state
+            .set_queued_offset(
+                &path_str,
+                file_len,
+                "claude",
+                "replay-connect-1111-2222-3333-444455556666",
+                "replay-connect-1111-2222-3333-444455556666",
+            )
+            .unwrap();
+        spool
+            .enqueue(
+                "claude",
+                &path_str,
+                0,
+                file_len,
+                Some("replay-connect-1111-2222-3333-444455556666"),
+            )
+            .unwrap();
+
+        let before = chrono::Utc::now();
+        let ship_stats = RecentShipStatsTracker::new();
+        let outcome = replay_spool_for_path_with_batch_bytes_and_parse_tracker(
+            &conn,
+            &make_test_client("http://127.0.0.1:9"),
+            CompressionAlgo::Gzip,
+            &path,
+            10,
+            10_000,
+            None,
+            Some(&ship_stats),
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.resolved, 0);
+        assert_eq!(outcome.failed, 1);
+        assert!(outcome.had_connect_error);
+        assert_eq!(spool.pending_count().unwrap(), 1);
+
+        let row: (String, i64, String, String) = conn
+            .query_row(
+                "SELECT status, retry_count, last_error, next_retry_at FROM spool_queue WHERE file_path = ?1",
+                [&path_str],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, "pending");
+        assert_eq!(row.1, 1);
+        assert!(!row.2.is_empty());
+        let next_retry = chrono::DateTime::parse_from_rfc3339(&row.3)
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        assert!(next_retry > before);
+
+        let summary = ship_stats.summary();
+        assert_eq!(summary.ship_attempts_1h, 1);
+        assert_eq!(summary.ship_connect_errors_1h, 1);
+        assert_eq!(summary.ship_attempts_10m, 1);
+        assert_eq!(summary.ship_connect_errors_10m, 1);
     }
 
     #[tokio::test]
