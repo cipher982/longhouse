@@ -249,15 +249,13 @@ async fn run_once(
         );
     }
 
-    let (stream, _) = tokio::time::timeout(
+    let (mut stream, _) = tokio::time::timeout(
         Duration::from_secs(CONTROL_CONNECT_TIMEOUT_SECS),
         connect_async(request),
     )
     .await
     .map_err(|_| anyhow!("timed out connecting machine control websocket {ws_url}"))?
     .with_context(|| format!("connecting machine control websocket {ws_url}"))?;
-    let (mut write, mut read) = stream.split();
-
     let hello = json!({
         "type": "hello",
         "schema_version": 1,
@@ -266,7 +264,7 @@ async fn run_once(
         "engine_build": build_identity::COMMIT_SHORT,
         "supports": CONTROL_SUPPORTS,
     });
-    write
+    stream
         .send(Message::Text(hello.to_string()))
         .await
         .context("sending machine control hello")?;
@@ -280,12 +278,12 @@ async fn run_once(
     loop {
         tokio::select! {
             _ = heartbeat.tick() => {
-                write
+                stream
                     .send(Message::Text(heartbeat_frame().to_string()))
                     .await
                     .context("sending machine control heartbeat")?;
             }
-            message = read.next() => {
+            message = stream.next() => {
                 let Some(message) = message else {
                     break;
                 };
@@ -297,7 +295,7 @@ async fn run_once(
                         break;
                     }
                     Message::Ping(payload) => {
-                        write
+                        stream
                             .send(Message::Pong(payload))
                             .await
                             .context("sending machine control pong")?;
@@ -316,7 +314,7 @@ async fn run_once(
                     continue;
                 }
                 let result = handle_command_frame(frame, completed_commands, config).await;
-                write
+                stream
                     .send(Message::Text(result.to_string()))
                     .await
                     .context("sending machine control command result")?;
