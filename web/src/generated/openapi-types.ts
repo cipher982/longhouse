@@ -8061,6 +8061,37 @@ export interface components {
              * @default neutral
              */
             display_tone: string;
+            /**
+             * Input Mode
+             * @description Canonical input/composer availability state for clients
+             * @default read_only
+             * @enum {string}
+             */
+            input_mode: "live" | "offline" | "read_only";
+            /**
+             * Default Input Intent
+             * @description Default POST input intent clients should use for the primary send action
+             * @default none
+             * @enum {string}
+             */
+            default_input_intent: "auto" | "steer" | "queue" | "none";
+            /**
+             * Composer Enabled
+             * @description True when clients should render an enabled composer
+             * @default false
+             */
+            composer_enabled: boolean;
+            /**
+             * Composer Placeholder
+             * @description Default composer placeholder text
+             * @default Type a message...
+             */
+            composer_placeholder: string;
+            /**
+             * Composer Disabled Reason
+             * @description User-facing reason the composer is disabled
+             */
+            composer_disabled_reason?: string | null;
         };
         /** SessionControlResponse */
         SessionControlResponse: {

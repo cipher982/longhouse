@@ -15,6 +15,11 @@ struct APISessionCapabilitiesResponse: Codable, Hashable, Sendable {
     let displayLabel: String?
     let displayDetail: String?
     let displayTone: String?
+    let inputMode: String?
+    let defaultInputIntent: String?
+    let composerEnabled: Bool?
+    let composerPlaceholder: String?
+    let composerDisabledReason: String?
 }
 
 typealias APIManagedSessionTransport = String

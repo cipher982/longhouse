@@ -502,6 +502,11 @@ struct SessionCapabilities: Codable, Sendable {
     let displayLabel: String?
     let displayDetail: String?
     let displayTone: String?
+    let inputMode: String?
+    let defaultInputIntent: String?
+    let composerEnabled: Bool?
+    let composerPlaceholder: String?
+    let composerDisabledReason: String?
 }
 
 struct TimelineBadgePresentation: Codable, Hashable, Sendable {
@@ -625,7 +630,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     }
 
     var canSendLive: Bool {
-        capabilities.liveControlAvailable || capabilities.replyToLiveSessionAvailable
+        capabilities.composerEnabled ?? (capabilities.liveControlAvailable || capabilities.replyToLiveSessionAvailable)
     }
 
     var canQueueNextInput: Bool {
@@ -685,6 +690,10 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     }
 
     var controlHealthMessage: String? {
+        if let disabledReason = capabilities.composerDisabledReason?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !disabledReason.isEmpty {
+            return disabledReason
+        }
         if isControlOffline {
             return capabilities.displayDetail ?? "Control is offline until the host reconnects."
         }
@@ -712,6 +721,22 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         if canSendLive { return "success" }
         if capabilities.hostReattachAvailable { return "warning" }
         return "neutral"
+    }
+
+    var defaultInputIntent: String {
+        guard let intent = capabilities.defaultInputIntent?.trimmingCharacters(in: .whitespacesAndNewlines),
+              ["auto", "steer", "queue"].contains(intent) else {
+            return "auto"
+        }
+        return intent
+    }
+
+    var composerPlaceholder: String {
+        guard let placeholder = capabilities.composerPlaceholder?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !placeholder.isEmpty else {
+            return "Reply"
+        }
+        return placeholder
     }
 
     var runtimeHeadline: String {

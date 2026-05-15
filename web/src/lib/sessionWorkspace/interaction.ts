@@ -54,11 +54,19 @@ export function getSessionInteractionCapabilities({
   const headOriginLabel = headThreadSession ? getSessionOriginLabel(headThreadSession) : null;
   const genericLaunchHint = getManagedLaunchHint(providerLabel);
 
-  const mode: SessionInteractionMode = liveControlAvailable
-    ? "managed_local"
-    : hostReattachAvailable
-      ? "managed_local_unavailable"
-      : "unsupported";
+  const serverInputMode = session.capabilities.input_mode;
+  const mode: SessionInteractionMode =
+    serverInputMode === "live"
+      ? "managed_local"
+      : serverInputMode === "offline"
+        ? "managed_local_unavailable"
+        : serverInputMode === "read_only"
+          ? "unsupported"
+          : liveControlAvailable
+            ? "managed_local"
+            : hostReattachAvailable
+              ? "managed_local_unavailable"
+              : "unsupported";
   const isUnsupportedManagedSession = mode === "unsupported" && isManagedLocalSession;
 
   const managedLaunchSuggestion =
@@ -127,10 +135,12 @@ export function getSessionInteractionCapabilities({
         ? `Longhouse can see this ${providerLabel} session, but cannot send prompts until the engine reconnects.`
         : unsupportedDescription;
 
+  const serverPlaceholder = session.capabilities.composer_placeholder?.trim();
   const placeholder =
-    mode === "managed_local"
+    serverPlaceholder ||
+    (mode === "managed_local"
       ? `Send a message to the live ${providerLabel} session...`
-      : "Type a message...";
+      : "Type a message...");
 
   const keyboardHint = undefined;
 
@@ -149,14 +159,16 @@ export function getSessionInteractionCapabilities({
           }
         : null;
 
+  const serverComposerDisabledReason = session.capabilities.composer_disabled_reason?.trim();
   const composerDisabledReason =
-    mode === "managed_local_unavailable"
+    serverComposerDisabledReason ||
+    (mode === "managed_local_unavailable"
       ? notice?.body ?? null
       : mode === "unsupported"
         ? managedLaunchSuggestion
           ? `This unmanaged ${providerLabel} session is read-only in Longhouse.`
           : notice?.body ?? null
-        : null;
+        : null);
 
   return {
     mode,
