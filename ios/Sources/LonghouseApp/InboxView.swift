@@ -487,6 +487,8 @@ enum ConnectionState: Equatable, Hashable {
     /// file scope so unit tests can lock in the state machine without having
     /// to spin up a `TimelineViewModel` (which depends on `AppState`/network).
     static func derive(failures: Int, lastUpdatedAt: Date?) -> ConnectionState {
+        // Defensive: a negative failure count is semantically "no failures".
+        let failures = max(0, failures)
         // Cold start (no successful poll yet): stay in .connecting through
         // the first failure so a single hiccup doesn't immediately read as
         // "reconnecting" — there's nothing to reconnect to. Two failures

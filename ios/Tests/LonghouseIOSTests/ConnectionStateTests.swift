@@ -61,14 +61,11 @@ struct ConnectionStateTests {
     }
 
     @Test
-    func negativeFailureCountResolvesToKnownState() {
-        // Defensive: negative counts shouldn't produce an undefined state.
-        // Cold start: < 2 → .connecting (treated as "no failures yet").
+    func negativeFailureCountIsTreatedAsZero() {
+        // Defensive: negative counts are clamped to 0 ("no failures recorded"),
+        // so cold-start and warm both behave identically to failures: 0.
         #expect(ConnectionState.derive(failures: -1, lastUpdatedAt: nil) == .connecting)
-        // Warm: hits the `default:` arm of the switch → .offline. This is a
-        // mild quirk (negative ought to be impossible) but it's the actual
-        // shipped behavior; encoding it so an accidental change is caught.
-        #expect(ConnectionState.derive(failures: -1, lastUpdatedAt: now) == .offline)
+        #expect(ConnectionState.derive(failures: -1, lastUpdatedAt: now) == .healthy)
     }
 
     // MARK: transitions
