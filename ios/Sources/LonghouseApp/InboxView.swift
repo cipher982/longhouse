@@ -22,17 +22,30 @@ struct TimelineView: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            Group {
-                if viewModel.isInitialLoading {
-                    ProgressView().controlSize(.large)
-                } else if let error = viewModel.errorMessage, viewModel.isEmpty {
-                    errorView(error)
-                } else if viewModel.isEmpty {
-                    emptyView
-                } else {
-                    timelineBody
+            VStack(spacing: 0) {
+                // Render the strip above all content branches so empty,
+                // error, loading, and timeline states all share the same
+                // connection signal. timelineBody no longer renders its
+                // own copy.
+                ConnectionStatusStrip(state: effectiveConnectionState)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                Group {
+                    if viewModel.isInitialLoading {
+                        ProgressView().controlSize(.large)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if let error = viewModel.errorMessage, viewModel.isEmpty {
+                        errorView(error)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if viewModel.isEmpty {
+                        emptyView
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        timelineBody
+                    }
                 }
             }
+            .background(Color(.systemGroupedBackground))
             .navigationTitle("Timeline")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -100,7 +113,6 @@ struct TimelineView: View {
     private var timelineBody: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 20) {
-                ConnectionStatusStrip(state: effectiveConnectionState)
                 if !viewModel.recent.isEmpty {
                     timelineSection(title: "Recent", sessions: viewModel.recent, emphasized: false)
                 }
@@ -108,7 +120,6 @@ struct TimelineView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 18)
         }
-        .background(Color(.systemGroupedBackground))
         .navigationDestination(for: SessionRoute.self) { route in
             SessionView(sessionId: route.sessionId, fallbackTitle: route.fallbackTitle)
         }
@@ -278,16 +289,16 @@ private struct RuntimeBadge: View {
 
     var body: some View {
         let isClosed = session.timelineStatusLabel == "Closed"
-        let globalAvailable = connectionState == .healthy || connectionState == .connecting
+        // Only .healthy preserves the status color. .connecting,
+        // .reconnecting, and .offline all retract to .secondary so a
+        // non-pulsing colored dot can't masquerade as "live".
         let globalHealthy = connectionState == .healthy
         let withinDeadline = phaseSignalFresh(session)
         let sessionStale = !withinDeadline && !isClosed
         // Pulse only when global is healthy AND the server's own
         // phase-signal deadline hasn't passed. Anything else freezes.
         let pulsing = globalHealthy && withinDeadline && !isClosed
-        // When global or per-session contact is stale, retract the
-        // color claim. A non-pulsing colored dot is too subtle.
-        let color = globalAvailable && !sessionStale ? timelineStatusColor(session) : .secondary
+        let color = globalHealthy && !sessionStale ? timelineStatusColor(session) : .secondary
 
         HStack(spacing: 6) {
             LivenessDot(color: color, pulsing: pulsing)
@@ -414,7 +425,13 @@ private struct LivenessDot: View {
                 .frame(width: 8, height: 8)
         }
         .frame(width: 12, height: 12)
-        .onAppear { if pulsing { animate = true } }
+        // Drive `animate` from the `pulsing` prop directly so LazyVStack
+        // recycling (which can swap pulsing on without firing onAppear)
+        // still kicks the animation back on.
+        .onAppear { animate = pulsing }
+        .onChange(of: pulsing) { _, isPulsing in
+            animate = isPulsing
+        }
     }
 }
 
@@ -482,15 +499,18 @@ final class TimelineViewModel: ObservableObject {
     private var activeRefreshCount = 0
 
     var connectionState: ConnectionState {
+        // Cold start (no successful poll yet): stay in .connecting through
+        // the first failure so a single hiccup doesn't immediately read as
+        // "reconnecting" — there's nothing to reconnect to. Two failures
+        // with no success on record means we're truly offline.
+        if lastUpdatedAt == nil {
+            return consecutiveRefreshFailures >= 2 ? .offline : .connecting
+        }
+        // We have at least one successful poll on record: standard ladder.
         switch consecutiveRefreshFailures {
-        case 0:
-            // Healthy once we have data; otherwise the cold-start poll
-            // is still in flight and hasn't reported success or failure.
-            return lastUpdatedAt == nil ? .connecting : .healthy
-        case 1:
-            return .reconnecting
-        default:
-            return .offline
+        case 0:  return .healthy
+        case 1:  return .reconnecting
+        default: return .offline
         }
     }
 
@@ -652,21 +672,15 @@ private func parseLonghouseDate(_ value: String?) -> Date? {
 
 // MARK: - Liveness + duration helpers (RuntimeBadge)
 
-/// Per-session deadline check: prefer the server's `phase.expiresAt`
-/// when present, then fall back to the older `activityRecency` field so
-/// legacy payloads do not pulse forever.
+/// Per-session deadline check: require the server's `phase.expiresAt`.
+/// Without a server-stamped deadline we refuse to claim freshness — a
+/// missing/malformed payload should freeze the dot, not pulse forever.
 func phaseSignalFresh(_ session: SessionSummary) -> Bool {
-    if let raw = session.runtimeFacts?.phase.expiresAt,
-       let expires = parseLonghouseDate(raw) {
-        return Date() < expires
-    }
-
-    switch session.runtimeDisplay?.activityRecency {
-    case "live", "recent":
-        return true
-    default:
+    guard let raw = session.runtimeFacts?.phase.expiresAt,
+          let expires = parseLonghouseDate(raw) else {
         return false
     }
+    return Date() < expires
 }
 
 /// "How long in current state" — the headline number in the pill.
