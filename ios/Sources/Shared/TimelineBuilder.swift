@@ -82,6 +82,7 @@ enum TimelineBuilder {
     static func build(events: [SessionEvent]) -> [TimelineItem] {
         var raw: [TimelineItem] = []
         var callIdToIndex: [String: Int] = [:]
+        var fifoToolCallIndexes: [Int] = []
 
         for event in events {
             if event.role == "system" { continue }
@@ -101,13 +102,22 @@ enum TimelineBuilder {
                     raw.append(.tool(call: event, result: nil))
                     if let callId = event.toolCallId, !callId.isEmpty {
                         callIdToIndex[callId] = raw.count - 1
+                    } else {
+                        fifoToolCallIndexes.append(raw.count - 1)
                     }
                 }
                 // Assistants with neither text nor tool_name are dropped silently.
 
             case "tool":
-                if let callId = event.toolCallId,
-                   let idx = callIdToIndex[callId],
+                var matchedIndex: Int?
+                if let callId = event.toolCallId, !callId.isEmpty {
+                    matchedIndex = callIdToIndex[callId]
+                }
+                if matchedIndex == nil, !fifoToolCallIndexes.isEmpty {
+                    matchedIndex = fifoToolCallIndexes.removeFirst()
+                }
+
+                if let idx = matchedIndex,
                    case .tool(let call, _) = raw[idx] {
                     raw[idx] = .tool(call: call, result: event)
                 } else {
