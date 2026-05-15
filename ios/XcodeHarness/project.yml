@@ -12,6 +12,9 @@ packages:
   GoogleSignIn:
     url: https://github.com/google/GoogleSignIn-iOS
     from: "8.0.0"
+  SnapshotPreviews:
+    url: https://github.com/EmergeTools/SnapshotPreviews
+    from: "0.14.0"
 
 targets:
   Longhouse:
@@ -125,6 +128,8 @@ targets:
         createIntermediateGroups: true
     dependencies:
       - target: Longhouse
+      - package: SnapshotPreviews
+        product: SnapshottingTests
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.longhouse.ios.tests
