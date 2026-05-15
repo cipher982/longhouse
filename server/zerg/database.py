@@ -491,18 +491,21 @@ def initialize_database(engine: Engine = None) -> None:
     # Create all tables (single declarative base — see models/agents.py)
     Base.metadata.create_all(bind=target_engine)
 
-    # Migrate existing tables: add columns that create_all() won't ALTER into place
+    # Phase 2 (Option D): auto-derive missing columns from SQLAlchemy metadata
+    # is now the authority for additive schema drift. Runs BEFORE
+    # `_migrate_agents_columns` so the residual imperative blocks
+    # (data-normalization UPDATEs, legacy backfills, index management) can
+    # safely reference any column declared on the model. Phase 1's parity check
+    # on a real dev DB returned zero new "would add" entries, confirming both
+    # paths converge to the same end state. New additive columns should be
+    # added to the SQLAlchemy model with appropriate ``server_default`` and rely
+    # on this path — NOT on `_migrate_agents_columns`.
+    _auto_add_missing_columns(target_engine, Base.metadata, apply=True)
+
+    # Residual imperative migrations: index/table adjustments, data
+    # normalization, and non-trivial backfills.
     _migrate_agents_columns(target_engine)
     _cleanup_legacy_agents_tables(target_engine)
-
-    # Phase 1 (Option D, parallel path): auto-derive missing columns in dry-run.
-    # Logs "would add" entries so we can observe coverage vs the imperative
-    # `_migrate_agents_columns` above without mutating schema. Phase 2 will flip
-    # this to apply=True and retire the imperative migrator.
-    try:
-        _auto_add_missing_columns(target_engine, Base.metadata, apply=False)
-    except Exception:
-        logger.debug("auto-derive dry-run skipped", exc_info=True)
 
     if target_engine.dialect.name == "sqlite":
         # Keep a ledger table ready for explicit heavy migrations.
@@ -531,14 +534,24 @@ def initialize_database(engine: Engine = None) -> None:
 
 
 def _migrate_agents_columns(engine: Engine) -> None:
-    """Run lightweight startup-safe SQLite schema migrations.
+    """Residual SQLite migrations not absorbed by the auto-derive path.
 
-    SQLite's CREATE TABLE IF NOT EXISTS is a no-op on existing tables, so new
-    model columns are invisible to existing deployments until added here.
+    Additive ALTER TABLE ADD COLUMN drift is now handled by
+    ``_auto_add_missing_columns`` against the SQLAlchemy metadata. The blocks
+    below are NOT pure column adds — they cover:
 
-    IMPORTANT: When adding a new column to AgentSession or other agents models,
-    add a corresponding ALTER TABLE check in this function or existing instances
-    will get 500 errors querying those columns.
+      * Always-run data-normalization UPDATEs (legacy enum values, etc.).
+      * Backfills the auto path can't express (CASE expressions, cross-table
+        subqueries, columns whose initial value depends on the row's own id).
+      * Index creates / drops / table drops the model layer cannot model.
+      * Heartbeat counter columns whose model uses Python ``default=0`` rather
+        than ``server_default=text("0")``; the auto path can't backfill those.
+      * CREATE TABLE IF NOT EXISTS guards left as belt-and-suspenders.
+
+    DO NOT add new ALTER TABLE ADD COLUMN entries here. Add the column to the
+    SQLAlchemy model with appropriate ``server_default`` and rely on
+    ``_auto_add_missing_columns`` (which runs before this function via
+    ``initialize_database``).
     """
     if engine.dialect.name != "sqlite":
         return
@@ -546,75 +559,65 @@ def _migrate_agents_columns(engine: Engine) -> None:
     try:
         with engine.connect() as conn:
             columns = {row[1] for row in conn.execute(text("PRAGMA table_info(sessions)"))}
-            if "summary" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN summary TEXT"))
-            if "summary_title" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN summary_title VARCHAR(200)"))
-            if "needs_embedding" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN needs_embedding INTEGER DEFAULT 1"))
-                conn.execute(text("UPDATE sessions SET needs_embedding = 1 WHERE needs_embedding IS NULL"))
-            if "summary_event_count" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN summary_event_count INTEGER DEFAULT 0"))
-                conn.execute(text("UPDATE sessions SET summary_event_count = 0 WHERE summary_event_count IS NULL"))
-            if "last_summarized_event_id" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN last_summarized_event_id INTEGER"))
-            if "transcript_revision" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN transcript_revision INTEGER DEFAULT 0 NOT NULL"))
+            # Pure additive ALTER ADDs (summary, summary_title, needs_embedding,
+            # summary_event_count, last_summarized_event_id, reflected_at,
+            # last_attention_push_at, last_attention_push_state, user_state,
+            # user_state_at, managed_transport, source_runner_id,
+            # source_runner_name, managed_session_name, loop_thread_id,
+            # is_sidechain, launch_state, launch_error_code, launch_error_message,
+            # launch_lease_until, launch_command_id, launch_client_request_id,
+            # continued_from_session_id, continuation_kind, origin_label,
+            # branched_from_event_id, is_writable_head, device_name, execution_home,
+            # loop_mode, transcript_revision, summary_revision, embedding_revision,
+            # thread_root_session_id, last_activity_at) are now handled by
+            # _auto_add_missing_columns. Remaining work below is non-additive:
+            # legacy backfills + always-run normalization UPDATEs + index creates.
+            if columns:
+                # Backfill: derive transcript_revision from per-session message
+                # counts on legacy rows that pre-date the column. The auto path
+                # adds the column with server_default=0; this seeds rows that
+                # already had content. WHERE clause keeps it idempotent.
                 conn.execute(
                     text(
                         """
                         UPDATE sessions
-                        SET transcript_revision = CASE
-                            WHEN COALESCE(user_messages, 0) + COALESCE(assistant_messages, 0) + COALESCE(tool_calls, 0) > 0 THEN 1
-                            ELSE 0
-                        END
+                        SET transcript_revision = 1
+                        WHERE transcript_revision = 0
+                          AND COALESCE(user_messages, 0) + COALESCE(assistant_messages, 0) + COALESCE(tool_calls, 0) > 0
                         """
                     )
                 )
-            if "summary_revision" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN summary_revision INTEGER DEFAULT 0 NOT NULL"))
+                # Backfill: summary_revision tracks transcript_revision when
+                # summary fields are populated.
                 conn.execute(
                     text(
                         """
                         UPDATE sessions
-                        SET summary_revision = CASE
-                            WHEN COALESCE(summary, '') <> ''
-                                 OR COALESCE(summary_title, '') <> ''
-                                 OR last_summarized_event_id IS NOT NULL
-                                 OR COALESCE(summary_event_count, 0) > 0
-                                THEN COALESCE(transcript_revision, 0)
-                            ELSE 0
-                        END
+                        SET summary_revision = COALESCE(transcript_revision, 0)
+                        WHERE summary_revision = 0
+                          AND (
+                                COALESCE(summary, '') <> ''
+                             OR COALESCE(summary_title, '') <> ''
+                             OR last_summarized_event_id IS NOT NULL
+                             OR COALESCE(summary_event_count, 0) > 0
+                          )
                         """
                     )
                 )
-            if "embedding_revision" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN embedding_revision INTEGER DEFAULT 0 NOT NULL"))
+                # Backfill: embedding_revision tracks transcript_revision when
+                # the row is already embedded (needs_embedding = 0).
                 conn.execute(
                     text(
                         """
                         UPDATE sessions
-                        SET embedding_revision = CASE
-                            WHEN COALESCE(needs_embedding, 1) = 0 THEN COALESCE(transcript_revision, 0)
-                            ELSE 0
-                        END
+                        SET embedding_revision = COALESCE(transcript_revision, 0)
+                        WHERE embedding_revision = 0
+                          AND COALESCE(needs_embedding, 1) = 0
                         """
                     )
                 )
-            if "reflected_at" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN reflected_at DATETIME"))
-            if "last_attention_push_at" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN last_attention_push_at DATETIME"))
-            if "last_attention_push_state" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN last_attention_push_state VARCHAR(20)"))
-            if "user_state" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN user_state VARCHAR(20) DEFAULT 'active' NOT NULL"))
-                conn.execute(text("UPDATE sessions SET user_state = 'active' WHERE user_state IS NULL"))
-            if "user_state_at" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN user_state_at DATETIME"))
-            if "execution_home" not in columns:
-                default_home = SessionExecutionHome.UNMANAGED_LOCAL.value
-                conn.execute(text(f"ALTER TABLE sessions ADD COLUMN execution_home VARCHAR(32) DEFAULT '{default_home}' NOT NULL"))
+            # Always-run normalization: drop legacy 'legacy' execution_home and
+            # any out-of-enum strings to the unmanaged-local default.
             conn.execute(
                 text(
                     f"""
@@ -633,16 +636,8 @@ def _migrate_agents_columns(engine: Engine) -> None:
                     """
                 )
             )
-            if "managed_transport" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN managed_transport VARCHAR(32)"))
-            if "source_runner_id" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN source_runner_id INTEGER"))
-            if "source_runner_name" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN source_runner_name VARCHAR(255)"))
-            if "managed_session_name" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN managed_session_name VARCHAR(255)"))
-            if "loop_mode" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN loop_mode VARCHAR(20) DEFAULT 'assist' NOT NULL"))
+            # Always-run normalization: legacy 'manual' loop_mode → 'assist';
+            # any out-of-enum value → 'assist'.
             conn.execute(text("UPDATE sessions SET loop_mode = 'assist' WHERE loop_mode IS NULL OR loop_mode = 'manual'"))
             conn.execute(
                 text(
@@ -653,55 +648,27 @@ def _migrate_agents_columns(engine: Engine) -> None:
                     """
                 )
             )
-            if "loop_thread_id" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN loop_thread_id INTEGER"))
-            if "is_sidechain" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN is_sidechain INTEGER NOT NULL DEFAULT 0"))
-            if "launch_state" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN launch_state VARCHAR(32)"))
-            if "launch_error_code" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN launch_error_code VARCHAR(64)"))
-            if "launch_error_message" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN launch_error_message TEXT"))
-            if "launch_lease_until" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN launch_lease_until DATETIME"))
-            if "launch_command_id" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN launch_command_id VARCHAR(64)"))
-            if "launch_client_request_id" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN launch_client_request_id VARCHAR(64)"))
-            if "thread_root_session_id" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN thread_root_session_id CHAR(36)"))
-            if "continued_from_session_id" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN continued_from_session_id CHAR(36)"))
-            if "continuation_kind" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN continuation_kind VARCHAR(20)"))
-            if "origin_label" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN origin_label VARCHAR(255)"))
-            if "branched_from_event_id" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN branched_from_event_id INTEGER"))
-            if "is_writable_head" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN is_writable_head INTEGER NOT NULL DEFAULT 1"))
+            # Backfill: every session is its own thread root unless explicitly
+            # branched. The model column has no server_default (CHAR(36) refers
+            # to id), so seed legacy rows here.
             conn.execute(text("UPDATE sessions SET thread_root_session_id = id WHERE thread_root_session_id IS NULL"))
-            conn.execute(text("UPDATE sessions SET is_writable_head = 1 WHERE is_writable_head IS NULL"))
+            # Backfill: legacy last_activity_at from MAX(events.timestamp).
+            events_exists = conn.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events'")).fetchone()
+            if events_exists:
+                conn.execute(
+                    text(
+                        "UPDATE sessions SET last_activity_at = ("
+                        "SELECT MAX(e.timestamp) FROM events e WHERE e.session_id = sessions.id"
+                        ") WHERE last_activity_at IS NULL"
+                    )
+                )
+            # Multi-column indexes the model layer doesn't declare on these columns.
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_execution_home ON sessions(execution_home)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_source_runner_id ON sessions(source_runner_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_thread_head ON sessions(thread_root_session_id, is_writable_head)"))
             conn.execute(
                 text("CREATE INDEX IF NOT EXISTS ix_sessions_continued_from_started ON sessions(continued_from_session_id, started_at)")
             )
-            if "device_name" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN device_name VARCHAR(255)"))
-            if "last_activity_at" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN last_activity_at DATETIME"))
-                events_exists = conn.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events'")).fetchone()
-                if events_exists:
-                    conn.execute(
-                        text(
-                            "UPDATE sessions SET last_activity_at = ("
-                            "SELECT MAX(e.timestamp) FROM events e WHERE e.session_id = sessions.id"
-                            ") WHERE last_activity_at IS NULL"
-                        )
-                    )
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_last_activity_at ON sessions(last_activity_at)"))
             conn.commit()
     except Exception:
@@ -714,10 +681,10 @@ def _migrate_agents_columns(engine: Engine) -> None:
             ).fetchone()
             if runtime_state_exists:
                 columns = {row[1] for row in conn.execute(text("PRAGMA table_info(session_runtime_state)"))}
-                if "terminal_reason" not in columns:
-                    conn.execute(text("ALTER TABLE session_runtime_state ADD COLUMN terminal_reason VARCHAR(64)"))
-                if "terminal_source" not in columns:
-                    conn.execute(text("ALTER TABLE session_runtime_state ADD COLUMN terminal_source VARCHAR(64)"))
+                # terminal_reason / terminal_source ALTER ADDs handled by
+                # _auto_add_missing_columns (pure nullable adds). The
+                # phase-source normalization UPDATE below remains because it is
+                # always-run data hygiene, not a column-add backfill.
                 if {
                     "phase",
                     "phase_source",
@@ -809,32 +776,14 @@ def _migrate_agents_columns(engine: Engine) -> None:
         logger.debug("agent_heartbeats table migration skipped (table may not exist yet)", exc_info=True)
 
     # session_turns table migrations
+    # source_kind, timing_confidence (server_default-backed), expected_user_text_hash
+    # and baseline_observation_cursor (pure nullable) ALTER ADDs handled by
+    # _auto_add_missing_columns. Remaining work: legacy backfill from
+    # baseline_runtime_cursor + index creates.
     try:
         with engine.connect() as conn:
             columns = {row[1] for row in conn.execute(text("PRAGMA table_info(session_turns)"))}
             if columns:
-                if "source_kind" not in columns:
-                    conn.execute(
-                        text(
-                            """
-                            ALTER TABLE session_turns
-                            ADD COLUMN source_kind VARCHAR(32) NOT NULL DEFAULT 'managed_live'
-                            """
-                        )
-                    )
-                if "timing_confidence" not in columns:
-                    conn.execute(
-                        text(
-                            """
-                            ALTER TABLE session_turns
-                            ADD COLUMN timing_confidence VARCHAR(20) NOT NULL DEFAULT 'exact'
-                            """
-                        )
-                    )
-                if "expected_user_text_hash" not in columns:
-                    conn.execute(text("ALTER TABLE session_turns ADD COLUMN expected_user_text_hash VARCHAR(64)"))
-                if "baseline_observation_cursor" not in columns:
-                    conn.execute(text("ALTER TABLE session_turns ADD COLUMN baseline_observation_cursor INTEGER"))
                 if "baseline_runtime_cursor" in columns:
                     conn.execute(
                         text(
@@ -867,15 +816,8 @@ def _migrate_agents_columns(engine: Engine) -> None:
         logger.debug("session_turns table migration skipped (table may not exist yet)", exc_info=True)
 
     # session_tasks table migrations
-    try:
-        with engine.connect() as conn:
-            columns = {row[1] for row in conn.execute(text("PRAGMA table_info(session_tasks)"))}
-            if columns:
-                if "retry_later_count" not in columns:
-                    conn.execute(text("ALTER TABLE session_tasks ADD COLUMN retry_later_count INTEGER NOT NULL DEFAULT 0"))
-                conn.commit()
-    except Exception:
-        logger.debug("session_tasks table migration skipped (table may not exist yet)", exc_info=True)
+    # retry_later_count ALTER ADD handled by _auto_add_missing_columns
+    # (server_default=0, NOT NULL — auto path emits matching DDL).
 
     # session_inputs table migrations
     try:
@@ -974,14 +916,13 @@ def _migrate_agents_columns(engine: Engine) -> None:
         logger.debug("session_messages table migration skipped", exc_info=True)
 
     # insights table migrations
+    # origin / archived_at ALTER ADDs handled by _auto_add_missing_columns
+    # (pure nullable). Remaining work: index creates + legacy origin backfill
+    # from system-generated titles / tags.
     try:
         with engine.connect() as conn:
             columns = {row[1] for row in conn.execute(text("PRAGMA table_info(insights)"))}
             if columns:
-                if "origin" not in columns:
-                    conn.execute(text("ALTER TABLE insights ADD COLUMN origin VARCHAR(20)"))
-                if "archived_at" not in columns:
-                    conn.execute(text("ALTER TABLE insights ADD COLUMN archived_at DATETIME"))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_insights_origin ON insights(origin)"))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_insights_archived_at ON insights(archived_at)"))
                 if "title" in columns:
@@ -1103,92 +1044,72 @@ def _migrate_agents_columns(engine: Engine) -> None:
         logger.debug("session_branches table migration skipped", exc_info=True)
 
     # events table migrations
+    # All ALTER ADD COLUMN entries (tool_call_id, branch_id, event_uuid,
+    # parent_event_uuid, raw_json_z, raw_json_codec, event_origin,
+    # provisional_state/key/cursor/seq/complete, reconciled_event_id) are now
+    # handled by _auto_add_missing_columns. Remaining work below: dedup index
+    # rebuild + supporting indexes.
     try:
         with engine.connect() as conn:
             columns = {row[1] for row in conn.execute(text("PRAGMA table_info(events)"))}
-            if columns and "tool_call_id" not in columns:
-                conn.execute(text("ALTER TABLE events ADD COLUMN tool_call_id VARCHAR(255)"))
-            if columns and "branch_id" not in columns:
-                conn.execute(text("ALTER TABLE events ADD COLUMN branch_id INTEGER"))
-            if columns and "event_uuid" not in columns:
-                conn.execute(text("ALTER TABLE events ADD COLUMN event_uuid VARCHAR(255)"))
-            if columns and "parent_event_uuid" not in columns:
-                conn.execute(text("ALTER TABLE events ADD COLUMN parent_event_uuid VARCHAR(255)"))
-            if columns and "raw_json_z" not in columns:
-                conn.execute(text("ALTER TABLE events ADD COLUMN raw_json_z BLOB"))
-            if columns and "raw_json_codec" not in columns:
-                conn.execute(text("ALTER TABLE events ADD COLUMN raw_json_codec INTEGER NOT NULL DEFAULT 0"))
-            if columns and "event_origin" not in columns:
-                conn.execute(text("ALTER TABLE events ADD COLUMN event_origin VARCHAR(32) NOT NULL DEFAULT 'durable'"))
-            if columns and "provisional_state" not in columns:
-                conn.execute(text("ALTER TABLE events ADD COLUMN provisional_state VARCHAR(32)"))
-            if columns and "provisional_key" not in columns:
-                conn.execute(text("ALTER TABLE events ADD COLUMN provisional_key VARCHAR(512)"))
-            if columns and "provisional_cursor" not in columns:
-                conn.execute(text("ALTER TABLE events ADD COLUMN provisional_cursor VARCHAR(512)"))
-            if columns and "provisional_seq" not in columns:
-                conn.execute(text("ALTER TABLE events ADD COLUMN provisional_seq INTEGER"))
-            if columns and "provisional_complete" not in columns:
-                conn.execute(text("ALTER TABLE events ADD COLUMN provisional_complete INTEGER NOT NULL DEFAULT 0"))
-            if columns and "reconciled_event_id" not in columns:
-                conn.execute(text("ALTER TABLE events ADD COLUMN reconciled_event_id INTEGER"))
-            dedup_idx_sql_row = conn.execute(
-                text(
-                    """
-                    SELECT sql
-                    FROM sqlite_master
-                    WHERE type = 'index' AND name = 'ix_events_dedup'
-                    LIMIT 1
-                    """
+            if columns:
+                dedup_idx_sql_row = conn.execute(
+                    text(
+                        """
+                        SELECT sql
+                        FROM sqlite_master
+                        WHERE type = 'index' AND name = 'ix_events_dedup'
+                        LIMIT 1
+                        """
+                    )
+                ).fetchone()
+                dedup_needs_rebuild = True
+                if dedup_idx_sql_row and isinstance(dedup_idx_sql_row[0], str):
+                    normalized = " ".join(dedup_idx_sql_row[0].lower().split())
+                    expected_fragment = "on events(session_id, branch_id, source_path, source_offset, event_hash)"
+                    dedup_needs_rebuild = expected_fragment not in normalized
+                if dedup_needs_rebuild:
+                    conn.execute(text("DROP INDEX IF EXISTS ix_events_dedup"))
+                    conn.execute(
+                        text(
+                            """
+                            CREATE UNIQUE INDEX IF NOT EXISTS ix_events_dedup
+                            ON events(session_id, branch_id, source_path, source_offset, event_hash)
+                            WHERE source_path IS NOT NULL
+                            """
+                        )
+                    )
+                conn.execute(
+                    text("CREATE INDEX IF NOT EXISTS ix_events_session_branch_timestamp " "ON events(session_id, branch_id, timestamp)")
                 )
-            ).fetchone()
-            dedup_needs_rebuild = True
-            if dedup_idx_sql_row and isinstance(dedup_idx_sql_row[0], str):
-                normalized = " ".join(dedup_idx_sql_row[0].lower().split())
-                expected_fragment = "on events(session_id, branch_id, source_path, source_offset, event_hash)"
-                dedup_needs_rebuild = expected_fragment not in normalized
-            if dedup_needs_rebuild:
-                conn.execute(text("DROP INDEX IF EXISTS ix_events_dedup"))
                 conn.execute(
                     text(
                         """
-                        CREATE UNIQUE INDEX IF NOT EXISTS ix_events_dedup
-                        ON events(session_id, branch_id, source_path, source_offset, event_hash)
-                        WHERE source_path IS NOT NULL
+                        DROP INDEX IF EXISTS ix_events_session_uuid
                         """
                     )
                 )
-            conn.execute(
-                text("CREATE INDEX IF NOT EXISTS ix_events_session_branch_timestamp " "ON events(session_id, branch_id, timestamp)")
-            )
-            conn.execute(
-                text(
-                    """
-                    DROP INDEX IF EXISTS ix_events_session_uuid
-                    """
+                conn.execute(
+                    text(
+                        """
+                        CREATE UNIQUE INDEX IF NOT EXISTS ix_events_session_branch_uuid
+                        ON events(session_id, branch_id, event_uuid)
+                        WHERE event_uuid IS NOT NULL
+                        """
+                    )
                 )
-            )
-            conn.execute(
-                text(
-                    """
-                    CREATE UNIQUE INDEX IF NOT EXISTS ix_events_session_branch_uuid
-                    ON events(session_id, branch_id, event_uuid)
-                    WHERE event_uuid IS NOT NULL
-                    """
+                conn.execute(
+                    text(
+                        """
+                        CREATE UNIQUE INDEX IF NOT EXISTS ix_events_provisional_key
+                        ON events(session_id, provisional_key)
+                        WHERE provisional_key IS NOT NULL
+                        """
+                    )
                 )
-            )
-            conn.execute(
-                text(
-                    """
-                    CREATE UNIQUE INDEX IF NOT EXISTS ix_events_provisional_key
-                    ON events(session_id, provisional_key)
-                    WHERE provisional_key IS NOT NULL
-                    """
-                )
-            )
-            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_events_event_origin ON events(event_origin)"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_events_provisional_state ON events(provisional_state)"))
-            conn.commit()
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_events_event_origin ON events(event_origin)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_events_provisional_state ON events(provisional_state)"))
+                conn.commit()
     except Exception:
         logger.debug("events table migration skipped (table may not exist yet)", exc_info=True)
 
@@ -1332,22 +1253,16 @@ def _migrate_agents_columns(engine: Engine) -> None:
         raise RuntimeError("Failed to initialize session_observations table") from exc
 
     # job_runs table migrations
-    try:
-        with engine.connect() as conn:
-            columns = {row[1] for row in conn.execute(text("PRAGMA table_info(job_runs)"))}
-            if columns and "error_type" not in columns:
-                conn.execute(text("ALTER TABLE job_runs ADD COLUMN error_type VARCHAR(50)"))
-                conn.commit()
-    except Exception:
-        logger.debug("job_runs table migration skipped (table may not exist yet)", exc_info=True)
+    # error_type ALTER ADD handled by _auto_add_missing_columns (pure nullable).
 
     # commis_jobs table migrations
+    # parent_run_id ALTER ADD handled by _auto_add_missing_columns (pure nullable).
+    # Remaining work: index rekey (drop legacy ix_commis_jobs_idempotency, recreate
+    # as composite with parent_run_id + tool_call_id partial unique).
     try:
         with engine.connect() as conn:
             columns = {row[1] for row in conn.execute(text("PRAGMA table_info(commis_jobs)"))}
             if columns:
-                if "parent_run_id" not in columns:
-                    conn.execute(text("ALTER TABLE commis_jobs ADD COLUMN parent_run_id INTEGER"))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_commis_jobs_parent_run_id ON commis_jobs(parent_run_id)"))
                 conn.execute(text("DROP INDEX IF EXISTS ix_commis_jobs_idempotency"))
                 conn.execute(
@@ -1450,6 +1365,13 @@ def _auto_add_missing_columns(
                         if not isinstance(arg, (str, int, float, bool)) and not hasattr(arg, "text"):
                             skipped.append((table.name, col.name, "non_constant_default"))
                             continue
+                    # SQLite cannot ALTER ADD a NOT NULL column without a literal
+                    # DEFAULT — there are no rows to seed otherwise. Leave these
+                    # to the imperative migrator (typically nullable add + UPDATE
+                    # backfill + later constraint tightening via heavy migration).
+                    if not col.nullable and default is None:
+                        skipped.append((table.name, col.name, "not_null_without_default"))
+                        continue
                     try:
                         ddl = str(CreateColumn(col).compile(dialect=dialect))
                     except Exception as exc:

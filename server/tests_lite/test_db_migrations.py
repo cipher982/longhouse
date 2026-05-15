@@ -7,11 +7,26 @@ from sqlalchemy import text
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
-from zerg.database import _migrate_agents_columns
+from zerg.database import Base
+from zerg.database import _auto_add_missing_columns
+from zerg.database import _migrate_agents_columns as _migrate_agents_columns_raw
 from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.db_migrations import apply_heavy_migrations
 from zerg.db_migrations import plan_heavy_migrations
+
+
+def _migrate_agents_columns(engine):
+    """Run the Phase 2 startup migration sequence used by ``initialize_database``.
+
+    Phase 2 split additive ALTERs into ``_auto_add_missing_columns`` (which runs
+    first against ``Base.metadata``) and kept non-additive blocks in
+    ``_migrate_agents_columns_raw``. Tests that previously called the imperative
+    function directly need to mirror the production ordering.
+    """
+
+    _auto_add_missing_columns(engine, Base.metadata, apply=True)
+    _migrate_agents_columns_raw(engine)
 
 
 def _table_sql(engine, table_name: str) -> str:

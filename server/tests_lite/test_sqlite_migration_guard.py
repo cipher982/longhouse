@@ -12,8 +12,22 @@ from sqlalchemy import text
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
-from zerg.database import _migrate_agents_columns
+from zerg.database import Base
+from zerg.database import _auto_add_missing_columns
+from zerg.database import _migrate_agents_columns as _migrate_agents_columns_raw
 from zerg.database import make_engine
+
+
+def _migrate_agents_columns(engine):
+    """Mirror the production startup migration sequence (Phase 2).
+
+    ``initialize_database`` runs ``_auto_add_missing_columns`` first, then the
+    residual imperative blocks. Tests that exercise the legacy upgrade path must
+    do the same.
+    """
+
+    _auto_add_missing_columns(engine, Base.metadata, apply=True)
+    _migrate_agents_columns_raw(engine)
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
