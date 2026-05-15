@@ -47,7 +47,7 @@ struct SessionViewModelTests {
     }
 
     @Test
-    func sendChangesTranscriptScrollTokenBeforeWorkspaceRefreshCompletes() async throws {
+    func sendSynchronouslyBumpsTranscriptScrollToken() async throws {
         let before = try makeWorkspace(eventId: 10, content: "Before send")
         let api = FakeSessionWorkspaceClient(workspaces: [before])
         let appState = AppState()
@@ -55,14 +55,32 @@ struct SessionViewModelTests {
         let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
 
         await model.start(sessionId: "session-1", appState: appState)
-        await api.failFutureWorkspaceLoads()
         let beforeSendToken = model.transcriptScrollToken
+        let beforeRevealCounter = model.submittedRevealCounter
         let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
 
         #expect(sent)
         #expect(model.transcriptScrollToken != beforeSendToken)
+        #expect(model.submittedRevealCounter == beforeRevealCounter + 1)
         #expect(model.submittedInputs.first?.text == "continue")
         #expect(model.submittedInputs.first?.phase == .sent)
+    }
+
+    @Test
+    func transcriptScrollTokenChangesWhenLastItemContentGrows() async throws {
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in nil }, enableRealtime: false)
+
+        model.items = TimelineBuilder.build(events: [
+            makeEvent(id: 20, role: "assistant", content: "Thinking")
+        ])
+        let before = model.transcriptScrollToken
+        model.items = TimelineBuilder.build(events: [
+            makeEvent(id: 20, role: "assistant", content: "Thinking\n\nHere is the full answer.")
+        ])
+
+        #expect(model.transcriptScrollToken != before)
     }
 
     @Test
@@ -137,6 +155,72 @@ struct SessionViewModelTests {
         #expect(model.submittedInputs.first?.serverInputId == 7)
     }
 
+    @Test
+    func queueInsteadOfSteerRemovesOriginalDecisionBubble() async throws {
+        let before = try makeWorkspace(eventId: 10, content: "Before send")
+        let queuedResponse = SessionInputResponse(
+            outcome: .queued,
+            inputId: 9,
+            intent: "queue",
+            queued: [
+                QueuedInputSummary(
+                    id: 9,
+                    text: "keep going",
+                    intent: "queue",
+                    status: "queued",
+                    lastError: nil,
+                    createdAt: "2026-05-02T20:00:00Z"
+                )
+            ]
+        )
+        let api = FakeSessionWorkspaceClient(workspaces: [before])
+        await api.setSendSteps([
+            .turnEnded("Active turn ended."),
+            .response(queuedResponse),
+        ])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        let steered = await model.send(text: "keep going", sessionId: "session-1", appState: appState, intent: "steer")
+        #expect(!steered)
+        #expect(model.submittedInputs.count == 1)
+        #expect(model.submittedInputs.first?.phase == .needsUserDecision)
+
+        let queued = await model.queueInsteadOfSteer(sessionId: "session-1", appState: appState)
+
+        #expect(queued)
+        #expect(model.submittedInputs.count == 1)
+        #expect(model.submittedInputs.first?.phase == .queued)
+        #expect(model.submittedInputs.first?.serverInputId == 9)
+    }
+
+    @Test
+    func successfulRetryClearsPriorFailedBubbleForSameText() async throws {
+        let before = try makeWorkspace(eventId: 10, content: "Before send")
+        let api = FakeSessionWorkspaceClient(workspaces: [before])
+        await api.setSendSteps([
+            .requestFailed,
+            .response(SessionInputResponse(outcome: .sent, inputId: 11, intent: "auto", queued: [])),
+        ])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        let failed = await model.send(text: "retry me", sessionId: "session-1", appState: appState)
+        #expect(!failed)
+        #expect(model.submittedInputs.first?.phase == .failed)
+
+        let retried = await model.send(text: "retry me", sessionId: "session-1", appState: appState)
+
+        #expect(retried)
+        #expect(model.submittedInputs.count == 1)
+        #expect(model.submittedInputs.first?.phase == .sent)
+        #expect(model.submittedInputs.first?.serverInputId == 11)
+    }
+
     private func makeWorkspace(eventId: Int, content: String) throws -> SessionWorkspaceResponse {
         let json = """
         {
@@ -187,6 +271,27 @@ struct SessionViewModelTests {
         """.data(using: .utf8)!
         return try JSONDecoder.snakeCase.decode(SessionWorkspaceResponse.self, from: json)
     }
+
+    private func makeEvent(id: Int, role: String, content: String) -> SessionEvent {
+        SessionEvent(
+            id: id,
+            role: role,
+            contentText: content,
+            toolName: nil,
+            toolInputJSON: nil,
+            toolOutputText: nil,
+            toolCallId: nil,
+            timestamp: "2026-05-02T20:00:00Z",
+            inActiveContext: true,
+            isHeadBranch: true
+        )
+    }
+}
+
+private enum FakeSendStep: Sendable {
+    case response(SessionInputResponse)
+    case requestFailed
+    case turnEnded(String)
 }
 
 private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
@@ -194,6 +299,7 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
     private let sendResponse: SessionInputResponse
     private var shouldFailWorkspaceLoads = false
     private var sendError: Error?
+    private var sendSteps: [FakeSendStep] = []
     private var workspaceRequests: [(id: String, limit: Int, branchMode: String)] = []
     private var sentInputs: [String] = []
 
@@ -218,6 +324,17 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
 
     func sendInput(id: String, text: String, intent: String, clientRequestId: String?) async throws -> SessionInputResponse {
         sentInputs.append("\(text):\(intent)")
+        if !sendSteps.isEmpty {
+            let step = sendSteps.removeFirst()
+            switch step {
+            case .response(let response):
+                return response
+            case .requestFailed:
+                throw LonghouseAPIError.requestFailed
+            case .turnEnded(let message):
+                throw LonghouseAPIError.structured(status: 409, errorCode: "turn_ended", message: message)
+            }
+        }
         if let sendError {
             throw sendError
         }
@@ -240,6 +357,10 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
 
     func failFutureSends(_ error: Error) {
         sendError = error
+    }
+
+    func setSendSteps(_ steps: [FakeSendStep]) {
+        sendSteps = steps
     }
 
     func workspaceRequestCount() -> Int {
