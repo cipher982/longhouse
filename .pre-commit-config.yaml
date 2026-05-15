@@ -26,6 +26,17 @@ repos:
       - id: check-merge-conflict
 
   # =========================================================================
+  # Secret scanning: catches AWS keys, JWTs, OpenAI/Anthropic keys, GH tokens.
+  # If a real new secret-shape lands and gitleaks fires, fix the source. For
+  # legitimate test fixtures, add `gitleaks:allow` on the line or extend
+  # `[allowlist]` in `.gitleaks.toml` (do not loosen detection rules).
+  # =========================================================================
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.23.1
+    hooks:
+      - id: gitleaks
+
+  # =========================================================================
   # Python: ruff for lint + format (fast, replaces black/isort/flake8)
   # Only targets main source code, not alembic migrations or test scripts
   # =========================================================================
