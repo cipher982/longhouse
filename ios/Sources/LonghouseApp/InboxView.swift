@@ -482,6 +482,25 @@ enum ConnectionState: Equatable, Hashable {
     case healthy           // Most recent scheduled refresh succeeded
     case reconnecting      // 1 consecutive failure; retry already scheduled
     case offline           // 2+ consecutive failures
+
+    /// Pure derivation of connection state from observable inputs. Lives at
+    /// file scope so unit tests can lock in the state machine without having
+    /// to spin up a `TimelineViewModel` (which depends on `AppState`/network).
+    static func derive(failures: Int, lastUpdatedAt: Date?) -> ConnectionState {
+        // Cold start (no successful poll yet): stay in .connecting through
+        // the first failure so a single hiccup doesn't immediately read as
+        // "reconnecting" — there's nothing to reconnect to. Two failures
+        // with no success on record means we're truly offline.
+        if lastUpdatedAt == nil {
+            return failures >= 2 ? .offline : .connecting
+        }
+        // We have at least one successful poll on record: standard ladder.
+        switch failures {
+        case 0:  return .healthy
+        case 1:  return .reconnecting
+        default: return .offline
+        }
+    }
 }
 
 @MainActor
@@ -499,19 +518,7 @@ final class TimelineViewModel: ObservableObject {
     private var activeRefreshCount = 0
 
     var connectionState: ConnectionState {
-        // Cold start (no successful poll yet): stay in .connecting through
-        // the first failure so a single hiccup doesn't immediately read as
-        // "reconnecting" — there's nothing to reconnect to. Two failures
-        // with no success on record means we're truly offline.
-        if lastUpdatedAt == nil {
-            return consecutiveRefreshFailures >= 2 ? .offline : .connecting
-        }
-        // We have at least one successful poll on record: standard ladder.
-        switch consecutiveRefreshFailures {
-        case 0:  return .healthy
-        case 1:  return .reconnecting
-        default: return .offline
-        }
+        ConnectionState.derive(failures: consecutiveRefreshFailures, lastUpdatedAt: lastUpdatedAt)
     }
 
     var isEmpty: Bool { attention.isEmpty && recent.isEmpty }
