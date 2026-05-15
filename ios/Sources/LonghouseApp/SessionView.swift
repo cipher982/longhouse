@@ -10,7 +10,9 @@ struct SessionView: View {
     @StateObject private var viewModel = SessionViewModel()
     @StateObject private var liveActivityManager = SessionLiveActivityManager()
     @State private var composerText: String = ""
-    @State private var transcriptPinnedToBottom = true
+    @State private var shouldFollowTranscriptBottom = true
+    @State private var transcriptUserScrollActive = false
+    @State private var transcriptScrollTask: Task<Void, Never>?
     @FocusState private var composerFocused: Bool
     private let transcriptBottomAnchorID = "session-transcript-bottom-anchor"
 
@@ -43,7 +45,10 @@ struct SessionView: View {
             }
         }
         .task(id: sessionId) { await viewModel.start(sessionId: sessionId, appState: appState) }
-        .onDisappear { viewModel.stop() }
+        .onDisappear {
+            viewModel.stop()
+            cancelTranscriptScrollTask()
+        }
         .onChange(of: scenePhase) { _, newPhase in
             // SSE over URLSession is foreground-only per Apple's contract.
             // Tear down on background/inactive so we're not leaking a dead
@@ -141,54 +146,95 @@ struct SessionView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollViewReader { proxy in
-                    GeometryReader { viewport in
-                        ScrollView {
-                            LazyVStack(alignment: .leading, spacing: 10) {
-                                if let error = viewModel.errorMessage {
-                                    TranscriptErrorBanner(error: error)
-                                }
-                                if viewModel.items.isEmpty && viewModel.submittedInputs.isEmpty {
-                                    ContentUnavailableView(
-                                        "No messages yet",
-                                        systemImage: "bubble.left.and.bubble.right"
-                                    )
-                                    .padding(.vertical, 48)
-                                } else {
-                                    transcriptItems
-                                }
-                                Color.clear
-                                    .frame(height: 0)
-                                    .background(
-                                        GeometryReader { marker in
-                                            Color.clear.preference(
-                                                key: TranscriptBottomYKey.self,
-                                                value: marker.frame(in: .named("sessionTranscriptScroll")).maxY
-                                            )
-                                        }
-                                    )
-                                    .id(transcriptBottomAnchorID)
-                            }
-                            .padding(.horizontal)
-                            .padding(.vertical, 12)
-                        }
-                        .accessibilityIdentifier("session-chat-transcript")
-                        .coordinateSpace(name: "sessionTranscriptScroll")
-                        .scrollDismissesKeyboard(.interactively)
-                        .defaultScrollAnchor(.bottom)
-                        .onPreferenceChange(TranscriptBottomYKey.self) { bottomY in
-                            transcriptPinnedToBottom = bottomY <= viewport.size.height + 96
-                        }
-                        .onChange(of: viewModel.transcriptScrollToken) { _, _ in
-                            if transcriptPinnedToBottom {
-                                scrollTranscriptToBottom(proxy, animated: false)
-                            }
-                        }
-                        .onChange(of: viewModel.submittedRevealCounter) { _, _ in
-                            scrollTranscriptToBottom(proxy)
-                        }
-                    }
+                    transcriptScroll(proxy: proxy)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func transcriptScroll(proxy: ScrollViewProxy) -> some View {
+        if #available(iOS 18.0, *) {
+            transcriptScrollBase
+                .onScrollGeometryChange(for: Bool.self) { geometry in
+                    isTranscriptGeometryAtBottom(geometry)
+                } action: { _, isAtBottom in
+                    updateTranscriptFollowState(isAtBottom: isAtBottom, userDriven: transcriptUserScrollActive)
+                }
+                .onScrollPhaseChange { _, newPhase, context in
+                    updateTranscriptScrollPhase(newPhase, geometry: context.geometry)
+                }
+                .onChange(of: viewModel.transcriptScrollToken) { _, _ in
+                    followTranscriptBottomIfNeeded(proxy, animated: false)
+                }
+                .onChange(of: viewModel.submittedRevealCounter) { _, _ in
+                    shouldFollowTranscriptBottom = true
+                    scrollTranscriptToBottom(proxy)
+                }
+        } else {
+            GeometryReader { viewport in
+                transcriptScrollBase
+                    .coordinateSpace(name: "sessionTranscriptScroll")
+                    .onPreferenceChange(TranscriptBottomYKey.self) { bottomY in
+                        updateTranscriptFollowState(
+                            isAtBottom: bottomY <= viewport.size.height + 96,
+                            userDriven: true
+                        )
+                    }
+                    .onChange(of: viewModel.transcriptScrollToken) { _, _ in
+                        followTranscriptBottomIfNeeded(proxy, animated: false)
+                    }
+                    .onChange(of: viewModel.submittedRevealCounter) { _, _ in
+                        shouldFollowTranscriptBottom = true
+                        scrollTranscriptToBottom(proxy)
+                    }
+            }
+        }
+    }
+
+    private var transcriptScrollBase: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 10) {
+                if let error = viewModel.errorMessage {
+                    TranscriptErrorBanner(error: error)
+                }
+                if viewModel.items.isEmpty && viewModel.submittedInputs.isEmpty {
+                    ContentUnavailableView(
+                        "No messages yet",
+                        systemImage: "bubble.left.and.bubble.right"
+                    )
+                    .padding(.vertical, 48)
+                } else {
+                    transcriptItems
+                }
+                transcriptBottomAnchor
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 12)
+        }
+        .accessibilityIdentifier("session-chat-transcript")
+        .scrollDismissesKeyboard(.interactively)
+        .defaultScrollAnchor(.bottom)
+    }
+
+    @ViewBuilder
+    private var transcriptBottomAnchor: some View {
+        if #available(iOS 18.0, *) {
+            Color.clear
+                .frame(height: 1)
+                .id(transcriptBottomAnchorID)
+        } else {
+            Color.clear
+                .frame(height: 1)
+                .background(
+                    GeometryReader { marker in
+                        Color.clear.preference(
+                            key: TranscriptBottomYKey.self,
+                            value: marker.frame(in: .named("sessionTranscriptScroll")).maxY
+                        )
+                    }
+                )
+                .id(transcriptBottomAnchorID)
         }
     }
 
@@ -212,8 +258,40 @@ struct SessionView: View {
         }
     }
 
-    private func scrollTranscriptToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
-        DispatchQueue.main.async {
+    private func updateTranscriptFollowState(isAtBottom: Bool, userDriven: Bool) {
+        if isAtBottom {
+            shouldFollowTranscriptBottom = true
+        } else if userDriven {
+            shouldFollowTranscriptBottom = false
+            cancelTranscriptScrollTask()
+        }
+    }
+
+    @available(iOS 18.0, *)
+    private func updateTranscriptScrollPhase(_ phase: ScrollPhase, geometry: ScrollGeometry) {
+        let userDriven = phase == .tracking || phase == .interacting || phase == .decelerating
+        transcriptUserScrollActive = userDriven
+        updateTranscriptFollowState(isAtBottom: isTranscriptGeometryAtBottom(geometry), userDriven: userDriven)
+    }
+
+    @available(iOS 18.0, *)
+    private func isTranscriptGeometryAtBottom(_ geometry: ScrollGeometry) -> Bool {
+        let visibleMaxY = geometry.contentOffset.y + geometry.containerSize.height
+        return visibleMaxY >= geometry.contentSize.height - 96
+    }
+
+    private func followTranscriptBottomIfNeeded(_ proxy: ScrollViewProxy, animated: Bool) {
+        guard shouldFollowTranscriptBottom else { return }
+        scrollTranscriptToBottom(proxy, animated: animated)
+    }
+
+    private func scrollTranscriptToBottom(
+        _ proxy: ScrollViewProxy,
+        animated: Bool = true
+    ) {
+        transcriptScrollTask?.cancel()
+        transcriptScrollTask = Task { @MainActor in
+            await Task.yield()
             let scroll = {
                 proxy.scrollTo(transcriptBottomAnchorID, anchor: .bottom)
             }
@@ -222,7 +300,16 @@ struct SessionView: View {
             } else {
                 scroll()
             }
+
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            guard !Task.isCancelled, shouldFollowTranscriptBottom else { return }
+            proxy.scrollTo(transcriptBottomAnchorID, anchor: .bottom)
         }
+    }
+
+    private func cancelTranscriptScrollTask() {
+        transcriptScrollTask?.cancel()
+        transcriptScrollTask = nil
     }
 
     @ViewBuilder

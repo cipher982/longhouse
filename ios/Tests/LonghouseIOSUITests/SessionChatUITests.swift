@@ -34,6 +34,28 @@ final class SessionChatUITests: XCTestCase {
         XCTAssertEqual(composer.value as? String, "Reply")
     }
 
+    func testAssistantUpdateKeepsPinnedTranscriptAtBottom() {
+        let app = launchChatFixture(name: "assistant-update", eventCount: 40)
+        let currentLastMessage = app.staticTexts["Assistant fixture message 39: streaming-style response with enough body to exercise row layout."]
+        let liveUpdate = app.staticTexts["Assistant fixture live update at bottom."]
+
+        XCTAssertTrue(currentLastMessage.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitUntilHittable(liveUpdate, timeout: 5))
+        XCTAssertFalse(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."].exists)
+    }
+
+    func testAssistantUpdateWithKeyboardOpenKeepsPinnedTranscriptAtBottom() {
+        let app = launchChatFixture(name: "assistant-update-keyboard", eventCount: 40)
+        let composer = app.textFields["session-chat-composer"]
+        let liveUpdate = app.staticTexts["Assistant fixture keyboard update at bottom."]
+
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        composer.tap()
+
+        XCTAssertTrue(waitUntilHittable(liveUpdate, timeout: 6))
+        XCTAssertFalse(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."].exists)
+    }
+
     func testLargeTranscriptScrollPerformance() {
         let app = launchChatFixture(name: "stress", eventCount: 500)
         let transcript = app.scrollViews["session-chat-transcript"]
@@ -56,5 +78,11 @@ final class SessionChatUITests: XCTestCase {
         app.launchEnvironment[LaunchEnvironment.chatEventCount] = String(eventCount)
         app.launch()
         return app
+    }
+
+    private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
+        let predicate = NSPredicate(format: "hittable == true")
+        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
 }

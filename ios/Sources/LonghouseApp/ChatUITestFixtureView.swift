@@ -3,12 +3,15 @@ import SwiftUI
 
 @MainActor
 struct ChatUITestFixtureView: View {
+    @EnvironmentObject private var appState: AppState
+    private let fixtureName: String
     private let client: ChatUITestWorkspaceClient
     @StateObject private var viewModel: SessionViewModel
 
     init(fixtureName: String) {
         let fixture = ChatUITestFixture(name: fixtureName)
         let client = ChatUITestWorkspaceClient(fixture: fixture)
+        self.fixtureName = fixtureName
         self.client = client
         _viewModel = StateObject(
             wrappedValue: SessionViewModel(
@@ -25,6 +28,18 @@ struct ChatUITestFixtureView: View {
                 fallbackTitle: "Chat UI Fixture",
                 viewModel: viewModel
             )
+        }
+        .task(id: fixtureName) {
+            guard fixtureName.hasPrefix("assistant-update") else { return }
+            let delay: UInt64 = fixtureName == "assistant-update-keyboard"
+                ? 2_500_000_000
+                : 900_000_000
+            let message = fixtureName == "assistant-update-keyboard"
+                ? "Assistant fixture keyboard update at bottom."
+                : "Assistant fixture live update at bottom."
+            try? await Task.sleep(nanoseconds: delay)
+            await client.appendAssistantMessage(message)
+            await viewModel.reload(sessionId: client.sessionID, appState: appState)
         }
     }
 }
@@ -89,6 +104,16 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
     }
 
     func postRenderBeacon(_ payload: RenderBeaconReporter.Payload) async {}
+
+    func appendAssistantMessage(_ text: String) {
+        events.append(Self.makeEvent(
+            id: nextEventID,
+            role: "assistant",
+            content: text,
+            timestamp: ISO8601DateFormatter().string(from: Date())
+        ))
+        nextEventID += 1
+    }
 
     private static func makeWorkspace(sessionID: String, events: [SessionEvent]) -> SessionWorkspaceResponse {
         let detail = SessionDetail(
