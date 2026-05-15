@@ -233,6 +233,65 @@ struct SessionModelsTests {
     }
 
     @Test
+    func sessionEventToolInputJSONPreservesOriginalKeys() throws {
+        let json = """
+        {
+          "id": 42,
+          "role": "assistant",
+          "content_text": null,
+          "tool_name": "edit",
+          "tool_input_json": {
+            "file_path": "/tmp/example.swift",
+            "nested_value": {
+              "inner_key": "kept"
+            }
+          },
+          "tool_output_text": null,
+          "tool_call_id": "call-1",
+          "timestamp": "2026-05-15T20:00:00Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+        """.data(using: .utf8)!
+
+        let event = try JSONDecoder.snakeCase.decode(SessionEvent.self, from: json)
+
+        #expect(event.toolInputString("file_path") == "/tmp/example.swift")
+        #expect(event.toolInputString("filePath") == nil)
+        guard case let .object(nested)? = event.toolInputJSON?["nested_value"] else {
+            Issue.record("expected nested_value object")
+            return
+        }
+        #expect(nested["inner_key"] == .string("kept"))
+        #expect(nested["innerKey"] == nil)
+    }
+
+    @Test
+    func generatedAPIEventToolInputJSONPreservesOriginalKeys() throws {
+        let json = """
+        {
+          "id": 43,
+          "role": "assistant",
+          "content_text": null,
+          "tool_name": "edit",
+          "tool_input_json": {
+            "file_path": "/tmp/generated.swift"
+          },
+          "tool_output_text": null,
+          "tool_call_id": "call-2",
+          "timestamp": "2026-05-15T20:00:00Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+        """.data(using: .utf8)!
+
+        let event = try JSONDecoder.snakeCase.decode(APIEventResponse.self, from: json)
+
+        #expect(event.toolInputJson?["file_path"] == .string("/tmp/generated.swift"))
+        #expect(event.toolInputJson?["filePath"] == nil)
+    }
+
+    @Test
     func timelineBranchBadgeUsesOnlyRealGitBranch() {
         let branchSession = SessionSummary(
             id: "session-branch",
@@ -995,7 +1054,7 @@ struct SessionModelsTests {
     }
 
     @Test
-    func sessionsResponseDecodesTimelineCardContract() throws {
+    func apiTimelineSessionsListResponseDecodesTimelineCardContract() throws {
         let sessionJSON = """
         {
           "id": "session-card-contract",

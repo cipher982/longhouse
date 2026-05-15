@@ -517,9 +517,48 @@ extension LonghouseAPIError: LocalizedError {
 extension JSONDecoder {
     static let snakeCase: JSONDecoder = {
         let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        decoder.keyDecodingStrategy = .custom { codingPath in
+            guard let key = codingPath.last else {
+                return LonghouseJSONCodingKey("")
+            }
+            if codingPath.dropLast().contains(where: { pathKey in
+                pathKey.stringValue == "tool_input_json" || pathKey.stringValue == "toolInputJson"
+            }) {
+                return LonghouseJSONCodingKey(key.stringValue)
+            }
+            return LonghouseJSONCodingKey(JSONDecoder.longhouseConvertFromSnakeCase(key.stringValue))
+        }
         return decoder
     }()
+
+    private static func longhouseConvertFromSnakeCase(_ key: String) -> String {
+        guard key.contains("_") else { return key }
+        let parts = key.split(separator: "_", omittingEmptySubsequences: false)
+        guard let first = parts.first else { return key }
+        return String(first) + parts.dropFirst().map { part in
+            guard let firstCharacter = part.first else { return "" }
+            return firstCharacter.uppercased() + part.dropFirst()
+        }.joined()
+    }
+}
+
+private struct LonghouseJSONCodingKey: CodingKey {
+    let stringValue: String
+    let intValue: Int?
+
+    init(_ stringValue: String) {
+        self.stringValue = stringValue
+        self.intValue = nil
+    }
+
+    init?(stringValue: String) {
+        self.init(stringValue)
+    }
+
+    init?(intValue: Int) {
+        self.stringValue = String(intValue)
+        self.intValue = intValue
+    }
 }
 
 struct UserNotificationSettings: Decodable, Equatable {

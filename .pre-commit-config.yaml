@@ -98,6 +98,16 @@ repos:
         pass_filenames: false
 
       # -----------------------------------------------------------------------
+      # iOS OpenAPI DTO drift guard
+      # -----------------------------------------------------------------------
+      - id: ios-api-contract-drift
+        name: iOS OpenAPI DTO drift check
+        entry: make validate-ios-api
+        language: system
+        files: ^(openapi\.json|scripts/generate/ios_api_models\.py|ios/Sources/Shared/Generated/SessionAPI\.generated\.swift)$
+        pass_filenames: false
+
+      # -----------------------------------------------------------------------
       # AsyncAPI spec validation
       # -----------------------------------------------------------------------
       - id: asyncapi-validate

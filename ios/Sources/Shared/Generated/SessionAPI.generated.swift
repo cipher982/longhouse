@@ -1,5 +1,8 @@
 // @generated from openapi.json by scripts/generate/ios_api_models.py
 // Do not edit by hand.
+//
+// The generated event DTOs intentionally reuse the hand-written JSONValue type.
+// Decode with JSONDecoder.snakeCase so tool_input_json payload keys are preserved.
 
 import Foundation
 
