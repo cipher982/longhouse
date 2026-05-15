@@ -16,7 +16,8 @@ struct ChatUITestFixtureView: View {
         _viewModel = StateObject(
             wrappedValue: SessionViewModel(
                 apiFactory: { _ in client },
-                enableRealtime: false
+                streamFactory: { _, _ in client.streamSource() },
+                enableRealtime: fixture.usesRealtimeStream
             )
         )
     }
@@ -30,7 +31,20 @@ struct ChatUITestFixtureView: View {
             )
         }
         .task(id: fixtureName) {
-            guard fixtureName.hasPrefix("assistant-update") else { return }
+            guard fixtureName.hasPrefix("assistant-update") || fixtureName.hasPrefix("assistant-stream") else { return }
+            if fixtureName.hasPrefix("assistant-stream") {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                await client.streamAssistantMessage(
+                    chunks: [
+                        "Assistant fixture streaming",
+                        "Assistant fixture streaming update",
+                        "Assistant fixture streaming update at bottom.",
+                    ],
+                    intervalNanoseconds: 250_000_000
+                )
+                return
+            }
+
             let delay: UInt64 = fixtureName == "assistant-update-keyboard"
                 ? 2_500_000_000
                 : 900_000_000
@@ -52,12 +66,18 @@ private struct ChatUITestFixture: Sendable {
         self.name = name
         self.eventCount = max(0, UITestHooks.chatFixtureEventCount ?? (name == "stress" ? 500 : 80))
     }
+
+    var usesRealtimeStream: Bool {
+        name.hasPrefix("assistant-stream")
+    }
 }
 
 private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
     let sessionID = "ui-test-chat-session"
     private var nextEventID = 1
     private var events: [SessionEvent]
+    private var realtimeContinuation: AsyncStream<SessionWorkspaceStream.Event>.Continuation?
+    private var streamingAssistantEventID: Int?
 
     init(fixture: ChatUITestFixture) {
         var seedEvents: [SessionEvent] = []
@@ -105,6 +125,26 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
 
     func postRenderBeacon(_ payload: RenderBeaconReporter.Payload) async {}
 
+    nonisolated func streamSource() -> SessionWorkspaceStreamSource {
+        SessionWorkspaceStreamSource(
+            start: { await self.startRealtimeStream() },
+            stop: { await self.stopRealtimeStream() }
+        )
+    }
+
+    func startRealtimeStream() -> AsyncStream<SessionWorkspaceStream.Event> {
+        AsyncStream { continuation in
+            Task {
+                await self.attachRealtimeContinuation(continuation)
+            }
+        }
+    }
+
+    func stopRealtimeStream() {
+        realtimeContinuation?.finish()
+        realtimeContinuation = nil
+    }
+
     func appendAssistantMessage(_ text: String) {
         events.append(Self.makeEvent(
             id: nextEventID,
@@ -113,6 +153,67 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             timestamp: ISO8601DateFormatter().string(from: Date())
         ))
         nextEventID += 1
+    }
+
+    func streamAssistantMessage(chunks: [String], intervalNanoseconds: UInt64) async {
+        for chunk in chunks {
+            upsertStreamingAssistantMessage(chunk)
+            emitWorkspaceChanged()
+            try? await Task.sleep(nanoseconds: intervalNanoseconds)
+        }
+    }
+
+    private func attachRealtimeContinuation(
+        _ continuation: AsyncStream<SessionWorkspaceStream.Event>.Continuation
+    ) {
+        realtimeContinuation?.finish()
+        realtimeContinuation = continuation
+        continuation.yield(.connected(SessionWorkspaceStream.Connected(
+            session_id: sessionID,
+            server_now_ms: Int64(Date().timeIntervalSince1970 * 1000)
+        )))
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.clearRealtimeContinuation() }
+        }
+    }
+
+    private func clearRealtimeContinuation() {
+        realtimeContinuation = nil
+    }
+
+    private func upsertStreamingAssistantMessage(_ text: String) {
+        if let eventID = streamingAssistantEventID,
+           let index = events.firstIndex(where: { $0.id == eventID }) {
+            events[index] = Self.makeEvent(
+                id: eventID,
+                role: "assistant",
+                content: text,
+                timestamp: ISO8601DateFormatter().string(from: Date())
+            )
+            return
+        }
+
+        let eventID = nextEventID
+        streamingAssistantEventID = eventID
+        events.append(Self.makeEvent(
+            id: eventID,
+            role: "assistant",
+            content: text,
+            timestamp: ISO8601DateFormatter().string(from: Date())
+        ))
+        nextEventID += 1
+    }
+
+    private func emitWorkspaceChanged() {
+        let latestID = events.last?.id ?? 0
+        realtimeContinuation?.yield(.changed(SessionWorkspaceStream.WorkspaceChanged(
+            session_id: sessionID,
+            latest_event_id: latestID,
+            thread_session_count: 1,
+            latest_event_emitted_at_ms: Int64(Date().timeIntervalSince1970 * 1000),
+            server_now_ms: Int64(Date().timeIntervalSince1970 * 1000),
+            pubsub_seq: latestID
+        )))
     }
 
     private static func makeWorkspace(sessionID: String, events: [SessionEvent]) -> SessionWorkspaceResponse {
