@@ -255,14 +255,16 @@ private struct RuntimeBadge: View {
 
     var body: some View {
         let isClosed = session.timelineStatusLabel == "Closed"
+        let globalAvailable = connectionState == .healthy || connectionState == .connecting
         let globalHealthy = connectionState == .healthy
         let withinDeadline = phaseSignalFresh(session)
+        let sessionStale = !withinDeadline && !isClosed
         // Pulse only when global is healthy AND the server's own
         // phase-signal deadline hasn't passed. Anything else freezes.
         let pulsing = globalHealthy && withinDeadline && !isClosed
-        // When global is unhealthy, the dot retracts its claim by going
-        // gray — we don't pretend the status color is current.
-        let color = globalHealthy ? timelineStatusColor(session) : .secondary
+        // When global or per-session contact is stale, retract the
+        // color claim. A non-pulsing colored dot is too subtle.
+        let color = globalAvailable && !sessionStale ? timelineStatusColor(session) : .secondary
 
         HStack(spacing: 6) {
             LivenessDot(color: color, pulsing: pulsing)
@@ -277,6 +279,14 @@ private struct RuntimeBadge: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .monospacedDigit()
+            }
+            if sessionStale {
+                Text("·")
+                    .foregroundStyle(.tertiary)
+                Text("stale")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.orange)
+                    .lineLimit(1)
             }
         }
         .foregroundStyle(color)
@@ -301,7 +311,9 @@ struct ConnectionIndicator: View {
             }
             .accessibilityLabel("Connecting to Longhouse")
         case .healthy:
-            LivenessDot(color: .green, pulsing: true)
+            Text("Connected")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.green)
                 .accessibilityLabel("Connected")
         case .reconnecting:
             HStack(spacing: 5) {
@@ -593,17 +605,21 @@ private func parseLonghouseDate(_ value: String?) -> Date? {
 
 // MARK: - Liveness + duration helpers (RuntimeBadge)
 
-/// Per-session deadline check: the server stamps `phase.expiresAt` on
-/// each phase observation. If now is past that deadline, the server
-/// itself has already declared the signal stale — we just read it.
-/// Sessions without a deadline (rare/legacy) are treated as fresh so
-/// they don't all freeze on first encounter.
+/// Per-session deadline check: prefer the server's `phase.expiresAt`
+/// when present, then fall back to the older `activityRecency` field so
+/// legacy payloads do not pulse forever.
 func phaseSignalFresh(_ session: SessionSummary) -> Bool {
-    guard let raw = session.runtimeFacts?.phase.expiresAt,
-          let expires = parseLonghouseDate(raw) else {
-        return true
+    if let raw = session.runtimeFacts?.phase.expiresAt,
+       let expires = parseLonghouseDate(raw) {
+        return Date() < expires
     }
-    return Date() < expires
+
+    switch session.runtimeDisplay?.activityRecency {
+    case "live", "recent":
+        return true
+    default:
+        return false
+    }
 }
 
 /// "How long in current state" — the headline number in the pill.
