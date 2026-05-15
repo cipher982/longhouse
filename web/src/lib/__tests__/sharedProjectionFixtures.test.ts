@@ -1,0 +1,90 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { describe, expect, it } from "vitest";
+import { buildTimelineModel } from "../sessionWorkspace";
+import type { AgentSessionProjectionItem } from "../../services/api/agents";
+import type { TimelineItem } from "../sessionWorkspace";
+
+type ExpectedRow =
+  | {
+      kind: "message";
+      role: string;
+      event_id: number;
+    }
+  | {
+      kind: "tool";
+      tool_name: string;
+      call_event_id: number;
+      result_event_id: number | null;
+      pairing: "id" | "fifo" | "pending";
+    }
+  | {
+      kind: "orphan_tool";
+      tool_name: string;
+      result_event_id: number;
+    };
+
+type SharedProjectionFixture = {
+  name: string;
+  projection: {
+    items: AgentSessionProjectionItem[];
+  };
+  expectations: {
+    rows: ExpectedRow[];
+    tool_count: number;
+    orphan_tool_ids: number[];
+  };
+};
+
+function loadFixture(name: string): SharedProjectionFixture {
+  const fixturePath = resolve(process.cwd(), "../tests/fixtures/session-projection", name);
+  return JSON.parse(readFileSync(fixturePath, "utf8")) as SharedProjectionFixture;
+}
+
+function summarizeRows(items: TimelineItem[]): ExpectedRow[] {
+  return items.map((item) => {
+    if (item.kind === "message") {
+      return {
+        kind: "message",
+        role: item.event.role,
+        event_id: item.event.id,
+      };
+    }
+    if (item.kind === "noise_group") {
+      throw new Error("This fixture does not expect grouped rows yet");
+    }
+    const { interaction } = item;
+    if (interaction.pairing === "orphan") {
+      if (!interaction.resultEvent) {
+        throw new Error("Orphan tool interaction is missing its result event");
+      }
+      return {
+        kind: "orphan_tool",
+        tool_name: interaction.toolName,
+        result_event_id: interaction.resultEvent.id,
+      };
+    }
+    return {
+      kind: "tool",
+      tool_name: interaction.toolName,
+      call_event_id: interaction.callEvent?.id ?? -1,
+      result_event_id: interaction.resultEvent?.id ?? null,
+      pairing: interaction.pairing,
+    };
+  });
+}
+
+describe("shared session projection fixtures", () => {
+  it("matches the tool pairing FIFO contract", () => {
+    const fixture = loadFixture("tool-pairing-fifo.json");
+    const model = buildTimelineModel(fixture.projection.items);
+
+    expect(summarizeRows(model.items)).toEqual(fixture.expectations.rows);
+    expect(model.toolItems).toHaveLength(fixture.expectations.tool_count);
+    expect(
+      model.toolItems
+        .filter((interaction) => interaction.pairing === "orphan")
+        .map((interaction) => interaction.resultEvent?.id),
+    ).toEqual(fixture.expectations.orphan_tool_ids);
+  });
+});
