@@ -1359,9 +1359,32 @@ def _auto_add_missing_columns(
                     if col.unique:
                         skipped.append((table.name, col.name, "unique"))
                         continue
+                    # Columns using Python-side ``default=`` only (no ``server_default``)
+                    # cannot be backfilled by ALTER ADD COLUMN: SQLAlchemy applies the
+                    # Python default on INSERT, not as a SQLite DEFAULT clause. Auto-derive
+                    # would emit plain ``INTEGER`` (no DEFAULT) and legacy rows would stay
+                    # NULL — silently breaking counter columns like
+                    # AgentHeartbeat.spool_dead/ship_attempts_1h. Leave these for the
+                    # imperative migrator which adds the column WITH a literal DEFAULT
+                    # and runs an UPDATE backfill.
+                    if col.server_default is None and col.default is not None:
+                        skipped.append(
+                            (
+                                table.name,
+                                col.name,
+                                "python_default_only_no_server_default",
+                            )
+                        )
+                        continue
                     default = col.server_default
                     if default is not None and getattr(default, "arg", None) is not None:
                         arg = default.arg
+                        # NOTE: this skip currently false-positives ``server_default=func.now()``
+                        # — SQLite accepts ``DEFAULT (CURRENT_TIMESTAMP)`` and the dialect
+                        # would compile it correctly, but FunctionElement fails the
+                        # isinstance/has-text check. Left intentionally conservative: any
+                        # affected column is currently handled by the imperative migrator
+                        # and create_all paths. Tighten only if a real case appears.
                         if not isinstance(arg, (str, int, float, bool)) and not hasattr(arg, "text"):
                             skipped.append((table.name, col.name, "non_constant_default"))
                             continue
@@ -1382,7 +1405,15 @@ def _auto_add_missing_columns(
     for table_name, col_name, _ddl in pending:
         logger.info("auto-derive: %s add %s.%s", "would" if not apply else "applying", table_name, col_name)
     for table_name, col_name, reason in skipped:
-        logger.info("auto-derive: skip %s.%s (%s)", table_name, col_name, reason)
+        if reason == "python_default_only_no_server_default":
+            logger.info(
+                "auto-derive skip: %s.%s has Python default= but no server_default; "
+                "leaving for imperative migrator",
+                table_name,
+                col_name,
+            )
+        else:
+            logger.info("auto-derive: skip %s.%s (%s)", table_name, col_name, reason)
 
     if not apply or not pending:
         return [(t, c) for t, c, _ in pending]

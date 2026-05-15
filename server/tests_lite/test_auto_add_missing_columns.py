@@ -1,8 +1,13 @@
 """Phase 1 of Option D: auto-derive missing column ADDs from SQLAlchemy metadata."""
 
-from sqlalchemy import Column, Integer, MetaData, String, Table, text
+import os
 
-from zerg.database import _auto_add_missing_columns, make_engine
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
+
+from sqlalchemy import Column, Integer, MetaData, String, Table, text  # noqa: E402
+
+from zerg.database import _auto_add_missing_columns, make_engine  # noqa: E402
 
 
 def _live_columns(engine, table_name: str) -> set[str]:
@@ -79,6 +84,65 @@ def test_skips_pk_and_brand_new_table(tmp_path, caplog):
     assert all(t != "brand_new" for t, _ in added)
     assert "alt_id" not in _live_columns(engine, "baz")
     assert any("primary_key" in rec.message for rec in caplog.records)
+
+
+def test_skips_python_default_without_server_default(tmp_path, caplog):
+    """Columns with Python ``default=0`` but no ``server_default`` must be skipped.
+
+    Auto-derive would otherwise emit a plain ``INTEGER`` ALTER (no DEFAULT clause),
+    leaving legacy rows NULL — and would also block the imperative migrator's
+    ``if col not in columns`` backfill from running. This is the regression class
+    that broke ``AgentHeartbeat.spool_dead``/``ship_attempts_1h``.
+    """
+    engine = _make_engine(tmp_path, "pydefault.db")
+    md_v1 = MetaData()
+    Table("counters", md_v1, Column("id", Integer, primary_key=True))
+    md_v1.create_all(engine)
+    # Seed a legacy row so we can verify it stays untouched on the auto path.
+    with engine.begin() as conn:
+        conn.exec_driver_sql("INSERT INTO counters DEFAULT VALUES")
+
+    md_v2 = MetaData()
+    Table(
+        "counters",
+        md_v2,
+        Column("id", Integer, primary_key=True),
+        # AgentHeartbeat.spool_dead-style: Python default, no server_default.
+        Column("spool_dead", Integer, default=0),
+        Column("ship_attempts_1h", Integer, default=0),
+    )
+    with caplog.at_level("INFO"):
+        added = _auto_add_missing_columns(engine, md_v2, apply=True)
+    # Neither column should have been added by the auto path.
+    assert added == []
+    assert "spool_dead" not in _live_columns(engine, "counters")
+    assert "ship_attempts_1h" not in _live_columns(engine, "counters")
+    # Skip log message must mention the imperative migrator handoff.
+    skip_msgs = [rec.message for rec in caplog.records if "auto-derive skip" in rec.message]
+    assert any("spool_dead" in m and "imperative migrator" in m for m in skip_msgs)
+    assert any("ship_attempts_1h" in m and "imperative migrator" in m for m in skip_msgs)
+
+
+def test_python_default_skip_lets_server_default_columns_through(tmp_path):
+    """Mixed model: server_default columns add, Python-default columns skip."""
+    engine = _make_engine(tmp_path, "mixed.db")
+    md_v1 = MetaData()
+    Table("mixed_t", md_v1, Column("id", Integer, primary_key=True))
+    md_v1.create_all(engine)
+
+    md_v2 = MetaData()
+    Table(
+        "mixed_t",
+        md_v2,
+        Column("id", Integer, primary_key=True),
+        Column("py_only", Integer, default=0),  # must skip
+        Column("server_only", Integer, nullable=False, server_default="0"),  # must add
+    )
+    added = _auto_add_missing_columns(engine, md_v2, apply=True)
+    assert added == [("mixed_t", "server_only")]
+    cols = _live_columns(engine, "mixed_t")
+    assert "server_only" in cols
+    assert "py_only" not in cols
 
 
 def test_handles_server_default(tmp_path):
