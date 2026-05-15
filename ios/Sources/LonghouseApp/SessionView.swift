@@ -117,7 +117,7 @@ struct SessionView: View {
             if viewModel.isInitialLoading {
                 ProgressView().controlSize(.large)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let error = viewModel.errorMessage, viewModel.items.isEmpty {
+            } else if let error = viewModel.errorMessage, viewModel.items.isEmpty && viewModel.submittedInputs.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
                     Text(error).multilineTextAlignment(.center).foregroundStyle(.secondary)
@@ -148,6 +148,7 @@ struct SessionView: View {
                         .padding(.horizontal)
                         .padding(.vertical, 12)
                     }
+                    .scrollDismissesKeyboard(.interactively)
                     .defaultScrollAnchor(.bottom)
                     .onAppear {
                         scrollTranscriptToBottom(proxy, animated: false)
