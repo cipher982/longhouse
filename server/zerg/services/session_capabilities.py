@@ -43,6 +43,15 @@ class SessionCapabilityDisplay:
     tone: str
 
 
+@dataclass(frozen=True)
+class SessionInputPresentation:
+    input_mode: str
+    default_input_intent: str
+    composer_enabled: bool
+    composer_placeholder: str
+    composer_disabled_reason: str | None
+
+
 def _coerce_managed_transport(value: str | None) -> ManagedSessionTransport | None:
     if value is None or not str(value).strip():
         return None
@@ -97,6 +106,61 @@ def build_session_capability_display(
         label="Read only",
         detail="This imported session is searchable, but Longhouse cannot steer it.",
         tone="neutral",
+    )
+
+
+def build_session_input_presentation(
+    capability_flags: SessionCapabilityFlags,
+    *,
+    capability_display: SessionCapabilityDisplay,
+    provider_label: str | None = None,
+    lifecycle: str | None = None,
+    is_executing: bool = False,
+) -> SessionInputPresentation:
+    provider = (provider_label or "").strip() or "session"
+    provider_session = provider if provider.lower().endswith("session") else f"{provider} session"
+
+    if capability_flags.live_control_available or capability_flags.reply_to_live_session_available:
+        if capability_flags.can_steer_active_turn:
+            default_intent = "steer"
+        elif capability_flags.can_queue_next_input and is_executing:
+            default_intent = "queue"
+        else:
+            default_intent = "auto"
+        return SessionInputPresentation(
+            input_mode="live",
+            default_input_intent=default_intent,
+            composer_enabled=True,
+            composer_placeholder=f"Send a message to the live {provider_session}...",
+            composer_disabled_reason=None,
+        )
+
+    if lifecycle == "closed":
+        return SessionInputPresentation(
+            input_mode="read_only",
+            default_input_intent="none",
+            composer_enabled=False,
+            composer_placeholder="Type a message...",
+            composer_disabled_reason=capability_display.detail,
+        )
+
+    if capability_flags.host_reattach_available:
+        return SessionInputPresentation(
+            input_mode="offline",
+            default_input_intent="none",
+            composer_enabled=False,
+            composer_placeholder="Type a message...",
+            composer_disabled_reason=(
+                f"Longhouse can see this {provider_session}, but cannot send prompts until the engine reconnects."
+            ),
+        )
+
+    return SessionInputPresentation(
+        input_mode="read_only",
+        default_input_intent="none",
+        composer_enabled=False,
+        composer_placeholder="Type a message...",
+        composer_disabled_reason=capability_display.detail,
     )
 
 

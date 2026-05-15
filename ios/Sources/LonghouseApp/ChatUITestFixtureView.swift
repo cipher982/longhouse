@@ -242,7 +242,12 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 canSteerActiveTurn: false,
                 displayLabel: "Send",
                 displayDetail: nil,
-                displayTone: "success"
+                displayTone: "success",
+                inputMode: "live",
+                defaultInputIntent: "auto",
+                composerEnabled: true,
+                composerPlaceholder: "Send a message to the live Codex session...",
+                composerDisabledReason: nil
             ),
             runtimeDisplay: SessionRuntimeDisplay(
                 truthTier: "live",

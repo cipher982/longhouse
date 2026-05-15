@@ -354,7 +354,7 @@ struct SessionView: View {
     @ViewBuilder
     private var composer: some View {
         if let detail = viewModel.detail {
-            if detail.capabilities.liveControlAvailable || detail.capabilities.replyToLiveSessionAvailable {
+            if detail.canSendLive {
                 composerField(detail: detail)
             } else {
                 unavailableComposerFooter(detail: detail)
@@ -444,7 +444,7 @@ struct SessionView: View {
                 .disabled(composerHasText || viewModel.isSending || viewModel.isDrafting)
                 .accessibilityLabel("Draft reply")
 
-                TextField("Reply", text: $composerText, axis: .vertical)
+                TextField(detail.composerPlaceholder, text: $composerText, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...6)
                     .focused($composerFocused)
@@ -508,7 +508,9 @@ struct SessionView: View {
     }
 
     private var primaryIntent: String {
-        guard let detail = viewModel.detail, detail.isSessionExecuting else { return "auto" }
+        guard let detail = viewModel.detail else { return "auto" }
+        if detail.defaultInputIntent != "auto" { return detail.defaultInputIntent }
+        guard detail.isSessionExecuting else { return "auto" }
         if detail.canSteerActiveTurn { return "steer" }
         if detail.canQueueNextInput { return "queue" }
         return "auto"

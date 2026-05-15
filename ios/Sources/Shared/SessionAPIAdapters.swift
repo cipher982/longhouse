@@ -10,7 +10,12 @@ extension APISessionCapabilitiesResponse {
             canSteerActiveTurn: canSteerActiveTurn,
             displayLabel: displayLabel,
             displayDetail: displayDetail,
-            displayTone: displayTone
+            displayTone: displayTone,
+            inputMode: inputMode,
+            defaultInputIntent: defaultInputIntent,
+            composerEnabled: composerEnabled,
+            composerPlaceholder: composerPlaceholder,
+            composerDisabledReason: composerDisabledReason
         )
     }
 }

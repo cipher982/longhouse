@@ -206,6 +206,11 @@ export interface SessionCapabilities {
   display_label?: string;
   display_detail?: string;
   display_tone?: "success" | "warning" | "neutral" | (string & {});
+  input_mode?: "live" | "offline" | "read_only" | (string & {});
+  default_input_intent?: "auto" | "steer" | "queue" | "none" | (string & {});
+  composer_enabled?: boolean;
+  composer_placeholder?: string;
+  composer_disabled_reason?: string | null;
 }
 
 export interface AgentSessionsListResponse {

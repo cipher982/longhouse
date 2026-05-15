@@ -28,6 +28,7 @@ from zerg.services.managed_local_transport import build_managed_local_attach_com
 from zerg.services.provisional_events import TranscriptPreview
 from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_capabilities import build_session_capability_display
+from zerg.services.session_capabilities import build_session_input_presentation
 from zerg.services.session_capabilities import project_current_session_capabilities
 from zerg.services.session_capabilities import project_current_session_capabilities_from_facts
 from zerg.services.session_current_control import engine_bridge_attached
@@ -86,6 +87,13 @@ def build_session_capabilities_response(
     if not lifecycle and runtime_display is not None:
         lifecycle = str(getattr(runtime_display, "lifecycle", "") or "").strip()
     capability_display = build_session_capability_display(capability_flags, host_label=host_label, lifecycle=lifecycle)
+    input_presentation = build_session_input_presentation(
+        capability_flags,
+        capability_display=capability_display,
+        provider_label=_provider_label(session),
+        lifecycle=lifecycle,
+        is_executing=_runtime_is_executing(runtime_display=runtime_display, runtime_facts=runtime_facts),
+    )
     return SessionCapabilitiesResponse(
         live_control_available=capability_flags.live_control_available,
         host_reattach_available=capability_flags.host_reattach_available,
@@ -95,7 +103,32 @@ def build_session_capabilities_response(
         display_label=capability_display.label,
         display_detail=capability_display.detail,
         display_tone=capability_display.tone,
+        input_mode=input_presentation.input_mode,
+        default_input_intent=input_presentation.default_input_intent,
+        composer_enabled=input_presentation.composer_enabled,
+        composer_placeholder=input_presentation.composer_placeholder,
+        composer_disabled_reason=input_presentation.composer_disabled_reason,
     )
+
+
+def _provider_label(session: AgentSession | None) -> str | None:
+    provider = str(getattr(session, "provider", "") or "").strip().lower()
+    if not provider:
+        return None
+    labels = {
+        "claude": "Claude",
+        "codex": "Codex",
+        "gemini": "Gemini",
+    }
+    return labels.get(provider, provider[:1].upper() + provider[1:])
+
+
+def _runtime_is_executing(*, runtime_display, runtime_facts) -> bool:
+    if runtime_display is not None:
+        return bool(getattr(runtime_display, "is_executing", False))
+    phase = getattr(runtime_facts, "phase", None)
+    phase_kind = str(getattr(phase, "kind", "") or "").strip()
+    return phase_kind in {"thinking", "running", "blocked", "stalled"}
 
 
 def build_session_runtime_display_response(
@@ -354,6 +387,17 @@ class SessionCapabilitiesResponse(BaseModel):
         description="User-facing capability explanation",
     )
     display_tone: str = Field("neutral", description="Stable capability tone for clients")
+    input_mode: Literal["live", "offline", "read_only"] = Field(
+        "read_only",
+        description="Canonical input/composer availability state for clients",
+    )
+    default_input_intent: Literal["auto", "steer", "queue", "none"] = Field(
+        "none",
+        description="Default POST input intent clients should use for the primary send action",
+    )
+    composer_enabled: bool = Field(False, description="True when clients should render an enabled composer")
+    composer_placeholder: str = Field("Type a message...", description="Default composer placeholder text")
+    composer_disabled_reason: Optional[str] = Field(None, description="User-facing reason the composer is disabled")
 
 
 class SessionRuntimeDisplayResponse(BaseModel):

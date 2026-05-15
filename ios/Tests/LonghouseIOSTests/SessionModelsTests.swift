@@ -1595,6 +1595,53 @@ struct SessionModelsTests {
     }
 
     @Test
+    func sessionDetailUsesServerOwnedComposerSemantics() throws {
+        let json = """
+        {
+          "id": "session-composer",
+          "provider": "codex",
+          "project": "zerg",
+          "cwd": "/Users/davidrose/git/zerg",
+          "git_branch": "main",
+          "summary": "Composer session",
+          "summary_title": "Composer session",
+          "presence_state": "running",
+          "presence_tool": null,
+          "user_state": "active",
+          "status": "running",
+          "last_activity_at": null,
+          "display_phase": null,
+          "active_tool": null,
+          "home_label": "On this Mac",
+          "origin_label": "On this Mac",
+          "capabilities": {
+            "live_control_available": true,
+            "host_reattach_available": true,
+            "reply_to_live_session_available": true,
+            "can_queue_next_input": true,
+            "can_steer_active_turn": true,
+            "display_label": "Live on this Mac",
+            "display_detail": "Longhouse can send prompts into this live session.",
+            "display_tone": "success",
+            "input_mode": "live",
+            "default_input_intent": "steer",
+            "composer_enabled": true,
+            "composer_placeholder": "Send a message to the live Codex session...",
+            "composer_disabled_reason": null
+          },
+          "loop_mode": "manual"
+        }
+        """.data(using: .utf8)!
+
+        let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
+
+        #expect(detail.canSendLive)
+        #expect(detail.defaultInputIntent == "steer")
+        #expect(detail.composerPlaceholder == "Send a message to the live Codex session...")
+        #expect(detail.controlHealthMessage == nil)
+    }
+
+    @Test
     func sessionInputResponseDecodesSentOutcome() throws {
         let json = """
         {

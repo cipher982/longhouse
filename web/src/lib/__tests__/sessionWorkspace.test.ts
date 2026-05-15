@@ -231,6 +231,26 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.notice?.title).toBe("Control is offline");
   });
 
+  it("prefers server-owned composer semantics when present", () => {
+    const capabilities = getSessionInteractionCapabilities({
+      session: makeSession({
+        provider: "codex",
+        capabilities: makeCapabilities({
+          live_control_available: true,
+          host_reattach_available: true,
+          reply_to_live_session_available: true,
+          input_mode: "offline",
+          composer_placeholder: "Server placeholder",
+          composer_disabled_reason: "Server says control is offline.",
+        }),
+      }),
+    });
+
+    expect(capabilities.mode).toBe("managed_local_unavailable");
+    expect(capabilities.placeholder).toBe("Server placeholder");
+    expect(capabilities.composerDisabledReason).toBe("Server says control is offline.");
+  });
+
   it("shows reattach when a managed-local Claude session loses its live control channel", () => {
     const capabilities = getSessionInteractionCapabilities({
       session: makeSession({
