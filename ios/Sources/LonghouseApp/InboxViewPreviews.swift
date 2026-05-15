@@ -207,7 +207,42 @@ private func mockSession(
     return ScrollView {
         VStack(spacing: 12) {
             ForEach(sessions) { session in
-                TimelineSessionCardRow(session: session, emphasized: false)
+                TimelineSessionCardRow(session: session, emphasized: false, connectionState: .healthy)
+            }
+        }
+        .padding(16)
+    }
+    .background(Color(.systemGroupedBackground))
+}
+
+#Preview("Connection states") {
+    let session = mockSession(
+        id: "1",
+        project: "chaos",
+        title: "Chaos BranchTrace Blog Post Refinement",
+        summary: "Same card under each global connection state.",
+        statusLabel: "Thinking",
+        statusTone: "thinking",
+        activityRecency: "live",
+        anchorSecondsAgo: 5,
+        seenAtSecondsAgo: 5
+    )
+    let cases: [(String, ConnectionState)] = [
+        ("connecting", .connecting),
+        ("healthy", .healthy),
+        ("reconnecting", .reconnecting),
+        ("offline", .offline),
+    ]
+    return ScrollView {
+        VStack(alignment: .leading, spacing: 18) {
+            ForEach(cases, id: \.0) { label, state in
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        ConnectionIndicator(state: state, onRetry: {})
+                        Text(label).font(.caption).foregroundStyle(.secondary)
+                    }
+                    TimelineSessionCardRow(session: session, emphasized: false, connectionState: state)
+                }
             }
         }
         .padding(16)
