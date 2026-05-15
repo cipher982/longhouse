@@ -187,7 +187,7 @@ async def list_timeline_sessions(
     device_id: Optional[str] = Query(None, description="Filter by device ID"),
     days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
     query: Optional[str] = Query(None, description="Search query for content"),
-    limit: int = Query(20, ge=1, le=100, description="Max results"),
+    limit: int = Query(20, ge=1, description="Max results (server clamps to 100)"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     sort: Optional[str] = Query(
         None,
@@ -198,6 +198,8 @@ async def list_timeline_sessions(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_browser_user),
 ):
+    effective_limit = min(limit, 100)
+    response.headers["X-Limit-Cap"] = "100"
     timing = ServerTimingRecorder()
     try:
         result = await list_timeline_sessions_for_browser(
@@ -211,7 +213,7 @@ async def list_timeline_sessions(
                 device_id=device_id,
                 days_back=days_back,
                 query=query,
-                limit=limit,
+                limit=effective_limit,
                 offset=offset,
                 sort=sort,
                 mode=mode,
@@ -228,6 +230,7 @@ async def list_timeline_sessions(
             content=result.response.model_dump(mode="json"),
             headers=result.headers,
         )
+        compat_response.headers["X-Limit-Cap"] = "100"
         timing.apply(compat_response)
         return compat_response
 

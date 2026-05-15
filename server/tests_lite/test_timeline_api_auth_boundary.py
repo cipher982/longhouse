@@ -667,3 +667,26 @@ def test_agents_sessions_reject_legacy_non_device_token(tmp_path):
         assert response.json()["detail"] == "Invalid or revoked device token"
     finally:
         api_app.dependency_overrides.clear()
+
+
+def test_timeline_sessions_clamps_oversized_limit(tmp_path):
+    session_local = _make_db(tmp_path)
+    with session_local() as db:
+        _seed_user(db)
+        for _ in range(150):
+            _seed_session(db)
+
+    client = _make_client(session_local)
+
+    try:
+        with _force_browser_jwt_mode():
+            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
+            response = client.get("/timeline/sessions?limit=500")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert len(payload["sessions"]) <= 100
+        assert response.headers.get("X-Limit-Cap") == "100"
+    finally:
+        auth_deps._strategy_cache.clear()
+        api_app.dependency_overrides.clear()
