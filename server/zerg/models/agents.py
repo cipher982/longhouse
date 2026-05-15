@@ -17,15 +17,14 @@ from sqlalchemy import ForeignKey
 from sqlalchemy import Index
 from sqlalchemy import Integer
 from sqlalchemy import LargeBinary
-from sqlalchemy import MetaData
 from sqlalchemy import String
 from sqlalchemy import Text
 from sqlalchemy import UniqueConstraint
 from sqlalchemy import text
-from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
+from zerg.database import Base
 from zerg.models.types import GUID
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_loop_mode import SessionLoopMode
@@ -34,12 +33,12 @@ if TYPE_CHECKING:
     pass
 
 
-# SQLite-only: no schema support, tables live in main database
+# SQLite-only: no schema support, tables live in main database.
+# `AgentsBase` is retained as an alias for `Base` so existing imports keep
+# working — there is one declarative base / metadata for the whole app.
 AGENTS_SCHEMA = None
-agents_metadata = MetaData(schema=AGENTS_SCHEMA)
-
-# Separate Base class for agents schema models
-AgentsBase = declarative_base(metadata=agents_metadata)
+AgentsBase = Base
+agents_metadata = Base.metadata
 
 
 class AgentSession(AgentsBase):

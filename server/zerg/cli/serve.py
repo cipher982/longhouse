@@ -257,14 +257,12 @@ def _build_demo_db(db_path: Path) -> None:
 
     from zerg.database import Base
     from zerg.database import make_engine
-    from zerg.models.agents import AgentsBase
     from zerg.services.agents_store import AgentsStore
     from zerg.services.demo_sessions import build_demo_agent_sessions
 
     db_url = f"sqlite:///{db_path}"
     engine = make_engine(db_url).execution_options(schema_translate_map={"zerg": None, "agents": None})
     Base.metadata.create_all(bind=engine)
-    AgentsBase.metadata.create_all(bind=engine)
 
     SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
     db = SessionLocal()
