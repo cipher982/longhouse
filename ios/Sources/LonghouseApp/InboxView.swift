@@ -314,6 +314,9 @@ struct ConnectionIndicator: View {
             Text("Connected")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.green)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
+                .background(Color.green.opacity(0.14), in: Capsule())
                 .accessibilityLabel("Connected")
         case .reconnecting:
             HStack(spacing: 5) {
