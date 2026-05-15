@@ -39,10 +39,21 @@
           "reasoningNone": false
         }
       },
+      "deepseek/deepseek-v4-flash": {
+        "displayName": "DeepSeek v4 Flash (OpenRouter)",
+        "provider": "openrouter",
+        "description": "DeepSeek v4 Flash via OpenRouter - main default for text routing",
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "apiKeyEnvVar": "OPENROUTER_API_KEY",
+        "capabilities": {
+          "reasoning": true,
+          "reasoningNone": true
+        }
+      },
       "x-ai/grok-4.3": {
         "displayName": "Grok 4.3 (OpenRouter)",
         "provider": "openrouter",
-        "description": "xAI Grok 4.3 via OpenRouter - replaces retired grok-4.1-fast SKU",
+        "description": "xAI Grok 4.3 via OpenRouter - fallback option",
         "baseUrl": "https://openrouter.ai/api/v1",
         "apiKeyEnvVar": "OPENROUTER_API_KEY",
         "capabilities": {
@@ -164,7 +175,7 @@
     "$comment": "Maps use cases to tiers - quality-critical tasks get TIER_1 even for small outputs",
     "text": {
       "fiche_conversation": "TIER_1",
-      "loop_controller": "x-ai/grok-4.3",
+      "loop_controller": "deepseek/deepseek-v4-flash",
       "routing_decision": "TIER_1",
       "tool_selection": "TIER_1",
       "commis_task": "TIER_1",
@@ -189,15 +200,15 @@
       "$comment": "Hosted instances: all internal tasks route through OpenRouter. Commis/agent execution is NOT here — those spawn CLI agents with their own model selection via hatch.",
       "text": {
         "useCases": {
-          "fiche_conversation": "x-ai/grok-4.3",
-          "summarization": "x-ai/grok-4.3",
-          "summary_update": "x-ai/grok-4.3",
-          "reflection": "x-ai/grok-4.3",
-          "bulk_classification": "x-ai/grok-4.3"
+          "fiche_conversation": "deepseek/deepseek-v4-flash",
+          "summarization": "deepseek/deepseek-v4-flash",
+          "summary_update": "deepseek/deepseek-v4-flash",
+          "reflection": "deepseek/deepseek-v4-flash",
+          "bulk_classification": "deepseek/deepseek-v4-flash"
         },
         "defaults": {
-          "fiche": "x-ai/grok-4.3",
-          "test": "x-ai/grok-4.3"
+          "fiche": "deepseek/deepseek-v4-flash",
+          "test": "deepseek/deepseek-v4-flash"
         }
       }
     },
@@ -205,15 +216,15 @@
       "$comment": "David's instance: use OpenRouter for text routing; embeddings stay on the embedding provider.",
       "text": {
         "useCases": {
-          "fiche_conversation": "x-ai/grok-4.3",
-          "summarization": "x-ai/grok-4.3",
-          "summary_update": "x-ai/grok-4.3",
-          "reflection": "x-ai/grok-4.3",
-          "bulk_classification": "x-ai/grok-4.3"
+          "fiche_conversation": "deepseek/deepseek-v4-flash",
+          "summarization": "deepseek/deepseek-v4-flash",
+          "summary_update": "deepseek/deepseek-v4-flash",
+          "reflection": "deepseek/deepseek-v4-flash",
+          "bulk_classification": "deepseek/deepseek-v4-flash"
         },
         "defaults": {
-          "fiche": "x-ai/grok-4.3",
-          "test": "x-ai/grok-4.3"
+          "fiche": "deepseek/deepseek-v4-flash",
+          "test": "deepseek/deepseek-v4-flash"
         }
       }
     }
