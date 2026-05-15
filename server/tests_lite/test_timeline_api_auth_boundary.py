@@ -690,3 +690,127 @@ def test_timeline_sessions_clamps_oversized_limit(tmp_path):
     finally:
         auth_deps._strategy_cache.clear()
         api_app.dependency_overrides.clear()
+
+
+def test_timeline_sessions_summary_clamps_oversized_limit(tmp_path):
+    session_local = _make_db(tmp_path)
+    with session_local() as db:
+        _seed_user(db)
+        for _ in range(150):
+            _seed_session(db)
+
+    client = _make_client(session_local)
+
+    try:
+        with _force_browser_jwt_mode():
+            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
+            response = client.get("/timeline/sessions/summary?limit=500")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert len(payload["sessions"]) <= 100
+        assert response.headers.get("X-Limit-Cap") == "100"
+    finally:
+        auth_deps._strategy_cache.clear()
+        api_app.dependency_overrides.clear()
+
+
+def test_timeline_session_turns_clamps_oversized_limit(tmp_path):
+    from zerg.dependencies.browser_auth import get_current_browser_user
+
+    session_local = _make_db(tmp_path)
+    with session_local() as db:
+        user = _seed_user(db)
+        session_id = uuid4()
+        session = AgentSession(
+            id=session_id,
+            provider="codex",
+            environment="development",
+            project="timeline-auth",
+            device_id="cinder",
+            cwd="/tmp/timeline-auth",
+            git_repo=None,
+            git_branch="main",
+            started_at=datetime(2026, 3, 22, 22, 0, tzinfo=timezone.utc),
+            ended_at=None,
+            user_messages=1,
+            assistant_messages=1,
+            tool_calls=0,
+        )
+        db.add(session)
+        for idx in range(120):
+            db.add(
+                SessionTurn(
+                    session_id=session_id,
+                    request_id=f"req-{idx}",
+                    state="active",
+                    user_submitted_at=datetime(2026, 3, 22, 22, 3, idx % 60, tzinfo=timezone.utc),
+                )
+            )
+        db.commit()
+        user_id = user.id
+
+    client = _make_client(session_local)
+    api_app.dependency_overrides[get_current_browser_user] = lambda: type(
+        "U", (), {"id": user_id, "email": "owner@example.com", "role": "ADMIN"}
+    )()
+
+    try:
+        with _force_browser_jwt_mode():
+            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
+            response = client.get(f"/timeline/sessions/{session_id}/turns?limit=500")
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert len(payload["turns"]) <= 100
+        assert response.headers.get("X-Limit-Cap") == "100"
+    finally:
+        auth_deps._strategy_cache.clear()
+        api_app.dependency_overrides.clear()
+
+
+def test_timeline_sessions_stream_clamps_oversized_limit(tmp_path, monkeypatch):
+    """The SSE stream endpoint must clamp limit and surface X-Limit-Cap.
+
+    We don't actually consume the stream — we replace the generator with an
+    immediately-completing async generator and verify the EventSourceResponse
+    carries our header and that the underlying params were clamped.
+    """
+    from zerg.dependencies.browser_auth import get_current_browser_user_id_short_lived
+    from zerg.dependencies.browser_auth import require_current_browser_user_short_lived
+
+    session_local = _make_db(tmp_path)
+    with session_local() as db:
+        user = _seed_user(db)
+        _seed_session(db)
+        user_id = user.id
+
+    client = _make_client(session_local)
+    api_app.dependency_overrides[get_current_browser_user_id_short_lived] = lambda: user_id
+    api_app.dependency_overrides[require_current_browser_user_short_lived] = lambda: None
+
+    captured: dict = {}
+
+    async def _fake_stream(request, *, session_factory, params, skip_initial_replay, owner_id=None):
+        captured["limit"] = params.limit
+        # Immediately end the stream so TestClient can return headers + close.
+        if False:
+            yield {}
+        return
+
+    import zerg.routers.timeline as timeline_router
+
+    monkeypatch.setattr(timeline_router, "stream_timeline_sessions_for_browser", _fake_stream)
+
+    try:
+        with client.stream("GET", "/timeline/sessions/stream?limit=500") as response:
+            assert response.status_code == 200
+            assert response.headers.get("X-Limit-Cap") == "100"
+            # Drain the (empty) stream so the context manager closes cleanly.
+            for _ in response.iter_bytes():
+                pass
+
+        assert captured["limit"] == 100
+    finally:
+        auth_deps._strategy_cache.clear()
+        api_app.dependency_overrides.clear()

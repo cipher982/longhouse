@@ -252,7 +252,7 @@ async def stream_timeline_sessions(
     device_id: Optional[str] = Query(None, description="Filter by device ID"),
     days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
     query: Optional[str] = Query(None, description="Search query for content"),
-    limit: int = Query(20, ge=1, le=100, description="Max results"),
+    limit: int = Query(20, ge=1, description="Max results (server clamps to 100)"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     sort: Optional[str] = Query(
         None,
@@ -271,6 +271,7 @@ async def stream_timeline_sessions(
     except SessionListingError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
+    effective_limit = min(limit, 100)
     session_factory = get_session_factory()
     params = TimelineSessionListParams(
         project=project,
@@ -281,14 +282,14 @@ async def stream_timeline_sessions(
         device_id=device_id,
         days_back=days_back,
         query=query,
-        limit=limit,
+        limit=effective_limit,
         offset=offset,
         sort=sort,
         mode=mode,
         context_mode=context_mode,
     )
 
-    return EventSourceResponse(
+    sse_response = EventSourceResponse(
         stream_timeline_sessions_for_browser(
             request,
             session_factory=session_factory,
@@ -297,10 +298,13 @@ async def stream_timeline_sessions(
             owner_id=current_user_id if isinstance(current_user_id, int) else None,
         )
     )
+    sse_response.headers["X-Limit-Cap"] = "100"
+    return sse_response
 
 
 @router.get("/sessions/summary", response_model=SessionsSummaryResponse)
 async def list_timeline_session_summaries(
+    response: Response,
     project: Optional[str] = Query(None, description="Filter by project"),
     provider: Optional[str] = Query(None, description="Filter by provider"),
     environment: Optional[str] = Query(None, description="Filter by environment (production, development, test, e2e)"),
@@ -308,7 +312,7 @@ async def list_timeline_session_summaries(
     device_id: Optional[str] = Query(None, description="Filter by device ID"),
     days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
     query: Optional[str] = Query(None, description="Search query for content"),
-    limit: int = Query(20, ge=1, le=100, description="Max results"),
+    limit: int = Query(20, ge=1, description="Max results (server clamps to 100)"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     hide_autonomous: bool = Query(
         True,
@@ -316,6 +320,8 @@ async def list_timeline_session_summaries(
     ),
     db: Session = Depends(get_db),
 ):
+    effective_limit = min(limit, 100)
+    response.headers["X-Limit-Cap"] = "100"
     return await _sessions_router.list_session_summaries(
         project=project,
         provider=provider,
@@ -324,7 +330,7 @@ async def list_timeline_session_summaries(
         device_id=device_id,
         days_back=days_back,
         query=query,
-        limit=limit,
+        limit=effective_limit,
         offset=offset,
         hide_autonomous=hide_autonomous,
         db=db,
@@ -460,7 +466,8 @@ async def get_timeline_session_thread(
 @router.get("/sessions/{session_id}/turns", response_model=SessionTurnsListResponse)
 async def get_timeline_session_turns(
     session_id: UUID,
-    limit: int = Query(50, ge=1, le=100, description="Max turns to return"),
+    response: Response,
+    limit: int = Query(50, ge=1, description="Max turns to return (server clamps to 100)"),
     offset: int = Query(0, ge=0, description="Offset within the stable per-session turn order"),
     order: str = Query("asc", description="Turn order: asc|desc"),
     db: Session = Depends(get_db),
@@ -469,9 +476,11 @@ async def get_timeline_session_turns(
     if normalized_order not in {"asc", "desc"}:
         raise HTTPException(status_code=400, detail="order must be one of: asc, desc")
 
+    effective_limit = min(limit, 100)
+    response.headers["X-Limit-Cap"] = "100"
     return await _sessions_router.get_session_turns(
         session_id=session_id,
-        limit=limit,
+        limit=effective_limit,
         offset=offset,
         order=normalized_order,
         db=db,
