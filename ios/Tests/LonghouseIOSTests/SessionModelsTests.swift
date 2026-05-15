@@ -10,6 +10,7 @@ struct SessionModelsTests {
         processStatus: String = "unknown",
         phaseKind: String? = nil,
         phaseTool: String? = nil,
+        phaseExpiresAt: String? = nil,
         transcriptAt: String? = nil,
         lifecycleState: String = "unknown",
         lifecycleReason: String? = nil,
@@ -39,7 +40,7 @@ struct SessionModelsTests {
                 tool: phaseTool,
                 source: phaseKind == nil ? nil : "managed_local_transport",
                 observedAt: phaseKind == nil ? nil : observedAt,
-                expiresAt: phaseKind == nil ? nil : "2026-04-25T20:15:00Z"
+                expiresAt: phaseKind == nil ? nil : (phaseExpiresAt ?? "2026-04-25T20:15:00Z")
             ),
             activity: ActivityObservation(
                 lastTranscriptAt: transcriptAt,
@@ -51,6 +52,57 @@ struct SessionModelsTests {
                 reason: lifecycleReason,
                 observedAt: lifecycleState == "unknown" ? nil : observedAt
             )
+        )
+    }
+
+    private func runtimeDisplay(activityRecency: String?) -> SessionRuntimeDisplay {
+        SessionRuntimeDisplay(
+            truthTier: "managed-local",
+            state: "running",
+            tone: "running",
+            headline: "Using Codex",
+            detail: nil,
+            phaseLabel: "Using Codex",
+            compactToolLabel: "Codex",
+            isLive: activityRecency == "live" || activityRecency == "recent",
+            isExecuting: true,
+            needsAttention: false,
+            isIdle: false,
+            isManagedLocalTruth: true,
+            hasSignal: true,
+            controlPath: "managed",
+            activityRecency: activityRecency,
+            lifecycle: "open",
+            hostState: "online",
+            terminalReason: nil
+        )
+    }
+
+    private func summaryForPhaseFreshness(
+        activityRecency: String?,
+        phaseExpiresAt: String? = nil,
+        includeRuntimeFacts: Bool = true
+    ) -> SessionSummary {
+        SessionSummary(
+            id: "freshness-test",
+            title: "Freshness test",
+            presenceState: "running",
+            provider: "codex",
+            project: "zerg",
+            lastActivityAt: "2026-04-25T20:00:00Z",
+            status: "running",
+            displayPhase: "Using Codex",
+            runtimeDisplay: runtimeDisplay(activityRecency: activityRecency),
+            runtimeFacts: includeRuntimeFacts
+                ? runtimeFacts(
+                    processState: "running",
+                    hostState: "online",
+                    processStatus: "observed",
+                    phaseKind: "running",
+                    phaseTool: "codex",
+                    phaseExpiresAt: phaseExpiresAt
+                )
+                : nil
         )
     }
 
@@ -687,6 +739,23 @@ struct SessionModelsTests {
         )
 
         #expect(summary.timelineStatusLabel == "Idle")
+    }
+
+    @Test
+    func phaseSignalFreshUsesRuntimeFactDeadlineWhenPresent() {
+        let future = ISO8601DateFormatter().string(from: Date().addingTimeInterval(60))
+        let past = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-60))
+
+        #expect(phaseSignalFresh(summaryForPhaseFreshness(activityRecency: "stale", phaseExpiresAt: future)))
+        #expect(!phaseSignalFresh(summaryForPhaseFreshness(activityRecency: "live", phaseExpiresAt: past)))
+    }
+
+    @Test
+    func phaseSignalFreshFallsBackToActivityRecencyForLegacyPayloads() {
+        #expect(phaseSignalFresh(summaryForPhaseFreshness(activityRecency: "live", includeRuntimeFacts: false)))
+        #expect(phaseSignalFresh(summaryForPhaseFreshness(activityRecency: "recent", includeRuntimeFacts: false)))
+        #expect(!phaseSignalFresh(summaryForPhaseFreshness(activityRecency: "stale", includeRuntimeFacts: false)))
+        #expect(!phaseSignalFresh(summaryForPhaseFreshness(activityRecency: nil, includeRuntimeFacts: false)))
     }
 
     @Test
