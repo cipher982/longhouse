@@ -46,6 +46,16 @@
             "last_progress_at": "2026-05-15T20:00:02Z"
           },
           "lifecycle": {"state": "open", "reason": null, "observed_at": "2026-05-15T20:00:02Z"}
+        },
+        "timeline_card": {
+          "ownership": {"label": "Managed", "tone": "neutral"},
+          "status": {
+            "label": "Using Shell",
+            "tone": "running",
+            "seen_at": "2026-05-15T20:00:02Z",
+            "seen_at_prefix": "Updated"
+          },
+          "border_tone": "running"
         }
       },
       "expectations": {
@@ -95,6 +105,16 @@
             "last_progress_at": null
           },
           "lifecycle": {"state": "open", "reason": null, "observed_at": "2026-05-15T20:10:01Z"}
+        },
+        "timeline_card": {
+          "ownership": {"label": "Unmanaged", "tone": "neutral"},
+          "status": {
+            "label": "Running",
+            "tone": "inactive",
+            "seen_at": "2026-05-15T20:10:01Z",
+            "seen_at_prefix": "Verified"
+          },
+          "border_tone": "inactive"
         }
       },
       "expectations": {
@@ -144,6 +164,16 @@
             "last_progress_at": null
           },
           "lifecycle": {"state": "closed", "reason": "process_gone", "observed_at": "2026-05-15T20:20:01Z"}
+        },
+        "timeline_card": {
+          "ownership": {"label": "Managed", "tone": "neutral"},
+          "status": {
+            "label": "Closed",
+            "tone": "closed",
+            "seen_at": "2026-05-15T20:20:01Z",
+            "seen_at_prefix": "Closed"
+          },
+          "border_tone": "closed"
         }
       },
       "expectations": {
