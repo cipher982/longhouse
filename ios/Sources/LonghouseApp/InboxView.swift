@@ -8,6 +8,17 @@ struct TimelineView: View {
     @StateObject private var viewModel = TimelineViewModel()
     @State private var path: [SessionRoute] = []
     @State private var launchSheetPresented = false
+    #if DEBUG
+    @State private var forcedConnectionState: ConnectionState?
+    #endif
+
+    private var effectiveConnectionState: ConnectionState {
+        #if DEBUG
+        forcedConnectionState ?? viewModel.connectionState
+        #else
+        viewModel.connectionState
+        #endif
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -32,9 +43,25 @@ struct TimelineView: View {
                             .accessibilityLabel("Start session")
                     }
                 }
+                #if DEBUG
+                ToolbarItem(placement: .topBarLeading) {
+                    Menu {
+                        Button("Auto (\(label(for: viewModel.connectionState)))") {
+                            forcedConnectionState = nil
+                        }
+                        Divider()
+                        ForEach([ConnectionState.connecting, .healthy, .reconnecting, .offline], id: \.self) { s in
+                            Button("Force: \(label(for: s))") { forcedConnectionState = s }
+                        }
+                    } label: {
+                        Image(systemName: "ladybug")
+                            .accessibilityLabel("Debug: force connection state")
+                    }
+                }
+                #endif
             }
             .safeAreaInset(edge: .top, spacing: 0) {
-                ConnectionStatusStrip(state: viewModel.connectionState)
+                ConnectionStatusStrip(state: effectiveConnectionState)
             }
             .sheet(isPresented: $launchSheetPresented) {
                 LaunchSessionSheet { sessionId in
@@ -330,7 +357,16 @@ struct ConnectionStatusStrip: View {
     private func style(for state: ConnectionState) -> Style? {
         switch state {
         case .healthy:
+            #if DEBUG
+            // Always render in DEBUG so the codepath is visible — we
+            // can't tell "healthy" apart from "the strip never ran" by
+            // looking at it. Release builds hide healthy entirely.
+            return Style(label: "Connected", symbol: nil,
+                         foreground: .green,
+                         background: Color.green.opacity(0.14))
+            #else
             return nil
+            #endif
         case .connecting:
             return Style(label: "Connecting", symbol: nil,
                          foreground: .secondary,
@@ -346,6 +382,17 @@ struct ConnectionStatusStrip: View {
         }
     }
 }
+
+#if DEBUG
+private func label(for state: ConnectionState) -> String {
+    switch state {
+    case .connecting: return "Connecting"
+    case .healthy:    return "Healthy"
+    case .reconnecting: return "Reconnecting"
+    case .offline:    return "Offline"
+    }
+}
+#endif
 
 private struct LivenessDot: View {
     let color: Color
@@ -414,7 +461,7 @@ private struct MetadataBadge: View {
 /// Connection state, derived from the auto-refresh contract — no time
 /// thresholds. The poll either succeeded, is in-flight, or failed; we
 /// just read what already happened.
-enum ConnectionState: Equatable {
+enum ConnectionState: Equatable, Hashable {
     case connecting        // No successful refresh yet (cold start in flight)
     case healthy           // Most recent scheduled refresh succeeded
     case reconnecting      // 1 consecutive failure; retry already scheduled
