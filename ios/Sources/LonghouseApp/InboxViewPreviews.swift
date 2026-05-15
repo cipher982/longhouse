@@ -184,7 +184,8 @@ private func mockSession(
             statusTone: "idle",
             activityRecency: "stale",
             anchorSecondsAgo: 18 * 60,
-            seenAtSecondsAgo: 95
+            seenAtSecondsAgo: 95,
+            phaseExpiresInSeconds: -45 // server already declared this stale
         ),
         mockSession(
             id: "6",
