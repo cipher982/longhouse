@@ -1,0 +1,159 @@
+{
+  "name": "basic-runtime-semantics",
+  "description": "Shared runtime status semantics for managed, unmanaged, and closed sessions.",
+  "cases": [
+    {
+      "name": "managed-running-shell",
+      "session": {
+        "id": "runtime-managed-running",
+        "title": "Managed running shell",
+        "presence_state": "unknown",
+        "provider": "codex",
+        "project": "zerg",
+        "last_activity_at": "2026-05-15T20:00:00Z",
+        "status": "active",
+        "capabilities": {
+          "live_control_available": true,
+          "host_reattach_available": true,
+          "reply_to_live_session_available": true
+        },
+        "runtime_display": null,
+        "runtime_facts": {
+          "control_path": "managed",
+          "process_state": "running",
+          "host": {"state": "online", "last_seen_at": "2026-05-15T20:00:00Z", "source": "machine"},
+          "process": {
+            "status": "observed",
+            "pid": 4242,
+            "process_start_time": "2026-05-15T19:50:00Z",
+            "observed_at": "2026-05-15T20:00:01Z",
+            "last_seen_at": "2026-05-15T20:00:01Z",
+            "source_mtime": null,
+            "source_path": null,
+            "reason": null,
+            "source": "process_scan"
+          },
+          "phase": {
+            "kind": "running",
+            "tool": "shell",
+            "source": "managed_local_transport",
+            "observed_at": "2026-05-15T20:00:02Z",
+            "expires_at": "2026-05-15T20:15:02Z"
+          },
+          "activity": {
+            "last_transcript_at": "2026-05-15T20:00:00Z",
+            "last_runtime_signal_at": "2026-05-15T20:00:02Z",
+            "last_progress_at": "2026-05-15T20:00:02Z"
+          },
+          "lifecycle": {"state": "open", "reason": null, "observed_at": "2026-05-15T20:00:02Z"}
+        }
+      },
+      "expectations": {
+        "management_label": "Managed",
+        "status_label": "Using Shell",
+        "status_tone": "running",
+        "display_phase_label": "Using Shell",
+        "seen_at": "2026-05-15T20:00:02Z",
+        "seen_at_prefix": "Updated"
+      }
+    },
+    {
+      "name": "unmanaged-process-visible",
+      "session": {
+        "id": "runtime-unmanaged-process",
+        "title": "Unmanaged process",
+        "presence_state": "unknown",
+        "provider": "claude",
+        "project": "zerg",
+        "last_activity_at": "2026-05-15T20:10:00Z",
+        "status": "active",
+        "capabilities": {
+          "live_control_available": false,
+          "host_reattach_available": false,
+          "reply_to_live_session_available": false
+        },
+        "runtime_display": null,
+        "runtime_facts": {
+          "control_path": "unmanaged",
+          "process_state": "running",
+          "host": {"state": "online", "last_seen_at": "2026-05-15T20:10:00Z", "source": "machine"},
+          "process": {
+            "status": "observed",
+            "pid": 4343,
+            "process_start_time": "2026-05-15T20:00:00Z",
+            "observed_at": "2026-05-15T20:10:01Z",
+            "last_seen_at": "2026-05-15T20:10:01Z",
+            "source_mtime": null,
+            "source_path": null,
+            "reason": null,
+            "source": "process_scan"
+          },
+          "phase": {"kind": null, "tool": null, "source": null, "observed_at": null, "expires_at": null},
+          "activity": {
+            "last_transcript_at": "2026-05-15T20:10:00Z",
+            "last_runtime_signal_at": "2026-05-15T20:10:01Z",
+            "last_progress_at": null
+          },
+          "lifecycle": {"state": "open", "reason": null, "observed_at": "2026-05-15T20:10:01Z"}
+        }
+      },
+      "expectations": {
+        "management_label": "Unmanaged",
+        "status_label": "Running",
+        "status_tone": "inactive",
+        "display_phase_label": "Running",
+        "seen_at": "2026-05-15T20:10:01Z",
+        "seen_at_prefix": "Verified"
+      }
+    },
+    {
+      "name": "managed-closed",
+      "session": {
+        "id": "runtime-managed-closed",
+        "title": "Managed closed",
+        "presence_state": "unknown",
+        "provider": "codex",
+        "project": "zerg",
+        "last_activity_at": "2026-05-15T20:20:00Z",
+        "status": "completed",
+        "capabilities": {
+          "live_control_available": false,
+          "host_reattach_available": true,
+          "reply_to_live_session_available": false
+        },
+        "runtime_display": null,
+        "runtime_facts": {
+          "control_path": "managed",
+          "process_state": "closed",
+          "host": {"state": "online", "last_seen_at": "2026-05-15T20:20:00Z", "source": "machine"},
+          "process": {
+            "status": "gone",
+            "pid": null,
+            "process_start_time": null,
+            "observed_at": "2026-05-15T20:20:01Z",
+            "last_seen_at": "2026-05-15T20:20:01Z",
+            "source_mtime": null,
+            "source_path": null,
+            "reason": "process_gone",
+            "source": "process_scan"
+          },
+          "phase": {"kind": null, "tool": null, "source": null, "observed_at": null, "expires_at": null},
+          "activity": {
+            "last_transcript_at": "2026-05-15T20:20:00Z",
+            "last_runtime_signal_at": "2026-05-15T20:20:01Z",
+            "last_progress_at": null
+          },
+          "lifecycle": {"state": "closed", "reason": "process_gone", "observed_at": "2026-05-15T20:20:01Z"}
+        }
+      },
+      "expectations": {
+        "management_label": "Managed",
+        "status_label": "Closed",
+        "status_tone": "closed",
+        "display_phase_label": "Closed",
+        "seen_at": "2026-05-15T20:20:01Z",
+        "seen_at_prefix": "Closed"
+      }
+    }
+  ]
+}
