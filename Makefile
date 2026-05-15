@@ -8,7 +8,7 @@ COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/dock
 E2E_BACKEND_PORT ?=
 E2E_FRONTEND_PORT ?=
 
-.PHONY: help dev dev-demo stop test test-ios test-ios-helper test-frontend test-engine test-runner test-e2e test-e2e-core test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-sdk validate-makefile validate-build-identity validate-managed-codex-contract validate-ship-monitor regen-ws generate-sdk qa-live qa-unmanaged render-canary session-propagation-sla managed-claude-truth-probe managed-claude-poc reprovision deploy-status ship-watch ship release ui-capture qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-e2e-continuation-provider test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest eval dogfood dogfood-refresh dogfood-check
+.PHONY: help dev dev-demo stop test test-ios test-ios-helper test-frontend test-engine test-runner test-e2e test-e2e-core test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-sdk validate-ios-api validate-makefile validate-build-identity validate-managed-codex-contract validate-ship-monitor regen-ws generate-sdk generate-ios-api qa-live qa-unmanaged render-canary session-propagation-sla managed-claude-truth-probe managed-claude-poc reprovision deploy-status ship-watch ship release ui-capture qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-e2e-continuation-provider test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest eval dogfood dogfood-refresh dogfood-check
 
 # ---------------------------------------------------------------------------
 # Help
@@ -198,6 +198,7 @@ dogfood-check: ## Show installed local runtime status + local health
 validate: ## Run all contract checks
 	@$(MAKE) validate-ws
 	@$(MAKE) validate-sdk
+	@$(MAKE) validate-ios-api
 	@$(MAKE) validate-makefile
 	@$(MAKE) validate-build-identity
 	@$(MAKE) validate-managed-codex-contract
@@ -226,10 +227,13 @@ validate-ws: ## @internal WebSocket contract check
 
 validate-sdk: ## @internal OpenAPI/SDK drift check
 	@$(MAKE) generate-sdk >/dev/null
-	@if ! git diff --quiet -- openapi.json web/src/generated/openapi-types.ts; then \
+	@if ! git diff --quiet -- openapi.json web/src/generated/openapi-types.ts ios/Sources/Shared/Generated/SessionAPI.generated.swift; then \
 		echo "OpenAPI/SDK out of sync — run 'make generate-sdk'"; \
 		exit 1; \
 	fi
+
+validate-ios-api: ## @internal iOS OpenAPI DTO drift check
+	@python3 scripts/generate/ios_api_models.py --check
 
 validate-makefile: ## @internal Verify .PHONY vs documented targets
 	@failed=0; \
@@ -255,6 +259,10 @@ generate-sdk: ## Regenerate OpenAPI types
 	@$(MAKE) ensure-js-deps
 	@cd server && uv run python scripts/export_openapi.py >/dev/null
 	@cd web && bun run openapi-typescript ../openapi.json --output src/generated/openapi-types.ts
+	@python3 scripts/generate/ios_api_models.py
+
+generate-ios-api: ## Regenerate iOS OpenAPI DTOs from openapi.json
+	@python3 scripts/generate/ios_api_models.py
 
 import-smoke: ## @internal Fast import + CSS reference smoke (<5s)
 	@cd server && uv run python ../scripts/ci/import-smoke.py
