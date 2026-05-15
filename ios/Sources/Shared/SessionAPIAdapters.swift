@@ -218,6 +218,70 @@ extension APISessionWorkspaceResponse {
     }
 }
 
+extension APIQueuedInputSummary {
+    var queuedInputSummary: QueuedInputSummary {
+        QueuedInputSummary(
+            id: id,
+            text: text,
+            intent: intent,
+            status: status,
+            lastError: lastError,
+            createdAt: createdAt
+        )
+    }
+}
+
+extension APISessionInputResponse {
+    var sessionInputResponse: SessionInputResponse {
+        SessionInputResponse(
+            outcome: SessionInputOutcome(rawValue: outcome) ?? .queued,
+            inputId: inputId,
+            intent: intent,
+            queued: (queued ?? []).map(\.queuedInputSummary)
+        )
+    }
+}
+
+extension APISessionDraftReplyResponse {
+    var draftReplyResponse: DraftReplyResponse {
+        DraftReplyResponse(
+            draftText: draftText,
+            model: model,
+            generatedAt: generatedAt,
+            basedOnEventIds: basedOnEventIds
+        )
+    }
+}
+
+extension APISessionLoopModeResponse {
+    var loopModeResponse: LoopModeResponse {
+        LoopModeResponse(
+            sessionId: sessionId,
+            loopMode: SessionLoopMode(rawValue: loopMode) ?? .assist
+        )
+    }
+}
+
+extension APISessionTurnResponse {
+    var sessionTurn: SessionTurn {
+        SessionTurn(
+            id: id,
+            sessionId: sessionId,
+            state: state,
+            terminalPhase: terminalPhase,
+            errorCode: errorCode,
+            userSubmittedAt: userSubmittedAt,
+            terminalAt: terminalAt
+        )
+    }
+}
+
+extension APISessionTurnsListResponse {
+    var sessionTurnsResponse: SessionTurnsResponse {
+        SessionTurnsResponse(turns: turns.map(\.sessionTurn), total: total)
+    }
+}
+
 extension APITimelineSessionCardResponse {
     var sessionSummary: SessionSummary {
         SessionSummary(

@@ -395,6 +395,69 @@ struct SessionModelsTests {
     }
 
     @Test
+    func generatedControlResponsesAdaptToDomainModels() throws {
+        let inputJSON = """
+        {
+          "outcome": "queued",
+          "input_id": 10,
+          "intent": "steer",
+          "queued": [
+            {
+              "id": 10,
+              "text": "update this turn",
+              "intent": "steer",
+              "status": "failed",
+              "last_error": "turn_ended",
+              "created_at": "2026-04-26T23:12:00Z"
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+        let turnsJSON = """
+        {
+          "turns": [
+            {
+              "id": 99,
+              "session_id": "session-1",
+              "state": "terminal",
+              "terminal_phase": "needs_user",
+              "error_code": null,
+              "user_submitted_at": "2026-04-26T23:10:00Z",
+              "terminal_at": "2026-04-26T23:11:00Z",
+              "timing": {}
+            }
+          ],
+          "total": 1
+        }
+        """.data(using: .utf8)!
+        let draftJSON = """
+        {
+          "draft_text": "Looks good.",
+          "model": "codex",
+          "generated_at": "2026-04-26T23:12:00Z",
+          "based_on_event_ids": [1, 2]
+        }
+        """.data(using: .utf8)!
+        let loopJSON = """
+        {
+          "session_id": "session-1",
+          "loop_mode": "autopilot"
+        }
+        """.data(using: .utf8)!
+
+        let input = try JSONDecoder.snakeCase.decode(APISessionInputResponse.self, from: inputJSON).sessionInputResponse
+        let turns = try JSONDecoder.snakeCase.decode(APISessionTurnsListResponse.self, from: turnsJSON).sessionTurnsResponse
+        let draft = try JSONDecoder.snakeCase.decode(APISessionDraftReplyResponse.self, from: draftJSON).draftReplyResponse
+        let loop = try JSONDecoder.snakeCase.decode(APISessionLoopModeResponse.self, from: loopJSON).loopModeResponse
+
+        #expect(input.outcome == .queued)
+        #expect(input.visibleFailedInputCount == 0)
+        #expect(turns.turns.first?.terminalPhase == "needs_user")
+        #expect(draft.basedOnEventIds == [1, 2])
+        #expect(loop.loopMode == .autopilot)
+    }
+
+    @Test
     func timelineBranchBadgeUsesOnlyRealGitBranch() {
         let branchSession = SessionSummary(
             id: "session-branch",

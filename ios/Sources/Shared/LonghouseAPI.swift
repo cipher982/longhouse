@@ -121,8 +121,8 @@ struct LonghouseAPI: Sendable {
         guard httpResponse.statusCode == 200 else {
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
-        let decoded = try JSONDecoder.snakeCase.decode(SessionTurnsResponse.self, from: data)
-        return decoded.turns
+        let decoded = try JSONDecoder.snakeCase.decode(APISessionTurnsListResponse.self, from: data)
+        return decoded.sessionTurnsResponse.turns
     }
 
     func sendLive(id: String, text: String) async throws {
@@ -170,7 +170,7 @@ struct LonghouseAPI: Sendable {
             }
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
-        return try JSONDecoder.snakeCase.decode(SessionInputResponse.self, from: data)
+        return try JSONDecoder.snakeCase.decode(APISessionInputResponse.self, from: data).sessionInputResponse
     }
 
     /// Extract `{"detail": {"error_code": ..., "message": ...}}` from an
@@ -199,7 +199,7 @@ struct LonghouseAPI: Sendable {
         guard (200..<300).contains(httpResponse.statusCode) else {
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
-        return try JSONDecoder.snakeCase.decode(DraftReplyResponse.self, from: data)
+        return try JSONDecoder.snakeCase.decode(APISessionDraftReplyResponse.self, from: data).draftReplyResponse
     }
 
     func setSessionLoopMode(id: String, loopMode: SessionLoopMode) async throws -> LoopModeResponse {
@@ -213,7 +213,7 @@ struct LonghouseAPI: Sendable {
         guard (200..<300).contains(httpResponse.statusCode) else {
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
-        return try JSONDecoder.snakeCase.decode(LoopModeResponse.self, from: data)
+        return try JSONDecoder.snakeCase.decode(APISessionLoopModeResponse.self, from: data).loopModeResponse
     }
 
     func sessionAction(id: String, action: String) async throws {
