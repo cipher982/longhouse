@@ -213,6 +213,7 @@ private func mockSession(
         .padding(16)
     }
     .background(Color(.systemGroupedBackground))
+    .preferredColorScheme(.dark)
 }
 
 #Preview("Connection states") {
@@ -250,5 +251,6 @@ private func mockSession(
         .padding(16)
     }
     .background(Color(.systemGroupedBackground))
+    .preferredColorScheme(.dark)
 }
 #endif
