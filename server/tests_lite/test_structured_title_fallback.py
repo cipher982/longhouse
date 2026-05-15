@@ -17,9 +17,9 @@ import pytest
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
-from zerg.database import make_engine, make_sessionmaker
+from zerg.database import Base, make_engine, make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.models.agents import AgentEvent, AgentSession, AgentsBase
+from zerg.models.agents import AgentEvent, AgentSession
 
 
 # ---------------------------------------------------------------------------
@@ -30,7 +30,7 @@ from zerg.models.agents import AgentEvent, AgentSession, AgentsBase
 def _make_db(tmp_path, name="test.db"):
     db_path = tmp_path / name
     engine = make_engine(f"sqlite:///{db_path}")
-    AgentsBase.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
     return make_sessionmaker(engine)
 
 
@@ -193,7 +193,6 @@ def test_sessions_list_includes_first_user_message(tmp_path):
     db_path = tmp_path / "test_first_msg.db"
     engine = make_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(bind=engine)
-    AgentsBase.metadata.create_all(bind=engine)
     factory = make_sessionmaker(engine)
 
     session = _seed_session(factory, project="proj", git_branch="feat")

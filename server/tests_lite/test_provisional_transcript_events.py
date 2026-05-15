@@ -11,7 +11,7 @@ from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSourceLine
-from zerg.models.agents import AgentsBase
+from zerg.database import Base
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionObservation
 from zerg.services.agents_store import AgentsStore
@@ -31,7 +31,7 @@ from zerg.session_execution_home import SessionExecutionHome
 def _make_sessionmaker(tmp_path, name: str):
     engine = make_engine(f"sqlite:///{tmp_path / name}")
     engine = engine.execution_options(schema_translate_map={"agents": None})
-    AgentsBase.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
     return sessionmaker(bind=engine)
 
 

@@ -9,12 +9,13 @@ from sqlalchemy.orm import sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.database import get_db
-from zerg.models.agents import AgentsBase, AgentSession
+from zerg.database import Base
+from zerg.models.agents import AgentSession
 
 
 def _make_db(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path}/test.db")
-    AgentsBase.metadata.create_all(engine)
+    Base.metadata.create_all(engine)
     return sessionmaker(bind=engine)
 
 

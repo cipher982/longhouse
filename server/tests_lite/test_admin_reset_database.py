@@ -17,7 +17,6 @@ from zerg.dependencies.auth import get_current_user
 from zerg.dependencies.auth import require_admin
 from zerg.main import api_app
 from zerg.models import User
-from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
 from zerg.models.models import Runner
 
@@ -27,7 +26,6 @@ def _make_db(tmp_path, name="admin_reset.db"):
     engine = make_engine(f"sqlite:///{db_path}")
     engine = engine.execution_options(schema_translate_map={"agents": None})
     Base.metadata.create_all(bind=engine)
-    AgentsBase.metadata.create_all(bind=engine)
     return make_sessionmaker(engine)
 
 

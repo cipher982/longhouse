@@ -19,7 +19,7 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentHeartbeat
-from zerg.models.agents import AgentsBase
+from zerg.database import Base
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import UnmanagedSessionBinding
@@ -37,7 +37,7 @@ from zerg.session_execution_home import SessionExecutionHome
 def _make_db(tmp_path, name="timeline_runtime_overlay.db"):
     db_path = tmp_path / name
     engine = make_engine(f"sqlite:///{db_path}")
-    AgentsBase.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
     return make_sessionmaker(engine)
 
 

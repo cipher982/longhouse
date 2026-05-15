@@ -10,7 +10,7 @@ from datetime import timezone
 from sqlalchemy.orm import sessionmaker
 
 from zerg.database import make_engine
-from zerg.models.agents import AgentsBase
+from zerg.database import Base
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
@@ -21,7 +21,7 @@ def test_environment_filter_returns_commis_sessions(tmp_path):
     db_path = tmp_path / "env_filter.db"
     engine = make_engine(f"sqlite:///{db_path}")
     engine = engine.execution_options(schema_translate_map={"agents": None})
-    AgentsBase.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
 
     Session = sessionmaker(bind=engine)
     with Session() as db:

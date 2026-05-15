@@ -11,7 +11,7 @@ from uuid import uuid4
 from sqlalchemy.orm import sessionmaker
 
 from zerg.database import make_engine
-from zerg.models.agents import AgentsBase
+from zerg.database import Base
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionTask
 from zerg.services.agents_store import AgentsStore
@@ -31,7 +31,7 @@ def test_duplicate_event_sqlite_no_pending_rollback(tmp_path):
     engine = make_engine(f"sqlite:///{db_path}")
     # Strip schema for SQLite (models use schema="agents" for Postgres)
     engine = engine.execution_options(schema_translate_map={"agents": None})
-    AgentsBase.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
 
     SessionLocal = sessionmaker(bind=engine)
     with SessionLocal() as db:
@@ -130,7 +130,7 @@ def test_duplicate_event_different_hash(tmp_path):
     db_path = tmp_path / "duplicate_hash.db"
     engine = make_engine(f"sqlite:///{db_path}")
     engine = engine.execution_options(schema_translate_map={"agents": None})
-    AgentsBase.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
 
     SessionLocal = sessionmaker(bind=engine)
     with SessionLocal() as db:
@@ -200,7 +200,7 @@ def test_duplicate_ingest_upgrades_generic_environment_to_machine_label(tmp_path
     db_path = tmp_path / "duplicate_metadata_upgrade.db"
     engine = make_engine(f"sqlite:///{db_path}")
     engine = engine.execution_options(schema_translate_map={"agents": None})
-    AgentsBase.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
 
     SessionLocal = sessionmaker(bind=engine)
     with SessionLocal() as db:
@@ -272,7 +272,7 @@ def test_duplicate_ingest_replaces_managed_local_codex_placeholder_provider_sess
     db_path = tmp_path / "duplicate_codex_placeholder_upgrade.db"
     engine = make_engine(f"sqlite:///{db_path}")
     engine = engine.execution_options(schema_translate_map={"agents": None})
-    AgentsBase.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
 
     SessionLocal = sessionmaker(bind=engine)
     with SessionLocal() as db:
@@ -364,7 +364,7 @@ def test_duplicate_ingest_keeps_machine_label_when_generic_environment_arrives_l
     db_path = tmp_path / "duplicate_metadata_preserve.db"
     engine = make_engine(f"sqlite:///{db_path}")
     engine = engine.execution_options(schema_translate_map={"agents": None})
-    AgentsBase.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
 
     SessionLocal = sessionmaker(bind=engine)
     with SessionLocal() as db:
@@ -424,7 +424,7 @@ def test_duplicate_replay_without_source_line_delta_does_not_requeue_post_ingest
     db_path = tmp_path / "duplicate_replay_no_source_delta.db"
     engine = make_engine(f"sqlite:///{db_path}")
     engine = engine.execution_options(schema_translate_map={"agents": None})
-    AgentsBase.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
 
     SessionLocal = sessionmaker(bind=engine)
     with SessionLocal() as db:

@@ -19,7 +19,7 @@ from sqlalchemy.orm import sessionmaker
 
 from zerg.database import make_engine
 from zerg.models.agents import AgentHeartbeat
-from zerg.models.agents import AgentsBase
+from zerg.database import Base
 from zerg.models.work import OPERATIONAL_INCIDENT_STATUS_OPEN
 from zerg.models.work import OPERATIONAL_INCIDENT_STATUS_RESOLVED
 from zerg.models.work import Insight
@@ -34,7 +34,7 @@ def _make_db(tmp_path):
     db_path = tmp_path / "test_stale_agents.db"
     engine = make_engine(f"sqlite:///{db_path}")
     engine = engine.execution_options(schema_translate_map={"agents": None})
-    AgentsBase.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
     SessionLocal = sessionmaker(bind=engine)
     return SessionLocal, engine
 

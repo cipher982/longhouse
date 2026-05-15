@@ -13,7 +13,7 @@ from datetime import timezone
 from sqlalchemy.orm import sessionmaker
 
 from zerg.database import make_engine
-from zerg.models.agents import AgentsBase
+from zerg.database import Base
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
@@ -23,7 +23,7 @@ def _make_db(tmp_path):
     db_path = tmp_path / "test.db"
     engine = make_engine(f"sqlite:///{db_path}")
     engine = engine.execution_options(schema_translate_map={"agents": None})
-    AgentsBase.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
     return sessionmaker(bind=engine)
 
 

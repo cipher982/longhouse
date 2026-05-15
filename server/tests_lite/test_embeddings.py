@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker
 from zerg.database import make_engine
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
-from zerg.models.agents import AgentsBase
+from zerg.database import Base
 from zerg.models.agents import SessionEmbedding
 from zerg.models.work import Insight  # noqa: F401
 from zerg.services.session_processing.embeddings import bytes_to_embedding
@@ -28,7 +28,7 @@ def _make_db(tmp_path):
     db_path = tmp_path / "test_emb.db"
     engine = make_engine(f"sqlite:///{db_path}")
     engine = engine.execution_options(schema_translate_map={"agents": None})
-    AgentsBase.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
     SessionLocal = sessionmaker(bind=engine)
     return SessionLocal
 

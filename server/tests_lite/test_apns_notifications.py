@@ -21,7 +21,6 @@ from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.dependencies.auth import get_current_user
 from zerg.main import api_app
-from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
 from zerg.models.apns_device_registration import APNSDeviceRegistration
 from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration
@@ -42,7 +41,6 @@ from zerg.services.apns_sender import prepare_widget_timeline_push
 def _make_db(tmp_path, name: str = "test_apns.db"):
     engine = make_engine(f"sqlite:///{tmp_path}/{name}")
     Base.metadata.create_all(bind=engine)
-    AgentsBase.metadata.create_all(bind=engine)
     return engine, make_sessionmaker(engine)
 
 

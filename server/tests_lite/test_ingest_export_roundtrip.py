@@ -8,7 +8,7 @@ from pathlib import Path
 from sqlalchemy.orm import sessionmaker
 
 from zerg.database import make_engine
-from zerg.models.agents import AgentsBase
+from zerg.database import Base
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
@@ -106,7 +106,7 @@ def _roundtrip_fixture(tmp_path, provider: str) -> None:
     db_path = tmp_path / f"roundtrip_{provider}.db"
     engine = make_engine(f"sqlite:///{db_path}")
     engine = engine.execution_options(schema_translate_map={"agents": None})
-    AgentsBase.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
 
     fixture = _fixture_path(provider)
     source_path = str(fixture)

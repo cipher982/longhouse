@@ -46,7 +46,6 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
-from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionRuntimeState
 from zerg.session_loop_mode import SessionLoopMode
@@ -59,7 +58,6 @@ from zerg.session_loop_mode import SessionLoopMode
 def _make_db(tmp_path, name="test.db"):
     engine = make_engine(f"sqlite:///{tmp_path}/{name}")
     Base.metadata.create_all(bind=engine)
-    AgentsBase.metadata.create_all(bind=engine)
     return engine, make_sessionmaker(engine)
 
 

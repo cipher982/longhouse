@@ -5,7 +5,7 @@ from uuid import uuid4
 from sqlalchemy.orm import sessionmaker
 
 from zerg.database import make_engine
-from zerg.models.agents import AgentsBase
+from zerg.database import Base
 from zerg.models.agents import AgentSession
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.services.agents_store import AgentsStore
@@ -18,7 +18,7 @@ def _make_db(tmp_path):
     db_path = tmp_path / "lineage.db"
     engine = make_engine(f"sqlite:///{db_path}")
     engine = engine.execution_options(schema_translate_map={"agents": None})
-    AgentsBase.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
     return sessionmaker(bind=engine)
 
 

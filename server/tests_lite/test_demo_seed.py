@@ -15,7 +15,6 @@ from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
-from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
 from zerg.services.demo_sessions import build_demo_agent_sessions
 
@@ -24,7 +23,6 @@ def _make_db(tmp_path, name="demo_seed.db"):
     db_path = tmp_path / name
     engine = make_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(bind=engine)
-    AgentsBase.metadata.create_all(bind=engine)
     return make_sessionmaker(engine)
 
 

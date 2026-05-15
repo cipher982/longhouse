@@ -25,7 +25,7 @@ from zerg.dependencies.auth import get_current_user
 from zerg.main import api_app
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentHeartbeat
-from zerg.models.agents import AgentsBase
+from zerg.database import Base
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionTurn
 from zerg.services.session_turns import SESSION_TURN_STATE_DURABLE
@@ -35,7 +35,7 @@ def _make_db(tmp_path):
     db_path = tmp_path / "test_observability_routes.db"
     engine = make_engine(f"sqlite:///{db_path}")
     engine = engine.execution_options(schema_translate_map={"agents": None})
-    AgentsBase.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
     return sessionmaker(bind=engine)
 
 

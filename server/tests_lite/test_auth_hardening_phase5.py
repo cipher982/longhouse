@@ -15,14 +15,12 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.main import _enforce_single_tenant_startup
 from zerg.main import api_app
-from zerg.models.agents import AgentsBase
 
 
 def _make_db(tmp_path):
     db_path = tmp_path / "auth_hardening_phase5.db"
     engine = make_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(bind=engine)
-    AgentsBase.metadata.create_all(bind=engine)
     return make_sessionmaker(engine)
 
 

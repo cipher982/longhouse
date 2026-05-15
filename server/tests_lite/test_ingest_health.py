@@ -9,7 +9,7 @@ from unittest.mock import patch
 from sqlalchemy.orm import sessionmaker
 
 from zerg.jobs.ingest_health import compute_ingest_health
-from zerg.models.agents import AgentsBase
+from zerg.database import Base
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
 from zerg.models.work import OPERATIONAL_INCIDENT_STATUS_OPEN
@@ -22,7 +22,7 @@ def _make_session_local(tmp_path):
     from zerg.database import make_engine
     engine = make_engine(f"sqlite:///{tmp_path}/test.db")
     engine = engine.execution_options(schema_translate_map={"agents": None})
-    AgentsBase.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
     return sessionmaker(bind=engine)
 
 

@@ -14,7 +14,7 @@ from sqlalchemy.orm import sessionmaker
 from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
-from zerg.models.agents import AgentsBase
+from zerg.database import Base
 from zerg.models.agents import AgentSession
 from zerg.routers import session_chat
 from zerg.services.agents_store import AgentsStore
@@ -33,7 +33,7 @@ def _make_db(tmp_path):
     db_path = tmp_path / "resume_prep.db"
     engine = make_engine(f"sqlite:///{db_path}")
     engine = engine.execution_options(schema_translate_map={"agents": None})
-    AgentsBase.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
     return sessionmaker(bind=engine)
 
 

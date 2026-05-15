@@ -12,7 +12,6 @@ import pytest
 from zerg.database import Base
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
-from zerg.models.agents import AgentsBase
 from zerg.models.models import Runner
 from zerg.models.models import RunnerHealthIncident
 from zerg.models.user import User
@@ -29,7 +28,6 @@ def _make_db(tmp_path: Path):
     db_path = tmp_path / "runner-health-reconcile.db"
     engine = make_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(bind=engine)
-    AgentsBase.metadata.create_all(bind=engine)
     SessionLocal = make_sessionmaker(engine)
     return SessionLocal()
 
