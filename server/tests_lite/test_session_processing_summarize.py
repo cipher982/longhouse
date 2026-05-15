@@ -280,12 +280,12 @@ class TestBriefingFormatting:
         """Set up a SQLite test database with sessions."""
         from sqlalchemy.orm import sessionmaker
 
+        from zerg.database import Base
         from zerg.database import make_engine
-        from zerg.models.agents import AgentsBase
 
         db_path = tmp_path / "briefing_test.db"
         engine = make_engine(f"sqlite:///{db_path}")
-        AgentsBase.metadata.create_all(bind=engine)
+        Base.metadata.create_all(bind=engine)
         Session = sessionmaker(bind=engine)
         return Session()
 

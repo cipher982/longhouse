@@ -13,7 +13,6 @@ from fastapi.testclient import TestClient
 
 from zerg.database import Base, get_db, make_engine, make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.models.agents import AgentsBase
 from zerg.models.models import User
 from zerg.models.agents import AgentSession, AgentEvent
 
@@ -27,8 +26,7 @@ def _make_db(tmp_path: Path):
     """Create an in-memory SQLite DB with agents and user tables."""
     db_path = tmp_path / "test_datetime_e2e.db"
     engine = make_engine(f"sqlite:///{db_path}")
-    Base.metadata.create_all(bind=engine)  # User table
-    AgentsBase.metadata.create_all(bind=engine)  # Agent tables
+    Base.metadata.create_all(bind=engine)
     SessionLocal = make_sessionmaker(engine)
     return SessionLocal
 

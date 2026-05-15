@@ -5,7 +5,7 @@ from sqlalchemy.orm import sessionmaker
 
 from zerg.database import make_engine
 from zerg.models.agents import AgentEvent
-from zerg.models.agents import AgentsBase
+from zerg.database import Base
 from zerg.models.agents import AgentSession
 
 
@@ -14,7 +14,7 @@ def test_agents_models_roundtrip_sqlite(tmp_path):
     engine = make_engine(f"sqlite:///{db_path}")
     # Strip schema for SQLite (models use schema="agents" for Postgres)
     engine = engine.execution_options(schema_translate_map={"agents": None})
-    AgentsBase.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
 
     SessionLocal = sessionmaker(bind=engine)
     with SessionLocal() as db:

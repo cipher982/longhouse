@@ -19,7 +19,6 @@ from fastapi.testclient import TestClient
 
 from zerg.database import Base, get_db, make_engine, make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.models.agents import AgentsBase
 from zerg.main import api_app
 
 
@@ -32,7 +31,6 @@ def _make_client(tmp_path):
     db_path = tmp_path / "test.db"
     engine = make_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(bind=engine)
-    AgentsBase.metadata.create_all(bind=engine)
     factory = make_sessionmaker(engine)
 
     def override():

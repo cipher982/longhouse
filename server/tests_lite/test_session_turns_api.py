@@ -14,7 +14,7 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentEvent
-from zerg.models.agents import AgentsBase
+from zerg.database import Base
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionTurn
 from zerg.services.session_turns import SESSION_TURN_STATE_ACTIVE
@@ -25,7 +25,7 @@ from zerg.services.session_turns import SESSION_TURN_STATE_TERMINAL
 def _make_db(tmp_path):
     db_path = tmp_path / "test_session_turns_api.db"
     engine = make_engine(f"sqlite:///{db_path}")
-    AgentsBase.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
     return make_sessionmaker(engine)
 
 

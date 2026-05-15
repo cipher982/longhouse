@@ -48,12 +48,10 @@ def _cleanup(*job_ids):
 
 def _make_factory(tmp_path, name):
     from zerg.database import make_engine, make_sessionmaker
-    from zerg.models.agents import AgentsBase
     from zerg.models.models import Base
 
     db_path = tmp_path / name
     engine = make_engine(f"sqlite:///{db_path}")
-    AgentsBase.metadata.create_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     return make_sessionmaker(engine)
 

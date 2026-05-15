@@ -32,7 +32,6 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.models import User
 from zerg.models.agents import AgentEvent
-from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionTurn
@@ -44,7 +43,6 @@ def _make_db(tmp_path):
     engine = make_engine(f"sqlite:///{db_path}")
     engine = engine.execution_options(schema_translate_map={"agents": None})
     Base.metadata.create_all(bind=engine)
-    AgentsBase.metadata.create_all(bind=engine)
     return make_sessionmaker(engine)
 
 

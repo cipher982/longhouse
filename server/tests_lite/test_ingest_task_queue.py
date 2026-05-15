@@ -10,7 +10,7 @@ os.environ.setdefault("TESTING", "1")
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentSession
-from zerg.models.agents import AgentsBase
+from zerg.database import Base
 from zerg.models.agents import SessionTask
 from zerg.services.ingest_task_queue import close_current_pending_tasks
 
@@ -18,7 +18,7 @@ from zerg.services.ingest_task_queue import close_current_pending_tasks
 def _make_db(tmp_path, name: str):
     db_path = tmp_path / name
     engine = make_engine(f"sqlite:///{db_path}")
-    AgentsBase.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
     return make_sessionmaker(engine)
 
 

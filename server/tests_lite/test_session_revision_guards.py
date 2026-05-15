@@ -16,13 +16,13 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
-from zerg.models.agents import AgentsBase
+from zerg.database import Base
 
 
 def _make_db(tmp_path, name: str) -> make_sessionmaker:
     db_path = tmp_path / name
     engine = make_engine(f"sqlite:///{db_path}")
-    AgentsBase.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
     return make_sessionmaker(engine)
 
 
@@ -153,7 +153,7 @@ async def test_generate_summary_impl_releases_db_connection_during_llm_call(tmp_
 
     db_path = tmp_path / "summary_releases_connection.db"
     engine = make_engine(f"sqlite:///{db_path}", pool_size=1, max_overflow=0)
-    AgentsBase.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
     factory = make_sessionmaker(engine)
 
     db = factory()

@@ -10,7 +10,8 @@ from uuid import uuid4
 import zerg.dependencies.auth as _auth_deps  # noqa: F401 — triggers settings init
 import zerg.routers.timeline as timeline_mod
 from zerg.database import make_engine, make_sessionmaker
-from zerg.models.agents import AgentEvent, AgentSession, AgentsBase, SessionRuntimeState
+from zerg.database import Base
+from zerg.models.agents import AgentEvent, AgentSession, SessionRuntimeState
 
 
 async def _noop_coro() -> None:
@@ -20,7 +21,7 @@ async def _noop_coro() -> None:
 def _make_db(tmp_path, name="workspace_stream.db"):
     db_path = tmp_path / name
     engine = make_engine(f"sqlite:///{db_path}")
-    AgentsBase.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
     return make_sessionmaker(engine)
 
 

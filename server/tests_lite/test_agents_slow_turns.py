@@ -21,7 +21,7 @@ from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentHeartbeat
-from zerg.models.agents import AgentsBase
+from zerg.database import Base
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionTurn
 from zerg.services.session_turns import SESSION_TURN_STATE_ACTIVE
@@ -34,7 +34,7 @@ def _make_db(tmp_path):
     db_path = tmp_path / "test_agents_slow_turns.db"
     engine = make_engine(f"sqlite:///{db_path}")
     engine = engine.execution_options(schema_translate_map={"agents": None})
-    AgentsBase.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
     return sessionmaker(bind=engine)
 
 

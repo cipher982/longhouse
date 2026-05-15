@@ -20,7 +20,6 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
-from zerg.models.agents import AgentsBase
 
 
 def _fixture_path(provider: str) -> Path:
@@ -108,7 +107,6 @@ def _make_client(tmp_path: Path) -> TestClient:
     db_path = tmp_path / "archive_bundle.db"
     engine = make_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(bind=engine)
-    AgentsBase.metadata.create_all(bind=engine)
     factory = make_sessionmaker(engine)
 
     def override():

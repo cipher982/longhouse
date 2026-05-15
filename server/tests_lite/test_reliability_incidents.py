@@ -7,7 +7,7 @@ from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.dependencies.auth import require_admin
 from zerg.main import api_app
-from zerg.models.agents import AgentsBase
+from zerg.database import Base
 from zerg.models.work import OPERATIONAL_INCIDENT_STATUS_OPEN
 from zerg.models.work import OPERATIONAL_INCIDENT_STATUS_RESOLVED
 from zerg.models.work import OperationalIncident
@@ -16,7 +16,7 @@ from zerg.models.work import OperationalIncident
 def _make_session_local(tmp_path):
     engine = make_engine(f"sqlite:///{tmp_path}/test_reliability_incidents.db")
     engine = engine.execution_options(schema_translate_map={"agents": None})
-    AgentsBase.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
     return sessionmaker(bind=engine)
 
 

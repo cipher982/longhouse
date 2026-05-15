@@ -21,14 +21,13 @@ os.environ.setdefault("TESTING", "1")
 
 from zerg.database import Base, get_db, make_engine, make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.models.agents import AgentSession, AgentsBase
+from zerg.models.agents import AgentSession
 
 
 def _make_db(tmp_path, name="actions.db"):
     db_path = tmp_path / name
     engine = make_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(bind=engine)
-    AgentsBase.metadata.create_all(bind=engine)
     return make_sessionmaker(engine)
 
 

@@ -30,7 +30,6 @@ from zerg.dependencies.agents_auth import require_single_tenant  # noqa: E402
 from zerg.dependencies.agents_auth import verify_agents_token  # noqa: E402
 from zerg.dependencies.browser_auth import get_current_browser_user  # noqa: E402
 from zerg.models import User  # noqa: E402
-from zerg.models.agents import AgentsBase  # noqa: E402
 from zerg.models.device_token import DeviceToken  # noqa: E402
 from zerg.services.machine_control_channel import MachineControlChannelRegistry  # noqa: E402
 from zerg.services.machines_directory import build_machines_directory  # noqa: E402
@@ -44,7 +43,6 @@ def _make_db(tmp_path):
     engine = make_engine(f"sqlite:///{db_path}")
     engine = engine.execution_options(schema_translate_map={"agents": None})
     Base.metadata.create_all(bind=engine)
-    AgentsBase.metadata.create_all(bind=engine)
     return sessionmaker(bind=engine)
 
 

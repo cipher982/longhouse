@@ -19,14 +19,14 @@ import zerg.services.agent_heartbeat_health as machine_health_service
 from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.models.agents import AgentHeartbeat
-from zerg.models.agents import AgentsBase
+from zerg.database import Base
 
 
 def _make_db(tmp_path):
     db_path = tmp_path / "test_agents_machine_health.db"
     engine = make_engine(f"sqlite:///{db_path}")
     engine = engine.execution_options(schema_translate_map={"agents": None})
-    AgentsBase.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
     SessionLocal = sessionmaker(bind=engine)
     return SessionLocal
 
