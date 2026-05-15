@@ -24,17 +24,17 @@ struct TimelineView: View {
             }
             .navigationTitle("Timeline")
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    ConnectionIndicator(state: viewModel.connectionState) {
+                        Task { await viewModel.refresh(using: appState, reloadWidget: true) }
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
-                    HStack(spacing: 12) {
-                        if viewModel.isRefreshing && !viewModel.isInitialLoading {
-                            ProgressView().controlSize(.small)
-                        }
-                        Button {
-                            launchSheetPresented = true
-                        } label: {
-                            Image(systemName: "plus.circle.fill")
-                                .accessibilityLabel("Start session")
-                        }
+                    Button {
+                        launchSheetPresented = true
+                    } label: {
+                        Image(systemName: "plus.circle.fill")
+                            .accessibilityLabel("Start session")
                     }
                 }
             }
@@ -101,7 +101,11 @@ struct TimelineView: View {
             VStack(spacing: 10) {
                 ForEach(sessions) { session in
                     NavigationLink(value: SessionRoute(sessionId: session.id, fallbackTitle: session.title)) {
-                        TimelineSessionCardRow(session: session, emphasized: emphasized)
+                        TimelineSessionCardRow(
+                            session: session,
+                            emphasized: emphasized,
+                            connectionState: viewModel.connectionState
+                        )
                     }
                     .buttonStyle(.plain)
                 }
@@ -153,6 +157,7 @@ private struct SessionRoute: Hashable {
 struct TimelineSessionCardRow: View {
     let session: SessionSummary
     let emphasized: Bool
+    var connectionState: ConnectionState = .healthy
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -174,7 +179,7 @@ struct TimelineSessionCardRow: View {
                 .lineLimit(1)
 
                 HStack(spacing: 8) {
-                    RuntimeBadge(session: session)
+                    RuntimeBadge(session: session, connectionState: connectionState)
                     CapabilityBadge(session: session)
                 }
             }
@@ -246,13 +251,21 @@ private struct ProviderBadge: View {
 
 private struct RuntimeBadge: View {
     let session: SessionSummary
+    let connectionState: ConnectionState
 
     var body: some View {
-        let color = timelineStatusColor(session)
         let isClosed = session.timelineStatusLabel == "Closed"
-        let live = isLiveContact(session)
+        let globalHealthy = connectionState == .healthy
+        let withinDeadline = phaseSignalFresh(session)
+        // Pulse only when global is healthy AND the server's own
+        // phase-signal deadline hasn't passed. Anything else freezes.
+        let pulsing = globalHealthy && withinDeadline && !isClosed
+        // When global is unhealthy, the dot retracts its claim by going
+        // gray — we don't pretend the status color is current.
+        let color = globalHealthy ? timelineStatusColor(session) : .secondary
+
         HStack(spacing: 6) {
-            LivenessDot(color: color, pulsing: live && !isClosed)
+            LivenessDot(color: color, pulsing: pulsing)
             Text(session.timelineStatusLabel)
                 .font(.caption.weight(.semibold))
                 .lineLimit(1)
@@ -265,19 +278,59 @@ private struct RuntimeBadge: View {
                     .lineLimit(1)
                     .monospacedDigit()
             }
-            if let staleness = lostContactLabel(for: session) {
-                Text("·")
-                    .foregroundStyle(.tertiary)
-                Text(staleness)
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.orange)
-                    .lineLimit(1)
-            }
         }
         .foregroundStyle(color)
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
         .background(color.opacity(0.14), in: Capsule())
+    }
+}
+
+struct ConnectionIndicator: View {
+    let state: ConnectionState
+    let onRetry: () -> Void
+
+    var body: some View {
+        switch state {
+        case .connecting:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini)
+                Text("Connecting")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+            .accessibilityLabel("Connecting to Longhouse")
+        case .healthy:
+            LivenessDot(color: .green, pulsing: true)
+                .accessibilityLabel("Connected")
+        case .reconnecting:
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.caption2.weight(.semibold))
+                Text("Reconnecting")
+                    .font(.caption.weight(.semibold))
+            }
+            .foregroundStyle(.yellow)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .background(Color.yellow.opacity(0.16), in: Capsule())
+            .accessibilityLabel("Reconnecting to Longhouse")
+        case .offline:
+            Button(action: onRetry) {
+                HStack(spacing: 5) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.caption2.weight(.semibold))
+                    Text("Offline · Tap to retry")
+                        .font(.caption.weight(.semibold))
+                }
+                .foregroundStyle(.red)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
+                .background(Color.red.opacity(0.16), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Offline. Tap to retry.")
+        }
     }
 }
 
@@ -345,6 +398,16 @@ private struct MetadataBadge: View {
     }
 }
 
+/// Connection state, derived from the auto-refresh contract — no time
+/// thresholds. The poll either succeeded, is in-flight, or failed; we
+/// just read what already happened.
+enum ConnectionState: Equatable {
+    case connecting        // No successful refresh yet (cold start in flight)
+    case healthy           // Most recent scheduled refresh succeeded
+    case reconnecting      // 1 consecutive failure; retry already scheduled
+    case offline           // 2+ consecutive failures
+}
+
 @MainActor
 final class TimelineViewModel: ObservableObject {
     @Published var attention: [SessionSummary] = []
@@ -353,11 +416,24 @@ final class TimelineViewModel: ObservableObject {
     @Published var isInitialLoading = true
     @Published var isRefreshing = false
     @Published var lastUpdatedAt: Date?
+    @Published private(set) var consecutiveRefreshFailures = 0
 
     private var autoRefreshTask: Task<Void, Never>?
     private var lastWidgetReloadAt: Date?
     private var activeRefreshCount = 0
-    private var consecutiveRefreshFailures = 0
+
+    var connectionState: ConnectionState {
+        switch consecutiveRefreshFailures {
+        case 0:
+            // Healthy once we have data; otherwise the cold-start poll
+            // is still in flight and hasn't reported success or failure.
+            return lastUpdatedAt == nil ? .connecting : .healthy
+        case 1:
+            return .reconnecting
+        default:
+            return .offline
+        }
+    }
 
     var isEmpty: Bool { attention.isEmpty && recent.isEmpty }
 
@@ -517,13 +593,17 @@ private func parseLonghouseDate(_ value: String?) -> Date? {
 
 // MARK: - Liveness + duration helpers (RuntimeBadge)
 
-/// Healthy-contact signal: dot pulses when this is true.
-/// Closed sessions are intentionally excluded by the call site.
-func isLiveContact(_ session: SessionSummary) -> Bool {
-    switch session.runtimeDisplay?.activityRecency {
-    case "live", "recent": return true
-    default: return false
+/// Per-session deadline check: the server stamps `phase.expiresAt` on
+/// each phase observation. If now is past that deadline, the server
+/// itself has already declared the signal stale — we just read it.
+/// Sessions without a deadline (rare/legacy) are treated as fresh so
+/// they don't all freeze on first encounter.
+func phaseSignalFresh(_ session: SessionSummary) -> Bool {
+    guard let raw = session.runtimeFacts?.phase.expiresAt,
+          let expires = parseLonghouseDate(raw) else {
+        return true
     }
+    return Date() < expires
 }
 
 /// "How long in current state" — the headline number in the pill.
@@ -534,16 +614,6 @@ func stateDurationLabel(for session: SessionSummary) -> String? {
     if session.timelineStatusLabel == "Closed" { return nil }
     guard let date = parseLonghouseDate(session.timelineAnchor) else { return nil }
     return compactDuration(since: date)
-}
-
-/// Lost-contact escalation: only surfaces when contact is stale or unknown.
-/// Healthy contact stays uncluttered — the pulse is the proof of life.
-func lostContactLabel(for session: SessionSummary) -> String? {
-    guard !isLiveContact(session) else { return nil }
-    if session.timelineStatusLabel == "Closed" { return nil }
-    guard let seenAt = session.timelineStatusSeenAt,
-          let date = parseLonghouseDate(seenAt) else { return nil }
-    return "last seen \(compactDuration(since: date))"
 }
 
 /// Compact, no-"ago" duration: "5s", "12s", "3m", "1h", "2d".

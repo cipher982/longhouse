@@ -23,6 +23,7 @@ private func mockSession(
     anchorSecondsAgo: TimeInterval,
     seenAtSecondsAgo: TimeInterval? = nil,
     seenAtPrefix: String = "Updated",
+    phaseExpiresInSeconds: TimeInterval? = 12,
     isManaged: Bool = true,
     turns: Int = 4,
     tools: Int = 12
@@ -59,6 +60,40 @@ private func mockSession(
         hostState: nil,
         terminalReason: nil
     )
+    let phaseExpiresAt: String? = phaseExpiresInSeconds.map { iso(-$0) }
+    let facts = SessionLivenessFacts(
+        controlPath: isManaged ? "managed" : "unmanaged",
+        processState: statusLabel == "Closed" ? "closed" : "running",
+        host: HostObservation(state: "online", lastSeenAt: iso(anchorSecondsAgo), source: "preview"),
+        process: ProcessObservation(
+            status: "observed",
+            pid: 1234,
+            processStartTime: iso(60 * 60),
+            observedAt: iso(anchorSecondsAgo),
+            lastSeenAt: iso(anchorSecondsAgo),
+            sourceMtime: nil,
+            sourcePath: nil,
+            reason: nil,
+            source: "preview"
+        ),
+        phase: PhaseObservation(
+            kind: statusLabel.lowercased(),
+            tool: nil,
+            source: "preview",
+            observedAt: iso(anchorSecondsAgo),
+            expiresAt: phaseExpiresAt
+        ),
+        activity: ActivityObservation(
+            lastTranscriptAt: iso(anchorSecondsAgo),
+            lastRuntimeSignalAt: iso(anchorSecondsAgo),
+            lastProgressAt: iso(anchorSecondsAgo)
+        ),
+        lifecycle: LifecycleFact(
+            state: statusLabel == "Closed" ? "closed" : "running",
+            reason: nil,
+            observedAt: iso(anchorSecondsAgo)
+        )
+    )
     return SessionSummary(
         id: id,
         title: title,
@@ -82,7 +117,7 @@ private func mockSession(
         hostReattachAvailable: false,
         replyToLiveSessionAvailable: isManaged,
         runtimeDisplay: display,
-        runtimeFacts: nil,
+        runtimeFacts: facts,
         timelineCard: card
     )
 }
