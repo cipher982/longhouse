@@ -228,8 +228,7 @@ export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]
 
       if (event.tool_call_id) {
         matched = byCallId.get(event.tool_call_id);
-      }
-      if (!matched) {
+      } else {
         matched = fifoQueue.shift();
         if (matched) matched.pairing = "fifo";
       }

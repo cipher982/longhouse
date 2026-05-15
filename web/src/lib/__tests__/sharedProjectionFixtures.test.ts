@@ -22,6 +22,13 @@ type ExpectedRow =
       kind: "orphan_tool";
       tool_name: string;
       result_event_id: number;
+    }
+  | {
+      kind: "noise_group";
+      tool_names: string[];
+      call_event_ids: number[];
+      result_event_ids: Array<number | null>;
+      pairings: Array<"id" | "fifo" | "pending">;
     };
 
 type SharedProjectionFixture = {
@@ -32,6 +39,7 @@ type SharedProjectionFixture = {
   expectations: {
     rows: ExpectedRow[];
     tool_count: number;
+    noise_group_count: number;
     orphan_tool_ids: number[];
   };
 };
@@ -51,7 +59,18 @@ function summarizeRows(items: TimelineItem[]): ExpectedRow[] {
       };
     }
     if (item.kind === "noise_group") {
-      throw new Error("This fixture does not expect grouped rows yet");
+      return {
+        kind: "noise_group",
+        tool_names: item.group.interactions.map((interaction) => interaction.toolName),
+        call_event_ids: item.group.interactions.map((interaction) => interaction.callEvent?.id ?? -1),
+        result_event_ids: item.group.interactions.map((interaction) => interaction.resultEvent?.id ?? null),
+        pairings: item.group.interactions.map((interaction) => {
+          if (interaction.pairing === "orphan") {
+            throw new Error("Noise groups cannot contain orphan tool interactions");
+          }
+          return interaction.pairing;
+        }),
+      };
     }
     const { interaction } = item;
     if (interaction.pairing === "orphan") {
@@ -75,16 +94,20 @@ function summarizeRows(items: TimelineItem[]): ExpectedRow[] {
 }
 
 describe("shared session projection fixtures", () => {
-  it("matches the tool pairing FIFO contract", () => {
-    const fixture = loadFixture("tool-pairing-fifo.json");
-    const model = buildTimelineModel(fixture.projection.items);
+  it.each(["tool-pairing-fifo.json", "context-boundary-noise-collapse.json"])(
+    "matches %s",
+    (fixtureName) => {
+      const fixture = loadFixture(fixtureName);
+      const model = buildTimelineModel(fixture.projection.items);
 
-    expect(summarizeRows(model.items)).toEqual(fixture.expectations.rows);
-    expect(model.toolItems).toHaveLength(fixture.expectations.tool_count);
-    expect(
-      model.toolItems
-        .filter((interaction) => interaction.pairing === "orphan")
-        .map((interaction) => interaction.resultEvent?.id),
-    ).toEqual(fixture.expectations.orphan_tool_ids);
-  });
+      expect(summarizeRows(model.items)).toEqual(fixture.expectations.rows);
+      expect(model.toolItems).toHaveLength(fixture.expectations.tool_count);
+      expect(model.noiseGroups).toHaveLength(fixture.expectations.noise_group_count);
+      expect(
+        model.toolItems
+          .filter((interaction) => interaction.pairing === "orphan")
+          .map((interaction) => interaction.resultEvent?.id),
+      ).toEqual(fixture.expectations.orphan_tool_ids);
+    },
+  );
 });
