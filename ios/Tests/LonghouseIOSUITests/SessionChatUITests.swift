@@ -1,3 +1,5 @@
+import CoreGraphics
+import ImageIO
 import XCTest
 
 @MainActor
@@ -65,6 +67,7 @@ final class SessionChatUITests: XCTestCase {
         composer.tap()
 
         XCTAssertTrue(waitUntilHittable(liveUpdate, timeout: 6))
+        assertScreenIsVisiblyRendered(app)
         XCTAssertFalse(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."].exists)
     }
 
@@ -77,6 +80,7 @@ final class SessionChatUITests: XCTestCase {
         composer.tap()
 
         XCTAssertTrue(waitUntilHittable(finalChunk, timeout: 7))
+        assertScreenIsVisiblyRendered(app)
         XCTAssertFalse(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."].exists)
     }
 
@@ -100,6 +104,7 @@ final class SessionChatUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment[LaunchEnvironment.chatFixture] = name
         app.launchEnvironment[LaunchEnvironment.chatEventCount] = String(eventCount)
+        app.launchArguments += ["-AppleInterfaceStyle", "Light"]
         app.launch()
         self.app = app
         return app
@@ -109,5 +114,57 @@ final class SessionChatUITests: XCTestCase {
         let predicate = NSPredicate(format: "hittable == true")
         let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
         return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    private func assertScreenIsVisiblyRendered(
+        _ app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let screenshot = app.screenshot()
+        guard let source = CGImageSourceCreateWithData(screenshot.pngRepresentation as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            XCTFail("Could not decode screenshot", file: file, line: line)
+            return
+        }
+
+        let width = 32
+        let height = 64
+        let bytesPerPixel = 4
+        var pixels = [UInt8](repeating: 0, count: width * height * bytesPerPixel)
+        guard let context = CGContext(
+            data: &pixels,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * bytesPerPixel,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            XCTFail("Could not create screenshot sampling context", file: file, line: line)
+            return
+        }
+
+        context.interpolationQuality = .low
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        var luminanceTotal = 0.0
+        var visiblyLitPixels = 0
+        for offset in stride(from: 0, to: pixels.count, by: bytesPerPixel) {
+            let red = Double(pixels[offset]) / 255.0
+            let green = Double(pixels[offset + 1]) / 255.0
+            let blue = Double(pixels[offset + 2]) / 255.0
+            let luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
+            luminanceTotal += luminance
+            if luminance > 0.08 {
+                visiblyLitPixels += 1
+            }
+        }
+
+        let sampleCount = width * height
+        let meanLuminance = luminanceTotal / Double(sampleCount)
+        let litPixelFraction = Double(visiblyLitPixels) / Double(sampleCount)
+        XCTAssertGreaterThan(meanLuminance, 0.03, "Screen rendered close to black", file: file, line: line)
+        XCTAssertGreaterThan(litPixelFraction, 0.02, "Screen did not contain enough visible pixels", file: file, line: line)
     }
 }
