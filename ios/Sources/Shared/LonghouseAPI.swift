@@ -110,7 +110,7 @@ struct LonghouseAPI: Sendable {
         guard httpResponse.statusCode == 200 else {
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
-        return try JSONDecoder.snakeCase.decode(SessionWorkspaceResponse.self, from: data)
+        return try JSONDecoder.snakeCase.decode(APISessionWorkspaceResponse.self, from: data).sessionWorkspaceResponse
     }
 
     func sessionTurns(id: String) async throws -> [SessionTurn] {

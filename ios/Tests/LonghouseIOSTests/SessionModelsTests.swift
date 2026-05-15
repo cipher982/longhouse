@@ -78,6 +78,57 @@ struct SessionModelsTests {
         )
     }
 
+    private func apiSessionJSON(id: String = "session-card-contract") -> String {
+        """
+        {
+          "id": "\(id)",
+          "summary_title": "Timeline contract",
+          "summary": "Backend emits card presentation.",
+          "status": "idle",
+          "presence_state": "needs_user",
+          "presence_tool": null,
+          "active_tool": null,
+          "display_phase": "Idle",
+          "user_state": "active",
+          "provider": "claude",
+          "project": "zerg",
+          "git_branch": "main",
+          "started_at": "2026-04-25T19:00:00Z",
+          "ended_at": null,
+          "home_label": "On this Mac",
+          "timeline_anchor_at": "2026-04-25T20:00:00Z",
+          "last_activity_at": "2026-04-25T20:00:00Z",
+          "user_messages": 3,
+          "assistant_messages": 2,
+          "tool_calls": 4,
+          "thread_root_session_id": "\(id)",
+          "thread_head_session_id": "\(id)",
+          "thread_continuation_count": 0,
+          "capabilities": {
+            "live_control_available": true,
+            "host_reattach_available": true,
+            "reply_to_live_session_available": true
+          },
+          "loop_mode": "assist",
+          "runtime_display": null,
+          "runtime_facts": {
+            "control_path": "managed",
+            "process_state": "unknown",
+            "host": {"state": "online", "last_seen_at": "2026-04-25T20:00:00Z", "source": "machine_heartbeat"},
+            "process": {"status": "unknown", "pid": null, "process_start_time": null, "observed_at": null, "last_seen_at": null, "source_mtime": null, "source_path": null, "reason": null, "source": null},
+            "phase": {"kind": "needs_user", "tool": null, "source": "managed_local_transport", "observed_at": "2026-04-25T20:00:00Z", "expires_at": "2026-04-25T20:15:00Z"},
+            "activity": {"last_transcript_at": "2026-04-25T20:00:00Z", "last_runtime_signal_at": "2026-04-25T20:00:00Z", "last_progress_at": null},
+            "lifecycle": {"state": "open", "reason": "phase_observed", "observed_at": "2026-04-25T20:00:00Z"}
+          },
+          "timeline_card": {
+            "ownership": {"label": "Managed", "tone": "neutral"},
+            "status": {"label": "Idle", "tone": "idle", "seen_at": null, "seen_at_prefix": "Updated"},
+            "border_tone": "idle"
+          }
+        }
+        """
+    }
+
     private func summaryForPhaseFreshness(
         activityRecency: String?,
         phaseExpiresAt: String? = nil,
@@ -289,6 +340,58 @@ struct SessionModelsTests {
 
         #expect(event.toolInputJson?["file_path"] == .string("/tmp/generated.swift"))
         #expect(event.toolInputJson?["filePath"] == nil)
+    }
+
+    @Test
+    func apiSessionWorkspaceResponseAdaptsGeneratedDTOs() throws {
+        let sessionJSON = apiSessionJSON(id: "workspace-session")
+        let json = """
+        {
+          "session": \(sessionJSON),
+          "thread": {
+            "root_session_id": "workspace-session",
+            "head_session_id": "workspace-session",
+            "sessions": [\(sessionJSON)]
+          },
+          "projection": {
+            "root_session_id": "workspace-session",
+            "focus_session_id": "workspace-session",
+            "head_session_id": "workspace-session",
+            "path_session_ids": ["workspace-session"],
+            "items": [
+              {
+                "kind": "event",
+                "session_id": "workspace-session",
+                "timestamp": "2026-05-15T20:00:00Z",
+                "event": {
+                  "id": 44,
+                  "role": "assistant",
+                  "content_text": null,
+                  "tool_name": "edit",
+                  "tool_input_json": {"file_path": "/tmp/workspace.swift"},
+                  "tool_output_text": null,
+                  "tool_call_id": "call-3",
+                  "timestamp": "2026-05-15T20:00:00Z",
+                  "in_active_context": true,
+                  "is_head_branch": true
+                }
+              }
+            ],
+            "total": 1,
+            "page_offset": 0,
+            "branch_mode": "head",
+            "abandoned_events": 0
+          }
+        }
+        """.data(using: .utf8)!
+
+        let apiWorkspace = try JSONDecoder.snakeCase.decode(APISessionWorkspaceResponse.self, from: json)
+        let workspace = apiWorkspace.sessionWorkspaceResponse
+
+        #expect(workspace.session.id == "workspace-session")
+        #expect(workspace.thread.sessions.map(\.id) == ["workspace-session"])
+        #expect(workspace.events.map(\.id) == [44])
+        #expect(workspace.events.first?.toolInputString("file_path") == "/tmp/workspace.swift")
     }
 
     @Test
