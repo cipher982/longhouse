@@ -1,4 +1,22 @@
+import os
 import SwiftUI
+
+#if DEBUG
+private let sessionViewLogger = Logger(subsystem: "ai.longhouse.ios", category: "SessionView")
+#endif
+
+struct SessionWorkspaceStreamSource: Sendable {
+    let start: @Sendable () async -> AsyncStream<SessionWorkspaceStream.Event>
+    let stop: @Sendable () async -> Void
+
+    static func live(baseURL: URL, sessionId: String) -> SessionWorkspaceStreamSource {
+        let stream = SessionWorkspaceStream(baseURL: baseURL, sessionId: sessionId)
+        return SessionWorkspaceStreamSource(
+            start: { await stream.start() },
+            stop: { await stream.stop() }
+        )
+    }
+}
 
 @MainActor
 struct SessionView: View {
@@ -65,6 +83,9 @@ struct SessionView: View {
         .onChange(of: viewModel.liveActivityFingerprint) { _, _ in
             guard let detail = viewModel.detail else { return }
             Task { await liveActivityManager.update(detail: detail) }
+        }
+        .onChange(of: composerFocused) { _, focused in
+            debugLogTranscriptState("composer focus changed: \(focused)")
         }
         .refreshable { await viewModel.reload(sessionId: sessionId, appState: appState) }
     }
@@ -265,13 +286,17 @@ struct SessionView: View {
             shouldFollowTranscriptBottom = false
             cancelTranscriptScrollTask()
         }
+        debugLogTranscriptState(
+            "scroll follow state: atBottom=\(isAtBottom) userDriven=\(userDriven) follow=\(shouldFollowTranscriptBottom)"
+        )
     }
 
     @available(iOS 18.0, *)
     private func updateTranscriptScrollPhase(_ phase: ScrollPhase, geometry: ScrollGeometry) {
-        let userDriven = phase == .tracking || phase == .interacting || phase == .decelerating
+        let userDriven = phase == .tracking || phase == .interacting
         transcriptUserScrollActive = userDriven
         updateTranscriptFollowState(isAtBottom: isTranscriptGeometryAtBottom(geometry), userDriven: userDriven)
+        debugLogTranscriptState("scroll phase: \(phase.debugDescription)")
     }
 
     @available(iOS 18.0, *)
@@ -281,7 +306,11 @@ struct SessionView: View {
     }
 
     private func followTranscriptBottomIfNeeded(_ proxy: ScrollViewProxy, animated: Bool) {
-        guard shouldFollowTranscriptBottom else { return }
+        guard shouldFollowTranscriptBottom else {
+            debugLogTranscriptState("skip follow bottom")
+            return
+        }
+        debugLogTranscriptState("follow bottom")
         scrollTranscriptToBottom(proxy, animated: animated)
     }
 
@@ -301,15 +330,25 @@ struct SessionView: View {
                 scroll()
             }
 
-            try? await Task.sleep(nanoseconds: 120_000_000)
-            guard !Task.isCancelled, shouldFollowTranscriptBottom else { return }
-            proxy.scrollTo(transcriptBottomAnchorID, anchor: .bottom)
+            for delay in [80_000_000, 100_000_000, 140_000_000] as [UInt64] {
+                try? await Task.sleep(nanoseconds: delay)
+                guard !Task.isCancelled, shouldFollowTranscriptBottom else { return }
+                proxy.scrollTo(transcriptBottomAnchorID, anchor: .bottom)
+            }
         }
     }
 
     private func cancelTranscriptScrollTask() {
         transcriptScrollTask?.cancel()
         transcriptScrollTask = nil
+    }
+
+    private func debugLogTranscriptState(_ message: String) {
+        #if DEBUG
+        sessionViewLogger.debug(
+            "\(message, privacy: .public) items=\(viewModel.items.count) submitted=\(viewModel.submittedInputs.count) follow=\(shouldFollowTranscriptBottom) userScroll=\(transcriptUserScrollActive)"
+        )
+        #endif
     }
 
     @ViewBuilder
@@ -1266,18 +1305,23 @@ final class SessionViewModel: ObservableObject {
 
     private var expandedIds: Set<String> = []
     private var pollTask: Task<Void, Never>?
-    private var stream: SessionWorkspaceStream?
+    private var stream: SessionWorkspaceStreamSource?
     private var streamTask: Task<Void, Never>?
     private var streamConnected: Bool = false
     private var activeSessionId: String?
     private let apiFactory: (String) -> SessionWorkspaceClient?
+    private let streamFactory: (URL, String) -> SessionWorkspaceStreamSource
     private let enableRealtime: Bool
 
     init(
         apiFactory: @escaping (String) -> SessionWorkspaceClient? = { LonghouseAPI(host: $0) },
+        streamFactory: @escaping (URL, String) -> SessionWorkspaceStreamSource = { baseURL, sessionId in
+            SessionWorkspaceStreamSource.live(baseURL: baseURL, sessionId: sessionId)
+        },
         enableRealtime: Bool = true
     ) {
         self.apiFactory = apiFactory
+        self.streamFactory = streamFactory
         self.enableRealtime = enableRealtime
     }
 
@@ -1540,7 +1584,7 @@ final class SessionViewModel: ObservableObject {
         }
         streamConnected = false
         guard let base = URL(string: appState.serverURL) else { return }
-        let s = SessionWorkspaceStream(baseURL: base, sessionId: sessionId)
+        let s = streamFactory(base, sessionId)
         stream = s
         streamTask = Task { [weak self] in
             let events = await s.start()

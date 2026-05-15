@@ -143,6 +143,9 @@ targets:
         createIntermediateGroups: true
     dependencies:
       - target: Longhouse
+    configFiles:
+      Debug: Configs/Longhouse.xcconfig
+      Release: Configs/Longhouse.xcconfig
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.longhouse.ios.uitests

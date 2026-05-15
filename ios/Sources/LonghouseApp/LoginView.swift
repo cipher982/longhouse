@@ -434,17 +434,21 @@ struct LoginView: View {
 
         GIDSignIn.sharedInstance.signIn(withPresenting: rootVC) { result, error in
             if let error {
-                isSigningIn = false
-                if (error as NSError).code == GIDSignInError.canceled.rawValue {
-                    return
+                Task { @MainActor in
+                    isSigningIn = false
+                    if (error as NSError).code == GIDSignInError.canceled.rawValue {
+                        return
+                    }
+                    localErrorMessage = error.localizedDescription
                 }
-                localErrorMessage = error.localizedDescription
                 return
             }
 
             guard let idToken = result?.user.idToken?.tokenString else {
-                isSigningIn = false
-                localErrorMessage = "No ID token received from Google"
+                Task { @MainActor in
+                    isSigningIn = false
+                    localErrorMessage = "No ID token received from Google"
+                }
                 return
             }
 

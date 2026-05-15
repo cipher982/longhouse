@@ -2,6 +2,8 @@ import XCTest
 
 @MainActor
 final class SessionChatUITests: XCTestCase {
+    private var app: XCUIApplication?
+
     private enum LaunchEnvironment {
         static let chatFixture = "LONGHOUSE_UI_TEST_CHAT_FIXTURE"
         static let chatEventCount = "LONGHOUSE_UI_TEST_CHAT_EVENT_COUNT"
@@ -9,6 +11,16 @@ final class SessionChatUITests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
+    }
+
+    override func tearDownWithError() throws {
+        if let app, testRun?.failureCount ?? 0 > 0 {
+            let attachment = XCTAttachment(screenshot: app.screenshot())
+            attachment.name = "\(name)-failure"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        app = nil
     }
 
     func testTranscriptStartsPinnedToLatestMessage() {
@@ -56,6 +68,18 @@ final class SessionChatUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."].exists)
     }
 
+    func testAssistantStreamingWithKeyboardOpenKeepsPinnedTranscriptAtBottom() {
+        let app = launchChatFixture(name: "assistant-stream-keyboard", eventCount: 40)
+        let composer = app.textFields["session-chat-composer"]
+        let finalChunk = app.staticTexts["Assistant fixture streaming update at bottom."]
+
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        composer.tap()
+
+        XCTAssertTrue(waitUntilHittable(finalChunk, timeout: 7))
+        XCTAssertFalse(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."].exists)
+    }
+
     func testLargeTranscriptScrollPerformance() {
         let app = launchChatFixture(name: "stress", eventCount: 500)
         let transcript = app.scrollViews["session-chat-transcript"]
@@ -77,6 +101,7 @@ final class SessionChatUITests: XCTestCase {
         app.launchEnvironment[LaunchEnvironment.chatFixture] = name
         app.launchEnvironment[LaunchEnvironment.chatEventCount] = String(eventCount)
         app.launch()
+        self.app = app
         return app
     }
 
