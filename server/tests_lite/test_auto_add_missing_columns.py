@@ -230,10 +230,11 @@ def test_adds_datetime_with_timezone(tmp_path):
     assert rows and "2026-01-02" in rows[0][0]
 
 
-def test_adds_foreign_key_column_without_inline_constraint(tmp_path):
-    """FK columns add successfully — SQLite ALTER cannot enforce inline FK, so
-    auto-derive must drop the constraint silently. Document that behavior so we
-    notice if it ever changes."""
+def test_skips_foreign_key_column(tmp_path, caplog):
+    """FK columns must be skipped — SQLite ALTER ADD COLUMN cannot preserve a
+    REFERENCES clause (CreateColumn emits only the bare type), so silently
+    absorbing them would drop the constraint. A real FK column add needs the
+    imperative path (or a table rebuild) that wires the constraint correctly."""
     engine = _make_engine(tmp_path, "fk.db")
     md_v1 = MetaData()
     Table("parents", md_v1, Column("id", Integer, primary_key=True))
@@ -248,14 +249,14 @@ def test_adds_foreign_key_column_without_inline_constraint(tmp_path):
         Column("id", Integer, primary_key=True),
         Column("parent_id", Integer, ForeignKey("parents.id")),
     )
-    added = _auto_add_missing_columns(engine, md_v2, apply=True)
-    assert ("children", "parent_id") in added
-    assert "parent_id" in _live_columns(engine, "children")
-    # No FK constraint should be present on the child table — SQLAlchemy's
-    # CreateColumn compiler emits only the bare type for ALTER ADD COLUMN.
-    with engine.connect() as conn:
-        fks = list(conn.exec_driver_sql("PRAGMA foreign_key_list(children)").fetchall())
-    assert fks == []
+    with caplog.at_level("INFO"):
+        added = _auto_add_missing_columns(engine, md_v2, apply=True)
+    assert ("children", "parent_id") not in added
+    assert "parent_id" not in _live_columns(engine, "children")
+    assert any(
+        "foreign-key constraint" in rec.message and "children" in rec.message and "parent_id" in rec.message
+        for rec in caplog.records
+    )
 
 
 def test_adds_indexed_column_but_not_index(tmp_path):
