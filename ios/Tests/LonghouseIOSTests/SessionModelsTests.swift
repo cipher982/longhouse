@@ -996,58 +996,73 @@ struct SessionModelsTests {
 
     @Test
     func sessionsResponseDecodesTimelineCardContract() throws {
+        let sessionJSON = """
+        {
+          "id": "session-card-contract",
+          "summary_title": "Timeline contract",
+          "summary": "Backend emits card presentation.",
+          "status": "idle",
+          "presence_state": "needs_user",
+          "presence_tool": null,
+          "active_tool": null,
+          "display_phase": "Idle",
+          "user_state": "active",
+          "provider": "claude",
+          "project": "zerg",
+          "git_branch": "main",
+          "started_at": "2026-04-25T19:00:00Z",
+          "ended_at": null,
+          "home_label": "On this Mac",
+          "timeline_anchor_at": "2026-04-25T20:00:00Z",
+          "last_activity_at": "2026-04-25T20:00:00Z",
+          "user_messages": 3,
+          "assistant_messages": 2,
+          "tool_calls": 4,
+          "thread_root_session_id": "session-card-contract",
+          "thread_head_session_id": "session-card-contract",
+          "thread_continuation_count": 0,
+          "capabilities": {
+            "live_control_available": true,
+            "host_reattach_available": true,
+            "reply_to_live_session_available": true
+          },
+          "loop_mode": "assist",
+          "runtime_display": null,
+          "runtime_facts": {
+            "control_path": "managed",
+            "process_state": "unknown",
+            "host": {"state": "online", "last_seen_at": "2026-04-25T20:00:00Z", "source": "machine_heartbeat"},
+            "process": {"status": "unknown", "pid": null, "process_start_time": null, "observed_at": null, "last_seen_at": null, "source_mtime": null, "source_path": null, "reason": null, "source": null},
+            "phase": {"kind": "needs_user", "tool": null, "source": "managed_local_transport", "observed_at": "2026-04-25T20:00:00Z", "expires_at": "2026-04-25T20:15:00Z"},
+            "activity": {"last_transcript_at": "2026-04-25T20:00:00Z", "last_runtime_signal_at": "2026-04-25T20:00:00Z", "last_progress_at": null},
+            "lifecycle": {"state": "open", "reason": "phase_observed", "observed_at": "2026-04-25T20:00:00Z"}
+          },
+          "timeline_card": {
+            "ownership": {"label": "Managed", "tone": "neutral"},
+            "status": {"label": "Idle", "tone": "idle", "seen_at": null, "seen_at_prefix": "Updated"},
+            "border_tone": "idle"
+          }
+        }
+        """
         let json = """
         {
           "sessions": [
             {
+              "thread_id": "session-card-contract",
               "timeline_anchor_at": "2026-04-25T20:05:00Z",
               "head_origin_label": "On this Mac",
-              "head": {
-                "id": "session-card-contract",
-                "summary_title": "Timeline contract",
-                "summary": "Backend emits card presentation.",
-                "status": "idle",
-                "presence_state": "needs_user",
-                "presence_tool": null,
-                "active_tool": null,
-                "display_phase": "Idle",
-                "user_state": "active",
-                "provider": "claude",
-                "project": "zerg",
-                "git_branch": "main",
-                "home_label": "On this Mac",
-                "timeline_anchor_at": "2026-04-25T20:00:00Z",
-                "last_activity_at": "2026-04-25T20:00:00Z",
-                "user_messages": 3,
-                "tool_calls": 4,
-                "capabilities": {
-                  "live_control_available": true,
-                  "host_reattach_available": true,
-                  "reply_to_live_session_available": true
-                },
-                "loop_mode": "assist",
-                "runtime_display": null,
-                "runtime_facts": {
-                  "control_path": "managed",
-                  "process_state": "unknown",
-                  "host": {"state": "online", "last_seen_at": "2026-04-25T20:00:00Z", "source": "machine_heartbeat"},
-                  "process": {"status": "unknown", "pid": null, "process_start_time": null, "observed_at": null, "last_seen_at": null, "source_mtime": null, "source_path": null, "reason": null, "source": null},
-                  "phase": {"kind": "needs_user", "tool": null, "source": "managed_local_transport", "observed_at": "2026-04-25T20:00:00Z", "expires_at": "2026-04-25T20:15:00Z"},
-                  "activity": {"last_transcript_at": "2026-04-25T20:00:00Z", "last_runtime_signal_at": "2026-04-25T20:00:00Z", "last_progress_at": null},
-                  "lifecycle": {"state": "open", "reason": "phase_observed", "observed_at": "2026-04-25T20:00:00Z"}
-                },
-                "timeline_card": {
-                  "ownership": {"label": "Managed", "tone": "neutral"},
-                  "status": {"label": "Idle", "tone": "idle", "seen_at": null, "seen_at_prefix": "Updated"},
-                  "border_tone": "idle"
-                }
-              }
+              "head": \(sessionJSON),
+              "detail": \(sessionJSON),
+              "root": \(sessionJSON),
+              "continuation_count": 0
             }
-          ]
+          ],
+          "total": 1,
+          "has_real_sessions": true
         }
         """
 
-        let decoded = try JSONDecoder.snakeCase.decode(SessionsResponse.self, from: Data(json.utf8))
+        let decoded = try JSONDecoder.snakeCase.decode(APITimelineSessionsListResponse.self, from: Data(json.utf8))
         let card = try #require(decoded.sessions.first)
         let session = card.head
         let summary = card.sessionSummary
@@ -1055,12 +1070,13 @@ struct SessionModelsTests {
         #expect(card.timelineAnchorAt == "2026-04-25T20:05:00Z")
         #expect(session.timelineAnchorAt == "2026-04-25T20:00:00Z")
         #expect(summary.timelineAnchorAt == "2026-04-25T20:05:00Z")
-        #expect(session.timelineCard?.ownership.label == "Managed")
-        #expect(session.timelineCard?.status?.label == "Idle")
-        #expect(session.timelineCard?.borderTone == "idle")
+        #expect(session.timelineCard.ownership.label == "Managed")
+        #expect(session.timelineCard.status?.label == "Idle")
+        #expect(session.timelineCard.borderTone == "idle")
         #expect(session.runtimeFacts?.controlPath == "managed")
         #expect(session.runtimeFacts?.processState == "unknown")
         #expect(session.runtimeFacts?.phase.kind == "needs_user")
+        #expect(summary.timelineCard?.ownership.label == "Managed")
     }
 
     @Test
