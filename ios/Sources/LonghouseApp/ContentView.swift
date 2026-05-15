@@ -5,16 +5,29 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            if appState.isValidating {
-                LoadingScreen()
-            } else if appState.isAuthenticated {
-                AuthenticatedPager()
+#if DEBUG
+            if let fixtureName = UITestHooks.chatFixtureName {
+                ChatUITestFixtureView(fixtureName: fixtureName)
             } else {
-                LoginView()
-                    .overlay(alignment: .topTrailing) {
-                        ServerConfigButton()
-                    }
+                normalContent
             }
+#else
+            normalContent
+#endif
+        }
+    }
+
+    @ViewBuilder
+    private var normalContent: some View {
+        if appState.isValidating {
+            LoadingScreen()
+        } else if appState.isAuthenticated {
+            AuthenticatedPager()
+        } else {
+            LoginView()
+                .overlay(alignment: .topTrailing) {
+                    ServerConfigButton()
+                }
         }
     }
 }

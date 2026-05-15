@@ -14,6 +14,16 @@ struct SessionView: View {
     @FocusState private var composerFocused: Bool
     private let transcriptBottomAnchorID = "session-transcript-bottom-anchor"
 
+    init(
+        sessionId: String,
+        fallbackTitle: String,
+        viewModel: SessionViewModel = SessionViewModel()
+    ) {
+        self.sessionId = sessionId
+        self.fallbackTitle = fallbackTitle
+        _viewModel = StateObject(wrappedValue: viewModel)
+    }
+
     private var composerHasText: Bool {
         !composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -161,6 +171,7 @@ struct SessionView: View {
                             .padding(.horizontal)
                             .padding(.vertical, 12)
                         }
+                        .accessibilityIdentifier("session-chat-transcript")
                         .coordinateSpace(name: "sessionTranscriptScroll")
                         .scrollDismissesKeyboard(.interactively)
                         .defaultScrollAnchor(.bottom)
@@ -312,6 +323,7 @@ struct SessionView: View {
                     .lineLimit(1...6)
                     .focused($composerFocused)
                     .disabled(viewModel.isDrafting)
+                    .accessibilityIdentifier("session-chat-composer")
 
                 // Send button: always a circle arrow icon; long-press reveals steer/queue split
                 Button {
@@ -328,6 +340,7 @@ struct SessionView: View {
                 }
                 .disabled(!composerHasText || viewModel.isSending || viewModel.isDrafting)
                 .accessibilityLabel(sendAccessibilityLabel)
+                .accessibilityIdentifier("session-chat-send")
                 .contextMenu {
                     if showSecondaryQueueAction {
                         Button {
