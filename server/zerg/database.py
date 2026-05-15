@@ -916,13 +916,18 @@ def _migrate_agents_columns(engine: Engine) -> None:
         logger.debug("session_messages table migration skipped", exc_info=True)
 
     # insights table migrations
-    # origin / archived_at ALTER ADDs handled by _auto_add_missing_columns
-    # (pure nullable). Remaining work: index creates + legacy origin backfill
-    # from system-generated titles / tags.
+    # `origin` has Python default= but no server_default (legacy rows must
+    # stay NULL so the title/tags backfill can promote system rows to
+    # 'system' while leaving manual rows untouched). _auto_add_missing_columns
+    # correctly skips this; we add it imperatively here.
+    # `archived_at` is fully nullable and is handled by _auto_add_missing_columns.
     try:
         with engine.connect() as conn:
             columns = {row[1] for row in conn.execute(text("PRAGMA table_info(insights)"))}
             if columns:
+                if "origin" not in columns:
+                    conn.execute(text("ALTER TABLE insights ADD COLUMN origin VARCHAR(20)"))
+                    columns.add("origin")
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_insights_origin ON insights(origin)"))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_insights_archived_at ON insights(archived_at)"))
                 if "title" in columns:
