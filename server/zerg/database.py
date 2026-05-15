@@ -495,6 +495,15 @@ def initialize_database(engine: Engine = None) -> None:
     _migrate_agents_columns(target_engine)
     _cleanup_legacy_agents_tables(target_engine)
 
+    # Phase 1 (Option D, parallel path): auto-derive missing columns in dry-run.
+    # Logs "would add" entries so we can observe coverage vs the imperative
+    # `_migrate_agents_columns` above without mutating schema. Phase 2 will flip
+    # this to apply=True and retire the imperative migrator.
+    try:
+        _auto_add_missing_columns(target_engine, Base.metadata, apply=False)
+    except Exception:
+        logger.debug("auto-derive dry-run skipped", exc_info=True)
+
     if target_engine.dialect.name == "sqlite":
         # Keep a ledger table ready for explicit heavy migrations.
         from zerg.db_migrations import ensure_migration_ledger
@@ -1380,6 +1389,94 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 conn.commit()
     except Exception:
         logger.debug("runners table migration skipped (table may not exist yet)", exc_info=True)
+
+
+def _auto_add_missing_columns(
+    engine: Engine,
+    *metadatas: MetaData,
+    apply: bool = False,
+) -> list[tuple[str, str]]:
+    """Auto-derive missing columns from SQLAlchemy metadata against live schema.
+
+    For each Table in each MetaData, diffs PRAGMA table_info against the model
+    columns and emits ``ALTER TABLE … ADD COLUMN`` for the missing ones using
+    SQLAlchemy's :class:`CreateColumn` compiler so the DDL comes from the column
+    object itself (preserves type/nullability/server_default).
+
+    SQLite ALTER TABLE cannot add primary-key, unique, or columns whose default
+    is non-constant — those are logged and skipped, never raised.
+
+    Args:
+        engine: target SQLAlchemy engine (SQLite only — no-op otherwise).
+        *metadatas: one or more MetaData containers to scan.
+        apply: when False (default), only log what would be added; when True,
+            execute the ALTERs through the WriteSerializer when configured,
+            falling back to a direct connection at startup before the
+            serializer is wired (mirrors the existing imperative migrator).
+
+    Returns:
+        ``[(table_name, column_name), …]`` — what was (or would be) added.
+    """
+    if engine.dialect.name != "sqlite":
+        return []
+
+    from sqlalchemy.schema import CreateColumn
+
+    dialect = engine.dialect
+    pending: list[tuple[str, str, str]] = []  # (table, col, ddl)
+    skipped: list[tuple[str, str, str]] = []  # (table, col, reason)
+
+    with engine.connect() as conn:
+        existing_tables = {
+            row[0] for row in conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
+        for md in metadatas:
+            for table in md.tables.values():
+                if table.name not in existing_tables:
+                    continue  # create_all handles greenfield; skip
+                live_cols = {row[1] for row in conn.execute(text(f"PRAGMA table_info({table.name})"))}
+                for col in table.columns:
+                    if col.name in live_cols:
+                        continue
+                    if col.primary_key:
+                        skipped.append((table.name, col.name, "primary_key"))
+                        continue
+                    if col.unique:
+                        skipped.append((table.name, col.name, "unique"))
+                        continue
+                    default = col.server_default
+                    if default is not None and getattr(default, "arg", None) is not None:
+                        arg = default.arg
+                        if not isinstance(arg, (str, int, float, bool)) and not hasattr(arg, "text"):
+                            skipped.append((table.name, col.name, "non_constant_default"))
+                            continue
+                    try:
+                        ddl = str(CreateColumn(col).compile(dialect=dialect))
+                    except Exception as exc:
+                        skipped.append((table.name, col.name, f"compile_failed:{exc}"))
+                        continue
+                    pending.append((table.name, col.name, ddl))
+
+    for table_name, col_name, _ddl in pending:
+        logger.info("auto-derive: %s add %s.%s", "would" if not apply else "applying", table_name, col_name)
+    for table_name, col_name, reason in skipped:
+        logger.info("auto-derive: skip %s.%s (%s)", table_name, col_name, reason)
+
+    if not apply or not pending:
+        return [(t, c) for t, c, _ in pending]
+
+    def _apply(conn) -> None:
+        for table_name, _col_name, ddl in pending:
+            conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {ddl}"))
+
+    # Mirror the existing imperative migrator: at startup the WriteSerializer
+    # is not yet configured (initialize_database() runs before it), so use a
+    # direct engine connection. When a configured event loop is available we
+    # could route through the serializer, but startup is the only caller.
+    with engine.begin() as conn:
+        _apply(conn)
+
+    return [(t, c) for t, c, _ in pending]
 
 
 def _cleanup_legacy_agents_tables(engine: Engine) -> None:
