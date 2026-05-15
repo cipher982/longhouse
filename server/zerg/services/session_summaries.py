@@ -266,15 +266,15 @@ async def generate_summary_impl(session_id: str) -> None:
             "git_branch": session.git_branch,
         }
 
-        from zerg.models_config import get_llm_client_with_db_fallback
+        from zerg.models_config import get_llm_client_preferring_db_config
 
         _config_db = session_factory()
         try:
             try:
-                client, model, _provider = get_llm_client_with_db_fallback("summary_update", db=_config_db)
+                client, model, _provider = get_llm_client_preferring_db_config("summary_update", db=_config_db)
             except ValueError:
                 try:
-                    client, model, _provider = get_llm_client_with_db_fallback("summarization", db=_config_db)
+                    client, model, _provider = get_llm_client_preferring_db_config("summarization", db=_config_db)
                 except ValueError as e:
                     logger.warning("Summarization misconfigured -- session %s will NOT be summarized: %s", session_id, e)
                     await set_structured_title_if_empty(session_id)
@@ -425,11 +425,11 @@ async def generate_embeddings_impl(session_id: str) -> None:
         if transcript_revision <= 0 and getattr(session, "needs_embedding", 1) == 0:
             return
 
-        from zerg.models_config import get_embedding_config_with_db_fallback
+        from zerg.models_config import get_embedding_config_preferring_db_config
 
         _config_db = session_factory()
         try:
-            config = get_embedding_config_with_db_fallback(db=_config_db)
+            config = get_embedding_config_preferring_db_config(db=_config_db)
         finally:
             _config_db.close()
 

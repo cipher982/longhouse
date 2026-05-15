@@ -276,7 +276,7 @@ def test_list_sessions_hybrid_mode_batches_semantic_session_loads(tmp_path):
 
     with (
         patch(
-            "zerg.models_config.get_embedding_config_with_db_fallback",
+            "zerg.models_config.get_embedding_config_preferring_db_config",
             return_value=SimpleNamespace(model="test-model", dims=4),
         ),
         patch("zerg.services.session_processing.embeddings.generate_embedding", fake_generate_embedding),
@@ -327,7 +327,7 @@ def test_list_sessions_hybrid_mode_uses_semantic_snippet_fallback(tmp_path):
 
     with (
         patch(
-            "zerg.models_config.get_embedding_config_with_db_fallback",
+            "zerg.models_config.get_embedding_config_preferring_db_config",
             return_value=SimpleNamespace(model="test-model", dims=4),
         ),
         patch("zerg.services.session_processing.embeddings.generate_embedding", fake_generate_embedding),

@@ -54,7 +54,7 @@ async def test_generate_summary_impl_skips_provider_when_summary_revision_curren
         patch("zerg.database.get_session_factory", return_value=factory),
         patch("zerg.services.session_summaries.get_settings", return_value=settings),
         patch(
-            "zerg.models_config.get_llm_client_with_db_fallback",
+            "zerg.models_config.get_llm_client_preferring_db_config",
             side_effect=AssertionError("summary provider should not be fetched when summary revision is current"),
         ),
     ):
@@ -85,7 +85,7 @@ async def test_generate_embeddings_impl_skips_provider_when_embedding_revision_c
     with (
         patch("zerg.database.get_session_factory", return_value=factory),
         patch(
-            "zerg.models_config.get_embedding_config_with_db_fallback",
+            "zerg.models_config.get_embedding_config_preferring_db_config",
             side_effect=AssertionError("embedding config should not be loaded when embedding revision is current"),
         ),
     ):
@@ -201,7 +201,7 @@ async def test_generate_summary_impl_releases_db_connection_during_llm_call(tmp_
     with (
         patch("zerg.database.get_session_factory", return_value=factory),
         patch("zerg.services.session_summaries.get_settings", return_value=settings),
-        patch("zerg.models_config.get_llm_client_with_db_fallback", return_value=(client, "test-model", "test-provider")),
+        patch("zerg.models_config.get_llm_client_preferring_db_config", return_value=(client, "test-model", "test-provider")),
     ):
         await generate_summary_impl(session_id)
 

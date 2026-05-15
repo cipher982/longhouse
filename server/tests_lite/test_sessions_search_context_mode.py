@@ -230,7 +230,7 @@ def test_semantic_search_batches_thread_meta_for_result_set(tmp_path):
         return original_batch_thread_meta(self, sessions)
 
     with (
-        patch("zerg.models_config.get_embedding_config_with_db_fallback", return_value=SimpleNamespace(model="fake", dims=3)),
+        patch("zerg.models_config.get_embedding_config_preferring_db_config", return_value=SimpleNamespace(model="fake", dims=3)),
         patch("zerg.services.embedding_cache.EmbeddingCache", FakeEmbeddingCache),
         patch("zerg.services.session_processing.embeddings.generate_embedding", fake_generate_embedding),
         patch.object(AgentsStore, "batch_thread_meta", record_batch_thread_meta),
@@ -288,7 +288,7 @@ def test_recall_active_context_dedupes_session_boundary_lookups(tmp_path):
         return original_get_active_context_boundary(self, session_id, branch_mode=branch_mode)
 
     with (
-        patch("zerg.models_config.get_embedding_config_with_db_fallback", return_value=SimpleNamespace(model="fake", dims=3)),
+        patch("zerg.models_config.get_embedding_config_preferring_db_config", return_value=SimpleNamespace(model="fake", dims=3)),
         patch("zerg.services.embedding_cache.EmbeddingCache", FakeEmbeddingCache),
         patch("zerg.services.session_processing.embeddings.generate_embedding", fake_generate_embedding),
         patch.object(AgentsStore, "get_active_context_boundary", record_get_active_context_boundary),

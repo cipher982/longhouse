@@ -33,7 +33,7 @@ async def list_hybrid_sessions(
             "Pagination (offset) is not supported for mode=hybrid",
         )
 
-    from zerg.models_config import get_embedding_config_with_db_fallback
+    from zerg.models_config import get_embedding_config_preferring_db_config
     from zerg.services.search import SessionFilters
     from zerg.services.search import lexical_search
     from zerg.services.search import rrf_fuse
@@ -52,7 +52,7 @@ async def list_hybrid_sessions(
 
     lex_hits = lexical_search(params.query or "", db, filters, params.limit, over_fetch=True)
 
-    config = get_embedding_config_with_db_fallback(db=db)
+    config = get_embedding_config_preferring_db_config(db=db)
     sem_hits: list[tuple[AgentSession, float]] = []
     x_search_mode_header = None
     query_vec = None
