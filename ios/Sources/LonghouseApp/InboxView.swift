@@ -60,9 +60,6 @@ struct TimelineView: View {
                 }
                 #endif
             }
-            .safeAreaInset(edge: .top, spacing: 0) {
-                ConnectionStatusStrip(state: effectiveConnectionState)
-            }
             .sheet(isPresented: $launchSheetPresented) {
                 LaunchSessionSheet { sessionId in
                     launchSheetPresented = false
@@ -103,6 +100,7 @@ struct TimelineView: View {
     private var timelineBody: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 20) {
+                ConnectionStatusStrip(state: effectiveConnectionState)
                 if !viewModel.recent.isEmpty {
                     timelineSection(title: "Recent", sessions: viewModel.recent, emphasized: false)
                 }
@@ -337,12 +335,13 @@ struct ConnectionStatusStrip: View {
                 }
                 Text(style.label)
                     .font(.caption.weight(.semibold))
+                Spacer(minLength: 0)
             }
             .foregroundStyle(style.foreground)
-            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .background(style.background)
-            .transition(.move(edge: .top).combined(with: .opacity))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(style.background, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .accessibilityLabel(style.label)
         }
     }
