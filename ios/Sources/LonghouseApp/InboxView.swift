@@ -150,7 +150,7 @@ private struct SessionRoute: Hashable {
     let fallbackTitle: String
 }
 
-private struct TimelineSessionCardRow: View {
+struct TimelineSessionCardRow: View {
     let session: SessionSummary
     let emphasized: Bool
 
@@ -162,9 +162,6 @@ private struct TimelineSessionCardRow: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 Spacer(minLength: 12)
-                Text(relativeTime(session.timelineAnchor))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -252,17 +249,28 @@ private struct RuntimeBadge: View {
 
     var body: some View {
         let color = timelineStatusColor(session)
-        HStack(spacing: 5) {
-            Circle()
-                .fill(color)
-                .frame(width: 7, height: 7)
+        let isClosed = session.timelineStatusLabel == "Closed"
+        let live = isLiveContact(session)
+        HStack(spacing: 6) {
+            LivenessDot(color: color, pulsing: live && !isClosed)
             Text(session.timelineStatusLabel)
                 .font(.caption.weight(.semibold))
                 .lineLimit(1)
-            if let seenAt = session.timelineStatusSeenAt {
-                Text("\(session.timelineStatusSeenAtPrefix) \(relativeTime(seenAt))")
-                    .font(.caption2.weight(.medium))
+            if let duration = stateDurationLabel(for: session) {
+                Text("·")
                     .foregroundStyle(.secondary)
+                Text(duration)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .monospacedDigit()
+            }
+            if let staleness = lostContactLabel(for: session) {
+                Text("·")
+                    .foregroundStyle(.tertiary)
+                Text(staleness)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.orange)
                     .lineLimit(1)
             }
         }
@@ -270,6 +278,31 @@ private struct RuntimeBadge: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
         .background(color.opacity(0.14), in: Capsule())
+    }
+}
+
+private struct LivenessDot: View {
+    let color: Color
+    let pulsing: Bool
+
+    @State private var animate = false
+
+    var body: some View {
+        ZStack {
+            if pulsing {
+                Circle()
+                    .stroke(color, lineWidth: 1.4)
+                    .scaleEffect(animate ? 2.0 : 1.0)
+                    .opacity(animate ? 0.0 : 0.55)
+                    .frame(width: 8, height: 8)
+                    .animation(.easeOut(duration: 1.2).repeatForever(autoreverses: false), value: animate)
+            }
+            Circle()
+                .fill(color)
+                .frame(width: 8, height: 8)
+        }
+        .frame(width: 12, height: 12)
+        .onAppear { if pulsing { animate = true } }
     }
 }
 
@@ -480,4 +513,48 @@ private func relativeTime(_ value: String?) -> String {
 private func parseLonghouseDate(_ value: String?) -> Date? {
     guard let value else { return nil }
     return LonghouseDateParser.parse(value)
+}
+
+// MARK: - Liveness + duration helpers (RuntimeBadge)
+
+/// Healthy-contact signal: dot pulses when this is true.
+/// Closed sessions are intentionally excluded by the call site.
+func isLiveContact(_ session: SessionSummary) -> Bool {
+    switch session.runtimeDisplay?.activityRecency {
+    case "live", "recent": return true
+    default: return false
+    }
+}
+
+/// "How long in current state" — the headline number in the pill.
+/// Uses `timelineAnchor`, which the backend re-anchors on phase changes
+/// and progress signals (server/zerg/services/session_runtime.py).
+/// Returns nil for closed sessions (we don't want to show a counter there).
+func stateDurationLabel(for session: SessionSummary) -> String? {
+    if session.timelineStatusLabel == "Closed" { return nil }
+    guard let date = parseLonghouseDate(session.timelineAnchor) else { return nil }
+    return compactDuration(since: date)
+}
+
+/// Lost-contact escalation: only surfaces when contact is stale or unknown.
+/// Healthy contact stays uncluttered — the pulse is the proof of life.
+func lostContactLabel(for session: SessionSummary) -> String? {
+    guard !isLiveContact(session) else { return nil }
+    if session.timelineStatusLabel == "Closed" { return nil }
+    guard let seenAt = session.timelineStatusSeenAt,
+          let date = parseLonghouseDate(seenAt) else { return nil }
+    return "last seen \(compactDuration(since: date))"
+}
+
+/// Compact, no-"ago" duration: "5s", "12s", "3m", "1h", "2d".
+func compactDuration(since date: Date) -> String {
+    let interval = max(0, Date().timeIntervalSince(date))
+    let seconds = Int(interval)
+    if seconds < 60 { return "\(seconds)s" }
+    let minutes = seconds / 60
+    if minutes < 60 { return "\(minutes)m" }
+    let hours = minutes / 60
+    if hours < 24 { return "\(hours)h" }
+    let days = hours / 24
+    return "\(days)d"
 }
