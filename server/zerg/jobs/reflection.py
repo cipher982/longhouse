@@ -13,7 +13,7 @@ from typing import Any
 from zerg.database import db_session
 from zerg.jobs.registry import JobConfig
 from zerg.jobs.registry import job_registry
-from zerg.models_config import get_llm_client_with_db_fallback
+from zerg.models_config import get_llm_client_preferring_db_config
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +28,10 @@ async def run() -> dict[str, Any]:
 
     with db_session() as config_db:
         try:
-            client, model_id, _provider = get_llm_client_with_db_fallback("reflection", db=config_db)
+            client, model_id, _provider = get_llm_client_preferring_db_config("reflection", db=config_db)
         except (ValueError, KeyError):
             try:
-                client, model_id, _provider = get_llm_client_with_db_fallback("summarization", db=config_db)
+                client, model_id, _provider = get_llm_client_preferring_db_config("summarization", db=config_db)
             except (ValueError, KeyError):
                 logger.error("No LLM configured for reflection or summarization")
                 return {"success": False, "error": "No LLM configured"}

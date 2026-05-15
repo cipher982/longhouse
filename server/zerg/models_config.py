@@ -446,7 +446,7 @@ _DB_PROVIDER_DEFAULT_MODELS: dict[str, str] = {
 }
 
 
-def get_llm_client_with_db_fallback(use_case: str, db=None) -> tuple:
+def get_llm_client_preferring_db_config(use_case: str, db=None) -> tuple:
     """Get an async LLM client, checking DB-stored provider config first.
 
     For single-tenant instances, looks up any user's DB config for the "text"
@@ -503,7 +503,7 @@ def get_llm_client_with_db_fallback(use_case: str, db=None) -> tuple:
     return get_llm_client_for_use_case(use_case)
 
 
-def get_embedding_config_with_db_fallback(db=None) -> EmbeddingConfig | None:
+def get_embedding_config_preferring_db_config(db=None) -> EmbeddingConfig | None:
     """Load embedding config, checking DB-stored provider config first.
 
     For single-tenant instances, looks up any user's DB config for the

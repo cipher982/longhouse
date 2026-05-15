@@ -42,7 +42,7 @@ async def semantic_search_sessions(
     _single: None = Depends(require_single_tenant),
 ) -> SemanticSearchResponse:
     """Search sessions by semantic similarity using embeddings."""
-    from zerg.models_config import get_embedding_config_with_db_fallback
+    from zerg.models_config import get_embedding_config_preferring_db_config
     from zerg.services.embedding_cache import EmbeddingCache
     from zerg.services.session_processing.embeddings import generate_embedding
 
@@ -52,7 +52,7 @@ async def semantic_search_sessions(
             detail="context_mode must be one of: forensic, active_context",
         )
 
-    config = get_embedding_config_with_db_fallback(db=db)
+    config = get_embedding_config_preferring_db_config(db=db)
     if not config:
         return SemanticSearchResponse(sessions=[], total=0)
 
@@ -172,7 +172,7 @@ async def recall_sessions(
     _single: None = Depends(require_single_tenant),
 ) -> RecallResponse:
     """Recall specific knowledge from past sessions."""
-    from zerg.models_config import get_embedding_config_with_db_fallback
+    from zerg.models_config import get_embedding_config_preferring_db_config
     from zerg.services.embedding_cache import EmbeddingCache
     from zerg.services.session_processing.embeddings import generate_embedding
 
@@ -182,7 +182,7 @@ async def recall_sessions(
             detail="context_mode must be one of: forensic, active_context",
         )
 
-    config = get_embedding_config_with_db_fallback(db=db)
+    config = get_embedding_config_preferring_db_config(db=db)
     if not config:
         return RecallResponse(matches=[], total=0)
 
