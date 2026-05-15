@@ -86,7 +86,7 @@ struct LonghouseAPI: Sendable {
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
 
-        let decoded = try JSONDecoder.snakeCase.decode(SessionsResponse.self, from: data)
+        let decoded = try JSONDecoder.snakeCase.decode(APITimelineSessionsListResponse.self, from: data)
         return decoded.sessions.map(\.sessionSummary)
     }
 
