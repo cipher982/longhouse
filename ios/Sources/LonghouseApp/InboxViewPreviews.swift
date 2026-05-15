@@ -236,12 +236,14 @@ private func mockSession(
     return ScrollView {
         VStack(alignment: .leading, spacing: 18) {
             ForEach(cases, id: \.0) { label, state in
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        ConnectionIndicator(state: state, onRetry: {})
-                        Text(label).font(.caption).foregroundStyle(.secondary)
-                    }
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(label)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.bottom, 4)
+                    ConnectionStatusStrip(state: state)
                     TimelineSessionCardRow(session: session, emphasized: false, connectionState: state)
+                        .padding(.top, 8)
                 }
             }
         }

@@ -24,11 +24,6 @@ struct TimelineView: View {
             }
             .navigationTitle("Timeline")
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    ConnectionIndicator(state: viewModel.connectionState) {
-                        Task { await viewModel.refresh(using: appState, reloadWidget: true) }
-                    }
-                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         launchSheetPresented = true
@@ -37,6 +32,9 @@ struct TimelineView: View {
                             .accessibilityLabel("Start session")
                     }
                 }
+            }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                ConnectionStatusStrip(state: viewModel.connectionState)
             }
             .sheet(isPresented: $launchSheetPresented) {
                 LaunchSessionSheet { sessionId in
@@ -296,55 +294,55 @@ private struct RuntimeBadge: View {
     }
 }
 
-struct ConnectionIndicator: View {
+/// Slim status strip pinned below the nav bar via safeAreaInset.
+/// Healthy = invisible (the absence of a strip is the signal).
+/// Anything else paints a thin colored bar with text. Pull to refresh
+/// is the retry path; this view is purely informational.
+struct ConnectionStatusStrip: View {
     let state: ConnectionState
-    let onRetry: () -> Void
 
     var body: some View {
-        switch state {
-        case .connecting:
+        if let style = style(for: state) {
             HStack(spacing: 6) {
-                ProgressView().controlSize(.mini)
-                Text("Connecting")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-            }
-            .accessibilityLabel("Connecting to Longhouse")
-        case .healthy:
-            Text("Connected")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.green)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 4)
-                .background(Color.green.opacity(0.14), in: Capsule())
-                .accessibilityLabel("Connected")
-        case .reconnecting:
-            HStack(spacing: 5) {
-                Image(systemName: "arrow.triangle.2.circlepath")
-                    .font(.caption2.weight(.semibold))
-                Text("Reconnecting")
+                if let symbol = style.symbol {
+                    Image(systemName: symbol)
+                        .font(.caption2.weight(.semibold))
+                }
+                Text(style.label)
                     .font(.caption.weight(.semibold))
             }
-            .foregroundStyle(.yellow)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 4)
-            .background(Color.yellow.opacity(0.16), in: Capsule())
-            .accessibilityLabel("Reconnecting to Longhouse")
+            .foregroundStyle(style.foreground)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .background(style.background)
+            .transition(.move(edge: .top).combined(with: .opacity))
+            .accessibilityLabel(style.label)
+        }
+    }
+
+    private struct Style {
+        let label: String
+        let symbol: String?
+        let foreground: Color
+        let background: Color
+    }
+
+    private func style(for state: ConnectionState) -> Style? {
+        switch state {
+        case .healthy:
+            return nil
+        case .connecting:
+            return Style(label: "Connecting", symbol: nil,
+                         foreground: .secondary,
+                         background: Color(.tertiarySystemGroupedBackground))
+        case .reconnecting:
+            return Style(label: "Reconnecting", symbol: "arrow.triangle.2.circlepath",
+                         foreground: .yellow,
+                         background: Color.yellow.opacity(0.18))
         case .offline:
-            Button(action: onRetry) {
-                HStack(spacing: 5) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.caption2.weight(.semibold))
-                    Text("Offline · Tap to retry")
-                        .font(.caption.weight(.semibold))
-                }
-                .foregroundStyle(.red)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 4)
-                .background(Color.red.opacity(0.16), in: Capsule())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Offline. Tap to retry.")
+            return Style(label: "Offline", symbol: "exclamationmark.triangle.fill",
+                         foreground: .red,
+                         background: Color.red.opacity(0.18))
         }
     }
 }
