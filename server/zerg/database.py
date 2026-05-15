@@ -447,7 +447,6 @@ def initialize_database(engine: Engine = None) -> None:
         engine: Optional engine to use, defaults to default_engine
     """
     # Import all models to ensure they are registered with Base
-    from zerg.models.agents import AgentsBase
     from zerg.models.agents import SessionEmbedding  # noqa: F401
     from zerg.models.apns_device_registration import APNSDeviceRegistration  # noqa: F401
     from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration  # noqa: F401
@@ -489,11 +488,8 @@ def initialize_database(engine: Engine = None) -> None:
         table_names = [table.name for table in Base.metadata.tables.values()]
         logger.debug("Creating tables: %s", sorted(table_names))
 
-    # Create main tables
+    # Create all tables (single declarative base — see models/agents.py)
     Base.metadata.create_all(bind=target_engine)
-
-    # Create agents tables
-    AgentsBase.metadata.create_all(bind=target_engine)
 
     # Migrate existing tables: add columns that create_all() won't ALTER into place
     _migrate_agents_columns(target_engine)

@@ -29,7 +29,6 @@ from zerg.database import get_session_factory
 from zerg.dependencies.auth import get_current_user
 from zerg.dependencies.auth import require_admin
 from zerg.dependencies.auth import require_super_admin
-from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
 from zerg.models.models import Runner
 from zerg.models.user import User
@@ -134,7 +133,6 @@ def clear_user_data(engine) -> dict[str, any]:
     preserve_tables = {"users", "alembic_version", "runners"}
 
     discovered_tables: list[tuple[str | None, str]] = [(table.schema, table.name) for table in Base.metadata.sorted_tables]
-    discovered_tables.extend((table.schema, table.name) for table in AgentsBase.metadata.sorted_tables)
 
     # Tables to clear (user-generated content)
     clear_tables = [table_ref for table_ref in discovered_tables if table_ref[1] not in preserve_tables]
@@ -347,17 +345,11 @@ def _reset_database_sync(request: DatabaseResetRequest, current_user):
         for attempt in range(1, max_attempts + 1):
             try:
                 logger.info(f"Dropping all tables … (attempt {attempt}/{max_attempts})")
-                # SQLite-only: simple drop and recreate
-                # Drop both Base and AgentsBase tables
-                from zerg.models.agents import AgentsBase
-
+                # SQLite-only: simple drop and recreate (single declarative base)
                 Base.metadata.drop_all(bind=engine)
-                AgentsBase.metadata.drop_all(bind=engine)
 
                 logger.info("Re-creating all tables …")
-                # Recreate both Base and AgentsBase tables
                 Base.metadata.create_all(bind=engine)
-                AgentsBase.metadata.create_all(bind=engine)
 
                 # Count tables immediately after recreation (should be 0)
                 def _safe_count_immediate(table: str) -> int:

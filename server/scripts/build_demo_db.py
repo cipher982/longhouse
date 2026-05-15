@@ -21,7 +21,6 @@ from zerg.crud import get_user_by_email
 from zerg.database import Base
 from zerg.database import _ensure_agents_fts
 from zerg.database import make_engine
-from zerg.models.agents import AgentsBase
 from zerg.models.models import User
 from zerg.services.agents_store import AgentsStore
 from zerg.services.demo_sessions import build_demo_agent_sessions
@@ -71,7 +70,6 @@ def main() -> int:
     db_url = f"sqlite:///{output_path}"
     engine = make_engine(db_url).execution_options(schema_translate_map={"zerg": None, "agents": None})
     Base.metadata.create_all(bind=engine)
-    AgentsBase.metadata.create_all(bind=engine)
 
     SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
     db = SessionLocal()
