@@ -1364,6 +1364,14 @@ def _auto_add_missing_columns(
                     if col.unique:
                         skipped.append((table.name, col.name, "unique"))
                         continue
+                    # SQLite ALTER ADD COLUMN cannot preserve a REFERENCES clause:
+                    # CreateColumn(col).compile(...) emits only the bare type for
+                    # ALTER, so the FK would be silently dropped. Skip and force
+                    # a human to write an imperative migration (often a table
+                    # rebuild) that wires the constraint correctly.
+                    if col.foreign_keys:
+                        skipped.append((table.name, col.name, "foreign_key"))
+                        continue
                     # Columns using Python-side ``default=`` only (no ``server_default``)
                     # cannot be backfilled by ALTER ADD COLUMN: SQLAlchemy applies the
                     # Python default on INSERT, not as a SQLite DEFAULT clause. Auto-derive
@@ -1414,6 +1422,13 @@ def _auto_add_missing_columns(
             logger.info(
                 "auto-derive skip: %s.%s has Python default= but no server_default; "
                 "leaving for imperative migrator",
+                table_name,
+                col_name,
+            )
+        elif reason == "foreign_key":
+            logger.info(
+                "auto-derive skip: %s.%s has foreign-key constraint; "
+                "SQLite ALTER cannot preserve REFERENCES — leaving for imperative migration",
                 table_name,
                 col_name,
             )
