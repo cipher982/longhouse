@@ -10,6 +10,7 @@ struct SessionView: View {
     @StateObject private var viewModel = SessionViewModel()
     @StateObject private var liveActivityManager = SessionLiveActivityManager()
     @State private var composerText: String = ""
+    @State private var transcriptPinnedToBottom = true
     @FocusState private var composerFocused: Bool
     private let transcriptBottomAnchorID = "session-transcript-bottom-anchor"
 
@@ -130,34 +131,48 @@ struct SessionView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 10) {
-                            if viewModel.items.isEmpty && viewModel.submittedInputs.isEmpty {
-                                ContentUnavailableView(
-                                    "No messages yet",
-                                    systemImage: "bubble.left.and.bubble.right"
-                                )
-                                .padding(.vertical, 48)
-                            } else {
-                                transcriptItems
+                    GeometryReader { viewport in
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 10) {
+                                if let error = viewModel.errorMessage {
+                                    TranscriptErrorBanner(error: error)
+                                }
+                                if viewModel.items.isEmpty && viewModel.submittedInputs.isEmpty {
+                                    ContentUnavailableView(
+                                        "No messages yet",
+                                        systemImage: "bubble.left.and.bubble.right"
+                                    )
+                                    .padding(.vertical, 48)
+                                } else {
+                                    transcriptItems
+                                }
+                                Color.clear
+                                    .frame(height: 0)
+                                    .background(
+                                        GeometryReader { marker in
+                                            Color.clear.preference(
+                                                key: TranscriptBottomYKey.self,
+                                                value: marker.frame(in: .named("sessionTranscriptScroll")).maxY
+                                            )
+                                        }
+                                    )
+                                    .id(transcriptBottomAnchorID)
                             }
-                            Color.clear
-                                .frame(height: 1)
-                                .id(transcriptBottomAnchorID)
+                            .padding(.horizontal)
+                            .padding(.vertical, 12)
                         }
-                        .padding(.horizontal)
-                        .padding(.vertical, 12)
-                    }
-                    .scrollDismissesKeyboard(.interactively)
-                    .defaultScrollAnchor(.bottom)
-                    .onAppear {
-                        scrollTranscriptToBottom(proxy, animated: false)
-                    }
-                    .onChange(of: viewModel.transcriptScrollToken) { _, _ in
-                        scrollTranscriptToBottom(proxy)
-                    }
-                    .onChange(of: composerFocused) { _, focused in
-                        if focused {
+                        .coordinateSpace(name: "sessionTranscriptScroll")
+                        .scrollDismissesKeyboard(.interactively)
+                        .defaultScrollAnchor(.bottom)
+                        .onPreferenceChange(TranscriptBottomYKey.self) { bottomY in
+                            transcriptPinnedToBottom = bottomY <= viewport.size.height + 96
+                        }
+                        .onChange(of: viewModel.transcriptScrollToken) { _, _ in
+                            if transcriptPinnedToBottom {
+                                scrollTranscriptToBottom(proxy, animated: false)
+                            }
+                        }
+                        .onChange(of: viewModel.submittedRevealCounter) { _, _ in
                             scrollTranscriptToBottom(proxy)
                         }
                     }
@@ -181,7 +196,6 @@ struct SessionView: View {
             SubmittedInputBubble(input: input) {
                 composerText = input.text
                 composerFocused = true
-                viewModel.dismissSubmittedInput(input.id)
             }
             .id(input.id)
         }
@@ -413,6 +427,32 @@ struct SessionView: View {
         guard let draft = await viewModel.draftReply(sessionId: sessionId, appState: appState) else { return }
         composerText = draft
         composerFocused = true
+    }
+}
+
+private struct TranscriptErrorBanner: View {
+    let error: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle")
+                .foregroundStyle(.orange)
+            Text(error)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(10)
+        .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityIdentifier("session-chat-error-banner")
+    }
+}
+
+private struct TranscriptBottomYKey: PreferenceKey {
+    static let defaultValue: CGFloat = .greatestFiniteMagnitude
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 
@@ -1115,6 +1155,7 @@ final class SessionViewModel: ObservableObject {
     @Published var queuedInputCount: Int = 0
     @Published var failedInputCount: Int = 0
     @Published var submittedInputs: [SubmittedInput] = []
+    @Published private(set) var submittedRevealCounter: UInt64 = 0
     /// Text preserved from a steer attempt that the server rejected with
     /// error_code: "turn_ended". The UI offers an explicit "Queue instead"
     /// action; we do not silently convert the intent for the user.
@@ -1143,20 +1184,50 @@ final class SessionViewModel: ObservableObject {
     func isExpanded(_ id: String) -> Bool { expandedIds.contains(id) }
 
     var transcriptScrollToken: String {
-        let itemPart = [
-            String(items.count),
-            items.last?.id ?? "empty",
-        ].joined(separator: ":")
+        let itemPart = items.suffix(3)
+            .map(transcriptItemSignature)
+            .joined(separator: "\u{1F}")
         let submittedPart = submittedInputs
             .map { input in
                 [
                     input.id,
                     input.phase.rawValue,
                     input.serverInputId.map(String.init) ?? "local",
-                ].joined(separator: ":")
+                ].joined(separator: "\u{1E}")
             }
-            .joined(separator: "|")
-        return "\(itemPart)#\(submittedPart)"
+            .joined(separator: "\u{1F}")
+        return "\(items.count)\u{1D}\(itemPart)\u{1D}\(submittedPart)"
+    }
+
+    private func transcriptItemSignature(_ item: TimelineItem) -> String {
+        switch item {
+        case .user(let event), .assistant(let event), .orphanTool(let event):
+            return eventSignature(item.id, event)
+        case .tool(let call, let result):
+            return [
+                item.id,
+                eventSignature("call", call),
+                result.map { eventSignature("result", $0) } ?? "pending",
+            ].joined(separator: "\u{1E}")
+        case .passiveGroup(let calls):
+            let callPart = calls.suffix(3).map { passive in
+                [
+                    eventSignature("call", passive.call),
+                    passive.result.map { eventSignature("result", $0) } ?? "pending",
+                ].joined(separator: "\u{1C}")
+            }.joined(separator: "\u{1E}")
+            return "passive\u{1E}\(calls.count)\u{1E}\(callPart)"
+        }
+    }
+
+    private func eventSignature(_ prefix: String, _ event: SessionEvent) -> String {
+        [
+            prefix,
+            String(event.id),
+            event.timestamp,
+            String(event.contentText?.count ?? 0),
+            String(event.toolOutputText?.count ?? 0),
+        ].joined(separator: "\u{1C}")
     }
 
     func toggleExpanded(_ id: String) {
@@ -1232,6 +1303,7 @@ final class SessionViewModel: ObservableObject {
             createdAt: Date()
         )
         submittedInputs.append(localInput)
+        submittedRevealCounter &+= 1
         guard let api = apiFactory(appState.serverURL) else {
             updateSubmittedInput(
                 clientRequestId,
@@ -1262,6 +1334,7 @@ final class SessionViewModel: ObservableObject {
                 serverInputId: response.inputId,
                 lastError: nil
             )
+            clearSupersededSubmittedInputs(text: text, keepClientRequestId: clientRequestId)
             Task { [weak self] in
                 guard let self else { return }
                 try? await self.refreshWorkspace(api: api, sessionId: sessionId, allowFailure: true)
@@ -1295,8 +1368,15 @@ final class SessionViewModel: ObservableObject {
     /// steer failed with turn_ended. Always maps to intent=queue.
     func queueInsteadOfSteer(sessionId: String, appState: AppState) async -> Bool {
         guard let text = turnEndedDraft else { return false }
-        turnEndedDraft = nil
-        return await send(text: text, sessionId: sessionId, appState: appState, intent: "queue")
+        let decisionIds = submittedInputs
+            .filter { $0.phase == .needsUserDecision && $0.text == text }
+            .map(\.id)
+        let queued = await send(text: text, sessionId: sessionId, appState: appState, intent: "queue")
+        if queued {
+            turnEndedDraft = nil
+            submittedInputs.removeAll { decisionIds.contains($0.id) }
+        }
+        return queued
     }
 
     func dismissSubmittedInput(_ id: String) {
@@ -1420,6 +1500,14 @@ final class SessionViewModel: ObservableObject {
         submittedInputs[index].phase = phase
         submittedInputs[index].serverInputId = serverInputId
         submittedInputs[index].lastError = lastError
+    }
+
+    private func clearSupersededSubmittedInputs(text: String, keepClientRequestId: String) {
+        submittedInputs.removeAll { input in
+            input.clientRequestId != keepClientRequestId
+                && input.text == text
+                && (input.phase == .failed || input.phase == .needsUserDecision)
+        }
     }
 
     private func reconcileSubmittedInputs(with events: [SessionEvent]) {
