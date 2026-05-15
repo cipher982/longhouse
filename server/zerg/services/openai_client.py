@@ -27,6 +27,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_extra_body(extra_body: dict | None) -> dict | None:
+    """Strip ``metadata`` from ``extra_body`` before forwarding to the SDK.
+
+    Providers (Anthropic / OpenAI / Bedrock / OpenRouter) reject unknown
+    ``metadata`` keys at the top of the request body. AGENTS.md flags this
+    as a footgun: ``Do not add extra_body={metadata: ...} to provider LLM
+    calls.`` Enforce it here so it's impossible to send through this client.
+    """
+    if not extra_body:
+        return extra_body
+    if "metadata" in extra_body:
+        logger.warning("Dropping unsupported 'metadata' key from extra_body before provider call")
+        extra_body = {k: v for k, v in extra_body.items() if k != "metadata"}
+    return extra_body or None
+
+
 @dataclass
 class ChatResponse:
     """Response from a chat completion call."""
@@ -203,7 +219,7 @@ class OpenAIChat:
         self._base_url = base_url
         self._streaming = streaming
         self._reasoning_effort = reasoning_effort
-        self._extra_body = extra_body
+        self._extra_body = _sanitize_extra_body(extra_body)
         self._default_headers = default_headers
         self._tools: list[Tool] = []
         self._tool_choice: dict | str | None = None
