@@ -11,6 +11,7 @@ struct SessionView: View {
     @StateObject private var liveActivityManager = SessionLiveActivityManager()
     @State private var composerText: String = ""
     @FocusState private var composerFocused: Bool
+    private let transcriptBottomAnchorID = "session-transcript-bottom-anchor"
 
     private var composerHasText: Bool {
         !composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -130,43 +131,70 @@ struct SessionView: View {
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 10) {
-                            if viewModel.items.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            if viewModel.items.isEmpty && viewModel.submittedInputs.isEmpty {
                                 ContentUnavailableView(
                                     "No messages yet",
                                     systemImage: "bubble.left.and.bubble.right"
                                 )
                                 .padding(.vertical, 48)
                             } else {
-                                ForEach(viewModel.items, id: \.id) { item in
-                                    TimelineItemView(
-                                        item: item,
-                                        isExpanded: viewModel.isExpanded(item.id),
-                                        sessionEnded: viewModel.isSessionEnded,
-                                        onToggle: { viewModel.toggleExpanded(item.id) }
-                                    )
-                                    .id(item.id)
-                                }
-                                ForEach(viewModel.submittedInputs) { input in
-                                    SubmittedInputBubble(input: input) {
-                                        composerText = input.text
-                                        composerFocused = true
-                                        viewModel.dismissSubmittedInput(input.id)
-                                    }
-                                    .id(input.id)
-                                }
+                                transcriptItems
                             }
+                            Color.clear
+                                .frame(height: 1)
+                                .id(transcriptBottomAnchorID)
                         }
                         .padding(.horizontal)
                         .padding(.vertical, 12)
                     }
                     .defaultScrollAnchor(.bottom)
-                    .onChange(of: viewModel.items.count) { _, _ in
-                        if let last = viewModel.items.last {
-                            proxy.scrollTo(last.id, anchor: .bottom)
+                    .onAppear {
+                        scrollTranscriptToBottom(proxy, animated: false)
+                    }
+                    .onChange(of: viewModel.transcriptScrollToken) { _, _ in
+                        scrollTranscriptToBottom(proxy)
+                    }
+                    .onChange(of: composerFocused) { _, focused in
+                        if focused {
+                            scrollTranscriptToBottom(proxy)
                         }
                     }
                 }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var transcriptItems: some View {
+        ForEach(viewModel.items, id: \.id) { item in
+            TimelineItemView(
+                item: item,
+                isExpanded: viewModel.isExpanded(item.id),
+                sessionEnded: viewModel.isSessionEnded,
+                onToggle: { viewModel.toggleExpanded(item.id) }
+            )
+            .id(item.id)
+        }
+        ForEach(viewModel.submittedInputs) { input in
+            SubmittedInputBubble(input: input) {
+                composerText = input.text
+                composerFocused = true
+                viewModel.dismissSubmittedInput(input.id)
+            }
+            .id(input.id)
+        }
+    }
+
+    private func scrollTranscriptToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
+        DispatchQueue.main.async {
+            let scroll = {
+                proxy.scrollTo(transcriptBottomAnchorID, anchor: .bottom)
+            }
+            if animated {
+                withAnimation(.easeOut(duration: 0.18), scroll)
+            } else {
+                scroll()
             }
         }
     }
@@ -1112,6 +1140,23 @@ final class SessionViewModel: ObservableObject {
     }
 
     func isExpanded(_ id: String) -> Bool { expandedIds.contains(id) }
+
+    var transcriptScrollToken: String {
+        let itemPart = [
+            String(items.count),
+            items.last?.id ?? "empty",
+        ].joined(separator: ":")
+        let submittedPart = submittedInputs
+            .map { input in
+                [
+                    input.id,
+                    input.phase.rawValue,
+                    input.serverInputId.map(String.init) ?? "local",
+                ].joined(separator: ":")
+            }
+            .joined(separator: "|")
+        return "\(itemPart)#\(submittedPart)"
+    }
 
     func toggleExpanded(_ id: String) {
         if expandedIds.contains(id) { expandedIds.remove(id) } else { expandedIds.insert(id) }

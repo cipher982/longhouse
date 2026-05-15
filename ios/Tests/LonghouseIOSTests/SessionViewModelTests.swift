@@ -47,6 +47,25 @@ struct SessionViewModelTests {
     }
 
     @Test
+    func sendChangesTranscriptScrollTokenBeforeWorkspaceRefreshCompletes() async throws {
+        let before = try makeWorkspace(eventId: 10, content: "Before send")
+        let api = FakeSessionWorkspaceClient(workspaces: [before])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        await api.failFutureWorkspaceLoads()
+        let beforeSendToken = model.transcriptScrollToken
+        let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
+
+        #expect(sent)
+        #expect(model.transcriptScrollToken != beforeSendToken)
+        #expect(model.submittedInputs.first?.text == "continue")
+        #expect(model.submittedInputs.first?.phase == .sent)
+    }
+
+    @Test
     func sendDoesNotBlankTranscriptWhenBestEffortRefreshFails() async throws {
         let before = try makeWorkspace(eventId: 10, content: "Before send")
         let api = FakeSessionWorkspaceClient(workspaces: [before])
