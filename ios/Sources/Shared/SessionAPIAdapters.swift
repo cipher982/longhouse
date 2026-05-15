@@ -148,6 +148,76 @@ extension APISessionResponse {
     }
 }
 
+extension APIEventResponse {
+    var sessionEvent: SessionEvent {
+        SessionEvent(
+            id: id,
+            role: role,
+            contentText: contentText,
+            toolName: toolName,
+            toolInputJSON: toolInputJson,
+            toolOutputText: toolOutputText,
+            toolCallId: toolCallId,
+            timestamp: timestamp,
+            inActiveContext: inActiveContext ?? true,
+            isHeadBranch: isHeadBranch ?? true
+        )
+    }
+}
+
+extension APISessionProjectionItemResponse {
+    var sessionProjectionItem: SessionProjectionItem {
+        SessionProjectionItem(
+            kind: kind,
+            sessionId: sessionId,
+            timestamp: timestamp,
+            event: event?.sessionEvent,
+            continuedFromSessionId: continuedFromSessionId,
+            continuationKind: continuationKind,
+            originLabel: originLabel,
+            parentOriginLabel: parentOriginLabel,
+            parentContinuationKind: parentContinuationKind,
+            branchedFromEventId: branchedFromEventId
+        )
+    }
+}
+
+extension APISessionProjectionResponse {
+    var sessionProjectionResponse: SessionProjectionResponse {
+        SessionProjectionResponse(
+            rootSessionId: rootSessionId,
+            focusSessionId: focusSessionId,
+            headSessionId: headSessionId,
+            pathSessionIds: pathSessionIds,
+            items: items.map(\.sessionProjectionItem),
+            total: total,
+            pageOffset: pageOffset ?? 0,
+            branchMode: branchMode ?? "head",
+            abandonedEvents: abandonedEvents ?? 0
+        )
+    }
+}
+
+extension APISessionThreadResponse {
+    var sessionThreadResponse: SessionThreadResponse {
+        SessionThreadResponse(
+            rootSessionId: rootSessionId,
+            headSessionId: headSessionId,
+            sessions: sessions.map(\.sessionDetail)
+        )
+    }
+}
+
+extension APISessionWorkspaceResponse {
+    var sessionWorkspaceResponse: SessionWorkspaceResponse {
+        SessionWorkspaceResponse(
+            session: session.sessionDetail,
+            thread: thread.sessionThreadResponse,
+            projection: projection.sessionProjectionResponse
+        )
+    }
+}
+
 extension APITimelineSessionCardResponse {
     var sessionSummary: SessionSummary {
         SessionSummary(
