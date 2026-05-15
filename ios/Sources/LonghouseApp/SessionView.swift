@@ -764,7 +764,7 @@ private struct TimelineItemView: View {
             UserBubble(event: event)
         case .assistant(let event):
             AssistantBubble(event: event)
-        case .tool(let call, let result):
+        case .tool(let call, let result, _):
             ToolRow(call: call, result: result, isExpanded: isExpanded, sessionEnded: sessionEnded, onToggle: onToggle)
         case .orphanTool(let event):
             ToolRow(call: event, result: event, isExpanded: isExpanded, sessionEnded: sessionEnded, onToggle: onToggle, orphan: true)
@@ -1347,7 +1347,7 @@ final class SessionViewModel: ObservableObject {
         switch item {
         case .user(let event), .assistant(let event), .orphanTool(let event):
             return eventSignature(item.id, event)
-        case .tool(let call, let result):
+        case .tool(let call, let result, _):
             return [
                 item.id,
                 eventSignature("call", call),

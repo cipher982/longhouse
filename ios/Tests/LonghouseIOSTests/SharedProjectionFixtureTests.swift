@@ -11,6 +11,7 @@ final class SharedProjectionFixtureTests: XCTestCase {
     private struct Expectations: Decodable {
         let rows: [ExpectedRow]
         let toolCount: Int
+        let noiseGroupCount: Int
         let orphanToolIds: [Int]
     }
 
@@ -22,15 +23,22 @@ final class SharedProjectionFixtureTests: XCTestCase {
         let callEventId: Int?
         let resultEventId: Int?
         let pairing: String?
+        let toolNames: [String]?
+        let callEventIds: [Int]?
+        let resultEventIds: [Int?]?
+        let pairings: [String]?
     }
 
-    func testToolPairingFIFOFixture() throws {
-        let fixture = try loadFixture("tool-pairing-fifo.json")
-        let items = TimelineBuilder.build(events: fixture.projection.items.compactMap(\.event))
+    func testSharedProjectionFixtures() throws {
+        for fixtureName in ["tool-pairing-fifo.json", "context-boundary-noise-collapse.json"] {
+            let fixture = try loadFixture(fixtureName)
+            let items = TimelineBuilder.build(events: fixture.projection.items.compactMap(\.event))
 
-        XCTAssertEqual(summarizeRows(items), fixture.expectations.rows)
-        XCTAssertEqual(toolRows(items).count, fixture.expectations.toolCount)
-        XCTAssertEqual(orphanToolIds(items), fixture.expectations.orphanToolIds)
+            XCTAssertEqual(summarizeRows(items), fixture.expectations.rows, fixtureName)
+            XCTAssertEqual(toolInteractionCount(items), fixture.expectations.toolCount, fixtureName)
+            XCTAssertEqual(noiseGroupCount(items), fixture.expectations.noiseGroupCount, fixtureName)
+            XCTAssertEqual(orphanToolIds(items), fixture.expectations.orphanToolIds, fixtureName)
+        }
     }
 
     private func loadFixture(_ name: String) throws -> Fixture {
@@ -57,9 +65,13 @@ final class SharedProjectionFixtureTests: XCTestCase {
                     toolName: nil,
                     callEventId: nil,
                     resultEventId: nil,
-                    pairing: nil
+                    pairing: nil,
+                    toolNames: nil,
+                    callEventIds: nil,
+                    resultEventIds: nil,
+                    pairings: nil
                 )
-            case .tool(let call, let result):
+            case .tool(let call, let result, let pairing):
                 return ExpectedRow(
                     kind: "tool",
                     role: nil,
@@ -67,7 +79,11 @@ final class SharedProjectionFixtureTests: XCTestCase {
                     toolName: call.toolName,
                     callEventId: call.id,
                     resultEventId: result?.id,
-                    pairing: toolPairing(call: call, result: result)
+                    pairing: pairing.rawValue,
+                    toolNames: nil,
+                    callEventIds: nil,
+                    resultEventIds: nil,
+                    pairings: nil
                 )
             case .orphanTool(let event):
                 return ExpectedRow(
@@ -77,33 +93,49 @@ final class SharedProjectionFixtureTests: XCTestCase {
                     toolName: event.toolName,
                     callEventId: nil,
                     resultEventId: event.id,
-                    pairing: nil
+                    pairing: nil,
+                    toolNames: nil,
+                    callEventIds: nil,
+                    resultEventIds: nil,
+                    pairings: nil
                 )
-            case .passiveGroup:
-                XCTFail("This fixture does not expect grouped rows yet")
+            case .passiveGroup(let calls):
                 return ExpectedRow(
-                    kind: "passive_group",
+                    kind: "noise_group",
                     role: nil,
                     eventId: nil,
                     toolName: nil,
                     callEventId: nil,
                     resultEventId: nil,
-                    pairing: nil
+                    pairing: nil,
+                    toolNames: calls.map { $0.call.toolName ?? "" },
+                    callEventIds: calls.map(\.call.id),
+                    resultEventIds: calls.map { $0.result?.id },
+                    pairings: calls.map { $0.pairing.rawValue }
                 )
             }
         }
     }
 
-    private func toolRows(_ items: [TimelineItem]) -> [TimelineItem] {
-        items.filter { item in
+    private func toolInteractionCount(_ items: [TimelineItem]) -> Int {
+        items.reduce(0) { count, item in
             switch item {
             case .tool, .orphanTool:
-                return true
+                return count + 1
             case .passiveGroup(let calls):
-                return !calls.isEmpty
+                return count + calls.count
             case .user, .assistant:
-                return false
+                return count
             }
+        }
+    }
+
+    private func noiseGroupCount(_ items: [TimelineItem]) -> Int {
+        items.reduce(0) { count, item in
+            if case .passiveGroup = item {
+                return count + 1
+            }
+            return count
         }
     }
 
@@ -116,13 +148,4 @@ final class SharedProjectionFixtureTests: XCTestCase {
         }
     }
 
-    private func toolPairing(call: SessionEvent, result: SessionEvent?) -> String {
-        if let callId = call.toolCallId, !callId.isEmpty {
-            return "id"
-        }
-        if result != nil {
-            return "fifo"
-        }
-        return "pending"
-    }
 }

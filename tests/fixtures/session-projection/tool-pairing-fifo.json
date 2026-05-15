@@ -6,7 +6,7 @@
     "focus_session_id": "fixture-tool-pairing",
     "head_session_id": "fixture-tool-pairing",
     "path_session_ids": ["fixture-tool-pairing"],
-    "total": 8,
+    "total": 10,
     "page_offset": 0,
     "branch_mode": "head",
     "abandoned_events": 0,
@@ -146,6 +146,40 @@
           "in_active_context": true,
           "is_head_branch": true
         }
+      },
+      {
+        "kind": "event",
+        "session_id": "fixture-tool-pairing",
+        "timestamp": "2026-05-15T18:00:08Z",
+        "event": {
+          "id": 9,
+          "role": "assistant",
+          "content_text": null,
+          "tool_name": "Bash",
+          "tool_input_json": {"command": "whoami"},
+          "tool_output_text": null,
+          "tool_call_id": null,
+          "timestamp": "2026-05-15T18:00:08Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "fixture-tool-pairing",
+        "timestamp": "2026-05-15T18:00:09Z",
+        "event": {
+          "id": 10,
+          "role": "tool",
+          "content_text": null,
+          "tool_name": "Bash",
+          "tool_input_json": null,
+          "tool_output_text": "wrong-id output",
+          "tool_call_id": "wrong-id",
+          "timestamp": "2026-05-15T18:00:09Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
       }
     ]
   },
@@ -156,9 +190,12 @@
       {"kind": "message", "role": "assistant", "event_id": 4},
       {"kind": "tool", "tool_name": "Read", "call_event_id": 5, "result_event_id": 6, "pairing": "fifo"},
       {"kind": "tool", "tool_name": "Bash", "call_event_id": 7, "result_event_id": null, "pairing": "id"},
-      {"kind": "orphan_tool", "tool_name": "Bash", "result_event_id": 8}
+      {"kind": "orphan_tool", "tool_name": "Bash", "result_event_id": 8},
+      {"kind": "tool", "tool_name": "Bash", "call_event_id": 9, "result_event_id": null, "pairing": "pending"},
+      {"kind": "orphan_tool", "tool_name": "Bash", "result_event_id": 10}
     ],
-    "tool_count": 4,
-    "orphan_tool_ids": [8]
+    "tool_count": 6,
+    "noise_group_count": 0,
+    "orphan_tool_ids": [8, 10]
   }
 }

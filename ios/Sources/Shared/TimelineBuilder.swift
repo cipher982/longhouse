@@ -3,13 +3,20 @@ import Foundation
 struct PassiveCall: Identifiable, Sendable {
     let call: SessionEvent
     let result: SessionEvent?
+    let pairing: ToolPairing
     var id: Int { call.id }
+}
+
+enum ToolPairing: String, Sendable {
+    case id
+    case fifo
+    case pending
 }
 
 enum TimelineItem: Identifiable, Sendable {
     case user(SessionEvent)
     case assistant(SessionEvent)
-    case tool(call: SessionEvent, result: SessionEvent?)
+    case tool(call: SessionEvent, result: SessionEvent?, pairing: ToolPairing)
     case orphanTool(SessionEvent)
     case passiveGroup(calls: [PassiveCall])
 
@@ -17,7 +24,7 @@ enum TimelineItem: Identifiable, Sendable {
         switch self {
         case .user(let e): return "user:\(e.id)"
         case .assistant(let e): return "prose:\(e.id)"
-        case .tool(let call, _): return "tool:\(call.id)"
+        case .tool(let call, _, _): return "tool:\(call.id)"
         case .orphanTool(let e): return "orphan:\(e.id)"
         case .passiveGroup(let calls):
             let firstId = calls.first?.call.id ?? 0
@@ -29,7 +36,7 @@ enum TimelineItem: Identifiable, Sendable {
         switch self {
         case .user(let e), .assistant(let e), .orphanTool(let e):
             return e.timestamp
-        case .tool(let call, _):
+        case .tool(let call, _, _):
             return call.timestamp
         case .passiveGroup(let calls):
             return calls.first?.call.timestamp ?? ""
@@ -65,10 +72,11 @@ enum TimelineBuilder {
     /// a low-signal read/search safe to collapse into a single "Explored" row.
     /// Context- and action-tier tools always render individually.
     /// NOTE: iOS historically collapsed `.context` (Read, WebFetch) as well as
-    /// `.noise`. Kept that behavior here so the mobile surface doesn't regress.
+    /// `.noise`, but the shared tier contract keeps context tools as individual
+    /// one-liners.
     static func isPassive(_ toolName: String) -> Bool {
         let tier = ToolTiers.tier(toolName)
-        return tier == .noise || tier == .context
+        return tier == .noise
     }
 
     /// Build a paired, renderable timeline from raw events.
@@ -99,7 +107,8 @@ enum TimelineBuilder {
                     raw.append(.assistant(event))
                 }
                 if hasTool {
-                    raw.append(.tool(call: event, result: nil))
+                    let pairing: ToolPairing = event.toolCallId?.isEmpty == false ? .id : .pending
+                    raw.append(.tool(call: event, result: nil, pairing: pairing))
                     if let callId = event.toolCallId, !callId.isEmpty {
                         callIdToIndex[callId] = raw.count - 1
                     } else {
@@ -110,16 +119,23 @@ enum TimelineBuilder {
 
             case "tool":
                 var matchedIndex: Int?
+                var resultPairing: ToolPairing?
                 if let callId = event.toolCallId, !callId.isEmpty {
-                    matchedIndex = callIdToIndex[callId]
+                    if let idx = callIdToIndex[callId] {
+                        matchedIndex = idx
+                        resultPairing = .id
+                    }
                 }
-                if matchedIndex == nil, !fifoToolCallIndexes.isEmpty {
+                if matchedIndex == nil,
+                   (event.toolCallId ?? "").isEmpty,
+                   !fifoToolCallIndexes.isEmpty {
                     matchedIndex = fifoToolCallIndexes.removeFirst()
+                    resultPairing = .fifo
                 }
 
                 if let idx = matchedIndex,
-                   case .tool(let call, _) = raw[idx] {
-                    raw[idx] = .tool(call: call, result: event)
+                   case .tool(let call, _, let pairing) = raw[idx] {
+                    raw[idx] = .tool(call: call, result: event, pairing: resultPairing ?? pairing)
                 } else {
                     raw.append(.orphanTool(event))
                 }
@@ -147,7 +163,7 @@ enum TimelineBuilder {
             guard !buffer.isEmpty else { return }
             if buffer.count == 1 {
                 let only = buffer[0]
-                out.append(.tool(call: only.call, result: only.result))
+                out.append(.tool(call: only.call, result: only.result, pairing: only.pairing))
             } else {
                 out.append(.passiveGroup(calls: buffer))
             }
@@ -156,9 +172,9 @@ enum TimelineBuilder {
 
         for item in items {
             switch item {
-            case .tool(let call, let result)
+            case .tool(let call, let result, let pairing)
                 where Self.isPassive(call.toolName ?? ""):
-                buffer.append(PassiveCall(call: call, result: result))
+                buffer.append(PassiveCall(call: call, result: result, pairing: pairing))
             default:
                 flush()
                 out.append(item)
