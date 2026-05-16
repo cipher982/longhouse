@@ -32,6 +32,8 @@ struct ChatUITestFixtureView: View {
         }
         .task(id: fixtureName) {
             guard fixtureName.hasPrefix("assistant-update") || fixtureName.hasPrefix("assistant-stream") else { return }
+            await waitForInitialWorkspaceLoad()
+
             if fixtureName.hasPrefix("assistant-stream") {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
                 await client.streamAssistantMessage(
@@ -54,6 +56,12 @@ struct ChatUITestFixtureView: View {
             try? await Task.sleep(nanoseconds: delay)
             await client.appendAssistantMessage(message)
             await viewModel.reload(sessionId: client.sessionID, appState: appState)
+        }
+    }
+
+    private func waitForInitialWorkspaceLoad() async {
+        while !Task.isCancelled && viewModel.detail == nil {
+            try? await Task.sleep(nanoseconds: 100_000_000)
         }
     }
 }
