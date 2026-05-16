@@ -976,9 +976,9 @@ struct SessionModelsTests {
     }
 
     @Test
-    func phaseSignalFreshFallsBackToActivityRecencyForLegacyPayloads() {
-        #expect(phaseSignalFresh(summaryForPhaseFreshness(activityRecency: "live", includeRuntimeFacts: false)))
-        #expect(phaseSignalFresh(summaryForPhaseFreshness(activityRecency: "recent", includeRuntimeFacts: false)))
+    func phaseSignalFreshRequiresRuntimeFactDeadlineForLegacyPayloads() {
+        #expect(!phaseSignalFresh(summaryForPhaseFreshness(activityRecency: "live", includeRuntimeFacts: false)))
+        #expect(!phaseSignalFresh(summaryForPhaseFreshness(activityRecency: "recent", includeRuntimeFacts: false)))
         #expect(!phaseSignalFresh(summaryForPhaseFreshness(activityRecency: "stale", includeRuntimeFacts: false)))
         #expect(!phaseSignalFresh(summaryForPhaseFreshness(activityRecency: nil, includeRuntimeFacts: false)))
     }
