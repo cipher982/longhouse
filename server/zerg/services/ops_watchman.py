@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 WATCHMAN_SOURCE = "ai_ops_watchman"
 WATCHMAN_PROMPT_VERSION = "2026-03-28.v1"
-DEFAULT_MODEL_ID = "x-ai/grok-4.1-fast"
+DEFAULT_MODEL_ID = "x-ai/grok-4.3"
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_API_KEY_ENV = "OPENROUTER_API_KEY"
 DEFAULT_WINDOW_MINUTES = 10
@@ -297,7 +297,9 @@ def _collect_recent_session_activity(db: Session, now: datetime, window_start: d
                         e.session_id AS session_id,
                         COUNT(*) AS new_events,
                         SUM(CASE WHEN e.role = 'user' THEN 1 ELSE 0 END) AS new_user_messages,
-                        SUM(CASE WHEN e.role = 'assistant' AND e.tool_name IS NULL THEN 1 ELSE 0 END) AS new_assistant_messages,
+                        SUM(
+                            CASE WHEN e.role = 'assistant' AND e.tool_name IS NULL THEN 1 ELSE 0 END
+                        ) AS new_assistant_messages,
                         SUM(CASE WHEN e.tool_name IS NOT NULL THEN 1 ELSE 0 END) AS new_tool_calls,
                         MIN(e.timestamp) AS first_event_at,
                         MAX(e.timestamp) AS last_event_at
@@ -519,7 +521,9 @@ def _validate_analysis_result(payload: dict[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
-async def analyze_context(context: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any], str | None, str | None]:
+async def analyze_context(
+    context: dict[str, Any],
+) -> tuple[dict[str, Any] | None, dict[str, Any], str | None, str | None]:
     """Run the LLM analysis over the current observation context.
 
     Returns:
@@ -865,7 +869,12 @@ async def run_watchman_cycle(*, db_session_factory) -> dict[str, Any]:
         run.estimated_cost_usd = usage.get("estimated_cost_usd")
         run.usage_json = usage
 
-        incident_action, incident_id, resolved_summaries = reconcile_incident(db, analysis=analysis, usage=usage, now=finished)
+        incident_action, incident_id, resolved_summaries = reconcile_incident(
+            db,
+            analysis=analysis,
+            usage=usage,
+            now=finished,
+        )
         email_sent = maybe_send_watchman_email(
             db,
             analysis=analysis,

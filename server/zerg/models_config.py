@@ -150,10 +150,17 @@ def _build_active_text_routing() -> tuple[str, Dict[str, str], Dict[str, str]]:
     base_defaults = dict(_CONFIG["defaults"]["text"])
 
     raw_routing_profiles = _CONFIG.get("routingProfiles", {})
-    routing_profiles = {name: cfg for name, cfg in raw_routing_profiles.items() if isinstance(cfg, dict) and not name.startswith("$")}
+    routing_profiles = {
+        name: cfg
+        for name, cfg in raw_routing_profiles.items()
+        if isinstance(cfg, dict) and not name.startswith("$")
+    }
     active_profile = os.getenv("MODELS_PROFILE", "oss")
     if routing_profiles and active_profile not in routing_profiles:
-        raise ValueError(f"Unknown MODELS_PROFILE '{active_profile}'. " f"Valid profiles: {list(routing_profiles.keys())}")
+        raise ValueError(
+            f"Unknown MODELS_PROFILE '{active_profile}'. "
+            f"Valid profiles: {list(routing_profiles.keys())}"
+        )
 
     profile_cfg = routing_profiles.get(active_profile, {})
     text_overrides = profile_cfg.get("text", {})
@@ -314,7 +321,8 @@ def validate_use_case_llm_config(use_case: str) -> tuple[str, ModelProvider, str
     api_key_env_var = _get_api_key_env_var(model_config)
     if not os.getenv(api_key_env_var):
         raise ValueError(
-            f"{api_key_env_var} required for use case '{use_case}' " f"(model='{model_id}', provider='{model_config.provider.value}')"
+            f"{api_key_env_var} required for use case '{use_case}' "
+            f"(model='{model_id}', provider='{model_config.provider.value}')"
         )
 
     return model_id, model_config.provider, api_key_env_var
@@ -439,8 +447,8 @@ EMBEDDING_DIMS: int = _EMBEDDING_DEFAULT.get("dims", 256)
 # OpenAI models). Maps provider_name -> model_id.
 _DB_PROVIDER_DEFAULT_MODELS: dict[str, str] = {
     "openai": "gpt-4o-mini",
-    "openrouter": "x-ai/grok-4.1-fast",
-    "xai": "grok-4-1-fast-non-reasoning",
+    "openrouter": "x-ai/grok-4.3",
+    "xai": "grok-4.3",
     "groq": "llama-3.3-70b-versatile",
     "ollama": "llama3.2",
 }
