@@ -8,8 +8,8 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.orm import sessionmaker
 
-from zerg.database import make_engine
 from zerg.database import Base
+from zerg.database import make_engine
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSessionBranch
@@ -94,9 +94,17 @@ def test_collect_observations_includes_recent_session_activity(monkeypatch, tmp_
         observations = ops_watchman.collect_observations(db, now=now)
 
     sources = {row.source for row in observations}
-    assert {"db_file_stats", "write_serializer", "ingest_health", "open_incidents", "recent_session_activity"} <= sources
+    assert {
+        "db_file_stats",
+        "write_serializer",
+        "ingest_health",
+        "open_incidents",
+        "recent_session_activity",
+    } <= sources
 
-    session_rows = [row for row in observations if row.source == "recent_session_activity" and row.entity_id == str(session.id)]
+    session_rows = [
+        row for row in observations if row.source == "recent_session_activity" and row.entity_id == str(session.id)
+    ]
     assert len(session_rows) == 1
     payload = session_rows[0].payload_json
     assert payload["new_events"] == 2
@@ -115,7 +123,7 @@ def test_watchman_model_config_defaults_to_openrouter(monkeypatch):
 
     model_id, base_url, api_key_env, api_key, reasoning = ops_watchman._watchman_model_config()
 
-    assert model_id == "x-ai/grok-4.1-fast"
+    assert model_id == "x-ai/grok-4.3"
     assert base_url == "https://openrouter.ai/api/v1"
     assert api_key_env == "OPENROUTER_API_KEY"
     assert api_key is None
@@ -152,7 +160,7 @@ async def test_run_watchman_cycle_persists_run_observations_and_incident(monkeyp
     }
 
     async def _fake_analyze(_context):
-        return analysis, usage, "grok-4-1-fast-reasoning", None
+        return analysis, usage, "x-ai/grok-4.3", None
 
     monkeypatch.setattr(ops_watchman, "analyze_context", _fake_analyze)
     monkeypatch.setattr(ops_watchman, "send_alert_email", lambda *args, **kwargs: "msg-1")
@@ -167,7 +175,9 @@ async def test_run_watchman_cycle_persists_run_observations_and_incident(monkeyp
     with SessionLocal() as db:
         runs = db.query(OpsWatchRun).all()
         observations = db.query(OpsWatchObservation).all()
-        incidents = db.query(OperationalIncident).filter(OperationalIncident.source == ops_watchman.WATCHMAN_SOURCE).all()
+        incidents = (
+            db.query(OperationalIncident).filter(OperationalIncident.source == ops_watchman.WATCHMAN_SOURCE).all()
+        )
 
         assert len(runs) == 1
         assert runs[0].status == "success"

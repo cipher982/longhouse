@@ -29,6 +29,6 @@ if _watchman_enabled():
             timeout_seconds=int(os.getenv("OPS_WATCHMAN_JOB_TIMEOUT_SECONDS", "120")),
             max_attempts=1,
             tags=["monitoring", "builtin", "ai"],
-            description="AI-first tenant-local monitoring via Grok 4.1 watchman analysis",
+            description="AI-first tenant-local monitoring via Grok 4.3 watchman analysis",
         )
     )
