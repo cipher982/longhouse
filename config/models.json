@@ -39,10 +39,21 @@
           "reasoningNone": false
         }
       },
+      "deepseek/deepseek-v4-pro": {
+        "displayName": "DeepSeek v4 Pro (OpenRouter)",
+        "provider": "openrouter",
+        "description": "DeepSeek v4 Pro via OpenRouter - main default for text routing (large context)",
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "apiKeyEnvVar": "OPENROUTER_API_KEY",
+        "capabilities": {
+          "reasoning": true,
+          "reasoningNone": true
+        }
+      },
       "minimax/minimax-m2.7": {
         "displayName": "MiniMax M2.7 (OpenRouter)",
         "provider": "openrouter",
-        "description": "MiniMax M2.7 via OpenRouter - main default for text routing",
+        "description": "MiniMax M2.7 via OpenRouter - fallback, ~200K ctx limit",
         "baseUrl": "https://openrouter.ai/api/v1",
         "apiKeyEnvVar": "OPENROUTER_API_KEY",
         "capabilities": {
@@ -53,7 +64,7 @@
       "deepseek/deepseek-v4-flash": {
         "displayName": "DeepSeek v4 Flash (OpenRouter)",
         "provider": "openrouter",
-        "description": "DeepSeek v4 Flash via OpenRouter - non-default option",
+        "description": "DeepSeek v4 Flash via OpenRouter - fallback for high-volume summarization",
         "baseUrl": "https://openrouter.ai/api/v1",
         "apiKeyEnvVar": "OPENROUTER_API_KEY",
         "capabilities": {
@@ -64,7 +75,7 @@
       "x-ai/grok-4.3": {
         "displayName": "Grok 4.3 (OpenRouter)",
         "provider": "openrouter",
-        "description": "xAI Grok 4.3 via OpenRouter - fallback option",
+        "description": "xAI Grok 4.3 via OpenRouter - flagship fallback for harder tasks",
         "baseUrl": "https://openrouter.ai/api/v1",
         "apiKeyEnvVar": "OPENROUTER_API_KEY",
         "capabilities": {
@@ -186,7 +197,7 @@
     "$comment": "Maps use cases to tiers - quality-critical tasks get TIER_1 even for small outputs",
     "text": {
       "fiche_conversation": "TIER_1",
-      "loop_controller": "minimax/minimax-m2.7",
+      "loop_controller": "deepseek/deepseek-v4-pro",
       "routing_decision": "TIER_1",
       "tool_selection": "TIER_1",
       "commis_task": "TIER_1",
@@ -211,15 +222,15 @@
       "$comment": "Hosted instances: all internal tasks route through OpenRouter. Commis/agent execution is NOT here — those spawn CLI agents with their own model selection via hatch.",
       "text": {
         "useCases": {
-          "fiche_conversation": "minimax/minimax-m2.7",
-          "summarization": "minimax/minimax-m2.7",
-          "summary_update": "minimax/minimax-m2.7",
-          "reflection": "minimax/minimax-m2.7",
-          "bulk_classification": "minimax/minimax-m2.7"
+          "fiche_conversation": "deepseek/deepseek-v4-pro",
+          "summarization": "deepseek/deepseek-v4-pro",
+          "summary_update": "deepseek/deepseek-v4-pro",
+          "reflection": "deepseek/deepseek-v4-pro",
+          "bulk_classification": "deepseek/deepseek-v4-pro"
         },
         "defaults": {
-          "fiche": "minimax/minimax-m2.7",
-          "test": "minimax/minimax-m2.7"
+          "fiche": "deepseek/deepseek-v4-pro",
+          "test": "deepseek/deepseek-v4-pro"
         }
       }
     },
@@ -227,15 +238,15 @@
       "$comment": "David's instance: use OpenRouter for text routing; embeddings stay on the embedding provider.",
       "text": {
         "useCases": {
-          "fiche_conversation": "minimax/minimax-m2.7",
-          "summarization": "minimax/minimax-m2.7",
-          "summary_update": "minimax/minimax-m2.7",
-          "reflection": "minimax/minimax-m2.7",
-          "bulk_classification": "minimax/minimax-m2.7"
+          "fiche_conversation": "deepseek/deepseek-v4-pro",
+          "summarization": "deepseek/deepseek-v4-pro",
+          "summary_update": "deepseek/deepseek-v4-pro",
+          "reflection": "deepseek/deepseek-v4-pro",
+          "bulk_classification": "deepseek/deepseek-v4-pro"
         },
         "defaults": {
-          "fiche": "minimax/minimax-m2.7",
-          "test": "minimax/minimax-m2.7"
+          "fiche": "deepseek/deepseek-v4-pro",
+          "test": "deepseek/deepseek-v4-pro"
         }
       }
     }
