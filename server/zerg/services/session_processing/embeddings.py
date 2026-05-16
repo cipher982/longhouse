@@ -72,15 +72,17 @@ def bytes_to_embedding(data: bytes, dims: int) -> np.ndarray:
 
 
 async def generate_embedding(text: str, config: "EmbeddingConfig") -> np.ndarray:
-    """Generate an embedding vector via OpenAI API."""
+    """Generate an embedding vector via an OpenAI-compatible API (OpenAI, OpenRouter)."""
     from openai import AsyncOpenAI
 
-    if config.provider != "openai":
-        raise ValueError(f"Unsupported embedding provider: {config.provider}. Only 'openai' is supported.")
+    from zerg.models_config import build_openai_compatible_client_kwargs
 
-    kwargs: dict = {"api_key": config.api_key}
-    if getattr(config, "base_url", None):
-        kwargs["base_url"] = config.base_url
+    if config.provider not in ("openai", "openrouter"):
+        raise ValueError(f"Unsupported embedding provider: {config.provider}. Use 'openai' or 'openrouter'.")
+
+    kwargs = build_openai_compatible_client_kwargs(
+        provider=config.provider, api_key=config.api_key, base_url=getattr(config, "base_url", None)
+    )
     client = AsyncOpenAI(**kwargs)
     try:
         response = await client.embeddings.create(

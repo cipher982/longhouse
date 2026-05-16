@@ -573,4 +573,5 @@ def get_embedding_config() -> EmbeddingConfig | None:
         dims=default["dims"],
         api_key_env_var=api_key_env,
         api_key=api_key,
+        base_url=default.get("baseUrl"),
     )
