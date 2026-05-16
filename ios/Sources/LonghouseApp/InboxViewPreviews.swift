@@ -15,6 +15,7 @@ private func mockSession(
     project: String,
     title: String,
     summary: String,
+    summaryStatus: String? = nil,
     provider: String = "claude",
     branch: String? = "main",
     statusLabel: String,
@@ -102,6 +103,7 @@ private func mockSession(
         project: project,
         lastActivityAt: iso(anchorSecondsAgo),
         summary: summary,
+        summaryStatus: summaryStatus,
         userState: "active",
         status: nil,
         displayPhase: statusLabel,
@@ -204,6 +206,71 @@ private func mockSession(
         ),
     ]
 
+    return ScrollView {
+        VStack(spacing: 12) {
+            ForEach(sessions) { session in
+                TimelineSessionCardRow(session: session, emphasized: false, connectionState: .healthy)
+            }
+        }
+        .padding(16)
+    }
+    .background(Color(.systemGroupedBackground))
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Summary status — all four") {
+    let sessions: [SessionSummary] = [
+        mockSession(
+            id: "ready",
+            project: "longhouse",
+            title: "Ready — backend has summary",
+            summary: "Wired summary_status into timeline payload. Single batched query joins session_tasks for the latest summary task per session, derives ready/pending/failed/unavailable in the projection layer, and threads the result through SessionResponse so iOS can render honestly.",
+            summaryStatus: "ready",
+            statusLabel: "Idle",
+            statusTone: "idle",
+            activityRecency: "live",
+            anchorSecondsAgo: 30,
+            seenAtSecondsAgo: 30
+        ),
+        mockSession(
+            id: "pending",
+            project: "longhouse",
+            title: "Pending — task queued/running",
+            summary: "",
+            summaryStatus: "pending",
+            statusLabel: "Thinking",
+            statusTone: "thinking",
+            activityRecency: "live",
+            anchorSecondsAgo: 4,
+            seenAtSecondsAgo: 4
+        ),
+        mockSession(
+            id: "failed",
+            project: "longhouse",
+            title: "Failed — terminal, won't auto-retry",
+            summary: "",
+            summaryStatus: "failed",
+            statusLabel: "Idle",
+            statusTone: "idle",
+            activityRecency: "stale",
+            anchorSecondsAgo: 12 * 60,
+            seenAtSecondsAgo: 12 * 60
+        ),
+        mockSession(
+            id: "unavailable",
+            project: "longhouse",
+            title: "Unavailable — too little content",
+            summary: "",
+            summaryStatus: "unavailable",
+            statusLabel: "Idle",
+            statusTone: "idle",
+            activityRecency: "stale",
+            anchorSecondsAgo: 60,
+            seenAtSecondsAgo: 60,
+            turns: 1,
+            tools: 0
+        ),
+    ]
     return ScrollView {
         VStack(spacing: 12) {
             ForEach(sessions) { session in

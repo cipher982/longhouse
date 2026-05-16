@@ -297,6 +297,7 @@ extension APITimelineSessionCardResponse {
             project: head.project,
             lastActivityAt: head.lastActivityAt,
             summary: head.summary,
+            summaryStatus: head.summaryStatus,
             userState: head.userState,
             status: head.status,
             displayPhase: head.displayPhase,
