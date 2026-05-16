@@ -6002,6 +6002,36 @@ export interface components {
             /** Ship Latency P95 Ms 1H */
             ship_latency_p95_ms_1h?: number | null;
             /**
+             * Ship Attempts 10M
+             * @default 0
+             */
+            ship_attempts_10m: number;
+            /**
+             * Ship Successes 10M
+             * @default 0
+             */
+            ship_successes_10m: number;
+            /**
+             * Ship Rate Limited 10M
+             * @default 0
+             */
+            ship_rate_limited_10m: number;
+            /**
+             * Ship Server Errors 10M
+             * @default 0
+             */
+            ship_server_errors_10m: number;
+            /**
+             * Ship Retryable Client Errors 10M
+             * @default 0
+             */
+            ship_retryable_client_errors_10m: number;
+            /**
+             * Ship Connect Errors 10M
+             * @default 0
+             */
+            ship_connect_errors_10m: number;
+            /**
              * Disk Free Bytes
              * @default 0
              */
@@ -6480,6 +6510,18 @@ export interface components {
             ship_latency_p50_ms_1h?: number | null;
             /** Ship Latency P95 Ms 1H */
             ship_latency_p95_ms_1h?: number | null;
+            /** Ship Attempts 10M */
+            ship_attempts_10m?: number | null;
+            /** Ship Successes 10M */
+            ship_successes_10m?: number | null;
+            /** Ship Rate Limited 10M */
+            ship_rate_limited_10m?: number | null;
+            /** Ship Server Errors 10M */
+            ship_server_errors_10m?: number | null;
+            /** Ship Retryable Client Errors 10M */
+            ship_retryable_client_errors_10m?: number | null;
+            /** Ship Connect Errors 10M */
+            ship_connect_errors_10m?: number | null;
             /** Spool Pending */
             spool_pending: number;
             /** Spool Dead */
@@ -15401,7 +15443,7 @@ export interface operations {
                 days_back?: number;
                 /** @description Search query for content */
                 query?: string | null;
-                /** @description Max results */
+                /** @description Max results (server clamps to 100) */
                 limit?: number;
                 /** @description Offset for pagination */
                 offset?: number;
@@ -15599,7 +15641,7 @@ export interface operations {
                 days_back?: number;
                 /** @description Search query for content */
                 query?: string | null;
-                /** @description Max results */
+                /** @description Max results (server clamps to 100) */
                 limit?: number;
                 /** @description Offset for pagination */
                 offset?: number;
@@ -15653,7 +15695,7 @@ export interface operations {
                 days_back?: number;
                 /** @description Search query for content */
                 query?: string | null;
-                /** @description Max results */
+                /** @description Max results (server clamps to 100) */
                 limit?: number;
                 /** @description Offset for pagination */
                 offset?: number;
@@ -15919,7 +15961,7 @@ export interface operations {
     get_timeline_session_turns_timeline_sessions__session_id__turns_get: {
         parameters: {
             query?: {
-                /** @description Max turns to return */
+                /** @description Max turns to return (server clamps to 100) */
                 limit?: number;
                 /** @description Offset within the stable per-session turn order */
                 offset?: number;
