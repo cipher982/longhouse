@@ -16,8 +16,6 @@ from datetime import timezone
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
-import pytest
-
 from zerg.database import Base
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
@@ -104,6 +102,18 @@ def test_timeout_for_embedding_is_fixed():
 def test_timeout_for_unknown_type_returns_none():
     assert _timeout_for("turn_loop", 1) is None
     assert _timeout_for("bogus", 3) is None
+
+
+def test_hot_worker_lane_is_turn_loop_only():
+    assert itq.HOT_INGEST_TASK_TYPES == ("turn_loop",)
+    assert itq._is_hot_worker_lane(
+        include_task_types=itq.HOT_INGEST_TASK_TYPES,
+        exclude_task_types=None,
+    )
+    assert not itq._is_hot_worker_lane(
+        include_task_types=(),
+        exclude_task_types=None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -276,8 +286,6 @@ def test_summary_attempt_one_times_out_at_thirty_seconds(tmp_path, monkeypatch):
     seen by _execute_task to keep the test wall-clock tiny.
     """
     captured: list[float] = []
-
-    real_wait_for = asyncio.wait_for
 
     async def fake_wait_for(coro, timeout):
         captured.append(timeout)
