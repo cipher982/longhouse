@@ -639,7 +639,7 @@ class SessionTask(AgentsBase):
     task_type = Column(String(32), nullable=False)  # summary | embedding | turn_loop
     status = Column(String(16), nullable=False, default="pending")
     attempts = Column(Integer, nullable=False, server_default=text("0"))
-    max_attempts = Column(Integer, nullable=False, server_default=text("3"))
+    max_attempts = Column(Integer, nullable=False, server_default=text("5"))
     retry_later_count = Column(Integer, nullable=False, server_default=text("0"))
     # House cleaner: number of times a terminally-failed task has been
     # resurrected back to pending. Capped at 5 so genuinely broken work

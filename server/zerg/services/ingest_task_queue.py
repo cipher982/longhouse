@@ -46,11 +46,17 @@ logger = logging.getLogger(__name__)
 WORKER_POLL_SECONDS = 2.0
 HOT_WORKER_POLL_SECONDS = 0.5
 CLAIM_LIMIT = 1
+COLD_WORKER_CONCURRENCY = 4
+HOT_WORKER_CONCURRENCY = 1
+MAX_ATTEMPTS_DEFAULT = 5
 STALE_RUNNING_MINUTES = 30
 STALE_PENDING_SWEEP_BATCH = 1000
-TASK_TIMEOUT_SECONDS: dict[str, float] = {
-    "summary": 180.0,
-    "embedding": 30.0,
+# Tiered per-attempt timeouts. Fail-fast on attempt 1, ramp up to today's
+# 180s budget by attempt 5. Indexed by (attempts - 1); attempts is bumped
+# inside _claim_pending before execution starts, so the first run is 1.
+TASK_TIMEOUT_SECONDS_BY_ATTEMPT: dict[str, list[float]] = {
+    "summary": [30.0, 60.0, 90.0, 120.0, 180.0],
+    "embedding": [30.0, 30.0, 30.0, 30.0, 30.0],
 }
 RETRY_LATER_BASE_SECONDS = 2.0
 RETRY_LATER_MAX_SECONDS = 16.0
@@ -61,6 +67,20 @@ _hot_worker_loop: asyncio.AbstractEventLoop | None = None
 
 class RetryTaskLater(Exception):
     """Signal that a task should be re-queued without treating it as a hard failure."""
+
+
+def _timeout_for(task_type: str, attempts: int) -> float | None:
+    """Return per-attempt timeout in seconds, or None if untimed.
+
+    `attempts` is 1-indexed (the value already incremented by _claim_pending).
+    Clamps past the end of the tier list to the final entry so retries past
+    the array length still get a sane bound.
+    """
+    tiers = TASK_TIMEOUT_SECONDS_BY_ATTEMPT.get(task_type)
+    if not tiers:
+        return None
+    idx = max(0, min(attempts - 1, len(tiers) - 1))
+    return tiers[idx]
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +112,7 @@ def _enqueue_if_not_active(db, session_id: str, task_type: str) -> None:
         SessionTask(
             session_id=session_id,
             task_type=task_type,
+            max_attempts=MAX_ATTEMPTS_DEFAULT,
             created_at=now,
             updated_at=now,
         )
@@ -222,31 +243,43 @@ async def run_ingest_task_worker(
     worker_name: str = "default",
     include_task_types: tuple[str, ...] | None = None,
     exclude_task_types: tuple[str, ...] | None = None,
+    concurrency: int | None = None,
 ) -> None:
     """Background worker: poll and execute pending ingest tasks.
 
     Runs indefinitely. Launch as asyncio.create_task() from lifespan.
+
+    With concurrency > 1, the worker dispatches up to N task executions in
+    flight at once. A semaphore caps the live set; each completed task frees
+    a slot for the next claim. Hot lane stays at concurrency=1 (serial).
     """
-    logger.info(
-        "Ingest task worker started (name=%s poll=%.1fs claim_limit=%d include=%s exclude=%s)",
-        worker_name,
-        poll_seconds,
-        CLAIM_LIMIT,
-        include_task_types or (),
-        exclude_task_types or (),
-    )
     hot_lane = _is_hot_worker_lane(
         include_task_types=include_task_types,
         exclude_task_types=exclude_task_types,
     )
+    if concurrency is None:
+        concurrency = HOT_WORKER_CONCURRENCY if hot_lane else COLD_WORKER_CONCURRENCY
+    concurrency = max(1, concurrency)
+    logger.info(
+        "Ingest task worker started (name=%s poll=%.1fs concurrency=%d include=%s exclude=%s)",
+        worker_name,
+        poll_seconds,
+        concurrency,
+        include_task_types or (),
+        exclude_task_types or (),
+    )
     if hot_lane:
         _ensure_hot_worker_event()
+    semaphore = asyncio.Semaphore(concurrency)
+    in_flight: set[asyncio.Task] = set()
     while True:
         try:
             await _process_batch(
                 worker_name=worker_name,
                 include_task_types=include_task_types,
                 exclude_task_types=exclude_task_types,
+                semaphore=semaphore,
+                in_flight=in_flight,
             )
         except Exception:
             logger.exception("Ingest task worker %s: unexpected error in batch", worker_name)
@@ -288,37 +321,77 @@ async def _process_batch(
     worker_name: str = "default",
     include_task_types: tuple[str, ...] | None = None,
     exclude_task_types: tuple[str, ...] | None = None,
+    semaphore: asyncio.Semaphore | None = None,
+    in_flight: set[asyncio.Task] | None = None,
 ) -> None:
+    """Claim-then-dispatch loop.
+
+    Acquire a semaphore slot, claim one task through the write serializer,
+    dispatch it as a background asyncio.Task, then loop to claim more. The
+    inner loop never awaits a dispatched task's result — completion just
+    releases the semaphore via a done-callback. The outer worker sleep
+    yields the event loop when no work is available or all slots are busy.
+    """
+    if semaphore is None:
+        semaphore = asyncio.Semaphore(1)
+    if in_flight is None:
+        in_flight = set()
+
     while True:
         ws = get_write_serializer()
         if not ws.is_configured:
             return
-        # Cheap read-only peek before touching the write serializer — keeps
-        # "task-claim" counts meaningful (actual claims, not idle polls).
-        # Uses the serializer's own factory so patched test serializers work.
-        _session_maker = ws._resolve_session_factory()
-        has_work = await asyncio.to_thread(_peek_has_pending, _session_maker, include_task_types, exclude_task_types)
-        if not has_work:
-            return
-        tasks = await ws.execute(
-            lambda db, _include=include_task_types, _exclude=exclude_task_types: _claim_pending(
-                db,
-                CLAIM_LIMIT,
-                include_task_types=_include,
-                exclude_task_types=_exclude,
-            ),
-            label="task-claim",
-        )
+        # Block here until a slot frees. With concurrency=1 this matches the
+        # old serial behavior; with concurrency=N, claims pause when full.
+        await semaphore.acquire()
+        try:
+            # Cheap read-only peek before touching the write serializer — keeps
+            # "task-claim" counts meaningful (actual claims, not idle polls).
+            # Uses the serializer's own factory so patched test serializers work.
+            _session_maker = ws._resolve_session_factory()
+            has_work = await asyncio.to_thread(
+                _peek_has_pending, _session_maker, include_task_types, exclude_task_types
+            )
+            if not has_work:
+                semaphore.release()
+                return
+            tasks = await ws.execute(
+                lambda db, _include=include_task_types, _exclude=exclude_task_types: _claim_pending(
+                    db,
+                    CLAIM_LIMIT,
+                    include_task_types=_include,
+                    exclude_task_types=_exclude,
+                ),
+                label="task-claim",
+            )
 
-        if not tasks:
-            return
+            if not tasks:
+                semaphore.release()
+                return
 
-        task_id, session_id, task_type = tasks[0]
-        retried = await _execute_task(task_id, session_id, task_type)
-        if retried:
-            # Task was re-queued; break so the outer worker sleep provides a
-            # yield before we re-claim — prevents event-loop starvation.
-            break
+            task_id, session_id, task_type, attempts = tasks[0]
+        except BaseException:
+            semaphore.release()
+            raise
+
+        # Dispatch as a tracked background task. Releases the semaphore + drops
+        # itself from the in-flight set on completion (success, failure, retry).
+        async def _runner(_id=task_id, _sid=session_id, _type=task_type, _att=attempts):
+            try:
+                await _execute_task(_id, _sid, _type, _att)
+            except Exception:
+                logger.exception("Ingest task %s (%s/%s) crashed in dispatcher", _id, _type, _sid)
+
+        task_obj = asyncio.create_task(_runner(), name=f"ingest-task-{task_id}")
+        in_flight.add(task_obj)
+
+        def _on_done(t: asyncio.Task, _set=in_flight, _sem=semaphore):
+            _set.discard(t)
+            _sem.release()
+
+        task_obj.add_done_callback(_on_done)
+        # Loop: try to claim another. If the semaphore is saturated the next
+        # acquire() blocks until a slot frees — fairness via in-flight cap.
 
 
 def _claim_pending(
@@ -327,8 +400,8 @@ def _claim_pending(
     *,
     include_task_types: tuple[str, ...] | None = None,
     exclude_task_types: tuple[str, ...] | None = None,
-) -> list[tuple[str, str, str]]:
-    """Mark pending tasks as running; return (id, session_id, task_type) tuples."""
+) -> list[tuple[str, str, str, int]]:
+    """Mark pending tasks as running; return (id, session_id, task_type, attempts) tuples."""
     priority = case(
         (SessionTask.task_type == "summary", 1),
         else_=2,
@@ -354,15 +427,15 @@ def _claim_pending(
         task.status = "running"
         task.attempts = (task.attempts or 0) + 1
         task.updated_at = now
-        claimed.append((task.id, task.session_id, task.task_type))
+        claimed.append((task.id, task.session_id, task.task_type, task.attempts))
     # No commit — serializer auto-commits
     return claimed
 
 
-async def _execute_task(task_id: str, session_id: str, task_type: str) -> bool:
+async def _execute_task(task_id: str, session_id: str, task_type: str, attempts: int = 1) -> bool:
     """Execute a single task. Returns True if the task was re-queued (RetryTaskLater)."""
     ws = get_write_serializer()
-    timeout_seconds = TASK_TIMEOUT_SECONDS.get(task_type)
+    timeout_seconds = _timeout_for(task_type, attempts)
     try:
         if timeout_seconds is None:
             await _run_task_impl(task_id, session_id, task_type)
