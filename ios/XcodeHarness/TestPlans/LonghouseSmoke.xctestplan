@@ -7,14 +7,6 @@
         "language" : "en",
         "region" : "US"
       }
-    },
-    {
-      "id" : "F8A0D329-9463-4F8C-8FF4-E2B5256A5F2A",
-      "name" : "French",
-      "options" : {
-        "language" : "fr",
-        "region" : "FR"
-      }
     }
   ],
   "defaultOptions" : {
