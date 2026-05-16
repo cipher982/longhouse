@@ -123,7 +123,7 @@ def test_watchman_model_config_defaults_to_openrouter(monkeypatch):
 
     model_id, base_url, api_key_env, api_key, reasoning = ops_watchman._watchman_model_config()
 
-    assert model_id == "x-ai/grok-4.3"
+    assert model_id == "deepseek/deepseek-v4-pro"
     assert base_url == "https://openrouter.ai/api/v1"
     assert api_key_env == "OPENROUTER_API_KEY"
     assert api_key is None
@@ -160,7 +160,7 @@ async def test_run_watchman_cycle_persists_run_observations_and_incident(monkeyp
     }
 
     async def _fake_analyze(_context):
-        return analysis, usage, "x-ai/grok-4.3", None
+        return analysis, usage, "deepseek/deepseek-v4-pro", None
 
     monkeypatch.setattr(ops_watchman, "analyze_context", _fake_analyze)
     monkeypatch.setattr(ops_watchman, "send_alert_email", lambda *args, **kwargs: "msg-1")

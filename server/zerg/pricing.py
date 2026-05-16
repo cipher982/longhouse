@@ -17,6 +17,7 @@ MODEL_PRICES_USD_PER_1K: dict[str, Tuple[float, float]] = {
     "gpt-mock": (0.0, 0.0),
     # OpenRouter models (hosted instances) — pass-through pricing, no markup
     # Source: openrouter.ai/models (prices per 1K tokens)
+    "deepseek/deepseek-v4-pro": (0.00174, 0.00348),
     "x-ai/grok-4.3": (0.00125, 0.0025),
     "x-ai/grok-4": (0.003, 0.015),
     "openai/gpt-5-mini": (0.0003, 0.0012),

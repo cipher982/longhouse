@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 WATCHMAN_SOURCE = "ai_ops_watchman"
 WATCHMAN_PROMPT_VERSION = "2026-03-28.v1"
-DEFAULT_MODEL_ID = "x-ai/grok-4.3"
+DEFAULT_MODEL_ID = "deepseek/deepseek-v4-pro"
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_API_KEY_ENV = "OPENROUTER_API_KEY"
 DEFAULT_WINDOW_MINUTES = 10

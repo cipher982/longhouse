@@ -2,7 +2,7 @@
 """
 Docs drift detector — LLM-powered CI check for documentation accuracy.
 
-Sends the full PR diff + all doc pages to Grok 4.3 via OpenRouter.
+Sends the full PR diff + all doc pages to DeepSeek V4 Pro via OpenRouter.
 The model decides what's drifted. ~$0.01 per run, ~$1/month at 80 PRs.
 
 Non-blocking: posts a PR comment with findings. Never fails the build
@@ -27,7 +27,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DOCS_DIR = REPO_ROOT / "web" / "src" / "pages" / "docs"
 
-MODEL = "x-ai/grok-4.3"
+MODEL = "deepseek/deepseek-v4-pro"
 
 SYSTEM_PROMPT = """\
 You are a documentation accuracy reviewer for an open-source project called Longhouse.
@@ -86,7 +86,7 @@ def read_all_doc_pages() -> dict[str, str]:
 
 
 def call_llm(diff: str, doc_pages: dict[str, str], api_key: str) -> dict:
-    """Call Grok 4.3 via OpenRouter. Raises on failure."""
+    """Call DeepSeek V4 Pro via OpenRouter. Raises on failure."""
     doc_sections = [f"--- {name} ---\n{content}" for name, content in doc_pages.items()]
     docs_text = "\n\n".join(doc_sections)
 

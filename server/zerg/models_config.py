@@ -447,7 +447,7 @@ EMBEDDING_DIMS: int = _EMBEDDING_DEFAULT.get("dims", 256)
 # OpenAI models). Maps provider_name -> model_id.
 _DB_PROVIDER_DEFAULT_MODELS: dict[str, str] = {
     "openai": "gpt-4o-mini",
-    "openrouter": "x-ai/grok-4.3",
+    "openrouter": "deepseek/deepseek-v4-pro",
     "xai": "grok-4.3",
     "groq": "llama-3.3-70b-versatile",
     "ollama": "llama3.2",
