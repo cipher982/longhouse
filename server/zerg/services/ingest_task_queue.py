@@ -452,3 +452,171 @@ def _mark_status(db, task_id: str, final_status: str, error: str | None, retry: 
     # Always overwrite error: clears stale error on success, records new on failure
     task.error = error[:1000] if error is not None else None
     task.updated_at = datetime.now(timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# Failed task resurrector ("house cleaner")
+# ---------------------------------------------------------------------------
+
+RESURRECT_POLL_SECONDS = 300.0
+RESURRECT_BATCH_SIZE = 100
+RESURRECT_TIME_GATE_MINUTES = 30
+RESURRECT_MAX_CYCLES = 5
+RESURRECT_STARTUP_PACE_SECONDS = 1.0
+RESURRECT_EXHAUSTED_ERROR = "exhausted retries after 5 resurrection cycles"
+
+
+def _resurrect_failed_tasks_atomic(
+    db,
+    *,
+    batch_size: int,
+    time_gate_minutes: int | None,
+) -> int:
+    """Resurrect terminally-failed ingest tasks. MUST run inside WriteSerializer.
+
+    Single atomic flow per call: read candidates, check active dedup against
+    the same snapshot, decide outcome, write. Because this runs through the
+    write serializer's lock, no concurrent enqueue can interleave between the
+    "is there an active task?" check and the failed→pending flip.
+
+    Outcomes per failed candidate:
+      - session is already current for this task_type → mark done (clear error)
+      - another pending/running task exists for (session, type) → leave alone
+      - resurrection_count >= cap → stamp terminal error, leave failed
+      - otherwise → reset to pending (attempts=0, error=None), bump cycle
+
+    Returns the number of rows actually flipped to pending.
+    """
+    now = datetime.now(timezone.utc)
+    q = db.query(SessionTask).filter(SessionTask.status == "failed")
+    if time_gate_minutes is not None:
+        cutoff = now - timedelta(minutes=time_gate_minutes)
+        q = q.filter(SessionTask.updated_at < cutoff)
+    candidates = (
+        q.order_by(SessionTask.updated_at, SessionTask.id).limit(batch_size).all()
+    )
+    if not candidates:
+        return 0
+
+    resurrected = 0
+    for task in candidates:
+        # Active-task dedup: same (session_id, task_type) must not already have
+        # a pending or running peer. Read inside the same serializer txn — any
+        # concurrent enqueue is either fully visible here or fully after us.
+        active_peer = (
+            db.query(SessionTask.id)
+            .filter(
+                SessionTask.session_id == task.session_id,
+                SessionTask.task_type == task.task_type,
+                SessionTask.status.in_(["pending", "running"]),
+                SessionTask.id != task.id,
+            )
+            .first()
+        )
+        if active_peer:
+            continue
+
+        # If session is already current, the failed work is moot — close it.
+        session = (
+            db.query(AgentSession).filter(AgentSession.id == task.session_id).first()
+        )
+        if session is not None and _session_is_current(session, task.task_type):
+            task.status = "done"
+            task.error = None
+            task.updated_at = now
+            continue
+
+        next_cycle = (task.resurrection_count or 0) + 1
+        if next_cycle > RESURRECT_MAX_CYCLES:
+            # Don't churn updated_at — keeps the row sortable by oldest-first
+            # and prevents us from re-touching an already-terminal row each cycle.
+            if task.error != RESURRECT_EXHAUSTED_ERROR:
+                task.error = RESURRECT_EXHAUSTED_ERROR
+                task.updated_at = now
+            continue
+
+        task.resurrection_count = next_cycle
+        task.status = "pending"
+        task.attempts = 0
+        task.error = None
+        task.updated_at = now
+        resurrected += 1
+
+    return resurrected
+
+
+def _session_is_current(session: AgentSession, task_type: str) -> bool:
+    """Mirror of close_current_pending_tasks's currency rule, per task type."""
+    if task_type == "summary":
+        return (
+            (session.transcript_revision or 0) > 0
+            and (session.summary_revision or 0) >= (session.transcript_revision or 0)
+        )
+    if task_type == "embedding":
+        if (session.needs_embedding or 0) == 0:
+            return True
+        return (
+            (session.transcript_revision or 0) > 0
+            and (session.embedding_revision or 0) >= (session.transcript_revision or 0)
+        )
+    return False
+
+
+async def run_failed_task_resurrector(
+    *,
+    poll_seconds: float = RESURRECT_POLL_SECONDS,
+    batch_size: int = RESURRECT_BATCH_SIZE,
+) -> None:
+    """Background worker: resurrect terminally-failed ingest tasks.
+
+    First iteration: startup backfill with no time gate, paced batches so a
+    big stuck pile (e.g. ~2.5k rows from a model swap) doesn't hammer the
+    write serializer. Subsequent iterations: 30-minute time gate, single
+    batch per cycle, 5-minute polling.
+    """
+    logger.info(
+        "Failed-task resurrector started (poll=%.0fs batch=%d cap=%d cycles)",
+        poll_seconds,
+        batch_size,
+        RESURRECT_MAX_CYCLES,
+    )
+    ws = get_write_serializer()
+    # Startup backfill: drain everything failed without a time gate.
+    try:
+        total = 0
+        while True:
+            if not ws.is_configured:
+                break
+            count = await ws.execute(
+                lambda db, _bs=batch_size: _resurrect_failed_tasks_atomic(
+                    db, batch_size=_bs, time_gate_minutes=None
+                ),
+                label="task-resurrect",
+            )
+            total += count
+            if count < batch_size:
+                break
+            await asyncio.sleep(RESURRECT_STARTUP_PACE_SECONDS)
+        if total:
+            logger.info("Resurrector startup backfill: resurrected %d failed tasks", total)
+    except Exception:  # noqa: BLE001
+        logger.exception("Resurrector startup backfill failed")
+
+    # Steady-state loop: time-gated, single batch per cycle.
+    while True:
+        try:
+            await asyncio.sleep(poll_seconds)
+            if not ws.is_configured:
+                continue
+            count = await ws.execute(
+                lambda db, _bs=batch_size: _resurrect_failed_tasks_atomic(
+                    db, batch_size=_bs, time_gate_minutes=RESURRECT_TIME_GATE_MINUTES
+                ),
+                label="task-resurrect",
+            )
+            if count:
+                logger.info("Resurrector cycle: resurrected %d failed tasks", count)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.exception("Resurrector cycle failed")

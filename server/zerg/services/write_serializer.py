@@ -91,6 +91,7 @@ _LABEL_PRIORITIES: dict[str, int] = {
     "task-retry": 80,
     "task-timeout": 80,
     "task-fail": 80,
+    "task-resurrect": 85,
     "commis-claim": 85,
     "commis-reclaim": 85,
     "commis-reclaim-async": 85,
