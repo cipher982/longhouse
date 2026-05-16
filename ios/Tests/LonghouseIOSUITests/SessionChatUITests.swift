@@ -4,8 +4,6 @@ import XCTest
 
 @MainActor
 final class SessionChatUITests: XCTestCase {
-    private var app: XCUIApplication?
-
     private enum LaunchEnvironment {
         static let chatFixture = "LONGHOUSE_UI_TEST_CHAT_FIXTURE"
         static let chatEventCount = "LONGHOUSE_UI_TEST_CHAT_EVENT_COUNT"
@@ -13,16 +11,6 @@ final class SessionChatUITests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
-    }
-
-    override func tearDownWithError() throws {
-        if let app, testRun?.failureCount ?? 0 > 0 {
-            let attachment = XCTAttachment(screenshot: app.screenshot())
-            attachment.name = "\(name)-failure"
-            attachment.lifetime = .keepAlways
-            add(attachment)
-        }
-        app = nil
     }
 
     func testTranscriptStartsPinnedToLatestMessage() {
@@ -106,7 +94,6 @@ final class SessionChatUITests: XCTestCase {
         app.launchEnvironment[LaunchEnvironment.chatEventCount] = String(eventCount)
         app.launchArguments += ["-AppleInterfaceStyle", "Light"]
         app.launch()
-        self.app = app
         return app
     }
 
