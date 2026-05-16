@@ -42,7 +42,7 @@
       "deepseek/deepseek-v4-pro": {
         "displayName": "DeepSeek v4 Pro (OpenRouter)",
         "provider": "openrouter",
-        "description": "DeepSeek v4 Pro via OpenRouter - main default for text routing (large context)",
+        "description": "DeepSeek v4 Pro via OpenRouter - primary for reasoning and conversation lanes (loop_controller, fiche_conversation)",
         "baseUrl": "https://openrouter.ai/api/v1",
         "apiKeyEnvVar": "OPENROUTER_API_KEY",
         "capabilities": {
@@ -64,7 +64,7 @@
       "deepseek/deepseek-v4-flash": {
         "displayName": "DeepSeek v4 Flash (OpenRouter)",
         "provider": "openrouter",
-        "description": "DeepSeek v4 Flash via OpenRouter - fallback for high-volume summarization",
+        "description": "DeepSeek v4 Flash via OpenRouter - primary for high-volume summarization and reflection lanes",
         "baseUrl": "https://openrouter.ai/api/v1",
         "apiKeyEnvVar": "OPENROUTER_API_KEY",
         "capabilities": {
@@ -154,10 +154,10 @@
       "text": {
         "useCases": {
           "fiche_conversation": "deepseek/deepseek-v4-pro",
-          "summarization": "deepseek/deepseek-v4-pro",
-          "summary_update": "deepseek/deepseek-v4-pro",
-          "reflection": "deepseek/deepseek-v4-pro",
-          "bulk_classification": "deepseek/deepseek-v4-pro"
+          "summarization": "deepseek/deepseek-v4-flash",
+          "summary_update": "deepseek/deepseek-v4-flash",
+          "reflection": "deepseek/deepseek-v4-flash",
+          "bulk_classification": "deepseek/deepseek-v4-flash"
         },
         "defaults": {
           "fiche": "deepseek/deepseek-v4-pro",
@@ -170,10 +170,10 @@
       "text": {
         "useCases": {
           "fiche_conversation": "deepseek/deepseek-v4-pro",
-          "summarization": "deepseek/deepseek-v4-pro",
-          "summary_update": "deepseek/deepseek-v4-pro",
-          "reflection": "deepseek/deepseek-v4-pro",
-          "bulk_classification": "deepseek/deepseek-v4-pro"
+          "summarization": "deepseek/deepseek-v4-flash",
+          "summary_update": "deepseek/deepseek-v4-flash",
+          "reflection": "deepseek/deepseek-v4-flash",
+          "bulk_classification": "deepseek/deepseek-v4-flash"
         },
         "defaults": {
           "fiche": "deepseek/deepseek-v4-pro",
