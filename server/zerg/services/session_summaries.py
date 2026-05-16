@@ -244,7 +244,9 @@ async def generate_summary_impl(session_id: str) -> None:
             return
 
         new_event_dicts = events_to_dicts(new_events)
-        meaningful_count = sum(1 for e in new_event_dicts if e["role"] in ("user", "assistant") and e.get("content_text"))
+        meaningful_count = sum(
+            1 for e in new_event_dicts if e["role"] in ("user", "assistant") and e.get("content_text")
+        )
         if meaningful_count < 2:
             logger.debug("Only %d new messages for session %s, waiting for more", meaningful_count, session_id)
             await set_structured_title_if_empty(session_id)
@@ -276,7 +278,11 @@ async def generate_summary_impl(session_id: str) -> None:
                 try:
                     client, model, _provider = get_llm_client_preferring_db_config("summarization", db=_config_db)
                 except ValueError as e:
-                    logger.warning("Summarization misconfigured -- session %s will NOT be summarized: %s", session_id, e)
+                    logger.warning(
+                        "Summarization misconfigured -- session %s will NOT be summarized: %s",
+                        session_id,
+                        e,
+                    )
                     await set_structured_title_if_empty(session_id)
                     return
         finally:
@@ -403,6 +409,8 @@ async def generate_embeddings_background(session_id: str) -> None:
 
 
 async def generate_embeddings_impl(session_id: str) -> None:
+    from types import SimpleNamespace
+
     from zerg.database import get_session_factory
 
     session_factory = get_session_factory()
@@ -446,15 +454,27 @@ async def generate_embeddings_impl(session_id: str) -> None:
         if not events:
             return
 
+        session_snapshot = SimpleNamespace(
+            summary=session.summary,
+            summary_title=session.summary_title,
+        )
+        event_dicts = events_to_dicts(events)
+
         from zerg.services.embedding_cache import EmbeddingCache
         from zerg.services.session_processing.embeddings import embed_session
 
+        # Release the read connection before embedding API calls. Embeddings are
+        # best-effort background work and must not occupy the SQLite pool while
+        # realtime ingest/presence/lifecycle requests are waiting.
+        db.close()
+        db = None
+
         count = await embed_session(
             session_id,
-            session,
-            events,
+            session_snapshot,
+            event_dicts,
             config,
-            db,
+            None,
             transcript_revision=transcript_revision or None,
         )
         if count > 0:
@@ -462,7 +482,9 @@ async def generate_embeddings_impl(session_id: str) -> None:
             EmbeddingCache().invalidate()
 
     except Exception:
-        db.rollback()
+        if db is not None:
+            db.rollback()
         logger.exception("Failed to generate embeddings for session %s", session_id)
     finally:
-        db.close()
+        if db is not None:
+            db.close()
