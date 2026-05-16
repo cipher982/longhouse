@@ -60,7 +60,7 @@ TASK_TIMEOUT_SECONDS_BY_ATTEMPT: dict[str, list[float]] = {
 }
 RETRY_LATER_BASE_SECONDS = 2.0
 RETRY_LATER_MAX_SECONDS = 16.0
-HOT_INGEST_TASK_TYPES: tuple[str, ...] = ()
+HOT_INGEST_TASK_TYPES: tuple[str, ...] = ("turn_loop",)
 _hot_worker_event: asyncio.Event | None = None
 _hot_worker_loop: asyncio.AbstractEventLoop | None = None
 
@@ -418,7 +418,11 @@ def _claim_pending(
         pending_query = pending_query.filter(~SessionTask.task_type.in_(exclude_task_types))
     # RetryLater paths bump updated_at when they yield, so claim by updated_at
     # before created_at to keep a single re-queued task from pinning the queue.
-    pending = pending_query.order_by(priority, SessionTask.updated_at, SessionTask.created_at, SessionTask.id).limit(limit).all()
+    pending = (
+        pending_query.order_by(priority, SessionTask.updated_at, SessionTask.created_at, SessionTask.id)
+        .limit(limit)
+        .all()
+    )
     if not pending:
         return []
 
