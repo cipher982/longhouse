@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -30,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 # Max tokens for embedding input (OpenAI limit is 8191, keep conservative)
 MAX_EMBEDDING_TOKENS = 1800
+EMBEDDING_REQUEST_TIMEOUT_SECONDS = float(os.getenv("EMBEDDING_REQUEST_TIMEOUT_SECONDS", "10"))
 
 
 @dataclass
@@ -83,7 +86,7 @@ async def generate_embedding(text: str, config: "EmbeddingConfig") -> np.ndarray
     kwargs = build_openai_compatible_client_kwargs(
         provider=config.provider, api_key=config.api_key, base_url=getattr(config, "base_url", None)
     )
-    client = AsyncOpenAI(**kwargs)
+    client = AsyncOpenAI(**kwargs, max_retries=0, timeout=EMBEDDING_REQUEST_TIMEOUT_SECONDS)
     try:
         response = await client.embeddings.create(
             model=config.model,
@@ -236,18 +239,22 @@ async def embed_session(
     target_revision = int(transcript_revision or 0)
 
     # Convert ORM events to dicts for transcript building
-    event_dicts = [
-        {
-            "role": e.role,
-            "content_text": e.content_text,
-            "tool_name": e.tool_name,
-            "tool_input_json": e.tool_input_json,
-            "tool_output_text": e.tool_output_text,
-            "timestamp": e.timestamp,
-            "session_id": str(e.session_id),
-        }
-        for e in events
-    ]
+    event_dicts = []
+    for e in events:
+        if isinstance(e, Mapping):
+            event_dicts.append(dict(e))
+            continue
+        event_dicts.append(
+            {
+                "role": e.role,
+                "content_text": e.content_text,
+                "tool_name": e.tool_name,
+                "tool_input_json": e.tool_input_json,
+                "tool_output_text": e.tool_output_text,
+                "timestamp": e.timestamp,
+                "session_id": str(e.session_id),
+            }
+        )
 
     # --- Phase 1: Generate embeddings (network I/O, no DB) ---
     session_pending: _PendingEmbedding | None = None
@@ -364,4 +371,13 @@ async def embed_session(
         return count
 
     ws = get_write_serializer()
-    return await ws.execute_or_direct(_persist_embeddings, db, label="embeddings")
+    if ws.is_configured or db is not None:
+        return await ws.execute_or_direct(_persist_embeddings, db, label="embeddings")
+
+    from zerg.database import get_session_factory
+
+    fallback_db = get_session_factory()()
+    try:
+        return await ws.execute_or_direct(_persist_embeddings, fallback_db, label="embeddings")
+    finally:
+        fallback_db.close()
