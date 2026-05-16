@@ -83,16 +83,6 @@
           "reasoningNone": true
         }
       },
-      "x-ai/grok-4": {
-        "displayName": "Grok 4 (OpenRouter)",
-        "provider": "openrouter",
-        "description": "xAI Grok 4 full via OpenRouter - top-tier quality",
-        "baseUrl": "https://openrouter.ai/api/v1",
-        "apiKeyEnvVar": "OPENROUTER_API_KEY",
-        "capabilities": {
-          "reasoning": true
-        }
-      },
       "openai/gpt-5-mini": {
         "displayName": "GPT-5 Mini (OpenRouter)",
         "provider": "openrouter",
@@ -102,65 +92,6 @@
         "capabilities": {
           "reasoning": true,
           "reasoningNone": false
-        }
-      },
-      "grok-4-1-fast-reasoning": {
-        "displayName": "Grok 4.1 Fast (Reasoning, direct xAI)",
-        "provider": "xai",
-        "description": "xAI Grok 4.1 fast direct - legacy, prefer OpenRouter",
-        "baseUrl": "https://api.x.ai/v1",
-        "apiKeyEnvVar": "XAI_API_KEY",
-        "capabilities": {
-          "reasoning": true
-        }
-      },
-      "grok-4-1-fast-non-reasoning": {
-        "displayName": "Grok 4.1 Fast (direct xAI)",
-        "provider": "xai",
-        "description": "xAI Grok 4.1 fast direct - legacy, prefer OpenRouter",
-        "baseUrl": "https://api.x.ai/v1",
-        "apiKeyEnvVar": "XAI_API_KEY",
-        "capabilities": {
-          "reasoning": false
-        }
-      },
-      "meta-llama/llama-4-scout-17b-16e-instruct": {
-        "displayName": "Llama 4 Scout (Groq)",
-        "provider": "groq",
-        "description": "Meta's Llama 4 Scout via Groq LPU - blazing fast",
-        "baseUrl": "https://api.groq.com/openai/v1",
-        "capabilities": {
-          "reasoning": false
-        }
-      },
-      "qwen/qwen3-32b": {
-        "displayName": "Qwen 3 32B (Groq)",
-        "provider": "groq",
-        "description": "Alibaba's Qwen 3 32B via Groq LPU - fast general purpose",
-        "baseUrl": "https://api.groq.com/openai/v1",
-        "capabilities": {
-          "reasoning": true,
-          "reasoningNone": true
-        }
-      },
-      "glm-4.7": {
-        "displayName": "GLM 4.7 (z.ai)",
-        "provider": "anthropic",
-        "description": "Zhipu GLM-4.7 via z.ai Anthropic-compatible API",
-        "baseUrl": "https://api.z.ai/api/anthropic",
-        "apiKeyEnvVar": "ZAI_API_KEY",
-        "capabilities": {
-          "reasoning": true
-        }
-      },
-      "glm-4.7-flash": {
-        "displayName": "GLM 4.7 Flash (z.ai Free)",
-        "provider": "anthropic",
-        "description": "Free-tier GLM-4.7 Flash - good enough for summarization",
-        "baseUrl": "https://api.z.ai/api/anthropic",
-        "apiKeyEnvVar": "ZAI_API_KEY",
-        "capabilities": {
-          "reasoning": false
         }
       }
     }
