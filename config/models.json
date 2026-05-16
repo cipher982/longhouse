@@ -75,7 +75,7 @@
       "x-ai/grok-4.3": {
         "displayName": "Grok 4.3 (OpenRouter)",
         "provider": "openrouter",
-        "description": "xAI Grok 4.3 via OpenRouter - flagship fallback for harder tasks",
+        "description": "xAI Grok 4.3 via OpenRouter - expensive fallback for Grok-specific needs",
         "baseUrl": "https://openrouter.ai/api/v1",
         "apiKeyEnvVar": "OPENROUTER_API_KEY",
         "capabilities": {
