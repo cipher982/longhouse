@@ -567,6 +567,14 @@ class SessionResponse(UTCBaseModel):
     confidence: Optional[str] = Field(None, description="Runtime confidence: live|stale")
     summary: Optional[str] = Field(None, description="Session summary")
     summary_title: Optional[str] = Field(None, description="Short session title")
+    summary_status: Optional[str] = Field(
+        None,
+        description=(
+            "Honest summarization state: ready (summary present), pending (task queued/running), "
+            "failed (terminal — won't auto-retry), unavailable (no task / too little content). "
+            "Tiebreaker: ready > pending > failed > unavailable."
+        ),
+    )
     first_user_message: Optional[str] = Field(None, description="First user message (truncated)")
     match_event_id: Optional[int] = Field(None, description="Matching event id for search queries")
     match_snippet: Optional[str] = Field(None, description="Snippet of matching content")
@@ -1078,6 +1086,7 @@ def build_session_response(
     binding_overlay=None,
     transcript_preview: TranscriptPreview | None = None,
     owner_id: int | None = None,
+    summary_status: str | None = None,
 ) -> SessionResponse:
     cache = thread_cache if thread_cache is not None else {}
     thread_head_session_id, thread_continuation_count = get_thread_meta(store, session, cache)
@@ -1158,6 +1167,7 @@ def build_session_response(
         confidence=(runtime_overlay.confidence if include_runtime else None),
         summary=session.summary,
         summary_title=session.summary_title,
+        summary_status=summary_status,
         first_user_message=first_user_message,
         match_event_id=match_event_id,
         match_snippet=match_snippet,

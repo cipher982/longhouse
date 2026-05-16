@@ -8638,6 +8638,11 @@ export interface components {
              */
             summary_title?: string | null;
             /**
+             * Summary Status
+             * @description Honest summarization state: ready (summary present), pending (task queued/running), failed (terminal — won't auto-retry), unavailable (no task / too little content). Tiebreaker: ready > pending > failed > unavailable.
+             */
+            summary_status?: string | null;
+            /**
              * First User Message
              * @description First user message (truncated)
              */

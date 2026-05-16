@@ -184,6 +184,15 @@ func sessionFactStatus(_ facts: SessionLivenessFacts?) -> SessionFactStatus? {
     return SessionFactStatus(label: "Unknown", tone: "inactive", seenAt: nil, seenAtPrefix: "Checked")
 }
 
+/// Honest summarization state — mirrors backend `summary_status` field.
+/// Tiebreaker: ready > pending > failed > unavailable.
+enum SummaryStatus: String, Codable, Sendable, Hashable {
+    case ready
+    case pending
+    case failed
+    case unavailable
+}
+
 struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     let id: String
     let title: String
@@ -192,6 +201,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     let project: String?
     let lastActivityAt: String?
     let summary: String?
+    let summaryStatus: String?
     let userState: String?
     let status: String?
     let displayPhase: String?
@@ -218,6 +228,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         project: String?,
         lastActivityAt: String?,
         summary: String? = nil,
+        summaryStatus: String? = nil,
         userState: String? = nil,
         status: String? = nil,
         displayPhase: String? = nil,
@@ -243,6 +254,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         self.project = project
         self.lastActivityAt = lastActivityAt
         self.summary = summary
+        self.summaryStatus = summaryStatus
         self.userState = userState
         self.status = status
         self.displayPhase = displayPhase
@@ -483,6 +495,15 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
             return nil
         }
         return summary
+    }
+
+    /// Decoded summary lifecycle. Falls back to inferring from `summary` when
+    /// the backend hasn't supplied an explicit status (older payloads).
+    var summaryStatusValue: SummaryStatus {
+        if let raw = summaryStatus, let value = SummaryStatus(rawValue: raw) {
+            return value
+        }
+        return summaryPreview != nil ? .ready : .unavailable
     }
 
     static func attentionWidgetOrder(_ sessions: [SessionSummary], limit: Int) -> [SessionSummary] {
