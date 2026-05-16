@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -46,7 +47,7 @@ logger = logging.getLogger(__name__)
 WORKER_POLL_SECONDS = 2.0
 HOT_WORKER_POLL_SECONDS = 0.5
 CLAIM_LIMIT = 1
-COLD_WORKER_CONCURRENCY = 4
+COLD_WORKER_CONCURRENCY = int(os.getenv("COLD_INGEST_WORKER_CONCURRENCY", "1"))
 HOT_WORKER_CONCURRENCY = 1
 MAX_ATTEMPTS_DEFAULT = 5
 STALE_RUNNING_MINUTES = 30

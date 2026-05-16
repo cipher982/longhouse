@@ -1,8 +1,10 @@
-"""Tests for concurrent cold-lane ingest worker + tiered timeouts.
+"""Tests for cold-lane ingest worker + tiered timeouts.
 
-The cold worker dispatches up to COLD_WORKER_CONCURRENCY task executions in
-flight at once, gated by a semaphore. Hot worker stays serial. Per-attempt
-timeouts ramp from fail-fast (30s) up to today's full budget (180s).
+The cold worker can dispatch multiple task executions in flight at once,
+gated by a semaphore. Production defaults conservative for hosted SQLite,
+but the worker still supports explicit concurrency for controlled deployments.
+Hot worker stays serial. Per-attempt timeouts ramp from fail-fast (30s) up to
+today's full budget (180s).
 """
 
 from __future__ import annotations
@@ -22,7 +24,6 @@ from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionTask
 from zerg.services import ingest_task_queue as itq
-from zerg.services.ingest_task_queue import COLD_WORKER_CONCURRENCY
 from zerg.services.ingest_task_queue import MAX_ATTEMPTS_DEFAULT
 from zerg.services.ingest_task_queue import _timeout_for
 from zerg.services.write_serializer import WriteSerializer
@@ -114,6 +115,10 @@ def test_hot_worker_lane_is_turn_loop_only():
         include_task_types=(),
         exclude_task_types=None,
     )
+
+
+def test_cold_worker_default_concurrency_is_conservative():
+    assert itq.COLD_WORKER_CONCURRENCY == 1
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +215,7 @@ def test_cold_worker_runs_tasks_concurrently(tmp_path, monkeypatch):
         monkeypatch,
         impl=fake_impl,
         task_count=8,
-        concurrency=COLD_WORKER_CONCURRENCY,
+        concurrency=4,
         db_name="cold_concurrent.db",
         settle_timeout=8.0,
     )
@@ -229,7 +234,7 @@ def test_cold_worker_runs_tasks_concurrently(tmp_path, monkeypatch):
 
     # Concurrency was actually exercised: peak >= 2, capped at 4.
     assert in_flight_peak["value"] >= 2
-    assert in_flight_peak["value"] <= COLD_WORKER_CONCURRENCY
+    assert in_flight_peak["value"] <= 4
 
     # Wall clock significantly less than serial (8 * 0.4 = 3.2s). Two waves
     # of 4 ~= 0.8s of work; allow scheduling/poll slack but require beating
