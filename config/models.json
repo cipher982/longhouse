@@ -39,10 +39,21 @@
           "reasoningNone": false
         }
       },
+      "minimax/minimax-m2.7": {
+        "displayName": "MiniMax M2.7 (OpenRouter)",
+        "provider": "openrouter",
+        "description": "MiniMax M2.7 via OpenRouter - main default for text routing",
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "apiKeyEnvVar": "OPENROUTER_API_KEY",
+        "capabilities": {
+          "reasoning": true,
+          "reasoningNone": true
+        }
+      },
       "deepseek/deepseek-v4-flash": {
         "displayName": "DeepSeek v4 Flash (OpenRouter)",
         "provider": "openrouter",
-        "description": "DeepSeek v4 Flash via OpenRouter - main default for text routing",
+        "description": "DeepSeek v4 Flash via OpenRouter - non-default option",
         "baseUrl": "https://openrouter.ai/api/v1",
         "apiKeyEnvVar": "OPENROUTER_API_KEY",
         "capabilities": {
@@ -175,7 +186,7 @@
     "$comment": "Maps use cases to tiers - quality-critical tasks get TIER_1 even for small outputs",
     "text": {
       "fiche_conversation": "TIER_1",
-      "loop_controller": "deepseek/deepseek-v4-flash",
+      "loop_controller": "minimax/minimax-m2.7",
       "routing_decision": "TIER_1",
       "tool_selection": "TIER_1",
       "commis_task": "TIER_1",
@@ -200,15 +211,15 @@
       "$comment": "Hosted instances: all internal tasks route through OpenRouter. Commis/agent execution is NOT here — those spawn CLI agents with their own model selection via hatch.",
       "text": {
         "useCases": {
-          "fiche_conversation": "deepseek/deepseek-v4-flash",
-          "summarization": "deepseek/deepseek-v4-flash",
-          "summary_update": "deepseek/deepseek-v4-flash",
-          "reflection": "deepseek/deepseek-v4-flash",
-          "bulk_classification": "deepseek/deepseek-v4-flash"
+          "fiche_conversation": "minimax/minimax-m2.7",
+          "summarization": "minimax/minimax-m2.7",
+          "summary_update": "minimax/minimax-m2.7",
+          "reflection": "minimax/minimax-m2.7",
+          "bulk_classification": "minimax/minimax-m2.7"
         },
         "defaults": {
-          "fiche": "deepseek/deepseek-v4-flash",
-          "test": "deepseek/deepseek-v4-flash"
+          "fiche": "minimax/minimax-m2.7",
+          "test": "minimax/minimax-m2.7"
         }
       }
     },
@@ -216,15 +227,15 @@
       "$comment": "David's instance: use OpenRouter for text routing; embeddings stay on the embedding provider.",
       "text": {
         "useCases": {
-          "fiche_conversation": "deepseek/deepseek-v4-flash",
-          "summarization": "deepseek/deepseek-v4-flash",
-          "summary_update": "deepseek/deepseek-v4-flash",
-          "reflection": "deepseek/deepseek-v4-flash",
-          "bulk_classification": "deepseek/deepseek-v4-flash"
+          "fiche_conversation": "minimax/minimax-m2.7",
+          "summarization": "minimax/minimax-m2.7",
+          "summary_update": "minimax/minimax-m2.7",
+          "reflection": "minimax/minimax-m2.7",
+          "bulk_classification": "minimax/minimax-m2.7"
         },
         "defaults": {
-          "fiche": "deepseek/deepseek-v4-flash",
-          "test": "deepseek/deepseek-v4-flash"
+          "fiche": "minimax/minimax-m2.7",
+          "test": "minimax/minimax-m2.7"
         }
       }
     }
