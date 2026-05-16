@@ -176,11 +176,14 @@ async def smoke_text_anthropic(model_id: str, api_key: str, base_url: str | None
         await client.close()
 
 
-async def smoke_embedding(model_id: str, api_key: str, dims: int) -> str:
+async def smoke_embedding(model_id: str, api_key: str, dims: int, base_url: str | None = None) -> str:
     """Ping an embedding model."""
     from openai import AsyncOpenAI
 
-    client = AsyncOpenAI(api_key=api_key, timeout=15.0)
+    kwargs: dict = {"api_key": api_key, "timeout": 15.0}
+    if base_url:
+        kwargs["base_url"] = base_url
+    client = AsyncOpenAI(**kwargs)
     try:
         resp = await client.embeddings.create(model=model_id, input="test", dimensions=dims)
         if resp.data and len(resp.data[0].embedding) == dims:
@@ -207,7 +210,7 @@ async def smoke_one_model(model_id: str, model_info: dict, category: str) -> dic
 
     try:
         if category == "embedding":
-            result = await smoke_embedding(model_id, api_key, model_info.get("dims", 256))
+            result = await smoke_embedding(model_id, api_key, model_info.get("dims", 256), base_url)
         elif provider == "anthropic":
             result = await smoke_text_anthropic(model_id, api_key, base_url)
         else:
