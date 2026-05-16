@@ -371,13 +371,15 @@ async def embed_session(
         return count
 
     ws = get_write_serializer()
-    if ws.is_configured or db is not None:
-        return await ws.execute_or_direct(_persist_embeddings, db, label="embeddings")
+    fallback_db = db
+    owns_fallback = False
+    if fallback_db is None:
+        from zerg.database import get_session_factory
 
-    from zerg.database import get_session_factory
-
-    fallback_db = get_session_factory()()
+        fallback_db = get_session_factory()()
+        owns_fallback = True
     try:
         return await ws.execute_or_direct(_persist_embeddings, fallback_db, label="embeddings")
     finally:
-        fallback_db.close()
+        if owns_fallback:
+            fallback_db.close()
