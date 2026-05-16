@@ -641,6 +641,10 @@ class SessionTask(AgentsBase):
     attempts = Column(Integer, nullable=False, server_default=text("0"))
     max_attempts = Column(Integer, nullable=False, server_default=text("3"))
     retry_later_count = Column(Integer, nullable=False, server_default=text("0"))
+    # House cleaner: number of times a terminally-failed task has been
+    # resurrected back to pending. Capped at 5 so genuinely broken work
+    # eventually stays terminal instead of looping forever.
+    resurrection_count = Column(Integer, nullable=False, server_default=text("0"))
     error = Column(Text, nullable=True)
     created_at = Column(
         DateTime(timezone=True),
