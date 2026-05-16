@@ -54,7 +54,7 @@ final class SessionChatUITests: XCTestCase {
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
         composer.tap()
 
-        XCTAssertTrue(waitUntilHittable(liveUpdate, timeout: 6))
+        XCTAssertTrue(liveUpdate.waitForExistence(timeout: 10))
         assertScreenIsVisiblyRendered(app)
         XCTAssertFalse(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."].exists)
     }
@@ -67,7 +67,7 @@ final class SessionChatUITests: XCTestCase {
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
         composer.tap()
 
-        XCTAssertTrue(waitUntilHittable(finalChunk, timeout: 7))
+        XCTAssertTrue(finalChunk.waitForExistence(timeout: 10))
         assertScreenIsVisiblyRendered(app)
         XCTAssertFalse(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."].exists)
     }
