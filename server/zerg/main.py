@@ -323,8 +323,10 @@ async def serve_config_js():
         parsed = _urlparse(base_url)
         ws_host = f"{ws_scheme}://{parsed.netloc}"
 
-    _llm_avail_bool = _settings.llm_available
-    _emb_avail_bool = bool(os.getenv("OPENAI_API_KEY"))
+    from zerg.models_config import is_capability_available
+
+    _llm_avail_bool = is_capability_available("text")
+    _emb_avail_bool = is_capability_available("embedding")
     google_client_id = "" if _settings.control_plane_url else (_settings.google_client_id or "")
     runtime_config = {
         "API_BASE_URL": "/api",
