@@ -94,6 +94,13 @@ final class SessionChatUITests: XCTestCase {
         app.launchEnvironment[LaunchEnvironment.chatEventCount] = String(eventCount)
         app.launchArguments += ["-AppleInterfaceStyle", "Light"]
         app.launch()
+        addTeardownBlock { [weak self] in
+            guard let self, (self.testRun?.failureCount ?? 0) > 0 else { return }
+            let attachment = XCTAttachment(screenshot: app.screenshot())
+            attachment.name = "\(self.name)-failure"
+            attachment.lifetime = .keepAlways
+            self.add(attachment)
+        }
         return app
     }
 
