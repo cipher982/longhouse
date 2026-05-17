@@ -560,7 +560,7 @@ def _migrate_agents_columns(engine: Engine) -> None:
         with engine.connect() as conn:
             columns = {row[1] for row in conn.execute(text("PRAGMA table_info(sessions)"))}
             # Pure additive ALTER ADDs (summary, summary_title, needs_embedding,
-            # summary_event_count, last_summarized_event_id, reflected_at,
+            # summary_event_count, last_summarized_event_id,
             # last_attention_push_at, last_attention_push_state, user_state,
             # user_state_at, managed_transport, source_runner_id,
             # source_runner_name, managed_session_name, loop_thread_id,
@@ -726,6 +726,16 @@ def _migrate_agents_columns(engine: Engine) -> None:
     except Exception:
         logger.exception("session_runtime_events table removal failed")
         raise
+
+    # Reflection feature removed — drop table and stamping column.
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS reflection_runs"))
+            session_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(sessions)"))}
+            if "reflected_at" in session_cols:
+                conn.execute(text("ALTER TABLE sessions DROP COLUMN reflected_at"))
+    except Exception:
+        logger.debug("reflection cleanup skipped", exc_info=True)
 
     try:
         with engine.connect() as conn:

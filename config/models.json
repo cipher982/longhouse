@@ -67,8 +67,7 @@
     "$comment": "Maps active text use cases to the two standard Longhouse lanes.",
     "text": {
       "summarization": "TIER_2",
-      "summary_update": "TIER_3",
-      "reflection": "TIER_2"
+      "summary_update": "TIER_3"
     },
     "realtime": {
       "voice_conversation": "TIER_1",

@@ -279,7 +279,6 @@ def get_model_for_use_case(use_case: str) -> str:
     Use cases (defined in config/models.json):
     - summarization: TIER_2 (cost-sensitive background summaries)
     - summary_update: TIER_3 (incremental session summaries)
-    - reflection: TIER_2 (batch insight extraction)
 
     Values can be tier references (e.g. "TIER_1") or direct model IDs (e.g. "glm-4.7").
     """

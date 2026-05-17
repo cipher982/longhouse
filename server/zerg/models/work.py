@@ -23,10 +23,9 @@ from sqlalchemy.sql import func
 from zerg.models.agents import AgentsBase
 from zerg.models.types import GUID
 
-# Shared constant: dedup window for insights (used by router, reflection service)
+# Shared constant: dedup window for insights (used by router)
 INSIGHT_DEDUP_WINDOW_DAYS = 7
 INSIGHT_ORIGIN_MANUAL = "manual"
-INSIGHT_ORIGIN_REFLECTION = "reflection"
 INSIGHT_ORIGIN_SYSTEM = "system"
 OPERATIONAL_INCIDENT_STATUS_OPEN = "open"
 OPERATIONAL_INCIDENT_STATUS_RESOLVED = "resolved"
@@ -119,35 +118,6 @@ class OpsWatchRun(AgentsBase):
     estimated_cost_usd = Column(Float, nullable=True)
     usage_json = Column(JSON, nullable=True)
     result_json = Column(JSON, nullable=True)
-    error = Column(Text, nullable=True)
-
-
-class ReflectionRun(AgentsBase):
-    """A single reflection run — batch analysis of recent sessions to extract insights."""
-
-    __tablename__ = "reflection_runs"
-
-    id = Column(GUID(), primary_key=True, default=uuid4)
-    project = Column(String(255), index=True, nullable=True)  # null = cross-project
-    started_at = Column(DateTime, server_default=func.now())
-    completed_at = Column(DateTime, nullable=True)
-    status = Column(String(20), default="running")  # running, completed, failed
-
-    # What was analyzed
-    session_count = Column(Integer, default=0)
-    window_hours = Column(Integer, default=24)
-
-    # What was produced
-    insights_created = Column(Integer, default=0)
-    insights_merged = Column(Integer, default=0)
-    insights_skipped = Column(Integer, default=0)
-
-    # LLM metadata
-    model = Column(String(100), nullable=True)
-    prompt_tokens = Column(Integer, nullable=True)
-    completion_tokens = Column(Integer, nullable=True)
-
-    # Error tracking
     error = Column(Text, nullable=True)
 
 
