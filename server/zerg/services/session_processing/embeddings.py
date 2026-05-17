@@ -14,6 +14,7 @@ from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from datetime import timezone
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -46,6 +47,7 @@ class EmbeddingChunk:
     """A chunk of text ready for embedding."""
 
     kind: str  # "session" or "turn"
+    # Turn indices are clean-message indices, not raw DB row ids.
     chunk_index: int  # -1 for session, >=0 for turn
     text: str
     content_hash: str
@@ -210,8 +212,24 @@ class _TranscriptTurn:
     event_index_end: int
 
 
+def _event_sort_key(event: dict) -> tuple[datetime, int]:
+    timestamp = event.get("timestamp")
+    if isinstance(timestamp, datetime):
+        ts = timestamp
+    elif isinstance(timestamp, str):
+        try:
+            ts = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        except ValueError:
+            ts = datetime.min.replace(tzinfo=timezone.utc)
+    else:
+        ts = datetime.min.replace(tzinfo=timezone.utc)
+    if ts.tzinfo is not None:
+        ts = ts.astimezone(timezone.utc).replace(tzinfo=None)
+    return ts, int(event.get("id") or 0)
+
+
 def _iter_clean_turns(events: list[dict]) -> Iterator[_TranscriptTurn]:
-    ordered = sorted(events, key=lambda e: e.get("timestamp") or datetime.min)
+    ordered = sorted(events, key=_event_sort_key)
     current_role: str | None = None
     current_texts: list[str] = []
     current_start = 0
@@ -316,7 +334,12 @@ def _load_existing_embeddings(
     from zerg.models.agents import SessionEmbedding
 
     rows = (
-        db.query(SessionEmbedding)
+        db.query(
+            SessionEmbedding.kind,
+            SessionEmbedding.chunk_index,
+            SessionEmbedding.content_hash,
+            SessionEmbedding.dims,
+        )
         .filter(
             SessionEmbedding.session_id == session_id,
             SessionEmbedding.model == model,
@@ -324,11 +347,11 @@ def _load_existing_embeddings(
         .all()
     )
     return {
-        (row.kind, row.chunk_index): _ExistingEmbedding(
-            content_hash=row.content_hash,
-            dims=row.dims,
+        (kind, chunk_index): _ExistingEmbedding(
+            content_hash=row_hash,
+            dims=dims,
         )
-        for row in rows
+        for kind, chunk_index, row_hash, dims in rows
     }
 
 
@@ -505,6 +528,7 @@ async def embed_session(
                 "tool_output_text": e.tool_output_text,
                 "timestamp": e.timestamp,
                 "session_id": str(e.session_id),
+                "id": e.id,
             }
         )
 

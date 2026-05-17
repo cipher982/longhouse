@@ -440,7 +440,7 @@ async def generate_embeddings_impl(session_id: str) -> bool:
             db.query(AgentEvent)
             .filter(AgentEvent.session_id == session_id)
             .filter(durable_transcript_event_predicate())
-            .order_by(AgentEvent.timestamp)
+            .order_by(AgentEvent.timestamp, AgentEvent.id)
             .all()
         )
         if not events:
@@ -478,6 +478,8 @@ async def generate_embeddings_impl(session_id: str) -> bool:
                 remaining,
             )
             EmbeddingCache().invalidate()
+        if remaining > 0 and written == 0:
+            raise RuntimeError("Embedding reconciliation made no progress")
         if remaining == 0:
             await mark_session_embedding_complete(
                 session_id,

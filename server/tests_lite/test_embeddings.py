@@ -216,6 +216,37 @@ def test_turn_chunks_event_indices(tmp_path):
     assert chunks[1].event_index_end == 3
 
 
+def test_turn_chunks_break_equal_timestamps_by_event_id(tmp_path):
+    """Equal event timestamps use the durable row id for stable transcript order."""
+    events = [
+        {
+            "id": 2,
+            "role": "assistant",
+            "content_text": "Then the answer.",
+            "tool_name": None,
+            "tool_input_json": None,
+            "tool_output_text": None,
+            "timestamp": "2026-01-01T00:00:00Z",
+            "session_id": "test",
+        },
+        {
+            "id": 1,
+            "role": "user",
+            "content_text": "First the question.",
+            "tool_name": None,
+            "tool_input_json": None,
+            "tool_output_text": None,
+            "timestamp": datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc),
+            "session_id": "test",
+        },
+    ]
+
+    chunks = prepare_turn_chunks(events)
+
+    assert len(chunks) == 1
+    assert chunks[0].text.index("First the question.") < chunks[0].text.index("Then the answer.")
+
+
 def test_embedding_upsert(tmp_path):
     """SessionEmbedding can be inserted and queried back."""
     SessionLocal = _make_db(tmp_path)

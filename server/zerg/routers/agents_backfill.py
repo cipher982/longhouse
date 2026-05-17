@@ -168,7 +168,7 @@ async def _run_backfill(
                             db.query(AgentEvent)
                             .filter(AgentEvent.session_id == session_id)
                             .filter(durable_transcript_event_predicate())
-                            .order_by(AgentEvent.timestamp)
+                            .order_by(AgentEvent.timestamp, AgentEvent.id)
                             .all()
                         )
                         if not events:
@@ -344,6 +344,8 @@ async def _run_embedding_backfill(
                                 transcript_revision=int(getattr(sess, "transcript_revision", 0) or 0),
                                 db=db,
                             )
+                        if remaining > 0 and written == 0:
+                            raise RuntimeError("Embedding reconciliation made no progress")
                         if written > 0:
                             _embedding_backfill_state["embedded"] += 1
                         else:
