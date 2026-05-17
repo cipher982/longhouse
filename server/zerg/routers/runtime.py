@@ -157,6 +157,7 @@ async def ingest_runtime_observation_batch(
                                 current_state=canonical_state,
                                 current_tool_name=tool,
                                 occurred_at=now_utc,
+                                runtime_state_map=runtime_state_map,
                             ),
                         }
                     )
