@@ -16,6 +16,8 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.metrics import event_age_at_ingest_seconds
 from zerg.models.agents import AgentSession
+from zerg.services.apns_sender import WIDGET_PUSH_PLATFORM
+from zerg.services.apns_sender import active_ios_targets_for_owner
 from zerg.services.apns_sender import prepare_session_attention_push
 from zerg.services.apns_sender import prepare_session_attention_resolution_push
 from zerg.services.apns_sender import prepare_session_live_activity_pushes
@@ -86,7 +88,33 @@ async def ingest_runtime_observation_batch(
 
             # Prepare per-session pushes on the post-ingest state.
             prepared: list[dict] = []
+            widget_push = None
             if session_ids_in_batch:
+                # Pre-fetch APNs target sets ONCE per (owner, platform) for the batch
+                # rather than per-session × per-prep-fn. The widget timeline push is
+                # owner-scoped (not session-scoped), so prepare it ONCE per batch.
+                ios_targets = (
+                    active_ios_targets_for_owner(wdb, owner_id=owner_id, log_context="runtime batch")
+                    if owner_id is not None
+                    else None
+                )
+                widget_targets = (
+                    active_ios_targets_for_owner(
+                        wdb,
+                        owner_id=owner_id,
+                        platform=WIDGET_PUSH_PLATFORM,
+                        log_context="runtime batch widget",
+                    )
+                    if owner_id is not None
+                    else None
+                )
+                widget_push = prepare_widget_timeline_push(
+                    wdb,
+                    owner_id=owner_id,
+                    occurred_at=now_utc,
+                    targets=widget_targets,
+                )
+
                 session_rows = wdb.query(AgentSession).filter(AgentSession.id.in_(session_ids_in_batch)).all()
                 runtime_state_map = load_runtime_state_map(wdb, session_ids_in_batch)
                 for session_row in session_rows:
@@ -111,6 +139,7 @@ async def ingest_runtime_observation_batch(
                                 current_state=canonical_state,
                                 occurred_at=now_utc,
                                 current_tool_name=tool,
+                                targets=ios_targets,
                             ),
                             "attention_resolution_push": prepare_session_attention_resolution_push(
                                 wdb,
@@ -119,11 +148,7 @@ async def ingest_runtime_observation_batch(
                                 previous_state=prev,
                                 current_state=canonical_state,
                                 occurred_at=now_utc,
-                            ),
-                            "widget_push": prepare_widget_timeline_push(
-                                wdb,
-                                owner_id=owner_id,
-                                occurred_at=now_utc,
+                                targets=ios_targets,
                             ),
                             "live_activity_pushes": prepare_session_live_activity_pushes(
                                 wdb,
@@ -135,9 +160,11 @@ async def ingest_runtime_observation_batch(
                             ),
                         }
                     )
-            return ingest_result, prepared
+            return ingest_result, prepared, widget_push
 
-        result, prepared_per_session = await ws.execute_or_direct(_do, db, label="runtime-observations")
+        result, prepared_per_session, widget_push = await ws.execute_or_direct(
+            _do, db, label="runtime-observations"
+        )
 
         # Publish per-session after a successful write; SSE subscribers wake directly.
         updated_runtime_keys = set(result.updated_runtime_keys)
@@ -160,14 +187,33 @@ async def ingest_runtime_observation_batch(
 
         # Send pre-prepared APNs pushes + deliver queued messages, per session.
         # Per-session exception fence so one bad dispatch doesn't skip the rest.
-        for item in prepared_per_session:
+        # The widget timeline push is owner-scoped and fires once per batch (on
+        # the first session iteration); subsequent iterations pass widget_push=None.
+        # If there are no prepared sessions but a widget push exists, send it standalone.
+        if widget_push is not None and not prepared_per_session:
+            try:
+                await send_presence_pushes(
+                    attention_push=None,
+                    attention_resolution_push=None,
+                    widget_push=widget_push,
+                    live_activity_pushes=(),
+                    db=db,
+                    ws=ws,
+                    dispatch_label_prefix="runtime",
+                )
+            except Exception:
+                import logging
+
+                logging.getLogger(__name__).exception("APNs widget dispatch failed; continuing")
+
+        for index, item in enumerate(prepared_per_session):
             sid = item["session_id"]
             canonical_state = item["canonical_state"]
             try:
                 await send_presence_pushes(
                     attention_push=item["attention_push"],
                     attention_resolution_push=item["attention_resolution_push"],
-                    widget_push=item["widget_push"],
+                    widget_push=widget_push if index == 0 else None,
                     live_activity_pushes=item["live_activity_pushes"],
                     db=db,
                     ws=ws,

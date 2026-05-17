@@ -3248,3 +3248,79 @@ def test_older_terminal_signal_does_not_override_newer_progress(tmp_path):
         assert view.confidence == "stale"
 
     engine.dispose()
+
+
+def test_runtime_batch_hoists_apns_prep_per_batch(tmp_path, monkeypatch):
+    """5-session batch must call _active_ios_targets_for_owner at most twice
+    (once per platform: ios + ios_widget) and prepare_widget_timeline_push exactly
+    once per batch — not per session × per push type."""
+    from zerg.services import apns_sender
+
+    engine, SessionLocal = _make_db(tmp_path, "runtime_apns_hoist.db")
+    now = datetime.now(timezone.utc)
+
+    sessions: list[AgentSession] = []
+    runtime_keys: list[str] = []
+    with SessionLocal() as db:
+        for _ in range(5):
+            s = _seed_session(db, started_at=now - timedelta(minutes=20))
+            sessions.append(s)
+            runtime_keys.append(runtime_key_for_session("claude", str(s.id)))
+
+    targets_call_count = {"n": 0}
+    widget_prep_call_count = {"n": 0}
+
+    real_targets = apns_sender._active_ios_targets_for_owner
+
+    def counting_targets(*args, **kwargs):
+        targets_call_count["n"] += 1
+        return real_targets(*args, **kwargs)
+
+    real_widget = apns_sender.prepare_widget_timeline_push
+
+    def counting_widget(*args, **kwargs):
+        widget_prep_call_count["n"] += 1
+        return real_widget(*args, **kwargs)
+
+    # Patch in both places: the apns_sender module (used by prepare_*) and the
+    # runtime router module (which imports the public alias and the prep fn directly).
+    monkeypatch.setattr(apns_sender, "_active_ios_targets_for_owner", counting_targets)
+    monkeypatch.setattr(apns_sender, "active_ios_targets_for_owner", counting_targets)
+    monkeypatch.setattr(apns_sender, "prepare_widget_timeline_push", counting_widget)
+    from zerg.routers import runtime as runtime_router
+
+    monkeypatch.setattr(runtime_router, "active_ios_targets_for_owner", counting_targets)
+    monkeypatch.setattr(runtime_router, "prepare_widget_timeline_push", counting_widget)
+
+    for client in _client(SessionLocal):
+        events = []
+        for s, rk in zip(sessions, runtime_keys, strict=True):
+            events.append(
+                {
+                    "runtime_key": rk,
+                    "session_id": str(s.id),
+                    "provider": "claude",
+                    "device_id": "cinder",
+                    "source": "claude_hook",
+                    "kind": "phase_signal",
+                    "phase": "thinking",
+                    "occurred_at": (now - timedelta(seconds=10)).isoformat(),
+                    "freshness_ms": phase_freshness_ms("thinking"),
+                    "dedupe_key": f"hoist-{s.id}",
+                    "payload": {},
+                }
+            )
+        resp = client.post(
+            "/agents/runtime/events/batch",
+            json={"events": events},
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert resp.status_code == 200, resp.text
+
+    # 5-session batch: targets pre-fetched once per platform (ios + ios_widget) = 2.
+    # Old code: 2 prep fns × 5 sessions (ios) + 1 prep fn × 5 sessions (widget) = 15.
+    assert targets_call_count["n"] == 2, f"expected 2 target lookups, got {targets_call_count['n']}"
+    # Widget prep: once per batch, not per session.
+    assert widget_prep_call_count["n"] == 1, f"expected 1 widget prep, got {widget_prep_call_count['n']}"
+
+    engine.dispose()
