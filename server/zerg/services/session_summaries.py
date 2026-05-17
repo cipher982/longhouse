@@ -404,7 +404,7 @@ async def generate_embeddings_background(session_id: str) -> None:
         await generate_embeddings_impl(session_id)
 
 
-async def generate_embeddings_impl(session_id: str) -> None:
+async def generate_embeddings_impl(session_id: str) -> bool:
     from types import SimpleNamespace
 
     from zerg.database import get_session_factory
@@ -415,7 +415,7 @@ async def generate_embeddings_impl(session_id: str) -> None:
     try:
         session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
         if not session:
-            return
+            return True
         transcript_revision = int(getattr(session, "transcript_revision", 0) or 0)
         embedding_revision = int(getattr(session, "embedding_revision", 0) or 0)
         if transcript_revision > 0 and embedding_revision >= transcript_revision:
@@ -425,16 +425,16 @@ async def generate_embeddings_impl(session_id: str) -> None:
                 embedding_revision,
                 transcript_revision,
             )
-            return
+            return True
         if transcript_revision <= 0 and getattr(session, "needs_embedding", 1) == 0:
-            return
+            return True
 
         from zerg.models_config import get_embedding_config
 
         config = get_embedding_config()
 
         if not config:
-            return
+            return True
 
         events = (
             db.query(AgentEvent)
@@ -444,7 +444,7 @@ async def generate_embeddings_impl(session_id: str) -> None:
             .all()
         )
         if not events:
-            return
+            return True
 
         session_snapshot = SimpleNamespace(
             summary=session.summary,
@@ -454,6 +454,7 @@ async def generate_embeddings_impl(session_id: str) -> None:
 
         from zerg.services.embedding_cache import EmbeddingCache
         from zerg.services.session_processing.embeddings import embed_session
+        from zerg.services.session_processing.embeddings import mark_session_embedding_complete
 
         # Release the read connection before embedding API calls. Embeddings are
         # best-effort background work and must not occupy the SQLite pool while
@@ -461,7 +462,7 @@ async def generate_embeddings_impl(session_id: str) -> None:
         db.close()
         db = None
 
-        count = await embed_session(
+        written, remaining = await embed_session(
             session_id,
             session_snapshot,
             event_dicts,
@@ -469,14 +470,27 @@ async def generate_embeddings_impl(session_id: str) -> None:
             None,
             transcript_revision=transcript_revision or None,
         )
-        if count > 0:
-            logger.info("Generated %d embeddings for session %s", count, session_id)
+        if written > 0:
+            logger.info(
+                "Generated %d embeddings for session %s (%d remaining)",
+                written,
+                session_id,
+                remaining,
+            )
             EmbeddingCache().invalidate()
+        if remaining == 0:
+            await mark_session_embedding_complete(
+                session_id,
+                transcript_revision=transcript_revision or None,
+            )
+            return True
+        return False
 
     except Exception:
         if db is not None:
             db.rollback()
         logger.exception("Failed to generate embeddings for session %s", session_id)
+        raise
     finally:
         if db is not None:
             db.close()

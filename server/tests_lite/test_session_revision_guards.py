@@ -279,7 +279,7 @@ async def test_generate_embeddings_impl_releases_db_connection_during_provider_c
     ):
         await generate_embeddings_impl(session_id)
 
-    assert observed_checked_out == [0, 0]
+    assert observed_checked_out == [0]
 
     verify_db = factory()
     stored = verify_db.query(SessionEmbedding).filter(SessionEmbedding.session_id == session_id).all()

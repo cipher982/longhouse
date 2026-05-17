@@ -226,10 +226,14 @@ async def backfill_embeddings(
     from zerg.models_config import get_embedding_config
 
     if _embedding_backfill_state["running"]:
+        message = (
+            "Embedding backfill in progress: "
+            f"{_embedding_backfill_state['embedded']}/{_embedding_backfill_state['total']} done"
+        )
         return BackfillEmbeddingsResponse(
             status="already_running",
             total=_embedding_backfill_state["total"],
-            message=f"Embedding backfill in progress: {_embedding_backfill_state['embedded']}/{_embedding_backfill_state['total']} done",
+            message=message,
         )
 
     config = get_embedding_config()
@@ -288,6 +292,7 @@ async def _run_embedding_backfill(
 
     from zerg.database import make_engine
     from zerg.services.session_processing.embeddings import embed_session
+    from zerg.services.session_processing.embeddings import mark_session_embedding_complete
 
     _embedding_backfill_state.update(running=True, embedded=0, skipped=0, errors=0, remaining=total, total=total)
     semaphore = asyncio.Semaphore(concurrency)
@@ -325,7 +330,7 @@ async def _run_embedding_backfill(
                             _embedding_backfill_state["skipped"] += 1
                             return
 
-                        count = await embed_session(
+                        written, remaining = await embed_session(
                             str(session_id),
                             sess,
                             events,
@@ -333,7 +338,13 @@ async def _run_embedding_backfill(
                             db,
                             transcript_revision=int(getattr(sess, "transcript_revision", 0) or 0),
                         )
-                        if count > 0:
+                        if remaining == 0:
+                            await mark_session_embedding_complete(
+                                str(session_id),
+                                transcript_revision=int(getattr(sess, "transcript_revision", 0) or 0),
+                                db=db,
+                            )
+                        if written > 0:
                             _embedding_backfill_state["embedded"] += 1
                         else:
                             _embedding_backfill_state["skipped"] += 1
@@ -411,7 +422,10 @@ async def get_usage_stats(
         {"since": since.isoformat()},
     ).fetchall()
 
-    by_provider = [UsageStatsByProvider(provider=r.provider, sessions=r.sessions, messages=r.messages or 0) for r in rows]
+    by_provider = [
+        UsageStatsByProvider(provider=r.provider, sessions=r.sessions, messages=r.messages or 0)
+        for r in rows
+    ]
 
     return UsageStatsResponse(
         total_sessions=sum(r.sessions for r in by_provider),
