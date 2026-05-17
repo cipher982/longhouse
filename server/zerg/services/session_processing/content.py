@@ -1,7 +1,4 @@
-"""Content cleaning — noise stripping, secret redaction, tool-result detection.
-
-Extracted from daily_digest.py (strip_noise) and shared/redaction.py (redact_secrets).
-"""
+"""Content cleaning — noise stripping, secret redaction, tool-result detection."""
 
 from __future__ import annotations
 

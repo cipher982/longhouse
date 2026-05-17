@@ -650,7 +650,6 @@ async def register_all_jobs(scheduler: AsyncIOScheduler | None = None, use_queue
     # Import builtin job modules (self-register on import).
     # Each module calls job_registry.register() at module level.
     builtin_modules = (
-        "zerg.jobs.daily_digest",
         "zerg.jobs.health_monitor",
         "zerg.jobs.check_stale_agents",
         "zerg.jobs.runner_health_reconcile",

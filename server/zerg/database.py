@@ -737,6 +737,17 @@ def _migrate_agents_columns(engine: Engine) -> None:
     except Exception:
         logger.debug("reflection cleanup skipped", exc_info=True)
 
+    # Daily-digest feature removed — drop User columns.
+    try:
+        with engine.begin() as conn:
+            user_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(users)"))}
+            if "digest_enabled" in user_cols:
+                conn.execute(text("ALTER TABLE users DROP COLUMN digest_enabled"))
+            if "last_digest_sent_at" in user_cols:
+                conn.execute(text("ALTER TABLE users DROP COLUMN last_digest_sent_at"))
+    except Exception:
+        logger.debug("daily digest cleanup skipped", exc_info=True)
+
     try:
         with engine.connect() as conn:
             columns = {row[1] for row in conn.execute(text("PRAGMA table_info(agent_heartbeats)"))}

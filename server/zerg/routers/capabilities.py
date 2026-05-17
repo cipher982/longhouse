@@ -308,7 +308,7 @@ def llm_capabilities(
             available=text_avail,
             source=None,  # Don't leak source in public endpoint
             provider_name=None,
-            features=["summaries", "daily digest", "chat"],
+            features=["summaries", "chat"],
         ),
         embedding=CapabilityStatus(
             available=emb_avail,
