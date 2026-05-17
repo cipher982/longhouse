@@ -378,8 +378,8 @@ def test_managed_local_draft_reply_returns_prefill(monkeypatch, tmp_path):
 
         monkeypatch.setattr(
             session_chat_impl,
-            "get_llm_client_preferring_db_config",
-            lambda use_case, db=None: (FakeClient(), "test-draft-model", "openai"),
+            "get_llm_client_for_use_case",
+            lambda use_case: (FakeClient(), "test-draft-model", "openai"),
         )
 
         try:

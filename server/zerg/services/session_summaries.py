@@ -268,25 +268,21 @@ async def generate_summary_impl(session_id: str) -> None:
             "git_branch": session.git_branch,
         }
 
-        from zerg.models_config import get_llm_client_preferring_db_config
+        from zerg.models_config import get_llm_client_for_use_case
 
-        _config_db = session_factory()
         try:
+            client, model, _provider = get_llm_client_for_use_case("summary_update")
+        except ValueError:
             try:
-                client, model, _provider = get_llm_client_preferring_db_config("summary_update", db=_config_db)
-            except ValueError:
-                try:
-                    client, model, _provider = get_llm_client_preferring_db_config("summarization", db=_config_db)
-                except ValueError as e:
-                    logger.warning(
-                        "Summarization misconfigured -- session %s will NOT be summarized: %s",
-                        session_id,
-                        e,
-                    )
-                    await set_structured_title_if_empty(session_id)
-                    return
-        finally:
-            _config_db.close()
+                client, model, _provider = get_llm_client_for_use_case("summarization")
+            except ValueError as e:
+                logger.warning(
+                    "Summarization misconfigured -- session %s will NOT be summarized: %s",
+                    session_id,
+                    e,
+                )
+                await set_structured_title_if_empty(session_id)
+                return
 
         # Release the read connection before the LLM call. Summary generation is
         # best-effort background work and must not occupy the SQLite pool while
@@ -433,13 +429,9 @@ async def generate_embeddings_impl(session_id: str) -> None:
         if transcript_revision <= 0 and getattr(session, "needs_embedding", 1) == 0:
             return
 
-        from zerg.models_config import get_embedding_config_preferring_db_config
+        from zerg.models_config import get_embedding_config
 
-        _config_db = session_factory()
-        try:
-            config = get_embedding_config_preferring_db_config(db=_config_db)
-        finally:
-            _config_db.close()
+        config = get_embedding_config()
 
         if not config:
             return

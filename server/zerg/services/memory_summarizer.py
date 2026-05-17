@@ -11,7 +11,7 @@ from typing import Any
 from zerg.config import get_settings
 from zerg.crud import memory_crud
 from zerg.database import get_session_factory
-from zerg.models_config import get_llm_client_preferring_db_config
+from zerg.models_config import get_llm_client_for_use_case
 from zerg.services import memory_embeddings
 from zerg.services.session_processing import safe_parse_json
 
@@ -109,9 +109,7 @@ async def _generate_summary(task: str, result_text: str) -> dict[str, Any] | Non
 
     user_prompt = f"Task:\\n{task}\\n\\nResult:\\n{result_text}\\n"
 
-    session_factory = get_session_factory()
-    with session_factory() as db:
-        client, model, _provider = get_llm_client_preferring_db_config("summarization", db=db)
+    client, model, _provider = get_llm_client_for_use_case("summarization")
 
     try:
         response = await client.chat.completions.create(

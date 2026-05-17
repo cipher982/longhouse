@@ -66,7 +66,7 @@ async def backfill_summaries(
     _single: None = Depends(require_single_tenant),
 ) -> BackfillSummariesResponse:
     """Start backfilling missing summaries as a background task."""
-    from zerg.models_config import get_llm_client_preferring_db_config
+    from zerg.models_config import get_llm_client_for_use_case
 
     if _backfill_state["running"]:
         return BackfillSummariesResponse(
@@ -86,7 +86,7 @@ async def backfill_summaries(
         return BackfillSummariesResponse(status="nothing_to_do", total=0, message="No sessions to backfill")
 
     try:
-        client, model, _provider = get_llm_client_preferring_db_config("summarization", db=db)
+        client, model, _provider = get_llm_client_for_use_case("summarization")
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -223,7 +223,7 @@ async def backfill_embeddings(
     _single: None = Depends(require_single_tenant),
 ) -> BackfillEmbeddingsResponse:
     """Start backfilling missing embeddings as a background task."""
-    from zerg.models_config import get_embedding_config_preferring_db_config
+    from zerg.models_config import get_embedding_config
 
     if _embedding_backfill_state["running"]:
         return BackfillEmbeddingsResponse(
@@ -232,7 +232,7 @@ async def backfill_embeddings(
             message=f"Embedding backfill in progress: {_embedding_backfill_state['embedded']}/{_embedding_backfill_state['total']} done",
         )
 
-    config = get_embedding_config_preferring_db_config(db=db)
+    config = get_embedding_config()
     if not config:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

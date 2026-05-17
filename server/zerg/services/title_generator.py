@@ -9,8 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from zerg.config import get_settings
-from zerg.database import get_session_factory
-from zerg.models_config import get_llm_client_preferring_db_config
+from zerg.models_config import get_llm_client_for_use_case
 from zerg.services.session_processing import safe_parse_json
 
 # System prompt for title generation
@@ -85,9 +84,7 @@ async def generate_conversation_title(messages: list[dict[str, Any]]) -> str | N
     # Build transcript
     transcript = "\n".join(f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content']}" for m in normalized)
 
-    session_factory = get_session_factory()
-    with session_factory() as db:
-        client, model, _provider = get_llm_client_preferring_db_config("summary_update", db=db)
+    client, model, _provider = get_llm_client_for_use_case("summary_update")
 
     try:
         response = await client.chat.completions.create(
