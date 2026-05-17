@@ -748,6 +748,13 @@ def _migrate_agents_columns(engine: Engine) -> None:
     except Exception:
         logger.debug("daily digest cleanup skipped", exc_info=True)
 
+    # BYO-key LLM provider DB config removed — drop table.
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS llm_provider_configs"))
+    except Exception:
+        logger.debug("llm_provider_configs drop skipped", exc_info=True)
+
     try:
         with engine.connect() as conn:
             columns = {row[1] for row in conn.execute(text("PRAGMA table_info(agent_heartbeats)"))}
