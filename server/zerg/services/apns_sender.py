@@ -51,6 +51,11 @@ _APNS_PROVIDER_TOKEN_TTL = timedelta(minutes=50)
 _cached_provider_token: str | None = None
 _cached_provider_token_expires_at: datetime | None = None
 
+# Sentinel for prepare_* `targets` kwargs: distinguishes "caller did not pre-fetch"
+# (look up internally — preserves single-event call sites in presence.py) from
+# "caller pre-fetched and the owner has no targets" (None; skip).
+_TARGETS_SENTINEL: object = object()
+
 
 @dataclass(frozen=True)
 class APNSDeviceTarget:
@@ -220,6 +225,7 @@ def prepare_session_attention_push(
     current_state: str | None,
     occurred_at: datetime,
     current_tool_name: str | None = None,
+    targets: tuple[APNSDeviceTarget, ...] | None | object = _TARGETS_SENTINEL,
 ) -> SessionAttentionPush | None:
     if owner_id is None or current_state not in ATTENTION_PUSH_STATES or previous_state == current_state:
         return None
@@ -238,7 +244,8 @@ def prepare_session_attention_push(
     ):
         return None
 
-    targets = _active_ios_targets_for_owner(db, owner_id=owner_id, log_context="attention push")
+    if targets is _TARGETS_SENTINEL:
+        targets = _active_ios_targets_for_owner(db, owner_id=owner_id, log_context="attention push")
     if not targets:
         return None
 
@@ -277,6 +284,7 @@ def prepare_session_attention_resolution_push(
     previous_state: str | None,
     current_state: str | None,
     occurred_at: datetime,
+    targets: tuple[APNSDeviceTarget, ...] | None | object = _TARGETS_SENTINEL,
 ) -> SessionAttentionResolutionPush | None:
     if (
         owner_id is None
@@ -297,7 +305,8 @@ def prepare_session_attention_resolution_push(
     if last_attention_push_state != previous_state or last_attention_push_at is None:
         return None
 
-    targets = _active_ios_targets_for_owner(db, owner_id=owner_id, log_context="attention resolution push")
+    if targets is _TARGETS_SENTINEL:
+        targets = _active_ios_targets_for_owner(db, owner_id=owner_id, log_context="attention resolution push")
     if not targets:
         return None
 
@@ -319,6 +328,7 @@ def prepare_widget_timeline_push(
     *,
     owner_id: int | None,
     occurred_at: datetime,
+    targets: tuple[APNSDeviceTarget, ...] | None | object = _TARGETS_SENTINEL,
 ) -> WidgetTimelinePush | None:
     if owner_id is None:
         return None
@@ -336,12 +346,13 @@ def prepare_widget_timeline_push(
         if previous_push_at_utc is not None and (occurred_at - previous_push_at_utc) < WIDGET_PUSH_DEBOUNCE:
             return None
 
-    targets = _active_ios_targets_for_owner(
-        db,
-        owner_id=owner_id,
-        platform=WIDGET_PUSH_PLATFORM,
-        log_context="widget timeline push",
-    )
+    if targets is _TARGETS_SENTINEL:
+        targets = _active_ios_targets_for_owner(
+            db,
+            owner_id=owner_id,
+            platform=WIDGET_PUSH_PLATFORM,
+            log_context="widget timeline push",
+        )
     if not targets:
         return None
 
@@ -796,6 +807,19 @@ def build_session_live_activity_payload(notification: LiveActivityPush) -> dict:
             "relevance-score": 80 if notification.is_attention else 50,
         }
     }
+
+
+def active_ios_targets_for_owner(
+    db: Session,
+    *,
+    owner_id: int,
+    platform: str = "ios",
+    log_context: str,
+) -> tuple[APNSDeviceTarget, ...] | None:
+    """Public alias for `_active_ios_targets_for_owner` (kept for legacy callers)."""
+    return _active_ios_targets_for_owner(
+        db, owner_id=owner_id, platform=platform, log_context=log_context
+    )
 
 
 def _active_ios_targets_for_owner(
