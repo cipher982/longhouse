@@ -11,9 +11,9 @@
 
 const textConfig = {
   tiers: {
-    TIER_1: 'gpt-5.2',
-    TIER_2: 'gpt-5-mini',
-    TIER_3: 'gpt-5-nano',
+    TIER_1: 'deepseek/deepseek-v4-pro',
+    TIER_2: 'deepseek/deepseek-v4-flash',
+    TIER_3: 'deepseek/deepseek-v4-flash',
   },
 };
 

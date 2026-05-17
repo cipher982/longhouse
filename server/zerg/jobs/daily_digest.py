@@ -35,7 +35,7 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.connector import Connector
 from zerg.models.user import User
-from zerg.models_config import get_model_for_use_case
+from zerg.models_config import get_llm_client_preferring_db_config
 from zerg.services import gmail_api
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.session_processing import summarize_events
@@ -436,15 +436,6 @@ async def run() -> dict[str, Any]:
     Returns:
         Dict with job results
     """
-    # Check for OpenAI API key (required for summarization)
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        logger.error("OPENAI_API_KEY not set")
-        return {"success": False, "error": "OPENAI_API_KEY not configured"}
-
-    model = get_model_for_use_case("summarization")
-    logger.info("Using model %s for summarization", model)
-
     # Calculate yesterday's date
     now = datetime.now(UTC)
     yesterday = now - timedelta(days=1)
@@ -458,24 +449,32 @@ async def run() -> dict[str, Any]:
         logger.info("No users have digest enabled")
         return {"success": True, "users_processed": 0, "message": "No users have digest enabled"}
 
-    logger.info("Processing digests for %d users", len(user_ids))
+    with db_session() as config_db:
+        try:
+            openai_client, model, _provider = get_llm_client_preferring_db_config("summarization", db=config_db)
+        except ValueError as exc:
+            logger.error("Summarization LLM is not configured: %s", exc)
+            return {"success": False, "error": "Summarization LLM not configured"}
+    logger.info("Using model %s for summarization", model)
 
-    # Create OpenAI client
-    openai_client = AsyncOpenAI(api_key=api_key)
+    logger.info("Processing digests for %d users", len(user_ids))
 
     # Process each user
     results: list[UserDigestResult] = []
-    for user_id in user_ids:
-        result = await send_user_digest(user_id, yesterday, openai_client, model)
-        results.append(result)
-        logger.info(
-            "User %d (%s): success=%s, sessions=%d, error=%s",
-            result.user_id,
-            result.user_email,
-            result.success,
-            result.sessions_summarized,
-            result.error,
-        )
+    try:
+        for user_id in user_ids:
+            result = await send_user_digest(user_id, yesterday, openai_client, model)
+            results.append(result)
+            logger.info(
+                "User %d (%s): success=%s, sessions=%d, error=%s",
+                result.user_id,
+                result.user_email,
+                result.success,
+                result.sessions_summarized,
+                result.error,
+            )
+    finally:
+        await openai_client.close()
 
     # Aggregate results
     total_success = sum(1 for r in results if r.success)

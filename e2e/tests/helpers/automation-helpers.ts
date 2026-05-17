@@ -36,7 +36,7 @@ export async function createAutomationViaAPI(
 
   const config: CreateAutomationRequest = {
     name: options.name || `Test Automation ${commisId}`,
-    model: options.model || 'gpt-5-nano',
+    model: options.model || 'deepseek/deepseek-v4-flash',
     system_instructions: options.systemInstructions || 'You are a test automation for E2E testing',
     task_instructions: options.taskInstructions || 'Perform test tasks as requested',
     temperature: options.temperature || 0.7,
@@ -244,7 +244,7 @@ export async function createTestAutomation(page: Page, name: string): Promise<Au
 
   const config: CreateAutomationRequest = {
     name: name || `Test Automation ${Date.now()}`,
-    model: 'gpt-5-nano',
+    model: 'deepseek/deepseek-v4-flash',
     system_instructions: 'You are a test automation for E2E testing',
     task_instructions: 'Perform test tasks as requested',
     temperature: 0.7,

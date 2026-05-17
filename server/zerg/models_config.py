@@ -232,9 +232,9 @@ def build_openai_compatible_client_kwargs(
 # =============================================================================
 
 # Model tiers by capability (change these in config/models.json to update everywhere)
-TIER_1: str = _TIERS["TIER_1"]  # Best reasoning (gpt-5.2)
-TIER_2: str = _TIERS["TIER_2"]  # Good, cheaper (gpt-5-mini)
-TIER_3: str = _TIERS["TIER_3"]  # Basic, cheapest (gpt-5-nano)
+TIER_1: str = _TIERS["TIER_1"]  # Best reasoning / interactive automation lane
+TIER_2: str = _TIERS["TIER_2"]  # Cheaper background summarization lane
+TIER_3: str = _TIERS["TIER_3"]  # Cheapest lane, currently same model as TIER_2
 # Note: Test models (gpt-mock, gpt-scripted) are defined in zerg.testing.test_models
 
 
@@ -280,14 +280,9 @@ def get_model_for_use_case(use_case: str) -> str:
     Get the appropriate model ID for a use case.
 
     Use cases (defined in config/models.json):
-    - fiche_conversation: TIER_1 (quality critical)
-    - loop_controller: dedicated per-session turn-end judge
-    - routing_decision: TIER_1 (small output but high-stakes decision)
-    - tool_selection: TIER_1 (quality critical)
-    - commis_task: TIER_2 (cost-sensitive batch work)
-    - summarization: TIER_2 (cost-sensitive by default profile)
-    - bulk_classification: TIER_3 (high volume, simple)
-    - ci_test: TIER_3 (fast/cheap for CI)
+    - summarization: TIER_2 (cost-sensitive background summaries)
+    - summary_update: TIER_3 (incremental session summaries)
+    - reflection: TIER_2 (batch insight extraction)
 
     Values can be tier references (e.g. "TIER_1") or direct model IDs (e.g. "glm-4.7").
     """
@@ -453,6 +448,20 @@ _DB_PROVIDER_DEFAULT_MODELS: dict[str, str] = {
     "ollama": "llama3.2",
 }
 
+LEGACY_MODEL_REDIRECTS: dict[str, str] = {
+    "gpt-5.2": "deepseek/deepseek-v4-pro",
+    "gpt-5-mini": "deepseek/deepseek-v4-flash",
+    "gpt-5-nano": "deepseek/deepseek-v4-flash",
+    "openai/gpt-5-mini": "deepseek/deepseek-v4-flash",
+    "minimax/minimax-m2.7": "deepseek/deepseek-v4-pro",
+    "x-ai/grok-4.3": "deepseek/deepseek-v4-pro",
+}
+
+
+def normalize_legacy_model_id(model_id: str) -> str:
+    """Map removed registry model IDs from existing rows to active models."""
+    return LEGACY_MODEL_REDIRECTS.get(model_id, model_id)
+
 
 def get_llm_client_preferring_db_config(use_case: str, db=None) -> tuple:
     """Get an async LLM client, checking DB-stored provider config first.
@@ -533,13 +542,12 @@ def get_embedding_config_preferring_db_config(db=None) -> EmbeddingConfig | None
             row = db.query(LlmProviderConfig).filter(LlmProviderConfig.capability == "embedding").first()
             if row:
                 api_key = _decrypt(row.encrypted_api_key)
-                base_url = row.base_url
+                base_url = row.base_url or get_provider_default_base_url(row.provider_name)
                 # Use default embedding config from models.json for model/dims
                 embedding_cfg = _CONFIG.get("embedding", {})
                 default = embedding_cfg.get("default", {})
                 return EmbeddingConfig(
-                    # Always "openai" — pipeline uses OpenAI embedding API
-                    provider="openai",
+                    provider=row.provider_name,
                     model=default.get("model", "text-embedding-3-small"),
                     dims=default.get("dims", 256),
                     api_key_env_var="DB_CONFIGURED",

@@ -21,7 +21,7 @@ test.describe("Backend Parallelism Probe", () => {
           name: `Probe Automation ${testInfo.commisIndex}-${i}`,
           system_instructions: "probe",
           task_instructions: "probe",
-          model: "gpt-5-nano",
+          model: "deepseek/deepseek-v4-flash",
         },
       });
       expect(res.status()).toBe(201);

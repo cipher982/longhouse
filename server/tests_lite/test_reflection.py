@@ -537,7 +537,7 @@ class TestFullFlow:
             run = ReflectionRun(
                 project="test",
                 window_hours=24,
-                model="gpt-5-mini",
+                model="deepseek/deepseek-v4-flash",
                 session_count=3,
                 insights_created=1,
                 insights_merged=1,
