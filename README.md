@@ -124,7 +124,7 @@ Built by [David Rose](https://github.com/cipher982). Apache-2.0.
     "uv venv .tmp-readme-serve-venv --python 3.12 -q",
     ". .tmp-readme-serve-venv/bin/activate",
     "uv pip install -e server -q",
-    "DATABASE_URL=sqlite:///$(mktemp -d)/test.db longhouse serve --port 47398 &",
+    "DATABASE_URL=sqlite:///$(mktemp -d)/test.db LLM_DISABLED=1 longhouse serve --port 47398 &",
     "SERVER_PID=$!",
     "for _ in $(seq 1 20); do curl -sf http://127.0.0.1:47398/api/health && break; sleep 1; done",
     "curl -sf http://127.0.0.1:47398/api/health",
