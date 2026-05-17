@@ -35,7 +35,7 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import SessionInput
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
-from zerg.models_config import get_llm_client_preferring_db_config
+from zerg.models_config import get_llm_client_for_use_case
 from zerg.observability import get_tracer
 from zerg.observability import mark_span_error
 from zerg.observability import set_span_attributes
@@ -275,7 +275,7 @@ async def _build_managed_local_draft_reply_response(
         )
 
     try:
-        client, model, _provider = get_llm_client_preferring_db_config("summarization", db=db)
+        client, model, _provider = get_llm_client_for_use_case("summarization")
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
