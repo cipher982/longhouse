@@ -3269,6 +3269,7 @@ def test_runtime_batch_hoists_apns_prep_per_batch(tmp_path, monkeypatch):
 
     targets_call_count = {"n": 0}
     widget_prep_call_count = {"n": 0}
+    runtime_state_map_call_count = {"n": 0}
 
     real_targets = apns_sender._active_ios_targets_for_owner
 
@@ -3282,15 +3283,25 @@ def test_runtime_batch_hoists_apns_prep_per_batch(tmp_path, monkeypatch):
         widget_prep_call_count["n"] += 1
         return real_widget(*args, **kwargs)
 
+    from zerg.services import session_runtime as session_runtime_module
+
+    real_load_runtime_state_map = session_runtime_module.load_runtime_state_map
+
+    def counting_load_runtime_state_map(*args, **kwargs):
+        runtime_state_map_call_count["n"] += 1
+        return real_load_runtime_state_map(*args, **kwargs)
+
     # Patch in both places: the apns_sender module (used by prepare_*) and the
     # runtime router module (which imports the public alias and the prep fn directly).
     monkeypatch.setattr(apns_sender, "_active_ios_targets_for_owner", counting_targets)
     monkeypatch.setattr(apns_sender, "active_ios_targets_for_owner", counting_targets)
     monkeypatch.setattr(apns_sender, "prepare_widget_timeline_push", counting_widget)
+    monkeypatch.setattr(apns_sender, "load_runtime_state_map", counting_load_runtime_state_map)
     from zerg.routers import runtime as runtime_router
 
     monkeypatch.setattr(runtime_router, "active_ios_targets_for_owner", counting_targets)
     monkeypatch.setattr(runtime_router, "prepare_widget_timeline_push", counting_widget)
+    monkeypatch.setattr(runtime_router, "load_runtime_state_map", counting_load_runtime_state_map)
 
     for client in _client(SessionLocal):
         events = []
@@ -3322,5 +3333,11 @@ def test_runtime_batch_hoists_apns_prep_per_batch(tmp_path, monkeypatch):
     assert targets_call_count["n"] == 2, f"expected 2 target lookups, got {targets_call_count['n']}"
     # Widget prep: once per batch, not per session.
     assert widget_prep_call_count["n"] == 1, f"expected 1 widget prep, got {widget_prep_call_count['n']}"
+    # Runtime state map: pre-loaded once at top of batch loop, threaded into
+    # prepare_session_live_activity_pushes — not re-queried per session.
+    # Old code: 1 (router) + 5 (per-session inside prepare_*) = 6.
+    assert (
+        runtime_state_map_call_count["n"] == 1
+    ), f"expected 1 load_runtime_state_map call, got {runtime_state_map_call_count['n']}"
 
     engine.dispose()

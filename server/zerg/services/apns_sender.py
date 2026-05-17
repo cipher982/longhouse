@@ -389,6 +389,7 @@ def prepare_session_live_activity_pushes(
     current_state: str | None,
     current_tool_name: str | None,
     occurred_at: datetime,
+    runtime_state_map: dict | None | object = _TARGETS_SENTINEL,
 ) -> tuple[LiveActivityPush, ...]:
     if owner_id is None or session_id is None:
         return ()
@@ -418,10 +419,12 @@ def prepare_session_live_activity_pushes(
         return ()
 
     provider = str(getattr(session, "provider", None) or "Session")
+    if runtime_state_map is _TARGETS_SENTINEL:
+        runtime_state_map = load_runtime_state_map(db, [session.id])
     runtime_overlay = resolve_runtime_overlay(
         session,
         last_activity_at=session.last_activity_at,
-        runtime_state_map=load_runtime_state_map(db, [session.id]),
+        runtime_state_map=runtime_state_map or {},
         now=occurred_at,
     )
     runtime_display = build_session_runtime_display(
