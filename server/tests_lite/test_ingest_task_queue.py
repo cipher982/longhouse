@@ -8,10 +8,10 @@ from datetime import timezone
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
+from zerg.database import Base
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentSession
-from zerg.database import Base
 from zerg.models.agents import SessionTask
 from zerg.services.ingest_task_queue import ENQUEUE_DEDUP_WINDOW_HOURS
 from zerg.services.ingest_task_queue import close_current_pending_tasks
@@ -188,6 +188,50 @@ def test_enqueue_allows_after_dedup_window_expires(tmp_path):
 
     # New pending row added since the old failed row is outside the window.
     assert _count_tasks(db, str(session.id), "summary") == 2
+    db.close()
+
+
+def test_enqueue_recent_done_row_does_not_block_new_stale_summary_revision(tmp_path):
+    """A done row may cover an older revision; new transcript work must enqueue."""
+    factory = _make_db(tmp_path, "enqueue_done_stale_summary.db")
+    db = factory()
+    session = _add_session(
+        db, transcript_revision=2, summary_revision=1, embedding_revision=2, needs_embedding=0
+    )
+
+    _add_task(db, str(session.id), "summary", status="done")
+
+    enqueue_ingest_tasks(db, str(session.id))
+    db.commit()
+
+    rows = (
+        db.query(SessionTask.status)
+        .filter(SessionTask.session_id == str(session.id), SessionTask.task_type == "summary")
+        .all()
+    )
+    assert sorted(row.status for row in rows) == ["done", "pending"]
+    db.close()
+
+
+def test_enqueue_recent_done_row_does_not_block_new_stale_embedding_revision(tmp_path):
+    """A done row may cover an older revision; new embedding work must enqueue."""
+    factory = _make_db(tmp_path, "enqueue_done_stale_embedding.db")
+    db = factory()
+    session = _add_session(
+        db, transcript_revision=2, summary_revision=2, embedding_revision=1, needs_embedding=1
+    )
+
+    _add_task(db, str(session.id), "embedding", status="done")
+
+    enqueue_ingest_tasks(db, str(session.id))
+    db.commit()
+
+    rows = (
+        db.query(SessionTask.status)
+        .filter(SessionTask.session_id == str(session.id), SessionTask.task_type == "embedding")
+        .all()
+    )
+    assert sorted(row.status for row in rows) == ["done", "pending"]
     db.close()
 
 
