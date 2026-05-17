@@ -121,3 +121,42 @@ def test_is_capability_available_rejects_unknown_capability(tmp_path, monkeypatc
 
     with pytest.raises(ValueError):
         mc.is_capability_available("realtime")
+
+
+def test_lifespan_model_validation_skips_when_llm_disabled(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("TESTING", "1")
+    import zerg.lifespan as lifespan
+
+    monkeypatch.setattr(
+        lifespan,
+        "_settings",
+        SimpleNamespace(testing=False, llm_disabled=True, demo_mode=False),
+    )
+    monkeypatch.setattr(
+        "zerg.models_config.validate_startup_config",
+        lambda: (_ for _ in ()).throw(AssertionError("validation should be skipped")),
+    )
+
+    lifespan._validate_models_config_startup()
+
+
+def test_lifespan_model_validation_raises_when_enabled(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("TESTING", "1")
+    cfg = _write_test_config(tmp_path)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    _reload_models_config(monkeypatch, cfg)
+
+    import zerg.lifespan as lifespan
+
+    monkeypatch.setattr(
+        lifespan,
+        "_settings",
+        SimpleNamespace(testing=False, llm_disabled=False, demo_mode=False),
+    )
+
+    with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
+        lifespan._validate_models_config_startup()

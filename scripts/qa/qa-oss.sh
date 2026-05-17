@@ -140,7 +140,7 @@ mkdir -p "$(dirname "$QA_DB_PATH")"
 echo "🚀 Starting Longhouse at ${BASE_URL}"
 (
   cd "$WORKDIR/server"
-  HOME="$QA_HOME" AUTH_DISABLED=1 ENVIRONMENT="test:e2e" SKIP_DEMO_SEED=1 DATABASE_URL="sqlite:///${QA_DB_PATH}" \
+  HOME="$QA_HOME" AUTH_DISABLED=1 ENVIRONMENT="test:e2e" LLM_DISABLED=1 SKIP_DEMO_SEED=1 DATABASE_URL="sqlite:///${QA_DB_PATH}" \
     uv run longhouse serve --host 127.0.0.1 --port "$PORT"
 ) >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
