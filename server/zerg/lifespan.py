@@ -459,20 +459,22 @@ async def lifespan(app: FastAPI):
             except Exception:
                 logger.warning("Email not configured — job notifications disabled")
 
-        # Summarization config validation
+        # Models config validation — fail loudly when any provider declared
+        # in config/models.json is missing its API key env var. Skipped only
+        # for tests and when LLM is explicitly disabled (demo/dev modes).
         if not _settings.testing and not _settings.llm_disabled and not _settings.demo_mode:
-            from zerg.models_config import validate_use_case_llm_config
+            from zerg.models_config import iter_required_provider_keys
+            from zerg.models_config import validate_startup_config
 
-            try:
-                model, provider, key_env = validate_use_case_llm_config("summarization")
+            validate_startup_config()
+            for env_var, scope, model_id, provider in iter_required_provider_keys():
                 logger.info(
-                    "Summarization configured: model=%s provider=%s key_env=%s",
-                    model,
-                    provider.value,
-                    key_env,
+                    "Models config OK: %s -> provider=%s model=%s key_env=%s",
+                    scope,
+                    provider,
+                    model_id,
+                    env_var,
                 )
-            except ValueError as exc:
-                logger.warning("Summarization unavailable (missing API key): %s", exc)
 
         # Telegram channel
         if not _settings.testing and _settings.telegram_bot_token:

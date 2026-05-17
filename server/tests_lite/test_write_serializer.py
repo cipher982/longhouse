@@ -314,6 +314,10 @@ def test_full_app_ingest_succeeds_in_subprocess_without_testing_flag(tmp_path):
             "JOB_QUEUE_ENABLED": "0",
             "FERNET_SECRET": base64.urlsafe_b64encode(os.urandom(32)).decode(),
             "TRIGGER_SIGNING_SECRET": base64.urlsafe_b64encode(os.urandom(32)).decode(),
+            # Startup validation requires the providers in config/models.json
+            # to have their keys set. This subprocess boots without TESTING=1
+            # so the real validator runs; supply a stub key to satisfy it.
+            "OPENROUTER_API_KEY": "test-openrouter-key",
         }
     )
 

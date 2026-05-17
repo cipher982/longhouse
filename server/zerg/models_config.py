@@ -470,26 +470,67 @@ def is_capability_available(capability: str) -> bool:
     raise ValueError(f"Unknown capability '{capability}'. Valid: 'text', 'embedding'.")
 
 
-def iter_required_provider_keys() -> list[tuple[str, str, str]]:
-    """Yield (env_var_name, use_case_or_section, model_id) for every configured
-    use case and the embedding default. Used by startup validation.
+def iter_required_provider_keys() -> list[tuple[str, str, str, str]]:
+    """Return [(env_var_name, scope_label, model_id, provider)] for every
+    configured use case and the embedding default. Used by startup validation
+    to fail loudly when models.json declares a provider whose key is unset.
     """
-    required: list[tuple[str, str, str]] = []
+    required: list[tuple[str, str, str, str]] = []
 
     for use_case in _USE_CASES:
-        try:
-            model_id = get_model_for_use_case(use_case)
-        except ValueError:
-            continue
+        model_id = get_model_for_use_case(use_case)
         model_config = MODELS_BY_ID.get(model_id)
         if not model_config:
             continue
-        required.append((_get_api_key_env_var(model_config), f"use case '{use_case}'", model_id))
+        required.append(
+            (
+                _get_api_key_env_var(model_config),
+                f"use case '{use_case}'",
+                model_id,
+                model_config.provider.value,
+            )
+        )
 
     embedding_default = _CONFIG.get("embedding", {}).get("default")
     if embedding_default:
         api_key_env = embedding_default.get("apiKeyEnvVar", "")
         if api_key_env:
-            required.append((api_key_env, "embedding", embedding_default.get("model", "")))
+            required.append(
+                (
+                    api_key_env,
+                    "embedding",
+                    embedding_default.get("model", ""),
+                    embedding_default.get("provider", ""),
+                )
+            )
 
     return required
+
+
+def validate_startup_config() -> None:
+    """Raise RuntimeError if any provider declared in config/models.json is
+    missing its API key env var.
+
+    Called from the FastAPI lifespan at boot. The point is to fail loudly:
+    if you wired a use case to a provider in models.json, that provider's
+    key MUST be present at startup. To run without a given capability,
+    remove its section/use case from models.json — don't leave it declared
+    and unconfigured.
+
+    Tests bypass this by setting MODELS_CONFIG_PATH to a fixture file
+    (or by skipping it via _settings.testing in lifespan).
+    """
+    missing: list[str] = []
+    for env_var, scope, model_id, provider in iter_required_provider_keys():
+        if not os.getenv(env_var):
+            missing.append(
+                f"  - {env_var} required for {scope} (provider: {provider}, model: {model_id})"
+            )
+
+    if missing:
+        raise RuntimeError(
+            "Startup validation failed: configured providers are missing API keys.\n"
+            + "\n".join(missing)
+            + "\n\nSet the missing env vars, or remove the corresponding entries from "
+            + "config/models.json if the capability is intentionally not wired up."
+        )
