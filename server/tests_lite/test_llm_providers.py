@@ -95,17 +95,25 @@ class TestLlmCapabilities:
             assert isinstance(data["text"]["features"], list)
             assert isinstance(data["embedding"]["features"], list)
 
-    @patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test-123"})
     def test_env_var_makes_available(self, tmp_path):
-        """When OPENAI_API_KEY is set, text is available but configured embeddings are not."""
+        """When OPENAI_API_KEY is set, text is available but configured embeddings are not.
+
+        Embeddings now route through OpenRouter (commit d1173c48), so this test
+        must pop OPENROUTER_API_KEY too — otherwise dev environments that load
+        it via dotenv will leak it in and embedding.available becomes True.
+        """
         sf = _make_db(tmp_path)
         for client in _get_client(sf):
-            resp = client.get("/capabilities/llm")
-            data = resp.json()
-            assert data["text"]["available"] is True
-            # Public endpoint does not expose source/provider_name
-            assert data["text"]["source"] is None
-            assert data["embedding"]["available"] is False
+            with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test-123"}, clear=False):
+                os.environ.pop("OPENROUTER_API_KEY", None)
+                os.environ.pop("GROQ_API_KEY", None)
+                os.environ.pop("XAI_API_KEY", None)
+                resp = client.get("/capabilities/llm")
+                data = resp.json()
+                assert data["text"]["available"] is True
+                # Public endpoint does not expose source/provider_name
+                assert data["text"]["source"] is None
+                assert data["embedding"]["available"] is False
 
     def test_openrouter_env_var_makes_text_and_embedding_available(self, tmp_path):
         """When OPENROUTER_API_KEY is set, text and configured embeddings are available."""
