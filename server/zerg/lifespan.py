@@ -53,6 +53,25 @@ def _enforce_single_tenant_startup(app: FastAPI) -> None:
         raise RuntimeError(message) from exc
 
 
+def _validate_models_config_startup() -> None:
+    """Fail fast when configured model providers are missing required keys."""
+    if _settings.testing or _settings.llm_disabled or _settings.demo_mode:
+        return
+
+    from zerg.models_config import iter_required_provider_keys
+    from zerg.models_config import validate_startup_config
+
+    validate_startup_config()
+    for env_var, scope, model_id, provider in iter_required_provider_keys():
+        logger.info(
+            "Models config OK: %s -> provider=%s model=%s key_env=%s",
+            scope,
+            provider,
+            model_id,
+            env_var,
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle application startup and shutdown lifecycle."""
@@ -214,6 +233,8 @@ async def lifespan(app: FastAPI):
             from zerg.services.fiche_state_recovery import initialize_fiche_state_system
 
             await initialize_fiche_state_system()
+
+        _validate_models_config_startup()
 
         # Shared async runner
         from zerg.utils.async_runner import get_shared_runner
@@ -458,23 +479,6 @@ async def lifespan(app: FastAPI):
                     logger.warning("Email not configured — job notifications disabled")
             except Exception:
                 logger.warning("Email not configured — job notifications disabled")
-
-        # Models config validation — fail loudly when any provider declared
-        # in config/models.json is missing its API key env var. Skipped only
-        # for tests and when LLM is explicitly disabled (demo/dev modes).
-        if not _settings.testing and not _settings.llm_disabled and not _settings.demo_mode:
-            from zerg.models_config import iter_required_provider_keys
-            from zerg.models_config import validate_startup_config
-
-            validate_startup_config()
-            for env_var, scope, model_id, provider in iter_required_provider_keys():
-                logger.info(
-                    "Models config OK: %s -> provider=%s model=%s key_env=%s",
-                    scope,
-                    provider,
-                    model_id,
-                    env_var,
-                )
 
         # Telegram channel
         if not _settings.testing and _settings.telegram_bot_token:
