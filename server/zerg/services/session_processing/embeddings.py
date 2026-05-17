@@ -9,9 +9,11 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+from collections.abc import Iterator
 from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -20,6 +22,7 @@ from sqlalchemy import text as sa_text
 from .content import redact_secrets
 from .content import strip_noise
 from .tokens import truncate
+from .transcript import _extract_content
 from .transcript import build_transcript
 
 if TYPE_CHECKING:
@@ -35,6 +38,7 @@ logger = logging.getLogger(__name__)
 MAX_EMBEDDING_TOKENS = 1800
 EMBEDDING_REQUEST_TIMEOUT_SECONDS = float(os.getenv("EMBEDDING_REQUEST_TIMEOUT_SECONDS", "10"))
 EMBEDDING_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
+EMBEDDING_MAX_CHUNKS_PER_PASS = int(os.getenv("EMBEDDING_MAX_CHUNKS_PER_PASS", "128"))
 
 
 @dataclass
@@ -181,63 +185,7 @@ def prepare_turn_chunks(events: list[dict]) -> list[EmbeddingChunk]:
 
     Detects user/assistant turn boundaries and creates one chunk per pair.
     """
-    transcript = build_transcript(
-        events,
-        include_tool_calls=False,
-        strip_noise=True,
-        redact_secrets=True,
-    )
-    if not transcript.turns:
-        return []
-
-    chunks: list[EmbeddingChunk] = []
-    chunk_idx = 0
-
-    # Build event index mapping: for each turn, find approximate event range
-    event_idx = 0
-    turn_event_map: list[tuple[int, int]] = []  # (start, end) per turn
-
-    for turn in transcript.turns:
-        start = event_idx
-        event_idx += turn.message_count
-        turn_event_map.append((start, event_idx - 1))
-
-    for i in range(len(transcript.turns)):
-        turn = transcript.turns[i]
-        if turn.role != "user":
-            continue
-
-        # Combine user turn with next assistant turn if available
-        text_parts = [turn.combined_text]
-        event_start, _ = turn_event_map[i]
-        event_end = turn_event_map[i][1]
-
-        if i + 1 < len(transcript.turns) and transcript.turns[i + 1].role == "assistant":
-            text_parts.append(transcript.turns[i + 1].combined_text)
-            event_end = turn_event_map[i + 1][1]
-
-        combined = "\n".join(text_parts)
-        # Truncate to token limit
-        combined, _, was_truncated = truncate(
-            combined,
-            MAX_EMBEDDING_TOKENS,
-            strategy="head",
-        )
-
-        if combined.strip():
-            chunks.append(
-                EmbeddingChunk(
-                    kind="turn",
-                    chunk_index=chunk_idx,
-                    text=combined,
-                    content_hash=content_hash(combined),
-                    event_index_start=event_start,
-                    event_index_end=event_end,
-                )
-            )
-            chunk_idx += 1
-
-    return chunks
+    return list(iter_turn_chunks(events))
 
 
 @dataclass
@@ -248,6 +196,284 @@ class _PendingEmbedding:
     vec_bytes: bytes
 
 
+@dataclass(frozen=True)
+class _ExistingEmbedding:
+    content_hash: str | None
+    dims: int
+
+
+@dataclass(frozen=True)
+class _TranscriptTurn:
+    role: str
+    combined_text: str
+    event_index_start: int
+    event_index_end: int
+
+
+def _iter_clean_turns(events: list[dict]) -> Iterator[_TranscriptTurn]:
+    ordered = sorted(events, key=lambda e: e.get("timestamp") or datetime.min)
+    current_role: str | None = None
+    current_texts: list[str] = []
+    current_start = 0
+    message_index = 0
+
+    for event in ordered:
+        content = _extract_content(event, include_tool_calls=False, tool_output_max_chars=500)
+        if content is None:
+            continue
+        content = redact_secrets(strip_noise(content))
+        if not content.strip():
+            continue
+
+        role = event.get("role", "unknown")
+        if current_role is None:
+            current_role = role
+            current_texts = [content]
+            current_start = message_index
+        elif role == current_role:
+            current_texts.append(content)
+        else:
+            if current_role is not None and current_texts:
+                yield _TranscriptTurn(
+                    role=current_role,
+                    combined_text="\n".join(current_texts),
+                    event_index_start=current_start,
+                    event_index_end=message_index - 1,
+                )
+            current_role = role
+            current_texts = [content]
+            current_start = message_index
+        message_index += 1
+
+    if current_role is not None and current_texts:
+        yield _TranscriptTurn(
+            role=current_role,
+            combined_text="\n".join(current_texts),
+            event_index_start=current_start,
+            event_index_end=message_index - 1,
+        )
+
+
+def iter_turn_chunks(events: list[dict]) -> Iterator[EmbeddingChunk]:
+    """Yield turn-level embedding chunks without provider or DB work."""
+    chunk_idx = 0
+    pending_user: _TranscriptTurn | None = None
+
+    def _make_chunk(user_turn: _TranscriptTurn, assistant_turn: _TranscriptTurn | None = None) -> EmbeddingChunk | None:
+        text_parts = [user_turn.combined_text]
+        event_end = user_turn.event_index_end
+        if assistant_turn is not None:
+            text_parts.append(assistant_turn.combined_text)
+            event_end = assistant_turn.event_index_end
+
+        combined = "\n".join(text_parts)
+        combined, _, _was_truncated = truncate(
+            combined,
+            MAX_EMBEDDING_TOKENS,
+            strategy="head",
+        )
+        if not combined.strip():
+            return None
+        return EmbeddingChunk(
+            kind="turn",
+            chunk_index=chunk_idx,
+            text=combined,
+            content_hash=content_hash(combined),
+            event_index_start=user_turn.event_index_start,
+            event_index_end=event_end,
+        )
+
+    for turn in _iter_clean_turns(events):
+        if pending_user is not None:
+            if turn.role == "assistant":
+                chunk = _make_chunk(pending_user, turn)
+                if chunk is not None:
+                    yield chunk
+                    chunk_idx += 1
+                pending_user = None
+                continue
+            chunk = _make_chunk(pending_user)
+            if chunk is not None:
+                yield chunk
+                chunk_idx += 1
+            pending_user = None
+
+        if turn.role == "user":
+            pending_user = turn
+
+    if pending_user is not None:
+        chunk = _make_chunk(pending_user)
+        if chunk is not None:
+            yield chunk
+
+
+def _load_existing_embeddings(
+    db: "DBSession",
+    *,
+    session_id: str,
+    model: str,
+) -> dict[tuple[str, int], _ExistingEmbedding]:
+    from zerg.models.agents import SessionEmbedding
+
+    rows = (
+        db.query(SessionEmbedding)
+        .filter(
+            SessionEmbedding.session_id == session_id,
+            SessionEmbedding.model == model,
+        )
+        .all()
+    )
+    return {
+        (row.kind, row.chunk_index): _ExistingEmbedding(
+            content_hash=row.content_hash,
+            dims=row.dims,
+        )
+        for row in rows
+    }
+
+
+def _chunk_is_current(
+    chunk: EmbeddingChunk,
+    existing: dict[tuple[str, int], _ExistingEmbedding],
+    *,
+    dims: int,
+) -> bool:
+    row = existing.get((chunk.kind, chunk.chunk_index))
+    return row is not None and row.dims == dims and row.content_hash == chunk.content_hash
+
+
+def _desired_embedding_slice(
+    *,
+    session: "AgentSession",
+    event_dicts: list[dict],
+    existing: dict[tuple[str, int], _ExistingEmbedding],
+    dims: int,
+    max_chunks: int,
+) -> tuple[list[EmbeddingChunk], bool]:
+    missing: list[EmbeddingChunk] = []
+    limit = max(1, max_chunks)
+
+    session_chunk = prepare_session_chunk(session, event_dicts)
+    if session_chunk and not _chunk_is_current(session_chunk, existing, dims=dims):
+        missing.append(session_chunk)
+
+    for chunk in iter_turn_chunks(event_dicts):
+        if _chunk_is_current(chunk, existing, dims=dims):
+            continue
+        missing.append(chunk)
+        if len(missing) > limit:
+            return missing[:limit], True
+
+    return missing[:limit], False
+
+
+async def _persist_embedding_batch(
+    session_id: str,
+    pending_batch: list[_PendingEmbedding],
+    config: "EmbeddingConfig",
+    db: "DBSession | None",
+) -> int:
+    from zerg.models.agents import SessionEmbedding
+    from zerg.services.write_serializer import get_write_serializer
+
+    if not pending_batch:
+        return 0
+
+    def _persist_embeddings(write_db: "DBSession") -> int:
+        count = 0
+        for pending in pending_batch:
+            existing = (
+                write_db.query(SessionEmbedding)
+                .filter(
+                    SessionEmbedding.session_id == session_id,
+                    SessionEmbedding.kind == pending.chunk.kind,
+                    SessionEmbedding.chunk_index == pending.chunk.chunk_index,
+                    SessionEmbedding.model == config.model,
+                )
+                .first()
+            )
+            if existing:
+                existing.embedding = pending.vec_bytes
+                existing.content_hash = pending.chunk.content_hash
+                existing.dims = config.dims
+                existing.event_index_start = pending.chunk.event_index_start
+                existing.event_index_end = pending.chunk.event_index_end
+            else:
+                write_db.add(
+                    SessionEmbedding(
+                        session_id=session_id,
+                        kind=pending.chunk.kind,
+                        chunk_index=pending.chunk.chunk_index,
+                        model=config.model,
+                        dims=config.dims,
+                        embedding=pending.vec_bytes,
+                        content_hash=pending.chunk.content_hash,
+                        event_index_start=pending.chunk.event_index_start,
+                        event_index_end=pending.chunk.event_index_end,
+                    )
+                )
+            count += 1
+        return count
+
+    ws = get_write_serializer()
+    fallback_db = db
+    owns_fallback = False
+    if fallback_db is None:
+        from zerg.database import get_session_factory
+
+        fallback_db = get_session_factory()()
+        owns_fallback = True
+    try:
+        return await ws.execute_or_direct(_persist_embeddings, fallback_db, label="embeddings")
+    finally:
+        if owns_fallback:
+            fallback_db.close()
+
+
+async def mark_session_embedding_complete(
+    session_id: str,
+    *,
+    transcript_revision: int | None,
+    db: "DBSession | None" = None,
+) -> None:
+    from zerg.services.write_serializer import get_write_serializer
+
+    target_revision = int(transcript_revision or 0)
+
+    def _mark_complete(write_db: "DBSession") -> None:
+        if target_revision > 0:
+            write_db.execute(
+                sa_text(
+                    """
+                    UPDATE sessions
+                    SET needs_embedding = 0,
+                        embedding_revision = CASE
+                            WHEN COALESCE(embedding_revision, 0) < :rev THEN :rev
+                            ELSE COALESCE(embedding_revision, 0)
+                        END
+                    WHERE id = :sid
+                    """
+                ),
+                {"sid": session_id, "rev": target_revision},
+            )
+        else:
+            write_db.execute(sa_text("UPDATE sessions SET needs_embedding = 0 WHERE id = :sid"), {"sid": session_id})
+
+    ws = get_write_serializer()
+    fallback_db = db
+    owns_fallback = False
+    if fallback_db is None:
+        from zerg.database import get_session_factory
+
+        fallback_db = get_session_factory()()
+        owns_fallback = True
+    try:
+        await ws.execute_or_direct(_mark_complete, fallback_db, label="embeddings-complete")
+    finally:
+        if owns_fallback:
+            fallback_db.close()
+
+
 async def embed_session(
     session_id: str,
     session: "AgentSession",
@@ -256,19 +482,13 @@ async def embed_session(
     db: "DBSession",
     *,
     transcript_revision: int | None = None,
-) -> int:
-    """Orchestrate embedding generation for a session.
+) -> tuple[int, int]:
+    """Reconcile a bounded slice of embeddings for a session.
 
-    Phase 1: Generate all embeddings via API (no DB access — slow network I/O).
-    Phase 2: Write all results in one short DB transaction (fast).
-
-    This separation prevents the DB write lock from being held during API calls,
-    which caused SQLite "database is locked" errors under concurrent backfill.
+    Returns ``(written, remaining)``. ``remaining`` is exact when zero and a
+    positive sentinel when more missing/stale chunks still exist. Callers mark
+    the session current only when ``remaining == 0``.
     """
-    from zerg.models.agents import SessionEmbedding
-    from zerg.services.write_serializer import get_write_serializer
-
-    target_revision = int(transcript_revision or 0)
 
     # Convert ORM events to dicts for transcript building
     event_dicts = []
@@ -288,137 +508,36 @@ async def embed_session(
             }
         )
 
-    # --- Phase 1: Generate embeddings (network I/O, no DB) ---
-    session_pending: _PendingEmbedding | None = None
-    turn_pending: list[_PendingEmbedding] = []
-
-    session_chunk = prepare_session_chunk(session, event_dicts)
-    if session_chunk:
-        try:
-            vec = (await generate_embeddings([session_chunk.text], config))[0]
-            session_pending = _PendingEmbedding(chunk=session_chunk, vec_bytes=embedding_to_bytes(vec))
-        except Exception:
-            logger.exception("Failed to generate session embedding for %s", session_id)
-
-    turn_chunks = prepare_turn_chunks(event_dicts)
-    for batch in _chunk_batches(turn_chunks):
-        try:
-            vectors = await generate_embeddings([chunk.text for chunk in batch], config)
-        except Exception:
-            logger.exception(
-                "Failed to generate turn embedding batch %d-%d for %s",
-                batch[0].chunk_index,
-                batch[-1].chunk_index,
-                session_id,
-            )
-            continue
-        for chunk, vec in zip(batch, vectors, strict=True):
-            turn_pending.append(_PendingEmbedding(chunk=chunk, vec_bytes=embedding_to_bytes(vec)))
-
-    # --- Phase 2: Write all results in one short DB transaction ---
-    def _persist_embeddings(write_db: "DBSession") -> int:
-        count = 0
-        session_embedding_ok = False
-
-        if session_pending:
-            existing = (
-                write_db.query(SessionEmbedding)
-                .filter(
-                    SessionEmbedding.session_id == session_id,
-                    SessionEmbedding.kind == "session",
-                    SessionEmbedding.chunk_index == -1,
-                    SessionEmbedding.model == config.model,
-                )
-                .first()
-            )
-            if existing:
-                existing.embedding = session_pending.vec_bytes
-                existing.content_hash = session_pending.chunk.content_hash
-                existing.dims = config.dims
-            else:
-                write_db.add(
-                    SessionEmbedding(
-                        session_id=session_id,
-                        kind="session",
-                        chunk_index=-1,
-                        model=config.model,
-                        dims=config.dims,
-                        embedding=session_pending.vec_bytes,
-                        content_hash=session_pending.chunk.content_hash,
-                    )
-                )
-            count += 1
-            session_embedding_ok = True
-
-        for pending in turn_pending:
-            existing = (
-                write_db.query(SessionEmbedding)
-                .filter(
-                    SessionEmbedding.session_id == session_id,
-                    SessionEmbedding.kind == "turn",
-                    SessionEmbedding.chunk_index == pending.chunk.chunk_index,
-                    SessionEmbedding.model == config.model,
-                )
-                .first()
-            )
-            if existing:
-                existing.embedding = pending.vec_bytes
-                existing.content_hash = pending.chunk.content_hash
-                existing.dims = config.dims
-                existing.event_index_start = pending.chunk.event_index_start
-                existing.event_index_end = pending.chunk.event_index_end
-            else:
-                write_db.add(
-                    SessionEmbedding(
-                        session_id=session_id,
-                        kind="turn",
-                        chunk_index=pending.chunk.chunk_index,
-                        model=config.model,
-                        dims=config.dims,
-                        embedding=pending.vec_bytes,
-                        content_hash=pending.chunk.content_hash,
-                        event_index_start=pending.chunk.event_index_start,
-                        event_index_end=pending.chunk.event_index_end,
-                    )
-                )
-            count += 1
-
-        # Only clear the flag when the session-level embedding succeeded so
-        # backfill can retry on transient failures.
-        if session_embedding_ok:
-            if target_revision > 0:
-                write_db.execute(
-                    sa_text(
-                        """
-                        UPDATE sessions
-                        SET needs_embedding = 0,
-                            embedding_revision = CASE
-                                WHEN COALESCE(embedding_revision, 0) < :rev THEN :rev
-                                ELSE COALESCE(embedding_revision, 0)
-                            END
-                        WHERE id = :sid
-                        """
-                    ),
-                    {"sid": session_id, "rev": target_revision},
-                )
-            else:
-                write_db.execute(
-                    sa_text("UPDATE sessions SET needs_embedding = 0 WHERE id = :sid"),
-                    {"sid": session_id},
-                )
-
-        return count
-
-    ws = get_write_serializer()
-    fallback_db = db
-    owns_fallback = False
-    if fallback_db is None:
+    read_db = db
+    owns_read_db = False
+    if read_db is None:
         from zerg.database import get_session_factory
 
-        fallback_db = get_session_factory()()
-        owns_fallback = True
+        read_db = get_session_factory()()
+        owns_read_db = True
     try:
-        return await ws.execute_or_direct(_persist_embeddings, fallback_db, label="embeddings")
+        existing = _load_existing_embeddings(read_db, session_id=session_id, model=config.model)
     finally:
-        if owns_fallback:
-            fallback_db.close()
+        if owns_read_db:
+            read_db.close()
+
+    chunks, has_more = _desired_embedding_slice(
+        session=session,
+        event_dicts=event_dicts,
+        existing=existing,
+        dims=config.dims,
+        max_chunks=EMBEDDING_MAX_CHUNKS_PER_PASS,
+    )
+    if not chunks:
+        return 0, 0
+
+    written = 0
+    for batch in _chunk_batches(chunks):
+        vectors = await generate_embeddings([chunk.text for chunk in batch], config)
+        pending = [
+            _PendingEmbedding(chunk=chunk, vec_bytes=embedding_to_bytes(vec))
+            for chunk, vec in zip(batch, vectors, strict=True)
+        ]
+        written += await _persist_embedding_batch(session_id, pending, config, db)
+
+    return written, 1 if has_more else 0

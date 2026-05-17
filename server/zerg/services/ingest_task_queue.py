@@ -61,6 +61,7 @@ TASK_TIMEOUT_SECONDS_BY_ATTEMPT: dict[str, list[float]] = {
 }
 RETRY_LATER_BASE_SECONDS = 2.0
 RETRY_LATER_MAX_SECONDS = 16.0
+TASK_CONTINUE_DELAY_SECONDS = float(os.getenv("TASK_CONTINUE_DELAY_SECONDS", "5"))
 # Dedup window for enqueue: if a failed task row exists for the same
 # (session_id, task_type) created within this many hours, skip enqueue.
 # Active rows (pending/running) always dedupe. Done rows must not dedupe:
@@ -74,6 +75,10 @@ _hot_worker_loop: asyncio.AbstractEventLoop | None = None
 
 class RetryTaskLater(Exception):
     """Signal that a task should be re-queued without treating it as a hard failure."""
+
+
+class ContinueTaskLater(Exception):
+    """Signal that a task made progress and should continue later."""
 
 
 def _timeout_for(task_type: str, attempts: int) -> float | None:
@@ -474,6 +479,10 @@ async def _execute_task(task_id: str, session_id: str, task_type: str, attempts:
         # deferred ingest task just because the session was actively running.
         await ws.execute(lambda db, _e=str(e): _reset_for_retry_later(db, task_id, _e), label="task-retry")
         return True
+    except ContinueTaskLater as e:
+        logger.info("Ingest task %s (%s/%s) continuing later: %s", task_id, task_type, session_id, e)
+        await ws.execute(lambda db, _e=str(e): _reset_for_continuation(db, task_id, _e), label="task-continue")
+        return True
     except asyncio.TimeoutError:
         timeout_label = f"{timeout_seconds:g}s" if timeout_seconds is not None else "unknown"
         logger.warning("Ingest task %s (%s/%s) timed out after %s", task_id, task_type, session_id, timeout_label)
@@ -498,7 +507,9 @@ async def _run_task_impl(task_id: str, session_id: str, task_type: str) -> None:
     if task_type == "embedding":
         from zerg.services.session_summaries import generate_embeddings_impl
 
-        await generate_embeddings_impl(session_id)
+        complete = await generate_embeddings_impl(session_id)
+        if complete is False:
+            raise ContinueTaskLater("embedding reconciliation incomplete")
         return
     logger.warning("Unknown task_type %r for session %s", task_type, session_id)
 
@@ -530,6 +541,23 @@ def _reset_for_retry_later(db, task_id: str, error: str) -> None:
         RETRY_LATER_MAX_SECONDS,
     )
     task.updated_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
+
+
+def _reset_for_continuation(db, task_id: str, note: str) -> None:
+    """Reset a task to pending after successful partial progress.
+
+    Continuation is distinct from RetryTaskLater: the task is not blocked on an
+    active session and no retry-later counter should grow. We still undo the
+    claim attempt so long sessions can complete across many bounded slices
+    without exhausting the failure budget.
+    """
+    task = db.query(SessionTask).filter(SessionTask.id == task_id).first()
+    if not task:
+        return
+    task.attempts = max(0, (task.attempts or 1) - 1)
+    task.status = "pending"
+    task.error = note[:1000] if note else None
+    task.updated_at = datetime.now(timezone.utc) + timedelta(seconds=max(0.0, TASK_CONTINUE_DELAY_SECONDS))
 
 
 def _mark_status(db, task_id: str, final_status: str, error: str | None, retry: bool) -> None:

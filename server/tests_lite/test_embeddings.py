@@ -1,18 +1,22 @@
 """Tests for embedding utilities: round-trip serialization, sanitization, chunking, and upsert."""
 
+import os
 from datetime import datetime
 from datetime import timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
+
 import numpy as np
 import pytest
 from sqlalchemy.orm import sessionmaker
 
+from zerg.database import Base
 from zerg.database import make_engine
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
-from zerg.database import Base
 from zerg.models.agents import SessionEmbedding
 from zerg.models.work import Insight  # noqa: F401
 from zerg.services.session_processing.embeddings import bytes_to_embedding
@@ -20,6 +24,7 @@ from zerg.services.session_processing.embeddings import content_hash
 from zerg.services.session_processing.embeddings import embed_session
 from zerg.services.session_processing.embeddings import embedding_to_bytes
 from zerg.services.session_processing.embeddings import generate_embeddings
+from zerg.services.session_processing.embeddings import mark_session_embedding_complete
 from zerg.services.session_processing.embeddings import prepare_session_chunk
 from zerg.services.session_processing.embeddings import prepare_turn_chunks
 from zerg.services.session_processing.embeddings import sanitize_for_embedding
@@ -314,9 +319,10 @@ async def test_embed_session_routes_write_phase_through_serializer(monkeypatch, 
         session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp).all()
 
-        count = await embed_session(session_id, session, events, config, db, transcript_revision=4)
-        assert count == 2
-        assert labels == ["embeddings"]
+        written, remaining = await embed_session(session_id, session, events, config, db, transcript_revision=4)
+        assert (written, remaining) == (2, 0)
+        await mark_session_embedding_complete(session_id, transcript_revision=4, db=db)
+        assert labels == ["embeddings", "embeddings-complete"]
 
         db.expire_all()
         stored = (
@@ -391,6 +397,318 @@ async def test_embed_session_batches_turn_embeddings(monkeypatch, tmp_path):
         session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp).all()
 
-        count = await embed_session(session_id, session, events, config, db, transcript_revision=2)
-        assert count == 4
-        assert batch_sizes == [1, 3]
+        written, remaining = await embed_session(session_id, session, events, config, db, transcript_revision=2)
+        assert (written, remaining) == (4, 0)
+        assert batch_sizes == [4]
+
+
+@pytest.mark.asyncio
+async def test_embed_session_writes_bounded_slice_and_leaves_session_stale(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+
+    class _FakeSerializer:
+        is_configured = True
+
+        async def execute_or_direct(self, fn, fallback_db=None, *, label="", auto_commit=True):
+            result = fn(fallback_db)
+            if auto_commit:
+                fallback_db.commit()
+            return result
+
+    async def _fake_generate_embeddings(texts, _config):
+        return [np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32) for _ in texts]
+
+    monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: _FakeSerializer())
+    monkeypatch.setattr("zerg.services.session_processing.embeddings.generate_embeddings", _fake_generate_embeddings)
+    monkeypatch.setattr("zerg.services.session_processing.embeddings.EMBEDDING_MAX_CHUNKS_PER_PASS", 2)
+
+    config = SimpleNamespace(provider="openai", model="test-model", dims=4, api_key="test-key")
+
+    with SessionLocal() as db:
+        db.add(
+            AgentSession(
+                id=session_id,
+                provider="claude",
+                environment="test",
+                project="zerg",
+                started_at=datetime.now(timezone.utc),
+                needs_embedding=1,
+                summary="Sliceable session summary.",
+                transcript_revision=5,
+            )
+        )
+        for idx in range(3):
+            db.add(
+                AgentEvent(
+                    session_id=session_id,
+                    role="user",
+                    content_text=f"Question {idx}",
+                    timestamp=datetime(2026, 1, 1, 0, idx * 2, tzinfo=timezone.utc),
+                )
+            )
+            db.add(
+                AgentEvent(
+                    session_id=session_id,
+                    role="assistant",
+                    content_text=f"Answer {idx}",
+                    timestamp=datetime(2026, 1, 1, 0, idx * 2 + 1, tzinfo=timezone.utc),
+                )
+            )
+        db.commit()
+
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp).all()
+
+        written, remaining = await embed_session(session_id, session, events, config, db, transcript_revision=5)
+        assert written == 2
+        assert remaining > 0
+
+        stored = db.query(SessionEmbedding).filter(SessionEmbedding.session_id == session_id).all()
+        assert len(stored) == 2
+
+        db.expire_all()
+        refreshed = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        assert refreshed.needs_embedding == 1
+        assert refreshed.embedding_revision == 0
+
+
+@pytest.mark.asyncio
+async def test_embed_session_resumes_from_existing_content_hashes(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+    generated_texts: list[str] = []
+
+    class _FakeSerializer:
+        is_configured = True
+
+        async def execute_or_direct(self, fn, fallback_db=None, *, label="", auto_commit=True):
+            result = fn(fallback_db)
+            if auto_commit:
+                fallback_db.commit()
+            return result
+
+    async def _fake_generate_embeddings(texts, _config):
+        generated_texts.extend(texts)
+        return [np.array([float(len(generated_texts)), 0.0, 0.0, 0.0], dtype=np.float32) for _ in texts]
+
+    monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: _FakeSerializer())
+    monkeypatch.setattr("zerg.services.session_processing.embeddings.generate_embeddings", _fake_generate_embeddings)
+    monkeypatch.setattr("zerg.services.session_processing.embeddings.EMBEDDING_MAX_CHUNKS_PER_PASS", 2)
+
+    config = SimpleNamespace(provider="openai", model="test-model", dims=4, api_key="test-key")
+
+    with SessionLocal() as db:
+        db.add(
+            AgentSession(
+                id=session_id,
+                provider="claude",
+                environment="test",
+                project="zerg",
+                started_at=datetime.now(timezone.utc),
+                needs_embedding=1,
+                summary="Resume session summary.",
+                transcript_revision=3,
+            )
+        )
+        for idx in range(3):
+            db.add(
+                AgentEvent(
+                    session_id=session_id,
+                    role="user",
+                    content_text=f"Resume question {idx}",
+                    timestamp=datetime(2026, 1, 1, 0, idx * 2, tzinfo=timezone.utc),
+                )
+            )
+            db.add(
+                AgentEvent(
+                    session_id=session_id,
+                    role="assistant",
+                    content_text=f"Resume answer {idx}",
+                    timestamp=datetime(2026, 1, 1, 0, idx * 2 + 1, tzinfo=timezone.utc),
+                )
+            )
+        db.commit()
+
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp).all()
+
+        first = await embed_session(session_id, session, events, config, db, transcript_revision=3)
+        second = await embed_session(session_id, session, events, config, db, transcript_revision=3)
+
+        assert first == (2, 1)
+        assert second == (2, 0)
+        assert len(generated_texts) == 4
+        assert len(set(generated_texts)) == 4
+
+
+@pytest.mark.asyncio
+async def test_partial_turn_embeddings_are_searchable(monkeypatch, tmp_path):
+    from zerg.services.embedding_cache import EmbeddingCache
+
+    EmbeddingCache.reset()
+    SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+
+    class _FakeSerializer:
+        is_configured = True
+
+        async def execute_or_direct(self, fn, fallback_db=None, *, label="", auto_commit=True):
+            result = fn(fallback_db)
+            if auto_commit:
+                fallback_db.commit()
+            return result
+
+    async def _fake_generate_embeddings(texts, _config):
+        vectors = []
+        for text in texts:
+            vectors.append(
+                np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
+                if "needle" in text
+                else np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+            )
+        return vectors
+
+    monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: _FakeSerializer())
+    monkeypatch.setattr("zerg.services.session_processing.embeddings.generate_embeddings", _fake_generate_embeddings)
+    monkeypatch.setattr("zerg.services.session_processing.embeddings.EMBEDDING_MAX_CHUNKS_PER_PASS", 2)
+
+    config = SimpleNamespace(provider="openai", model="test-model", dims=4, api_key="test-key")
+
+    with SessionLocal() as db:
+        db.add(
+            AgentSession(
+                id=session_id,
+                provider="claude",
+                environment="test",
+                project="zerg",
+                started_at=datetime.now(timezone.utc),
+                needs_embedding=1,
+                summary="Searchable session summary.",
+                transcript_revision=3,
+            )
+        )
+        db.add(
+            AgentEvent(
+                session_id=session_id,
+                role="user",
+                content_text="needle question",
+                timestamp=datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc),
+            )
+        )
+        db.add(
+            AgentEvent(
+                session_id=session_id,
+                role="assistant",
+                content_text="needle answer",
+                timestamp=datetime(2026, 1, 1, 0, 1, tzinfo=timezone.utc),
+            )
+        )
+        db.add(
+            AgentEvent(
+                session_id=session_id,
+                role="user",
+                content_text="later question",
+                timestamp=datetime(2026, 1, 1, 0, 2, tzinfo=timezone.utc),
+            )
+        )
+        db.commit()
+
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp).all()
+        written, remaining = await embed_session(session_id, session, events, config, db, transcript_revision=3)
+        assert (written, remaining) == (2, 1)
+
+        cache = EmbeddingCache()
+        assert cache.load_turn_embeddings(db, "test-model", 4) == 1
+        results = cache.search_turns(np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32), limit=1)
+        assert results
+        assert results[0][0] == session_id
+        assert results[0][1] == 0
+
+    EmbeddingCache.reset()
+
+
+@pytest.mark.asyncio
+async def test_stale_content_hash_is_regenerated(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+    generated_texts: list[str] = []
+
+    class _FakeSerializer:
+        is_configured = True
+
+        async def execute_or_direct(self, fn, fallback_db=None, *, label="", auto_commit=True):
+            result = fn(fallback_db)
+            if auto_commit:
+                fallback_db.commit()
+            return result
+
+    async def _fake_generate_embeddings(texts, _config):
+        generated_texts.extend(texts)
+        return [np.array([0.0, 0.0, 1.0, 0.0], dtype=np.float32) for _ in texts]
+
+    monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: _FakeSerializer())
+    monkeypatch.setattr("zerg.services.session_processing.embeddings.generate_embeddings", _fake_generate_embeddings)
+    monkeypatch.setattr("zerg.services.session_processing.embeddings.EMBEDDING_MAX_CHUNKS_PER_PASS", 10)
+
+    config = SimpleNamespace(provider="openai", model="test-model", dims=4, api_key="test-key")
+
+    with SessionLocal() as db:
+        db.add(
+            AgentSession(
+                id=session_id,
+                provider="claude",
+                environment="test",
+                project="zerg",
+                started_at=datetime.now(timezone.utc),
+                needs_embedding=1,
+                summary="Current summary.",
+                transcript_revision=2,
+            )
+        )
+        db.add(
+            AgentEvent(
+                session_id=session_id,
+                role="user",
+                content_text="fresh question",
+                timestamp=datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc),
+            )
+        )
+        db.add(
+            AgentEvent(
+                session_id=session_id,
+                role="assistant",
+                content_text="fresh answer",
+                timestamp=datetime(2026, 1, 1, 0, 1, tzinfo=timezone.utc),
+            )
+        )
+        db.add(
+            SessionEmbedding(
+                session_id=session_id,
+                kind="turn",
+                chunk_index=0,
+                model="test-model",
+                dims=4,
+                embedding=embedding_to_bytes(np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)),
+                content_hash="stale",
+            )
+        )
+        db.commit()
+
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp).all()
+        written, remaining = await embed_session(session_id, session, events, config, db, transcript_revision=2)
+
+        assert (written, remaining) == (2, 0)
+        assert any("fresh question" in text for text in generated_texts)
+        turn = (
+            db.query(SessionEmbedding)
+            .filter(
+                SessionEmbedding.session_id == session_id,
+                SessionEmbedding.kind == "turn",
+                SessionEmbedding.chunk_index == 0,
+            )
+            .one()
+        )
+        assert turn.content_hash != "stale"
