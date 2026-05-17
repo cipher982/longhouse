@@ -126,9 +126,6 @@ class AgentSession(AgentsBase):
     # legacy — loop controller removed, column kept for DB compat
     loop_thread_id = Column(Integer, nullable=True, index=True)
 
-    # Reflection tracking — stamped when session has been analyzed by reflection service
-    reflected_at = Column(DateTime(timezone=True), nullable=True)
-
     # Debounce outgoing mobile pager pushes when a session flaps in and out of
     # attention states.
     last_attention_push_at = Column(DateTime(timezone=True), nullable=True)
