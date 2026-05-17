@@ -3,17 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import re
 from datetime import datetime
 from datetime import timezone
 from typing import Any
 
-from openai import AsyncOpenAI
-
 from zerg.config import get_settings
 from zerg.crud import memory_crud
 from zerg.database import get_session_factory
+from zerg.models_config import get_llm_client_preferring_db_config
 from zerg.services import memory_embeddings
 from zerg.services.session_processing import safe_parse_json
 
@@ -41,6 +39,13 @@ LOW_SIGNAL_PATTERNS = (
 
 
 def _extract_output_text(response: Any) -> str | None:
+    choices = getattr(response, "choices", None)
+    if choices:
+        message = getattr(choices[0], "message", None)
+        content = getattr(message, "content", None)
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+
     # SDK object or dict
     output_text = getattr(response, "output_text", None)
     if isinstance(output_text, str) and output_text.strip():
@@ -99,29 +104,25 @@ def _should_skip_summary(task: str, result_text: str) -> bool:
 
 async def _generate_summary(task: str, result_text: str) -> dict[str, Any] | None:
     settings = get_settings()
-    if settings.testing or settings.llm_disabled or not settings.openai_api_key:
+    if settings.testing or settings.llm_disabled:
         return None
-
-    model = os.getenv("LONGHOUSE_MEMORY_SUMMARY_MODEL", "gpt-5-mini")
-    reasoning_effort = os.getenv("LONGHOUSE_MEMORY_SUMMARY_REASONING_EFFORT", "minimal")
-    base_url = os.getenv("OPENAI_BASE_URL")
-
-    client_kwargs = {"api_key": settings.openai_api_key}
-    if base_url:
-        client_kwargs["base_url"] = base_url
-
-    client = AsyncOpenAI(**client_kwargs)
 
     user_prompt = f"Task:\\n{task}\\n\\nResult:\\n{result_text}\\n"
 
-    response = await client.responses.create(
-        model=model,
-        reasoning={"effort": reasoning_effort},
-        input=[
-            {"role": "system", "content": [{"type": "input_text", "text": SUMMARY_SYSTEM_PROMPT}]},
-            {"role": "user", "content": [{"type": "input_text", "text": user_prompt}]},
-        ],
-    )
+    session_factory = get_session_factory()
+    with session_factory() as db:
+        client, model, _provider = get_llm_client_preferring_db_config("summarization", db=db)
+
+    try:
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+    finally:
+        await client.close()
 
     output_text = _extract_output_text(response)
     return safe_parse_json(output_text)
