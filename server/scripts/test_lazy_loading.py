@@ -71,7 +71,7 @@ async def run_test():
 
     # Create minimal fiche mock with explicit attributes
     class AgentMock:
-        model = "gpt-5-mini"
+        model = "deepseek/deepseek-v4-flash"
         system_prompt = "You are a helpful assistant."
         reasoning_effort = None
         context_stuffing_strategy = None

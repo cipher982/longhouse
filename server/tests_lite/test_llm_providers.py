@@ -97,7 +97,7 @@ class TestLlmCapabilities:
 
     @patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test-123"})
     def test_env_var_makes_available(self, tmp_path):
-        """When OPENAI_API_KEY is set, both text and embedding show available."""
+        """When OPENAI_API_KEY is set, text is available but configured embeddings are not."""
         sf = _make_db(tmp_path)
         for client in _get_client(sf):
             resp = client.get("/capabilities/llm")
@@ -105,10 +105,10 @@ class TestLlmCapabilities:
             assert data["text"]["available"] is True
             # Public endpoint does not expose source/provider_name
             assert data["text"]["source"] is None
-            assert data["embedding"]["available"] is True
+            assert data["embedding"]["available"] is False
 
-    def test_openrouter_env_var_makes_text_available_only(self, tmp_path):
-        """When OPENROUTER_API_KEY is set, text is available but embeddings stay unavailable."""
+    def test_openrouter_env_var_makes_text_and_embedding_available(self, tmp_path):
+        """When OPENROUTER_API_KEY is set, text and configured embeddings are available."""
         sf = _make_db(tmp_path)
         for client in _get_client(sf):
             with patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-or-test-123"}, clear=False):
@@ -119,7 +119,7 @@ class TestLlmCapabilities:
                 data = resp.json()
                 assert data["text"]["available"] is True
                 assert data["text"]["source"] is None
-                assert data["embedding"]["available"] is False
+                assert data["embedding"]["available"] is True
 
     def test_xai_env_var_makes_text_available_only(self, tmp_path):
         """When XAI_API_KEY is set, text is available but embeddings stay unavailable."""

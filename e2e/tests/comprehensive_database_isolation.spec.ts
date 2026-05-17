@@ -50,7 +50,7 @@ test.describe('Comprehensive Database Isolation', () => {
       data: {
         system_instructions: 'You are a test automation for database isolation testing',
         task_instructions: 'Respond briefly',
-        model: 'gpt-5.2',
+        model: 'deepseek/deepseek-v4-pro',
       }
     });
     expect(createResponse.status()).toBe(201);

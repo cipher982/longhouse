@@ -1,139 +1,60 @@
 /**
  * E2E Test: Model Capabilities & Reasoning Selector
  *
- * Tests that the reasoning effort selector is shown/hidden based on model capabilities:
- * - Models with reasoning=true show the selector
- * - Models with reasoning=false hide the selector
- * - Models without reasoningNone=true don't show "None" option
+ * Tests that the reasoning effort selector follows the active model registry.
  */
 
 import { test, expect } from './fixtures';
 
+const EXPECTED_MODELS = ['deepseek/deepseek-v4-flash', 'deepseek/deepseek-v4-pro'];
+
 test.describe('Model Capabilities & Reasoning Selector', () => {
   test.beforeEach(async ({ page }) => {
-    // Navigate to chat page
     await page.goto('/chat');
 
-    // Wait for chat UI to load
     const modelSelector = page.locator('.model-select');
     await expect(modelSelector).toBeVisible({ timeout: 10000 });
   });
 
-  test('reasoning selector visible for gpt-5.2 (supports reasoning)', async ({ page }) => {
+  test('reasoning selector visible for DeepSeek Pro', async ({ page }) => {
     const modelSelector = page.locator('.model-select');
     const reasoningSelector = page.locator('.reasoning-select');
 
-    // Select gpt-5.2 (supports reasoning with none option)
-    await modelSelector.selectOption('gpt-5.2');
+    await modelSelector.selectOption('deepseek/deepseek-v4-pro');
 
-    // Reasoning selector should be visible
     await expect(reasoningSelector).toBeVisible();
-
-    // Should have "None" option available (reasoningNone=true)
-    const noneOption = reasoningSelector.locator('option[value="none"]');
-    await expect(noneOption).toBeAttached();
-  });
-
-  test('reasoning selector visible for gpt-5-mini (supports reasoning, no none)', async ({
-    page,
-  }) => {
-    const modelSelector = page.locator('.model-select');
-    const reasoningSelector = page.locator('.reasoning-select');
-
-    // Select gpt-5-mini (supports reasoning but NOT none)
-    await modelSelector.selectOption('gpt-5-mini');
-
-    // Reasoning selector should be visible
-    await expect(reasoningSelector).toBeVisible();
-
-    // Should NOT have "None" option (reasoningNone=false)
-    const noneOption = reasoningSelector.locator('option[value="none"]');
-    await expect(noneOption).not.toBeAttached();
-
-    // Should have low/medium/high options
+    await expect(reasoningSelector.locator('option[value="none"]')).toBeAttached();
     await expect(reasoningSelector.locator('option[value="low"]')).toBeAttached();
     await expect(reasoningSelector.locator('option[value="medium"]')).toBeAttached();
     await expect(reasoningSelector.locator('option[value="high"]')).toBeAttached();
   });
 
-  test('reasoning selector hidden for Grok 4.1 Fast (no reasoning support)', async ({
-    page,
-  }) => {
+  test('reasoning selector visible for DeepSeek Flash', async ({ page }) => {
     const modelSelector = page.locator('.model-select');
     const reasoningSelector = page.locator('.reasoning-select');
 
-    // Select Grok 4.1 Fast (no reasoning support)
-    await modelSelector.selectOption('grok-4-1-fast-reasoning');
+    await modelSelector.selectOption('deepseek/deepseek-v4-flash');
 
-    // Reasoning selector should be hidden
-    await expect(reasoningSelector).not.toBeVisible();
+    await expect(reasoningSelector).toBeVisible();
+    await expect(reasoningSelector.locator('option[value="none"]')).toBeAttached();
   });
 
-  test('reasoning selector visible for Qwen 3 32B (Groq with reasoning)', async ({ page }) => {
+  test('reasoning effort keeps none when switching between standard models', async ({ page }) => {
     const modelSelector = page.locator('.model-select');
     const reasoningSelector = page.locator('.reasoning-select');
 
-    // Select Qwen 3 32B (Groq model with reasoning support)
-    await modelSelector.selectOption('qwen/qwen3-32b');
-
-    // Reasoning selector should be visible
-    await expect(reasoningSelector).toBeVisible();
-
-    // Should have "None" option (reasoningNone=true)
-    const noneOption = reasoningSelector.locator('option[value="none"]');
-    await expect(noneOption).toBeAttached();
-  });
-
-  test('switching models updates reasoning selector visibility', async ({ page }) => {
-    const modelSelector = page.locator('.model-select');
-    const reasoningSelector = page.locator('.reasoning-select');
-
-    // Start with gpt-5.2 (reasoning visible)
-    await modelSelector.selectOption('gpt-5.2');
-    await expect(reasoningSelector).toBeVisible();
-
-    // Switch to Grok 4.1 Fast (reasoning hidden)
-    await modelSelector.selectOption('grok-4-1-fast-reasoning');
-    await expect(reasoningSelector).not.toBeVisible();
-
-    // Switch back to gpt-5.2 (reasoning visible again)
-    await modelSelector.selectOption('gpt-5.2');
-    await expect(reasoningSelector).toBeVisible();
-  });
-
-  test('reasoning effort resets when switching to model without none support', async ({
-    page,
-  }) => {
-    const modelSelector = page.locator('.model-select');
-    const reasoningSelector = page.locator('.reasoning-select');
-
-    // Start with gpt-5.2 and set reasoning to "none"
-    await modelSelector.selectOption('gpt-5.2');
+    await modelSelector.selectOption('deepseek/deepseek-v4-pro');
     await reasoningSelector.selectOption('none');
-
-    // Verify "none" is selected
     await expect(reasoningSelector).toHaveValue('none');
 
-    // Switch to gpt-5-mini (doesn't support "none")
-    await modelSelector.selectOption('gpt-5-mini');
-
-    // Reasoning should be reset to "low" (first available option)
-    await expect(reasoningSelector).toHaveValue('low');
+    await modelSelector.selectOption('deepseek/deepseek-v4-flash');
+    await expect(reasoningSelector).toHaveValue('none');
   });
 
-  test('all models are available in selector', async ({ page }) => {
+  test('all configured models are available in selector', async ({ page }) => {
     const modelSelector = page.locator('.model-select');
 
-    // Check all expected models are available
-    const expectedModels = [
-      'gpt-5.2',
-      'gpt-5-mini',
-      'gpt-5-nano',
-      'qwen/qwen3-32b',
-      'grok-4-1-fast-reasoning',
-    ];
-
-    for (const modelId of expectedModels) {
+    for (const modelId of EXPECTED_MODELS) {
       const option = modelSelector.locator(`option[value="${modelId}"]`);
       await expect(option).toBeAttached();
     }

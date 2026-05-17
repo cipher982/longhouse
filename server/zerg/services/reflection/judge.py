@@ -140,7 +140,7 @@ async def analyze_sessions(
 
     try:
         response = await llm_client.chat.completions.create(
-            model=model or "gpt-5-mini",
+            model=model or "deepseek/deepseek-v4-flash",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
             response_format={"type": "json_object"},

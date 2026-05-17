@@ -54,7 +54,7 @@ export async function createAgentViaAPI(request: APIRequestContext): Promise<str
     data: {
       system_instructions: 'You are a helpful assistant.',
       task_instructions: 'Answer user questions clearly and briefly.',
-      model: 'gpt-5.2',
+      model: 'deepseek/deepseek-v4-pro',
     }
   });
 

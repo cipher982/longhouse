@@ -4,56 +4,16 @@
   "text": {
     "$comment": "Text/chat completion models (Zerg agent orchestration)",
     "tiers": {
-      "TIER_1": "gpt-5.2",
-      "TIER_2": "gpt-5-mini",
-      "TIER_3": "gpt-5-nano"
+      "TIER_1": "deepseek/deepseek-v4-pro",
+      "TIER_2": "deepseek/deepseek-v4-flash",
+      "TIER_3": "deepseek/deepseek-v4-flash"
     },
     "models": {
-      "gpt-5.2": {
-        "displayName": "GPT-5.2",
-        "provider": "openai",
-        "tier": "TIER_1",
-        "description": "Latest state-of-the-art reasoning capability",
-        "capabilities": {
-          "reasoning": true,
-          "reasoningNone": true
-        }
-      },
-      "gpt-5-mini": {
-        "displayName": "GPT-5 Mini",
-        "provider": "openai",
-        "tier": "TIER_2",
-        "description": "Good quality, lower cost",
-        "capabilities": {
-          "reasoning": true,
-          "reasoningNone": false
-        }
-      },
-      "gpt-5-nano": {
-        "displayName": "GPT-5 Nano",
-        "provider": "openai",
-        "tier": "TIER_3",
-        "description": "Fast and cheap, basic capability",
-        "capabilities": {
-          "reasoning": true,
-          "reasoningNone": false
-        }
-      },
       "deepseek/deepseek-v4-pro": {
         "displayName": "DeepSeek v4 Pro (OpenRouter)",
         "provider": "openrouter",
-        "description": "DeepSeek v4 Pro via OpenRouter - primary for reasoning and conversation lanes (loop_controller, fiche_conversation)",
-        "baseUrl": "https://openrouter.ai/api/v1",
-        "apiKeyEnvVar": "OPENROUTER_API_KEY",
-        "capabilities": {
-          "reasoning": true,
-          "reasoningNone": true
-        }
-      },
-      "minimax/minimax-m2.7": {
-        "displayName": "MiniMax M2.7 (OpenRouter)",
-        "provider": "openrouter",
-        "description": "MiniMax M2.7 via OpenRouter - fallback, ~200K ctx limit",
+        "tier": "TIER_1",
+        "description": "DeepSeek v4 Pro via OpenRouter - primary reasoning and interactive automation lane",
         "baseUrl": "https://openrouter.ai/api/v1",
         "apiKeyEnvVar": "OPENROUTER_API_KEY",
         "capabilities": {
@@ -64,34 +24,13 @@
       "deepseek/deepseek-v4-flash": {
         "displayName": "DeepSeek v4 Flash (OpenRouter)",
         "provider": "openrouter",
+        "tier": "TIER_2",
         "description": "DeepSeek v4 Flash via OpenRouter - primary for high-volume summarization and reflection lanes",
         "baseUrl": "https://openrouter.ai/api/v1",
         "apiKeyEnvVar": "OPENROUTER_API_KEY",
         "capabilities": {
           "reasoning": true,
           "reasoningNone": true
-        }
-      },
-      "x-ai/grok-4.3": {
-        "displayName": "Grok 4.3 (OpenRouter)",
-        "provider": "openrouter",
-        "description": "xAI Grok 4.3 via OpenRouter - expensive fallback for Grok-specific needs",
-        "baseUrl": "https://openrouter.ai/api/v1",
-        "apiKeyEnvVar": "OPENROUTER_API_KEY",
-        "capabilities": {
-          "reasoning": true,
-          "reasoningNone": true
-        }
-      },
-      "openai/gpt-5-mini": {
-        "displayName": "GPT-5 Mini (OpenRouter)",
-        "provider": "openrouter",
-        "description": "OpenAI GPT-5 Mini via OpenRouter",
-        "baseUrl": "https://openrouter.ai/api/v1",
-        "apiKeyEnvVar": "OPENROUTER_API_KEY",
-        "capabilities": {
-          "reasoning": true,
-          "reasoningNone": false
         }
       }
     }
@@ -125,18 +64,11 @@
   },
 
   "useCases": {
-    "$comment": "Maps use cases to tiers - quality-critical tasks get TIER_1 even for small outputs",
+    "$comment": "Maps active text use cases to the two standard Longhouse lanes.",
     "text": {
-      "fiche_conversation": "TIER_1",
-      "loop_controller": "deepseek/deepseek-v4-pro",
-      "routing_decision": "TIER_1",
-      "tool_selection": "TIER_1",
-      "commis_task": "TIER_1",
       "summarization": "TIER_2",
       "summary_update": "TIER_3",
-      "reflection": "TIER_2",
-      "bulk_classification": "TIER_3",
-      "ci_test": "TIER_3"
+      "reflection": "TIER_2"
     },
     "realtime": {
       "voice_conversation": "TIER_1",
@@ -145,41 +77,15 @@
   },
 
   "routingProfiles": {
-    "$comment": "Optional per-instance overrides. Select with MODELS_PROFILE (default: oss). Hosted uses OpenRouter for unified provider access.",
+    "$comment": "Profile names are kept for deployed env compatibility; base routing is already OpenRouter/DeepSeek.",
     "oss": {
-      "$comment": "Default OSS profile: no overrides, uses direct provider tiers"
+      "$comment": "Default profile: no overrides."
     },
     "hosted": {
-      "$comment": "Hosted instances: all internal tasks route through OpenRouter. Commis/agent execution is NOT here — those spawn CLI agents with their own model selection via hatch.",
-      "text": {
-        "useCases": {
-          "fiche_conversation": "deepseek/deepseek-v4-pro",
-          "summarization": "deepseek/deepseek-v4-flash",
-          "summary_update": "deepseek/deepseek-v4-flash",
-          "reflection": "deepseek/deepseek-v4-flash",
-          "bulk_classification": "deepseek/deepseek-v4-flash"
-        },
-        "defaults": {
-          "fiche": "deepseek/deepseek-v4-pro",
-          "test": "deepseek/deepseek-v4-pro"
-        }
-      }
+      "$comment": "Hosted profile: no overrides."
     },
     "david": {
-      "$comment": "David's instance: use OpenRouter for text routing; embeddings stay on the embedding provider.",
-      "text": {
-        "useCases": {
-          "fiche_conversation": "deepseek/deepseek-v4-pro",
-          "summarization": "deepseek/deepseek-v4-flash",
-          "summary_update": "deepseek/deepseek-v4-flash",
-          "reflection": "deepseek/deepseek-v4-flash",
-          "bulk_classification": "deepseek/deepseek-v4-flash"
-        },
-        "defaults": {
-          "fiche": "deepseek/deepseek-v4-pro",
-          "test": "deepseek/deepseek-v4-pro"
-        }
-      }
+      "$comment": "David's instance: no overrides; embeddings stay on the embedding provider."
     }
   },
 

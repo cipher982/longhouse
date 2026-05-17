@@ -61,7 +61,7 @@ test.describe('Automation Creation', () => {
       data: {
         system_instructions: 'Test instructions',
         task_instructions: 'Test task',
-        model: 'gpt-5.2'
+        model: 'deepseek/deepseek-v4-pro'
       }
     });
 
@@ -80,7 +80,7 @@ test.describe('Automation Creation', () => {
       data: {
         system_instructions: 'Test instructions',
         task_instructions: 'Test task',
-        model: 'gpt-5.2'
+        model: 'deepseek/deepseek-v4-pro'
       }
     });
     expect(response1.ok()).toBeTruthy();
@@ -92,7 +92,7 @@ test.describe('Automation Creation', () => {
       data: {
         system_instructions: 'Different instructions',
         task_instructions: 'Different task',
-        model: 'gpt-5.2'
+        model: 'deepseek/deepseek-v4-pro'
       }
     });
     expect(response2.ok()).toBeTruthy();

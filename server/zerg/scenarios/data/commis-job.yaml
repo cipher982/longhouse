@@ -22,5 +22,5 @@ runs:
         status: success
         started_at: -24m
         finished_at: -18m
-        model: gpt-5-mini
+        model: deepseek/deepseek-v4-flash
         commis_id: demo-commis-1

@@ -8,13 +8,13 @@ description: Tool selection quality evals - tests that fiches pick the right spe
 # Variants for comparing lazy vs eager tool loading
 variants:
   eager:
-    model: gpt-5-mini
+    model: deepseek/deepseek-v4-flash
     temperature: 0.0
     reasoning_effort: none
     # lazy_loading: false (default)
 
   lazy:
-    model: gpt-5-mini
+    model: deepseek/deepseek-v4-flash
     temperature: 0.0
     reasoning_effort: none
     # lazy_loading: true (enable in runner)

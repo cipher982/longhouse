@@ -41,7 +41,7 @@ test.describe('Commis Database Isolation', () => {
         name: 'Test Automation for Isolation',
         system_instructions: 'Test automation',
         task_instructions: 'Test task',
-        model: 'gpt-5-nano',
+        model: 'deepseek/deepseek-v4-flash',
       }
     });
 
@@ -83,7 +83,7 @@ test.describe('Commis Database Isolation', () => {
         name: 'Automation for Thread Isolation Test',
         system_instructions: 'Test automation',
         task_instructions: 'Test task',
-        model: 'gpt-5-nano',
+        model: 'deepseek/deepseek-v4-flash',
       }
     });
 
@@ -125,7 +125,7 @@ test.describe('Commis Database Isolation', () => {
         name: 'WebSocket Test Automation',
         system_instructions: 'Test automation',
         task_instructions: 'Test task',
-        model: 'gpt-5-nano',
+        model: 'deepseek/deepseek-v4-flash',
       }
     });
 

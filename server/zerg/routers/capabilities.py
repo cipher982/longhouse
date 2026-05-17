@@ -33,6 +33,7 @@ from zerg.models.models import User
 from zerg.models_config import _DB_PROVIDER_DEFAULT_MODELS
 from zerg.models_config import EMBEDDING_MODEL
 from zerg.models_config import build_openai_compatible_client_kwargs
+from zerg.models_config import get_embedding_config
 from zerg.models_config import get_provider_default_base_url
 from zerg.utils.crypto import decrypt
 from zerg.utils.crypto import encrypt
@@ -182,6 +183,14 @@ def _check_env_text_provider() -> tuple[str, str] | None:
     return None
 
 
+def _check_env_embedding_provider() -> tuple[str, str] | None:
+    """Return configured env-backed embedding provider from models.json."""
+    config = get_embedding_config()
+    if config is None:
+        return None
+    return config.provider, config.api_key_env_var
+
+
 def _resolve_capability(capability: str, db: Session, user: User) -> tuple[bool, str | None, str | None]:
     """Check if a capability is available via DB config or env var.
 
@@ -198,8 +207,9 @@ def _resolve_capability(capability: str, db: Session, user: User) -> tuple[bool,
         if found:
             return True, "environment", found[0]
     elif capability == "embedding":
-        if os.getenv("OPENAI_API_KEY"):
-            return True, "environment", "openai"
+        found = _check_env_embedding_provider()
+        if found:
+            return True, "environment", found[0]
 
     return False, None, None
 
@@ -217,8 +227,9 @@ def _resolve_capability_no_user(capability: str, db: Session) -> tuple[bool, str
         if found:
             return True, "environment", found[0]
     elif capability == "embedding":
-        if os.getenv("OPENAI_API_KEY"):
-            return True, "environment", "openai"
+        found = _check_env_embedding_provider()
+        if found:
+            return True, "environment", found[0]
 
     return False, None, None
 
