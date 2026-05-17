@@ -63,6 +63,10 @@ def test_config_js_includes_runtime_umami_values(monkeypatch):
     monkeypatch.setattr(_settings, "umami_tag", "prod")
     monkeypatch.setattr(_settings, "openai_api_key", "test-openai-key")
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    # Active text use cases route to OpenRouter (per config/models.json), and
+    # the embedding default also lives on OpenRouter. Both capability flags
+    # are derived from that config + env-var presence.
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
 
     with TestClient(app) as client:
         response = client.get("/config.js")

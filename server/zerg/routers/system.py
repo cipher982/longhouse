@@ -13,6 +13,7 @@ from sqlalchemy import text
 
 from zerg.config import get_settings
 from zerg.database import get_session_factory
+from zerg.models_config import is_capability_available
 
 router = APIRouter(prefix="/system", tags=["system"])
 
@@ -37,24 +38,13 @@ def system_info() -> Dict[str, Any]:
 
 @router.get("/capabilities", status_code=status.HTTP_200_OK)
 def system_capabilities() -> Dict[str, Any]:
-    """Return system capability flags for graceful degradation."""
-    llm_available = _settings.llm_available
+    """Return system capability flags for graceful degradation.
 
-    # Also check if any user has configured LLM provider keys via connectors
-    if not llm_available:
-        from zerg.connectors.registry import ConnectorType
-        from zerg.models.models import AccountConnectorCredential
-
-        session_factory = get_session_factory()
-        with session_factory() as db:
-            llm_types = [ConnectorType.OPENAI.value, ConnectorType.ANTHROPIC.value]
-            has_llm_connector = (
-                db.query(AccountConnectorCredential).filter(AccountConnectorCredential.connector_type.in_(llm_types)).first()
-            ) is not None
-            llm_available = has_llm_connector
-
+    Single source of truth: config/models.json. A capability is available
+    iff the provider configured for it has its required API key env var set.
+    """
     return {
-        "llm_available": llm_available,
+        "llm_available": is_capability_available("text"),
         "auth_disabled": _settings.auth_disabled,
     }
 

@@ -431,11 +431,11 @@ EMBEDDING_DIMS: int = _EMBEDDING_DEFAULT.get("dims", 256)
 def get_embedding_config() -> EmbeddingConfig | None:
     """Load embedding config from models.json.
 
-    Uses ONLY the configured default provider. Returns None if
-    the required API key is not set (graceful degradation for OSS users).
-
-    Never falls through to alternatives — mixing embedding providers
-    produces incompatible vector spaces that break semantic search.
+    Returns None if embeddings are not configured (no `embedding` section)
+    OR if the configured provider's API key env var is not set. Startup
+    validation (validate_startup_config) is responsible for failing loud
+    when embeddings ARE declared in config but their key is missing —
+    runtime callers can rely on None meaning "embeddings unavailable".
     """
     embedding_cfg = _CONFIG.get("embedding")
     if not embedding_cfg:
@@ -459,3 +459,69 @@ def get_embedding_config() -> EmbeddingConfig | None:
         api_key=api_key,
         base_url=default.get("baseUrl"),
     )
+
+
+# =============================================================================
+# CAPABILITY CHECKS - Shared by frontend config.js and /system/capabilities
+# =============================================================================
+
+
+def is_capability_available(capability: str) -> bool:
+    """Return True iff the configured provider for `capability` has its key set.
+
+    Capabilities:
+    - "text": at least one active text use case has its required key present
+    - "embedding": embedding section configured AND its API key present
+
+    Source of truth is config/models.json. No DB fallbacks, no env-var-name
+    guessing — derives provider/key entirely from the config.
+    """
+    if capability == "embedding":
+        embedding_cfg = _CONFIG.get("embedding", {}).get("default")
+        if not embedding_cfg:
+            return False
+        api_key_env = embedding_cfg.get("apiKeyEnvVar", "")
+        return bool(api_key_env and os.getenv(api_key_env))
+
+    if capability == "text":
+        # Text capability is "available" when at least one configured text
+        # use case can be fulfilled (its provider key is set).
+        for use_case in _USE_CASES:
+            try:
+                model_id = get_model_for_use_case(use_case)
+            except ValueError:
+                continue
+            model_config = MODELS_BY_ID.get(model_id)
+            if not model_config:
+                continue
+            api_key_env = _get_api_key_env_var(model_config)
+            if os.getenv(api_key_env):
+                return True
+        return False
+
+    raise ValueError(f"Unknown capability '{capability}'. Valid: 'text', 'embedding'.")
+
+
+def iter_required_provider_keys() -> list[tuple[str, str, str]]:
+    """Yield (env_var_name, use_case_or_section, model_id) for every configured
+    use case and the embedding default. Used by startup validation.
+    """
+    required: list[tuple[str, str, str]] = []
+
+    for use_case in _USE_CASES:
+        try:
+            model_id = get_model_for_use_case(use_case)
+        except ValueError:
+            continue
+        model_config = MODELS_BY_ID.get(model_id)
+        if not model_config:
+            continue
+        required.append((_get_api_key_env_var(model_config), f"use case '{use_case}'", model_id))
+
+    embedding_default = _CONFIG.get("embedding", {}).get("default")
+    if embedding_default:
+        api_key_env = embedding_default.get("apiKeyEnvVar", "")
+        if api_key_env:
+            required.append((api_key_env, "embedding", embedding_default.get("model", "")))
+
+    return required
