@@ -57,10 +57,17 @@ STALE_PENDING_SWEEP_BATCH = 1000
 # inside _claim_pending before execution starts, so the first run is 1.
 TASK_TIMEOUT_SECONDS_BY_ATTEMPT: dict[str, list[float]] = {
     "summary": [30.0, 60.0, 90.0, 120.0, 180.0],
-    "embedding": [60.0, 90.0, 120.0, 180.0, 180.0],
+    "embedding": [30.0, 60.0, 90.0, 120.0, 180.0],
 }
 RETRY_LATER_BASE_SECONDS = 2.0
 RETRY_LATER_MAX_SECONDS = 16.0
+# Dedup window for enqueue: if any task row exists for the same
+# (session_id, task_type) created within this many hours, skip enqueue.
+# Active rows (pending/running) are obviously deduped; recent failed rows
+# also block new duplicates so transcript activity on a stuck session
+# doesn't pile up identical failed rows. The resurrector handles the
+# existing failed row on its own schedule.
+ENQUEUE_DEDUP_WINDOW_HOURS = 24
 HOT_INGEST_TASK_TYPES: tuple[str, ...] = ("turn_loop",)
 _hot_worker_event: asyncio.Event | None = None
 _hot_worker_loop: asyncio.AbstractEventLoop | None = None
@@ -96,19 +103,28 @@ def enqueue_ingest_tasks(db, session_id: str) -> None:
 
 
 def _enqueue_if_not_active(db, session_id: str, task_type: str) -> None:
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=ENQUEUE_DEDUP_WINDOW_HOURS)
+    # Dedup against any recent task row (any status) for the same
+    # (session_id, task_type). Pending/running blocks duplicate active work;
+    # a recent failed row blocks pile-up — the resurrector resets it on its
+    # own schedule, and a done row inside the window means recent ingest
+    # activity already covered it.
     existing = (
         db.query(SessionTask.id)
         .filter(
             SessionTask.session_id == session_id,
             SessionTask.task_type == task_type,
-            SessionTask.status.in_(["pending", "running"]),
+            or_(
+                SessionTask.status.in_(["pending", "running"]),
+                SessionTask.created_at >= cutoff,
+            ),
         )
         .first()
     )
     if existing:
         logger.debug("Skipping duplicate %s task for session %s", task_type, session_id)
         return
-    now = datetime.now(timezone.utc)
     db.add(
         SessionTask(
             session_id=session_id,

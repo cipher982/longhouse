@@ -96,12 +96,16 @@ def test_timeout_for_summary_ramps_per_attempt():
 
 
 def test_timeout_for_embedding_ramps_per_attempt():
-    assert _timeout_for("embedding", 1) == 60.0
-    assert _timeout_for("embedding", 2) == 90.0
-    assert _timeout_for("embedding", 3) == 120.0
-    assert _timeout_for("embedding", 4) == 180.0
+    # Mirrors summary: massive sessions (200K+ events) need >30s by retry.
+    assert _timeout_for("embedding", 1) == 30.0
+    assert _timeout_for("embedding", 2) == 60.0
+    assert _timeout_for("embedding", 3) == 90.0
+    assert _timeout_for("embedding", 4) == 120.0
     assert _timeout_for("embedding", 5) == 180.0
+    # Past the array — clamps to last entry.
     assert _timeout_for("embedding", 9) == 180.0
+    # Pre-claim defensive lookup — clamps to first.
+    assert _timeout_for("embedding", 0) == 30.0
 
 
 def test_timeout_for_unknown_type_returns_none():
@@ -337,6 +341,7 @@ def test_summary_attempt_one_times_out_at_thirty_seconds(tmp_path, monkeypatch):
 
 
 def test_embedding_timeout_ramps_across_attempts(tmp_path, monkeypatch):
+    """Massive sessions (200K+ events) need >30s by retry — same ramp as summary."""
     captured: list[float] = []
 
     async def fake_wait_for(coro, timeout):
@@ -352,7 +357,7 @@ def test_embedding_timeout_ramps_across_attempts(tmp_path, monkeypatch):
     async def fake_impl(task_id, session_id, task_type):
         await asyncio.sleep(60)
 
-    factory = _make_db(tmp_path, "embed_fixed.db")
+    factory = _make_db(tmp_path, "embed_ramp.db")
     db = factory()
     s = _add_session(db)
     t = _add_task(db, str(s.id), "embedding")
@@ -369,7 +374,7 @@ def test_embedding_timeout_ramps_across_attempts(tmp_path, monkeypatch):
             await itq._execute_task(t.id, str(s.id), "embedding", attempts=attempt)
 
     asyncio.run(_drive())
-    assert captured == [60.0, 90.0, 120.0, 180.0, 180.0]
+    assert captured == [30.0, 60.0, 90.0, 120.0, 180.0]
 
 
 # ---------------------------------------------------------------------------
