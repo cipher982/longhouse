@@ -144,7 +144,7 @@ Built by [David Rose](https://github.com/cipher982). Apache-2.0.
   "steps": [
     "cd {{WORKDIR}}/web && bun install --silent && bun run build",
     "cd {{WORKDIR}}/server && uv sync",
-    "cd {{WORKDIR}}/server && HOME={{WORKDIR}}/.qa-home uv run longhouse serve --host 127.0.0.1 --port 8080 --daemon",
+    "cd {{WORKDIR}}/server && HOME={{WORKDIR}}/.qa-home LLM_DISABLED=1 uv run longhouse serve --host 127.0.0.1 --port 8080 --daemon",
     "sleep 5",
     "curl -fsS http://127.0.0.1:8080/api/health",
     "cd {{WORKDIR}}/e2e && bun install --silent && PLAYWRIGHT_BASE_URL=http://127.0.0.1:8080 bunx playwright test --config playwright.onboarding.config.js --project onboarding-chromium"
