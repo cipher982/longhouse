@@ -335,11 +335,6 @@ def get_default_model() -> ModelConfig:
     return DEFAULT_MODEL
 
 
-def get_default_model_id_str() -> str:
-    """Backwards compatibility helper returning default model ID."""
-    return DEFAULT_MODEL_ID
-
-
 def get_default_model_id() -> str:
     """Get the default model ID as a string."""
     return DEFAULT_MODEL.id
