@@ -448,21 +448,6 @@ _DB_PROVIDER_DEFAULT_MODELS: dict[str, str] = {
     "ollama": "llama3.2",
 }
 
-LEGACY_MODEL_REDIRECTS: dict[str, str] = {
-    "gpt-5.2": "deepseek/deepseek-v4-pro",
-    "gpt-5-mini": "deepseek/deepseek-v4-flash",
-    "gpt-5-nano": "deepseek/deepseek-v4-flash",
-    "openai/gpt-5-mini": "deepseek/deepseek-v4-flash",
-    "minimax/minimax-m2.7": "deepseek/deepseek-v4-pro",
-    "x-ai/grok-4.3": "deepseek/deepseek-v4-pro",
-}
-
-
-def normalize_legacy_model_id(model_id: str) -> str:
-    """Map removed registry model IDs from existing rows to active models."""
-    return LEGACY_MODEL_REDIRECTS.get(model_id, model_id)
-
-
 def get_llm_client_preferring_db_config(use_case: str, db=None) -> tuple:
     """Get an async LLM client, checking DB-stored provider config first.
 
