@@ -289,3 +289,54 @@ async def test_generate_embeddings_impl_releases_db_connection_during_provider_c
     assert len(stored) == 2
     assert refreshed.needs_embedding == 0
     assert refreshed.embedding_revision == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_embeddings_impl_raises_when_reconcile_makes_no_progress(tmp_path, monkeypatch):
+    from zerg.services.session_summaries import generate_embeddings_impl
+
+    factory = _make_db(tmp_path, "embedding_no_progress.db")
+
+    db = factory()
+    session = AgentSession(
+        provider="claude",
+        environment="test",
+        project="zerg",
+        started_at=datetime.now(timezone.utc),
+        needs_embedding=1,
+        transcript_revision=3,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    session_id = str(session.id)
+    db.add(
+        AgentEvent(
+            session_id=session.id,
+            role="user",
+            content_text="Force an embedding continuation with no writes.",
+            timestamp=datetime.now(timezone.utc),
+        )
+    )
+    db.commit()
+    db.close()
+
+    async def _fake_embed_session(*_args, **_kwargs):
+        return 0, 1
+
+    config = SimpleNamespace(provider="openai", model="test-model", dims=4, api_key="test-key")
+    monkeypatch.setattr("zerg.services.session_processing.embeddings.embed_session", _fake_embed_session)
+
+    with (
+        patch("zerg.database.get_session_factory", return_value=factory),
+        patch("zerg.models_config.get_embedding_config", return_value=config),
+    ):
+        with pytest.raises(RuntimeError, match="made no progress"):
+            await generate_embeddings_impl(session_id)
+
+    verify_db = factory()
+    refreshed = verify_db.query(AgentSession).filter(AgentSession.id == session_id).one()
+    verify_db.close()
+
+    assert refreshed.needs_embedding == 1
+    assert refreshed.embedding_revision == 0
