@@ -2,6 +2,7 @@
 
 import os
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
@@ -12,7 +13,9 @@ from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentSession
 from zerg.database import Base
 from zerg.models.agents import SessionTask
+from zerg.services.ingest_task_queue import ENQUEUE_DEDUP_WINDOW_HOURS
 from zerg.services.ingest_task_queue import close_current_pending_tasks
+from zerg.services.ingest_task_queue import enqueue_ingest_tasks
 
 
 def _make_db(tmp_path, name: str):
@@ -117,4 +120,94 @@ def test_close_current_pending_tasks_respects_limit(tmp_path):
     statuses = {db.get(SessionTask, first.id).status, db.get(SessionTask, second.id).status}
     assert closed == 1
     assert statuses == {"done", "pending"}
+    db.close()
+
+
+# ---------------------------------------------------------------------------
+# Enqueue dedup against recent failed rows (Bug 2)
+# ---------------------------------------------------------------------------
+
+
+def _set_task_created_at(db, task_id, when: datetime) -> None:
+    """Backdate created_at for dedup-window tests."""
+    task = db.get(SessionTask, task_id)
+    task.created_at = when
+    task.updated_at = when
+    db.commit()
+
+
+def _count_tasks(db, session_id: str, task_type: str) -> int:
+    return (
+        db.query(SessionTask)
+        .filter(SessionTask.session_id == session_id, SessionTask.task_type == task_type)
+        .count()
+    )
+
+
+def test_enqueue_skips_when_recent_failed_row_exists(tmp_path):
+    """A recent failed row blocks new pile-up; the resurrector handles it."""
+    factory = _make_db(tmp_path, "enqueue_dedup_failed.db")
+    db = factory()
+    session = _add_session(
+        db, transcript_revision=2, summary_revision=0, embedding_revision=0
+    )
+
+    # Pre-existing failed summary + embedding rows from a prior ingest.
+    failed_summary = _add_task(db, str(session.id), "summary", status="failed")
+    failed_embed = _add_task(db, str(session.id), "embedding", status="failed")
+
+    # New ingest activity attempts to enqueue again.
+    enqueue_ingest_tasks(db, str(session.id))
+    db.commit()
+
+    # No duplicates added — the recent failed rows still cover this work.
+    assert _count_tasks(db, str(session.id), "summary") == 1
+    assert _count_tasks(db, str(session.id), "embedding") == 1
+    # And the existing failed rows weren't disturbed.
+    assert db.get(SessionTask, failed_summary.id).status == "failed"
+    assert db.get(SessionTask, failed_embed.id).status == "failed"
+    db.close()
+
+
+def test_enqueue_allows_after_dedup_window_expires(tmp_path):
+    """A failed row older than the dedup window doesn't block a fresh enqueue."""
+    factory = _make_db(tmp_path, "enqueue_dedup_window_expired.db")
+    db = factory()
+    session = _add_session(
+        db, transcript_revision=2, summary_revision=0, embedding_revision=0
+    )
+
+    old_when = datetime.now(timezone.utc) - timedelta(
+        hours=ENQUEUE_DEDUP_WINDOW_HOURS + 1
+    )
+    old_failed = _add_task(db, str(session.id), "summary", status="failed")
+    _set_task_created_at(db, old_failed.id, old_when)
+
+    enqueue_ingest_tasks(db, str(session.id))
+    db.commit()
+
+    # New pending row added since the old failed row is outside the window.
+    assert _count_tasks(db, str(session.id), "summary") == 2
+    db.close()
+
+
+def test_poison_session_does_not_accumulate_duplicates(tmp_path):
+    """Repeated ingests on a stuck session must not pile up duplicate failed rows."""
+    factory = _make_db(tmp_path, "poison_session_dedup.db")
+    db = factory()
+    session = _add_session(
+        db, transcript_revision=5, summary_revision=0, embedding_revision=0
+    )
+
+    # First ingest attempt succeeded at enqueue but task later failed.
+    _add_task(db, str(session.id), "summary", status="failed")
+    _add_task(db, str(session.id), "embedding", status="failed")
+
+    # Simulate 5 more ingest waves (transcript activity on a stuck session).
+    for _ in range(5):
+        enqueue_ingest_tasks(db, str(session.id))
+        db.commit()
+
+    assert _count_tasks(db, str(session.id), "summary") == 1
+    assert _count_tasks(db, str(session.id), "embedding") == 1
     db.close()

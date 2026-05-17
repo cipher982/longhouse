@@ -327,7 +327,9 @@ def test_concurrent_enqueue_and_resurrect_yields_one_pending_row(tmp_path, monke
 
 
 def test_concurrent_enqueue_then_resurrect_yields_one_pending_row(tmp_path, monkeypatch):
-    """Reverse order: enqueue first creates a pending peer, resurrect must skip."""
+    """Enqueue dedup against the failed row blocks pile-up; resurrector flips
+    the existing failed row to pending. End state: exactly one pending row, no duplicates.
+    """
     factory = _make_db(tmp_path, "concurrent_reverse.db")
     db = factory()
     session = _add_session(db, transcript_revision=2, summary_revision=0)
@@ -363,10 +365,11 @@ def test_concurrent_enqueue_then_resurrect_yields_one_pending_row(tmp_path, monk
         )
         .all()
     )
-    pending = [r for r in rows if r.status == "pending"]
-    assert len(pending) == 1
-    # The original failed row stays failed because a pending peer existed.
-    assert db.get(SessionTask, failed.id).status == "failed"
+    # Enqueue was a no-op (recent failed row covered it), so only one row exists.
+    assert len(rows) == 1
+    assert rows[0].id == failed.id
+    # Resurrector flipped that single failed row to pending.
+    assert rows[0].status == "pending"
     db.close()
 
 
