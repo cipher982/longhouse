@@ -117,7 +117,6 @@ from zerg.routers.agents_turns import router as agents_turns_router
 from zerg.routers.auth import router as auth_router
 from zerg.routers.auth_internal import router as auth_internal_router
 from zerg.routers.automation_connectors import router as automation_connectors_router
-from zerg.routers.capabilities import router as capabilities_router
 from zerg.routers.channels_webhooks import router as channels_webhooks_router
 from zerg.routers.connectors import router as connectors_router
 from zerg.routers.contacts import router as contacts_router
@@ -270,7 +269,6 @@ api_app.include_router(contacts_router)
 api_app.include_router(stream_router)
 api_app.include_router(system_router)
 api_app.include_router(email_config_router)
-api_app.include_router(capabilities_router)
 api_app.include_router(ops_router)
 api_app.include_router(ops_beacon_router)
 api_app.include_router(telemetry_beacon_router)
@@ -327,19 +325,6 @@ async def serve_config_js():
 
     _llm_avail_bool = _settings.llm_available
     _emb_avail_bool = bool(os.getenv("OPENAI_API_KEY"))
-    if not _llm_avail_bool or not _emb_avail_bool:
-        try:
-            from zerg.database import get_session_factory
-            from zerg.models.models import LlmProviderConfig
-
-            session_factory = get_session_factory()
-            with session_factory() as _db:
-                if not _llm_avail_bool:
-                    _llm_avail_bool = (_db.query(LlmProviderConfig).filter(LlmProviderConfig.capability == "text").first()) is not None
-                if not _emb_avail_bool:
-                    _emb_avail_bool = (_db.query(LlmProviderConfig).filter(LlmProviderConfig.capability == "embedding").first()) is not None
-        except Exception as exc:
-            logger.warning("config.js provider availability check failed; using env fallback: %s", exc)
     google_client_id = "" if _settings.control_plane_url else (_settings.google_client_id or "")
     runtime_config = {
         "API_BASE_URL": "/api",

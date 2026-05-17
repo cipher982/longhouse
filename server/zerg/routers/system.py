@@ -37,21 +37,8 @@ def system_info() -> Dict[str, Any]:
 
 @router.get("/capabilities", status_code=status.HTTP_200_OK)
 def system_capabilities() -> Dict[str, Any]:
-    """Return system capability flags for graceful degradation.
-
-    Legacy flat format for backwards compatibility. The richer endpoint
-    is GET /api/system/capabilities on the capabilities router.
-    """
+    """Return system capability flags for graceful degradation."""
     llm_available = _settings.llm_available
-
-    # Check DB-stored LLM provider configs
-    if not llm_available:
-        from zerg.models.models import LlmProviderConfig
-
-        session_factory = get_session_factory()
-        with session_factory() as db:
-            has_db_config = (db.query(LlmProviderConfig).filter(LlmProviderConfig.capability == "text").first()) is not None
-            llm_available = has_db_config
 
     # Also check if any user has configured LLM provider keys via connectors
     if not llm_available:

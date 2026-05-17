@@ -1,7 +1,6 @@
 import { useReadinessFlag } from "../lib/readiness-contract";
 import { PageShell, SectionHeader } from "../components/ui";
 import EmailConfigCard from "../components/EmailConfigCard";
-import LlmProviderCard from "../components/LlmProviderCard";
 
 export default function SettingsPage() {
   useReadinessFlag({ ready: true });
@@ -14,7 +13,6 @@ export default function SettingsPage() {
       />
 
       <div className="settings-stack settings-stack--lg">
-        <LlmProviderCard />
         <EmailConfigCard />
       </div>
     </PageShell>

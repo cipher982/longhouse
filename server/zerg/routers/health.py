@@ -157,22 +157,26 @@ async def health_check():
         checks["environment"] = {"status": "fail", "error": str(e)}
         health_status["status"] = "unhealthy"
 
-    # 1b. LLM capability check
+    # 1b. LLM capability check (env-var-driven only)
     try:
-        from zerg.database import get_session_factory as _gsf
-        from zerg.routers.capabilities import _resolve_capability_no_user
+        import os as _os
 
-        _sf = _gsf()
-        with _sf() as _db:
-            text_avail, text_src, _ = _resolve_capability_no_user("text", _db)
-            emb_avail, emb_src, _ = _resolve_capability_no_user("embedding", _db)
+        from zerg.models_config import _PROVIDER_DEFAULT_API_KEY_ENVS, get_embedding_config
+
+        text_provider = next(
+            (provider.value for provider, env_var in _PROVIDER_DEFAULT_API_KEY_ENVS.items() if _os.getenv(env_var)),
+            None,
+        )
+        text_avail = text_provider is not None
+        embedding_cfg = get_embedding_config()
+        emb_avail = embedding_cfg is not None
 
         checks["llm"] = {
             "status": "pass" if text_avail else "warn",
             "text_available": text_avail,
-            "text_source": text_src,
+            "text_source": "environment" if text_avail else None,
             "embeddings_available": emb_avail,
-            "embeddings_source": emb_src,
+            "embeddings_source": "environment" if emb_avail else None,
         }
     except Exception as e:
         checks["llm"] = {"status": "warn", "error": str(e)}
