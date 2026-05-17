@@ -159,7 +159,7 @@ async def _run_backfill(
             async with semaphore:
                 try:
                     with SessionFactory() as db:
-                        sess = db.query(AgentSession).get(session_id)
+                        sess = db.get(AgentSession, session_id)
                         if not sess:
                             _backfill_state["skipped"] += 1
                             return
@@ -314,7 +314,7 @@ async def _run_embedding_backfill(
             async with semaphore:
                 try:
                     with SessionFactory() as db:
-                        sess = db.query(AgentSession).get(session_id)
+                        sess = db.get(AgentSession, session_id)
                         if not sess:
                             _embedding_backfill_state["skipped"] += 1
                             return
@@ -323,30 +323,34 @@ async def _run_embedding_backfill(
                             db.query(AgentEvent)
                             .filter(AgentEvent.session_id == session_id)
                             .filter(durable_transcript_event_predicate())
-                            .order_by(AgentEvent.timestamp)
+                            .order_by(AgentEvent.timestamp, AgentEvent.id)
                             .all()
                         )
                         if not events:
                             _embedding_backfill_state["skipped"] += 1
                             return
 
-                        written, remaining = await embed_session(
-                            str(session_id),
-                            sess,
-                            events,
-                            config,
-                            db,
-                            transcript_revision=int(getattr(sess, "transcript_revision", 0) or 0),
-                        )
-                        if remaining == 0:
-                            await mark_session_embedding_complete(
+                        session_written = 0
+                        while True:
+                            written, remaining = await embed_session(
                                 str(session_id),
+                                sess,
+                                events,
+                                config,
+                                db,
                                 transcript_revision=int(getattr(sess, "transcript_revision", 0) or 0),
-                                db=db,
                             )
-                        if remaining > 0 and written == 0:
-                            raise RuntimeError("Embedding reconciliation made no progress")
-                        if written > 0:
+                            session_written += written
+                            if remaining == 0:
+                                await mark_session_embedding_complete(
+                                    str(session_id),
+                                    transcript_revision=int(getattr(sess, "transcript_revision", 0) or 0),
+                                    db=db,
+                                )
+                                break
+                            if written == 0:
+                                raise RuntimeError("Embedding reconciliation made no progress")
+                        if session_written > 0:
                             _embedding_backfill_state["embedded"] += 1
                         else:
                             _embedding_backfill_state["skipped"] += 1

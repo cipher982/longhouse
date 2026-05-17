@@ -418,6 +418,55 @@ def test_embedding_continuation_does_not_consume_retry_budget(tmp_path, monkeypa
         db.close()
 
 
+def test_embedding_continuations_leave_full_budget_for_later_errors(tmp_path, monkeypatch):
+    call_count = {"n": 0}
+
+    async def fake_impl(task_id, session_id, task_type):
+        call_count["n"] += 1
+        if call_count["n"] <= 3:
+            raise itq.ContinueTaskLater("partial embedding progress")
+        raise RuntimeError(f"boom {call_count['n']}")
+
+    factory = _make_db(tmp_path, "embedding_continue_then_fail.db")
+    db = factory()
+    s = _add_session(db)
+    t = _add_task(db, str(s.id), "embedding", max_attempts=5)
+    db.close()
+
+    serializer = WriteSerializer()
+    serializer.configure(factory)
+    monkeypatch.setattr(itq, "get_write_serializer", lambda: serializer)
+    monkeypatch.setattr(itq, "_run_task_impl", fake_impl)
+    monkeypatch.setattr(itq, "TASK_CONTINUE_DELAY_SECONDS", 0)
+
+    async def _drive():
+        for _ in range(8):
+            tasks = await serializer.execute(
+                lambda db: itq._claim_pending(
+                    db,
+                    1,
+                    exclude_task_types=itq.HOT_INGEST_TASK_TYPES,
+                ),
+                label="task-claim",
+            )
+            assert tasks, "expected to claim the task until retry budget is exhausted"
+            tid, sid, ttype, attempts = tasks[0]
+            await itq._execute_task(tid, sid, ttype, attempts)
+
+    asyncio.run(_drive())
+
+    db = factory()
+    try:
+        row = db.get(SessionTask, t.id)
+        assert call_count["n"] == 8
+        assert row.status == "failed"
+        assert row.attempts == 5
+        assert row.retry_later_count == 0
+        assert "boom 8" in (row.error or "")
+    finally:
+        db.close()
+
+
 # ---------------------------------------------------------------------------
 # max_attempts default
 # ---------------------------------------------------------------------------
