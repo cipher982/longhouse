@@ -1,19 +1,16 @@
-"""Conversation title generation using OpenAI.
+"""Conversation title generation.
 
 This module generates short, descriptive titles for conversations
-using OpenAI's responses API with structured output.
-
-Replaces the old chat proxy layer.
+using the configured summarization model.
 """
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
-import httpx
-
 from zerg.config import get_settings
+from zerg.database import get_session_factory
+from zerg.models_config import get_llm_client_preferring_db_config
 from zerg.services.session_processing import safe_parse_json
 
 # System prompt for title generation
@@ -59,38 +56,6 @@ def _normalize_title_messages(messages: list[dict[str, Any]]) -> list[dict[str, 
     return cleaned
 
 
-def _extract_output_text(response_json: dict[str, Any] | None) -> str | None:
-    """Extract text output from OpenAI responses API format."""
-    if not response_json or not isinstance(response_json, dict):
-        return None
-
-    # Direct output_text field
-    if isinstance(response_json.get("output_text"), str):
-        text = response_json["output_text"].strip()
-        if text:
-            return text
-
-    # Extract from output array
-    output = response_json.get("output")
-    if not isinstance(output, list):
-        return None
-
-    for item in output:
-        if not isinstance(item, dict):
-            continue
-        content = item.get("content")
-        if not isinstance(content, list):
-            continue
-        for part in content:
-            if not isinstance(part, dict):
-                continue
-            text = part.get("text")
-            if isinstance(text, str) and text.strip():
-                return text.strip()
-
-    return None
-
-
 async def generate_conversation_title(messages: list[dict[str, Any]]) -> str | None:
     """Generate a short conversation title from messages.
 
@@ -101,10 +66,11 @@ async def generate_conversation_title(messages: list[dict[str, Any]]) -> str | N
         Generated title string, or None if generation fails
 
     Raises:
-        httpx.TimeoutException: If OpenAI API times out
-        httpx.HTTPStatusError: If OpenAI API returns an error status
+        Provider/API exceptions if the configured summarization client fails.
     """
     settings = get_settings()
+    if settings.testing or settings.llm_disabled:
+        return None
 
     # Normalize messages
     normalized = _normalize_title_messages(messages)
@@ -116,52 +82,27 @@ async def generate_conversation_title(messages: list[dict[str, Any]]) -> str | N
     if not has_user or not has_assistant:
         return None
 
-    model = os.getenv("LONGHOUSE_TITLE_MODEL", "gpt-5-mini")
-    reasoning_effort = os.getenv("LONGHOUSE_TITLE_REASONING_EFFORT", "none")
-
     # Build transcript
     transcript = "\n".join(f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content']}" for m in normalized)
 
-    payload = {
-        "model": model,
-        "reasoning": {"effort": reasoning_effort},
-        "input": [
-            {"role": "system", "content": [{"type": "input_text", "text": TITLE_SYSTEM_PROMPT}]},
-            {"role": "user", "content": [{"type": "input_text", "text": transcript}]},
-        ],
-        "text": {
-            "verbosity": "low",
-            "format": {
-                "type": "json_schema",
-                "name": "conversation_title",
-                "strict": True,
-                "schema": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {"title": {"type": "string"}},
-                    "required": ["title"],
-                },
-            },
-        },
-    }
+    session_factory = get_session_factory()
+    with session_factory() as db:
+        client, model, _provider = get_llm_client_preferring_db_config("summary_update", db=db)
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(
-            "https://api.openai.com/v1/responses",
-            headers={
-                "Authorization": f"Bearer {settings.openai_api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
+    try:
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": TITLE_SYSTEM_PROMPT + " Return JSON only: {\"title\":\"...\"}"},
+                {"role": "user", "content": transcript},
+            ],
         )
-        response.raise_for_status()
-        result = response.json()
+    finally:
+        await client.close()
 
-        output_text = _extract_output_text(result)
+    output_text = response.choices[0].message.content if response.choices else None
+    parsed = safe_parse_json(output_text)
+    if parsed and isinstance(parsed.get("title"), str):
+        return parsed["title"].strip() or None
 
-        # Parse the JSON output
-        parsed = safe_parse_json(output_text)
-        if parsed and isinstance(parsed.get("title"), str):
-            return parsed["title"].strip() or None
-
-        return None
+    return None
