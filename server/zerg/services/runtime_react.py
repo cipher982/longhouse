@@ -110,12 +110,7 @@ def _make_llm(
     from zerg.models_config import build_openai_compatible_client_kwargs
     from zerg.models_config import get_all_models
     from zerg.models_config import get_model_by_id
-    from zerg.models_config import normalize_legacy_model_id
 
-    original_model = model
-    model = normalize_legacy_model_id(model)
-    if model != original_model:
-        logger.warning("Redirecting legacy model %s to %s", original_model, model)
     model_config = get_model_by_id(model)
     if not model_config:
         available = [m.id for m in get_all_models()]
