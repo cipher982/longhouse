@@ -12,7 +12,7 @@ Usage:
     python scripts/smoke_models.py              # from repo root
     python scripts/smoke_models.py --json       # machine-readable output
     python scripts/smoke_models.py --ci         # exit 1 on any failure (for CI)
-    python scripts/smoke_models.py --scope active  # active profile only
+    python scripts/smoke_models.py --scope active  # active use cases / defaults only
 """
 
 from __future__ import annotations
@@ -83,20 +83,10 @@ def _resolve_model_reference(config: dict, tier_or_model: str) -> str:
 
 
 def get_active_text_models(config: dict) -> list[tuple[str, dict]]:
-    """Return text models referenced by the active profile's routing."""
+    """Return text models referenced by the active use cases and defaults."""
     text_models = config.get("text", {}).get("models", {})
     use_cases = dict(config.get("useCases", {}).get("text", {}))
     defaults = dict(config.get("defaults", {}).get("text", {}))
-
-    raw_profiles = config.get("routingProfiles", {})
-    profiles = {name: cfg for name, cfg in raw_profiles.items() if isinstance(cfg, dict) and not name.startswith("$")}
-    active_profile = os.getenv("MODELS_PROFILE", "oss")
-    if profiles and active_profile not in profiles:
-        raise ValueError(f"Unknown MODELS_PROFILE '{active_profile}'. Valid profiles: {list(profiles.keys())}")
-
-    text_overrides = profiles.get(active_profile, {}).get("text", {})
-    use_cases.update(text_overrides.get("useCases", {}))
-    defaults.update(text_overrides.get("defaults", {}))
 
     ordered_models: list[tuple[str, dict]] = []
     seen: set[str] = set()
