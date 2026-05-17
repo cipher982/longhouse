@@ -19,6 +19,7 @@ from zerg.services.session_processing.embeddings import bytes_to_embedding
 from zerg.services.session_processing.embeddings import content_hash
 from zerg.services.session_processing.embeddings import embed_session
 from zerg.services.session_processing.embeddings import embedding_to_bytes
+from zerg.services.session_processing.embeddings import generate_embeddings
 from zerg.services.session_processing.embeddings import prepare_session_chunk
 from zerg.services.session_processing.embeddings import prepare_turn_chunks
 from zerg.services.session_processing.embeddings import sanitize_for_embedding
@@ -39,6 +40,41 @@ def test_embedding_roundtrip():
     encoded = embedding_to_bytes(original)
     decoded = bytes_to_embedding(encoded, 4)
     np.testing.assert_array_almost_equal(original, decoded)
+
+
+@pytest.mark.asyncio
+async def test_generate_embeddings_preserves_provider_index_order(monkeypatch):
+    """Batched provider responses are returned in input order."""
+
+    class _FakeEmbedding:
+        def __init__(self, index, embedding):
+            self.index = index
+            self.embedding = embedding
+
+    class _FakeEmbeddings:
+        async def create(self, **_kwargs):
+            return SimpleNamespace(
+                data=[
+                    _FakeEmbedding(1, [0.0, 1.0, 0.0, 0.0]),
+                    _FakeEmbedding(0, [1.0, 0.0, 0.0, 0.0]),
+                ]
+            )
+
+    class _FakeClient:
+        def __init__(self, **_kwargs):
+            self.embeddings = _FakeEmbeddings()
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr("openai.AsyncOpenAI", _FakeClient)
+
+    config = SimpleNamespace(provider="openai", model="test-model", dims=4, api_key="test-key", base_url=None)
+    vectors = await generate_embeddings(["first", "second"], config)
+
+    assert len(vectors) == 2
+    np.testing.assert_array_equal(vectors[0], np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32))
+    np.testing.assert_array_equal(vectors[1], np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32))
 
 
 def test_sanitize_for_embedding():
@@ -237,11 +273,11 @@ async def test_embed_session_routes_write_phase_through_serializer(monkeypatch, 
                 fallback_db.commit()
             return result
 
-    async def _fake_generate_embedding(_text, _config):
-        return np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    async def _fake_generate_embeddings(texts, _config):
+        return [np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32) for _ in texts]
 
     monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: _FakeSerializer())
-    monkeypatch.setattr("zerg.services.session_processing.embeddings.generate_embedding", _fake_generate_embedding)
+    monkeypatch.setattr("zerg.services.session_processing.embeddings.generate_embeddings", _fake_generate_embeddings)
 
     config = SimpleNamespace(provider="openai", model="test-model", dims=4, api_key="test-key")
 
@@ -294,3 +330,67 @@ async def test_embed_session_routes_write_phase_through_serializer(monkeypatch, 
         refreshed_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         assert refreshed_session.needs_embedding == 0
         assert refreshed_session.embedding_revision == 4
+
+
+@pytest.mark.asyncio
+async def test_embed_session_batches_turn_embeddings(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+    batch_sizes: list[int] = []
+
+    class _FakeSerializer:
+        is_configured = True
+
+        async def execute_or_direct(self, fn, fallback_db=None, *, label="", auto_commit=True):
+            result = fn(fallback_db)
+            if auto_commit:
+                fallback_db.commit()
+            return result
+
+    async def _fake_generate_embeddings(texts, _config):
+        batch_sizes.append(len(texts))
+        return [np.array([float(i + 1), 0.0, 0.0, 0.0], dtype=np.float32) for i, _text in enumerate(texts)]
+
+    monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: _FakeSerializer())
+    monkeypatch.setattr("zerg.services.session_processing.embeddings.generate_embeddings", _fake_generate_embeddings)
+
+    config = SimpleNamespace(provider="openai", model="test-model", dims=4, api_key="test-key")
+
+    with SessionLocal() as db:
+        db.add(
+            AgentSession(
+                id=session_id,
+                provider="claude",
+                environment="test",
+                project="zerg",
+                started_at=datetime.now(timezone.utc),
+                needs_embedding=1,
+                summary="A session summary gives us a session-level embedding.",
+                transcript_revision=2,
+            )
+        )
+        for idx in range(3):
+            db.add(
+                AgentEvent(
+                    session_id=session_id,
+                    role="user",
+                    content_text=f"Question {idx}",
+                    timestamp=datetime(2026, 1, 1, 0, idx * 2, tzinfo=timezone.utc),
+                )
+            )
+            db.add(
+                AgentEvent(
+                    session_id=session_id,
+                    role="assistant",
+                    content_text=f"Answer {idx}",
+                    timestamp=datetime(2026, 1, 1, 0, idx * 2 + 1, tzinfo=timezone.utc),
+                )
+            )
+        db.commit()
+
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp).all()
+
+        count = await embed_session(session_id, session, events, config, db, transcript_revision=2)
+        assert count == 4
+        assert batch_sizes == [1, 3]
