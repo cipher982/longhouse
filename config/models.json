@@ -75,19 +75,6 @@
     }
   },
 
-  "routingProfiles": {
-    "$comment": "Profile names are kept for deployed env compatibility; base routing is already OpenRouter/DeepSeek.",
-    "oss": {
-      "$comment": "Default profile: no overrides."
-    },
-    "hosted": {
-      "$comment": "Hosted profile: no overrides."
-    },
-    "david": {
-      "$comment": "David's instance: no overrides; embeddings stay on the embedding provider."
-    }
-  },
-
   "defaults": {
     "text": {
       "fiche": "TIER_1",

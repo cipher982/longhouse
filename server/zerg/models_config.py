@@ -3,11 +3,8 @@ Centralized model configuration for Zerg.
 
 Loads from shared config/models.json - the single source of truth for all model definitions.
 
-Override the default path via:
+Override the default path (e.g. for tests against a fixture config) via:
   MODELS_CONFIG_PATH=/path/to/models.json
-
-Select per-instance routing overrides via:
-  MODELS_PROFILE=oss|david|...
 """
 
 import json
@@ -144,44 +141,20 @@ def _resolve_model_reference(tier_or_model: str, *, source: str) -> str:
     return model_id
 
 
-def _build_active_text_routing() -> tuple[str, Dict[str, str], Dict[str, str]]:
-    """Resolve active text use-case/default routing with optional profile overrides."""
-    base_use_cases = dict(_CONFIG["useCases"]["text"])
-    base_defaults = dict(_CONFIG["defaults"]["text"])
-
-    raw_routing_profiles = _CONFIG.get("routingProfiles", {})
-    routing_profiles = {
-        name: cfg
-        for name, cfg in raw_routing_profiles.items()
-        if isinstance(cfg, dict) and not name.startswith("$")
-    }
-    active_profile = os.getenv("MODELS_PROFILE", "oss")
-    if routing_profiles and active_profile not in routing_profiles:
-        raise ValueError(
-            f"Unknown MODELS_PROFILE '{active_profile}'. "
-            f"Valid profiles: {list(routing_profiles.keys())}"
-        )
-
-    profile_cfg = routing_profiles.get(active_profile, {})
-    text_overrides = profile_cfg.get("text", {})
-    use_case_overrides = text_overrides.get("useCases", {})
-    defaults_overrides = text_overrides.get("defaults", {})
-
-    use_cases = dict(base_use_cases)
-    use_cases.update(use_case_overrides)
-
-    defaults = dict(base_defaults)
-    defaults.update(defaults_overrides)
+def _build_text_routing() -> tuple[Dict[str, str], Dict[str, str]]:
+    """Resolve text use-case and default routing, validating every reference."""
+    use_cases = dict(_CONFIG["useCases"]["text"])
+    defaults = dict(_CONFIG["defaults"]["text"])
 
     for use_case, tier_or_model in use_cases.items():
         _resolve_model_reference(tier_or_model, source=f"useCases.text.{use_case}")
     for name, tier_or_model in defaults.items():
         _resolve_model_reference(tier_or_model, source=f"defaults.text.{name}")
 
-    return active_profile, use_cases, defaults
+    return use_cases, defaults
 
 
-_ACTIVE_PROFILE, _USE_CASES, _DEFAULTS = _build_active_text_routing()
+_USE_CASES, _DEFAULTS = _build_text_routing()
 
 
 def _get_api_key_env_var(model_config: ModelConfig) -> str:
@@ -288,11 +261,6 @@ def get_model_for_use_case(use_case: str) -> str:
     return _resolve_model_reference(tier_or_model, source=f"useCases.text.{use_case}")
 
 
-def get_active_models_profile() -> str:
-    """Return active routing profile from MODELS_PROFILE."""
-    return _ACTIVE_PROFILE
-
-
 def get_api_key_env_var_for_use_case(use_case: str) -> str:
     """Return API key env var required for the use-case's resolved model."""
     model_id = get_model_for_use_case(use_case)
@@ -372,8 +340,8 @@ def get_tier_model(tier: str) -> str:
 def get_llm_client_for_use_case(use_case: str) -> tuple:
     """Get an async LLM client + model string for a use case.
 
-    Resolves use case -> tier/model -> provider from models.json (including MODELS_PROFILE
-    overrides), then creates the appropriate SDK client.
+    Resolves use case -> tier/model -> provider from models.json, then creates
+    the appropriate SDK client.
 
     API key env var resolution:
       1) model.apiKeyEnvVar (if configured on that model)

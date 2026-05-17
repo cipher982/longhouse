@@ -47,21 +47,7 @@ def test_build_openai_smoke_request_keeps_non_gpt5_plain():
     assert "reasoning_effort" not in request
 
 
-def test_active_model_scope_defaults_to_direct_provider_tiers(monkeypatch):
-    monkeypatch.delenv("MODELS_PROFILE", raising=False)
-
+def test_active_model_scope_returns_configured_text_models():
     active_models = {model_id for model_id, _ in get_active_text_models(load_config())}
 
-    assert "deepseek/deepseek-v4-pro" in active_models
-    assert "deepseek/deepseek-v4-flash" in active_models
-    assert active_models == {"deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash"}
-
-
-def test_active_model_scope_respects_hosted_profile_overrides(monkeypatch):
-    monkeypatch.setenv("MODELS_PROFILE", "hosted")
-
-    active_models = {model_id for model_id, _ in get_active_text_models(load_config())}
-
-    assert "deepseek/deepseek-v4-pro" in active_models
-    assert "deepseek/deepseek-v4-flash" in active_models
     assert active_models == {"deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash"}

@@ -461,14 +461,12 @@ async def lifespan(app: FastAPI):
 
         # Summarization config validation
         if not _settings.testing and not _settings.llm_disabled and not _settings.demo_mode:
-            from zerg.models_config import get_active_models_profile
             from zerg.models_config import validate_use_case_llm_config
 
             try:
                 model, provider, key_env = validate_use_case_llm_config("summarization")
                 logger.info(
-                    "Summarization configured: profile=%s model=%s provider=%s key_env=%s",
-                    get_active_models_profile(),
+                    "Summarization configured: model=%s provider=%s key_env=%s",
                     model,
                     provider.value,
                     key_env,
