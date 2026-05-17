@@ -217,7 +217,7 @@ export default function EmailConfigCard() {
                   )}
                 </div>
                 <span className="llm-capability-features">
-                  Enables: job failure alerts, daily digests, and system notification emails
+                  Enables: job failure alerts and system notification emails
                 </span>
               </div>
               <div className="llm-capability-actions">
