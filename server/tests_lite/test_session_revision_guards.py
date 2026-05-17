@@ -265,13 +265,13 @@ async def test_generate_embeddings_impl_releases_db_connection_during_provider_c
 
     observed_checked_out: list[int] = []
 
-    async def _fake_generate_embedding(_text, _config):
+    async def _fake_generate_embeddings(texts, _config):
         observed_checked_out.append(engine.pool.checkedout())
-        return np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        return [np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32) for _ in texts]
 
     config = SimpleNamespace(provider="openai", model="test-model", dims=4, api_key="test-key")
 
-    monkeypatch.setattr("zerg.services.session_processing.embeddings.generate_embedding", _fake_generate_embedding)
+    monkeypatch.setattr("zerg.services.session_processing.embeddings.generate_embeddings", _fake_generate_embeddings)
 
     with (
         patch("zerg.database.get_session_factory", return_value=factory),

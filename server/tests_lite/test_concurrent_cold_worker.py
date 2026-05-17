@@ -95,9 +95,13 @@ def test_timeout_for_summary_ramps_per_attempt():
     assert _timeout_for("summary", 0) == 30.0
 
 
-def test_timeout_for_embedding_is_fixed():
-    for attempts in (1, 2, 3, 4, 5, 9):
-        assert _timeout_for("embedding", attempts) == 30.0
+def test_timeout_for_embedding_ramps_per_attempt():
+    assert _timeout_for("embedding", 1) == 60.0
+    assert _timeout_for("embedding", 2) == 90.0
+    assert _timeout_for("embedding", 3) == 120.0
+    assert _timeout_for("embedding", 4) == 180.0
+    assert _timeout_for("embedding", 5) == 180.0
+    assert _timeout_for("embedding", 9) == 180.0
 
 
 def test_timeout_for_unknown_type_returns_none():
@@ -332,7 +336,7 @@ def test_summary_attempt_one_times_out_at_thirty_seconds(tmp_path, monkeypatch):
     assert captured == [30.0, 90.0, 180.0]
 
 
-def test_embedding_timeout_stays_fixed_across_attempts(tmp_path, monkeypatch):
+def test_embedding_timeout_ramps_across_attempts(tmp_path, monkeypatch):
     captured: list[float] = []
 
     async def fake_wait_for(coro, timeout):
@@ -365,7 +369,7 @@ def test_embedding_timeout_stays_fixed_across_attempts(tmp_path, monkeypatch):
             await itq._execute_task(t.id, str(s.id), "embedding", attempts=attempt)
 
     asyncio.run(_drive())
-    assert captured == [30.0, 30.0, 30.0, 30.0, 30.0]
+    assert captured == [60.0, 90.0, 120.0, 180.0, 180.0]
 
 
 # ---------------------------------------------------------------------------

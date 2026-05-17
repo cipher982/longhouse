@@ -57,7 +57,7 @@ STALE_PENDING_SWEEP_BATCH = 1000
 # inside _claim_pending before execution starts, so the first run is 1.
 TASK_TIMEOUT_SECONDS_BY_ATTEMPT: dict[str, list[float]] = {
     "summary": [30.0, 60.0, 90.0, 120.0, 180.0],
-    "embedding": [30.0, 30.0, 30.0, 30.0, 30.0],
+    "embedding": [60.0, 90.0, 120.0, 180.0, 180.0],
 }
 RETRY_LATER_BASE_SECONDS = 2.0
 RETRY_LATER_MAX_SECONDS = 16.0

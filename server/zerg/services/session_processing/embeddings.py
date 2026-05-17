@@ -10,6 +10,7 @@ import hashlib
 import logging
 import os
 from collections.abc import Mapping
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -33,6 +34,7 @@ logger = logging.getLogger(__name__)
 # Max tokens for embedding input (OpenAI limit is 8191, keep conservative)
 MAX_EMBEDDING_TOKENS = 1800
 EMBEDDING_REQUEST_TIMEOUT_SECONDS = float(os.getenv("EMBEDDING_REQUEST_TIMEOUT_SECONDS", "10"))
+EMBEDDING_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
 
 
 @dataclass
@@ -75,10 +77,20 @@ def bytes_to_embedding(data: bytes, dims: int) -> np.ndarray:
 
 
 async def generate_embedding(text: str, config: "EmbeddingConfig") -> np.ndarray:
-    """Generate an embedding vector via an OpenAI-compatible API (OpenAI, OpenRouter)."""
+    """Generate one embedding vector via an OpenAI-compatible API."""
+    embeddings = await generate_embeddings([text], config)
+    return embeddings[0]
+
+
+async def generate_embeddings(texts: Sequence[str], config: "EmbeddingConfig") -> list[np.ndarray]:
+    """Generate embedding vectors via an OpenAI-compatible API (OpenAI, OpenRouter)."""
     from openai import AsyncOpenAI
 
     from zerg.models_config import build_openai_compatible_client_kwargs
+
+    inputs = list(texts)
+    if not inputs:
+        return []
 
     if config.provider not in ("openai", "openrouter"):
         raise ValueError(f"Unsupported embedding provider: {config.provider}. Use 'openai' or 'openrouter'.")
@@ -90,12 +102,32 @@ async def generate_embedding(text: str, config: "EmbeddingConfig") -> np.ndarray
     try:
         response = await client.embeddings.create(
             model=config.model,
-            input=text,
+            input=inputs,
             dimensions=config.dims,
         )
-        return np.array(response.data[0].embedding, dtype=np.float32)
+        data = list(response.data or [])
+        if len(data) != len(inputs):
+            raise ValueError(f"Expected {len(inputs)} embeddings, received {len(data)}")
+        def _order_key(pair) -> int:
+            fallback, item = pair
+            index = getattr(item, "index", None)
+            return index if index is not None else fallback
+
+        ordered = sorted(enumerate(data), key=_order_key)
+        vectors: list[np.ndarray] = []
+        for _pos, item in ordered:
+            embedding = getattr(item, "embedding", None)
+            if not embedding:
+                raise ValueError("No embedding data received")
+            vectors.append(np.array(embedding, dtype=np.float32))
+        return vectors
     finally:
         await client.close()
+
+
+def _chunk_batches(chunks: Sequence[EmbeddingChunk]) -> list[list[EmbeddingChunk]]:
+    batch_size = max(1, EMBEDDING_BATCH_SIZE)
+    return [list(chunks[i : i + batch_size]) for i in range(0, len(chunks), batch_size)]
 
 
 def prepare_session_chunk(
@@ -263,18 +295,25 @@ async def embed_session(
     session_chunk = prepare_session_chunk(session, event_dicts)
     if session_chunk:
         try:
-            vec = await generate_embedding(session_chunk.text, config)
+            vec = (await generate_embeddings([session_chunk.text], config))[0]
             session_pending = _PendingEmbedding(chunk=session_chunk, vec_bytes=embedding_to_bytes(vec))
         except Exception:
             logger.exception("Failed to generate session embedding for %s", session_id)
 
     turn_chunks = prepare_turn_chunks(event_dicts)
-    for chunk in turn_chunks:
+    for batch in _chunk_batches(turn_chunks):
         try:
-            vec = await generate_embedding(chunk.text, config)
-            turn_pending.append(_PendingEmbedding(chunk=chunk, vec_bytes=embedding_to_bytes(vec)))
+            vectors = await generate_embeddings([chunk.text for chunk in batch], config)
         except Exception:
-            logger.exception("Failed to generate turn embedding %d for %s", chunk.chunk_index, session_id)
+            logger.exception(
+                "Failed to generate turn embedding batch %d-%d for %s",
+                batch[0].chunk_index,
+                batch[-1].chunk_index,
+                session_id,
+            )
+            continue
+        for chunk, vec in zip(batch, vectors, strict=True):
+            turn_pending.append(_PendingEmbedding(chunk=chunk, vec_bytes=embedding_to_bytes(vec)))
 
     # --- Phase 2: Write all results in one short DB transaction ---
     def _persist_embeddings(write_db: "DBSession") -> int:
