@@ -18,6 +18,7 @@ import {
   getBranchLabel,
   getRuntimeMetaLabel,
   getProjectLabel,
+  getSessionFallbackSummary,
   getSessionTitle,
   renderHighlightedText,
   getTurnsColor,
@@ -221,12 +222,13 @@ export function SessionCard({
     transcriptPreview != null;
   const showSummary =
     !showTranscriptPreview && !showKeywordSnippet && !showSemanticSnippet && !!session.summary;
-  const showGenerating =
+  const fallbackSummary = getSessionFallbackSummary(session, TRANSCRIPT_PREVIEW_CHAR_LIMIT);
+  const showFallbackSummary =
+    !showSummary &&
     !showTranscriptPreview &&
     !showKeywordSnippet &&
     !showSemanticSnippet &&
-    !session.summary &&
-    !session.summary_title;
+    fallbackSummary.length > 0;
   const showProcessPill =
     !isClosedSession && processPillLabel != null && (controlPath === "unmanaged" || processState === "running");
   // Always render the runtime pill for unmanaged sessions so unknown or
@@ -425,9 +427,9 @@ export function SessionCard({
               </span>
             </div>
           )}
-          {showGenerating && (
-            <div className="session-card-summary session-card-summary--pending">
-              Generating summary<span className="session-card-dots" aria-hidden="true" />
+          {showFallbackSummary && (
+            <div className="session-card-summary">
+              {fallbackSummary}
             </div>
           )}
           {showKeywordSnippet && (

@@ -117,9 +117,7 @@ export function getSessionTitle(session: AgentSession): string {
     const snippet = session.first_user_message.trim().slice(0, 80);
     if (snippet) return snippet;
   }
-  const branch = getBranchLabel(session.git_branch);
-  if (branch) return branch;
-  return "";
+  return `New ${formatProviderName(session.provider)} session`;
 }
 
 export function getBranchLabel(value: string | null | undefined): string | null {
@@ -127,6 +125,38 @@ export function getBranchLabel(value: string | null | undefined): string | null 
   const branch = value!.trim();
   if (branch.toUpperCase() === "HEAD") return null;
   return branch;
+}
+
+export function getSessionFallbackSummary(session: AgentSession, maxChars = 180): string {
+  const firstUser = compactText(session.first_user_message);
+  if (firstUser) {
+    return truncateText(firstUser, maxChars);
+  }
+
+  const project = getProjectLabel(session);
+  const provider = formatProviderName(session.provider);
+  if (project && project !== session.provider) {
+    return `New ${provider} session in ${project}.`;
+  }
+  return `New ${provider} session.`;
+}
+
+function compactText(value: string | null | undefined): string {
+  return (value || "").trim().replace(/\s+/g, " ");
+}
+
+function truncateText(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  return `${value.slice(0, Math.max(0, maxChars - 1)).trimEnd()}...`;
+}
+
+function formatProviderName(provider: string | null | undefined): string {
+  const value = compactText(provider);
+  if (!value) return "agent";
+  if (value.toLowerCase() === "codex") return "Codex";
+  if (value.toLowerCase() === "claude") return "Claude";
+  if (value.toLowerCase() === "gemini") return "Gemini";
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 // ---------------------------------------------------------------------------
