@@ -398,44 +398,10 @@
    * Session Groups
    * ---------------------------------------------------------------------------*/
 
-  .sessions-list {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-8);
-  }
-
-  .session-group {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-4);
-  }
-
-  .session-group-header {
-    display: flex;
-    align-items: center;
-    gap: var(--space-3);
-  }
-
-  .session-group-title {
-    font-size: var(--font-size-lg);
-    font-weight: var(--font-weight-semibold);
-    color: var(--color-text-primary);
-  }
-
-  .session-group-count {
-    background: color-mix(in srgb, var(--color-brand-primary) 15%, transparent);
-    color: var(--color-brand-primary);
-    border-color: color-mix(in srgb, var(--color-brand-primary) 25%, transparent);
-  }
-
-  .session-group-list {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-    gap: var(--space-4);
-  }
-
   /* ---------------------------------------------------------------------------
-   * Session Cards
+   * Legacy session-card chrome — kept as long as the detail page or any
+   * branch-specific view still references these classes. The `/timeline`
+   * inbox renders via styles/inbox.css.
    * ---------------------------------------------------------------------------*/
 
   .session-card {
@@ -1152,18 +1118,6 @@
     .sessions-filter-toggle {
       min-height: 34px;
       padding: 0 9px;
-    }
-
-    .session-group {
-      gap: var(--space-3);
-    }
-
-    .session-group-header {
-      gap: var(--space-2);
-    }
-
-    .session-group-list {
-      gap: var(--space-3);
     }
 
     .session-card {
@@ -2357,10 +2311,6 @@
 
     .sessions-filter-select {
       flex: 1;
-    }
-
-    .session-group-list {
-      grid-template-columns: 1fr;
     }
 
     .session-detail-meta {

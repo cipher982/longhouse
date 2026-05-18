@@ -48,7 +48,7 @@ export function SessionRow({
   const text = getSessionCardText(session, { titleMaxChars: 96, subheadingMaxChars: 200 });
   const branch = getBranchLabel(session.git_branch);
   const provider = session.provider;
-  const startedAtIso = thread.timeline_anchor_at || thread.root?.started_at || session.started_at;
+  const startedAtIso = thread.root?.started_at || session.started_at;
 
   // When the user is searching and the backend returned a match snippet,
   // show that as the row's secondary line with the query highlighted.

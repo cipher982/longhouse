@@ -176,11 +176,20 @@
     line-height: 1.4;
     /* keep both lines the same height even when one is empty */
     min-height: 18px;
+    /* the meta cluster track is fixed width; truncate, don't reflow */
+    max-width: 100%;
+    overflow: hidden;
+    white-space: nowrap;
   }
 
   .inbox-row-meta-provider {
     color: var(--text-secondary);
     text-transform: capitalize;
+  }
+
+  .inbox-row-provider {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .inbox-row-branch {
@@ -190,6 +199,9 @@
     padding: 1px 6px;
     border-radius: var(--radius-sm);
     background: color-mix(in srgb, var(--color-legacy-bg-button) 60%, transparent);
+    max-width: 12ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .inbox-row-meta-status {
@@ -230,13 +242,22 @@
     color: var(--text-secondary);
     text-transform: lowercase;
     transition: color 200ms ease, opacity 200ms ease;
+    /* status label is variable-length but the meta line is nowrap+overflow:hidden,
+     * so longer values truncate with ellipsis instead of pushing the time */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
   }
 
   .inbox-row-time {
     color: var(--text-muted);
+    flex-shrink: 0;
   }
 
-  /* ---------- Mobile ---------- */
+  /* ---------- Mobile ----------
+   * Single-column stack. Meta drops below the title/summary as one line,
+   * still nowrap+ellipsis so it never reflows the row when status changes.
+   */
 
   @media (max-width: 720px) {
     .inbox-row {
@@ -247,7 +268,13 @@
     .inbox-row-meta {
       align-items: flex-start;
       flex-direction: row;
-      flex-wrap: wrap;
+      gap: var(--space-3);
+      overflow: hidden;
+    }
+
+    .inbox-row-meta-line {
+      flex-shrink: 1;
+      min-width: 0;
     }
   }
 }

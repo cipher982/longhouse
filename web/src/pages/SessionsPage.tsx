@@ -2,7 +2,7 @@
  * TimelinePage - Browse agent sessions shipped via the shipper
  *
  * Features:
- * - Timeline list grouped by day
+ * - Inbox layout grouped by repo (Active above, Closed below)
  * - Filter by project, provider, date range (dynamic from API)
  * - Search sessions by content
  * - Live updates via timeline stream with slow reconciliation
@@ -243,7 +243,7 @@ export default function SessionsPage() {
   const skipInitialTimelineReplay =
     timelineStreamEnabled &&
     !timelineStreamBootstrapKeysRef.current.has(timelineStreamBootstrapKey) &&
-    sessions.length > 0;
+    (data?.sessions.length ?? 0) > 0;
 
   useEffect(() => {
     if (!timelineStreamEnabled) {

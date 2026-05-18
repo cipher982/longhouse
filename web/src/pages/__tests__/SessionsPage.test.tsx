@@ -910,7 +910,7 @@ describe("SessionsPage", () => {
   });
 
 
-  it("uses the session timeline anchor for the card timestamp", async () => {
+  it("uses the session start time for the card timestamp", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-21T12:05:00Z"));
 
@@ -934,7 +934,7 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
-    expect(screen.getByText("2m ago")).toBeInTheDocument();
+    expect(screen.getByText("1h ago")).toBeInTheDocument();
   });
 
 
