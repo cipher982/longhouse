@@ -215,6 +215,7 @@ def server(tmp_path_factory):
         **os.environ,
         "AUTH_DISABLED": "1",
         "DATABASE_URL": f"sqlite:///{db_path}",
+        "LLM_DISABLED": "1",
         "FERNET_SECRET": os.environ.get(
             "FERNET_SECRET",
             base64.urlsafe_b64encode(os.urandom(32)).decode(),
