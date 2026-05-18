@@ -1,4 +1,4 @@
-import { type TimelineSessionCard, getTimelineCardAnchor } from "../services/api/agents";
+import { type TimelineSessionCard } from "../services/api/agents";
 import { getProjectLabel } from "./sessionUtils";
 import { isSessionClosed } from "./sessionRuntime";
 
@@ -14,8 +14,7 @@ export interface InboxLayout {
 }
 
 function startedAtMs(card: TimelineSessionCard): number {
-  const anchor = getTimelineCardAnchor(card);
-  const started = anchor || card.root?.started_at || card.head?.started_at;
+  const started = card.root?.started_at || card.head?.started_at;
   if (!started) return 0;
   const ms = Date.parse(started);
   return Number.isFinite(ms) ? ms : 0;
