@@ -6,7 +6,7 @@
  * transitions (idle → thinking → idle) crossfade in place.
  */
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import { type TimelineSessionCard } from "../../services/api/agents";
 import {
   isSessionClosed,
@@ -16,6 +16,7 @@ import {
   formatRelativeTime,
   getBranchLabel,
   getSessionCardText,
+  renderHighlightedText,
 } from "../../lib/sessionUtils";
 
 const HOVER_PREFETCH_DELAY_MS = 180;
@@ -36,9 +37,11 @@ export function SessionRow({
   onPrefetch,
   allowHoverPrefetch,
   relativeNowMs,
+  highlightQuery,
   closed = false,
 }: SessionRowProps) {
   const session = thread.head;
+  const detailSession = thread.detail;
   const runtime = resolveSessionRuntimeState(session);
   const cardStatus = session.timeline_card?.status ?? runtime.factStatus ?? null;
   const isClosed = closed || isCardClosed(thread);
@@ -46,6 +49,14 @@ export function SessionRow({
   const branch = getBranchLabel(session.git_branch);
   const provider = session.provider;
   const startedAtIso = thread.timeline_anchor_at || thread.root?.started_at || session.started_at;
+
+  // When the user is searching and the backend returned a match snippet,
+  // show that as the row's secondary line with the query highlighted.
+  const matchSnippet = detailSession?.match_snippet ?? null;
+  const showSnippet = !!highlightQuery && !!matchSnippet;
+  const summary: ReactNode = showSnippet
+    ? renderHighlightedText(matchSnippet!, highlightQuery!)
+    : text.subheading;
 
   const statusTone = isClosed ? "closed" : (cardStatus?.tone ?? runtime.tone);
   const statusLabel = isClosed
@@ -91,8 +102,13 @@ export function SessionRow({
     >
       <div className="inbox-row-main">
         <div className="inbox-row-title">{text.title}</div>
-        {text.subheading ? (
-          <div className="inbox-row-summary">{text.subheading}</div>
+        {summary ? (
+          <div
+            className={`inbox-row-summary${showSnippet ? " inbox-row-summary--snippet" : ""}`}
+            data-testid={showSnippet ? "session-row-snippet" : undefined}
+          >
+            {summary}
+          </div>
         ) : (
           <div className="inbox-row-summary inbox-row-summary--empty" aria-hidden="true">
             &nbsp;

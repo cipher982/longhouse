@@ -119,15 +119,12 @@ test.describe("Managed Codex liveness", () => {
     await page.goto(`/timeline?project=${project}`);
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
-    const card = page
-      .locator('[data-testid="session-card"]', { hasText: token })
+    const row = page
+      .getByTestId("session-row")
+      .filter({ hasText: token })
       .first();
-    await expect(card).toBeVisible();
-    await expect(card).toContainText("Idle");
-    await expect(card).not.toContainText("State unavailable");
-    await expect(card).not.toContainText("Not connected");
-    await expect(card).toHaveAttribute("data-runtime-tone", "idle");
-    await expect(card).not.toHaveClass(/session-card--idle/);
-    await expect(card).not.toHaveClass(/session-card--live/);
+    await expect(row).toBeVisible();
+    await expect(row).toHaveAttribute("data-status", "idle");
+    await expect(row).toContainText("idle");
   });
 });

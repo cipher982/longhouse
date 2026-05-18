@@ -149,7 +149,7 @@ test('live thread card groups continuations and stale branch stays explicit', as
 
   await page.goto(`/timeline?project=${project}`, { waitUntil: 'domcontentloaded' });
 
-  const card = page.locator('.session-card', { hasText: project });
+  const card = page.getByTestId('session-row').filter({ hasText: project });
   await expect(card).toHaveCount(1, { timeout: 15_000 });
 
   await card.click();
@@ -226,9 +226,9 @@ test('live search keeps one card but opens the matching older continuation', asy
   await searchInput.fill(token);
   await expect(page).toHaveURL(new RegExp(`query=${token}`));
 
-  const card = page.locator('.session-card', { hasText: project });
+  const card = page.getByTestId('session-row').filter({ hasText: project });
   await expect(card).toHaveCount(1, { timeout: 15_000 });
-  await expect(card.locator('.session-card-snippet')).toContainText(token);
+  await expect(card.getByTestId('session-row-snippet')).toContainText(token);
 
   await card.click();
   await expect(page).toHaveURL(new RegExp(`/timeline/${rootId}.*event_id=`));

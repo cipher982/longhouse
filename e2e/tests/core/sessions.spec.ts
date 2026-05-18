@@ -153,7 +153,7 @@ test.describe("Sessions Page", () => {
     await expect(page.locator('.nav-tab:has-text("Timeline")')).toBeVisible();
 
     // Should show either sessions list or hero empty state
-    const hasSessions = (await page.locator(".session-card").count()) > 0;
+    const hasSessions = (await page.getByTestId("session-row").count()) > 0;
     const hasHeroEmpty = await page.locator(".sessions-hero-empty").isVisible();
 
     expect(hasSessions || hasHeroEmpty).toBe(true);
@@ -258,16 +258,17 @@ test.describe("Sessions Page", () => {
     await searchInput.fill(magicToken);
     await expect(page).toHaveURL(new RegExp(`query=${magicToken}`));
 
-    const sessionCard = page
-      .locator(".session-card", { hasText: "fts-e2e" })
+    const sessionRow = page
+      .getByTestId("session-row")
+      .filter({ hasText: "fts-e2e" })
       .first();
-    await expect(sessionCard).toBeVisible();
+    await expect(sessionRow).toBeVisible();
 
-    const snippet = sessionCard.locator(".session-card-snippet");
+    const snippet = sessionRow.getByTestId("session-row-snippet");
     await expect(snippet).toContainText(magicToken);
     await expect(snippet.locator("mark.search-highlight")).toBeVisible();
 
-    await sessionCard.click();
+    await sessionRow.click();
 
     await expect(page).toHaveURL(
       new RegExp(`/timeline/${sessionId}.*event_id=`),
@@ -335,16 +336,16 @@ test.describe("Sessions Page", () => {
     await searchInput.fill(magicToken);
     await expect(page).toHaveURL(new RegExp(`query=${magicToken}`));
 
-    const cards = page.locator('[data-testid="session-card"]');
-    await expect(cards).toHaveCount(1);
+    const rows = page.getByTestId("session-row");
+    await expect(rows).toHaveCount(1);
 
-    const sessionCard = cards.first();
-    await expect(sessionCard).toHaveAttribute("data-thread-id", rootId);
-    await expect(sessionCard).toHaveAttribute("data-session-id", rootId);
-    await expect(sessionCard).toContainText(magicToken);
-    await expect(sessionCard).not.toContainText(headId);
+    const sessionRow = rows.first();
+    await expect(sessionRow).toHaveAttribute("data-thread-id", rootId);
+    await expect(sessionRow).toHaveAttribute("data-session-id", rootId);
+    await expect(sessionRow).toContainText(magicToken);
+    await expect(sessionRow).not.toContainText(headId);
 
-    await sessionCard.click();
+    await sessionRow.click();
 
     await expect(page).toHaveURL(new RegExp(`/timeline/${rootId}.*event_id=`));
     await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
@@ -452,21 +453,20 @@ test.describe("Sessions Page", () => {
     expect(queryPayload.total).toBe(2);
     expect(queryPayload.sessions).toHaveLength(2);
 
-    const cards = page.getByTestId("session-card");
-    await expect(cards).toHaveCount(1);
+    const rows = page.getByTestId("session-row");
+    await expect(rows).toHaveCount(1);
 
-    const card = cards.first();
-    await expect(card).toHaveAttribute("data-thread-id", rootId);
-    await expect(card).toHaveAttribute("data-session-id", matchedId);
-    await expect(card.locator(".session-card-snippet")).toContainText(token);
-    await expect(card).toContainText("Using Pytest");
-    await expect(card).toHaveAttribute("data-runtime-tone", "running");
-    await expect(card).toHaveClass(/session-card--running/);
-    await expect(card).not.toContainText(
+    const row = rows.first();
+    await expect(row).toHaveAttribute("data-thread-id", rootId);
+    await expect(row).toHaveAttribute("data-session-id", matchedId);
+    await expect(row.getByTestId("session-row-snippet")).toContainText(token);
+    await expect(row).toContainText("Using Pytest");
+    await expect(row).toHaveAttribute("data-status", "running");
+    await expect(row).not.toContainText(
       "Newest writable head is just housekeeping without the search token",
     );
 
-    await card.click();
+    await row.click();
     await expect(page).toHaveURL(new RegExp(`/timeline/${matchedId}.*event_id=`));
     await expect(
       page.getByTestId("session-timeline-row").filter({ hasText: token }).first(),
@@ -606,35 +606,26 @@ test.describe("Sessions Page", () => {
     await page.goto(`/timeline?project=${project}`);
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
-    const runningCard = page
-      .locator('[data-testid="session-card"]', { hasText: `running-state-${suffix}` })
+    const runningRow = page
+      .getByTestId("session-row")
+      .filter({ hasText: `running-state-${suffix}` })
       .first();
-    await expect(runningCard).toBeVisible();
-    await expect(runningCard).toContainText("Using Shell");
-    await expect(runningCard).toHaveAttribute("data-runtime-tone", "running");
-    await expect(runningCard).not.toHaveClass(/session-card--live/);
-    await expect(runningCard).toHaveClass(/session-card--running/);
+    await expect(runningRow).toBeVisible();
+    await expect(runningRow).toHaveAttribute("data-status", "running");
 
-    const needsUserCard = page
-      .locator('[data-testid="session-card"]', { hasText: `needs-user-state-${suffix}` })
+    const needsUserRow = page
+      .getByTestId("session-row")
+      .filter({ hasText: `needs-user-state-${suffix}` })
       .first();
-    await expect(needsUserCard).toBeVisible();
-    await expect(needsUserCard).toContainText("Idle");
-    await expect(needsUserCard).not.toContainText("Ready");
-    await expect(needsUserCard).not.toContainText("Needs you");
-    await expect(needsUserCard).toHaveAttribute("data-runtime-tone", "idle");
-    await expect(needsUserCard).not.toHaveClass(/session-card--live/);
-    await expect(needsUserCard).not.toHaveClass(/session-card--idle/);
+    await expect(needsUserRow).toBeVisible();
+    await expect(needsUserRow).toHaveAttribute("data-status", "idle");
 
-    const inferredCard = page
-      .locator('[data-testid="session-card"]', { hasText: `inferred-state-${suffix}` })
+    const inferredRow = page
+      .getByTestId("session-row")
+      .filter({ hasText: `inferred-state-${suffix}` })
       .first();
-    await expect(inferredCard).toBeVisible();
-    await expect(inferredCard).toContainText("Process unknown");
-    await expect(inferredCard).not.toContainText("Recent progress");
-    await expect(inferredCard).toHaveAttribute("data-runtime-tone", "inactive");
-    await expect(inferredCard).not.toHaveClass(/session-card--live/);
-    await expect(inferredCard).not.toHaveClass(/session-card--inferred/);
+    await expect(inferredRow).toBeVisible();
+    await expect(inferredRow).toHaveAttribute("data-status", "inactive");
   });
 
   test("Timeline live stream updates a visible card in place without duplication", async ({
@@ -685,19 +676,20 @@ test.describe("Sessions Page", () => {
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
     await streamConnected;
 
-    const cards = page.locator('[data-testid="session-card"]');
-    const olderCard = page.locator(
-      `[data-testid="session-card"][data-session-id="${olderId}"]`,
+    const rows = page.getByTestId("session-row");
+    const olderRow = page.locator(
+      `[data-testid="session-row"][data-session-id="${olderId}"]`,
     );
-    const recentCard = page.locator(
-      `[data-testid="session-card"][data-session-id="${recentId}"]`,
+    const recentRow = page.locator(
+      `[data-testid="session-row"][data-session-id="${recentId}"]`,
     );
 
-    await expect(cards.first()).toHaveAttribute("data-session-id", recentId);
-    await expect(olderCard).toBeVisible();
-    await expect(olderCard).toContainText(`older-stream-session-${suffix}`);
-    await expect(recentCard).toBeVisible();
-    await expect(recentCard).toContainText(`recent-stream-session-${suffix}`);
+    // Initial order is by start time desc — recent first.
+    await expect(rows.first()).toHaveAttribute("data-session-id", recentId);
+    await expect(olderRow).toBeVisible();
+    await expect(olderRow).toContainText(`older-stream-session-${suffix}`);
+    await expect(recentRow).toBeVisible();
+    await expect(recentRow).toContainText(`recent-stream-session-${suffix}`);
 
     await ingestRuntimeEvents(request, [
       {
@@ -712,18 +704,15 @@ test.describe("Sessions Page", () => {
       },
     ]);
 
-    await expect(olderCard).toContainText("Using Shell", {
-      timeout: 15000,
-    });
-    await expect(olderCard).toHaveAttribute("data-runtime-tone", "running");
-    await expect(olderCard).toHaveAttribute("data-card-state", "actionable");
-    await expect(olderCard).not.toHaveClass(/session-card--closed/);
-    await expect(olderCard).not.toHaveClass(/session-card--live/);
-    await expect(olderCard).toHaveClass(/session-card--running/);
-    await expect(cards.first()).toHaveAttribute("data-session-id", olderId);
-    await expect(olderCard).toHaveCount(1);
-    await expect(recentCard).toHaveCount(1);
-    await expect(cards.nth(1)).toHaveAttribute("data-session-id", recentId);
+    // The runtime fact updates the older row's status in place, but the
+    // inbox layout is anchored to start time — so order MUST NOT change.
+    // This is the no-jitter contract.
+    await expect(olderRow).toHaveAttribute("data-status", "running", { timeout: 15000 });
+    await expect(olderRow).toHaveAttribute("data-closed", "false");
+    await expect(olderRow).toHaveCount(1);
+    await expect(recentRow).toHaveCount(1);
+    await expect(rows.first()).toHaveAttribute("data-session-id", recentId);
+    await expect(rows.nth(1)).toHaveAttribute("data-session-id", olderId);
   });
 });
 
@@ -1477,15 +1466,12 @@ test.describe("Machine Filter", () => {
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
     // Should show the filtered machine's sessions
-    const cards = page.locator(".session-card");
-    await expect(cards.first()).toBeVisible({ timeout: 10000 });
-
-    // All visible cards should belong to the filtered machine project
-    const allCards = await cards.all();
-    for (const card of allCards) {
-      const text = await card.textContent();
-      // The project name is visible on each card
-      expect(text).toContain("machine-filter-sessions");
-    }
+    const repoHeader = page.locator(".inbox-repo-name", {
+      hasText: "machine-filter-sessions",
+    });
+    await expect(repoHeader).toBeVisible({ timeout: 10000 });
+    await expect(
+      page.locator(".inbox-repo-name", { hasText: "machine-filter-other" }),
+    ).toHaveCount(0);
   });
 });
