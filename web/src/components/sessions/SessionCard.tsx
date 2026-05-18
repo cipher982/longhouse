@@ -19,7 +19,6 @@ import {
   getRuntimeMetaLabel,
   getProjectLabel,
   getSessionFallbackSummary,
-  getSessionTitle,
   renderHighlightedText,
   getTurnsColor,
 } from "../../lib/sessionUtils";
@@ -30,12 +29,6 @@ import {
 
 const SESSION_CARD_HOVER_PREFETCH_DELAY_MS = 180;
 const TRANSCRIPT_PREVIEW_CHAR_LIMIT = 180;
-
-export type SessionCardCopyMode = "ai" | "fallback";
-
-function compactCopy(value: string): string {
-  return value.trim().replace(/\s+/g, " ");
-}
 
 type TimelineStatusLike = {
   label: string;
@@ -76,33 +69,6 @@ function isAnimatedRuntimeTone(tone: string): boolean {
   return tone === "thinking" || tone === "running";
 }
 
-type TranscriptPreviewCard = {
-  text: string;
-  fullText: string;
-  label: "Live output" | "Latest output";
-};
-
-function getTranscriptPreviewCard(session: TimelineSessionCard["head"]): TranscriptPreviewCard | null {
-  const preview = session.transcript_preview;
-  if (!preview || preview.is_stale) {
-    return null;
-  }
-  const text = preview.text?.trim();
-  if (!text) {
-    return null;
-  }
-  const compact = text.replace(/\s+/g, " ");
-  const previewText =
-    compact.length <= TRANSCRIPT_PREVIEW_CHAR_LIMIT
-      ? compact
-      : `${compact.slice(0, TRANSCRIPT_PREVIEW_CHAR_LIMIT - 1).trimEnd()}...`;
-  return {
-    text: previewText,
-    fullText: text,
-    label: preview.is_complete ? "Latest output" : "Live output",
-  };
-}
-
 // ---------------------------------------------------------------------------
 // SessionCard
 // ---------------------------------------------------------------------------
@@ -116,7 +82,6 @@ export interface SessionCardProps {
   highlightQuery?: string;
   isSemanticResult?: boolean;
   groupedQueryMode?: boolean;
-  copyMode?: SessionCardCopyMode;
   relativeNowMs: number;
 }
 
@@ -129,7 +94,6 @@ export function SessionCard({
   highlightQuery,
   isSemanticResult,
   groupedQueryMode = false,
-  copyMode = "ai",
   relativeNowMs,
 }: SessionCardProps) {
   const [confirming, setConfirming] = useState(false);
@@ -197,8 +161,6 @@ export function SessionCard({
           ? "The provider process is closed."
           : undefined;
   const projectLabel = getProjectLabel(session);
-  const aiCopyEnabled = copyMode === "ai";
-  const title = getSessionTitle(session, { preferAi: aiCopyEnabled });
   const branchLabel = getBranchLabel(session.git_branch);
   const cardRuntimeMetaParts = [runtimeMetaLabel].filter(Boolean);
   const showContinuationCount = !groupedQueryMode && thread.continuation_count > 1;
@@ -211,8 +173,14 @@ export function SessionCard({
 
   const showKeywordSnippet = !isSemanticResult && !!highlightQuery && !!detailSession.match_snippet;
   const showSemanticSnippet = isSemanticResult && !!detailSession.match_snippet;
-  const transcriptPreview = getTranscriptPreviewCard(session);
+  const promptPreview = getSessionFallbackSummary(session, TRANSCRIPT_PREVIEW_CHAR_LIMIT);
   const cardActionLabel = groupedQueryMode ? "Open match" : "Open session";
+  const cardAriaContext =
+    (showKeywordSnippet || showSemanticSnippet) && detailSession.match_snippet
+      ? `${projectLabel}, ${detailSession.match_snippet}`
+      : promptPreview
+        ? `${projectLabel}, ${promptPreview}`
+        : projectLabel;
   const hasControlPath = interaction.liveControlAvailable || interaction.hostReattachAvailable;
   // Lifecycle is the closure axis. The reducer only closes on explicit
   // terminal or process-gone facts.
@@ -224,23 +192,7 @@ export function SessionCard({
     (lifecycle != null
       ? lifecycle === "closed"
       : isSessionClosed(session) && !hasCurrentControlledPresence);
-  const showTranscriptPreview =
-    aiCopyEnabled &&
-    !showKeywordSnippet &&
-    !showSemanticSnippet &&
-    !isClosedSession &&
-    transcriptPreview != null;
-  const showSummary =
-    aiCopyEnabled && !showTranscriptPreview && !showKeywordSnippet && !showSemanticSnippet && !!session.summary;
-  const fallbackSummary = getSessionFallbackSummary(session, TRANSCRIPT_PREVIEW_CHAR_LIMIT);
-  const fallbackDuplicatesTitle = compactCopy(fallbackSummary) === compactCopy(title);
-  const showFallbackSummary =
-    !showSummary &&
-    !showTranscriptPreview &&
-    !showKeywordSnippet &&
-    !showSemanticSnippet &&
-    !fallbackDuplicatesTitle &&
-    fallbackSummary.length > 0;
+  const showPromptPreview = !showKeywordSnippet && !showSemanticSnippet && promptPreview.length > 0;
   const showProcessPill =
     !isClosedSession && processPillLabel != null && (controlPath === "unmanaged" || processState === "running");
   // Always render the runtime pill for unmanaged sessions so unknown or
@@ -324,7 +276,7 @@ export function SessionCard({
           type="button"
           className="session-card-hitbox"
           onClick={onClick}
-          aria-label={title ? `${cardActionLabel}: ${title}` : cardActionLabel}
+          aria-label={`${cardActionLabel}: ${cardAriaContext}`}
         />
       )}
 
@@ -421,27 +373,9 @@ export function SessionCard({
         </div>
 
         <div className="session-card-body">
-          {title && <div className="session-card-title">{title}</div>}
-          {showSummary && (
-            <div className="session-card-summary">{session.summary}</div>
-          )}
-          {showTranscriptPreview && (
-            <div
-              className="session-card-transcript-preview"
-              data-testid="session-card-transcript-preview"
-              title={transcriptPreview?.fullText}
-            >
-              <span className="session-card-transcript-preview__label">
-                {transcriptPreview?.label}
-              </span>
-              <span className="session-card-transcript-preview__text">
-                {transcriptPreview?.text}
-              </span>
-            </div>
-          )}
-          {showFallbackSummary && (
+          {showPromptPreview && (
             <div className="session-card-summary">
-              {fallbackSummary}
+              {promptPreview}
             </div>
           )}
           {showKeywordSnippet && (

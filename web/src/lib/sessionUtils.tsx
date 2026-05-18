@@ -108,22 +108,6 @@ export function getProjectLabel(session: AgentSession): string {
   return session.provider;
 }
 
-/** Secondary: what was done in this session? */
-export function getSessionTitle(
-  session: AgentSession,
-  options: { preferAi?: boolean } = {},
-): string {
-  const preferAi = options.preferAi ?? true;
-  if (preferAi && session.summary_title && session.summary_title !== "Untitled Session") {
-    return session.summary_title;
-  }
-  if (session.first_user_message) {
-    const snippet = session.first_user_message.trim().slice(0, 80);
-    if (snippet) return snippet;
-  }
-  return `New ${formatProviderName(session.provider)} session`;
-}
-
 export function getBranchLabel(value: string | null | undefined): string | null {
   if (!isValidTitle(value)) return null;
   const branch = value!.trim();
