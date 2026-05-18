@@ -1388,6 +1388,62 @@ describe("SessionsPage", () => {
     expect(screen.queryByText("Durable summary should stay behind the current server preview.")).not.toBeInTheDocument();
   });
 
+  it("uses the first user message instead of a generating-summary placeholder", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            ended_at: null,
+            summary: null,
+            summary_title: null,
+            first_user_message: "Workshop an inbox-style homepage layout for Longhouse timeline cards.",
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage();
+
+    expect(await screen.findAllByText("Workshop an inbox-style homepage layout for Longhouse timeline cards.")).toHaveLength(2);
+    expect(screen.queryByText(/Generating summary/)).not.toBeInTheDocument();
+  });
+
+  it("uses a deterministic session summary before any transcript arrives", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            ended_at: null,
+            provider: "claude",
+            project: "zerg",
+            summary: null,
+            summary_title: null,
+            first_user_message: null,
+            user_messages: 0,
+            assistant_messages: 0,
+            tool_calls: 0,
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage();
+
+    expect(await screen.findByText("New Claude session")).toBeInTheDocument();
+    expect(screen.getByText("New Claude session in zerg.")).toBeInTheDocument();
+    expect(screen.queryByText(/Generating summary/)).not.toBeInTheDocument();
+  });
+
   it("does not style transcript-only progress as currently executing", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
