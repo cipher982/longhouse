@@ -259,8 +259,8 @@ test.describe("Sessions Page", () => {
     await expect(page).toHaveURL(new RegExp(`query=${magicToken}`));
 
     const sessionRow = page
+      .locator('section.inbox-repo[data-repo="fts-e2e"]')
       .getByTestId("session-row")
-      .filter({ hasText: "fts-e2e" })
       .first();
     await expect(sessionRow).toBeVisible();
 
@@ -657,7 +657,7 @@ test.describe("Sessions Page", () => {
     const recentId = await ingestSession(request, {
       project,
       started_at: recentTimestamp,
-      ended_at: recentTimestamp,
+      ended_at: null,
       events: [
         {
           role: "user",
