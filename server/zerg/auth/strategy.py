@@ -273,6 +273,12 @@ class JWTAuthStrategy(AuthStrategy):
         if not token:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token or session cookie")
 
+        if token.startswith("zdt_"):
+            user = _resolve_device_token_user(token, db)
+            if user is None:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or revoked device token")
+            return user
+
         try:
             payload = self._decode(token)
         except Exception:  # noqa: BLE001
@@ -297,6 +303,9 @@ class JWTAuthStrategy(AuthStrategy):
         if not token:
             return None
 
+        if token.startswith("zdt_"):
+            return _resolve_device_token_user(token, db)
+
         try:
             payload = self._decode(token)
         except Exception:  # noqa: BLE001
@@ -312,6 +321,23 @@ class JWTAuthStrategy(AuthStrategy):
             return None
 
         return user
+
+
+def _resolve_device_token_user(token: str, db: Session):
+    """Resolve a `zdt_...` device token to its owner User row, or None.
+
+    Lets the local dev proxy (and any other tooling that already holds a
+    device token) authenticate browser API routes as the token's owner.
+    """
+    from zerg.routers.device_tokens import validate_device_token
+
+    device_token = validate_device_token(token, db)
+    if device_token is None:
+        return None
+    user = get_user(db, int(device_token.owner_id))
+    if user is None or not getattr(user, "is_active", True):
+        return None
+    return user
 
 
 # Public re-exports ---------------------------------------------------------
