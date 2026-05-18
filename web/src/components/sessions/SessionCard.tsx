@@ -18,7 +18,7 @@ import {
   getBranchLabel,
   getRuntimeMetaLabel,
   getProjectLabel,
-  getSessionFallbackSummary,
+  getSessionCardText,
   renderHighlightedText,
   getTurnsColor,
 } from "../../lib/sessionUtils";
@@ -162,6 +162,10 @@ export function SessionCard({
           : undefined;
   const projectLabel = getProjectLabel(session);
   const branchLabel = getBranchLabel(session.git_branch);
+  const cardText = getSessionCardText(session, {
+    titleMaxChars: 96,
+    subheadingMaxChars: TRANSCRIPT_PREVIEW_CHAR_LIMIT,
+  });
   const cardRuntimeMetaParts = [runtimeMetaLabel].filter(Boolean);
   const showContinuationCount = !groupedQueryMode && thread.continuation_count > 1;
   const secondaryStatsLabel = groupedQueryMode
@@ -173,13 +177,13 @@ export function SessionCard({
 
   const showKeywordSnippet = !isSemanticResult && !!highlightQuery && !!detailSession.match_snippet;
   const showSemanticSnippet = isSemanticResult && !!detailSession.match_snippet;
-  const promptPreview = getSessionFallbackSummary(session, TRANSCRIPT_PREVIEW_CHAR_LIMIT);
   const cardActionLabel = groupedQueryMode ? "Open match" : "Open session";
+  const cardTextAria = [cardText.title, cardText.subheading].filter(Boolean).join(", ");
   const cardAriaContext =
     (showKeywordSnippet || showSemanticSnippet) && detailSession.match_snippet
-      ? `${projectLabel}, ${detailSession.match_snippet}`
-      : promptPreview
-        ? `${projectLabel}, ${promptPreview}`
+      ? `${projectLabel}, ${cardText.title}, ${detailSession.match_snippet}`
+      : cardTextAria
+        ? `${projectLabel}, ${cardTextAria}`
         : projectLabel;
   const hasControlPath = interaction.liveControlAvailable || interaction.hostReattachAvailable;
   // Lifecycle is the closure axis. The reducer only closes on explicit
@@ -192,7 +196,7 @@ export function SessionCard({
     (lifecycle != null
       ? lifecycle === "closed"
       : isSessionClosed(session) && !hasCurrentControlledPresence);
-  const showPromptPreview = !showKeywordSnippet && !showSemanticSnippet && promptPreview.length > 0;
+  const showSubheading = !showKeywordSnippet && !showSemanticSnippet && !!cardText.subheading;
   const showProcessPill =
     !isClosedSession && processPillLabel != null && (controlPath === "unmanaged" || processState === "running");
   // Always render the runtime pill for unmanaged sessions so unknown or
@@ -373,9 +377,12 @@ export function SessionCard({
         </div>
 
         <div className="session-card-body">
-          {showPromptPreview && (
-            <div className="session-card-summary">
-              {promptPreview}
+          <div className="session-card-title" data-testid="session-card-title">
+            {cardText.title}
+          </div>
+          {showSubheading && (
+            <div className="session-card-subheading" data-testid="session-card-subheading">
+              {cardText.subheading}
             </div>
           )}
           {showKeywordSnippet && (

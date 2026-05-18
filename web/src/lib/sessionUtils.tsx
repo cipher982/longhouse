@@ -108,6 +108,60 @@ export function getProjectLabel(session: AgentSession): string {
   return session.provider;
 }
 
+export type SessionCardTitleSource = "generated" | "prompt" | "fallback";
+
+export interface SessionCardText {
+  title: string;
+  titleSource: SessionCardTitleSource;
+  subheading: string | null;
+}
+
+function isGeneratedSessionTitle(value: string | null | undefined): value is string {
+  const title = compactText(value);
+  if (!title) return false;
+  const normalized = title.toLowerCase();
+  if (normalized === "untitled session") return false;
+  if (normalized === "generating summary") return false;
+  if (normalized === "generating title") return false;
+  return true;
+}
+
+export function getSessionCardText(
+  session: AgentSession,
+  options: { titleMaxChars?: number; subheadingMaxChars?: number; preferGenerated?: boolean } = {},
+): SessionCardText {
+  const titleMaxChars = options.titleMaxChars ?? 96;
+  const subheadingMaxChars = options.subheadingMaxChars ?? 180;
+  const preferGenerated = options.preferGenerated ?? true;
+  const firstUser = compactText(session.first_user_message);
+
+  if (preferGenerated && isGeneratedSessionTitle(session.summary_title)) {
+    return {
+      title: truncateText(compactText(session.summary_title), titleMaxChars),
+      titleSource: "generated",
+      subheading: firstUser ? truncateText(firstUser, subheadingMaxChars) : null,
+    };
+  }
+
+  if (firstUser) {
+    return {
+      title: truncateText(firstUser, titleMaxChars),
+      titleSource: "prompt",
+      subheading: null,
+    };
+  }
+
+  const project = getProjectLabel(session);
+  const provider = formatProviderName(session.provider);
+  return {
+    title: project && project !== session.provider
+      ? `New ${provider} session in ${project}`
+      : `New ${provider} session`,
+    titleSource: "fallback",
+    subheading: null,
+  };
+}
+
 export function getBranchLabel(value: string | null | undefined): string | null {
   if (!isValidTitle(value)) return null;
   const branch = value!.trim();
