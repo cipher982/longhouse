@@ -1,7 +1,28 @@
 import { execSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
+
+/**
+ * Dev proxy: when a `~/.longhouse/machine/device-token` exists alongside a
+ * `~/.longhouse/machine/target-url`, the local UI proxies `/api/*` to that
+ * backend and forwards the device token as a Bearer header. The backend's
+ * browser-auth dependency accepts device tokens for the token owner.
+ *
+ * No config file, no env var — driven entirely off existing CLI state.
+ */
+function loadDevProxy(): { target: string; bearer: string } | null {
+  try {
+    const home = process.env.HOME || "";
+    const target = readFileSync(path.join(home, ".longhouse/machine/target-url"), "utf8").trim();
+    const bearer = readFileSync(path.join(home, ".longhouse/machine/device-token"), "utf8").trim();
+    if (!target || !bearer) return null;
+    return { target, bearer };
+  } catch {
+    return null;
+  }
+}
 
 /** Replace __BUILD_HASH__ in index.html with the short git SHA. */
 function buildHashPlugin(): Plugin {
@@ -43,9 +64,26 @@ export default defineConfig(({ mode }) => {
   // The /react/ path was legacy and unnecessary - only frontend runs on this port
   const basePath = "/";
 
-  // Proxy target: use VITE_PROXY_TARGET for local dev outside Docker,
-  // otherwise leverage Docker Compose DNS (backend:8000)
-  const proxyTarget = process.env.VITE_PROXY_TARGET || rootEnv.VITE_PROXY_TARGET || "http://backend:8000";
+  // Proxy target priority:
+  //   1. ~/.longhouse/machine/{target-url,device-token} — point local UI at the
+  //      already-authenticated remote backend used by the longhouse CLI/engine.
+  //   2. VITE_PROXY_TARGET env — local backend on a non-default port
+  //   3. Docker Compose DNS fallback
+  const devProxy = loadDevProxy();
+  const proxyTarget =
+    devProxy?.target || process.env.VITE_PROXY_TARGET || rootEnv.VITE_PROXY_TARGET || "http://backend:8000";
+
+  if (devProxy) {
+    console.log(`[dev-proxy] forwarding /api/* to ${devProxy.target} as device-token owner`);
+  }
+
+  const remoteProxyConfigure = devProxy
+    ? (proxy: { on: (ev: string, cb: (proxyReq: { setHeader: (k: string, v: string) => void }) => void) => void }) => {
+        proxy.on("proxyReq", (proxyReq) => {
+          proxyReq.setHeader("authorization", `Bearer ${devProxy.bearer}`);
+        });
+      }
+    : undefined;
 
   return {
     plugins: [react(), buildHashPlugin()],
@@ -71,15 +109,18 @@ export default defineConfig(({ mode }) => {
         "/config.js": {
           target: proxyTarget,
           changeOrigin: true,
+          configure: remoteProxyConfigure,
         },
         "/api/ws": {
           target: proxyTarget,
           ws: true,
           changeOrigin: true,
+          configure: remoteProxyConfigure,
         },
         "/api": {
           target: proxyTarget,
           changeOrigin: true,
+          configure: remoteProxyConfigure,
         },
       },
     },
