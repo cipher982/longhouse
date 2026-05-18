@@ -37,7 +37,7 @@ import {
 } from "../components/ui";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { RecallPanel } from "../components/RecallPanel";
-import { SessionCard } from "../components/sessions/SessionCard";
+import { SessionCard, type SessionCardCopyMode } from "../components/sessions/SessionCard";
 import { FilterChip, FilterPopover } from "../components/sessions/SessionsFilter";
 import LaunchSessionModal from "../components/LaunchSessionModal";
 import {
@@ -60,6 +60,18 @@ const TIMELINE_RECONCILIATION_MS = 120_000;
 const DEFAULT_SORT_ORDER = "relevant";
 const SESSION_WORKSPACE_PREFETCH_LIMIT = 200;
 const SESSION_CARD_SCROLL_SUPPRESSION_MS = 250;
+const TIMELINE_COPY_MODE_STORAGE_KEY = "longhouse.timelineCopyMode";
+
+function readTimelineCopyMode(): SessionCardCopyMode {
+  if (typeof window === "undefined") {
+    return "ai";
+  }
+  try {
+    return window.localStorage.getItem(TIMELINE_COPY_MODE_STORAGE_KEY) === "fallback" ? "fallback" : "ai";
+  } catch {
+    return "ai";
+  }
+}
 
 // ---------------------------------------------------------------------------
 // useRelativeTimeClock
@@ -110,6 +122,7 @@ interface SessionGroupProps {
   highlightQuery?: string;
   isSemanticResult?: boolean;
   groupedQueryMode?: boolean;
+  copyMode: SessionCardCopyMode;
   relativeNowMs: number;
 }
 
@@ -123,6 +136,7 @@ function SessionGroup({
   highlightQuery,
   isSemanticResult,
   groupedQueryMode,
+  copyMode,
   relativeNowMs,
 }: SessionGroupProps) {
   return (
@@ -143,6 +157,7 @@ function SessionGroup({
             highlightQuery={highlightQuery}
             isSemanticResult={isSemanticResult}
             groupedQueryMode={groupedQueryMode}
+            copyMode={copyMode}
             relativeNowMs={relativeNowMs}
           />
         ))}
@@ -207,6 +222,7 @@ export default function SessionsPage() {
   );
 
   const [popoverOpen, setPopoverOpen] = useState(false);
+  const [copyMode, setCopyMode] = useState<SessionCardCopyMode>(() => readTimelineCopyMode());
   const filterBtnRef = useRef<HTMLButtonElement>(null);
   const [recallOpen, setRecallOpen] = useState(false);
   const queryClient = useQueryClient();
@@ -255,6 +271,14 @@ export default function SessionsPage() {
     (value: SortOrder) => updateFilterState({ sortOrder: value }),
     [updateFilterState]
   );
+  const handleCopyModeChange = useCallback((value: SessionCardCopyMode) => {
+    setCopyMode(value);
+    try {
+      window.localStorage.setItem(TIMELINE_COPY_MODE_STORAGE_KEY, value);
+    } catch {
+      // Storage can be blocked in private browser modes; the in-memory toggle still works.
+    }
+  }, []);
 
   const documentVisible = useDocumentVisible();
   const relativeNowMs = useRelativeTimeClock(documentVisible);
@@ -626,6 +650,32 @@ export default function SessionsPage() {
           </div>
         )}
 
+        <div className="sessions-dev-panel" role="region" aria-label="Timeline display controls">
+          <span className="sessions-dev-panel-label">Dev</span>
+          <div className="sessions-dev-segment" role="radiogroup" aria-label="Timeline card copy source">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={copyMode === "fallback"}
+              className={`sessions-dev-segment-btn${copyMode === "fallback" ? " sessions-dev-segment-btn--active" : ""}`}
+              onClick={() => handleCopyModeChange("fallback")}
+              title="Use deterministic first-message fallbacks for card title and summary."
+            >
+              AI off
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={copyMode === "ai"}
+              className={`sessions-dev-segment-btn${copyMode === "ai" ? " sessions-dev-segment-btn--active" : ""}`}
+              onClick={() => handleCopyModeChange("ai")}
+              title="Use generated summary titles and summaries when available."
+            >
+              AI on
+            </button>
+          </div>
+        </div>
+
         {/* Compact Toolbar */}
         <div className="sessions-toolbar">
           <div className="sessions-search-row">
@@ -821,6 +871,7 @@ export default function SessionsPage() {
                 highlightQuery={debouncedQuery}
                 isSemanticResult={aiSearch}
                 groupedQueryMode={groupedQueryMode}
+                copyMode={copyMode}
                 relativeNowMs={relativeNowMs}
               />
             ))}

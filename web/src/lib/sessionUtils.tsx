@@ -109,8 +109,12 @@ export function getProjectLabel(session: AgentSession): string {
 }
 
 /** Secondary: what was done in this session? */
-export function getSessionTitle(session: AgentSession): string {
-  if (session.summary_title && session.summary_title !== "Untitled Session") {
+export function getSessionTitle(
+  session: AgentSession,
+  options: { preferAi?: boolean } = {},
+): string {
+  const preferAi = options.preferAi ?? true;
+  if (preferAi && session.summary_title && session.summary_title !== "Untitled Session") {
     return session.summary_title;
   }
   if (session.first_user_message) {

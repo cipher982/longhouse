@@ -250,6 +250,7 @@ describe("SessionsPage", () => {
     latestSessionOptions = undefined;
     latestTimelineStreamOptions = undefined;
     setDocumentVisibility("visible");
+    window.localStorage.clear();
     vi.stubGlobal("EventSource", class {} as typeof EventSource);
 
     mockUseAgentSessions.mockImplementation((filters: AgentSessionFilters, options?: { refetchInterval?: unknown }) => {
@@ -288,6 +289,7 @@ describe("SessionsPage", () => {
   afterEach(() => {
     vi.useRealTimers();
     setDocumentVisibility("visible");
+    window.localStorage.clear();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -338,6 +340,38 @@ describe("SessionsPage", () => {
 
     expect(await screen.findByPlaceholderText("Search sessions...")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Timeline" })).not.toBeInTheDocument();
+  });
+
+  it("lets the dev panel toggle timeline cards between AI and fallback copy", async () => {
+    const user = userEvent.setup();
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            summary_title: "AI generated subject",
+            summary: "AI generated summary.",
+            first_user_message: "Original prompt text that I remember.",
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline");
+
+    expect(await screen.findByText("AI generated subject")).toBeInTheDocument();
+    expect(screen.getByText("AI generated summary.")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: "AI off" }));
+
+    expect(screen.queryByText("AI generated subject")).not.toBeInTheDocument();
+    expect(screen.queryByText("AI generated summary.")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Original prompt text that I remember.")).toHaveLength(2);
+    expect(window.localStorage.getItem("longhouse.timelineCopyMode")).toBe("fallback");
   });
 
   it("prefetches the session workspace queries when a session card gets hover intent", async () => {
