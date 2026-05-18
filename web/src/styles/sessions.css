@@ -71,65 +71,6 @@
     text-decoration: underline;
   }
 
-  .sessions-dev-panel {
-    position: fixed;
-    right: max(var(--space-4), env(safe-area-inset-right));
-    bottom: max(var(--space-4), env(safe-area-inset-bottom));
-    z-index: var(--z-index-sticky);
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    padding: 6px;
-    border: 1px solid color-mix(in srgb, var(--border-glass-1) 72%, transparent);
-    border-radius: var(--radius-md);
-    background: color-mix(in srgb, var(--surface-glass-2) 90%, #0f1117 10%);
-    box-shadow: var(--shadow-md);
-    backdrop-filter: blur(14px);
-  }
-
-  .sessions-dev-panel-label {
-    padding: 0 var(--space-1);
-    font-size: 10px;
-    font-weight: var(--font-weight-semibold);
-    color: var(--color-text-muted);
-    line-height: 1;
-    text-transform: uppercase;
-  }
-
-  .sessions-dev-segment {
-    display: inline-flex;
-    align-items: center;
-    gap: 2px;
-    padding: 2px;
-    border: 1px solid color-mix(in srgb, var(--border-glass-1) 72%, transparent);
-    border-radius: var(--radius-sm);
-    background: color-mix(in srgb, var(--surface-glass-1) 86%, transparent);
-  }
-
-  .sessions-dev-segment-btn {
-    min-height: 28px;
-    padding: 0 10px;
-    border: 0;
-    border-radius: var(--radius-xs);
-    background: transparent;
-    color: var(--color-text-secondary);
-    font-size: 12px;
-    font-weight: var(--font-weight-medium);
-    line-height: 1;
-    cursor: pointer;
-  }
-
-  .sessions-dev-segment-btn:hover {
-    color: var(--color-text-primary);
-    background: color-mix(in srgb, var(--surface-glass-2) 70%, transparent);
-  }
-
-  .sessions-dev-segment-btn--active {
-    color: var(--color-text-primary);
-    background: color-mix(in srgb, var(--color-brand-accent) 20%, var(--surface-glass-2));
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  }
-
   /* ---------------------------------------------------------------------------
    * Hero Empty State (first-run, viewport-centered)
    * ---------------------------------------------------------------------------*/
@@ -1025,22 +966,6 @@
       0 0 8px color-mix(in srgb, #94a3b8 10%, transparent);
   }
 
-  /* Secondary: what was done — summary title or first user message */
-  .session-card-title {
-    font-size: var(--font-size-sm);
-    font-weight: var(--font-weight-medium);
-    color: var(--color-text-secondary);
-    line-height: var(--font-line-height-snug);
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-  }
-
-  .session-card:not(.session-card--closed) .session-card-title {
-    color: var(--color-text-primary);
-  }
-
   .session-card-snippet {
     font-size: var(--font-size-xs);
     color: var(--color-text-secondary);
@@ -1053,42 +978,6 @@
     padding-left: var(--space-2);
     color: var(--color-text-secondary);
     opacity: 0.9;
-  }
-
-  .session-card-transcript-preview {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    min-width: 0;
-    padding: 7px 9px;
-    border-radius: var(--radius-md);
-    border: 1px solid color-mix(in srgb, #38bdf8 26%, var(--border-glass-1));
-    background:
-      linear-gradient(
-        90deg,
-        color-mix(in srgb, #38bdf8 10%, transparent),
-        color-mix(in srgb, var(--surface-glass-2) 82%, transparent)
-      );
-  }
-
-  .session-card-transcript-preview__label {
-    font-size: 10px;
-    line-height: 1;
-    font-weight: var(--font-weight-semibold);
-    color: color-mix(in srgb, #38bdf8 62%, var(--color-text-secondary));
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  .session-card-transcript-preview__text {
-    display: -webkit-box;
-    -webkit-line-clamp: 3;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-    font-size: var(--font-size-sm);
-    color: color-mix(in srgb, var(--color-text-primary) 82%, var(--color-text-secondary));
-    line-height: var(--font-line-height-relaxed);
-    word-break: break-word;
   }
 
   .search-highlight {
@@ -1303,7 +1192,6 @@
       font-size: var(--font-size-sm);
     }
 
-    .session-card-title,
     .session-card-summary {
       font-size: 13px;
       line-height: 1.45;
@@ -2398,7 +2286,6 @@
   }
 
   .session-card--closed .session-card-project,
-  .session-card--closed .session-card-title,
   .session-card--closed .session-card-summary,
   .session-card--closed .session-stat {
     color: color-mix(in srgb, var(--color-text-muted) 58%, var(--color-text-secondary));

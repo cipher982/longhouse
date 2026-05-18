@@ -342,38 +342,6 @@ describe("SessionsPage", () => {
     expect(screen.queryByRole("heading", { name: "Timeline" })).not.toBeInTheDocument();
   });
 
-  it("lets the dev panel toggle timeline cards between AI and fallback copy", async () => {
-    const user = userEvent.setup();
-    mockUseAgentSessions.mockReturnValue({
-      data: {
-        sessions: [
-          makeTimelineCard({
-            summary_title: "AI generated subject",
-            summary: "AI generated summary.",
-            first_user_message: "Original prompt text that I remember.",
-          }),
-        ],
-        total: 1,
-        has_real_sessions: true,
-      },
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
-    });
-
-    renderSessionsPage("/timeline");
-
-    expect(await screen.findByText("AI generated subject")).toBeInTheDocument();
-    expect(screen.getByText("AI generated summary.")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("radio", { name: "AI off" }));
-
-    expect(screen.queryByText("AI generated subject")).not.toBeInTheDocument();
-    expect(screen.queryByText("AI generated summary.")).not.toBeInTheDocument();
-    expect(screen.getAllByText("Original prompt text that I remember.")).toHaveLength(1);
-    expect(window.localStorage.getItem("longhouse.timelineCopyMode")).toBe("fallback");
-  });
-
   it("prefetches the session workspace queries when a session card gets hover intent", async () => {
     const queryClient = createQueryClient();
     const prefetchSpy = vi.spyOn(queryClient, "prefetchQuery").mockImplementation(async (options) => {
@@ -497,7 +465,7 @@ describe("SessionsPage", () => {
   it("labels imported session cards as unmanaged without capability chrome", async () => {
     renderSessionsPage("/timeline");
 
-    expect(await screen.findByText("Cleanup sessions page")).toBeInTheDocument();
+    expect(await screen.findByText("clean this up")).toBeInTheDocument();
     expect(screen.getByTestId("session-card-ownership")).toHaveTextContent("Unmanaged");
     expect(screen.queryByTestId("session-card-management")).not.toBeInTheDocument();
     expect(screen.queryByTestId("session-card-capability")).not.toBeInTheDocument();
@@ -807,8 +775,8 @@ describe("SessionsPage", () => {
   it("keeps the timeline card action semantically honest", async () => {
     renderSessionsPage("/timeline");
 
-    expect(await screen.findByRole("button", { name: "Open session: Cleanup sessions page" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Continue here: Cleanup sessions page" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Open session: zerg, clean this up" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Continue here: zerg, clean this up" })).not.toBeInTheDocument();
   });
 
   it("uses honest grouped-results copy in grouped query mode", async () => {
@@ -1007,13 +975,16 @@ describe("SessionsPage", () => {
 
       renderSessionsPage("/timeline?query=needle");
 
-      expect(screen.getByText("Matched continuation")).toBeInTheDocument();
+      expect(screen.getByText("search-hit-project")).toBeInTheDocument();
+      expect(screen.getByText("needle")).toBeInTheDocument();
+      expect(screen.getByText(/in the older continuation/)).toBeInTheDocument();
+      expect(screen.queryByText("Matched continuation")).not.toBeInTheDocument();
       expect(screen.queryByText("Current writable head")).not.toBeInTheDocument();
       expect(screen.queryByText("Running bash")).not.toBeInTheDocument();
       expect(screen.queryByText(/^Head:/)).not.toBeInTheDocument();
       expect(screen.queryByText(/^Started:/)).not.toBeInTheDocument();
       expect(screen.queryByText(/continuations/)).not.toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Open match: Matched continuation" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Open match: search-hit-project, needle in the older continuation" })).toBeInTheDocument();
       expect(screen.getByText(/^Matched .*ago$/)).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
@@ -1300,7 +1271,7 @@ describe("SessionsPage", () => {
     expect(screen.queryByText("In progress")).not.toBeInTheDocument();
   });
 
-  it("shows transcript preview output on open managed session cards", async () => {
+  it("uses first prompt preview instead of generated or live transcript card copy", async () => {
     const receivedAt = new Date(Date.now() - 45_000).toISOString();
     mockUseAgentSessions.mockReturnValue({
       data: {
@@ -1308,6 +1279,8 @@ describe("SessionsPage", () => {
           makeTimelineCard({
             ended_at: null,
             summary: "Older generated summary.",
+            summary_title: "Generated subject",
+            first_user_message: "Original user prompt for this session.",
             capabilities: makeCapabilities({
               live_control_available: true,
               host_reattach_available: true,
@@ -1342,15 +1315,14 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
-    const transcriptPreview = await screen.findByTestId("session-card-transcript-preview");
-    expect(transcriptPreview).toHaveTextContent("Live output");
-    expect(transcriptPreview).toHaveTextContent(
-      "The provider already streamed this answer",
-    );
+    expect(await screen.findByText("Original user prompt for this session.")).toBeInTheDocument();
+    expect(screen.queryByText("Generated subject")).not.toBeInTheDocument();
     expect(screen.queryByText("Older generated summary.")).not.toBeInTheDocument();
+    expect(screen.queryByText("The provider already streamed this answer")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("session-card-transcript-preview")).not.toBeInTheDocument();
   });
 
-  it("does not let stale partial transcript preview output replace card summaries", async () => {
+  it("does not let stale partial transcript preview or summary replace first prompt card copy", async () => {
     const staleReceivedAt = new Date(Date.now() - 45_000).toISOString();
     mockUseAgentSessions.mockReturnValue({
       data: {
@@ -1358,6 +1330,7 @@ describe("SessionsPage", () => {
           makeTimelineCard({
             ended_at: null,
             summary: "Current durable summary.",
+            first_user_message: "Stable first prompt.",
             transcript_preview: {
               event_id: 102,
               text: "Partial text from a bridge that stopped sending updates.",
@@ -1381,11 +1354,12 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
-    expect(await screen.findByText("Current durable summary.")).toBeInTheDocument();
+    expect(await screen.findByText("Stable first prompt.")).toBeInTheDocument();
+    expect(screen.queryByText("Current durable summary.")).not.toBeInTheDocument();
     expect(screen.queryByTestId("session-card-transcript-preview")).not.toBeInTheDocument();
   });
 
-  it("uses server transcript preview freshness instead of local age heuristics", async () => {
+  it("keeps first prompt card copy even when the server has a fresh transcript preview", async () => {
     const oldButServerCurrent = new Date(Date.now() - 5 * 60_000).toISOString();
     mockUseAgentSessions.mockReturnValue({
       data: {
@@ -1393,6 +1367,7 @@ describe("SessionsPage", () => {
           makeTimelineCard({
             ended_at: null,
             summary: "Durable summary should stay behind the current server preview.",
+            first_user_message: "Stable prompt beats live preview.",
             transcript_preview: {
               event_id: 103,
               text: "Server says this complete bridge snapshot is still the card preview.",
@@ -1416,9 +1391,8 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
-    const transcriptPreview = await screen.findByTestId("session-card-transcript-preview");
-    expect(transcriptPreview).toHaveTextContent("Latest output");
-    expect(transcriptPreview).toHaveTextContent("Server says this complete bridge snapshot");
+    expect(await screen.findByText("Stable prompt beats live preview.")).toBeInTheDocument();
+    expect(screen.queryByText("Server says this complete bridge snapshot")).not.toBeInTheDocument();
     expect(screen.queryByText("Durable summary should stay behind the current server preview.")).not.toBeInTheDocument();
   });
 
@@ -1447,7 +1421,7 @@ describe("SessionsPage", () => {
     expect(screen.queryByText(/Generating summary/)).not.toBeInTheDocument();
   });
 
-  it("uses a deterministic session summary before any transcript arrives", async () => {
+  it("uses deterministic copy before any transcript arrives", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
@@ -1473,8 +1447,7 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
-    expect(await screen.findByText("New Claude session")).toBeInTheDocument();
-    expect(screen.getByText("New Claude session in zerg.")).toBeInTheDocument();
+    expect(await screen.findByText("New Claude session in zerg.")).toBeInTheDocument();
     expect(screen.queryByText(/Generating summary/)).not.toBeInTheDocument();
   });
 
@@ -1701,7 +1674,7 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
-    expect(await screen.findByText("Cleanup sessions page")).toBeInTheDocument();
+    expect(await screen.findByText("clean this up")).toBeInTheDocument();
     expect(screen.queryByText("Working")).not.toBeInTheDocument();
     expect(screen.queryByText("Fresh signal")).not.toBeInTheDocument();
   });
