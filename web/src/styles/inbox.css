@@ -1,0 +1,253 @@
+/**
+ * Timeline Inbox Layout
+ *
+ * Two-tier (Active, Closed) inbox grouped by repo. Reserved geometry on
+ * every row so live runtime updates never reflow. Only opacity/color
+ * changes when status transitions.
+ */
+
+@layer pages {
+  .inbox {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-8);
+  }
+
+  .inbox-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-6);
+  }
+
+  .inbox-section--closed {
+    opacity: 0.62;
+  }
+
+  .inbox-closed-divider {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) 0 var(--space-1);
+    border-top: 1px solid var(--color-border-muted);
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .inbox-closed-divider-label {
+    color: var(--text-secondary);
+  }
+
+  .inbox-closed-divider-count {
+    background: var(--color-legacy-bg-button);
+    border-radius: var(--radius-full);
+    padding: 2px 10px;
+    font-size: 11px;
+    color: var(--text-secondary);
+  }
+
+  /* ---------- Repo block ---------- */
+
+  .inbox-repo {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .inbox-repo-header {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    padding: 0 var(--space-2) var(--space-2);
+    border-bottom: 1px solid var(--color-border-subtle);
+  }
+
+  .inbox-repo-name {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: 0.005em;
+  }
+
+  .inbox-repo-count {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .inbox-repo-rows {
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ---------- Row ---------- */
+
+  .inbox-row {
+    /* reset button styles */
+    appearance: none;
+    background: none;
+    border: none;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+
+    display: grid;
+    grid-template-columns: 1fr minmax(180px, 220px);
+    align-items: stretch;
+    gap: var(--space-4);
+    padding: var(--space-3) var(--space-2);
+    border-bottom: 1px solid var(--color-border-muted);
+    transition: background-color 120ms ease;
+  }
+
+  .inbox-row:hover {
+    background: color-mix(in srgb, var(--color-legacy-bg-hover) 50%, transparent);
+  }
+
+  .inbox-row:focus-visible {
+    outline: 2px solid var(--color-brand-primary);
+    outline-offset: -2px;
+  }
+
+  .inbox-row[data-closed="true"] {
+    opacity: 0.85;
+  }
+
+  /* ---------- Row main (left side) ---------- */
+
+  .inbox-row-main {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0; /* allow children to truncate */
+  }
+
+  .inbox-row-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    line-height: 1.35;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .inbox-row-summary {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: opacity 200ms ease;
+  }
+
+  .inbox-row-summary--empty {
+    /* reserve the line height even when there's no summary, so rows
+     * with and without summaries align consistently */
+    visibility: hidden;
+  }
+
+  /* ---------- Row meta (right side) ----------
+   * Fixed layout. Two stacked lines, each occupying a reserved slot.
+   * Status changes only swap text + dot color; geometry never shifts.
+   */
+
+  .inbox-row-meta {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 2px;
+    font-size: 12px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    min-width: 0;
+  }
+
+  .inbox-row-meta-line {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    line-height: 1.4;
+    /* keep both lines the same height even when one is empty */
+    min-height: 18px;
+  }
+
+  .inbox-row-meta-provider {
+    color: var(--text-secondary);
+    text-transform: capitalize;
+  }
+
+  .inbox-row-branch {
+    color: var(--text-muted);
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--color-legacy-bg-button) 60%, transparent);
+  }
+
+  .inbox-row-meta-status {
+    color: var(--text-secondary);
+  }
+
+  .inbox-row-status-dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    transition: background-color 200ms ease, box-shadow 200ms ease;
+  }
+
+  .inbox-row-status-dot[data-tone="thinking"],
+  .inbox-row-status-dot[data-tone="active"],
+  .inbox-row-status-dot[data-tone="running"] {
+    background: var(--color-intent-warning);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-intent-warning) 25%, transparent);
+  }
+
+  .inbox-row-status-dot[data-tone="idle"] {
+    background: var(--text-muted);
+  }
+
+  .inbox-row-status-dot[data-tone="blocked"],
+  .inbox-row-status-dot[data-tone="stalled"] {
+    background: var(--color-intent-error);
+  }
+
+  .inbox-row-status-dot[data-tone="closed"] {
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--text-muted);
+  }
+
+  .inbox-row-status-label {
+    color: var(--text-secondary);
+    text-transform: lowercase;
+    transition: color 200ms ease, opacity 200ms ease;
+  }
+
+  .inbox-row-time {
+    color: var(--text-muted);
+  }
+
+  /* ---------- Mobile ---------- */
+
+  @media (max-width: 720px) {
+    .inbox-row {
+      grid-template-columns: 1fr;
+      gap: var(--space-1);
+    }
+
+    .inbox-row-meta {
+      align-items: flex-start;
+      flex-direction: row;
+      flex-wrap: wrap;
+    }
+  }
+}

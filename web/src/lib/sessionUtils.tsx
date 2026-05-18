@@ -43,28 +43,6 @@ export function getDateKey(dateStr: string, nowMs: number = Date.now()): string 
 }
 
 // ---------------------------------------------------------------------------
-// Session grouping
-// ---------------------------------------------------------------------------
-
-import { type TimelineSessionCard, getTimelineCardAnchor } from "../services/api/agents";
-
-export function groupThreadCardsByDay(
-  cards: TimelineSessionCard[],
-  nowMs: number,
-): Map<string, TimelineSessionCard[]> {
-  const groups = new Map<string, TimelineSessionCard[]>();
-
-  for (const card of cards) {
-    const key = getDateKey(getTimelineCardAnchor(card), nowMs);
-    const existing = groups.get(key) || [];
-    existing.push(card);
-    groups.set(key, existing);
-  }
-
-  return groups;
-}
-
-// ---------------------------------------------------------------------------
 // Navigation helpers
 // ---------------------------------------------------------------------------
 
