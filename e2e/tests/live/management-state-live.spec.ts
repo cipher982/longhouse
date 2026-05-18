@@ -82,7 +82,7 @@ async function fetchTimelinePage(
 async function openTimelinePage(page: Page, path: string): Promise<void> {
   await page.goto(path, { waitUntil: "domcontentloaded" });
   await waitForPageReady(page, { timeout: 20_000 });
-  await expect(page.getByTestId("session-card").first()).toBeVisible();
+  await expect(page.getByTestId("session-row").first()).toBeVisible();
 }
 
 async function findUnmanagedCard(page: Page): Promise<{ card: TimelineCard; path: string }> {
@@ -143,9 +143,9 @@ test("unmanaged sessions stay honest on hosted timeline and detail", async ({ co
       await openTimelinePage(page, path);
     }
 
-    const unmanagedCard = page.locator(`[data-session-id="${card.detail.id}"]`);
-    await expect(unmanagedCard, "unmanaged thread card should be rendered").toBeVisible();
-    await expect(unmanagedCard.getByTestId("session-card-ownership")).toHaveText("Unmanaged");
+    const unmanagedRow = page.locator(`[data-testid="session-row"][data-session-id="${card.detail.id}"]`);
+    await expect(unmanagedRow, "unmanaged thread row should be rendered").toBeVisible();
+    // Ownership chrome moved to the detail page; the inbox row no longer surfaces it.
 
     await page.goto(`/timeline/${card.detail.id}`, { waitUntil: "domcontentloaded" });
     await waitForPageReady(page, { timeout: 20_000 });
@@ -177,12 +177,11 @@ test("managed sessions stay quiet on cards and explicit on detail when present",
         await openTimelinePage(page, visibleManagedCard.path);
       }
 
-      const managedCard = page.locator(`[data-session-id="${visibleManagedCard.card.detail.id}"]`);
-      await expect(managedCard, "managed thread card should be rendered").toBeVisible();
-      await expect(
-        managedCard.getByTestId("session-card-ownership"),
-        "managed thread cards should show ownership without implying current action availability",
-      ).toHaveText("Managed");
+      const managedRow = page.locator(
+        `[data-testid="session-row"][data-session-id="${visibleManagedCard.card.detail.id}"]`,
+      );
+      await expect(managedRow, "managed thread row should be rendered").toBeVisible();
+      // Ownership chrome moved to the detail page; the inbox row no longer surfaces it.
     }
 
     await page.goto(`/timeline/${anyManagedCard.detail.id}`, { waitUntil: "domcontentloaded" });

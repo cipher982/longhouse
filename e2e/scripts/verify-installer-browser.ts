@@ -35,21 +35,21 @@ async function main() {
     // Wait for the timeline to reach its ready state
     await page.waitForSelector('[data-ready="true"]', { timeout: 20_000 });
 
-    // Count session cards — demo-fresh seeds ~10 sessions
-    const cardCount = await page.locator(".session-card").count();
-    if (cardCount === 0) {
-      throw new Error("No session cards found in timeline after demo seed");
+    // Count session rows — demo-fresh seeds ~10 sessions
+    const rowCount = await page.getByTestId("session-row").count();
+    if (rowCount === 0) {
+      throw new Error("No session rows found in timeline after demo seed");
     }
 
-    // Click the first session card and verify detail page loads
-    await page.locator(".session-card").first().click();
+    // Click the first session row and verify detail page loads
+    await page.getByTestId("session-row").first().click();
     await page.waitForSelector('[data-ready="true"]', { timeout: 15_000 });
     const detailUrl = page.url();
     if (!detailUrl.includes("/timeline/")) {
       throw new Error(`Expected session detail URL, got: ${detailUrl}`);
     }
 
-    console.log(`Timeline: ${cardCount} sessions visible`);
+    console.log(`Timeline: ${rowCount} sessions visible`);
     console.log(`Session detail loaded: ${detailUrl}`);
     console.log("Browser verification passed");
   } catch (err) {

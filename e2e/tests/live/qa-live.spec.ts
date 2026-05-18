@@ -167,11 +167,11 @@ test("auth + timeline loads with session rows", async ({ context }) => {
     );
   }
 
-  // At least one session card should be visible (this is the dev instance with real data)
-  const cardCount = await page.locator(".session-card").count();
+  // At least one session row should be visible (this is the dev instance with real data)
+  const rowCount = await page.getByTestId("session-row").count();
   expect(
-    cardCount,
-    `Expected at least 1 session card on /timeline, found ${cardCount}. Page may be broken or empty.`,
+    rowCount,
+    `Expected at least 1 session row on /timeline, found ${rowCount}. Page may be broken or empty.`,
   ).toBeGreaterThan(0);
 
   await page.close();
@@ -318,7 +318,7 @@ test("forum route redirects to timeline without auth errors", async ({
   }
 
   await page
-    .locator(".sessions-page, .sessions-hero-empty, .session-card")
+    .locator('.sessions-page, .sessions-hero-empty, [data-testid="session-row"]')
     .first()
     .waitFor({ timeout: 10_000 })
     .catch(async () => {

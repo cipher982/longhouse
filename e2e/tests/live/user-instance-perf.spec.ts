@@ -200,14 +200,14 @@ test("profile hosted timeline and session detail journey", async ({ context, age
     const timelinePhase = await measurePhase(page, tracker, "timeline_initial_load", async () => {
       await page.goto("/timeline", { waitUntil: "domcontentloaded" });
       await waitForPageReady(page, { timeout: 20_000 });
-      await expect(page.locator('[data-testid="session-card"]').first()).toBeVisible({ timeout: 15_000 });
+      await expect(page.getByTestId("session-row").first()).toBeVisible({ timeout: 15_000 });
     });
 
-    const selectedCard = page.locator('[data-testid="session-card"]').first();
-    const selectedSessionId = (await selectedCard.getAttribute("data-session-id")) || firstSessionId;
+    const selectedRow = page.getByTestId("session-row").first();
+    const selectedSessionId = (await selectedRow.getAttribute("data-session-id")) || firstSessionId;
 
     const detailPhase = await measurePhase(page, tracker, "timeline_click_to_detail", async () => {
-      await selectedCard.click();
+      await selectedRow.click();
       await page.waitForURL(new RegExp(`/timeline/${selectedSessionId}$`), { timeout: 15_000 });
       await waitForSessionDetail(page);
     });
