@@ -370,7 +370,7 @@ describe("SessionsPage", () => {
 
     expect(screen.queryByText("AI generated subject")).not.toBeInTheDocument();
     expect(screen.queryByText("AI generated summary.")).not.toBeInTheDocument();
-    expect(screen.getAllByText("Original prompt text that I remember.")).toHaveLength(2);
+    expect(screen.getAllByText("Original prompt text that I remember.")).toHaveLength(1);
     expect(window.localStorage.getItem("longhouse.timelineCopyMode")).toBe("fallback");
   });
 
@@ -1443,7 +1443,7 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
-    expect(await screen.findAllByText("Workshop an inbox-style homepage layout for Longhouse timeline cards.")).toHaveLength(2);
+    expect(await screen.findAllByText("Workshop an inbox-style homepage layout for Longhouse timeline cards.")).toHaveLength(1);
     expect(screen.queryByText(/Generating summary/)).not.toBeInTheDocument();
   });
 
