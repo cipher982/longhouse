@@ -33,6 +33,10 @@ const TRANSCRIPT_PREVIEW_CHAR_LIMIT = 180;
 
 export type SessionCardCopyMode = "ai" | "fallback";
 
+function compactCopy(value: string): string {
+  return value.trim().replace(/\s+/g, " ");
+}
+
 type TimelineStatusLike = {
   label: string;
   seen_at?: string | null;
@@ -229,11 +233,13 @@ export function SessionCard({
   const showSummary =
     aiCopyEnabled && !showTranscriptPreview && !showKeywordSnippet && !showSemanticSnippet && !!session.summary;
   const fallbackSummary = getSessionFallbackSummary(session, TRANSCRIPT_PREVIEW_CHAR_LIMIT);
+  const fallbackDuplicatesTitle = compactCopy(fallbackSummary) === compactCopy(title);
   const showFallbackSummary =
     !showSummary &&
     !showTranscriptPreview &&
     !showKeywordSnippet &&
     !showSemanticSnippet &&
+    !fallbackDuplicatesTitle &&
     fallbackSummary.length > 0;
   const showProcessPill =
     !isClosedSession && processPillLabel != null && (controlPath === "unmanaged" || processState === "running");
