@@ -65,13 +65,17 @@ export default defineConfig(({ mode }) => {
   const basePath = "/";
 
   // Proxy target priority:
-  //   1. ~/.longhouse/machine/{target-url,device-token} — point local UI at the
-  //      already-authenticated remote backend used by the longhouse CLI/engine.
-  //   2. VITE_PROXY_TARGET env — local backend on a non-default port
+  //   1. VITE_PROXY_TARGET env — explicit override (used by e2e webServer)
+  //   2. ~/.longhouse/machine/{target-url,device-token} — point local UI at
+  //      the already-authenticated remote backend used by the CLI/engine.
   //   3. Docker Compose DNS fallback
-  const devProxy = loadDevProxy();
-  const proxyTarget =
-    devProxy?.target || process.env.VITE_PROXY_TARGET || rootEnv.VITE_PROXY_TARGET || "http://backend:8000";
+  //
+  // The env var wins so test runs and CI can pin a deterministic backend
+  // without picking up whatever happens to be in ~/.longhouse on the dev
+  // machine.
+  const explicitProxyTarget = process.env.VITE_PROXY_TARGET || rootEnv.VITE_PROXY_TARGET || null;
+  const devProxy = explicitProxyTarget ? null : loadDevProxy();
+  const proxyTarget = explicitProxyTarget || devProxy?.target || "http://backend:8000";
 
   if (devProxy) {
     console.log(`[dev-proxy] forwarding /api/* to ${devProxy.target} as device-token owner`);

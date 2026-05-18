@@ -241,7 +241,9 @@ export default function SessionsPage() {
   const refetch = timelineResult.refetch;
   const timelineStreamEnabled = timelineStreamEligible && documentVisible && !isLoading && !!data;
   const skipInitialTimelineReplay =
-    timelineStreamEnabled && !timelineStreamBootstrapKeysRef.current.has(timelineStreamBootstrapKey);
+    timelineStreamEnabled &&
+    !timelineStreamBootstrapKeysRef.current.has(timelineStreamBootstrapKey) &&
+    sessions.length > 0;
 
   useEffect(() => {
     if (!timelineStreamEnabled) {
