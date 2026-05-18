@@ -31,6 +31,8 @@ import {
 const SESSION_CARD_HOVER_PREFETCH_DELAY_MS = 180;
 const TRANSCRIPT_PREVIEW_CHAR_LIMIT = 180;
 
+export type SessionCardCopyMode = "ai" | "fallback";
+
 type TimelineStatusLike = {
   label: string;
   seen_at?: string | null;
@@ -110,6 +112,7 @@ export interface SessionCardProps {
   highlightQuery?: string;
   isSemanticResult?: boolean;
   groupedQueryMode?: boolean;
+  copyMode?: SessionCardCopyMode;
   relativeNowMs: number;
 }
 
@@ -122,6 +125,7 @@ export function SessionCard({
   highlightQuery,
   isSemanticResult,
   groupedQueryMode = false,
+  copyMode = "ai",
   relativeNowMs,
 }: SessionCardProps) {
   const [confirming, setConfirming] = useState(false);
@@ -189,7 +193,8 @@ export function SessionCard({
           ? "The provider process is closed."
           : undefined;
   const projectLabel = getProjectLabel(session);
-  const title = getSessionTitle(session);
+  const aiCopyEnabled = copyMode === "ai";
+  const title = getSessionTitle(session, { preferAi: aiCopyEnabled });
   const branchLabel = getBranchLabel(session.git_branch);
   const cardRuntimeMetaParts = [runtimeMetaLabel].filter(Boolean);
   const showContinuationCount = !groupedQueryMode && thread.continuation_count > 1;
@@ -216,12 +221,13 @@ export function SessionCard({
       ? lifecycle === "closed"
       : isSessionClosed(session) && !hasCurrentControlledPresence);
   const showTranscriptPreview =
+    aiCopyEnabled &&
     !showKeywordSnippet &&
     !showSemanticSnippet &&
     !isClosedSession &&
     transcriptPreview != null;
   const showSummary =
-    !showTranscriptPreview && !showKeywordSnippet && !showSemanticSnippet && !!session.summary;
+    aiCopyEnabled && !showTranscriptPreview && !showKeywordSnippet && !showSemanticSnippet && !!session.summary;
   const fallbackSummary = getSessionFallbackSummary(session, TRANSCRIPT_PREVIEW_CHAR_LIMIT);
   const showFallbackSummary =
     !showSummary &&
