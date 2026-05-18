@@ -1192,12 +1192,12 @@
       font-size: var(--font-size-sm);
     }
 
-    .session-card-summary {
+    .session-card-title {
       font-size: 13px;
       line-height: 1.45;
     }
 
-    .session-card-summary {
+    .session-card-subheading {
       -webkit-line-clamp: 2;
     }
 
@@ -2271,7 +2271,18 @@
     animation: none;
   }
 
-  .session-card-summary {
+  .session-card-title {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+    line-height: var(--font-line-height-snug);
+  }
+
+  .session-card-subheading {
     display: -webkit-box;
     -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;
@@ -2281,12 +2292,13 @@
     line-height: var(--font-line-height-relaxed);
   }
 
-  .session-card:not(.session-card--closed) .session-card-summary {
+  .session-card:not(.session-card--closed) .session-card-subheading {
     color: color-mix(in srgb, var(--color-text-primary) 72%, var(--color-text-secondary));
   }
 
   .session-card--closed .session-card-project,
-  .session-card--closed .session-card-summary,
+  .session-card--closed .session-card-title,
+  .session-card--closed .session-card-subheading,
   .session-card--closed .session-stat {
     color: color-mix(in srgb, var(--color-text-muted) 58%, var(--color-text-secondary));
   }

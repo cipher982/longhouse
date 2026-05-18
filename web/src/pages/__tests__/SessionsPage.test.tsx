@@ -775,7 +775,7 @@ describe("SessionsPage", () => {
   it("keeps the timeline card action semantically honest", async () => {
     renderSessionsPage("/timeline");
 
-    expect(await screen.findByRole("button", { name: "Open session: zerg, clean this up" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Open session: zerg, Cleanup sessions page, clean this up" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Continue here: zerg, clean this up" })).not.toBeInTheDocument();
   });
 
@@ -976,15 +976,15 @@ describe("SessionsPage", () => {
       renderSessionsPage("/timeline?query=needle");
 
       expect(screen.getByText("search-hit-project")).toBeInTheDocument();
+      expect(screen.getByText("Matched continuation")).toBeInTheDocument();
       expect(screen.getByText("needle")).toBeInTheDocument();
       expect(screen.getByText(/in the older continuation/)).toBeInTheDocument();
-      expect(screen.queryByText("Matched continuation")).not.toBeInTheDocument();
       expect(screen.queryByText("Current writable head")).not.toBeInTheDocument();
       expect(screen.queryByText("Running bash")).not.toBeInTheDocument();
       expect(screen.queryByText(/^Head:/)).not.toBeInTheDocument();
       expect(screen.queryByText(/^Started:/)).not.toBeInTheDocument();
       expect(screen.queryByText(/continuations/)).not.toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Open match: search-hit-project, needle in the older continuation" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Open match: search-hit-project, Matched continuation, needle in the older continuation" })).toBeInTheDocument();
       expect(screen.getByText(/^Matched .*ago$/)).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
@@ -1271,7 +1271,7 @@ describe("SessionsPage", () => {
     expect(screen.queryByText("In progress")).not.toBeInTheDocument();
   });
 
-  it("uses first prompt preview instead of generated or live transcript card copy", async () => {
+  it("uses generated title with first prompt subheading and ignores summary or live transcript card copy", async () => {
     const receivedAt = new Date(Date.now() - 45_000).toISOString();
     mockUseAgentSessions.mockReturnValue({
       data: {
@@ -1315,8 +1315,8 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
+    expect(await screen.findByText("Generated subject")).toBeInTheDocument();
     expect(await screen.findByText("Original user prompt for this session.")).toBeInTheDocument();
-    expect(screen.queryByText("Generated subject")).not.toBeInTheDocument();
     expect(screen.queryByText("Older generated summary.")).not.toBeInTheDocument();
     expect(screen.queryByText("The provider already streamed this answer")).not.toBeInTheDocument();
     expect(screen.queryByTestId("session-card-transcript-preview")).not.toBeInTheDocument();
@@ -1447,7 +1447,7 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
-    expect(await screen.findByText("New Claude session in zerg.")).toBeInTheDocument();
+    expect(await screen.findByText("New Claude session in zerg")).toBeInTheDocument();
     expect(screen.queryByText(/Generating summary/)).not.toBeInTheDocument();
   });
 
