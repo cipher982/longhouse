@@ -222,6 +222,74 @@ async def test_generate_summary_impl_releases_db_connection_during_llm_call(tmp_
 
 
 @pytest.mark.asyncio
+async def test_generate_summary_impl_does_not_overwrite_with_placeholder_result(tmp_path, monkeypatch):
+    from zerg.services.session_summaries import generate_summary_impl
+
+    factory = _make_db(tmp_path, "summary_placeholder_result.db")
+
+    db = factory()
+    session = AgentSession(
+        provider="codex",
+        environment="test",
+        project="floodmap",
+        started_at=datetime.now(timezone.utc),
+        summary="Verified the slider QA flow and aggregate runner.",
+        summary_title="Slider QA Verified",
+        transcript_revision=3,
+        summary_revision=2,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    session_id = str(session.id)
+    db.add(
+        AgentEvent(
+            session_id=session.id,
+            role="user",
+            content_text="Keep going on the CONUS audit.",
+            timestamp=datetime.now(timezone.utc),
+        )
+    )
+    db.add(
+        AgentEvent(
+            session_id=session.id,
+            role="assistant",
+            content_text="I am running the next verifier pass.",
+            timestamp=datetime.now(timezone.utc),
+        )
+    )
+    db.commit()
+    db.close()
+
+    async def _fake_incremental_summary(**_kwargs):
+        return SimpleNamespace(title="Untitled Session", summary="No summary generated.")
+
+    client = SimpleNamespace(close=AsyncMock())
+    settings = SimpleNamespace(testing=False, llm_disabled=False)
+
+    monkeypatch.setattr("zerg.services.session_processing.incremental_summary", _fake_incremental_summary)
+
+    with (
+        patch("zerg.database.get_session_factory", return_value=factory),
+        patch("zerg.services.session_summaries.get_settings", return_value=settings),
+        patch(
+            "zerg.models_config.get_llm_client_for_use_case",
+            return_value=(client, "test-model", "test-provider"),
+        ),
+    ):
+        await generate_summary_impl(session_id)
+
+    verify_db = factory()
+    refreshed = verify_db.query(AgentSession).filter(AgentSession.id == session_id).one()
+    verify_db.close()
+
+    assert refreshed.summary == "Verified the slider QA flow and aggregate runner."
+    assert refreshed.summary_title == "Slider QA Verified"
+    assert refreshed.summary_revision == 3
+    client.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_generate_embeddings_impl_releases_db_connection_during_provider_call(tmp_path, monkeypatch):
     from zerg.models.agents import SessionEmbedding
     from zerg.services.session_summaries import generate_embeddings_impl

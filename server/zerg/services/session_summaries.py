@@ -23,6 +23,20 @@ logger = logging.getLogger(__name__)
 
 # Semaphore gates concurrent background embedding calls during bulk ingest.
 _embedding_semaphore = asyncio.Semaphore(5)
+_PLACEHOLDER_TITLE = "Untitled Session"
+_PLACEHOLDER_SUMMARY = "No summary generated."
+
+
+def _summary_content_values(summary: Any) -> dict[str, str]:
+    """Return only generated summary fields that are worth persisting."""
+    values: dict[str, str] = {}
+    title = str(getattr(summary, "title", "") or "").strip()
+    body = str(getattr(summary, "summary", "") or "").strip()
+    if title and title != _PLACEHOLDER_TITLE:
+        values["summary_title"] = title
+    if body and body != _PLACEHOLDER_SUMMARY:
+        values["summary"] = body
+    return values
 
 
 def events_to_dicts(events: list[AgentEvent]) -> list[dict]:
@@ -110,16 +124,19 @@ async def summarize_and_persist(
     new_last_event_id = events[-1].id if events else None
     target_revision = int(getattr(session, "transcript_revision", 0) or 0)
 
+    content_values = _summary_content_values(summary)
+    if not content_values:
+        logger.warning("Discarding placeholder summary result for session %s", session.id)
+
     def _do_persist(write_db: Session) -> int:
         result = write_db.execute(
             sa_update(AgentSession)
             .where(AgentSession.id == session.id)
             .values(
-                summary=summary.summary,
-                summary_title=summary.title,
                 summary_event_count=len(events),
                 last_summarized_event_id=new_last_event_id,
                 summary_revision=target_revision,
+                **content_values,
             )
         )
         return int(result.rowcount or 0)
@@ -127,8 +144,10 @@ async def summarize_and_persist(
     ws = get_write_serializer()
     updated = await ws.execute_or_direct(_do_persist, db, label="summary-backfill")
     if updated > 0:
-        session.summary = summary.summary
-        session.summary_title = summary.title
+        if "summary" in content_values:
+            session.summary = content_values["summary"]
+        if "summary_title" in content_values:
+            session.summary_title = content_values["summary_title"]
         session.summary_event_count = len(events)
         session.last_summarized_event_id = new_last_event_id
         session.summary_revision = target_revision
@@ -306,8 +325,11 @@ async def generate_summary_impl(session_id: str) -> None:
                 "summary_revision": transcript_revision,
             }
             if summary:
-                values["summary"] = summary.summary
-                values["summary_title"] = summary.title
+                content_values = _summary_content_values(summary)
+                if content_values:
+                    values.update(content_values)
+                else:
+                    logger.warning("Discarding placeholder summary result for session %s", session_id)
 
             stmt = update(AgentSession).where(AgentSession.id == session_id)
             if cursor_id is not None:
