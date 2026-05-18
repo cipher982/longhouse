@@ -22,14 +22,11 @@ import { useReadinessFlag } from "../lib/readiness-contract";
 import {
   type AgentSessionFilters,
   fetchAgentSessionWorkspace,
-  setSessionAction,
   type TimelineSessionCard,
   seedDemoSessions,
 } from "../services/api/agents";
-import { DEMO_READ_ONLY_MESSAGE } from "../services/api/base";
 import {
   Button,
-  Badge,
   EmptyState,
   PageShell,
   Spinner,
@@ -37,18 +34,18 @@ import {
 } from "../components/ui";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { RecallPanel } from "../components/RecallPanel";
-import { SessionCard } from "../components/sessions/SessionCard";
+import { TimelineInbox } from "../components/sessions/TimelineInbox";
 import { FilterChip, FilterPopover } from "../components/sessions/SessionsFilter";
 import LaunchSessionModal from "../components/LaunchSessionModal";
 import {
   type SortOrder,
   type SessionsUrlState,
-  groupThreadCardsByDay,
   buildSessionDetailPath,
   readSessionsUrlState,
   buildSessionsSearchParams,
 } from "../lib/sessionUtils";
 import "../styles/sessions.css";
+import "../styles/inbox.css";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -94,61 +91,6 @@ function useRelativeTimeClock(enabled: boolean): number {
   }, [enabled]);
 
   return nowMs;
-}
-
-// ---------------------------------------------------------------------------
-// Session Group Component
-// ---------------------------------------------------------------------------
-
-interface SessionGroupProps {
-  title: string;
-  sessions: TimelineSessionCard[];
-  onSessionClick: (thread: TimelineSessionCard) => void;
-  onSessionPrefetch: (thread: TimelineSessionCard) => void;
-  allowHoverPrefetch: () => boolean;
-  onSessionArchive: (thread: TimelineSessionCard) => void;
-  highlightQuery?: string;
-  isSemanticResult?: boolean;
-  groupedQueryMode?: boolean;
-  relativeNowMs: number;
-}
-
-function SessionGroup({
-  title,
-  sessions,
-  onSessionClick,
-  onSessionPrefetch,
-  allowHoverPrefetch,
-  onSessionArchive,
-  highlightQuery,
-  isSemanticResult,
-  groupedQueryMode,
-  relativeNowMs,
-}: SessionGroupProps) {
-  return (
-    <div className="session-group">
-      <div className="session-group-header">
-        <span className="session-group-title">{title}</span>
-        <Badge variant="neutral" className="session-group-count">{sessions.length}</Badge>
-      </div>
-      <div className="session-group-list">
-        {sessions.map((thread) => (
-          <SessionCard
-            key={thread.thread_id}
-            thread={thread}
-            onClick={() => onSessionClick(thread)}
-            onPrefetch={() => onSessionPrefetch(thread)}
-            allowHoverPrefetch={allowHoverPrefetch}
-            onArchive={() => onSessionArchive(thread)}
-            highlightQuery={highlightQuery}
-            isSemanticResult={isSemanticResult}
-            groupedQueryMode={groupedQueryMode}
-            relativeNowMs={relativeNowMs}
-          />
-        ))}
-      </div>
-    </div>
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -320,7 +262,6 @@ export default function SessionsPage() {
   });
 
   const threadCards = sessions;
-  const groupedSessions = useMemo(() => groupThreadCardsByDay(threadCards, relativeNowMs), [threadCards, relativeNowMs]);
 
   // PageShell owns scroll detection and CSS class toggling; we only track the
   // timestamp here to gate hover-prefetch intent.
@@ -379,32 +320,6 @@ export default function SessionsPage() {
       </Button>
     </div>
   );
-
-  // Archive a session — optimistic remove, confirmed by inline card UI
-  const handleSessionArchive = useCallback(async (thread: TimelineSessionCard) => {
-    if (config.demoMode) {
-      toast(DEMO_READ_ONLY_MESSAGE);
-      return;
-    }
-    const sessionId = thread.detail.id;
-    queryClient.setQueriesData<{ sessions: TimelineSessionCard[]; total: number }>(
-      { queryKey: ["agent-sessions"] },
-      (old) => {
-        if (!old) return old;
-        return {
-          ...old,
-          sessions: old.sessions.filter((t) => t.thread_id !== thread.thread_id),
-          total: Math.max(0, old.total - 1),
-        };
-      },
-    );
-    try {
-      await setSessionAction(sessionId, "archive");
-    } catch {
-      queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
-      toast.error("Failed to archive session");
-    }
-  }, [queryClient]);
 
   // Handle session click - preserve current filters in location state
   const handleSessionClick = useCallback((thread: TimelineSessionCard) => {
@@ -790,7 +705,7 @@ export default function SessionsPage() {
           </div>
         )}
 
-        {/* Timeline List */}
+        {/* Timeline Inbox */}
         {threadCards.length === 0 ? (
           <EmptyState
             title="No timeline sessions found"
@@ -808,23 +723,14 @@ export default function SessionsPage() {
             }
           />
         ) : (
-          <div className="sessions-list">
-            {Array.from(groupedSessions.entries()).map(([dateKey, daySessions]) => (
-              <SessionGroup
-                key={dateKey}
-                title={dateKey}
-                sessions={daySessions}
-                onSessionClick={handleSessionClick}
-                onSessionPrefetch={handleSessionPrefetch}
-                allowHoverPrefetch={allowHoverPrefetch}
-                onSessionArchive={handleSessionArchive}
-                highlightQuery={debouncedQuery}
-                isSemanticResult={aiSearch}
-                groupedQueryMode={groupedQueryMode}
-                relativeNowMs={relativeNowMs}
-              />
-            ))}
-          </div>
+          <TimelineInbox
+            sessions={threadCards}
+            onSessionClick={handleSessionClick}
+            onSessionPrefetch={handleSessionPrefetch}
+            allowHoverPrefetch={allowHoverPrefetch}
+            relativeNowMs={relativeNowMs}
+            highlightQuery={debouncedQuery}
+          />
         )}
 
         {/* Footer with count and load more */}
