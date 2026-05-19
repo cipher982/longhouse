@@ -21,6 +21,7 @@ import { Button, EmptyState, Spinner } from "../components/ui";
 import { TrashIcon } from "../components/icons";
 import { SessionChat, type SessionChatTarget } from "../components/SessionChat";
 import { SessionContextPane } from "../components/session-workspace/SessionContextPane";
+import { RenderTelemetryPanel } from "../components/session-workspace/RenderTelemetryPanel";
 import { SessionRuntimeStrip } from "../components/session-workspace/SessionRuntimeStrip";
 import { isSessionClosed, resolveSessionRuntimeState } from "../lib/sessionRuntime";
 import { TimelinePane } from "../components/session-workspace/TimelinePane";
@@ -388,6 +389,7 @@ function SessionDetailWorkspaceRoute({
             }
           />
         }
+        inspector={<RenderTelemetryPanel sessionId={session.id} />}
       />
     </div>
   );
