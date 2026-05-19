@@ -18,12 +18,11 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 from zerg.services.claude_channel_bridge import CLAUDE_CHANNEL_SERVER_NAME
 from zerg.services.claude_channel_bridge import build_claude_channel_state_file
 from zerg.services.claude_channel_bridge import install_claude_channel_mcp_server
-from zerg.services.claude_channel_bridge import resolve_claude_project_key
 from zerg.services.claude_channel_bridge import resolve_claude_user_config_path
 from zerg.services.claude_channel_bridge import wait_for_claude_channel_state
 
 
-def test_install_claude_channel_mcp_server_writes_local_scope_project_entry(tmp_path):
+def test_install_claude_channel_mcp_server_writes_user_scope_entry(tmp_path):
     claude_dir = tmp_path / ".claude"
     claude_dir.mkdir()
     workspace = tmp_path / "real-workspace"
@@ -39,7 +38,14 @@ def test_install_claude_channel_mcp_server_writes_local_scope_project_entry(tmp_
                     "/tmp/other-project": {
                         "allowedTools": ["Read"],
                         "mcpContextUris": ["ctx://demo"],
-                        "mcpServers": {"other": {"type": "stdio", "command": "other", "args": ["serve"]}},
+                        "mcpServers": {
+                            "other": {"type": "stdio", "command": "other", "args": ["serve"]},
+                            CLAUDE_CHANNEL_SERVER_NAME: {
+                                "type": "stdio",
+                                "command": "stale-longhouse",
+                                "args": ["claude-channel", "serve"],
+                            },
+                        },
                         "enabledMcpjsonServers": ["shared"],
                         "disabledMcpjsonServers": [],
                         "hasTrustDialogAccepted": True,
@@ -56,29 +62,25 @@ def test_install_claude_channel_mcp_server_writes_local_scope_project_entry(tmp_
 
     actions = install_claude_channel_mcp_server(workspace_path=workspace_link, claude_dir=claude_dir)
     data = json.loads(config_path.read_text(encoding="utf-8"))
-    project_key = resolve_claude_project_key(workspace_link)
 
-    assert actions == [f"Updated {config_path} with local MCP server {CLAUDE_CHANNEL_SERVER_NAME} for {project_key}"]
+    assert actions == [
+        f"Updated {config_path} with user MCP server {CLAUDE_CHANNEL_SERVER_NAME}",
+        f"Removed project-local MCP server {CLAUDE_CHANNEL_SERVER_NAME} from 1 Claude project(s)",
+    ]
     assert data["mcpServers"]["existing"] == {"type": "stdio", "command": "demo", "args": ["serve"]}
-    assert data["projects"]["/tmp/other-project"]["mcpServers"]["other"] == {
-        "type": "stdio",
-        "command": "other",
-        "args": ["serve"],
-    }
-    assert data["projects"][project_key]["allowedTools"] == []
-    assert data["projects"][project_key]["mcpContextUris"] == []
-    assert data["projects"][project_key]["enabledMcpjsonServers"] == []
-    assert data["projects"][project_key]["disabledMcpjsonServers"] == []
-    assert data["projects"][project_key]["hasTrustDialogAccepted"] is False
-    assert data["projects"][project_key]["projectOnboardingSeenCount"] == 0
-    assert data["projects"][project_key]["hasClaudeMdExternalIncludesApproved"] is False
-    assert data["projects"][project_key]["hasClaudeMdExternalIncludesWarningShown"] is False
-    assert data["projects"][project_key]["mcpServers"][CLAUDE_CHANNEL_SERVER_NAME] == {
+    assert data["mcpServers"][CLAUDE_CHANNEL_SERVER_NAME] == {
         "type": "stdio",
         "command": "longhouse",
         "args": ["claude-channel", "serve"],
         "env": {},
     }
+    assert data["projects"]["/tmp/other-project"]["mcpServers"]["other"] == {
+        "type": "stdio",
+        "command": "other",
+        "args": ["serve"],
+    }
+    assert CLAUDE_CHANNEL_SERVER_NAME not in data["projects"]["/tmp/other-project"]["mcpServers"]
+    assert str(workspace.resolve()) not in data["projects"]
 
 
 def test_claude_channel_bridge_emits_channel_notification_after_init(tmp_path):

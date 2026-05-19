@@ -223,6 +223,41 @@ def test_claude_command_stops_before_api_launch_when_preflight_fails(monkeypatch
     assert launch_calls == []
 
 
+def test_claude_command_stops_before_api_launch_when_native_bridge_setup_fails(monkeypatch, tmp_path):
+    runner = CliRunner()
+    launch_calls: list[dict] = []
+
+    monkeypatch.setattr(
+        claude_cli,
+        "_load_api_credentials",
+        lambda **_kwargs: ("https://longhouse.test", "zdt_test_token"),
+    )
+    monkeypatch.setattr(
+        claude_cli,
+        "_detect_native_claude_channels_available",
+        lambda: (True, "authMethod=claude.ai, apiProvider=firstParty"),
+    )
+    monkeypatch.setattr(claude_cli, "_collect_claude_launch_env", lambda: {})
+    monkeypatch.setattr(claude_cli, "get_machine_name_label", lambda: "work-laptop")
+    monkeypatch.setattr(claude_cli, "_ensure_managed_launch_preflight", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        claude_cli,
+        "_ensure_native_claude_prereqs",
+        lambda **_kwargs: (_ for _ in ()).throw(claude_cli._NativeClaudeError("missing longhouse-channel")),
+    )
+    monkeypatch.setattr(
+        claude_cli,
+        "_launch_managed_local_from_api",
+        lambda **kwargs: launch_calls.append(kwargs),
+    )
+
+    result = runner.invoke(app, ["claude", "--cwd", str(tmp_path)])
+
+    assert result.exit_code == claude_cli.EXIT_SETUP_FAILED
+    assert "Claude bridge setup failed: missing longhouse-channel" in result.output
+    assert launch_calls == []
+
+
 def test_claude_command_starts_native_channel_bridge_when_api_returns_native_transport(monkeypatch, tmp_path):
     runner = CliRunner()
     open_calls: list[str] = []
@@ -324,6 +359,35 @@ def test_run_claude_auth_status_uses_bare_claude(monkeypatch):
 
     assert completed.returncode == 0
     assert calls == [["claude", "auth", "status", "--json"]]
+
+
+def test_verify_claude_channel_mcp_server_uses_effective_workspace_config(monkeypatch, tmp_path):
+    calls: list[tuple[list[str], str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append((list(cmd), kwargs["cwd"]))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(claude_cli.subprocess, "run", fake_run)
+
+    claude_cli._verify_claude_channel_mcp_server(workspace_path=tmp_path)
+
+    assert calls == [(["claude", "mcp", "get", "longhouse-channel"], str(tmp_path))]
+
+
+def test_verify_claude_channel_mcp_server_raises_actionable_setup_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        claude_cli.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1,
+            stdout='No MCP server found with name: "longhouse-channel"',
+            stderr="",
+        ),
+    )
+
+    with pytest.raises(claude_cli._NativeClaudeError, match="Claude cannot resolve MCP server longhouse-channel"):
+        claude_cli._verify_claude_channel_mcp_server(workspace_path=tmp_path)
 
 
 def test_post_claude_terminal_signal_posts_runtime_event(monkeypatch):
@@ -573,6 +637,7 @@ def test_claude_command_force_native_channels_bypasses_bedrock_gate(monkeypatch,
     )
     monkeypatch.setattr(claude_cli, "get_machine_name_label", lambda: "work-laptop")
     monkeypatch.setattr(claude_cli, "_ensure_managed_launch_preflight", lambda **_kwargs: None)
+    monkeypatch.setattr(claude_cli, "_ensure_native_claude_prereqs", lambda **_kwargs: None)
     monkeypatch.setattr(
         claude_cli,
         "_launch_managed_local_from_api",
@@ -628,6 +693,7 @@ def test_claude_command_force_native_channels_allows_bedrock_native_transport(mo
     )
     monkeypatch.setattr(claude_cli, "get_machine_name_label", lambda: "work-laptop")
     monkeypatch.setattr(claude_cli, "_ensure_managed_launch_preflight", lambda **_kwargs: None)
+    monkeypatch.setattr(claude_cli, "_ensure_native_claude_prereqs", lambda **_kwargs: None)
     monkeypatch.setattr(
         claude_cli,
         "_launch_managed_local_from_api",
