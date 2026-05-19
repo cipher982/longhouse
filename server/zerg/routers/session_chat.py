@@ -729,6 +729,26 @@ def _create_session_input_or_existing(
         )
     except IntegrityError:
         db.rollback()
+        existing = _find_existing_input(
+            source_session=source_session,
+            owner_id=owner_id,
+            client_request_id=client_request_id,
+            db=db,
+        )
+        if existing is not None:
+            if existing.body != body.text:
+                raise _input_conflict(existing, reason="different_text")
+            if existing.status == INPUT_STATUS_FAILED:
+                row = retry_failed_input(
+                    db,
+                    int(existing.id),
+                    intent=intent,
+                    status=status_value,
+                    delivery_request_id=delivery_request_id,
+                )
+                if row is None:
+                    raise _conflict_for_existing_input(existing)
+                return row
         if existing_response := _existing_input_response(
             source_session=source_session,
             owner_id=owner_id,

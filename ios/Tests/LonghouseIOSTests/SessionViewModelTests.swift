@@ -311,10 +311,44 @@ struct SessionViewModelTests {
         #expect(model.items.map(\.id) == ["user:11"])
     }
 
+    @Test
+    func submittedInputDoesNotReconcileAgainstOffHeadIdentity() async throws {
+        let before = try makeWorkspace(eventId: 10, content: "Before send")
+        let after = try makeWorkspace(
+            eventId: 11,
+            content: "server projected text",
+            timestamp: ISO8601DateFormatter().string(from: Date()),
+            isHeadBranch: false,
+            inputOriginJSON: """
+            {
+              "authored_via": "longhouse",
+              "session_input_id": 7,
+              "client_request_id": "ios-off-head-1"
+            }
+            """
+        )
+        let api = FakeSessionWorkspaceClient(
+            workspaces: [before, after],
+            sendResponse: SessionInputResponse(outcome: .sent, inputId: 7, clientRequestId: nil, intent: "auto", queued: [])
+        )
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
+        await waitForWorkspaceRequestCount(api, atLeast: 2)
+
+        #expect(sent)
+        #expect(model.submittedInputs.count == 1)
+        #expect(model.items.map(\.id) == ["user:11"])
+    }
+
     nonisolated private func makeWorkspace(
         eventId: Int,
         content: String,
         timestamp: String = "2026-05-02T20:00:00Z",
+        isHeadBranch: Bool = true,
         inputOriginJSON: String? = nil
     ) throws -> SessionWorkspaceResponse {
         let encodedContent = try jsonString(content)
@@ -356,7 +390,7 @@ struct SessionViewModelTests {
                   "content_text": \(encodedContent),
                   "timestamp": \(encodedTimestamp),
                   "in_active_context": true,
-                  "is_head_branch": true\(inputOriginField)
+                  "is_head_branch": \(isHeadBranch)\(inputOriginField)
                 }
               }
             ],

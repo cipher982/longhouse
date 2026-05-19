@@ -220,6 +220,7 @@ def retry_failed_input(
     db.commit()
     if updated != 1:
         return None
+    db.expire_all()
     return get_session_input(db, input_id)
 
 
