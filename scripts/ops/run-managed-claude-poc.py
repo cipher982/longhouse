@@ -230,6 +230,7 @@ def main() -> int:
     clean_buffer = ""
     compact_buffer = ""
     session_id: str | None = None
+    confirmed_workspace_trust = False
     confirmed_warning = False
     sent_prompt = False
     observed_expected = False
@@ -259,6 +260,11 @@ def main() -> int:
                     if match:
                         session_id = match.group(1)
                         recorder.write("session_id_observed", session_id=session_id)
+
+                if not confirmed_workspace_trust and "Yes,Itrustthisfolder" in compact_buffer:
+                    os.write(master_fd, b"\r")
+                    confirmed_workspace_trust = True
+                    recorder.write("workspace_trust_confirmed", session_id=session_id)
 
                 if not confirmed_warning and "Iamusingthisforlocaldevelopment" in compact_buffer:
                     os.write(master_fd, b"\r")
