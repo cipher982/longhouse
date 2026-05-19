@@ -117,21 +117,23 @@ export function SessionRow({
       </div>
 
       <div className="inbox-row-meta" aria-hidden="false">
-        <div className="inbox-row-meta-line inbox-row-meta-provider">
-          <span className="inbox-row-provider">{provider}</span>
-          {branch ? <span className="inbox-row-branch">{branch}</span> : null}
-        </div>
-        <div className="inbox-row-meta-line inbox-row-meta-status">
-          <span
-            className="inbox-row-status-dot"
-            data-tone={statusTone}
-            aria-hidden="true"
-          />
-          <span className="inbox-row-status-label">{statusLabel}</span>
-          <span className="inbox-row-time">
-            {startedAtIso ? formatRelativeTime(startedAtIso, relativeNowMs) : ""}
-          </span>
-        </div>
+        <span
+          className="inbox-row-status-dot"
+          data-tone={statusTone}
+          aria-hidden="true"
+        />
+        <span className="inbox-row-status-label">{statusLabel}</span>
+        <span className="inbox-row-meta-divider" aria-hidden="true">·</span>
+        <span className="inbox-row-provider">{provider}</span>
+        {branch ? (
+          <>
+            <span className="inbox-row-meta-divider" aria-hidden="true">·</span>
+            <span className="inbox-row-branch">{branch}</span>
+          </>
+        ) : null}
+        <span className="inbox-row-time">
+          {startedAtIso ? formatRelativeTime(startedAtIso, relativeNowMs) : ""}
+        </span>
       </div>
     </button>
   );

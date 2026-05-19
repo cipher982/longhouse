@@ -6,17 +6,32 @@
  * changes when status transitions.
  */
 
+  /* Tunable defaults — kept on :root so the InboxTuner debug panel (writes
+   * to :root inline) can override them without specificity fights. Values
+   * dialed in 2026-05-18 against real david010 data. */
+  :where(:root) {
+    --inbox-row-font: 13px;
+    --inbox-row-pad-y: 2px;
+    --inbox-row-min-h: 29px;
+    --inbox-repo-font: 22px;
+    --inbox-repo-pad-y: 7px;
+    --inbox-meta-font: 15px;
+    --inbox-meta-width: 210px;
+    --inbox-title-max: 50%;
+    --inbox-group-gap: 0px;
+  }
+
 @layer pages {
   .inbox {
     display: flex;
     flex-direction: column;
-    gap: var(--space-8);
+    gap: var(--inbox-group-gap);
   }
 
   .inbox-section {
     display: flex;
     flex-direction: column;
-    gap: var(--space-6);
+    gap: 0;
   }
 
   .inbox-section--closed {
@@ -26,11 +41,12 @@
   .inbox-closed-divider {
     display: flex;
     align-items: center;
-    gap: var(--space-3);
-    padding: var(--space-3) 0 var(--space-1);
+    gap: var(--space-2);
+    padding: var(--space-2) 0 var(--space-1);
+    margin-top: var(--space-2);
     border-top: 1px solid var(--color-border-muted);
     color: var(--text-muted);
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -41,39 +57,46 @@
   }
 
   .inbox-closed-divider-count {
-    background: var(--color-legacy-bg-button);
-    border-radius: var(--radius-full);
-    padding: 2px 10px;
-    font-size: 11px;
-    color: var(--text-secondary);
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
   }
 
-  /* ---------- Repo block ---------- */
+  /* ---------- Repo block ----------
+   * Repo title is the strongest visual element on the page. Sticky so it
+   * stays visible while you scan rows below.
+   */
 
   .inbox-repo {
     display: flex;
     flex-direction: column;
-    gap: var(--space-1);
   }
 
   .inbox-repo-header {
     display: flex;
     align-items: baseline;
     gap: var(--space-2);
-    padding: 0 var(--space-2) var(--space-2);
-    border-bottom: 1px solid var(--color-border-subtle);
+    padding: var(--inbox-repo-pad-y) var(--space-2) calc(var(--inbox-repo-pad-y) / 2);
+    background: var(--color-legacy-bg-darker);
+    position: sticky;
+    top: 0;
+    z-index: 2;
+  }
+
+  .inbox-section--closed .inbox-repo-header {
+    background: transparent;
   }
 
   .inbox-repo-name {
     margin: 0;
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--text-primary);
-    letter-spacing: 0.005em;
+    font-size: var(--inbox-repo-font);
+    font-weight: 700;
+    color: var(--color-brand-primary);
+    letter-spacing: 0;
+    text-transform: lowercase;
   }
 
   .inbox-repo-count {
-    font-size: 12px;
+    font-size: 11px;
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
   }
@@ -83,10 +106,13 @@
     flex-direction: column;
   }
 
-  /* ---------- Row ---------- */
+  /* ---------- Row ----------
+   * Compact, dense, single-line. Inbox-style: hover highlights the entire
+   * line. No card padding. Title and summary on one line separated by a
+   * dim em-dash.
+   */
 
   .inbox-row {
-    /* reset button styles */
     appearance: none;
     background: none;
     border: none;
@@ -96,16 +122,18 @@
     cursor: pointer;
 
     display: grid;
-    grid-template-columns: 1fr minmax(180px, 220px);
-    align-items: stretch;
-    gap: var(--space-4);
-    padding: var(--space-3) var(--space-2);
+    grid-template-columns: 1fr minmax(160px, var(--inbox-meta-width));
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--inbox-row-pad-y) var(--space-2);
     border-bottom: 1px solid var(--color-border-muted);
-    transition: background-color 120ms ease;
+    transition: background-color 80ms ease;
+    line-height: 1.35;
+    min-height: var(--inbox-row-min-h);
   }
 
   .inbox-row:hover {
-    background: color-mix(in srgb, var(--color-legacy-bg-hover) 50%, transparent);
+    background: color-mix(in srgb, var(--color-legacy-bg-hover) 70%, transparent);
   }
 
   .inbox-row:focus-visible {
@@ -114,77 +142,85 @@
   }
 
   .inbox-row[data-closed="true"] {
-    opacity: 0.85;
+    opacity: 0.78;
   }
 
   /* ---------- Row main (left side) ---------- */
 
   .inbox-row-main {
     display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0; /* allow children to truncate */
+    align-items: baseline;
+    gap: var(--space-2);
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
   }
 
   .inbox-row-title {
-    font-size: 14px;
+    font-size: var(--inbox-row-font);
     font-weight: 600;
     color: var(--text-primary);
-    line-height: 1.35;
+    flex-shrink: 0;
+    max-width: var(--inbox-title-max);
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .inbox-row-summary {
-    font-size: 13px;
-    color: var(--text-secondary);
-    line-height: 1.4;
+    font-size: var(--inbox-row-font);
+    color: var(--text-muted);
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
-    transition: opacity 200ms ease;
+    flex: 1 1 auto;
+    min-width: 0;
+    transition: opacity 160ms ease;
+  }
+
+  .inbox-row-summary::before {
+    content: "—";
+    color: var(--color-border-primary);
+    margin-right: var(--space-2);
   }
 
   .inbox-row-summary--empty {
-    /* reserve the line height even when there's no summary, so rows
-     * with and without summaries align consistently */
     visibility: hidden;
   }
 
+  .inbox-row-summary--empty::before {
+    content: none;
+  }
+
   /* ---------- Row meta (right side) ----------
-   * Fixed layout. Two stacked lines, each occupying a reserved slot.
-   * Status changes only swap text + dot color; geometry never shifts.
+   * Single line, right-aligned. Reserved width — status changes only swap
+   * dot color and label text; the row geometry never shifts.
    */
 
   .inbox-row-meta {
     display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    justify-content: center;
-    gap: 2px;
-    font-size: 12px;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    font-size: var(--inbox-meta-font);
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
     min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
   }
 
   .inbox-row-meta-line {
     display: inline-flex;
     align-items: center;
-    gap: var(--space-2);
-    line-height: 1.4;
-    /* keep both lines the same height even when one is empty */
-    min-height: 18px;
-    /* the meta cluster track is fixed width; truncate, don't reflow */
-    max-width: 100%;
+    gap: var(--space-1);
     overflow: hidden;
-    white-space: nowrap;
+    text-overflow: ellipsis;
+    min-width: 0;
   }
 
   .inbox-row-meta-provider {
-    color: var(--text-secondary);
-    text-transform: capitalize;
+    color: var(--text-muted);
+    text-transform: lowercase;
   }
 
   .inbox-row-provider {
@@ -195,17 +231,20 @@
   .inbox-row-branch {
     color: var(--text-muted);
     font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
-    font-size: 11px;
-    padding: 1px 6px;
-    border-radius: var(--radius-sm);
-    background: color-mix(in srgb, var(--color-legacy-bg-button) 60%, transparent);
-    max-width: 12ch;
+    font-size: 10px;
+    max-width: 10ch;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
   .inbox-row-meta-status {
-    color: var(--text-secondary);
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+
+  .inbox-row-meta-divider {
+    color: var(--color-border-primary);
+    flex-shrink: 0;
   }
 
   .inbox-row-status-dot {
@@ -252,6 +291,112 @@
   .inbox-row-time {
     color: var(--text-muted);
     flex-shrink: 0;
+    margin-left: auto;
+    padding-left: var(--space-2);
+  }
+
+  /* ---------- Tuner panel ---------- */
+
+  .inbox-tuner {
+    position: fixed;
+    bottom: 16px;
+    right: 16px;
+    width: 320px;
+    z-index: 1000;
+    background: var(--color-legacy-bg-darker);
+    border: 1px solid var(--color-border-primary);
+    border-radius: var(--radius-md);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+    color: var(--text-primary);
+    font-size: 12px;
+    padding: var(--space-3);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .inbox-tuner-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: 700;
+    color: var(--color-brand-primary);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 11px;
+  }
+
+  .inbox-tuner-close {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+    padding: 0 4px;
+  }
+
+  .inbox-tuner-knobs {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .inbox-tuner-knob {
+    display: grid;
+    grid-template-columns: 90px 1fr 56px;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .inbox-tuner-knob-label {
+    color: var(--text-secondary);
+    font-size: 11px;
+  }
+
+  .inbox-tuner-knob input[type="range"] {
+    width: 100%;
+    accent-color: var(--color-brand-primary);
+  }
+
+  .inbox-tuner-knob-value {
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    font-size: 11px;
+  }
+
+  .inbox-tuner-footer {
+    display: flex;
+    gap: var(--space-2);
+  }
+
+  .inbox-tuner-footer button {
+    flex: 1;
+    background: var(--color-legacy-bg-button);
+    border: 1px solid var(--color-border-subtle);
+    color: var(--text-secondary);
+    border-radius: var(--radius-sm);
+    padding: 4px 8px;
+    cursor: pointer;
+    font-size: 11px;
+  }
+
+  .inbox-tuner-footer button:hover {
+    background: var(--color-legacy-bg-button-hover);
+    color: var(--text-primary);
+  }
+
+  .inbox-tuner-dump {
+    margin: 0;
+    padding: var(--space-2);
+    background: var(--color-legacy-bg-dark);
+    border-radius: var(--radius-sm);
+    font-size: 10px;
+    color: var(--text-muted);
+    max-height: 120px;
+    overflow: auto;
+    white-space: pre;
   }
 
   /* ---------- Mobile ----------
