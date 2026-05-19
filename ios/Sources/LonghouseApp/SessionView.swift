@@ -840,9 +840,10 @@ private struct UserBubble: View {
     let event: SessionEvent
     @State private var expanded = false
 
-    private var text: String { ClaudeChannelText.stripWrapper(event.contentText) }
+    private var text: String { event.contentText ?? "" }
     private var shouldCollapse: Bool { TranscriptTextPolicy.shouldCollapseMessage(text) }
     private var visibleText: String { TranscriptTextPolicy.visibleMessage(text, expanded: expanded) }
+    private var isLonghouseAuthored: Bool { event.inputOrigin?.authoredVia == .longhouse }
 
     var body: some View {
         HStack {
@@ -860,8 +861,27 @@ private struct UserBubble: View {
                         expanded.toggle()
                     }
                 }
+
+                if isLonghouseAuthored {
+                    InputOriginMarker()
+                }
             }
         }
+    }
+}
+
+private struct InputOriginMarker: View {
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "house")
+                .font(.caption2.weight(.semibold))
+            Text("Longhouse")
+                .font(.caption2.weight(.semibold))
+        }
+        .foregroundStyle(.secondary)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Sent via Longhouse")
+        .accessibilityIdentifier("session-chat-input-origin-longhouse")
     }
 }
 
@@ -1718,26 +1738,15 @@ final class SessionViewModel: ObservableObject {
 
     private func reconcileSubmittedInputs(with events: [SessionEvent]) {
         guard !submittedInputs.isEmpty else { return }
-        let now = Date()
         submittedInputs.removeAll { input in
             guard input.phase == .sent || input.phase == .queued || input.phase == .submitting else { return false }
-            let age = now.timeIntervalSince(input.createdAt)
             return events.contains { event in
-                guard event.role == "user", ClaudeChannelText.stripWrapper(event.contentText) == input.text else { return false }
-                guard let eventDate = LonghouseDateParser.parse(event.timestamp) else { return false }
-                // Near-realtime window: tight [-5s, +120s] around submit.
-                if eventDate >= input.createdAt.addingTimeInterval(-5)
-                    && eventDate <= input.createdAt.addingTimeInterval(120) {
+                guard event.role == "user", let origin = event.inputOrigin else { return false }
+                if let serverInputId = input.serverInputId,
+                   origin.sessionInputId == serverInputId {
                     return true
                 }
-                // Late-echo fallback: after the tight window has passed, accept any
-                // durable user event with matching text from >=createdAt-5s. This
-                // prevents a stale optimistic row sitting next to a duplicate
-                // transcript row when ingest was delayed past 120s.
-                if age > 120 && eventDate >= input.createdAt.addingTimeInterval(-5) {
-                    return true
-                }
-                return false
+                return origin.clientRequestId == input.clientRequestId
             }
         }
     }

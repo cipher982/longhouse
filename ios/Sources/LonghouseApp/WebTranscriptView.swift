@@ -63,9 +63,9 @@ struct WebTranscriptView: UIViewRepresentable {
     private static func payloadItem(_ item: TimelineItem, sessionEnded: Bool) -> WebTranscriptPayloadItem {
         switch item {
         case .user(let event):
-            return messagePayload(id: item.id, role: "user", text: event.contentText ?? "")
+            return messagePayload(id: item.id, role: "user", text: event.contentText ?? "", origin: event.inputOrigin?.authoredVia)
         case .assistant(let event):
-            return messagePayload(id: item.id, role: "assistant", text: event.contentText ?? "")
+            return messagePayload(id: item.id, role: "assistant", text: event.contentText ?? "", origin: nil)
         case .tool(let call, let result, _):
             return toolPayload(id: item.id, call: call, result: result, sessionEnded: sessionEnded)
         case .orphanTool(let event):
@@ -75,8 +75,13 @@ struct WebTranscriptView: UIViewRepresentable {
         }
     }
 
-    private static func messagePayload(id: String, role: String, text: String) -> WebTranscriptPayloadItem {
-        let displayText = role == "user" ? ClaudeChannelText.stripWrapper(text) : text
+    private static func messagePayload(
+        id: String,
+        role: String,
+        text: String,
+        origin: SessionInputAuthoredVia?
+    ) -> WebTranscriptPayloadItem {
+        let displayText = text
         let collapsed = TranscriptTextPolicy.shouldCollapseMessage(displayText)
         return WebTranscriptPayloadItem(
             id: id,
@@ -91,7 +96,8 @@ struct WebTranscriptView: UIViewRepresentable {
             duration: nil,
             input: nil,
             output: nil,
-            calls: []
+            calls: [],
+            origin: origin?.payloadValue
         )
     }
 
@@ -109,7 +115,8 @@ struct WebTranscriptView: UIViewRepresentable {
             duration: nil,
             input: nil,
             output: nil,
-            calls: []
+            calls: [],
+            origin: nil
         )
     }
 
@@ -146,7 +153,8 @@ struct WebTranscriptView: UIViewRepresentable {
             duration: duration,
             input: prettyJSON(call.toolInputJSON) ?? TimelineBuilder.inputSummary(for: call),
             output: truncatedOutput(result?.toolOutputText),
-            calls: []
+            calls: [],
+            origin: nil
         )
     }
 
@@ -190,7 +198,8 @@ struct WebTranscriptView: UIViewRepresentable {
             duration: nil,
             input: nil,
             output: nil,
-            calls: childCalls
+            calls: childCalls,
+            origin: nil
         )
     }
 
@@ -274,6 +283,7 @@ private struct WebTranscriptPayloadItem: Encodable {
     let input: String?
     let output: String?
     let calls: [WebTranscriptToolCall]
+    let origin: String?
 }
 
 private struct WebTranscriptToolCall: Encodable {
@@ -282,6 +292,19 @@ private struct WebTranscriptToolCall: Encodable {
     let status: String
     let input: String?
     let output: String?
+}
+
+private extension SessionInputAuthoredVia {
+    var payloadValue: String {
+        switch self {
+        case .longhouse:
+            return "longhouse"
+        case .terminal:
+            return "terminal"
+        case .unknown(let value):
+            return value
+        }
+    }
 }
 
 private extension WebTranscriptView {
@@ -404,6 +427,18 @@ private extension WebTranscriptView {
       font-size: 12px;
       font-weight: 600;
       text-align: right;
+    }
+
+    .origin {
+      margin-top: 6px;
+      color: var(--secondary);
+      font-size: 11px;
+      font-weight: 650;
+      text-align: right;
+      display: flex;
+      gap: 4px;
+      align-items: center;
+      justify-content: flex-end;
     }
 
     .message-content {
@@ -737,11 +772,15 @@ private extension WebTranscriptView {
         ? `<button class="expand" data-expand-index="${index}">Show full message</button>`
         : '';
       if (item.role === 'user') {
+        const origin = item.origin === 'longhouse'
+          ? '<div class="origin" aria-label="Sent via Longhouse">Longhouse</div>'
+          : '';
         return `
           <div class="row message user">
             <div>
               <div class="bubble">${body}</div>
               ${expand}
+              ${origin}
             </div>
           </div>
         `;
