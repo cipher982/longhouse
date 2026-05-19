@@ -61,18 +61,7 @@ const FLIGHT_SAMPLE_INTERVAL_SECS: u64 = 5;
 const LOCAL_WORK_TICK_INTERVAL: Duration = Duration::from_millis(250);
 const WATCHER_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const OUTBOX_DRAIN_INTERVAL: Duration = Duration::from_millis(100);
-const ACTIVE_TRANSCRIPT_POLL_INTERVAL: Duration = Duration::from_millis(250);
-const ACTIVE_TRANSCRIPT_POLL_SLOW_THRESHOLD: Duration = Duration::from_secs(2);
-const ACTIVE_TRANSCRIPT_POLL_SLOW_BACKOFF: Duration = Duration::from_secs(5);
-#[cfg(test)]
-const ACTIVE_TRANSCRIPT_POLL_TTL: Duration = Duration::from_secs(2 * 60 * 60);
 const MAX_TRANSCRIPT_WAKE_TRACKED_PATHS: usize = 4096;
-#[cfg(test)]
-const TERMINAL_CATCHUP_DELAYS: [Duration; 3] = [
-    Duration::from_secs(0),
-    Duration::from_secs(1),
-    Duration::from_secs(3),
-];
 const OFFLINE_CONNECT_FAILURE_THRESHOLD: u32 = 3;
 const CLAUDE_TERMINAL_EVENT_TIMEOUT: Duration = Duration::from_secs(2);
 const CLAUDE_TERMINAL_EVENT_SOURCE: &str = "claude_channel_scan";
@@ -177,31 +166,6 @@ struct ClaudeTerminalPostResult {
     result: Result<(), String>,
     join_elapsed_ms: u64,
     task_elapsed_ms: u64,
-}
-
-#[derive(Debug, Clone)]
-struct TranscriptCatchup {
-    due_at: Instant,
-    path: PathBuf,
-    provider: &'static str,
-    observation_source: &'static str,
-    observed_at_ms: i64,
-    wake_received_at_ms: Option<i64>,
-    session_id: Option<String>,
-    turn_id: Option<String>,
-    wake_reason: Option<String>,
-    file_len_hint: Option<u64>,
-}
-
-#[derive(Debug, Clone)]
-struct ActiveTranscriptPoll {
-    due_at: Instant,
-    expires_at: Instant,
-    provider: &'static str,
-    session_id: Option<String>,
-    turn_id: Option<String>,
-    wake_reason: Option<String>,
-    file_len_hint: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -309,8 +273,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut in_flight = JoinSet::new();
     let mut discovery_tasks: JoinSet<DiscoveryTaskResult> = JoinSet::new();
     let mut deferred_retries = HashMap::new();
-    let mut transcript_catchups = Vec::new();
-    let mut active_transcript_polls = HashMap::new();
 
     let initial_retry_paths =
         queue_pending_spool_paths(&mut scheduler, &conn, INITIAL_SPOOL_PATH_LIMIT)?;
@@ -394,8 +356,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             &mut in_flight,
             &task_context,
             &mut deferred_retries,
-            &mut transcript_catchups,
-            &mut active_transcript_polls,
             offline.is_offline,
         );
 
@@ -412,11 +372,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         let retry_path = result.job.path.clone();
                         let retry_provider = result.job.provider;
                         scheduler.complete(&retry_path, result.rerun_priority);
-                        backoff_slow_active_transcript_poll(
-                            &retry_path,
-                            result.processing_elapsed,
-                            &mut active_transcript_polls,
-                        );
                         if let Some(delay) = result.local_retry_after {
                             deferred_retries.insert(retry_path, DeferredRetry {
                                 due_at: Instant::now() + delay,
@@ -467,9 +422,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             }
 
             Some(signal) = transcript_wake_rx.recv() => {
-                schedule_transcript_catchup_for_wake(
-                    &mut transcript_catchups,
-                    &mut active_transcript_polls,
+                record_transcript_wake_hint(
                     &mut latest_transcript_wake_observed,
                     signal,
                 );
@@ -478,8 +431,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &mut in_flight,
                     &task_context,
                     &mut deferred_retries,
-                    &mut transcript_catchups,
-                    &mut active_transcript_polls,
                     offline.is_offline,
                 );
             }
@@ -621,8 +572,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &providers,
                     &scheduler,
                     &deferred_retries,
-                    &transcript_catchups,
-                    &active_transcript_polls,
                     "startup reconciliation",
                 );
             }
@@ -679,8 +628,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &providers,
                     &scheduler,
                     &deferred_retries,
-                    &transcript_catchups,
-                    &active_transcript_polls,
                     "reconciliation scan",
                 );
             }
@@ -757,8 +704,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
-            // Wake the loop when delayed local retry/catch-up work may now be ready.
-            _ = local_retry_timer.tick(), if !deferred_retries.is_empty() || !transcript_catchups.is_empty() || !active_transcript_polls.is_empty() => {}
+            // Wake the loop when delayed local retry work may now be ready.
+            _ = local_retry_timer.tick(), if !deferred_retries.is_empty() => {}
 
             _ = flight_sample_timer.tick(), if flight_recorder.is_some() => {
                 if let Some(recorder) = flight_recorder.as_ref() {
@@ -772,8 +719,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         in_flight.len(),
                         scheduler.has_pending_work(),
                         deferred_retries.len(),
-                        transcript_catchups.len(),
-                        active_transcript_polls.len(),
                         offline.is_offline,
                     );
                 }
@@ -817,15 +762,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &mut in_flight,
                     &task_context,
                     &mut deferred_retries,
-                    &mut transcript_catchups,
-                    &mut active_transcript_polls,
                     offline.is_offline,
                 );
                 let live_local_work_waiting = live_local_work_pending(
                     &scheduler,
                     &deferred_retries,
-                    &transcript_catchups,
-                    &active_transcript_polls,
                 );
                 let reused_unmanaged_bindings =
                     live_local_work_waiting && last_unmanaged_session_bindings.is_some();
@@ -898,15 +839,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &mut in_flight,
                     &task_context,
                     &mut deferred_retries,
-                    &mut transcript_catchups,
-                    &mut active_transcript_polls,
                     offline.is_offline,
                 );
                 let live_local_work_waiting = live_local_work_pending(
                     &scheduler,
                     &deferred_retries,
-                    &transcript_catchups,
-                    &active_transcript_polls,
                 );
                 let reused_unmanaged_bindings =
                     live_local_work_waiting && last_unmanaged_session_bindings.is_some();
@@ -1047,13 +984,8 @@ fn write_local_status_snapshot(
 fn live_local_work_pending(
     scheduler: &PathScheduler,
     deferred_retries: &HashMap<PathBuf, DeferredRetry>,
-    transcript_catchups: &[TranscriptCatchup],
-    active_transcript_polls: &HashMap<PathBuf, ActiveTranscriptPoll>,
 ) -> bool {
-    scheduler.has_pending_work()
-        || !deferred_retries.is_empty()
-        || !transcript_catchups.is_empty()
-        || !active_transcript_polls.is_empty()
+    scheduler.has_pending_work() || !deferred_retries.is_empty()
 }
 
 fn record_flight_sample(
@@ -1066,8 +998,6 @@ fn record_flight_sample(
     in_flight_jobs: usize,
     scheduler_pending: bool,
     deferred_retry_count: usize,
-    transcript_catchup_count: usize,
-    active_transcript_poll_count: usize,
     offline: bool,
 ) {
     recorder.record(json!({
@@ -1085,8 +1015,6 @@ fn record_flight_sample(
             "in_flight_jobs": in_flight_jobs,
             "scheduler_pending": scheduler_pending,
             "deferred_retry_count": deferred_retry_count,
-            "transcript_catchup_count": transcript_catchup_count,
-            "active_transcript_poll_count": active_transcript_poll_count,
         },
     }));
 }
@@ -1186,8 +1114,6 @@ fn maybe_start_reconciliation_scan(
     providers: &[ProviderConfig],
     scheduler: &PathScheduler,
     deferred_retries: &HashMap<PathBuf, DeferredRetry>,
-    transcript_catchups: &[TranscriptCatchup],
-    active_transcript_polls: &HashMap<PathBuf, ActiveTranscriptPoll>,
     reason: &'static str,
 ) {
     if !discovery_tasks.is_empty() {
@@ -1198,11 +1124,7 @@ fn maybe_start_reconciliation_scan(
         return;
     }
 
-    if scheduler.has_pending_work()
-        || !deferred_retries.is_empty()
-        || !transcript_catchups.is_empty()
-        || !active_transcript_polls.is_empty()
-    {
+    if scheduler.has_pending_work() || !deferred_retries.is_empty() {
         tracing::debug!(
             reason,
             "Skipping reconciliation scan while live local work is pending"
@@ -1568,8 +1490,6 @@ fn provider_name_to_static(provider: &str) -> Option<&'static str> {
 fn work_context(priority: WorkPriority) -> &'static str {
     match priority {
         WorkPriority::Live => "live_transcript",
-        WorkPriority::Watch => "watch",
-        WorkPriority::Catchup => "hook_catchup",
         WorkPriority::Retry => "spool_replay",
         WorkPriority::Scan => "reconciliation_scan",
     }
@@ -1615,21 +1535,11 @@ fn pump_ready_local_work(
     in_flight: &mut JoinSet<PathTaskResult>,
     task_context: &PathTaskContext,
     deferred_retries: &mut HashMap<PathBuf, DeferredRetry>,
-    transcript_catchups: &mut Vec<TranscriptCatchup>,
-    active_transcript_polls: &mut HashMap<PathBuf, ActiveTranscriptPoll>,
     offline: bool,
 ) {
     drain_due_local_retries(scheduler, deferred_retries);
-    drain_due_transcript_catchups(scheduler, transcript_catchups);
-    drain_due_active_transcript_polls(scheduler, active_transcript_polls);
     if !offline {
-        start_ready_jobs(
-            scheduler,
-            in_flight,
-            task_context,
-            !active_transcript_polls.is_empty(),
-            !active_transcript_polls.is_empty(),
-        );
+        start_ready_jobs(scheduler, in_flight, task_context, false, false);
     } else {
         start_ready_jobs(scheduler, in_flight, task_context, true, false);
     }
@@ -1652,115 +1562,9 @@ fn drain_due_local_retries(
     }
 }
 
-fn drain_due_transcript_catchups(
-    scheduler: &mut PathScheduler,
-    transcript_catchups: &mut Vec<TranscriptCatchup>,
-) {
-    let now = Instant::now();
-    let mut index = 0usize;
-    while index < transcript_catchups.len() {
-        if transcript_catchups[index].due_at <= now {
-            let catchup = transcript_catchups.swap_remove(index);
-            scheduler.enqueue_observation(
-                catchup.path,
-                catchup.provider,
-                transcript_catchup_priority(catchup.observation_source),
-                ObservationTrace {
-                    source: catchup.observation_source,
-                    observed_at_ms: catchup.observed_at_ms,
-                    latest_observed_at_ms: None,
-                    wake_received_at_ms: catchup.wake_received_at_ms,
-                    enqueued_at_ms: 0,
-                    session_id: catchup.session_id,
-                    turn_id: catchup.turn_id,
-                    wake_reason: catchup.wake_reason,
-                    file_len_hint: catchup.file_len_hint,
-                },
-            );
-        } else {
-            index += 1;
-        }
-    }
-}
-
-fn drain_due_active_transcript_polls(
-    scheduler: &mut PathScheduler,
-    active_transcript_polls: &mut HashMap<PathBuf, ActiveTranscriptPoll>,
-) {
-    let now = Instant::now();
-    let ready_paths: Vec<_> = active_transcript_polls
-        .iter()
-        .filter_map(|(path, poll)| (poll.due_at <= now).then_some(path.clone()))
-        .collect();
-
-    for path in ready_paths {
-        let Some(poll) = active_transcript_polls.get(&path).cloned() else {
-            continue;
-        };
-        if now >= poll.expires_at || !path.exists() {
-            active_transcript_polls.remove(&path);
-            continue;
-        }
-
-        if scheduler.path_in_flight(&path) {
-            if let Some(poll) = active_transcript_polls.get_mut(&path) {
-                poll.due_at = now + ACTIVE_TRANSCRIPT_POLL_INTERVAL;
-            }
-            continue;
-        }
-
-        scheduler.enqueue_observation(
-            path.clone(),
-            poll.provider,
-            WorkPriority::Live,
-            ObservationTrace {
-                source: "active_poll",
-                observed_at_ms: now_ms(),
-                latest_observed_at_ms: None,
-                wake_received_at_ms: None,
-                enqueued_at_ms: 0,
-                session_id: poll.session_id.clone(),
-                turn_id: poll.turn_id.clone(),
-                wake_reason: poll.wake_reason.clone(),
-                file_len_hint: poll.file_len_hint,
-            },
-        );
-        if let Some(poll) = active_transcript_polls.get_mut(&path) {
-            poll.due_at = now + ACTIVE_TRANSCRIPT_POLL_INTERVAL;
-        }
-    }
-}
-
-fn backoff_slow_active_transcript_poll(
-    path: &Path,
-    processing_elapsed: Duration,
-    active_transcript_polls: &mut HashMap<PathBuf, ActiveTranscriptPoll>,
-) {
-    if processing_elapsed < ACTIVE_TRANSCRIPT_POLL_SLOW_THRESHOLD {
-        return;
-    }
-
-    let Some(poll) = active_transcript_polls.get_mut(path) else {
-        return;
-    };
-
-    let due_at = Instant::now() + ACTIVE_TRANSCRIPT_POLL_SLOW_BACKOFF;
-    if poll.due_at < due_at {
-        poll.due_at = due_at;
-    }
-    tracing::debug!(
-        path = %path.display(),
-        elapsed_ms = processing_elapsed.as_millis() as u64,
-        backoff_ms = ACTIVE_TRANSCRIPT_POLL_SLOW_BACKOFF.as_millis() as u64,
-        "Backed off slow active transcript poll"
-    );
-}
-
 #[cfg(test)]
-fn schedule_transcript_catchups_for_signals(
+fn ignore_transcript_shipping_for_signals(
     _conn: &rusqlite::Connection,
-    _transcript_catchups: &mut Vec<TranscriptCatchup>,
-    _active_transcript_polls: &mut HashMap<PathBuf, ActiveTranscriptPoll>,
     signals: Vec<outbox::DrainedPresenceSignal>,
 ) {
     if !signals.is_empty() {
@@ -1802,9 +1606,7 @@ fn outbox_signal_mark(signal: &outbox::DrainedPresenceSignal) -> String {
     )
 }
 
-fn schedule_transcript_catchup_for_wake(
-    _transcript_catchups: &mut Vec<TranscriptCatchup>,
-    _active_transcript_polls: &mut HashMap<PathBuf, ActiveTranscriptPoll>,
+fn record_transcript_wake_hint(
     latest_transcript_wake_observed: &mut HashMap<PathBuf, i64>,
     signal: TranscriptWakeSignal,
 ) {
@@ -1882,10 +1684,7 @@ fn remember_transcript_wake_observation(
 }
 
 #[cfg(test)]
-fn schedule_transcript_catchups_for_codex_observations(
-    _transcript_catchups: &mut Vec<TranscriptCatchup>,
-    _active_transcript_polls: &mut HashMap<PathBuf, ActiveTranscriptPoll>,
-    _terminal_catchup_marks: &mut HashMap<PathBuf, String>,
+fn ignore_transcript_shipping_for_codex_observations(
     observations: &[managed_bridge_scan::CodexBridgeObservation],
 ) {
     if !observations.is_empty() {
@@ -1898,121 +1697,6 @@ fn schedule_transcript_catchups_for_codex_observations(
             transcript_path_hints,
             "Codex bridge observations do not schedule transcript shipping"
         );
-    }
-}
-
-#[cfg(test)]
-fn schedule_transcript_catchup(
-    transcript_catchups: &mut Vec<TranscriptCatchup>,
-    active_transcript_polls: &mut HashMap<PathBuf, ActiveTranscriptPoll>,
-    path: PathBuf,
-    provider: &'static str,
-    phase: &str,
-    observation_source: &'static str,
-    observed_at_ms: i64,
-    wake_received_at_ms: Option<i64>,
-    allow_active_poll: bool,
-    session_id: Option<String>,
-    turn_id: Option<String>,
-    wake_reason: Option<String>,
-    file_len_hint: Option<u64>,
-) {
-    if is_terminal_or_attention_phase(phase) {
-        let has_wake_socket_catchup = transcript_catchups
-            .iter()
-            .any(|existing| existing.path == path && existing.observation_source == "wake_socket");
-        if active_transcript_polls.remove(&path).is_some() {
-            tracing::info!(
-                path = %path.display(),
-                provider,
-                phase,
-                "Stopped active transcript polling"
-            );
-        }
-        if has_wake_socket_catchup && observation_source != "wake_socket" {
-            return;
-        }
-        transcript_catchups.retain(|existing| existing.path != path);
-        let now = Instant::now();
-        for delay in TERMINAL_CATCHUP_DELAYS {
-            transcript_catchups.push(TranscriptCatchup {
-                due_at: now + delay,
-                path: path.clone(),
-                provider,
-                observation_source,
-                observed_at_ms,
-                wake_received_at_ms,
-                session_id: session_id.clone(),
-                turn_id: turn_id.clone(),
-                wake_reason: wake_reason.clone(),
-                file_len_hint,
-            });
-        }
-        return;
-    }
-
-    if is_active_phase(phase) {
-        let now = Instant::now();
-        if allow_active_poll {
-            let was_polling = active_transcript_polls.contains_key(&path);
-            active_transcript_polls.insert(
-                path.clone(),
-                ActiveTranscriptPoll {
-                    due_at: now,
-                    expires_at: now + ACTIVE_TRANSCRIPT_POLL_TTL,
-                    provider,
-                    session_id: session_id.clone(),
-                    turn_id: turn_id.clone(),
-                    wake_reason: wake_reason.clone(),
-                    file_len_hint,
-                },
-            );
-            if !was_polling {
-                tracing::info!(
-                    path = %path.display(),
-                    provider,
-                    phase,
-                    "Started active transcript polling"
-                );
-            }
-        }
-        // Turn-start wakes arrive before Codex has necessarily written useful
-        // rollout content. Progress wakes happen after output changes and
-        // should enter the immediate live lane.
-        let wake_is_turn_start =
-            observation_source == "wake_socket" && wake_reason.as_deref() == Some("turn_started");
-        if wake_is_turn_start {
-            return;
-        }
-
-        if observation_source == "wake_socket" {
-            transcript_catchups.retain(|item| item.path != path);
-        } else if transcript_catchups.iter().any(|item| item.path == path) {
-            return;
-        }
-
-        {
-            transcript_catchups.push(TranscriptCatchup {
-                due_at: now,
-                path,
-                provider,
-                observation_source,
-                observed_at_ms,
-                wake_received_at_ms,
-                session_id,
-                turn_id,
-                wake_reason,
-                file_len_hint,
-            });
-        }
-    }
-}
-
-fn transcript_catchup_priority(observation_source: &str) -> WorkPriority {
-    match observation_source {
-        "wake_socket" => WorkPriority::Live,
-        "bridge_scan" => WorkPriority::Catchup,
-        _ => WorkPriority::Watch,
     }
 }
 
@@ -2058,16 +1742,6 @@ fn find_transcript_path(
             None
         }
     }
-}
-
-#[cfg(test)]
-fn is_terminal_or_attention_phase(phase: &str) -> bool {
-    matches!(phase, "idle" | "needs_user" | "blocked")
-}
-
-#[cfg(test)]
-fn is_active_phase(phase: &str) -> bool {
-    matches!(phase, "thinking" | "running")
 }
 
 struct PreparedPathJobFile {
@@ -2492,33 +2166,6 @@ mod tests {
     }
 
     #[test]
-    fn test_live_local_work_pending_includes_active_transcript_polls() {
-        let scheduler = PathScheduler::new(4);
-        let deferred_retries = HashMap::new();
-        let transcript_catchups = Vec::new();
-        let mut active_polls = HashMap::new();
-        active_polls.insert(
-            PathBuf::from("/tmp/live.jsonl"),
-            ActiveTranscriptPoll {
-                due_at: Instant::now(),
-                expires_at: Instant::now() + Duration::from_secs(30),
-                provider: "codex",
-                session_id: None,
-                turn_id: None,
-                wake_reason: None,
-                file_len_hint: None,
-            },
-        );
-
-        assert!(live_local_work_pending(
-            &scheduler,
-            &deferred_retries,
-            &transcript_catchups,
-            &active_polls,
-        ));
-    }
-
-    #[test]
     fn test_runtime_truth_signature_ignores_observation_timestamps() {
         let mut first = empty_heartbeat_payload();
         first
@@ -2772,269 +2419,12 @@ mod tests {
     }
 
     #[test]
-    fn test_terminal_phase_schedules_immediate_and_delayed_catchups() {
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        let path = tmp.path().to_path_buf();
-        let mut catchups = Vec::new();
-        let mut active_polls = HashMap::new();
-
-        schedule_transcript_catchup(
-            &mut catchups,
-            &mut active_polls,
-            path.clone(),
-            "claude",
-            "needs_user",
-            "test",
-            123,
-            None,
-            true,
-            None,
-            None,
-            None,
-            None,
-        );
-
-        assert_eq!(catchups.len(), 3);
-        assert!(active_polls.is_empty());
-
-        let mut scheduler = PathScheduler::new(4);
-        drain_due_transcript_catchups(&mut scheduler, &mut catchups);
-
-        let job = scheduler
-            .pop_launchable()
-            .expect("immediate catch-up queued");
-        assert_eq!(job.path, path);
-        assert_eq!(job.provider, "claude");
-        assert_eq!(job.priority, WorkPriority::Watch);
-        assert_eq!(catchups.len(), 2, "delayed catch-ups remain queued");
-    }
-
-    #[test]
-    fn test_active_phase_schedules_single_catchup() {
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        let path = tmp.path().to_path_buf();
-        let mut catchups = Vec::new();
-        let mut active_polls = HashMap::new();
-
-        schedule_transcript_catchup(
-            &mut catchups,
-            &mut active_polls,
-            path.clone(),
-            "claude",
-            "thinking",
-            "test",
-            123,
-            None,
-            true,
-            None,
-            None,
-            None,
-            None,
-        );
-        schedule_transcript_catchup(
-            &mut catchups,
-            &mut active_polls,
-            path.clone(),
-            "claude",
-            "running",
-            "test",
-            124,
-            None,
-            true,
-            None,
-            None,
-            None,
-            None,
-        );
-
-        assert_eq!(catchups.len(), 1);
-        assert_eq!(active_polls.len(), 1);
-
-        let mut scheduler = PathScheduler::new(4);
-        drain_due_transcript_catchups(&mut scheduler, &mut catchups);
-
-        let job = scheduler.pop_launchable().expect("active catch-up queued");
-        assert_eq!(job.path, path);
-        assert_eq!(job.priority, WorkPriority::Watch);
-        assert_eq!(job.observation.source, "test");
-        assert_eq!(job.observation.observed_at_ms, 123);
-        assert!(catchups.is_empty());
-    }
-
-    #[test]
-    fn test_active_phase_does_not_grow_pending_catchups() {
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        let path = tmp.path().to_path_buf();
-        let mut catchups = Vec::new();
-        let mut active_polls = HashMap::new();
-
-        for _ in 0..20 {
-            schedule_transcript_catchup(
-                &mut catchups,
-                &mut active_polls,
-                path.clone(),
-                "claude",
-                "thinking",
-                "test",
-                123,
-                None,
-                true,
-                None,
-                None,
-                None,
-                None,
-            );
-        }
-
-        assert_eq!(catchups.len(), 1);
-        assert_eq!(active_polls.len(), 1);
-    }
-
-    #[test]
-    fn test_active_transcript_poll_enqueues_recurring_catchup() {
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        let path = tmp.path().to_path_buf();
-        let now = Instant::now();
-        let mut active_polls = HashMap::new();
-        active_polls.insert(
-            path.clone(),
-            ActiveTranscriptPoll {
-                due_at: now - Duration::from_secs(1),
-                expires_at: now + Duration::from_secs(60),
-                provider: "codex",
-                session_id: None,
-                turn_id: None,
-                wake_reason: None,
-                file_len_hint: None,
-            },
-        );
-
-        let mut scheduler = PathScheduler::new(4);
-        drain_due_active_transcript_polls(&mut scheduler, &mut active_polls);
-
-        let job = scheduler.pop_launchable().expect("active poll queued");
-        assert_eq!(job.path, path);
-        assert_eq!(job.provider, "codex");
-        assert_eq!(job.priority, WorkPriority::Live);
-        assert_eq!(active_polls.len(), 1);
-        assert!(active_polls[&path].due_at > now);
-    }
-
-    #[test]
-    fn test_active_transcript_poll_skips_path_already_in_flight() {
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        let path = tmp.path().to_path_buf();
-        let now = Instant::now();
-        let mut active_polls = HashMap::new();
-        active_polls.insert(
-            path.clone(),
-            ActiveTranscriptPoll {
-                due_at: now - Duration::from_secs(1),
-                expires_at: now + Duration::from_secs(60),
-                provider: "codex",
-                session_id: None,
-                turn_id: None,
-                wake_reason: None,
-                file_len_hint: None,
-            },
-        );
-
-        let mut scheduler = PathScheduler::new(4);
-        scheduler.enqueue(path.clone(), "codex", WorkPriority::Live);
-        let _in_flight = scheduler.pop_launchable().expect("job launched");
-
-        drain_due_active_transcript_polls(&mut scheduler, &mut active_polls);
-
-        assert!(
-            scheduler.pop_launchable().is_none(),
-            "active polling should not queue a rerun while the same path is already in flight"
-        );
-        assert_eq!(active_polls.len(), 1);
-        assert!(active_polls[&path].due_at > now);
-    }
-
-    #[test]
-    fn test_slow_path_job_backs_off_active_transcript_poll() {
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        let path = tmp.path().to_path_buf();
-        let now = Instant::now();
-        let mut active_polls = HashMap::new();
-        active_polls.insert(
-            path.clone(),
-            ActiveTranscriptPoll {
-                due_at: now + ACTIVE_TRANSCRIPT_POLL_INTERVAL,
-                expires_at: now + Duration::from_secs(60),
-                provider: "codex",
-                session_id: None,
-                turn_id: None,
-                wake_reason: None,
-                file_len_hint: None,
-            },
-        );
-
-        backoff_slow_active_transcript_poll(
-            &path,
-            ACTIVE_TRANSCRIPT_POLL_SLOW_THRESHOLD + Duration::from_millis(1),
-            &mut active_polls,
-        );
-
-        assert!(
-            active_polls[&path].due_at >= now + ACTIVE_TRANSCRIPT_POLL_SLOW_BACKOFF,
-            "slow active transcript jobs should not be immediately re-polled"
-        );
-    }
-
-    #[test]
-    fn test_wake_socket_active_phase_waits_for_poll() {
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        let path = tmp.path().to_path_buf();
-        let mut catchups = Vec::new();
-        let mut active_polls = HashMap::new();
-
-        schedule_transcript_catchup(
-            &mut catchups,
-            &mut active_polls,
-            path.clone(),
-            "codex",
-            "running",
-            "wake_socket",
-            123,
-            Some(125),
-            true,
-            Some("session-123".to_string()),
-            Some("turn-123".to_string()),
-            Some("turn_started".to_string()),
-            Some(456),
-        );
-
-        assert!(catchups.is_empty());
-        assert!(active_polls.contains_key(&path));
-        let mut scheduler = PathScheduler::new(4);
-        drain_due_active_transcript_polls(&mut scheduler, &mut active_polls);
-        let job = scheduler.pop_launchable().expect("wake active poll queued");
-        assert_eq!(job.path, path);
-        assert_eq!(job.priority, WorkPriority::Live);
-        assert_eq!(job.observation.source, "active_poll");
-    }
-
-    #[test]
     fn test_codex_bridge_observation_does_not_schedule_transcript_shipping() {
         let transcript = tempfile::NamedTempFile::new().unwrap();
         let observation =
             codex_bridge_observation(transcript.path(), None, None, "2026-05-01T00:00:00Z", true);
-        let mut catchups = Vec::new();
-        let mut active_polls = HashMap::new();
-        let mut terminal_marks = HashMap::new();
 
-        schedule_transcript_catchups_for_codex_observations(
-            &mut catchups,
-            &mut active_polls,
-            &mut terminal_marks,
-            &[observation],
-        );
-
-        assert!(catchups.is_empty());
-        assert!(active_polls.is_empty());
+        ignore_transcript_shipping_for_codex_observations(&[observation]);
     }
 
     #[test]
@@ -3047,20 +2437,8 @@ mod tests {
             "2026-05-01T00:00:00Z",
             true,
         );
-        let mut catchups = Vec::new();
-        let mut active_polls = HashMap::new();
-        let mut terminal_marks = HashMap::new();
 
-        schedule_transcript_catchups_for_codex_observations(
-            &mut catchups,
-            &mut active_polls,
-            &mut terminal_marks,
-            &[observation],
-        );
-
-        assert!(catchups.is_empty());
-        assert!(active_polls.is_empty());
-        assert!(terminal_marks.is_empty());
+        ignore_transcript_shipping_for_codex_observations(&[observation]);
 
         let repeated = codex_bridge_observation(
             transcript.path(),
@@ -3069,14 +2447,7 @@ mod tests {
             "2026-05-01T00:00:00Z",
             true,
         );
-        schedule_transcript_catchups_for_codex_observations(
-            &mut catchups,
-            &mut active_polls,
-            &mut terminal_marks,
-            &[repeated],
-        );
-        assert!(catchups.is_empty());
-        assert!(terminal_marks.is_empty());
+        ignore_transcript_shipping_for_codex_observations(&[repeated]);
     }
 
     #[test]
@@ -3084,89 +2455,8 @@ mod tests {
         let transcript = tempfile::NamedTempFile::new().unwrap();
         let observation =
             codex_bridge_observation(transcript.path(), None, None, "2026-05-01T00:00:00Z", false);
-        let mut catchups = Vec::new();
-        let mut active_polls = HashMap::new();
-        let mut terminal_marks = HashMap::new();
 
-        schedule_transcript_catchups_for_codex_observations(
-            &mut catchups,
-            &mut active_polls,
-            &mut terminal_marks,
-            &[observation],
-        );
-
-        assert!(catchups.is_empty());
-        assert!(active_polls.is_empty());
-    }
-
-    #[test]
-    fn test_drain_transcript_catchups_leaves_future_entries() {
-        let ready = tempfile::NamedTempFile::new().unwrap();
-        let later = tempfile::NamedTempFile::new().unwrap();
-        let now = Instant::now();
-        let mut catchups = vec![
-            TranscriptCatchup {
-                due_at: now - Duration::from_secs(1),
-                path: ready.path().to_path_buf(),
-                provider: "claude",
-                observation_source: "test",
-                observed_at_ms: 123,
-                wake_received_at_ms: None,
-                session_id: None,
-                turn_id: None,
-                wake_reason: None,
-                file_len_hint: None,
-            },
-            TranscriptCatchup {
-                due_at: now + Duration::from_secs(30),
-                path: later.path().to_path_buf(),
-                provider: "claude",
-                observation_source: "test",
-                observed_at_ms: 124,
-                wake_received_at_ms: None,
-                session_id: None,
-                turn_id: None,
-                wake_reason: None,
-                file_len_hint: None,
-            },
-        ];
-
-        let mut scheduler = PathScheduler::new(4);
-        drain_due_transcript_catchups(&mut scheduler, &mut catchups);
-
-        let job = scheduler.pop_launchable().expect("ready catch-up queued");
-        assert_eq!(job.path, ready.path());
-        assert_eq!(job.priority, WorkPriority::Watch);
-        assert_eq!(job.observation.source, "test");
-        assert_eq!(job.observation.observed_at_ms, 123);
-        assert_eq!(catchups.len(), 1);
-        assert_eq!(catchups[0].path, later.path());
-    }
-
-    #[test]
-    fn test_legacy_outbox_signal_catchup_does_not_use_live_priority() {
-        let ready = tempfile::NamedTempFile::new().unwrap();
-        let now = Instant::now();
-        let mut catchups = vec![TranscriptCatchup {
-            due_at: now - Duration::from_secs(1),
-            path: ready.path().to_path_buf(),
-            provider: "codex",
-            observation_source: "outbox_signal",
-            observed_at_ms: 123,
-            wake_received_at_ms: None,
-            session_id: None,
-            turn_id: None,
-            wake_reason: None,
-            file_len_hint: None,
-        }];
-
-        let mut scheduler = PathScheduler::new(4);
-        drain_due_transcript_catchups(&mut scheduler, &mut catchups);
-
-        let job = scheduler.pop_launchable().expect("outbox catch-up queued");
-        assert_eq!(job.path, ready.path());
-        assert_eq!(job.priority, WorkPriority::Watch);
-        assert_eq!(job.observation.source, "outbox_signal");
+        ignore_transcript_shipping_for_codex_observations(&[observation]);
     }
 
     #[test]
@@ -3192,91 +2482,6 @@ mod tests {
         assert!(second.is_empty());
         assert_eq!(third.len(), 1);
         assert_eq!(first[0].transcript_path.as_ref(), Some(&transcript_path));
-    }
-
-    #[test]
-    fn test_wake_socket_catchup_replaces_pending_outbox_catchup() {
-        let transcript = tempfile::NamedTempFile::new().unwrap();
-        let now = Instant::now();
-        let mut catchups = vec![TranscriptCatchup {
-            due_at: now + Duration::from_secs(30),
-            path: transcript.path().to_path_buf(),
-            provider: "codex",
-            observation_source: "outbox_signal",
-            observed_at_ms: 100,
-            wake_received_at_ms: None,
-            session_id: None,
-            turn_id: None,
-            wake_reason: None,
-            file_len_hint: None,
-        }];
-        let mut active_polls = HashMap::new();
-
-        schedule_transcript_catchup(
-            &mut catchups,
-            &mut active_polls,
-            transcript.path().to_path_buf(),
-            "codex",
-            "running",
-            "wake_socket",
-            200,
-            Some(205),
-            true,
-            Some("session-123".to_string()),
-            Some("turn-123".to_string()),
-            Some("progress".to_string()),
-            Some(456),
-        );
-
-        assert_eq!(catchups.len(), 1);
-        assert_eq!(catchups[0].observation_source, "wake_socket");
-        assert_eq!(catchups[0].observed_at_ms, 200);
-        assert_eq!(catchups[0].wake_received_at_ms, Some(205));
-        assert_eq!(catchups[0].session_id.as_deref(), Some("session-123"));
-        assert_eq!(catchups[0].turn_id.as_deref(), Some("turn-123"));
-        assert_eq!(catchups[0].wake_reason.as_deref(), Some("progress"));
-        assert_eq!(catchups[0].file_len_hint, Some(456));
-    }
-
-    #[test]
-    fn test_outbox_catchup_does_not_replace_pending_wake_socket_catchup() {
-        let transcript = tempfile::NamedTempFile::new().unwrap();
-        let now = Instant::now();
-        let mut catchups = vec![TranscriptCatchup {
-            due_at: now,
-            path: transcript.path().to_path_buf(),
-            provider: "codex",
-            observation_source: "wake_socket",
-            observed_at_ms: 100,
-            wake_received_at_ms: Some(105),
-            session_id: Some("session-123".to_string()),
-            turn_id: Some("turn-123".to_string()),
-            wake_reason: Some("progress".to_string()),
-            file_len_hint: Some(456),
-        }];
-        let mut active_polls = HashMap::new();
-
-        schedule_transcript_catchup(
-            &mut catchups,
-            &mut active_polls,
-            transcript.path().to_path_buf(),
-            "codex",
-            "running",
-            "outbox_signal",
-            200,
-            None,
-            true,
-            None,
-            None,
-            None,
-            None,
-        );
-
-        assert_eq!(catchups.len(), 1);
-        assert_eq!(catchups[0].observation_source, "wake_socket");
-        assert_eq!(catchups[0].observed_at_ms, 100);
-        assert_eq!(catchups[0].session_id.as_deref(), Some("session-123"));
-        assert_eq!(catchups[0].file_len_hint, Some(456));
     }
 
     #[test]
@@ -3353,12 +2558,8 @@ mod tests {
             .set_offset(&path, 100, "sess-signal", "sess-signal", "claude")
             .unwrap();
 
-        let mut catchups = Vec::new();
-        let mut active_polls = HashMap::new();
-        schedule_transcript_catchups_for_signals(
+        ignore_transcript_shipping_for_signals(
             &conn,
-            &mut catchups,
-            &mut active_polls,
             vec![outbox::DrainedPresenceSignal {
                 session_id: "sess-signal".to_string(),
                 provider: "claude".to_string(),
@@ -3367,9 +2568,6 @@ mod tests {
                 transcript_path: None,
             }],
         );
-
-        assert!(catchups.is_empty());
-        assert!(active_polls.is_empty());
     }
 
     #[test]
@@ -3378,12 +2576,8 @@ mod tests {
         let transcript = tempfile::NamedTempFile::new().unwrap();
         let conn = open_db(Some(db.path())).unwrap();
 
-        let mut catchups = Vec::new();
-        let mut active_polls = HashMap::new();
-        schedule_transcript_catchups_for_signals(
+        ignore_transcript_shipping_for_signals(
             &conn,
-            &mut catchups,
-            &mut active_polls,
             vec![outbox::DrainedPresenceSignal {
                 session_id: "sess-hook-path".to_string(),
                 provider: "codex".to_string(),
@@ -3391,12 +2585,6 @@ mod tests {
                 observed_at: chrono::Utc::now(),
                 transcript_path: Some(transcript.path().to_path_buf()),
             }],
-        );
-
-        assert!(catchups.is_empty());
-        assert!(
-            active_polls.is_empty(),
-            "hook outbox signals must not schedule transcript shipping"
         );
     }
 
@@ -3411,12 +2599,8 @@ mod tests {
             .bind(&canonical.to_string_lossy(), managed_session_id, "codex")
             .unwrap();
 
-        let mut catchups = Vec::new();
-        let mut active_polls = HashMap::new();
-        schedule_transcript_catchups_for_signals(
+        ignore_transcript_shipping_for_signals(
             &conn,
-            &mut catchups,
-            &mut active_polls,
             vec![outbox::DrainedPresenceSignal {
                 session_id: managed_session_id.to_string(),
                 provider: "codex".to_string(),
@@ -3425,24 +2609,14 @@ mod tests {
                 transcript_path: Some(transcript.path().to_path_buf()),
             }],
         );
-
-        assert!(catchups.is_empty());
-        assert!(
-            active_polls.is_empty(),
-            "hook outbox signals must not arm transcript shipping"
-        );
     }
 
     #[test]
     fn test_transcript_wake_does_not_start_transcript_shipping() {
         let transcript = tempfile::NamedTempFile::new().unwrap();
-        let mut catchups = Vec::new();
-        let mut active_polls = HashMap::new();
         let mut latest_wakes = HashMap::new();
 
-        schedule_transcript_catchup_for_wake(
-            &mut catchups,
-            &mut active_polls,
+        record_transcript_wake_hint(
             &mut latest_wakes,
             TranscriptWakeSignal {
                 provider: "codex".to_string(),
@@ -3457,21 +2631,15 @@ mod tests {
             },
         );
 
-        assert!(catchups.is_empty());
-        assert!(active_polls.is_empty());
         assert_eq!(latest_wakes.get(transcript.path()), Some(&123));
     }
 
     #[test]
     fn test_progress_wake_records_hint_without_shipping() {
         let transcript = tempfile::NamedTempFile::new().unwrap();
-        let mut catchups = Vec::new();
-        let mut active_polls = HashMap::new();
         let mut latest_wakes = HashMap::new();
 
-        schedule_transcript_catchup_for_wake(
-            &mut catchups,
-            &mut active_polls,
+        record_transcript_wake_hint(
             &mut latest_wakes,
             TranscriptWakeSignal {
                 provider: "codex".to_string(),
@@ -3486,21 +2654,15 @@ mod tests {
             },
         );
 
-        assert!(catchups.is_empty());
-        assert!(active_polls.is_empty());
         assert_eq!(latest_wakes.get(transcript.path()), Some(&123));
     }
 
     #[test]
     fn test_stale_active_wake_does_not_replace_newer_wake_hint() {
         let transcript = tempfile::NamedTempFile::new().unwrap();
-        let mut catchups = Vec::new();
-        let mut active_polls = HashMap::new();
         let mut latest_wakes = HashMap::new();
 
-        schedule_transcript_catchup_for_wake(
-            &mut catchups,
-            &mut active_polls,
+        record_transcript_wake_hint(
             &mut latest_wakes,
             TranscriptWakeSignal {
                 provider: "codex".to_string(),
@@ -3515,9 +2677,7 @@ mod tests {
             },
         );
 
-        schedule_transcript_catchup_for_wake(
-            &mut catchups,
-            &mut active_polls,
+        record_transcript_wake_hint(
             &mut latest_wakes,
             TranscriptWakeSignal {
                 provider: "codex".to_string(),
@@ -3532,8 +2692,6 @@ mod tests {
             },
         );
 
-        assert!(catchups.is_empty());
-        assert!(active_polls.is_empty());
         assert_eq!(latest_wakes.get(transcript.path()), Some(&200));
     }
 
@@ -3575,56 +2733,7 @@ mod tests {
     }
 
     #[test]
-    fn test_terminal_outbox_signal_does_not_replace_wake_catchup() {
-        let transcript = tempfile::NamedTempFile::new().unwrap();
-        let path = transcript.path().to_path_buf();
-        let mut catchups = Vec::new();
-        let mut active_polls = HashMap::new();
-
-        schedule_transcript_catchup(
-            &mut catchups,
-            &mut active_polls,
-            path.clone(),
-            "codex",
-            "idle",
-            "wake_socket",
-            123,
-            Some(124),
-            true,
-            Some("session-123".to_string()),
-            Some("turn-123".to_string()),
-            Some("turn_completed".to_string()),
-            Some(456),
-        );
-        schedule_transcript_catchup(
-            &mut catchups,
-            &mut active_polls,
-            path,
-            "codex",
-            "idle",
-            "outbox_signal",
-            130,
-            None,
-            true,
-            None,
-            None,
-            None,
-            None,
-        );
-
-        let mut scheduler = PathScheduler::new(4);
-        drain_due_transcript_catchups(&mut scheduler, &mut catchups);
-        let job = scheduler.pop_launchable().expect("terminal wake queued");
-        assert_eq!(job.observation.source, "wake_socket");
-        assert_eq!(
-            job.observation.wake_reason.as_deref(),
-            Some("turn_completed")
-        );
-        assert_eq!(job.observation.session_id.as_deref(), Some("session-123"));
-    }
-
-    #[test]
-    fn test_unknown_provider_signal_does_not_schedule_catchup() {
+    fn test_unknown_provider_signal_does_not_schedule_transcript_shipping() {
         let db = tempfile::NamedTempFile::new().unwrap();
         let transcript = tempfile::NamedTempFile::new().unwrap();
         let conn = open_db(Some(db.path())).unwrap();
@@ -3634,12 +2743,8 @@ mod tests {
             .set_offset(&path, 100, "sess-unknown", "sess-unknown", "claude")
             .unwrap();
 
-        let mut catchups = Vec::new();
-        let mut active_polls = HashMap::new();
-        schedule_transcript_catchups_for_signals(
+        ignore_transcript_shipping_for_signals(
             &conn,
-            &mut catchups,
-            &mut active_polls,
             vec![outbox::DrainedPresenceSignal {
                 session_id: "sess-unknown".to_string(),
                 provider: "unknown-provider".to_string(),
@@ -3648,12 +2753,10 @@ mod tests {
                 transcript_path: None,
             }],
         );
-
-        assert!(catchups.is_empty());
     }
 
     #[test]
-    fn test_presence_catchup_does_not_ship_bound_transcript_tail() {
+    fn test_presence_signal_does_not_ship_bound_transcript_tail() {
         let db = tempfile::NamedTempFile::new().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let transcript = dir
@@ -3678,12 +2781,8 @@ mod tests {
             .bind(&canonical, managed_session_id, "claude")
             .unwrap();
 
-        let mut catchups = Vec::new();
-        let mut active_polls = HashMap::new();
-        schedule_transcript_catchups_for_signals(
+        ignore_transcript_shipping_for_signals(
             &conn,
-            &mut catchups,
-            &mut active_polls,
             vec![outbox::DrainedPresenceSignal {
                 session_id: managed_session_id.to_string(),
                 provider: "claude".to_string(),
@@ -3692,8 +2791,6 @@ mod tests {
                 transcript_path: None,
             }],
         );
-        assert!(catchups.is_empty());
-        assert!(active_polls.is_empty());
         assert_eq!(FileState::new(&conn).get_offset(&canonical).unwrap_or(0), 0);
         assert_eq!(
             crate::state::session_binding::SessionBinding::new(&conn)
@@ -3792,7 +2889,7 @@ mod tests {
             LIVE_LOCAL_RETRY_DELAY
         );
         assert_eq!(
-            local_retry_delay(WorkPriority::Watch),
+            local_retry_delay(WorkPriority::Scan),
             Duration::from_secs(LOCAL_RETRY_DELAY_SECS)
         );
     }
