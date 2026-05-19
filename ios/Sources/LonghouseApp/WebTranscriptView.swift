@@ -49,7 +49,7 @@ struct WebTranscriptView: UIViewRepresentable {
         return data.base64EncodedString()
     }
 
-    private static func payloadItems(
+    nonisolated static func payloadItems(
         timelineItems: [TimelineItem],
         submittedInputs: [SubmittedInput],
         sessionEnded: Bool
@@ -57,11 +57,38 @@ struct WebTranscriptView: UIViewRepresentable {
         var rows = timelineItems.map { item in
             payloadItem(item, sessionEnded: sessionEnded)
         }
-        rows.append(contentsOf: submittedInputs.map(payloadSubmittedInput))
+        let durableUserInputs = durableUserInputIdentities(timelineItems)
+        rows.append(contentsOf: submittedInputs
+            .filter { !durableUserInputs.contains($0) }
+            .map(payloadSubmittedInput)
+        )
         return rows
     }
 
-    private static func payloadItem(_ item: TimelineItem, sessionEnded: Bool) -> WebTranscriptPayloadItem {
+    private nonisolated static func durableUserInputIdentities(_ timelineItems: [TimelineItem]) -> DurableUserInputIdentities {
+        var sessionInputIds = Set<Int>()
+        var clientRequestIds = Set<String>()
+
+        for item in timelineItems {
+            guard case .user(let event) = item,
+                  event.isHeadBranch,
+                  let origin = event.inputOrigin else { continue }
+            if let sessionInputId = origin.sessionInputId {
+                sessionInputIds.insert(sessionInputId)
+            }
+            if let clientRequestId = origin.clientRequestId,
+               !clientRequestId.isEmpty {
+                clientRequestIds.insert(clientRequestId)
+            }
+        }
+
+        return DurableUserInputIdentities(
+            sessionInputIds: sessionInputIds,
+            clientRequestIds: clientRequestIds
+        )
+    }
+
+    private nonisolated static func payloadItem(_ item: TimelineItem, sessionEnded: Bool) -> WebTranscriptPayloadItem {
         switch item {
         case .user(let event):
             return messagePayload(id: item.id, role: "user", text: event.contentText ?? "", origin: event.inputOrigin?.authoredVia)
@@ -76,7 +103,7 @@ struct WebTranscriptView: UIViewRepresentable {
         }
     }
 
-    private static func messagePayload(
+    private nonisolated static func messagePayload(
         id: String,
         role: String,
         text: String,
@@ -102,7 +129,7 @@ struct WebTranscriptView: UIViewRepresentable {
         )
     }
 
-    private static func payloadSubmittedInput(_ input: SubmittedInput) -> WebTranscriptPayloadItem {
+    private nonisolated static func payloadSubmittedInput(_ input: SubmittedInput) -> WebTranscriptPayloadItem {
         WebTranscriptPayloadItem(
             id: input.id,
             kind: "submitted",
@@ -121,7 +148,7 @@ struct WebTranscriptView: UIViewRepresentable {
         )
     }
 
-    private static func toolPayload(
+    private nonisolated static func toolPayload(
         id: String,
         call: SessionEvent,
         result: SessionEvent?,
@@ -159,7 +186,7 @@ struct WebTranscriptView: UIViewRepresentable {
         )
     }
 
-    private static func passiveGroupPayload(
+    private nonisolated static func passiveGroupPayload(
         id: String,
         calls: [PassiveCall],
         sessionEnded: Bool
@@ -204,7 +231,7 @@ struct WebTranscriptView: UIViewRepresentable {
         )
     }
 
-    private static func prettyJSON(_ value: [String: JSONValue]?) -> String? {
+    private nonisolated static func prettyJSON(_ value: [String: JSONValue]?) -> String? {
         guard let value, !value.isEmpty else { return nil }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -212,14 +239,14 @@ struct WebTranscriptView: UIViewRepresentable {
         return String(data: data, encoding: .utf8)
     }
 
-    private static func truncatedOutput(_ text: String?) -> String? {
+    private nonisolated static func truncatedOutput(_ text: String?) -> String? {
         guard let text, !text.isEmpty else { return nil }
         let maxCharacters = 12_000
         guard text.count > maxCharacters else { return text }
         return String(text.prefix(maxCharacters)) + "\n... truncated in iOS transcript ..."
     }
 
-    private static func submittedStatus(_ phase: SubmittedInputPhase, lastError: String?) -> String {
+    private nonisolated static func submittedStatus(_ phase: SubmittedInputPhase, lastError: String?) -> String {
         switch phase {
         case .submitting: return "Sending..."
         case .sent: return "Sent"
@@ -265,12 +292,25 @@ struct WebTranscriptView: UIViewRepresentable {
     }
 }
 
-private struct WebTranscriptPayload: Encodable {
+struct DurableUserInputIdentities {
+    let sessionInputIds: Set<Int>
+    let clientRequestIds: Set<String>
+
+    func contains(_ input: SubmittedInput) -> Bool {
+        if let serverInputId = input.serverInputId,
+           sessionInputIds.contains(serverInputId) {
+            return true
+        }
+        return clientRequestIds.contains(input.clientRequestId)
+    }
+}
+
+struct WebTranscriptPayload: Encodable {
     let errorMessage: String?
     let items: [WebTranscriptPayloadItem]
 }
 
-private struct WebTranscriptPayloadItem: Encodable {
+struct WebTranscriptPayloadItem: Encodable {
     let id: String
     let kind: String
     let role: String?
@@ -287,7 +327,7 @@ private struct WebTranscriptPayloadItem: Encodable {
     let origin: String?
 }
 
-private struct WebTranscriptToolCall: Encodable {
+struct WebTranscriptToolCall: Encodable {
     let title: String
     let subtitle: String
     let status: String
