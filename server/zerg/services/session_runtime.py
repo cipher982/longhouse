@@ -599,10 +599,17 @@ def runtime_event_from_observation(observation) -> RuntimeEventIngest | None:
         return None
     payload = _observation_payload(observation)
     kind = str(payload.get("kind") or "").strip()
-    if kind not in {"phase_signal", "progress_signal", "terminal_signal", "binding_signal"}:
-        raise ValueError(f"runtime_signal observation {observation.observation_id} has invalid kind {kind!r}")
+    valid_kinds = {"phase_signal", "progress_signal", "terminal_signal", "binding_signal"}
+    if kind not in valid_kinds:
+        raise ValueError(
+            f"runtime_signal observation {observation.observation_id} has invalid kind {kind!r}"
+        )
     return RuntimeEventIngest(
-        runtime_key=observation.runtime_key or runtime_key_for_session(observation.provider, str(observation.session_id or "unknown")),
+        runtime_key=observation.runtime_key
+        or runtime_key_for_session(
+            observation.provider,
+            str(observation.session_id or "unknown"),
+        ),
         session_id=observation.session_id,
         provider=observation.provider,
         device_id=observation.device_id,
@@ -763,9 +770,14 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
             # Blocked-with-no-tool means "still blocked on the same tool as
             # last time" — keep the prior active_tool instead of dropping
             # it. Running signals always carry the tool explicitly.
-            next_active_tool = event.tool_name or (state.active_tool if next_phase == "blocked" else None)
+            next_active_tool = event.tool_name or (
+                state.active_tool if next_phase == "blocked" else None
+            )
         phase_changed = state.phase != next_phase
-        active_tool_changed = next_phase in {"running", "blocked"} and (state.active_tool or None) != (next_active_tool or None)
+        active_tool_changed = (
+            next_phase in {"running", "blocked"}
+            and (state.active_tool or None) != (next_active_tool or None)
+        )
         if phase_changed or active_tool_changed:
             if phase_changed and _phase_reanchors(state.phase, next_phase):
                 state.timeline_anchor_at = occurred_at
@@ -780,7 +792,11 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
         state.last_runtime_signal_at = occurred_at
         state.last_live_at = occurred_at
         freshness_ms = _phase_signal_freshness_ms(event, next_phase)
-        state.freshness_expires_at = occurred_at + timedelta(milliseconds=freshness_ms) if freshness_ms is not None else None
+        state.freshness_expires_at = (
+            occurred_at + timedelta(milliseconds=freshness_ms)
+            if freshness_ms is not None
+            else None
+        )
         state.terminal_state = None
         state.terminal_reason = None
         state.terminal_source = None
@@ -796,6 +812,17 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
             return "ignored"
         state.last_progress_at = occurred_at
         state.timeline_anchor_at = occurred_at
+        progress_kind = str((event.payload or {}).get("progress_kind") or "").strip()
+        if (
+            state.terminal_state is None
+            and state.phase in ATTENTION_PHASES
+            and progress_kind == "transcript_append"
+        ):
+            state.phase = "idle"
+            state.active_tool = None
+            state.freshness_expires_at = None
+            state.phase_started_at = occurred_at
+            state.phase_source = "progress"
         if state.terminal_state is not None and (
             normalize_utc(state.terminal_at) is None or occurred_at >= normalize_utc(state.terminal_at)
         ):
@@ -812,13 +839,20 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
             state.phase_source = "progress"
 
     elif event.kind == "terminal_signal":
-        terminal_state = str((event.payload or {}).get("terminal_state") or "finished").strip() or "finished"
+        terminal_state = (
+            str((event.payload or {}).get("terminal_state") or "finished").strip()
+            or "finished"
+        )
         latest_terminal_related_at = _latest_timestamp(
             state.last_runtime_signal_at,
             state.last_progress_at,
             state.terminal_at,
         )
-        if latest_terminal_related_at is not None and occurred_at < latest_terminal_related_at and terminal_state != "session_ended":
+        if (
+            latest_terminal_related_at is not None
+            and occurred_at < latest_terminal_related_at
+            and terminal_state != "session_ended"
+        ):
             return "ignored"
         terminal_reason = str((event.payload or {}).get("terminal_reason") or "").strip() or None
         if terminal_reason is None and terminal_state in {"process_gone", "host_expired", "user_closed"}:
