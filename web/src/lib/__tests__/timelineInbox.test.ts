@@ -123,4 +123,54 @@ describe("buildInboxLayout", () => {
     expect(layout.closed).toEqual([]);
     expect(layout.closedCount).toBe(0);
   });
+
+  it("applies a repo order override on top of default sort", () => {
+    const cards = [
+      makeCard({ id: "a", repo: "alpha", startedAt: "2026-05-18T10:00:00Z" }),
+      makeCard({ id: "b", repo: "beta", startedAt: "2026-05-18T11:00:00Z" }),
+      makeCard({ id: "c", repo: "gamma", startedAt: "2026-05-18T12:00:00Z" }),
+    ];
+
+    // Default order would be gamma > beta > alpha. Override pulls alpha to top.
+    const layout = buildInboxLayout(cards, {
+      repoOrder: ["alpha"],
+      sessionOrder: {},
+    });
+
+    expect(layout.active.map((g) => g.repo)).toEqual(["alpha", "gamma", "beta"]);
+  });
+
+  it("applies a session order override within a repo", () => {
+    const cards = [
+      makeCard({ id: "first", repo: "zerg", startedAt: "2026-05-18T12:00:00Z" }),
+      makeCard({ id: "second", repo: "zerg", startedAt: "2026-05-18T11:00:00Z" }),
+      makeCard({ id: "third", repo: "zerg", startedAt: "2026-05-18T10:00:00Z" }),
+    ];
+
+    // Default: first, second, third. Override pins third to top.
+    const layout = buildInboxLayout(cards, {
+      repoOrder: [],
+      sessionOrder: { zerg: ["third"] },
+    });
+
+    expect(layout.active[0].sessions.map((s) => s.thread_id)).toEqual([
+      "third",
+      "first",
+      "second",
+    ]);
+  });
+
+  it("ignores override entries for repos/sessions that no longer exist", () => {
+    const cards = [
+      makeCard({ id: "a", repo: "zerg", startedAt: "2026-05-18T12:00:00Z" }),
+    ];
+
+    const layout = buildInboxLayout(cards, {
+      repoOrder: ["ghost-repo", "zerg"],
+      sessionOrder: { zerg: ["ghost-session", "a"] },
+    });
+
+    expect(layout.active.map((g) => g.repo)).toEqual(["zerg"]);
+    expect(layout.active[0].sessions.map((s) => s.thread_id)).toEqual(["a"]);
+  });
 });
