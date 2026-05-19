@@ -653,12 +653,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     let events = watcher.collect_batch_after(first_event, config.flush_interval).await;
                     for event in events {
                         if let Some(provider) = discovery::provider_for_path(&event.path, &providers) {
-                            scheduler.enqueue_observed(
+                            scheduler.enqueue_observed_window(
                                 event.path,
                                 provider,
                                 WorkPriority::Live,
                                 "fsevent",
                                 event.observed_at_ms,
+                                event.latest_observed_at_ms,
                             );
                         } else {
                             tracing::debug!(
@@ -1667,6 +1668,7 @@ fn drain_due_transcript_catchups(
                 ObservationTrace {
                     source: catchup.observation_source,
                     observed_at_ms: catchup.observed_at_ms,
+                    latest_observed_at_ms: None,
                     wake_received_at_ms: catchup.wake_received_at_ms,
                     enqueued_at_ms: 0,
                     session_id: catchup.session_id,
@@ -1714,6 +1716,7 @@ fn drain_due_active_transcript_polls(
             ObservationTrace {
                 source: "active_poll",
                 observed_at_ms: now_ms(),
+                latest_observed_at_ms: None,
                 wake_received_at_ms: None,
                 enqueued_at_ms: 0,
                 session_id: poll.session_id.clone(),
@@ -2275,6 +2278,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                 work_context: work_context(result.job.priority),
                 observation_source: result.job.observation.source,
                 observed_at_ms: result.job.observation.observed_at_ms,
+                latest_observed_at_ms: result.job.observation.latest_observed_at_ms,
                 wake_received_at_ms: result.job.observation.wake_received_at_ms,
                 enqueued_at_ms: result.job.observation.enqueued_at_ms,
                 job_started_at_ms,
@@ -3713,6 +3717,7 @@ mod tests {
                     observation: ObservationTrace {
                         source: "wake_socket",
                         observed_at_ms: 100,
+                        latest_observed_at_ms: None,
                         wake_received_at_ms: Some(101),
                         enqueued_at_ms: 0,
                         session_id: Some("session-live".to_string()),
@@ -3731,6 +3736,7 @@ mod tests {
                     observation: ObservationTrace {
                         source: "local_retry",
                         observed_at_ms: 200,
+                        latest_observed_at_ms: None,
                         wake_received_at_ms: None,
                         enqueued_at_ms: 0,
                         session_id: None,

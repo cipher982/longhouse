@@ -21,6 +21,7 @@ pub struct ShipTraceContext {
     pub work_context: &'static str,
     pub observation_source: &'static str,
     pub observed_at_ms: i64,
+    pub latest_observed_at_ms: Option<i64>,
     pub wake_received_at_ms: Option<i64>,
     pub enqueued_at_ms: i64,
     pub job_started_at_ms: i64,

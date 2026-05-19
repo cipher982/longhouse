@@ -49,6 +49,7 @@ pub struct SessionWatcher {
 pub struct WatcherEvent {
     pub path: PathBuf,
     pub observed_at_ms: i64,
+    pub latest_observed_at_ms: i64,
 }
 
 impl SessionWatcher {
@@ -98,9 +99,11 @@ impl SessionWatcher {
 
                     // Bounded send. If the OS watcher floods, reconciliation
                     // scan repairs missed files.
+                    let observed_at_ms = chrono::Utc::now().timestamp_millis();
                     let watcher_event = WatcherEvent {
                         path,
-                        observed_at_ms: chrono::Utc::now().timestamp_millis(),
+                        observed_at_ms,
+                        latest_observed_at_ms: observed_at_ms,
                     };
                     if watcher_tx.try_send(watcher_event).is_err() {
                         let n =
@@ -157,27 +160,40 @@ impl SessionWatcher {
         first: WatcherEvent,
         flush_interval: Duration,
     ) -> Vec<WatcherEvent> {
-        let mut batch: HashMap<PathBuf, i64> = HashMap::new();
-        batch.insert(first.path, first.observed_at_ms);
+        let mut batch: HashMap<PathBuf, (i64, i64)> = HashMap::new();
+        batch.insert(
+            first.path,
+            (first.observed_at_ms, first.latest_observed_at_ms),
+        );
 
         tokio::time::sleep(flush_interval).await;
         while let Ok(event) = self.rx.try_recv() {
             batch
                 .entry(event.path)
-                .and_modify(|observed| *observed = (*observed).min(event.observed_at_ms))
-                .or_insert(event.observed_at_ms);
+                .and_modify(|(first_observed, latest_observed)| {
+                    *first_observed = (*first_observed).min(event.observed_at_ms);
+                    *latest_observed = (*latest_observed).max(event.latest_observed_at_ms);
+                })
+                .or_insert((event.observed_at_ms, event.latest_observed_at_ms));
         }
 
-        let mut events: Vec<_> = batch
-            .into_iter()
-            .map(|(path, observed_at_ms)| WatcherEvent {
+        coalesced_batch_to_events(batch)
+    }
+}
+
+fn coalesced_batch_to_events(batch: HashMap<PathBuf, (i64, i64)>) -> Vec<WatcherEvent> {
+    let mut events: Vec<_> = batch
+        .into_iter()
+        .map(
+            |(path, (observed_at_ms, latest_observed_at_ms))| WatcherEvent {
                 path,
                 observed_at_ms,
-            })
-            .collect();
-        events.sort_by(|a, b| a.path.cmp(&b.path));
-        events
-    }
+                latest_observed_at_ms,
+            },
+        )
+        .collect();
+    events.sort_by(|a, b| a.path.cmp(&b.path));
+    events
 }
 
 #[cfg(test)]
@@ -194,11 +210,13 @@ mod tests {
         tx.try_send(WatcherEvent {
             path: PathBuf::from("/a"),
             observed_at_ms: 1,
+            latest_observed_at_ms: 1,
         })
         .unwrap();
         tx.try_send(WatcherEvent {
             path: PathBuf::from("/b"),
             observed_at_ms: 2,
+            latest_observed_at_ms: 2,
         })
         .unwrap();
 
@@ -206,6 +224,7 @@ mod tests {
         let result = tx.try_send(WatcherEvent {
             path: PathBuf::from("/c"),
             observed_at_ms: 3,
+            latest_observed_at_ms: 3,
         });
         assert!(result.is_err(), "Full channel should reject send");
 
@@ -214,19 +233,46 @@ mod tests {
             rx.try_recv().unwrap(),
             WatcherEvent {
                 path: PathBuf::from("/a"),
-                observed_at_ms: 1
+                observed_at_ms: 1,
+                latest_observed_at_ms: 1
             }
         );
         assert_eq!(
             rx.try_recv().unwrap(),
             WatcherEvent {
                 path: PathBuf::from("/b"),
-                observed_at_ms: 2
+                observed_at_ms: 2,
+                latest_observed_at_ms: 2
             }
         );
         assert!(
             rx.try_recv().is_err(),
             "Channel should be empty after drain"
+        );
+    }
+
+    #[test]
+    fn test_coalesced_batch_preserves_first_and_latest_observed_times() {
+        let mut batch = HashMap::new();
+        batch.insert(PathBuf::from("/b.jsonl"), (2, 5));
+        batch.insert(PathBuf::from("/a.jsonl"), (1, 9));
+
+        let events = coalesced_batch_to_events(batch);
+
+        assert_eq!(
+            events,
+            vec![
+                WatcherEvent {
+                    path: PathBuf::from("/a.jsonl"),
+                    observed_at_ms: 1,
+                    latest_observed_at_ms: 9,
+                },
+                WatcherEvent {
+                    path: PathBuf::from("/b.jsonl"),
+                    observed_at_ms: 2,
+                    latest_observed_at_ms: 5,
+                },
+            ]
         );
     }
 }
