@@ -76,15 +76,16 @@ struct WebTranscriptView: UIViewRepresentable {
     }
 
     private static func messagePayload(id: String, role: String, text: String) -> WebTranscriptPayloadItem {
-        let collapsed = TranscriptTextPolicy.shouldCollapseMessage(text)
+        let displayText = role == "user" ? ClaudeChannelText.stripWrapper(text) : text
+        let collapsed = TranscriptTextPolicy.shouldCollapseMessage(displayText)
         return WebTranscriptPayloadItem(
             id: id,
             kind: "message",
             role: role,
             title: nil,
             subtitle: nil,
-            body: TranscriptTextPolicy.visibleMessage(text, expanded: false),
-            fullBody: collapsed ? text : nil,
+            body: TranscriptTextPolicy.visibleMessage(displayText, expanded: false),
+            fullBody: collapsed ? displayText : nil,
             collapsed: collapsed,
             status: nil,
             duration: nil,

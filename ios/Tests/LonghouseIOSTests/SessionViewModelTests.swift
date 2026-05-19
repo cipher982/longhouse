@@ -221,7 +221,45 @@ struct SessionViewModelTests {
         #expect(model.submittedInputs.first?.serverInputId == 11)
     }
 
-    private func makeWorkspace(eventId: Int, content: String) throws -> SessionWorkspaceResponse {
+    @Test
+    func claudeChannelWrapperIsStrippedForDisplayText() {
+        #expect(
+            ClaudeChannelText.stripWrapper("<channel name=\"commentary\">\ncontinue\n</channel>")
+                == "continue"
+        )
+        #expect(ClaudeChannelText.stripWrapper("continue") == "continue")
+        #expect(ClaudeChannelText.stripWrapper("<channel>\ncontinue") == "<channel>\ncontinue")
+    }
+
+    @Test
+    func submittedInputReconcilesAgainstClaudeChannelWrappedTranscriptEvent() async throws {
+        let before = try makeWorkspace(eventId: 10, content: "Before send")
+        let after = try makeWorkspace(
+            eventId: 11,
+            content: "<channel name=\"commentary\">\ncontinue\n</channel>",
+            timestamp: ISO8601DateFormatter().string(from: Date())
+        )
+        let api = FakeSessionWorkspaceClient(workspaces: [before, after])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
+        await waitForSubmittedInputsToClear(model)
+
+        #expect(sent)
+        #expect(model.submittedInputs.isEmpty)
+        #expect(model.items.map(\.id) == ["user:11"])
+    }
+
+    private func makeWorkspace(
+        eventId: Int,
+        content: String,
+        timestamp: String = "2026-05-02T20:00:00Z"
+    ) throws -> SessionWorkspaceResponse {
+        let encodedContent = try jsonString(content)
+        let encodedTimestamp = try jsonString(timestamp)
         let json = """
         {
           "session": {
@@ -255,8 +293,8 @@ struct SessionViewModelTests {
                 "event": {
                   "id": \(eventId),
                   "role": "user",
-                  "content_text": "\(content)",
-                  "timestamp": "2026-05-02T20:00:00Z",
+                  "content_text": \(encodedContent),
+                  "timestamp": \(encodedTimestamp),
                   "in_active_context": true,
                   "is_head_branch": true
                 }
@@ -270,6 +308,18 @@ struct SessionViewModelTests {
         }
         """.data(using: .utf8)!
         return try JSONDecoder.snakeCase.decode(SessionWorkspaceResponse.self, from: json)
+    }
+
+    private func jsonString(_ value: String) throws -> String {
+        let data = try JSONEncoder().encode(value)
+        return String(data: data, encoding: .utf8)!
+    }
+
+    private func waitForSubmittedInputsToClear(_ model: SessionViewModel) async {
+        for _ in 0..<50 {
+            if model.submittedInputs.isEmpty { return }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
     }
 
     private func makeEvent(id: Int, role: String, content: String) -> SessionEvent {
