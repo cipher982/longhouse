@@ -275,14 +275,15 @@ def _wait_for_ship_trace(
     server: dict[str, str],
     session_id: str,
     *,
-    offset: int,
+    offset: int | None,
     new_offset: int,
     timeout: float = 8.0,
 ) -> dict:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         for trace in _session_ship_traces(server, session_id):
-            if trace.get("offset") == offset and trace.get("new_offset") == new_offset:
+            offset_matches = offset is None or trace.get("offset") == offset
+            if offset_matches and trace.get("new_offset") == new_offset:
                 return trace
         time.sleep(0.1)
     raise AssertionError(
@@ -291,18 +292,21 @@ def _wait_for_ship_trace(
     )
 
 
-def _start_claude_connect_daemon(
+def _start_connect_daemon(
     server: dict[str, str],
     tmp_path: Path,
     *,
     project_name: str,
     machine_name: str,
+    create_codex_root: bool = False,
 ) -> dict:
     session_id = str(uuid4())
     home = tmp_path / "home"
     claude_root = home / ".claude"
     projects_dir = claude_root / "projects" / project_name
     projects_dir.mkdir(parents=True)
+    if create_codex_root:
+        (home / ".codex" / "sessions").mkdir(parents=True)
     transcript = projects_dir / f"{session_id}.jsonl"
     transcript.touch()
     longhouse_home = Path("/tmp") / f"lh-e2e-{session_id[:8]}"
@@ -344,6 +348,7 @@ def _start_claude_connect_daemon(
     )
     return {
         "session_id": session_id,
+        "home": home,
         "transcript": transcript,
         "proc": proc,
         "log_dir": log_dir,
@@ -575,7 +580,7 @@ def _ask_user_transcript_lines(session_id: str) -> tuple[list[dict], dict]:
 
 def test_connect_daemon_ships_ask_user_answer_append_from_filesystem_watch(server, tmp_path):
     """A blocked AskUserQuestion answer append ships through the filesystem hot lane."""
-    daemon = _start_claude_connect_daemon(
+    daemon = _start_connect_daemon(
         server,
         tmp_path,
         project_name="ask-user-project",
@@ -647,7 +652,7 @@ def test_connect_daemon_ships_ask_user_answer_append_from_filesystem_watch(serve
 
 def test_connect_daemon_waits_for_complete_ask_user_answer_line(server, tmp_path):
     """A partial AskUserQuestion answer append does not advance the cursor."""
-    daemon = _start_claude_connect_daemon(
+    daemon = _start_connect_daemon(
         server,
         tmp_path,
         project_name="ask-user-partial-project",
@@ -716,6 +721,60 @@ def test_connect_daemon_waits_for_complete_ask_user_answer_line(server, tmp_path
         daemon_output = _terminate_process(proc)
         raise AssertionError(
             f"daemon partial AskUserQuestion watcher integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}"
+        ) from None
+    finally:
+        if proc.poll() is None:
+            _terminate_process(proc)
+        shutil.rmtree(longhouse_home, ignore_errors=True)
+
+
+def test_connect_daemon_ships_codex_transcript_from_filesystem_watch(server, tmp_path):
+    """Codex transcripts under ~/.codex/sessions use the filesystem watcher hot lane."""
+    daemon = _start_connect_daemon(
+        server,
+        tmp_path,
+        project_name="unused-claude-project",
+        machine_name="shipper-e2e-codex-watcher",
+        create_codex_root=True,
+    )
+    session_id = daemon["session_id"]
+    home = daemon["home"]
+    proc = daemon["proc"]
+    log_dir = daemon["log_dir"]
+    longhouse_home = daemon["longhouse_home"]
+    codex_sessions = home / ".codex" / "sessions" / "2026" / "01" / "10"
+    codex_sessions.mkdir(parents=True)
+    transcript = codex_sessions / f"rollout-2026-01-10T11-00-00-{session_id}.jsonl"
+    transcript.touch()
+
+    try:
+        _wait_for_log_contains(log_dir, "Daemon ready")
+        fixture_text = (FIXTURES_DIR / CODEX_FIXTURE).read_text()
+        payload = fixture_text.replace(CODEX_SESSION_ID, session_id)
+        with transcript.open("a") as f:
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        os.utime(transcript, None)
+
+        final_bytes = transcript.stat().st_size
+        events = _wait_for_session_events(server, session_id, min_events=2)
+        assert [event["role"] for event in events[:2]] == ["user", "assistant"]
+
+        trace = _wait_for_ship_trace(
+            server,
+            session_id,
+            offset=None,
+            new_offset=final_bytes,
+        )
+        assert trace["work_context"] == "live_transcript"
+        assert trace["observation_source"] == "fsevent"
+        assert trace["provider"] == "codex"
+        assert trace["range_bytes"] == final_bytes - trace["offset"]
+    except Exception:
+        daemon_output = _terminate_process(proc)
+        raise AssertionError(
+            f"daemon Codex watcher integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}"
         ) from None
     finally:
         if proc.poll() is None:
