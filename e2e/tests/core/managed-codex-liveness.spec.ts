@@ -85,7 +85,7 @@ async function sendAttachedIdleLease(
           phase: "idle",
           bridge_status: "ready",
           thread_subscription_status: "subscribed",
-          observed_at: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+          observed_at: new Date().toISOString(),
           lease_ttl_ms: 15 * 60 * 1000,
         },
       ],
