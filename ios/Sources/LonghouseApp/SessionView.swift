@@ -616,7 +616,7 @@ final class SessionViewModel: ObservableObject {
             submittedInputs = []
             errorMessage = nil
         }
-        if isInitialLoading {
+        if isInitialLoading || !sessionChanged {
             await reload(sessionId: sessionId, appState: appState)
         }
         guard enableRealtime else { return }
