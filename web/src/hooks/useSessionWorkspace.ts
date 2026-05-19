@@ -33,6 +33,12 @@ interface UseSessionWorkspaceOptions {
   highlightEventId?: number | null;
 }
 
+interface PendingRenderBeacon {
+  sessionId: string;
+  latestEventId: number;
+  latestEventEmittedAtMs: number | null;
+}
+
 function getProjectionItemKey(item: AgentSessionProjectionItem): string {
   if (item.kind === "event" && item.event) {
     return `event:${item.event.id}`;
@@ -83,6 +89,8 @@ export function useSessionWorkspace(
   const onlineEpoch = useOnlineEpoch();
   const queryClient = useQueryClient();
   const [streamConnected, setStreamConnected] = useState(false);
+  const pendingRenderBeaconRef = useRef<PendingRenderBeacon | null>(null);
+  const [pendingRenderBeaconVersion, setPendingRenderBeaconVersion] = useState(0);
 
   // SSE stream subscription — invalidates queries on server-side change detection
   useEffect(() => {
@@ -113,21 +121,12 @@ export function useSessionWorkspace(
           void queryClient.invalidateQueries({ queryKey: ["agent-session-events-infinite", sessionId] });
           void queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
 
-          // Fire render beacon after next paint so we measure true end-to-end latency.
-          const sessionSnapshot = queryClient.getQueryData<{ session?: AgentSession }>([
-            "agent-session-workspace",
-            sessionId,
-          ]);
-          const caps = sessionSnapshot?.session?.capabilities;
-          const managed = Boolean(
-            caps && (caps.live_control_available || caps.host_reattach_available),
-          );
-          emitRenderBeacon({
+          pendingRenderBeaconRef.current = {
             sessionId,
             latestEventId: data.latest_event_id,
             latestEventEmittedAtMs: data.latest_event_emitted_at_ms ?? null,
-            managed,
-          });
+          };
+          setPendingRenderBeaconVersion((version) => version + 1);
         },
         onError: () => setStreamConnected(false),
       },
@@ -283,6 +282,24 @@ export function useSessionWorkspace(
     () => threadSessions.find((item) => item.id === headSessionId) || currentThreadSession,
     [threadSessions, headSessionId, currentThreadSession],
   );
+
+  useEffect(() => {
+    const pending = pendingRenderBeaconRef.current;
+    if (!pending || pending.sessionId !== sessionId) return;
+    if (!pending.latestEventEmittedAtMs) return;
+    const latestEventIsRendered = events.some((event) => event.id === pending.latestEventId);
+    if (!latestEventIsRendered) return;
+
+    const caps = currentThreadSession?.capabilities;
+    const managed = Boolean(caps && (caps.live_control_available || caps.host_reattach_available));
+    emitRenderBeacon({
+      sessionId: pending.sessionId,
+      latestEventId: pending.latestEventId,
+      latestEventEmittedAtMs: pending.latestEventEmittedAtMs,
+      managed,
+    });
+    pendingRenderBeaconRef.current = null;
+  }, [pendingRenderBeaconVersion, events, sessionId, currentThreadSession]);
 
   const isViewingHead =
     !!currentThreadSession &&

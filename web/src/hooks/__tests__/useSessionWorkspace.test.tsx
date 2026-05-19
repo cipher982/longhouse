@@ -17,10 +17,15 @@ const queryClientMocks = vi.hoisted(() => ({
   invalidateQueries: vi.fn(),
   getQueryData: vi.fn(() => undefined),
 }));
+const renderBeaconMocks = vi.hoisted(() => ({
+  emitRenderBeacon: vi.fn(),
+  recordServerClockSkew: vi.fn(),
+}));
 
 vi.mock("../useAgentSessions", () => agentSessionMocks);
 vi.mock("../useDocumentVisible", () => visibilityMocks);
 vi.mock("../../services/api/agents", () => streamMocks);
+vi.mock("../../lib/renderBeacon", () => renderBeaconMocks);
 vi.mock("@tanstack/react-query", () => ({
   useQueryClient: () => queryClientMocks,
 }));
@@ -239,6 +244,53 @@ describe("useSessionWorkspace", () => {
     });
     expect(queryClientMocks.invalidateQueries).toHaveBeenCalledWith({
       queryKey: ["agent-session-turns", baseSession.id],
+    });
+  });
+
+  it("waits to emit render telemetry until the latest SSE event is in the rendered projection", async () => {
+    let handlers:
+      | {
+          onConnected?: (data?: { session_id: string; server_now_ms?: number }) => void;
+          onWorkspaceChanged?: (data: {
+            session_id: string;
+            latest_event_id: number;
+            thread_session_count: number;
+            latest_event_emitted_at_ms?: number | null;
+            server_now_ms?: number;
+          }) => void;
+          onError?: () => void;
+        }
+      | undefined;
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    seedHookMocks(80);
+    const { rerender } = renderHook(() => useSessionWorkspace(baseSession.id));
+
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        latest_event_id: 81,
+        thread_session_count: 1,
+        latest_event_emitted_at_ms: 1_779_220_000_000,
+        server_now_ms: 1_779_220_000_100,
+      });
+    });
+
+    expect(renderBeaconMocks.emitRenderBeacon).not.toHaveBeenCalled();
+
+    seedHookMocks(81);
+    rerender();
+
+    await waitFor(() => {
+      expect(renderBeaconMocks.emitRenderBeacon).toHaveBeenCalledWith({
+        sessionId: baseSession.id,
+        latestEventId: 81,
+        latestEventEmittedAtMs: 1_779_220_000_000,
+        managed: false,
+      });
     });
   });
 
