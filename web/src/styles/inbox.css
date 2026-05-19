@@ -16,9 +16,8 @@
     --inbox-repo-font: 22px;
     --inbox-repo-pad-y: 7px;
     --inbox-meta-font: 15px;
-    --inbox-status-width: 17ch;
-    --inbox-provider-width: 7ch;
-    --inbox-branch-width: 8ch;
+    --inbox-status-width: 13ch;
+    --inbox-source-width: 12ch;
     --inbox-time-width: 16ch;
     --inbox-title-max: 50%;
     --inbox-group-gap: 0px;
@@ -128,10 +127,9 @@
     grid-template-columns:
       minmax(0, 1fr)
       minmax(0, var(--inbox-status-width))
-      minmax(0, var(--inbox-provider-width))
-      minmax(0, var(--inbox-branch-width))
+      minmax(0, var(--inbox-source-width))
       minmax(0, var(--inbox-time-width));
-    grid-template-areas: "main status provider branch time";
+    grid-template-areas: "main status source time";
     align-items: center;
     gap: var(--space-2);
     padding: var(--inbox-row-pad-y) var(--space-2);
@@ -231,14 +229,13 @@
   }
 
   /* ---------- Row meta (right side) ----------
-   * Stable slots, not a flexible blob. Status/provider/branch/time each
-   * reserve enough room for their normal domain; title/summary is the only
-   * pressure valve for ordinary row updates.
+   * Stable slots, not a flexible blob. Status/source/time each reserve
+   * enough room for their normal domain; title/summary is the only pressure
+   * valve for ordinary row updates.
    */
 
   .inbox-row-status,
-  .inbox-row-provider,
-  .inbox-row-branch,
+  .inbox-row-source,
   .inbox-row-time {
     font-size: var(--inbox-meta-font);
     color: var(--text-muted);
@@ -256,15 +253,26 @@
     gap: var(--space-2);
   }
 
+  .inbox-row-source {
+    grid-area: source;
+    display: inline-flex;
+    align-items: baseline;
+    gap: var(--space-2);
+  }
+
   .inbox-row-provider {
-    grid-area: provider;
+    overflow: hidden;
+    text-overflow: ellipsis;
     text-transform: lowercase;
+    flex: 0 0 auto;
   }
 
   .inbox-row-branch {
-    grid-area: branch;
     font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
     font-size: 10px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .inbox-row-status-dot {
@@ -420,8 +428,8 @@
   }
 
   /* ---------- Mobile ----------
-   * Main line first, then the two most useful live facts. Provider and
-   * branch are detail metadata, so they drop out on narrow screens.
+   * Main line first, then the two most useful live facts. Source metadata
+   * drops out on narrow screens.
    */
 
   @media (max-width: 720px) {
@@ -433,8 +441,7 @@
       gap: var(--space-1) var(--space-2);
     }
 
-    .inbox-row-provider,
-    .inbox-row-branch {
+    .inbox-row-source {
       display: none;
     }
 

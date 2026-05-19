@@ -154,9 +154,9 @@ export function SessionRow({
         />
         <span className="inbox-row-status-label">{statusLabel}</span>
       </span>
-      <span className="inbox-row-provider">{provider}</span>
-      <span className="inbox-row-branch" aria-hidden={branch ? undefined : "true"}>
-        {branch}
+      <span className="inbox-row-source">
+        <span className="inbox-row-provider">{provider}</span>
+        {branch ? <span className="inbox-row-branch">{branch}</span> : null}
       </span>
       <span className="inbox-row-time">
         {timeLabel}
