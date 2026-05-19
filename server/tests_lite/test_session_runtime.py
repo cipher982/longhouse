@@ -189,6 +189,114 @@ def test_runtime_reducer_materializes_phase_progress_and_terminal(tmp_path):
     engine.dispose()
 
 
+def test_transcript_progress_clears_blocked_attention_state(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_progress_clears_blocked.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(hours=1), provider="claude")
+        runtime_key = runtime_key_for_session("claude", str(session.id))
+
+        result = ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="phase_signal",
+                    phase="blocked",
+                    tool_name="AskUserQuestion",
+                    occurred_at=now - timedelta(seconds=30),
+                    freshness_ms=phase_freshness_ms("blocked"),
+                    dedupe_key="blocked-ask-user",
+                    payload={},
+                ),
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="agents_ingest",
+                    kind="progress_signal",
+                    occurred_at=now,
+                    dedupe_key="ask-user-answer-progress",
+                    payload={"progress_kind": "transcript_append"},
+                ),
+            ],
+        )
+        db.commit()
+
+        assert result.accepted == 2
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        assert state.phase == "idle"
+        assert state.phase_source == "progress"
+        assert state.active_tool is None
+        assert state.freshness_expires_at is None
+        assert state.last_progress_at.replace(tzinfo=timezone.utc) == now
+
+        view = build_runtime_view(state=state, session=session, now=now)
+        assert view.presence_state is None
+        assert view.active_tool is None
+        assert view.signal_tier == "transcript_progress"
+        assert view.status == "idle"
+        assert view.display_phase == "Inactive"
+
+    engine.dispose()
+
+
+def test_older_transcript_progress_does_not_clear_newer_blocked_state(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_progress_keeps_newer_blocked.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(hours=1), provider="claude")
+        runtime_key = runtime_key_for_session("claude", str(session.id))
+
+        result = ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="phase_signal",
+                    phase="blocked",
+                    tool_name="AskUserQuestion",
+                    occurred_at=now,
+                    freshness_ms=phase_freshness_ms("blocked"),
+                    dedupe_key="newer-blocked-ask-user",
+                    payload={},
+                ),
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="agents_ingest",
+                    kind="progress_signal",
+                    occurred_at=now - timedelta(seconds=30),
+                    dedupe_key="older-progress",
+                    payload={"progress_kind": "transcript_append"},
+                ),
+            ],
+        )
+        db.commit()
+
+        assert result.accepted == 2
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        assert state.phase == "blocked"
+        assert state.phase_source == "semantic"
+        assert state.active_tool == "AskUserQuestion"
+        assert state.last_progress_at is None
+
+    engine.dispose()
+
+
 def test_managed_session_ended_terminal_overrides_nearby_newer_lease(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "runtime_session_ended_after_lease_race.db")
     now = datetime.now(timezone.utc)
