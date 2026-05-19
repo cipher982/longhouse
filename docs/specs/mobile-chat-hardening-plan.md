@@ -34,6 +34,8 @@ Already in place:
 - Web and iOS emit client render beacons to `/api/telemetry/client-render`.
 - The server persists client render observations and exposes
   `/api/telemetry/client-render/recent` for admin forensic debugging.
+- The session detail page has a render telemetry panel for recent web/iOS
+  render beacons on the current session.
 - The hot-plane e2e path asserts persisted render telemetry.
 - iOS fixture UI tests cover initial bottom pinning, live updates, keyboard
   updates, streaming updates, optimistic send, origin marker display, and large
@@ -43,10 +45,11 @@ Already in place:
 
 Known gaps:
 
-- The persisted render beacons are not yet visible in a product/debug surface.
 - iOS render beacons currently use event timestamps but do not expose WebKit
   payload/render diagnostics such as payload size, row count, JS failures, or
   scroll-stick decisions.
+- The high-value mobile chat validation subset is still spread across ad hoc
+  commands instead of one focused target.
 - The WebKit transcript UI is functional but still needs product polish for
   dense tool rows, long-message expansion, copy/text selection, and active tool
   state.
@@ -58,6 +61,8 @@ Known gaps:
 ### 1. Make render telemetry usable
 
 Build a narrow debug surface over the telemetry that already exists.
+
+Status: Done.
 
 Deliverables:
 
@@ -159,7 +164,8 @@ Done when:
 
 ## First Slice
 
-Start with phase 1: expose recent render telemetry in a small debug/admin
-surface. The server endpoint already exists, and recent commits added hot-plane
-coverage, so this is the highest-leverage next step. It turns future polish
-work into evidence-driven iteration instead of subjective phone feel.
+Start with the focused validation target. The render telemetry surface is now
+in place, so the next smallest infrastructure step is `make test-mobile-chat`:
+web render telemetry tests plus the iOS Longhouse unit-test scheme, without the
+heavier UI smoke path. This gives the diagnostics, fixture, and polish work an
+obvious local validation loop.
