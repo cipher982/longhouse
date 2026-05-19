@@ -114,6 +114,21 @@ async function getSession(request: APIRequestContext, sessionId: string): Promis
   return response.json();
 }
 
+async function getRecentRenderBeacons(
+  request: APIRequestContext,
+  sessionId: string,
+): Promise<Record<string, unknown>[]> {
+  const response = await request.get(
+    `/api/telemetry/client-render/recent?session_id=${sessionId}`,
+  );
+  expect(
+    response.ok(),
+    `recent render beacons failed: ${response.status()} ${await response.text()}`,
+  ).toBe(true);
+  const body = (await response.json()) as { items?: Record<string, unknown>[] };
+  return body.items ?? [];
+}
+
 async function installWorkspaceFrameProbe(page: Page, sessionId: string): Promise<void> {
   await page.addInitScript((targetSessionId) => {
     const globalWindow = window as unknown as {
@@ -170,7 +185,6 @@ test.describe("Session hot plane", () => {
     const blockedAt = new Date(Date.now() - 30_000).toISOString();
     const answerAt = new Date().toISOString();
     const sourcePath = `/tmp/${sessionId}.jsonl`;
-    const renderBeacons: Record<string, unknown>[] = [];
 
     await ingestSessionEvents(request, {
       sessionId,
@@ -201,20 +215,6 @@ test.describe("Session hot plane", () => {
     });
     await configureManagedLocalSession(request, sessionId);
     await sendBlockedLease(request, sessionId, blockedAt);
-
-    await page.route("**/api/telemetry/client-render", async (route) => {
-      const raw = route.request().postData() || "{}";
-      try {
-        renderBeacons.push(JSON.parse(raw) as Record<string, unknown>);
-      } catch {
-        renderBeacons.push({});
-      }
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ accepted: 1, dropped_skew: 0, dropped_range: 0 }),
-      });
-    });
 
     await installWorkspaceFrameProbe(page, sessionId);
     await page.goto(`/timeline/${sessionId}`, { waitUntil: "domcontentloaded" });
@@ -262,9 +262,18 @@ test.describe("Session hot plane", () => {
       .toBeGreaterThan(0);
 
     await expect
-      .poll(() => renderBeacons.length, { timeout: 5_000 })
-      .toBeGreaterThan(0);
-    expect(renderBeacons.at(-1)).toMatchObject({
+      .poll(async () => getRecentRenderBeacons(request, sessionId), { timeout: 5_000 })
+      .toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            session_id: sessionId,
+            surface: "web",
+            emitted_at_ms: Date.parse(answerAt),
+          }),
+        ]),
+      );
+    const renderBeacon = (await getRecentRenderBeacons(request, sessionId))[0];
+    expect(renderBeacon).toMatchObject({
       session_id: sessionId,
       surface: "web",
       emitted_at_ms: Date.parse(answerAt),
