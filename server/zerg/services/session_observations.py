@@ -23,11 +23,13 @@ from zerg.utils.time import normalize_utc
 
 SOURCE_DOMAIN_TRANSCRIPT = "transcript"
 SOURCE_DOMAIN_RUNTIME = "runtime"
+SOURCE_DOMAIN_CLIENT = "client"
 
 OBS_KIND_PROVIDER_SOURCE_LINE = "provider_source_line"
 OBS_KIND_PROVIDER_EVENT = "provider_event"
 OBS_KIND_RUNTIME_SIGNAL = "runtime_signal"
 OBS_KIND_BRIDGE_TRANSCRIPT_DELTA = "bridge_transcript_delta"
+OBS_KIND_CLIENT_RENDER = "client_render"
 
 
 @dataclass(frozen=True)
@@ -85,7 +87,12 @@ def record_session_observation(
     return ObservationWriteResult(observation=None, inserted=False)
 
 
-def record_runtime_observation(db: Session, event: Any, *, received_at: datetime | None = None) -> ObservationWriteResult:
+def record_runtime_observation(
+    db: Session,
+    event: Any,
+    *,
+    received_at: datetime | None = None,
+) -> ObservationWriteResult:
     payload = event.payload or {}
     dedupe_key = _runtime_dedupe_key(event)
     kind = OBS_KIND_BRIDGE_TRANSCRIPT_DELTA if _is_bridge_transcript_delta(event, payload) else OBS_KIND_RUNTIME_SIGNAL
@@ -206,7 +213,11 @@ def record_provider_event_observation(
         source_path=source_path,
         source_offset=source_offset,
         source_cursor=event_uuid
-        or (f"{source_path}:{source_offset}:{event_hash}" if source_path is not None and source_offset is not None else identity),
+        or (
+            f"{source_path}:{source_offset}:{event_hash}"
+            if source_path is not None and source_offset is not None
+            else identity
+        ),
         observed_at=timestamp,
         received_at=received_at,
         payload={
