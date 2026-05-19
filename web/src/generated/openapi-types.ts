@@ -5643,6 +5643,8 @@ export interface components {
              * @description Raw provider content when it differs from display content
              */
             raw_content_text?: string | null;
+            /** @description Semantic origin for user-authored input events */
+            input_origin?: components["schemas"]["InputOriginResponse"] | null;
             /**
              * Tool Name
              * @description Tool name
@@ -5988,6 +5990,28 @@ export interface components {
             events_skipped: number;
             /** Session Created */
             session_created: boolean;
+        };
+        /**
+         * InputOriginResponse
+         * @description Semantic origin for a user-authored transcript event.
+         */
+        InputOriginResponse: {
+            /**
+             * Authored Via
+             * @description Where this user input was authored: longhouse|terminal
+             * @enum {string}
+             */
+            authored_via: "longhouse" | "terminal";
+            /**
+             * Session Input Id
+             * @description SessionInput row when authored through Longhouse
+             */
+            session_input_id?: number | null;
+            /**
+             * Client Request Id
+             * @description Client idempotency key when supplied by the Longhouse client
+             */
+            client_request_id?: string | null;
         };
         /** KnowledgeDocument */
         KnowledgeDocument: {
@@ -8854,6 +8878,11 @@ export interface components {
              * @description Transport request id when available, otherwise a synthetic canonical id for reconstructed native turns
              */
             request_id?: string | null;
+            /**
+             * Session Input Id
+             * @description SessionInput row that authored this turn, when any
+             */
+            session_input_id?: number | null;
             /**
              * State
              * @description created|send_accepted|active|terminal|durable|failed

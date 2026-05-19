@@ -1010,6 +1010,7 @@ async def _create_session_input_response(
             request_id=delivery_request_id,
             lock_scope_id=lock_scope_id,
             db=db,
+            session_input_id=int(row.id),
         )
     except HTTPException:
         await session_lock_manager.release(lock_scope_id, delivery_request_id)

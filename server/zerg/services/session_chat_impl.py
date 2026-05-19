@@ -16,6 +16,7 @@ from datetime import datetime
 from datetime import timezone
 from typing import AsyncIterator
 from uuid import UUID
+from uuid import uuid4
 
 from fastapi import HTTPException
 from fastapi import Request
@@ -402,6 +403,7 @@ async def _build_managed_local_chat_response(
     request_id: str,
     lock_scope_id: str,
     db: Session,
+    session_input_id: int | None = None,
 ) -> JSONResponse:
     """Dispatch text to a managed-local session and return a fast ack.
 
@@ -416,6 +418,7 @@ async def _build_managed_local_chat_response(
         request_id=request_id,
         lock_scope_id=lock_scope_id,
         db=db,
+        session_input_id=session_input_id,
     )
 
 
@@ -599,7 +602,7 @@ async def _drain_next_queued_input(
             logger.info("Drain aborted: session %s no longer supports live control", session_id)
             return
 
-        drain_request_id = f"drain-{str(session_id)[:8]}-{int(time.time())}"
+        drain_request_id = f"drain-{uuid4().hex}"
         lock = await session_lock_manager.acquire(
             session_id=lock_scope_id,
             holder=drain_request_id,
@@ -632,6 +635,7 @@ async def _drain_next_queued_input(
                 request_id=drain_request_id,
                 lock_scope_id=lock_scope_id,
                 db=db,
+                session_input_id=int(claimed.id),
             )
         except Exception as exc:
             mark_failed(db, int(claimed.id), error=str(exc)[:200])
@@ -846,6 +850,7 @@ async def _dispatch_managed_local_text(
     request_id: str,
     lock_scope_id: str,
     db: Session,
+    session_input_id: int | None = None,
 ) -> JSONResponse:
     """Send text to a managed-local session and return acceptance status."""
     tracer = get_tracer(__name__)
@@ -898,6 +903,7 @@ async def _dispatch_managed_local_text(
                 baseline_observation_cursor=baseline_hook_observation_id,
                 user_submitted_at=user_submitted_at,
                 expected_user_text=message,
+                session_input_id=session_input_id,
             )
             db.commit()
             set_span_attributes(
@@ -945,6 +951,7 @@ async def _dispatch_managed_local_text(
                         request_id=request_id,
                         accepted_at=send_observed_at,
                         user_event_id=getattr(send_result, "verified_user_event_id", None),
+                        session_input_id=session_input_id,
                     ):
                         raise RuntimeError(f"Failed to record canonical send_accepted milestone for {source_session.id}/{request_id}")
                 if not mark_session_turn_failed(
@@ -1013,6 +1020,7 @@ async def _dispatch_managed_local_text(
                 request_id=request_id,
                 accepted_at=send_observed_at,
                 user_event_id=getattr(send_result, "verified_user_event_id", None),
+                session_input_id=session_input_id,
             ):
                 raise RuntimeError(f"Failed to record canonical send_accepted milestone for {source_session.id}/{request_id}")
             db.commit()

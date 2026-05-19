@@ -327,7 +327,8 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             toolCallId: nil,
             timestamp: timestamp,
             inActiveContext: true,
-            isHeadBranch: true
+            isHeadBranch: true,
+            inputOrigin: nil
         )
     }
 

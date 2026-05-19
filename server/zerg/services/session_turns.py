@@ -69,6 +69,7 @@ class SessionTurnSnapshot:
     id: int
     session_id: UUID
     request_id: str | None
+    session_input_id: int | None
     state: str
     terminal_phase: str | None
     error_code: str | None
@@ -170,6 +171,7 @@ def create_session_turn(
     baseline_observation_cursor: int | None = None,
     user_submitted_at: datetime | None = None,
     expected_user_text: str | None = None,
+    session_input_id: int | None = None,
 ) -> SessionTurn:
     if request_id is not None:
         existing = (
@@ -181,11 +183,13 @@ def create_session_turn(
             .one_or_none()
         )
         if existing is not None:
+            _attach_session_input(existing, session_input_id=session_input_id)
             return existing
 
     turn = SessionTurn(
         session_id=session_id,
         request_id=request_id,
+        session_input_id=session_input_id,
         source_kind=_normalize_turn_source_kind(source_kind),
         timing_confidence=_normalize_turn_confidence(timing_confidence),
         expected_user_text_hash=hash_user_text(expected_user_text) if expected_user_text else None,
@@ -199,6 +203,26 @@ def create_session_turn(
     db.add(turn)
     db.flush()
     return turn
+
+
+def _attach_session_input(turn: SessionTurn, *, session_input_id: int | None) -> None:
+    if session_input_id is None:
+        return
+    normalized_id = int(session_input_id)
+    if normalized_id <= 0:
+        return
+    existing_id = getattr(turn, "session_input_id", None)
+    if existing_id is None:
+        turn.session_input_id = normalized_id
+        return
+    if int(existing_id) != normalized_id:
+        logger.warning(
+            "Session turn %s for session %s already links SessionInput %s; preserving over conflicting %s",
+            getattr(turn, "request_id", None),
+            getattr(turn, "session_id", None),
+            existing_id,
+            normalized_id,
+        )
 
 
 def materialize_managed_transcript_turns(
@@ -510,6 +534,7 @@ def get_session_turn_snapshot(
             id=int(turn.id),
             session_id=session_id,
             request_id=turn.request_id,
+            session_input_id=turn.session_input_id,
             state=turn.state or "",
             terminal_phase=turn.terminal_phase,
             error_code=turn.error_code,
@@ -559,10 +584,12 @@ def mark_session_turn_send_accepted(
     request_id: str,
     accepted_at: datetime | None = None,
     user_event_id: int | None = None,
+    session_input_id: int | None = None,
 ) -> bool:
     turn = get_session_turn(db, session_id=session_id, request_id=request_id)
     if turn is None:
         return False
+    _attach_session_input(turn, session_input_id=session_input_id)
     if turn.send_accepted_at is not None:
         if turn.user_event_id is None and user_event_id is not None:
             turn.user_event_id = user_event_id

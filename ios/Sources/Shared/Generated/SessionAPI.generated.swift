@@ -218,11 +218,18 @@ struct APISessionThreadResponse: Codable, Hashable, Sendable {
     let sessions: [APISessionResponse]
 }
 
+struct APIInputOriginResponse: Codable, Hashable, Sendable {
+    let authoredVia: String
+    let sessionInputId: Int?
+    let clientRequestId: String?
+}
+
 struct APIEventResponse: Codable, Hashable, Sendable {
     let id: Int
     let role: String
     let contentText: String?
     let rawContentText: String?
+    let inputOrigin: APIInputOriginResponse?
     let toolName: String?
     let toolInputJson: [String: JSONValue]?
     let toolOutputText: String?
@@ -311,6 +318,7 @@ struct APISessionTurnResponse: Codable, Hashable, Sendable {
     let id: Int
     let sessionId: String
     let requestId: String?
+    let sessionInputId: Int?
     let state: String
     let terminalPhase: String?
     let errorCode: String?
