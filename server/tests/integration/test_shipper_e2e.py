@@ -32,8 +32,8 @@ import base64
 import json
 import os
 import shutil
-import sqlite3
 import socket
+import sqlite3
 import subprocess
 import time
 from pathlib import Path
@@ -250,6 +250,107 @@ def _sqlite_rows(server: dict[str, str], query: str, params: tuple[object, ...] 
         return conn.execute(query, params).fetchall()
 
 
+def _session_ship_traces(server: dict[str, str], session_id: str) -> list[dict]:
+    rows = _sqlite_rows(
+        server,
+        """
+        SELECT payload_json
+        FROM session_observations
+        WHERE session_id = ?
+          AND source = 'agents_ingest_trace'
+        ORDER BY id ASC
+        """,
+        (session_id,),
+    )
+    traces = []
+    for row in rows:
+        stored = json.loads(row["payload_json"])
+        trace = stored.get("payload", {}).get("ship_trace")
+        if isinstance(trace, dict):
+            traces.append(trace)
+    return traces
+
+
+def _wait_for_ship_trace(
+    server: dict[str, str],
+    session_id: str,
+    *,
+    offset: int,
+    new_offset: int,
+    timeout: float = 8.0,
+) -> dict:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for trace in _session_ship_traces(server, session_id):
+            if trace.get("offset") == offset and trace.get("new_offset") == new_offset:
+                return trace
+        time.sleep(0.1)
+    raise AssertionError(
+        f"Timed out waiting for ship trace {session_id} offset={offset} new_offset={new_offset}; "
+        f"traces={_session_ship_traces(server, session_id)!r}"
+    )
+
+
+def _start_claude_connect_daemon(
+    server: dict[str, str],
+    tmp_path: Path,
+    *,
+    project_name: str,
+    machine_name: str,
+) -> dict:
+    session_id = str(uuid4())
+    home = tmp_path / "home"
+    claude_root = home / ".claude"
+    projects_dir = claude_root / "projects" / project_name
+    projects_dir.mkdir(parents=True)
+    transcript = projects_dir / f"{session_id}.jsonl"
+    transcript.touch()
+    longhouse_home = Path("/tmp") / f"lh-e2e-{session_id[:8]}"
+    log_dir = tmp_path / "logs"
+
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "CLAUDE_CONFIG_DIR": str(claude_root),
+        "LONGHOUSE_HOME": str(longhouse_home),
+        "LONGHOUSE_LOG_DIR": str(log_dir),
+    }
+    proc = subprocess.Popen(
+        [
+            str(ENGINE_BIN),
+            "connect",
+            "--url",
+            _server_url(server),
+            "--token",
+            _server_token(server),
+            "--db",
+            str(tmp_path / "engine.db"),
+            "--compression",
+            "gzip",
+            "--flush-ms",
+            "50",
+            "--fallback-scan-secs",
+            "300",
+            "--spool-replay-secs",
+            "300",
+            "--machine-name",
+            machine_name,
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    return {
+        "session_id": session_id,
+        "transcript": transcript,
+        "proc": proc,
+        "log_dir": log_dir,
+        "longhouse_home": longhouse_home,
+    }
+
+
 def _terminate_process(proc: subprocess.Popen[str]) -> str:
     proc.terminate()
     try:
@@ -398,6 +499,223 @@ def test_connect_daemon_ships_claude_transcript_from_filesystem_watch(server, tm
         daemon_output = _terminate_process(proc)
         raise AssertionError(
             f"daemon watcher integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}"
+        ) from None
+    finally:
+        if proc.poll() is None:
+            _terminate_process(proc)
+        shutil.rmtree(longhouse_home, ignore_errors=True)
+
+
+def _ask_user_transcript_lines(session_id: str) -> tuple[list[dict], dict]:
+    initial_lines = [
+        {
+            "parentUuid": None,
+            "isSidechain": False,
+            "userType": "external",
+            "cwd": "/tmp/longhouse-test",
+            "sessionId": session_id,
+            "version": "2.0.76",
+            "type": "user",
+            "uuid": "ask-user-prompt",
+            "timestamp": "2026-01-10T12:00:00.000Z",
+            "message": {"role": "user", "content": "Choose the implementation path."},
+        },
+        {
+            "parentUuid": "ask-user-prompt",
+            "isSidechain": False,
+            "userType": "external",
+            "cwd": "/tmp/longhouse-test",
+            "sessionId": session_id,
+            "version": "2.0.76",
+            "type": "assistant",
+            "uuid": "ask-user-tool-call",
+            "timestamp": "2026-01-10T12:00:10.000Z",
+            "message": {
+                "id": "msg_ask_user",
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_ask_user",
+                        "name": "AskUserQuestion",
+                        "input": {
+                            "question": "How should I fix the drag feel?",
+                            "choices": ["Use dnd-kit", "Keep inset line"],
+                        },
+                    }
+                ],
+                "stop_reason": "tool_use",
+            },
+        },
+    ]
+    answer_line = {
+        "parentUuid": "ask-user-tool-call",
+        "isSidechain": False,
+        "userType": "external",
+        "cwd": "/tmp/longhouse-test",
+        "sessionId": session_id,
+        "version": "2.0.76",
+        "type": "user",
+        "uuid": "ask-user-answer",
+        "timestamp": "2026-01-10T12:00:40.000Z",
+        "message": {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_ask_user",
+                    "content": "User has answered your questions: Use dnd-kit.",
+                }
+            ],
+        },
+    }
+    return initial_lines, answer_line
+
+
+def test_connect_daemon_ships_ask_user_answer_append_from_filesystem_watch(server, tmp_path):
+    """A blocked AskUserQuestion answer append ships through the filesystem hot lane."""
+    daemon = _start_claude_connect_daemon(
+        server,
+        tmp_path,
+        project_name="ask-user-project",
+        machine_name="shipper-e2e-ask-user",
+    )
+    session_id = daemon["session_id"]
+    transcript = daemon["transcript"]
+    proc = daemon["proc"]
+    log_dir = daemon["log_dir"]
+    longhouse_home = daemon["longhouse_home"]
+    initial_lines, answer_line = _ask_user_transcript_lines(session_id)
+
+    try:
+        _wait_for_log_contains(log_dir, "Daemon ready")
+        with transcript.open("a") as f:
+            for line in initial_lines:
+                f.write(json.dumps(line, separators=(",", ":")) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.utime(transcript, None)
+
+        initial_bytes = transcript.stat().st_size
+        initial_events = _wait_for_session_events(server, session_id, min_events=2)
+        assert any(
+            e["role"] == "assistant"
+            and e.get("tool_name") == "AskUserQuestion"
+            and e.get("tool_call_id") == "toolu_ask_user"
+            for e in initial_events
+        ), initial_events
+
+        with transcript.open("a") as f:
+            f.write(json.dumps(answer_line, separators=(",", ":")) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.utime(transcript, None)
+
+        final_bytes = transcript.stat().st_size
+        events = _wait_for_session_events(server, session_id, min_events=3)
+        ask_result = next(
+            (
+                e for e in events
+                if e["role"] == "tool"
+                and e.get("tool_call_id") == "toolu_ask_user"
+                and "Use dnd-kit" in (e.get("tool_output_text") or e.get("content_text") or "")
+            ),
+            None,
+        )
+        assert ask_result is not None, events
+
+        trace = _wait_for_ship_trace(
+            server,
+            session_id,
+            offset=initial_bytes,
+            new_offset=final_bytes,
+        )
+        assert trace["work_context"] == "live_transcript"
+        assert trace["observation_source"] == "fsevent"
+        assert trace["range_bytes"] == final_bytes - initial_bytes
+    except Exception:
+        daemon_output = _terminate_process(proc)
+        raise AssertionError(
+            f"daemon AskUserQuestion watcher integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}"
+        ) from None
+    finally:
+        if proc.poll() is None:
+            _terminate_process(proc)
+        shutil.rmtree(longhouse_home, ignore_errors=True)
+
+
+def test_connect_daemon_waits_for_complete_ask_user_answer_line(server, tmp_path):
+    """A partial AskUserQuestion answer append does not advance the cursor."""
+    daemon = _start_claude_connect_daemon(
+        server,
+        tmp_path,
+        project_name="ask-user-partial-project",
+        machine_name="shipper-e2e-ask-user-partial",
+    )
+    session_id = daemon["session_id"]
+    transcript = daemon["transcript"]
+    proc = daemon["proc"]
+    log_dir = daemon["log_dir"]
+    longhouse_home = daemon["longhouse_home"]
+    initial_lines, answer_line = _ask_user_transcript_lines(session_id)
+
+    try:
+        _wait_for_log_contains(log_dir, "Daemon ready")
+        with transcript.open("a") as f:
+            for line in initial_lines:
+                f.write(json.dumps(line, separators=(",", ":")) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.utime(transcript, None)
+
+        initial_bytes = transcript.stat().st_size
+        _wait_for_session_events(server, session_id, min_events=2)
+
+        answer_jsonl = json.dumps(answer_line, separators=(",", ":")) + "\n"
+        split_at = len(answer_jsonl) // 2
+        with transcript.open("a") as f:
+            f.write(answer_jsonl[:split_at])
+            f.flush()
+            os.fsync(f.fileno())
+        os.utime(transcript, None)
+
+        time.sleep(0.4)
+        assert len(_get_events(server, session_id)) == 2
+        assert not any(
+            trace.get("offset") == initial_bytes
+            for trace in _session_ship_traces(server, session_id)
+        )
+
+        with transcript.open("a") as f:
+            f.write(answer_jsonl[split_at:])
+            f.flush()
+            os.fsync(f.fileno())
+        os.utime(transcript, None)
+
+        final_bytes = transcript.stat().st_size
+        events = _wait_for_session_events(server, session_id, min_events=3)
+        ask_results = [
+            e for e in events
+            if e["role"] == "tool"
+            and e.get("tool_call_id") == "toolu_ask_user"
+            and "Use dnd-kit" in (e.get("tool_output_text") or e.get("content_text") or "")
+        ]
+        assert len(ask_results) == 1, events
+
+        trace = _wait_for_ship_trace(
+            server,
+            session_id,
+            offset=initial_bytes,
+            new_offset=final_bytes,
+        )
+        assert trace["work_context"] == "live_transcript"
+        assert trace["observation_source"] == "fsevent"
+        assert trace["range_bytes"] == final_bytes - initial_bytes
+    except Exception:
+        daemon_output = _terminate_process(proc)
+        raise AssertionError(
+            f"daemon partial AskUserQuestion watcher integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}"
         ) from None
     finally:
         if proc.poll() is None:
