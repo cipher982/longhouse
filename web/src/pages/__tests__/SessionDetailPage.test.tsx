@@ -342,6 +342,7 @@ describe("SessionDetailPage", () => {
       "data-launch-command",
       "",
     );
+    expect(screen.getByTestId("render-telemetry-panel")).toBeInTheDocument();
     expect(screen.getByText("Transcript row from Codex.")).toBeInTheDocument();
 
     const toolLabel = screen.getByText("Bash");
