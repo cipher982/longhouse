@@ -1838,17 +1838,33 @@
     margin: 0;
   }
 
-  .render-telemetry-panel__metrics div {
+  .render-telemetry-panel__diagnostics {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-2);
+    margin: 0;
+    padding-top: var(--space-2);
+    border-top: 1px solid rgba(158, 124, 90, 0.12);
+  }
+
+  .render-telemetry-panel__metrics div,
+  .render-telemetry-panel__diagnostics div {
     min-width: 0;
   }
 
-  .render-telemetry-panel__metrics dt {
+  .render-telemetry-panel__diagnostic-error {
+    grid-column: 1 / -1;
+  }
+
+  .render-telemetry-panel__metrics dt,
+  .render-telemetry-panel__diagnostics dt {
     color: var(--color-text-muted);
     font-size: var(--font-size-xs);
     text-transform: uppercase;
   }
 
-  .render-telemetry-panel__metrics dd {
+  .render-telemetry-panel__metrics dd,
+  .render-telemetry-panel__diagnostics dd {
     margin: 2px 0 0;
     overflow: hidden;
     color: var(--color-text-secondary);

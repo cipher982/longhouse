@@ -36,20 +36,20 @@ Already in place:
   `/api/telemetry/client-render/recent` for admin forensic debugging.
 - The session detail page has a render telemetry panel for recent web/iOS
   render beacons on the current session.
+- iOS WebKit transcript render beacons include diagnostic payload details:
+  payload size, row count, latest item id, render sequence, JS failure count,
+  scroll-stick decision, and render stage.
 - The hot-plane e2e path asserts persisted render telemetry.
 - iOS fixture UI tests cover initial bottom pinning, live updates, keyboard
   updates, streaming updates, optimistic send, origin marker display, and large
   transcript scrolling.
 - Web and iOS both reconcile Longhouse-authored input by durable identity
   instead of raw text matching.
+- `make test-mobile-chat` runs the focused web telemetry and iOS unit-test
+  validation path.
 
 Known gaps:
 
-- iOS render beacons currently use event timestamps but do not expose WebKit
-  payload/render diagnostics such as payload size, row count, JS failures, or
-  scroll-stick decisions.
-- The high-value mobile chat validation subset is still spread across ad hoc
-  commands instead of one focused target.
 - The WebKit transcript UI is functional but still needs product polish for
   dense tool rows, long-message expansion, copy/text selection, and active tool
   state.
@@ -81,6 +81,10 @@ Done when:
 
 Extend the iOS WebKit renderer and beacon payload path with lightweight
 debug-only diagnostics.
+
+Status: Done for persisted beacon diagnostics. A visible hidden debug readout
+can still be added later if dogfood reports need on-device inspection before
+beacons arrive.
 
 Deliverables:
 

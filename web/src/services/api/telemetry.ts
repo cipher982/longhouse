@@ -9,8 +9,21 @@ export interface ClientRenderBeaconItem {
   emitted_at_ms: number | null;
   rendered_at_ms: number | null;
   clock_skew_ms: number | null;
+  webkit?: ClientRenderWebKitDiagnostics | null;
   observed_at: string | null;
   received_at: string | null;
+}
+
+export interface ClientRenderWebKitDiagnostics {
+  stage?: string | null;
+  payload_byte_size?: number | null;
+  row_count?: number | null;
+  latest_item_id?: string | null;
+  render_sequence?: number | null;
+  js_failure_count?: number | null;
+  should_stick_to_bottom?: boolean | null;
+  web_view_loaded?: boolean | null;
+  error_description?: string | null;
 }
 
 export interface RecentClientRenderBeaconsResponse {

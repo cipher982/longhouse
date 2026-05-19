@@ -91,6 +91,20 @@ def _take_token(ip: str, now: float) -> bool:
     return True
 
 
+class WebKitRenderDiagnostics(BaseModel):
+    """Optional iOS WebKit transcript render diagnostics."""
+
+    stage: Literal["queued", "rendered", "failed", "duplicate"]
+    payload_byte_size: int = Field(..., ge=0, le=5_000_000)
+    row_count: int = Field(..., ge=0, le=50_000)
+    latest_item_id: str | None = Field(None, max_length=128)
+    render_sequence: int = Field(..., ge=0, le=10_000_000)
+    js_failure_count: int = Field(..., ge=0, le=10_000_000)
+    should_stick_to_bottom: bool
+    web_view_loaded: bool
+    error_description: str | None = Field(None, max_length=512)
+
+
 class RenderBeacon(BaseModel):
     """Single event-render beacon from a client."""
 
@@ -101,6 +115,7 @@ class RenderBeacon(BaseModel):
     emitted_at_ms: int = Field(..., description="Server-stamped emitted_at for the event, in ms epoch")
     rendered_at_ms: int = Field(..., description="Client wall-clock render time, in ms epoch")
     clock_skew_ms: int = Field(0, description="Client-measured skew vs server (positive: client ahead)")
+    webkit: WebKitRenderDiagnostics | None = None
 
 
 @dataclass
@@ -142,6 +157,8 @@ def _persist_render_beacon(db: Session, beacon: RenderBeacon, *, latency_ms: int
         "clock_skew_ms": beacon.clock_skew_ms,
         "latency_ms": latency_ms,
     }
+    if beacon.webkit is not None:
+        payload["webkit"] = beacon.webkit.model_dump(exclude_none=True)
     record_session_observation(
         db,
         observation_id=(
@@ -208,10 +225,14 @@ async def client_render_beacon(
             event_render_beacons_total.labels(surface=b.surface, outcome="stale").inc()
             continue
 
-        managed_label = "true" if b.managed else "false"
-        event_end_to_end_latency_seconds.labels(surface=b.surface, managed=managed_label).observe(latency_s)
-        event_render_beacons_total.labels(surface=b.surface, outcome="ok").inc()
-        _samples.append(_Sample(now_mono, b.surface, b.managed, latency_s, b.session_id, b.event_id))
+        webkit_stage = b.webkit.stage if b.webkit else None
+        if webkit_stage == "failed":
+            event_render_beacons_total.labels(surface=b.surface, outcome="render_failed").inc()
+        else:
+            managed_label = "true" if b.managed else "false"
+            event_end_to_end_latency_seconds.labels(surface=b.surface, managed=managed_label).observe(latency_s)
+            event_render_beacons_total.labels(surface=b.surface, outcome="ok").inc()
+            _samples.append(_Sample(now_mono, b.surface, b.managed, latency_s, b.session_id, b.event_id))
         try:
             _persist_render_beacon(db, b, latency_ms=int(round(latency_ms)))
         except Exception:
@@ -266,6 +287,7 @@ async def recent_client_render_beacons(
                 "emitted_at_ms": payload.get("emitted_at_ms"),
                 "rendered_at_ms": payload.get("rendered_at_ms"),
                 "clock_skew_ms": payload.get("clock_skew_ms"),
+                "webkit": payload.get("webkit"),
                 "observed_at": row.observed_at.isoformat() if row.observed_at else None,
                 "received_at": row.received_at.isoformat() if row.received_at else None,
             }

@@ -42,6 +42,16 @@ describe("RenderTelemetryPanel", () => {
           emitted_at_ms: 1_769_482_800_000,
           rendered_at_ms: 1_769_482_800_124,
           clock_skew_ms: -8,
+          webkit: {
+            stage: "rendered",
+            payload_byte_size: 4096,
+            row_count: 18,
+            latest_item_id: "assistant:42",
+            render_sequence: 3,
+            js_failure_count: 0,
+            should_stick_to_bottom: true,
+            web_view_loaded: true,
+          },
           observed_at: "2026-01-22T19:00:00Z",
           received_at: "2026-01-22T19:00:01Z",
         },
@@ -65,6 +75,9 @@ describe("RenderTelemetryPanel", () => {
     expect(screen.getByText("ios")).toBeInTheDocument();
     expect(screen.getByText("124ms")).toBeInTheDocument();
     expect(screen.getByText("-8ms")).toBeInTheDocument();
+    expect(screen.getByText("WebKit")).toBeInTheDocument();
+    expect(screen.getByText("4096B")).toBeInTheDocument();
+    expect(screen.getByText("assistant:42")).toBeInTheDocument();
   });
 
   it("shows an empty state after a successful empty fetch", async () => {

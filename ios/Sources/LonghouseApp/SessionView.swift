@@ -157,7 +157,16 @@ struct SessionView: View {
                     items: viewModel.items,
                     submittedInputs: viewModel.submittedInputs,
                     sessionEnded: viewModel.isSessionEnded,
-                    errorMessage: viewModel.errorMessage
+                    errorMessage: viewModel.errorMessage,
+                    onDiagnostics: { diagnostics in
+                        Task {
+                            await viewModel.recordTranscriptDiagnostics(
+                                diagnostics,
+                                sessionId: sessionId,
+                                appState: appState
+                            )
+                        }
+                    }
                 )
                 .accessibilityIdentifier("session-chat-transcript")
             }
@@ -571,6 +580,7 @@ final class SessionViewModel: ObservableObject {
     @Published var isUpdatingLoopMode = false
     @Published var draftErrorMessage: String?
     @Published var loopModeErrorMessage: String?
+    @Published var transcriptDiagnostics: RenderBeaconReporter.WebKitDiagnostics?
     /// Most recent send outcome so the UI can distinguish an immediate
     /// dispatch from a queued input without pretending the latter was sent.
     @Published var lastSendOutcome: SessionInputOutcome?
@@ -590,6 +600,7 @@ final class SessionViewModel: ObservableObject {
     private var streamTask: Task<Void, Never>?
     private var streamConnected: Bool = false
     private var activeSessionId: String?
+    private var lastWorkspaceEvents: [SessionEvent] = []
     private let apiFactory: (String) -> SessionWorkspaceClient?
     private let streamFactory: (URL, String) -> SessionWorkspaceStreamSource
     private let enableRealtime: Bool
@@ -614,6 +625,8 @@ final class SessionViewModel: ObservableObject {
             detail = nil
             items = []
             submittedInputs = []
+            transcriptDiagnostics = nil
+            lastWorkspaceEvents = []
             errorMessage = nil
         }
         if isInitialLoading || !sessionChanged {
@@ -780,6 +793,22 @@ final class SessionViewModel: ObservableObject {
         }
     }
 
+    func recordTranscriptDiagnostics(
+        _ diagnostics: RenderBeaconReporter.WebKitDiagnostics,
+        sessionId: String,
+        appState: AppState
+    ) async {
+        transcriptDiagnostics = diagnostics
+        guard diagnostics.stage == "rendered" || diagnostics.stage == "failed" else { return }
+        guard let api = apiFactory(appState.serverURL) else { return }
+        await reportRenderBeacon(
+            api: api,
+            sessionId: sessionId,
+            events: lastWorkspaceEvents,
+            webkitDiagnostics: diagnostics
+        )
+    }
+
     private func startVisiblePolling(sessionId: String, appState: AppState) {
         pollTask?.cancel()
         pollTask = Task { [weak self] in
@@ -844,12 +873,9 @@ final class SessionViewModel: ObservableObject {
             guard activeSessionId == sessionId else { return }
             self.detail = workspace.session
             let events = workspace.events
+            self.lastWorkspaceEvents = events
             self.items = TimelineBuilder.build(events: events)
             reconcileSubmittedInputs(with: events)
-            Task { [weak self] in
-                guard let self else { return }
-                await self.reportRenderBeacon(api: api, sessionId: sessionId, events: events)
-            }
         } catch {
             if !allowFailure { throw error }
         }
@@ -890,7 +916,12 @@ final class SessionViewModel: ObservableObject {
         }
     }
 
-    private func reportRenderBeacon(api: SessionWorkspaceClient, sessionId: String, events: [SessionEvent]) async {
+    private func reportRenderBeacon(
+        api: SessionWorkspaceClient,
+        sessionId: String,
+        events: [SessionEvent],
+        webkitDiagnostics: RenderBeaconReporter.WebKitDiagnostics?
+    ) async {
         guard let latest = events.last else { return }
         guard let emittedAt = LonghouseDateParser.parse(latest.timestamp) else { return }
         let caps = detail?.capabilities
@@ -899,7 +930,8 @@ final class SessionViewModel: ObservableObject {
             sessionId: sessionId,
             latestEventId: String(latest.id),
             emittedAt: emittedAt,
-            managed: managed
+            managed: managed,
+            webkit: webkitDiagnostics
         ) {
             await api.postRenderBeacon(payload)
         }

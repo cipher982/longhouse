@@ -41,6 +41,7 @@ function surfaceVariant(surface: string | null | undefined): "neutral" | "succes
 
 function RenderTelemetryRow({ beacon }: { beacon: ClientRenderBeaconItem }) {
   const surface = beacon.surface || "unknown";
+  const webkit = beacon.webkit ?? null;
   return (
     <li className="render-telemetry-panel__row">
       <div className="render-telemetry-panel__row-header">
@@ -67,6 +68,46 @@ function RenderTelemetryRow({ beacon }: { beacon: ClientRenderBeaconItem }) {
           <dd>{formatTimestamp(beacon.received_at)}</dd>
         </div>
       </dl>
+      {webkit ? (
+        <dl className="render-telemetry-panel__diagnostics" aria-label="WebKit diagnostics">
+          <div>
+            <dt>WebKit</dt>
+            <dd>{webkit.stage ?? "unknown"}</dd>
+          </div>
+          <div>
+            <dt>rows</dt>
+            <dd>{formatMetric(webkit.row_count, "")}</dd>
+          </div>
+          <div>
+            <dt>payload</dt>
+            <dd>{formatMetric(webkit.payload_byte_size, "B")}</dd>
+          </div>
+          <div>
+            <dt>sequence</dt>
+            <dd>{formatMetric(webkit.render_sequence, "")}</dd>
+          </div>
+          <div>
+            <dt>JS failures</dt>
+            <dd>{formatMetric(webkit.js_failure_count, "")}</dd>
+          </div>
+          <div>
+            <dt>stick</dt>
+            <dd>{webkit.should_stick_to_bottom ? "yes" : "no"}</dd>
+          </div>
+          {webkit.latest_item_id ? (
+            <div>
+              <dt>latest</dt>
+              <dd title={webkit.latest_item_id}>{webkit.latest_item_id}</dd>
+            </div>
+          ) : null}
+          {webkit.error_description ? (
+            <div className="render-telemetry-panel__diagnostic-error">
+              <dt>error</dt>
+              <dd title={webkit.error_description}>{webkit.error_description}</dd>
+            </div>
+          ) : null}
+        </dl>
+      ) : null}
     </li>
   );
 }
