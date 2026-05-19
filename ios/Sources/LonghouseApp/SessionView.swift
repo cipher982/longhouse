@@ -5,6 +5,25 @@ import SwiftUI
 private let sessionViewLogger = Logger(subsystem: "ai.longhouse.ios", category: "SessionView")
 #endif
 
+private enum TranscriptRendererMode {
+    case native
+    case web
+
+    var label: String {
+        switch self {
+        case .native: return "Native transcript"
+        case .web: return "Web transcript spike"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .native: return "text.bubble"
+        case .web: return "safari"
+        }
+    }
+}
+
 struct SessionWorkspaceStreamSource: Sendable {
     let start: @Sendable () async -> AsyncStream<SessionWorkspaceStream.Event>
     let stop: @Sendable () async -> Void
@@ -31,6 +50,7 @@ struct SessionView: View {
     @State private var shouldFollowTranscriptBottom = true
     @State private var transcriptUserScrollActive = false
     @State private var transcriptScrollTask: Task<Void, Never>?
+    @State private var transcriptRendererMode: TranscriptRendererMode = .native
     @FocusState private var composerFocused: Bool
     private let transcriptBottomAnchorID = "session-transcript-bottom-anchor"
 
@@ -58,6 +78,9 @@ struct SessionView: View {
         .navigationTitle(viewModel.detail?.displayTitle ?? fallbackTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                transcriptRendererButton
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 watchButton
             }
@@ -119,6 +142,32 @@ struct SessionView: View {
         }
     }
 
+    private var transcriptRendererButton: some View {
+        Menu {
+            Button {
+                transcriptRendererMode = .native
+            } label: {
+                Label(
+                    TranscriptRendererMode.native.label,
+                    systemImage: transcriptRendererMode == .native ? "checkmark.circle.fill" : TranscriptRendererMode.native.systemImage
+                )
+            }
+            Button {
+                transcriptRendererMode = .web
+            } label: {
+                Label(
+                    TranscriptRendererMode.web.label,
+                    systemImage: transcriptRendererMode == .web ? "checkmark.circle.fill" : TranscriptRendererMode.web.systemImage
+                )
+            }
+        } label: {
+            Label(transcriptRendererMode.label, systemImage: transcriptRendererMode.systemImage)
+                .labelStyle(.iconOnly)
+        }
+        .accessibilityLabel("Transcript renderer")
+        .accessibilityValue(transcriptRendererMode.label)
+    }
+
     @ViewBuilder
     private var runtimeDock: some View {
         if let detail = viewModel.detail {
@@ -166,8 +215,19 @@ struct SessionView: View {
                 .padding()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollViewReader { proxy in
-                    transcriptScroll(proxy: proxy)
+                switch transcriptRendererMode {
+                case .native:
+                    ScrollViewReader { proxy in
+                        transcriptScroll(proxy: proxy)
+                    }
+                case .web:
+                    WebTranscriptView(
+                        items: viewModel.items,
+                        submittedInputs: viewModel.submittedInputs,
+                        sessionEnded: viewModel.isSessionEnded,
+                        errorMessage: viewModel.errorMessage
+                    )
+                    .accessibilityIdentifier("session-chat-transcript-web")
                 }
             }
         }
