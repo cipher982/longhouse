@@ -65,17 +65,21 @@ export default defineConfig(({ mode }) => {
   const basePath = "/";
 
   // Proxy target priority:
-  //   1. VITE_PROXY_TARGET env — explicit override (used by e2e webServer)
+  //   1. VITE_PROXY_TARGET shell env — explicit override (used by e2e webServer
+  //      and CI, where `process.env.VITE_PROXY_TARGET` is set on the command).
   //   2. ~/.longhouse/machine/{target-url,device-token} — point local UI at
   //      the already-authenticated remote backend used by the CLI/engine.
-  //   3. Docker Compose DNS fallback
+  //   3. VITE_PROXY_TARGET from the repo `.env` file — historical local-backend
+  //      default. Only used when the dev-proxy file is absent.
+  //   4. Docker Compose DNS fallback.
   //
-  // The env var wins so test runs and CI can pin a deterministic backend
-  // without picking up whatever happens to be in ~/.longhouse on the dev
-  // machine.
-  const explicitProxyTarget = process.env.VITE_PROXY_TARGET || rootEnv.VITE_PROXY_TARGET || null;
-  const devProxy = explicitProxyTarget ? null : loadDevProxy();
-  const proxyTarget = explicitProxyTarget || devProxy?.target || "http://backend:8000";
+  // The shell env wins so test runs / CI pin a deterministic backend, but a
+  // line in `.env` like `VITE_PROXY_TARGET=http://localhost:47300` does NOT
+  // pre-empt the dev-proxy seam — that's the point of the seam.
+  const shellProxyTarget = process.env.VITE_PROXY_TARGET || null;
+  const devProxy = shellProxyTarget ? null : loadDevProxy();
+  const proxyTarget =
+    shellProxyTarget || devProxy?.target || rootEnv.VITE_PROXY_TARGET || "http://backend:8000";
 
   if (devProxy) {
     console.log(`[dev-proxy] forwarding /api/* to ${devProxy.target} as device-token owner`);
