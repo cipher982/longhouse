@@ -14,16 +14,40 @@ from zerg.database import db_session
 from zerg.database import get_db
 
 
+def _device_token_bearer(request: Request) -> str | None:
+    """Return a `zdt_...` device token from the Authorization header, or None.
+
+    Browser routes deliberately reject generic JWT bearers — that's the cookie
+    boundary. Device tokens are a separate, owner-scoped credential issued by
+    the CLI; allowing them lets the local dev proxy drive the UI without a
+    browser cookie. JWT bearers still fall through to None here.
+    """
+    header = request.headers.get("Authorization") or request.headers.get("authorization")
+    if not header:
+        return None
+    scheme, _, token = header.partition(" ")
+    if scheme.lower() != "bearer":
+        return None
+    token = token.strip()
+    return token if token.startswith("zdt_") else None
+
+
 def _get_browser_session_user(request: Request, db: Session):
-    """Validate only the browser session cookie and return the authenticated user."""
+    """Validate browser auth (cookie or device-token bearer) and return user."""
     if auth_deps.AUTH_DISABLED:
         return auth_deps._get_strategy().get_current_user(request, db)
 
     session_token = request.cookies.get(SESSION_COOKIE_NAME)
-    if not session_token:
-        return None
+    if session_token:
+        user = auth_deps._get_strategy().validate_ws_token(session_token, db)
+        if user is not None:
+            return user
 
-    return auth_deps._get_strategy().validate_ws_token(session_token, db)
+    device_token = _device_token_bearer(request)
+    if device_token:
+        return auth_deps._get_strategy().validate_ws_token(device_token, db)
+
+    return None
 
 
 def get_current_browser_user(request: Request, db: Session = Depends(get_db)):
