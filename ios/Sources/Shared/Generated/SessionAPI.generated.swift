@@ -222,6 +222,7 @@ struct APIEventResponse: Codable, Hashable, Sendable {
     let id: Int
     let role: String
     let contentText: String?
+    let rawContentText: String?
     let toolName: String?
     let toolInputJson: [String: JSONValue]?
     let toolOutputText: String?

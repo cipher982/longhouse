@@ -24,6 +24,7 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionTurn
 from zerg.services.agents_store import AgentsStore
+from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.managed_local_transport import build_managed_local_attach_command
 from zerg.services.provisional_events import TranscriptPreview
 from zerg.services.session_capabilities import build_session_capabilities
@@ -780,6 +781,10 @@ class EventResponse(UTCBaseModel):
     id: int = Field(..., description="Event ID")
     role: str = Field(..., description="Message role")
     content_text: Optional[str] = Field(None, description="Message content")
+    raw_content_text: Optional[str] = Field(
+        None,
+        description="Raw provider content when it differs from display content",
+    )
     tool_name: Optional[str] = Field(None, description="Tool name")
     tool_input_json: Optional[Dict[str, Any]] = Field(None, description="Tool input")
     tool_output_text: Optional[str] = Field(None, description="Tool output")
@@ -1343,10 +1348,19 @@ def build_event_response(
     boundary: int | None,
     head_branch_id: int | None,
 ) -> EventResponse:
+    content_text = event.content_text
+    raw_content_text = None
+    if event.role == "user" and content_text is not None:
+        display_text = strip_claude_channel_wrapper(content_text)
+        if display_text != content_text:
+            content_text = display_text
+            raw_content_text = event.content_text
+
     return EventResponse(
         id=event.id,
         role=event.role,
-        content_text=event.content_text,
+        content_text=content_text,
+        raw_content_text=raw_content_text,
         tool_name=event.tool_name,
         tool_input_json=event.tool_input_json,
         tool_output_text=event.tool_output_text,

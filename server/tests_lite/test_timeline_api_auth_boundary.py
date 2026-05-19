@@ -453,6 +453,62 @@ def test_timeline_session_workspace_bootstraps_session_thread_and_projection(tmp
         api_app.dependency_overrides.clear()
 
 
+def test_timeline_session_workspace_projects_claude_channel_display_text(tmp_path):
+    session_local = _make_db(tmp_path)
+    raw_text = '<channel source="longhouse">\ncontinue the migration\n</channel>'
+    with session_local() as db:
+        _seed_user(db)
+        session_id = _seed_session(db)
+        event = AgentEvent(
+            session_id=session_id,
+            role="user",
+            content_text=raw_text,
+            timestamp=datetime.now(timezone.utc),
+        )
+        db.add(event)
+        db.commit()
+        event_id = event.id
+
+    client = _make_client(session_local)
+
+    try:
+        with _force_browser_jwt_mode():
+            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
+            response = client.get(f"/timeline/sessions/{session_id}/workspace?limit=50")
+
+        assert response.status_code == 200
+        payload = response.json()
+        events = [item["event"] for item in payload["projection"]["items"] if item["kind"] == "event"]
+        assert events == [
+            {
+                "id": event_id,
+                "role": "user",
+                "content_text": "continue the migration",
+                "raw_content_text": raw_text,
+                "tool_name": None,
+                "tool_input_json": None,
+                "tool_output_text": None,
+                "tool_call_id": None,
+                "timestamp": events[0]["timestamp"],
+                "in_active_context": True,
+                "branch_id": None,
+                "is_head_branch": True,
+                "event_origin": "durable",
+                "provisional_state": None,
+                "provisional_cursor": None,
+                "provisional_complete": False,
+                "reconciled_event_id": None,
+            }
+        ]
+
+        with session_local() as db:
+            stored = db.query(AgentEvent).filter(AgentEvent.id == event_id).one()
+            assert stored.content_text == raw_text
+    finally:
+        auth_deps._strategy_cache.clear()
+        api_app.dependency_overrides.clear()
+
+
 def test_timeline_and_agents_session_workspace_return_same_body(tmp_path):
     session_local = _make_db(tmp_path)
     with session_local() as db:
