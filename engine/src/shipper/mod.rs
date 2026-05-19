@@ -3428,6 +3428,61 @@ mod tests {
         assert_eq!(prepared_second.total_event_count(), 1);
     }
 
+    #[tokio::test]
+    async fn test_reconciliation_scan_repairs_missed_append() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let provider_root = dir.path().join("projects");
+        std::fs::create_dir_all(&provider_root).unwrap();
+        let path = provider_root.join("reconcile1111-2222-3333-4444-555566667777.jsonl");
+        let path_str = path.to_string_lossy().to_string();
+        let first = make_line("reconcile-1", "first");
+        let second = make_line("reconcile-2", "second");
+        std::fs::write(&path, format!("{first}\n")).unwrap();
+        let first_end = std::fs::metadata(&path).unwrap().len();
+
+        FileState::new(&conn)
+            .set_offset(
+                &path_str,
+                first_end,
+                "reconcile1111-2222-3333-4444-555566667777",
+                "reconcile1111-2222-3333-4444-555566667777",
+                "claude",
+            )
+            .unwrap();
+
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(format!("{second}\n").as_bytes())
+            .unwrap();
+
+        let (url, captured, handle) = spawn_http_sequence_server(&[("200 OK", "{}")]);
+        let client = make_test_client(&url);
+        let providers = vec![ProviderConfig {
+            name: "claude",
+            root: provider_root,
+            extension: "jsonl",
+        }];
+
+        let (files_shipped, events_shipped) =
+            full_scan(&providers, &conn, &client, CompressionAlgo::Gzip, None)
+                .await
+                .unwrap();
+        handle.join().unwrap();
+
+        assert_eq!(files_shipped, 1);
+        assert_eq!(events_shipped, 1);
+        assert_eq!(
+            FileState::new(&conn).get_offset(&path_str).unwrap(),
+            std::fs::metadata(&path).unwrap().len()
+        );
+        let bodies = captured.lock().unwrap().clone();
+        assert_eq!(bodies.len(), 1);
+        assert_eq!(decode_payload_source_offsets(&bodies[0]), vec![first_end]);
+    }
+
     #[test]
     fn test_prepare_file_batches_marks_user_only_partial_turn_as_not_reply_ready() {
         let (_tmp, conn) = make_db();
