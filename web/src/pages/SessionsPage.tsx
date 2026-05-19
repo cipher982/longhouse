@@ -35,6 +35,7 @@ import {
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { RecallPanel } from "../components/RecallPanel";
 import { TimelineInbox } from "../components/sessions/TimelineInbox";
+import { InboxTuner } from "../components/sessions/InboxTuner";
 import { FilterChip, FilterPopover } from "../components/sessions/SessionsFilter";
 import LaunchSessionModal from "../components/LaunchSessionModal";
 import {
@@ -764,6 +765,7 @@ export default function SessionsPage() {
           navigate(`/timeline/${sessionId}`);
         }}
       />
+      <InboxTuner />
     </PageShell>
   );
 }
