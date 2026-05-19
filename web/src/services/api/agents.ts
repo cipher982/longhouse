@@ -371,6 +371,7 @@ export interface AgentEvent {
   id: number;
   role: string;
   content_text: string | null;
+  raw_content_text?: string | null;
   tool_name: string | null;
   tool_input_json: Record<string, unknown> | null;
   tool_output_text: string | null;

@@ -5639,6 +5639,11 @@ export interface components {
              */
             content_text?: string | null;
             /**
+             * Raw Content Text
+             * @description Raw provider content when it differs from display content
+             */
+            raw_content_text?: string | null;
+            /**
              * Tool Name
              * @description Tool name
              */
