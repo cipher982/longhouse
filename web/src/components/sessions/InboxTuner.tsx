@@ -31,7 +31,7 @@ const KNOBS: TunerKnob[] = [
   { key: "rowMinH", cssVar: "--inbox-row-min-h", label: "Row height", unit: "px", min: 22, max: 48, step: 1, defaultValue: 29 },
   { key: "repoFont", cssVar: "--inbox-repo-font", label: "Repo font", unit: "px", min: 14, max: 28, step: 1, defaultValue: 22 },
   { key: "repoPadY", cssVar: "--inbox-repo-pad-y", label: "Repo pad y", unit: "px", min: 4, max: 24, step: 1, defaultValue: 7 },
-  { key: "metaFont", cssVar: "--inbox-meta-font", label: "Meta font", unit: "px", min: 10, max: 18, step: 0.5, defaultValue: 15 },
+  { key: "metaFont", cssVar: "--inbox-meta-font", label: "Meta font", unit: "px", min: 10, max: 18, step: 0.5, defaultValue: 13 },
   { key: "statusWidth", cssVar: "--inbox-status-width", label: "Status slot", unit: "ch", min: 10, max: 26, step: 1, defaultValue: 13 },
   { key: "sourceWidth", cssVar: "--inbox-source-width", label: "Source slot", unit: "ch", min: 6, max: 22, step: 1, defaultValue: 12 },
   { key: "timeWidth", cssVar: "--inbox-time-width", label: "Time slot", unit: "ch", min: 12, max: 24, step: 1, defaultValue: 16 },
