@@ -224,24 +224,24 @@ struct SessionViewModelTests {
     }
 
     @Test
-    func claudeChannelWrapperIsStrippedForDisplayText() {
-        #expect(
-            ClaudeChannelText.stripWrapper("<channel name=\"commentary\">\ncontinue\n</channel>")
-                == "continue"
-        )
-        #expect(ClaudeChannelText.stripWrapper("continue") == "continue")
-        #expect(ClaudeChannelText.stripWrapper("<channel>\ncontinue") == "<channel>\ncontinue")
-    }
-
-    @Test
-    func submittedInputReconcilesAgainstClaudeChannelWrappedTranscriptEvent() async throws {
+    func submittedInputReconcilesBySessionInputId() async throws {
         let before = try makeWorkspace(eventId: 10, content: "Before send")
         let after = try makeWorkspace(
             eventId: 11,
-            content: "<channel name=\"commentary\">\ncontinue\n</channel>",
-            timestamp: ISO8601DateFormatter().string(from: Date())
+            content: "server projected text",
+            timestamp: ISO8601DateFormatter().string(from: Date()),
+            inputOriginJSON: """
+            {
+              "authored_via": "longhouse",
+              "session_input_id": 7,
+              "client_request_id": null
+            }
+            """
         )
-        let api = FakeSessionWorkspaceClient(workspaces: [before, after])
+        let api = FakeSessionWorkspaceClient(
+            workspaces: [before, after],
+            sendResponse: SessionInputResponse(outcome: .sent, inputId: 7, clientRequestId: nil, intent: "auto", queued: [])
+        )
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
         let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
@@ -255,13 +255,71 @@ struct SessionViewModelTests {
         #expect(model.items.map(\.id) == ["user:11"])
     }
 
-    private func makeWorkspace(
+    @Test
+    func submittedInputReconcilesByClientRequestId() async throws {
+        let before = try makeWorkspace(eventId: 10, content: "Before send")
+        let api = FakeSessionWorkspaceClient(
+            workspaces: [before],
+            sendResponse: SessionInputResponse(outcome: .sent, inputId: 7, clientRequestId: nil, intent: "auto", queued: []),
+            afterSendWorkspace: { clientRequestId in
+                try makeWorkspace(
+                    eventId: 11,
+                    content: "server projected text",
+                    timestamp: ISO8601DateFormatter().string(from: Date()),
+                    inputOriginJSON: """
+                    {
+                      "authored_via": "longhouse",
+                      "session_input_id": null,
+                      "client_request_id": "\(clientRequestId ?? "")"
+                    }
+                    """
+                )
+            }
+        )
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
+        await waitForSubmittedInputsToClear(model)
+
+        #expect(sent)
+        #expect(model.submittedInputs.isEmpty)
+        #expect(model.items.map(\.id) == ["user:11"])
+    }
+
+    @Test
+    func submittedInputDoesNotReconcileByMatchingTextWithoutIdentity() async throws {
+        let before = try makeWorkspace(eventId: 10, content: "Before send")
+        let after = try makeWorkspace(
+            eventId: 11,
+            content: "continue",
+            timestamp: ISO8601DateFormatter().string(from: Date())
+        )
+        let api = FakeSessionWorkspaceClient(workspaces: [before, after])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
+        await waitForWorkspaceRequestCount(api, atLeast: 2)
+
+        #expect(sent)
+        #expect(model.submittedInputs.count == 1)
+        #expect(model.items.map(\.id) == ["user:11"])
+    }
+
+    nonisolated private func makeWorkspace(
         eventId: Int,
         content: String,
-        timestamp: String = "2026-05-02T20:00:00Z"
+        timestamp: String = "2026-05-02T20:00:00Z",
+        inputOriginJSON: String? = nil
     ) throws -> SessionWorkspaceResponse {
         let encodedContent = try jsonString(content)
         let encodedTimestamp = try jsonString(timestamp)
+        let inputOriginField = inputOriginJSON.map { ",\n                  \"input_origin\": \($0)" } ?? ""
         let json = """
         {
           "session": {
@@ -298,7 +356,7 @@ struct SessionViewModelTests {
                   "content_text": \(encodedContent),
                   "timestamp": \(encodedTimestamp),
                   "in_active_context": true,
-                  "is_head_branch": true
+                  "is_head_branch": true\(inputOriginField)
                 }
               }
             ],
@@ -312,7 +370,7 @@ struct SessionViewModelTests {
         return try JSONDecoder.snakeCase.decode(SessionWorkspaceResponse.self, from: json)
     }
 
-    private func jsonString(_ value: String) throws -> String {
+    nonisolated private func jsonString(_ value: String) throws -> String {
         let data = try JSONEncoder().encode(value)
         return String(data: data, encoding: .utf8)!
     }
@@ -320,6 +378,13 @@ struct SessionViewModelTests {
     private func waitForSubmittedInputsToClear(_ model: SessionViewModel) async {
         for _ in 0..<50 {
             if model.submittedInputs.isEmpty { return }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+
+    private func waitForWorkspaceRequestCount(_ api: FakeSessionWorkspaceClient, atLeast count: Int) async {
+        for _ in 0..<50 {
+            if await api.workspaceRequestCount() >= count { return }
             try? await Task.sleep(nanoseconds: 20_000_000)
         }
     }
@@ -350,24 +415,31 @@ private enum FakeSendStep: Sendable {
 private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
     private var workspaces: [SessionWorkspaceResponse]
     private let sendResponse: SessionInputResponse
+    private let afterSendWorkspace: (@Sendable (String?) throws -> SessionWorkspaceResponse)?
     private var shouldFailWorkspaceLoads = false
     private var sendError: Error?
     private var sendSteps: [FakeSendStep] = []
     private var workspaceRequests: [(id: String, limit: Int, branchMode: String)] = []
     private var sentInputs: [String] = []
+    private var lastClientRequestId: String?
 
     init(
         workspaces: [SessionWorkspaceResponse],
-        sendResponse: SessionInputResponse = SessionInputResponse(outcome: .sent, inputId: 1, clientRequestId: nil, intent: "auto", queued: [])
+        sendResponse: SessionInputResponse = SessionInputResponse(outcome: .sent, inputId: 1, clientRequestId: nil, intent: "auto", queued: []),
+        afterSendWorkspace: (@Sendable (String?) throws -> SessionWorkspaceResponse)? = nil
     ) {
         self.workspaces = workspaces
         self.sendResponse = sendResponse
+        self.afterSendWorkspace = afterSendWorkspace
     }
 
     func sessionWorkspace(id: String, limit: Int, branchMode: String) async throws -> SessionWorkspaceResponse {
         workspaceRequests.append((id: id, limit: limit, branchMode: branchMode))
         if shouldFailWorkspaceLoads {
             throw URLError(.cannotConnectToHost)
+        }
+        if let afterSendWorkspace, lastClientRequestId != nil {
+            return try afterSendWorkspace(lastClientRequestId)
         }
         if workspaces.count > 1 {
             return workspaces.removeFirst()
@@ -377,6 +449,7 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
 
     func sendInput(id: String, text: String, intent: String, clientRequestId: String?) async throws -> SessionInputResponse {
         sentInputs.append("\(text):\(intent)")
+        lastClientRequestId = clientRequestId
         if !sendSteps.isEmpty {
             let step = sendSteps.removeFirst()
             switch step {

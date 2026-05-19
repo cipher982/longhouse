@@ -33,6 +33,7 @@ final class SessionChatUITests: XCTestCase {
         sendButton.tap()
 
         XCTAssertTrue(app.staticTexts[message].waitForExistence(timeout: 1))
+        XCTAssertTrue(app.descendants(matching: .any)["session-chat-input-origin-longhouse"].waitForExistence(timeout: 5))
         XCTAssertEqual(composer.value as? String, "Send a message to the live Codex session...")
     }
 

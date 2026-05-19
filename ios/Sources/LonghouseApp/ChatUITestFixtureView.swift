@@ -108,14 +108,20 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
 
     func sendInput(id: String, text: String, intent: String, clientRequestId: String?) async throws -> SessionInputResponse {
         try await Task.sleep(nanoseconds: 650_000_000)
+        let inputID = nextEventID
         events.append(Self.makeEvent(
             id: nextEventID,
             role: "user",
             content: text,
-            timestamp: ISO8601DateFormatter().string(from: Date())
+            timestamp: ISO8601DateFormatter().string(from: Date()),
+            inputOrigin: SessionInputOrigin(
+                authoredVia: .longhouse,
+                sessionInputId: inputID,
+                clientRequestId: clientRequestId
+            )
         ))
         nextEventID += 1
-        return SessionInputResponse(outcome: .sent, inputId: nextEventID, clientRequestId: nil, intent: intent, queued: [])
+        return SessionInputResponse(outcome: .sent, inputId: inputID, clientRequestId: clientRequestId, intent: intent, queued: [])
     }
 
     func draftReply(id: String, maxChars: Int) async throws -> DraftReplyResponse {
@@ -316,7 +322,13 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         )
     }
 
-    private static func makeEvent(id: Int, role: String, content: String, timestamp: String) -> SessionEvent {
+    private static func makeEvent(
+        id: Int,
+        role: String,
+        content: String,
+        timestamp: String,
+        inputOrigin: SessionInputOrigin? = nil
+    ) -> SessionEvent {
         SessionEvent(
             id: id,
             role: role,
@@ -328,7 +340,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             timestamp: timestamp,
             inActiveContext: true,
             isHeadBranch: true,
-            inputOrigin: nil
+            inputOrigin: inputOrigin
         )
     }
 
