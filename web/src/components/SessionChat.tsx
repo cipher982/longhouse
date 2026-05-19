@@ -127,6 +127,12 @@ function getSyncPendingPlaceholder(controlStatus?: SSEDone["control_status"]): s
   return "Completed locally. Transcript syncing...";
 }
 
+function newClientRequestId(): string {
+  const randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
+  if (randomUUID) return `web-${randomUUID()}`;
+  return `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
 export function SessionChat({
   session,
   onClose,
@@ -378,12 +384,14 @@ export function SessionChat({
 
   const handleManagedLocalSend = useCallback(
     async (message: string, intent: "auto" | "queue" | "steer" = "auto") => {
+      const clientRequestId = newClientRequestId();
       setPendingManagedLocalMessage(message);
       setIsSubmitting(true);
       try {
         const result = await postSessionInput(session.id, {
           text: message,
           intent,
+          client_request_id: clientRequestId,
         });
 
         // Seed the queued-inputs cache immediately so the chip appears

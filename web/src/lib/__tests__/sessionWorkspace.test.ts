@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildTimelineModel, getSessionInteractionCapabilities, isToolInteractionDropped } from "../sessionWorkspace";
+import {
+  buildTimelineModel,
+  getSessionInteractionCapabilities,
+  getTimelineMessagePreview,
+  isToolInteractionDropped,
+} from "../sessionWorkspace";
 import type { ToolInteraction } from "../sessionWorkspace";
 import type { AgentEvent, AgentSession, AgentSessionProjectionItem, SessionCapabilities } from "../../services/api/agents";
 
@@ -84,6 +89,26 @@ describe("buildTimelineModel", () => {
       throw new Error("Expected an orphan tool selection");
     }
     expect(selection.interaction.toolName).toBe("Bash");
+  });
+});
+
+describe("getTimelineMessagePreview", () => {
+  it("trusts server-projected display text instead of stripping provider wrappers locally", () => {
+    const event: AgentEvent = {
+      id: 7,
+      role: "user",
+      content_text: "<channel name=\"commentary\">\nkeep raw if server sent raw\n</channel>",
+      tool_name: null,
+      tool_input_json: null,
+      tool_output_text: null,
+      tool_call_id: null,
+      timestamp: "2026-03-22T22:00:00Z",
+      in_active_context: true,
+    };
+
+    expect(getTimelineMessagePreview(event)).toBe(
+      "<channel name=\"commentary\">\nkeep raw if server sent raw\n</channel>",
+    );
   });
 });
 

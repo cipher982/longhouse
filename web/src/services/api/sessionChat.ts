@@ -42,7 +42,7 @@ export interface SessionInterruptResponse {
 
 export async function postSessionInput(
   sessionId: string,
-  body: { text: string; intent: SessionInputIntent },
+  body: { text: string; intent: SessionInputIntent; client_request_id?: string | null },
 ): Promise<SessionInputResponse> {
   return request<SessionInputResponse>(`/sessions/${sessionId}/input`, {
     method: "POST",

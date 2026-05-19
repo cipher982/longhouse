@@ -64,12 +64,6 @@ export function getSessionOriginLabel(session: Pick<AgentSession, "origin_label"
   return normalizeSessionOriginLabel(session.origin_label) || session.environment || "Local";
 }
 
-/** Strip <channel ...>...</channel> wrapper injected by Claude channel bridge. */
-function stripChannelWrapper(text: string): string {
-  return text.replace(/^<channel\b[^>]*>\n?([\s\S]*?)\n?<\/channel>$/s, "$1").trim();
-}
-
 export function getTimelineMessagePreview(event: AgentEvent): string {
-  const raw = event.content_text || "(empty message)";
-  return stripChannelWrapper(raw);
+  return event.content_text || "(empty message)";
 }
