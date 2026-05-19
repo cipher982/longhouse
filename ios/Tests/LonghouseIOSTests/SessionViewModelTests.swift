@@ -26,6 +26,22 @@ struct SessionViewModelTests {
     }
 
     @Test
+    func startRefreshesAlreadyOpenSession() async throws {
+        let before = try makeWorkspace(eventId: 10, content: "Before reentry")
+        let after = try makeWorkspace(eventId: 11, content: "After reentry")
+        let api = FakeSessionWorkspaceClient(workspaces: [before, after])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        await model.start(sessionId: "session-1", appState: appState)
+
+        #expect(model.items.map(\.id) == ["user:11"])
+        #expect(await api.workspaceRequestCount() == 2)
+    }
+
+    @Test
     func sendReturnsBeforeWorkspaceRefreshCompletes() async throws {
         let before = try makeWorkspace(eventId: 10, content: "Before send")
         let after = try makeWorkspace(eventId: 11, content: "After send")

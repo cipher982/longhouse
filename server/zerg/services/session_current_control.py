@@ -44,7 +44,7 @@ def with_engine_control_capability(
             execution_home=capability_flags.execution_home,
             managed_transport=capability_flags.managed_transport,
             live_control_available=False,
-            host_reattach_available=False,
+            host_reattach_available=capability_flags.host_reattach_available,
             reply_to_live_session_available=False,
             can_queue_next_input=False,
             can_steer_active_turn=False,

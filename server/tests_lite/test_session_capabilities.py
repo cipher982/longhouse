@@ -773,7 +773,7 @@ def test_current_session_capabilities_do_not_treat_engine_online_as_bridge_attac
                 assert capabilities.live_control_available is False
                 assert capabilities.can_queue_next_input is False
                 assert capabilities.can_steer_active_turn is False
-                assert capabilities.host_reattach_available is False
+                assert capabilities.host_reattach_available is True
         finally:
             await registry.clear_for_tests()
 
