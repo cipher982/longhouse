@@ -43,6 +43,7 @@ pub struct PathJob {
 pub struct ObservationTrace {
     pub source: &'static str,
     pub observed_at_ms: i64,
+    pub latest_observed_at_ms: Option<i64>,
     pub wake_received_at_ms: Option<i64>,
     pub enqueued_at_ms: i64,
     pub session_id: Option<String>,
@@ -116,6 +117,31 @@ impl PathScheduler {
         let observation = ObservationTrace {
             source: observation_source,
             observed_at_ms,
+            latest_observed_at_ms: None,
+            wake_received_at_ms: None,
+            enqueued_at_ms: now_ms(),
+            session_id: None,
+            turn_id: None,
+            wake_reason: None,
+            file_len_hint: None,
+        };
+        self.enqueue_observation(path, provider, priority, observation);
+    }
+
+    /// Enqueue work observed through a coalesced filesystem watcher batch.
+    pub fn enqueue_observed_window(
+        &mut self,
+        path: PathBuf,
+        provider: &'static str,
+        priority: WorkPriority,
+        observation_source: &'static str,
+        observed_at_ms: i64,
+        latest_observed_at_ms: i64,
+    ) {
+        let observation = ObservationTrace {
+            source: observation_source,
+            observed_at_ms,
+            latest_observed_at_ms: Some(latest_observed_at_ms.max(observed_at_ms)),
             wake_received_at_ms: None,
             enqueued_at_ms: now_ms(),
             session_id: None,
@@ -402,6 +428,7 @@ mod tests {
             ObservationTrace {
                 source: "wake_socket",
                 observed_at_ms: 110,
+                latest_observed_at_ms: None,
                 wake_received_at_ms: Some(111),
                 enqueued_at_ms: 0,
                 session_id: Some("session-123".to_string()),
@@ -430,6 +457,7 @@ mod tests {
             ObservationTrace {
                 source: "wake_socket",
                 observed_at_ms: 100,
+                latest_observed_at_ms: None,
                 wake_received_at_ms: Some(150),
                 enqueued_at_ms: 0,
                 session_id: Some("session-123".to_string()),
@@ -445,6 +473,7 @@ mod tests {
             ObservationTrace {
                 source: "wake_socket",
                 observed_at_ms: 200,
+                latest_observed_at_ms: None,
                 wake_received_at_ms: Some(201),
                 enqueued_at_ms: 0,
                 session_id: Some("session-123".to_string()),
@@ -488,6 +517,19 @@ mod tests {
     }
 
     #[test]
+    fn test_filesystem_observation_preserves_coalesced_window() {
+        let mut scheduler = PathScheduler::new(2);
+        let path = PathBuf::from("/tmp/a.jsonl");
+
+        scheduler.enqueue_observed_window(path, "codex", WorkPriority::Live, "fsevent", 100, 150);
+
+        let job = scheduler.pop_launchable().unwrap();
+        assert_eq!(job.observation.source, "fsevent");
+        assert_eq!(job.observation.observed_at_ms, 100);
+        assert_eq!(job.observation.latest_observed_at_ms, Some(150));
+    }
+
+    #[test]
     fn test_inflight_path_keeps_wake_observation_for_rerun() {
         let mut scheduler = PathScheduler::new(1);
         let path = PathBuf::from("/tmp/a.jsonl");
@@ -508,6 +550,7 @@ mod tests {
             ObservationTrace {
                 source: "wake_socket",
                 observed_at_ms: 110,
+                latest_observed_at_ms: None,
                 wake_received_at_ms: Some(111),
                 enqueued_at_ms: 0,
                 session_id: Some("session-123".to_string()),
@@ -544,6 +587,7 @@ mod tests {
             ObservationTrace {
                 source: "wake_socket",
                 observed_at_ms: 110,
+                latest_observed_at_ms: None,
                 wake_received_at_ms: Some(111),
                 enqueued_at_ms: 0,
                 session_id: Some("session-123".to_string()),

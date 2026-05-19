@@ -1436,6 +1436,11 @@ fn build_ship_trace_value(
         insert_json_field(&mut value, "observed_at_ms", json!(trace.observed_at_ms));
         insert_json_field(
             &mut value,
+            "latest_observed_at_ms",
+            json!(trace.latest_observed_at_ms),
+        );
+        insert_json_field(
+            &mut value,
             "wake_received_at_ms",
             json!(trace.wake_received_at_ms),
         );
@@ -1494,6 +1499,13 @@ fn build_ship_trace_value(
             &mut value,
             "observation_to_enqueue_ms",
             json!(trace.enqueued_at_ms.saturating_sub(trace.observed_at_ms)),
+        );
+        insert_json_field(
+            &mut value,
+            "observation_window_ms",
+            json!(trace
+                .latest_observed_at_ms
+                .map(|latest_ms| latest_ms.saturating_sub(trace.observed_at_ms))),
         );
         insert_json_field(
             &mut value,
@@ -2582,6 +2594,7 @@ mod tests {
             work_context,
             observation_source: "test",
             observed_at_ms: 1,
+            latest_observed_at_ms: None,
             wake_received_at_ms: None,
             enqueued_at_ms: 2,
             job_started_at_ms: 3,
@@ -5112,5 +5125,40 @@ mod tests {
         assert!(encoded.contains("ship_trace.v1"));
         assert!(!encoded.contains("secret transcript payload"));
         assert_eq!(value.get("range_bytes").and_then(Value::as_u64), Some(10));
+    }
+
+    #[test]
+    fn test_ship_trace_value_includes_coalesced_observation_window() {
+        let item = ShipItem {
+            path_str: "/tmp/session.jsonl".to_string(),
+            provider: "codex".to_string(),
+            offset: 10,
+            new_offset: 20,
+            event_count: 2,
+            session_id: "session-1".to_string(),
+            compressed: Vec::new(),
+        };
+        let mut trace = make_ship_trace("live_transcript");
+        trace.observed_at_ms = 100;
+        trace.latest_observed_at_ms = Some(145);
+        trace.enqueued_at_ms = 160;
+        trace.job_started_at_ms = 170;
+
+        let value = build_ship_trace_value(&item, Some(&trace), 180);
+
+        assert_eq!(
+            value.get("latest_observed_at_ms").and_then(Value::as_i64),
+            Some(145)
+        );
+        assert_eq!(
+            value.get("observation_window_ms").and_then(Value::as_i64),
+            Some(45)
+        );
+        assert_eq!(
+            value
+                .get("observation_to_enqueue_ms")
+                .and_then(Value::as_i64),
+            Some(60)
+        );
     }
 }
