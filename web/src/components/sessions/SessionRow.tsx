@@ -6,7 +6,9 @@
  * transitions (idle → thinking → idle) crossfade in place.
  */
 
-import { useCallback, useEffect, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, type CSSProperties, type ReactNode, type Ref } from "react";
+import type { DraggableAttributes } from "@dnd-kit/core";
+import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
 import { type TimelineSessionCard } from "../../services/api/agents";
 import {
   isSessionClosed,
@@ -29,6 +31,16 @@ export interface SessionRowProps {
   highlightQuery?: string;
   relativeNowMs: number;
   closed?: boolean;
+  /** True when this row is currently being dragged (visual hint). */
+  dragging?: boolean;
+  /** dnd-kit `setNodeRef`. */
+  forwardedRef?: Ref<HTMLButtonElement>;
+  /** dnd-kit transform/transition style. */
+  style?: CSSProperties;
+  /** dnd-kit attributes (role, aria-roledescription, etc). */
+  sortableAttributes?: DraggableAttributes;
+  /** dnd-kit listeners (pointer/keyboard activators). Spread onto the row. */
+  sortableListeners?: SyntheticListenerMap;
 }
 
 export function SessionRow({
@@ -39,16 +51,29 @@ export function SessionRow({
   relativeNowMs,
   highlightQuery,
   closed = false,
+  dragging = false,
+  forwardedRef,
+  style,
+  sortableAttributes,
+  sortableListeners,
 }: SessionRowProps) {
   const session = thread.head;
   const detailSession = thread.detail;
   const runtime = resolveSessionRuntimeState(session);
-  const cardStatus = session.timeline_card?.status ?? runtime.factStatus ?? null;
+  const timelineStatus = session.timeline_card?.status ?? null;
+  const runtimeFactStatus = runtime.factStatus ?? null;
+  const cardStatus = timelineStatus ?? runtimeFactStatus;
   const isClosed = closed || isCardClosed(thread);
   const text = getSessionCardText(session, { titleMaxChars: 96, subheadingMaxChars: 200 });
   const branch = getBranchLabel(session.git_branch);
   const provider = session.provider;
   const startedAtIso = thread.root?.started_at || session.started_at;
+  const timeLabel = getRowTimeLabel({
+    seenAt: timelineStatus?.seen_at ?? runtimeFactStatus?.seenAt ?? null,
+    seenAtPrefix: timelineStatus?.seen_at_prefix ?? runtimeFactStatus?.seenAtPrefix ?? null,
+    startedAt: startedAtIso,
+    relativeNowMs,
+  });
 
   // When the user is searching and the backend returned a match snippet,
   // show that as the row's secondary line with the query highlighted.
@@ -84,6 +109,7 @@ export function SessionRow({
 
   return (
     <button
+      ref={forwardedRef}
       type="button"
       className="inbox-row"
       data-testid="session-row"
@@ -91,6 +117,10 @@ export function SessionRow({
       data-thread-id={thread.thread_id}
       data-status={statusTone}
       data-closed={isClosed ? "true" : "false"}
+      data-dragging={dragging ? "true" : undefined}
+      style={style}
+      {...(sortableAttributes ?? {})}
+      {...(sortableListeners ?? {})}
       onClick={onClick}
       onMouseEnter={scheduleHover}
       onMouseLeave={clearHover}
@@ -132,11 +162,32 @@ export function SessionRow({
           </>
         ) : null}
         <span className="inbox-row-time">
-          {startedAtIso ? formatRelativeTime(startedAtIso, relativeNowMs) : ""}
+          {timeLabel}
         </span>
       </div>
     </button>
   );
+}
+
+export function getRowTimeLabel({
+  seenAt,
+  seenAtPrefix,
+  startedAt,
+  relativeNowMs,
+}: {
+  seenAt: string | null;
+  seenAtPrefix: string | null;
+  startedAt: string | null;
+  relativeNowMs: number;
+}): string {
+  if (seenAt) {
+    const prefix = seenAtPrefix?.trim() || "Updated";
+    return `${prefix} ${formatRelativeTime(seenAt, relativeNowMs)}`;
+  }
+  if (startedAt) {
+    return `Started ${formatRelativeTime(startedAt, relativeNowMs)}`;
+  }
+  return "";
 }
 
 function humanizeTone(tone: string): string {

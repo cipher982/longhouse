@@ -541,13 +541,13 @@ describe("SessionsPage", () => {
 
       renderSessionsPage("/timeline");
 
-      expect(screen.getByText("Just now")).toBeInTheDocument();
+      expect(screen.getByText("Started Just now")).toBeInTheDocument();
 
       act(() => {
         vi.advanceTimersByTime(15_000);
       });
 
-      expect(screen.getByText("1m ago")).toBeInTheDocument();
+      expect(screen.getByText("Started 1m ago")).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
@@ -934,7 +934,7 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
-    expect(screen.getByText("1h ago")).toBeInTheDocument();
+    expect(screen.getByText("Started 1h ago")).toBeInTheDocument();
   });
 
 

@@ -145,6 +145,35 @@
     opacity: 0.78;
   }
 
+  /* ---------- Drag state ----------
+   * dnd-kit applies a CSS transform to the dragging item that follows the
+   * pointer, and animates siblings via transition. We just dim the source
+   * (the placeholder) and use a grab cursor on draggable surfaces.
+   */
+
+  .inbox-row {
+    touch-action: none;
+  }
+
+  .inbox-row[data-dragging="true"] {
+    opacity: 0.4;
+    cursor: grabbing;
+    z-index: 10;
+  }
+
+  .inbox-repo[data-dragging="true"] {
+    opacity: 0.4;
+  }
+
+  .inbox-repo-header {
+    user-select: none;
+    touch-action: none;
+  }
+
+  .inbox-repo-header:hover {
+    cursor: grab;
+  }
+
   /* ---------- Row main (left side) ---------- */
 
   .inbox-row-main {
