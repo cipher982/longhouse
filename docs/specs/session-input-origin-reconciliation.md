@@ -20,7 +20,7 @@ reason about later.
 
 ## Problem
 
-The iOS transcript spike exposed a deeper issue:
+The iOS transcript work exposed a deeper issue:
 
 1. A user sent a message from the iOS composer.
 2. iOS rendered a local optimistic submitted-input bubble.
@@ -323,7 +323,8 @@ needs them.
 - Submitted rows do not reconcile by same raw text when identity is absent.
 - The current iOS `ClaudeChannelText` display helper is deleted once the server
   projection contract is implemented.
-- WebKit transcript spike uses the same fields as native.
+- The WebKit transcript consumes the same semantic event/input model and is the
+  single iOS transcript renderer.
 
 ### Web
 
@@ -527,7 +528,7 @@ origin projection.
 - Decode and render `input_origin`.
 - Replace text-based optimistic reconciliation with identity-based
   reconciliation.
-- Render the Longhouse origin marker in native and WebKit transcript modes.
+- Render the Longhouse origin marker in the WebKit transcript.
 - Delete the temporary iOS `ClaudeChannelText` helper and, specifically, the
   current `stripWrapper(event.contentText) == input.text` reconciliation path.
 - Add iOS unit and fixture UI tests.

@@ -1,28 +1,4 @@
-import os
 import SwiftUI
-
-#if DEBUG
-private let sessionViewLogger = Logger(subsystem: "ai.longhouse.ios", category: "SessionView")
-#endif
-
-private enum TranscriptRendererMode {
-    case native
-    case web
-
-    var label: String {
-        switch self {
-        case .native: return "Native transcript"
-        case .web: return "Web transcript spike"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .native: return "text.bubble"
-        case .web: return "safari"
-        }
-    }
-}
 
 struct SessionWorkspaceStreamSource: Sendable {
     let start: @Sendable () async -> AsyncStream<SessionWorkspaceStream.Event>
@@ -47,12 +23,7 @@ struct SessionView: View {
     @StateObject private var viewModel = SessionViewModel()
     @StateObject private var liveActivityManager = SessionLiveActivityManager()
     @State private var composerText: String = ""
-    @State private var shouldFollowTranscriptBottom = true
-    @State private var transcriptUserScrollActive = false
-    @State private var transcriptScrollTask: Task<Void, Never>?
-    @State private var transcriptRendererMode: TranscriptRendererMode = .native
     @FocusState private var composerFocused: Bool
-    private let transcriptBottomAnchorID = "session-transcript-bottom-anchor"
 
     init(
         sessionId: String,
@@ -79,16 +50,12 @@ struct SessionView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                transcriptRendererButton
-            }
-            ToolbarItem(placement: .topBarTrailing) {
                 watchButton
             }
         }
         .task(id: sessionId) { await viewModel.start(sessionId: sessionId, appState: appState) }
         .onDisappear {
             viewModel.stop()
-            cancelTranscriptScrollTask()
         }
         .onChange(of: scenePhase) { _, newPhase in
             // SSE over URLSession is foreground-only per Apple's contract.
@@ -106,9 +73,6 @@ struct SessionView: View {
         .onChange(of: viewModel.liveActivityFingerprint) { _, _ in
             guard let detail = viewModel.detail else { return }
             Task { await liveActivityManager.update(detail: detail) }
-        }
-        .onChange(of: composerFocused) { _, focused in
-            debugLogTranscriptState("composer focus changed: \(focused)")
         }
         .refreshable { await viewModel.reload(sessionId: sessionId, appState: appState) }
     }
@@ -140,32 +104,6 @@ struct SessionView: View {
             .disabled(liveActivityManager.isBusy)
             .accessibilityHint("Opens Lock Screen update options")
         }
-    }
-
-    private var transcriptRendererButton: some View {
-        Menu {
-            Button {
-                transcriptRendererMode = .native
-            } label: {
-                Label(
-                    TranscriptRendererMode.native.label,
-                    systemImage: transcriptRendererMode == .native ? "checkmark.circle.fill" : TranscriptRendererMode.native.systemImage
-                )
-            }
-            Button {
-                transcriptRendererMode = .web
-            } label: {
-                Label(
-                    TranscriptRendererMode.web.label,
-                    systemImage: transcriptRendererMode == .web ? "checkmark.circle.fill" : TranscriptRendererMode.web.systemImage
-                )
-            }
-        } label: {
-            Label(transcriptRendererMode.label, systemImage: transcriptRendererMode.systemImage)
-                .labelStyle(.iconOnly)
-        }
-        .accessibilityLabel("Transcript renderer")
-        .accessibilityValue(transcriptRendererMode.label)
     }
 
     @ViewBuilder
@@ -215,200 +153,15 @@ struct SessionView: View {
                 .padding()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                switch transcriptRendererMode {
-                case .native:
-                    ScrollViewReader { proxy in
-                        transcriptScroll(proxy: proxy)
-                    }
-                case .web:
-                    WebTranscriptView(
-                        items: viewModel.items,
-                        submittedInputs: viewModel.submittedInputs,
-                        sessionEnded: viewModel.isSessionEnded,
-                        errorMessage: viewModel.errorMessage
-                    )
-                    .accessibilityIdentifier("session-chat-transcript-web")
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func transcriptScroll(proxy: ScrollViewProxy) -> some View {
-        if #available(iOS 18.0, *) {
-            transcriptScrollBase
-                .onScrollGeometryChange(for: Bool.self) { geometry in
-                    isTranscriptGeometryAtBottom(geometry)
-                } action: { _, isAtBottom in
-                    updateTranscriptFollowState(isAtBottom: isAtBottom, userDriven: transcriptUserScrollActive)
-                }
-                .onScrollPhaseChange { _, newPhase, context in
-                    updateTranscriptScrollPhase(newPhase, geometry: context.geometry)
-                }
-                .onChange(of: viewModel.transcriptScrollToken) { _, _ in
-                    followTranscriptBottomIfNeeded(proxy, animated: false)
-                }
-                .onChange(of: viewModel.submittedRevealCounter) { _, _ in
-                    shouldFollowTranscriptBottom = true
-                    scrollTranscriptToBottom(proxy)
-                }
-        } else {
-            GeometryReader { viewport in
-                transcriptScrollBase
-                    .coordinateSpace(name: "sessionTranscriptScroll")
-                    .onPreferenceChange(TranscriptBottomYKey.self) { bottomY in
-                        updateTranscriptFollowState(
-                            isAtBottom: bottomY <= viewport.size.height + 96,
-                            userDriven: true
-                        )
-                    }
-                    .onChange(of: viewModel.transcriptScrollToken) { _, _ in
-                        followTranscriptBottomIfNeeded(proxy, animated: false)
-                    }
-                    .onChange(of: viewModel.submittedRevealCounter) { _, _ in
-                        shouldFollowTranscriptBottom = true
-                        scrollTranscriptToBottom(proxy)
-                    }
-            }
-        }
-    }
-
-    private var transcriptScrollBase: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 10) {
-                if let error = viewModel.errorMessage {
-                    TranscriptErrorBanner(error: error)
-                }
-                if viewModel.items.isEmpty && viewModel.submittedInputs.isEmpty {
-                    ContentUnavailableView(
-                        "No messages yet",
-                        systemImage: "bubble.left.and.bubble.right"
-                    )
-                    .padding(.vertical, 48)
-                } else {
-                    transcriptItems
-                }
-                transcriptBottomAnchor
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 12)
-        }
-        .accessibilityIdentifier("session-chat-transcript")
-        .scrollDismissesKeyboard(.interactively)
-        .defaultScrollAnchor(.bottom)
-    }
-
-    @ViewBuilder
-    private var transcriptBottomAnchor: some View {
-        if #available(iOS 18.0, *) {
-            Color.clear
-                .frame(height: 1)
-                .id(transcriptBottomAnchorID)
-        } else {
-            Color.clear
-                .frame(height: 1)
-                .background(
-                    GeometryReader { marker in
-                        Color.clear.preference(
-                            key: TranscriptBottomYKey.self,
-                            value: marker.frame(in: .named("sessionTranscriptScroll")).maxY
-                        )
-                    }
+                WebTranscriptView(
+                    items: viewModel.items,
+                    submittedInputs: viewModel.submittedInputs,
+                    sessionEnded: viewModel.isSessionEnded,
+                    errorMessage: viewModel.errorMessage
                 )
-                .id(transcriptBottomAnchorID)
-        }
-    }
-
-    @ViewBuilder
-    private var transcriptItems: some View {
-        ForEach(viewModel.items, id: \.id) { item in
-            TimelineItemView(
-                item: item,
-                isExpanded: viewModel.isExpanded(item.id),
-                sessionEnded: viewModel.isSessionEnded,
-                onToggle: { viewModel.toggleExpanded(item.id) }
-            )
-            .id(item.id)
-        }
-        ForEach(viewModel.submittedInputs) { input in
-            SubmittedInputBubble(input: input) {
-                composerText = input.text
-                composerFocused = true
-            }
-            .id(input.id)
-        }
-    }
-
-    private func updateTranscriptFollowState(isAtBottom: Bool, userDriven: Bool) {
-        if isAtBottom {
-            shouldFollowTranscriptBottom = true
-        } else if userDriven {
-            shouldFollowTranscriptBottom = false
-            cancelTranscriptScrollTask()
-        }
-        debugLogTranscriptState(
-            "scroll follow state: atBottom=\(isAtBottom) userDriven=\(userDriven) follow=\(shouldFollowTranscriptBottom)"
-        )
-    }
-
-    @available(iOS 18.0, *)
-    private func updateTranscriptScrollPhase(_ phase: ScrollPhase, geometry: ScrollGeometry) {
-        let userDriven = phase == .tracking || phase == .interacting
-        transcriptUserScrollActive = userDriven
-        updateTranscriptFollowState(isAtBottom: isTranscriptGeometryAtBottom(geometry), userDriven: userDriven)
-        debugLogTranscriptState("scroll phase: \(phase.debugDescription)")
-    }
-
-    @available(iOS 18.0, *)
-    private func isTranscriptGeometryAtBottom(_ geometry: ScrollGeometry) -> Bool {
-        let visibleMaxY = geometry.contentOffset.y + geometry.containerSize.height
-        return visibleMaxY >= geometry.contentSize.height - 96
-    }
-
-    private func followTranscriptBottomIfNeeded(_ proxy: ScrollViewProxy, animated: Bool) {
-        guard shouldFollowTranscriptBottom else {
-            debugLogTranscriptState("skip follow bottom")
-            return
-        }
-        debugLogTranscriptState("follow bottom")
-        scrollTranscriptToBottom(proxy, animated: animated)
-    }
-
-    private func scrollTranscriptToBottom(
-        _ proxy: ScrollViewProxy,
-        animated: Bool = true
-    ) {
-        transcriptScrollTask?.cancel()
-        transcriptScrollTask = Task { @MainActor in
-            await Task.yield()
-            let scroll = {
-                proxy.scrollTo(transcriptBottomAnchorID, anchor: .bottom)
-            }
-            if animated {
-                withAnimation(.easeOut(duration: 0.18), scroll)
-            } else {
-                scroll()
-            }
-
-            for delay in [80_000_000, 100_000_000, 140_000_000] as [UInt64] {
-                try? await Task.sleep(nanoseconds: delay)
-                guard !Task.isCancelled, shouldFollowTranscriptBottom else { return }
-                proxy.scrollTo(transcriptBottomAnchorID, anchor: .bottom)
+                .accessibilityIdentifier("session-chat-transcript")
             }
         }
-    }
-
-    private func cancelTranscriptScrollTask() {
-        transcriptScrollTask?.cancel()
-        transcriptScrollTask = nil
-    }
-
-    private func debugLogTranscriptState(_ message: String) {
-        #if DEBUG
-        sessionViewLogger.debug(
-            "\(message, privacy: .public) items=\(viewModel.items.count) submitted=\(viewModel.submittedInputs.count) follow=\(shouldFollowTranscriptBottom) userScroll=\(transcriptUserScrollActive)"
-        )
-        #endif
     }
 
     @ViewBuilder
@@ -631,32 +384,6 @@ struct SessionView: View {
     }
 }
 
-private struct TranscriptErrorBanner: View {
-    let error: String
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "exclamationmark.triangle")
-                .foregroundStyle(.orange)
-            Text(error)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(10)
-        .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
-        .accessibilityIdentifier("session-chat-error-banner")
-    }
-}
-
-private struct TranscriptBottomYKey: PreferenceKey {
-    static let defaultValue: CGFloat = .greatestFiniteMagnitude
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
 struct SessionRuntimeDock: View {
     let detail: SessionDetail
     var loopMode: SessionLoopMode? = nil
@@ -812,79 +539,6 @@ private struct LoopModeButtons: View {
     }
 }
 
-// MARK: - Timeline items
-
-private struct TimelineItemView: View {
-    let item: TimelineItem
-    let isExpanded: Bool
-    let sessionEnded: Bool
-    let onToggle: () -> Void
-
-    var body: some View {
-        switch item {
-        case .user(let event):
-            UserBubble(event: event)
-        case .assistant(let event):
-            AssistantBubble(event: event)
-        case .tool(let call, let result, _):
-            ToolRow(call: call, result: result, isExpanded: isExpanded, sessionEnded: sessionEnded, onToggle: onToggle)
-        case .orphanTool(let event):
-            ToolRow(call: event, result: event, isExpanded: isExpanded, sessionEnded: sessionEnded, onToggle: onToggle, orphan: true)
-        case .passiveGroup(let calls):
-            PassiveGroupRow(calls: calls, isExpanded: isExpanded, onToggle: onToggle)
-        }
-    }
-}
-
-private struct UserBubble: View {
-    let event: SessionEvent
-    @State private var expanded = false
-
-    private var text: String { event.contentText ?? "" }
-    private var shouldCollapse: Bool { TranscriptTextPolicy.shouldCollapseMessage(text) }
-    private var visibleText: String { TranscriptTextPolicy.visibleMessage(text, expanded: expanded) }
-    private var isLonghouseAuthored: Bool { event.inputOrigin?.authoredVia == .longhouse }
-
-    var body: some View {
-        HStack {
-            Spacer(minLength: 40)
-            VStack(alignment: .trailing, spacing: 6) {
-                Text(visibleText)
-                    .font(.callout)
-                    .textSelection(.enabled)
-                    .padding(10)
-                    .background(Color.blue.opacity(0.15), in: RoundedRectangle(cornerRadius: 12))
-                    .frame(alignment: .trailing)
-
-                if shouldCollapse {
-                    TranscriptExpandButton(expanded: expanded) {
-                        expanded.toggle()
-                    }
-                }
-
-                if isLonghouseAuthored {
-                    InputOriginMarker()
-                }
-            }
-        }
-    }
-}
-
-private struct InputOriginMarker: View {
-    var body: some View {
-        HStack(spacing: 4) {
-            Image(systemName: "house")
-                .font(.caption2.weight(.semibold))
-            Text("Longhouse")
-                .font(.caption2.weight(.semibold))
-        }
-        .foregroundStyle(.secondary)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Sent via Longhouse")
-        .accessibilityIdentifier("session-chat-input-origin-longhouse")
-    }
-}
-
 enum SubmittedInputPhase: String, Sendable {
     case submitting
     case sent
@@ -902,459 +556,6 @@ struct SubmittedInput: Identifiable, Sendable {
     var serverInputId: Int?
     var lastError: String?
     let createdAt: Date
-}
-
-private struct SubmittedInputBubble: View {
-    let input: SubmittedInput
-    let onEdit: () -> Void
-
-    private var statusText: String {
-        switch input.phase {
-        case .submitting:
-            return "Sending..."
-        case .sent:
-            return "Sent"
-        case .queued:
-            return "Queued"
-        case .failed:
-            return input.lastError ?? "Could not send"
-        case .needsUserDecision:
-            return "Needs choice"
-        }
-    }
-
-    private var statusColor: Color {
-        switch input.phase {
-        case .failed, .needsUserDecision:
-            return .orange
-        case .queued:
-            return .secondary
-        case .submitting, .sent:
-            return .secondary
-        }
-    }
-
-    var body: some View {
-        HStack {
-            Spacer(minLength: 40)
-            VStack(alignment: .trailing, spacing: 6) {
-                Text(input.text)
-                    .font(.callout)
-                    .textSelection(.enabled)
-                    .padding(10)
-                    .background(Color.blue.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.blue.opacity(0.20), lineWidth: 1)
-                    )
-                    .frame(alignment: .trailing)
-                HStack(spacing: 8) {
-                    if input.phase == .submitting {
-                        ProgressView().controlSize(.mini)
-                    }
-                    Text(statusText)
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(statusColor)
-                    if input.phase == .failed {
-                        Button("Edit") { onEdit() }
-                            .font(.caption2.weight(.semibold))
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.blue)
-                    }
-                }
-            }
-        }
-        .accessibilityIdentifier("session-chat-submitted-input")
-    }
-}
-
-private struct AssistantBubble: View {
-    let event: SessionEvent
-    @State private var expanded = false
-
-    private var text: String { event.contentText ?? "" }
-    private var shouldCollapse: Bool { TranscriptTextPolicy.shouldCollapseMessage(text) }
-    private var visibleText: String { TranscriptTextPolicy.visibleMessage(text, expanded: expanded) }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            MarkdownText(visibleText)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            if shouldCollapse {
-                TranscriptExpandButton(expanded: expanded) {
-                    expanded.toggle()
-                }
-            }
-        }
-        .padding(10)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
-    }
-}
-
-private struct TranscriptExpandButton: View {
-    let expanded: Bool
-    let onToggle: () -> Void
-
-    var body: some View {
-        Button(action: onToggle) {
-            Text(expanded ? "Collapse message" : "Show full message")
-                .font(.caption.weight(.semibold))
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.blue)
-        .accessibilityLabel(expanded ? "Collapse message" : "Show full message")
-    }
-}
-
-/// Lightweight markdown renderer for assistant prose. Splits on fenced code
-/// blocks, then applies inline markdown (bold/italic/code/links) via
-/// AttributedString. Headings (## / #) and list bullets are styled manually.
-private struct MarkdownText: View {
-    let raw: String
-    init(_ raw: String) { self.raw = raw }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                switch block {
-                case .code(let text):
-                    Text(text)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.primary)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(8)
-                        .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 6))
-                case .heading(let level, let text):
-                    Text(inlineMarkdown(text))
-                        .font(level == 1 ? .title3.weight(.bold) : .callout.weight(.semibold))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                case .bullet(let text):
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text("•").font(.callout).foregroundStyle(.secondary)
-                        Text(inlineMarkdown(text))
-                            .font(.callout)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                case .paragraph(let text):
-                    Text(inlineMarkdown(text))
-                        .font(.callout)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-        }
-    }
-
-    private enum Block {
-        case paragraph(String)
-        case heading(Int, String)
-        case bullet(String)
-        case code(String)
-    }
-
-    private var blocks: [Block] {
-        var out: [Block] = []
-        let lines = raw.components(separatedBy: "\n")
-        var i = 0
-        var paragraphBuffer: [String] = []
-
-        func flushParagraph() {
-            guard !paragraphBuffer.isEmpty else { return }
-            let joined = paragraphBuffer.joined(separator: "\n")
-            if !joined.trimmingCharacters(in: .whitespaces).isEmpty {
-                out.append(.paragraph(joined))
-            }
-            paragraphBuffer.removeAll()
-        }
-
-        while i < lines.count {
-            let line = lines[i]
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-
-            if trimmed.hasPrefix("```") {
-                flushParagraph()
-                var code: [String] = []
-                i += 1
-                while i < lines.count {
-                    let inner = lines[i]
-                    if inner.trimmingCharacters(in: .whitespaces).hasPrefix("```") { break }
-                    code.append(inner)
-                    i += 1
-                }
-                out.append(.code(code.joined(separator: "\n")))
-                i += 1
-                continue
-            }
-
-            if trimmed.hasPrefix("## ") {
-                flushParagraph()
-                out.append(.heading(2, String(trimmed.dropFirst(3))))
-                i += 1
-                continue
-            }
-            if trimmed.hasPrefix("# ") {
-                flushParagraph()
-                out.append(.heading(1, String(trimmed.dropFirst(2))))
-                i += 1
-                continue
-            }
-            if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") {
-                flushParagraph()
-                out.append(.bullet(String(trimmed.dropFirst(2))))
-                i += 1
-                continue
-            }
-            if trimmed.isEmpty {
-                flushParagraph()
-                i += 1
-                continue
-            }
-            paragraphBuffer.append(line)
-            i += 1
-        }
-        flushParagraph()
-        return out
-    }
-
-    private func inlineMarkdown(_ text: String) -> AttributedString {
-        let options = AttributedString.MarkdownParsingOptions(
-            interpretedSyntax: .inlineOnlyPreservingWhitespace
-        )
-        if let attr = try? AttributedString(markdown: text, options: options) {
-            return attr
-        }
-        return AttributedString(text)
-    }
-}
-
-private struct ToolRow: View {
-    let call: SessionEvent
-    let result: SessionEvent?
-    let isExpanded: Bool
-    let sessionEnded: Bool
-    let onToggle: () -> Void
-    var orphan: Bool = false
-
-    private var summary: String { TimelineBuilder.inputSummary(for: call) }
-    private var toolName: String { call.toolName ?? (orphan ? "Tool" : "Tool") }
-    /// Pending = truly still running. A missing result becomes "dropped" once
-    /// the session ends or the call is older than the age threshold.
-    private var isPending: Bool {
-        guard result == nil, !orphan else { return false }
-        return !TimelineBuilder.isDropped(call: call, sessionEnded: sessionEnded)
-    }
-    private var isDropped: Bool {
-        result == nil && !orphan && TimelineBuilder.isDropped(call: call, sessionEnded: sessionEnded)
-    }
-    private var durationText: String? {
-        guard let result else { return nil }
-        return TimelineBuilder.durationSeconds(call: call, result: result).map(TimelineBuilder.formatDuration)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button(action: onToggle) {
-                HStack(spacing: 8) {
-                    Image(systemName: icon)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .frame(width: 16)
-                    Text(toolName)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.primary)
-                    if !summary.isEmpty {
-                        Text(summary)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    Spacer(minLength: 4)
-                    if isPending {
-                        ProgressView().controlSize(.mini)
-                    } else if isDropped {
-                        Text("dropped")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                            .italic()
-                    } else if let durationText {
-                        Text(durationText)
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.tertiary)
-                    }
-                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-            }
-            .buttonStyle(.plain)
-
-            if isExpanded {
-                Divider().padding(.horizontal, 10)
-                VStack(alignment: .leading, spacing: 8) {
-                    if !summary.isEmpty || call.toolInputJSON != nil {
-                        SectionLabel("Input")
-                        Text(inputBody)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    if let output = result?.toolOutputText, !output.isEmpty {
-                        SectionLabel("Output")
-                        Text(truncate(output))
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    } else if isPending {
-                        Text("Running…").font(.caption).foregroundStyle(.tertiary)
-                    } else if isDropped {
-                        Text("No result recorded — likely dropped during ingest.")
-                            .font(.caption).foregroundStyle(.tertiary)
-                    }
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-            }
-        }
-        .background(Color.purple.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(
-                    isPending ? Color.purple.opacity(0.4) : Color.clear,
-                    style: StrokeStyle(lineWidth: 1, dash: [3, 3])
-                )
-        )
-    }
-
-    private var icon: String {
-        switch call.toolName {
-        case "Bash": return "terminal"
-        case "Grep", "Glob": return "magnifyingglass"
-        case "Read": return "doc.text"
-        case "Edit", "Write", "NotebookEdit": return "pencil"
-        case "Task": return "square.stack.3d.up"
-        case "WebFetch", "WebSearch": return "globe"
-        default: return "wrench.adjustable"
-        }
-    }
-
-    private var inputBody: String {
-        if let json = call.toolInputJSON, !json.isEmpty {
-            return prettyJSON(json)
-        }
-        return summary
-    }
-
-    private func prettyJSON(_ value: [String: JSONValue]) -> String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        if let data = try? encoder.encode(value),
-           let str = String(data: data, encoding: .utf8) {
-            return str
-        }
-        return summary
-    }
-
-    private func truncate(_ text: String) -> String {
-        let max = 2000
-        if text.count <= max { return text }
-        return String(text.prefix(max)) + "\n… (truncated)"
-    }
-}
-
-/// Collapsed row for a run of passive tool calls within a turn. Shows a
-/// one-line summary like `Read × 3, Grep × 2` and expands to a list of the
-/// individual calls. Cuts scroll noise on Claude sessions where ~80% of
-/// calls are passive reads/searches.
-private struct PassiveGroupRow: View {
-    let calls: [PassiveCall]
-    let isExpanded: Bool
-    let onToggle: () -> Void
-
-    private var tallyText: String {
-        var counts: [(String, Int)] = []
-        for passive in calls {
-            let name = passive.call.toolName ?? "Tool"
-            if let idx = counts.firstIndex(where: { $0.0 == name }) {
-                counts[idx].1 += 1
-            } else {
-                counts.append((name, 1))
-            }
-        }
-        return counts.map { "\($0.0) × \($0.1)" }.joined(separator: ", ")
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button(action: onToggle) {
-                HStack(spacing: 8) {
-                    Image(systemName: "eye")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .frame(width: 16)
-                    Text("Explored")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.primary)
-                    Text(tallyText)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Spacer(minLength: 4)
-                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-            }
-            .buttonStyle(.plain)
-
-            if isExpanded {
-                Divider().padding(.horizontal, 10)
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(calls) { passive in
-                        HStack(spacing: 6) {
-                            Text(passive.call.toolName ?? "Tool")
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(.primary)
-                            let summary = TimelineBuilder.inputSummary(for: passive.call)
-                            if !summary.isEmpty {
-                                Text(summary)
-                                    .font(.caption.monospaced())
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                            }
-                            Spacer(minLength: 0)
-                        }
-                    }
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-            }
-        }
-        .background(Color.gray.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
-    }
-}
-
-private struct SectionLabel: View {
-    let text: String
-    init(_ text: String) { self.text = text }
-    var body: some View {
-        Text(text.uppercased())
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(.tertiary)
-            .tracking(0.5)
-    }
 }
 
 // MARK: - ViewModel
@@ -1376,7 +577,6 @@ final class SessionViewModel: ObservableObject {
     @Published var queuedInputCount: Int = 0
     @Published var failedInputCount: Int = 0
     @Published var submittedInputs: [SubmittedInput] = []
-    @Published private(set) var submittedRevealCounter: UInt64 = 0
     /// Text preserved from a steer attempt that the server rejected with
     /// error_code: "turn_ended". The UI offers an explicit "Queue instead"
     /// action; we do not silently convert the intent for the user.
@@ -1385,7 +585,6 @@ final class SessionViewModel: ObservableObject {
     /// auto-dismiss task only clears the label it owns.
     private(set) var sendCounter: UInt64 = 0
 
-    private var expandedIds: Set<String> = []
     private var pollTask: Task<Void, Never>?
     private var stream: SessionWorkspaceStreamSource?
     private var streamTask: Task<Void, Never>?
@@ -1407,60 +606,6 @@ final class SessionViewModel: ObservableObject {
         self.enableRealtime = enableRealtime
     }
 
-    func isExpanded(_ id: String) -> Bool { expandedIds.contains(id) }
-
-    var transcriptScrollToken: String {
-        let itemPart = items.suffix(3)
-            .map(transcriptItemSignature)
-            .joined(separator: "\u{1F}")
-        let submittedPart = submittedInputs
-            .map { input in
-                [
-                    input.id,
-                    input.phase.rawValue,
-                    input.serverInputId.map(String.init) ?? "local",
-                ].joined(separator: "\u{1E}")
-            }
-            .joined(separator: "\u{1F}")
-        return "\(items.count)\u{1D}\(itemPart)\u{1D}\(submittedPart)"
-    }
-
-    private func transcriptItemSignature(_ item: TimelineItem) -> String {
-        switch item {
-        case .user(let event), .assistant(let event), .orphanTool(let event):
-            return eventSignature(item.id, event)
-        case .tool(let call, let result, _):
-            return [
-                item.id,
-                eventSignature("call", call),
-                result.map { eventSignature("result", $0) } ?? "pending",
-            ].joined(separator: "\u{1E}")
-        case .passiveGroup(let calls):
-            let callPart = calls.suffix(3).map { passive in
-                [
-                    eventSignature("call", passive.call),
-                    passive.result.map { eventSignature("result", $0) } ?? "pending",
-                ].joined(separator: "\u{1C}")
-            }.joined(separator: "\u{1E}")
-            return "passive\u{1E}\(calls.count)\u{1E}\(callPart)"
-        }
-    }
-
-    private func eventSignature(_ prefix: String, _ event: SessionEvent) -> String {
-        [
-            prefix,
-            String(event.id),
-            event.timestamp,
-            String(event.contentText?.count ?? 0),
-            String(event.toolOutputText?.count ?? 0),
-        ].joined(separator: "\u{1C}")
-    }
-
-    func toggleExpanded(_ id: String) {
-        if expandedIds.contains(id) { expandedIds.remove(id) } else { expandedIds.insert(id) }
-        objectWillChange.send()
-    }
-
     func start(sessionId: String, appState: AppState) async {
         let sessionChanged = activeSessionId != sessionId
         if sessionChanged {
@@ -1470,7 +615,6 @@ final class SessionViewModel: ObservableObject {
             items = []
             submittedInputs = []
             errorMessage = nil
-            expandedIds.removeAll()
         }
         if isInitialLoading {
             await reload(sessionId: sessionId, appState: appState)
@@ -1529,7 +673,6 @@ final class SessionViewModel: ObservableObject {
             createdAt: Date()
         )
         submittedInputs.append(localInput)
-        submittedRevealCounter &+= 1
         guard let api = apiFactory(appState.serverURL) else {
             updateSubmittedInput(
                 clientRequestId,
@@ -1603,10 +746,6 @@ final class SessionViewModel: ObservableObject {
             submittedInputs.removeAll { decisionIds.contains($0.id) }
         }
         return queued
-    }
-
-    func dismissSubmittedInput(_ id: String) {
-        submittedInputs.removeAll { $0.id == id }
     }
 
     func draftReply(sessionId: String, appState: AppState) async -> String? {
