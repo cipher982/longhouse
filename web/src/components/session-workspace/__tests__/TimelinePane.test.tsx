@@ -29,6 +29,21 @@ const messageItem: TimelineItem = {
   },
 };
 
+const longhouseMessageItem: TimelineItem = {
+  kind: "message",
+  event: {
+    ...messageItem.event,
+    id: 3,
+    role: "user",
+    content_text: "Sent from the browser",
+    input_origin: {
+      authored_via: "longhouse",
+      session_input_id: 44,
+      client_request_id: "web-origin-1",
+    },
+  },
+};
+
 function makeMessageItem(content: string): TimelineItem {
   return {
     kind: "message",
@@ -144,6 +159,29 @@ describe("TimelinePane", () => {
     expect(timeline).toHaveTextContent("Dump line 350");
     expect(timeline).not.toHaveTextContent("... 400 lines hidden ...");
     expect(screen.getByRole("button", { name: "Collapse message" })).toBeInTheDocument();
+  });
+
+  it("renders a semantic Longhouse marker for Longhouse-authored user input", () => {
+    render(
+      <TimelinePane
+        items={[longhouseMessageItem]}
+        totalEntries={1}
+        loadedEntries={1}
+        abandonedEvents={0}
+        showAbandonedBranches={false}
+        onShowAbandonedBranchesChange={vi.fn()}
+        hasPreviousPage={false}
+        isFetchingPreviousPage={false}
+        onFetchPreviousPage={vi.fn()}
+        loading={false}
+        error={null}
+        selectedKey={null}
+        onSelectKey={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("session-input-origin-longhouse")).toHaveTextContent("Longhouse");
+    expect(screen.getByLabelText("Sent via Longhouse")).toBeInTheDocument();
   });
 
   it("marks unresolved open-session tools as pending rows", () => {

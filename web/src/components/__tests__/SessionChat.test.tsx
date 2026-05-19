@@ -401,9 +401,11 @@ describe("SessionChat", () => {
       String(path).endsWith("/input") && (init as RequestInit | undefined)?.method === "POST",
     );
     expect(inputCall).toBeTruthy();
-    expect(JSON.parse(String((inputCall?.[1] as RequestInit).body ?? "{}"))).toEqual({
+    const inputPayload = JSON.parse(String((inputCall?.[1] as RequestInit).body ?? "{}"));
+    expect(inputPayload).toEqual({
       text: "Continue locally",
       intent: "auto",
+      client_request_id: expect.stringMatching(/^web-/),
     });
     await waitFor(() => {
       expect(screen.getByRole("textbox")).toBeDisabled();

@@ -128,6 +128,7 @@ function MessageRow({
   const outside = isOutsideActiveContext(event);
   const isUser = event.role === "user";
   const isAssistant = event.role === "assistant";
+  const isLonghouseAuthored = event.input_origin?.authored_via === "longhouse";
   const isLong = messageLineCount(preview) > MESSAGE_COLLAPSE_LINE_LIMIT;
   const [expanded, setExpanded] = useState(false);
   const visible = isLong && !expanded
@@ -149,6 +150,11 @@ function MessageRow({
         <span className="tl-msg__time">{formatTime(event.timestamp)}</span>
         {outside ? (
           <span className="tl-chip tl-chip--warning">outside active context</span>
+        ) : null}
+        {isUser && isLonghouseAuthored ? (
+          <span className="tl-chip" aria-label="Sent via Longhouse" data-testid="session-input-origin-longhouse">
+            Longhouse
+          </span>
         ) : null}
       </div>
       <div className="tl-msg__body">
