@@ -146,25 +146,21 @@ export function SessionRow({
         )}
       </div>
 
-      <div className="inbox-row-meta" aria-hidden="false">
+      <span className="inbox-row-status" aria-hidden="false">
         <span
           className="inbox-row-status-dot"
           data-tone={statusTone}
           aria-hidden="true"
         />
         <span className="inbox-row-status-label">{statusLabel}</span>
-        <span className="inbox-row-meta-divider" aria-hidden="true">·</span>
-        <span className="inbox-row-provider">{provider}</span>
-        {branch ? (
-          <>
-            <span className="inbox-row-meta-divider" aria-hidden="true">·</span>
-            <span className="inbox-row-branch">{branch}</span>
-          </>
-        ) : null}
-        <span className="inbox-row-time">
-          {timeLabel}
-        </span>
-      </div>
+      </span>
+      <span className="inbox-row-provider">{provider}</span>
+      <span className="inbox-row-branch" aria-hidden={branch ? undefined : "true"}>
+        {branch}
+      </span>
+      <span className="inbox-row-time">
+        {timeLabel}
+      </span>
     </button>
   );
 }

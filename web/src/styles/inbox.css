@@ -16,7 +16,10 @@
     --inbox-repo-font: 22px;
     --inbox-repo-pad-y: 7px;
     --inbox-meta-font: 15px;
-    --inbox-meta-max: 46%;
+    --inbox-status-width: 17ch;
+    --inbox-provider-width: 7ch;
+    --inbox-branch-width: 8ch;
+    --inbox-time-width: 16ch;
     --inbox-title-max: 50%;
     --inbox-group-gap: 0px;
   }
@@ -122,9 +125,15 @@
     cursor: pointer;
 
     display: grid;
-    grid-template-columns: minmax(0, 1fr) fit-content(var(--inbox-meta-max));
+    grid-template-columns:
+      minmax(0, 1fr)
+      minmax(0, var(--inbox-status-width))
+      minmax(0, var(--inbox-provider-width))
+      minmax(0, var(--inbox-branch-width))
+      minmax(0, var(--inbox-time-width));
+    grid-template-areas: "main status provider branch time";
     align-items: center;
-    gap: var(--space-3);
+    gap: var(--space-2);
     padding: var(--inbox-row-pad-y) var(--space-2);
     border-bottom: 1px solid var(--color-border-muted);
     transition: background-color 80ms ease;
@@ -177,6 +186,7 @@
   /* ---------- Row main (left side) ---------- */
 
   .inbox-row-main {
+    grid-area: main;
     display: flex;
     align-items: baseline;
     gap: var(--space-2);
@@ -221,62 +231,40 @@
   }
 
   /* ---------- Row meta (right side) ----------
-   * Single line, right-aligned. The metadata cluster gets its natural width
-   * first; the summary/title side gives up space before metadata truncates.
-   * The percent cap is only a safety rail for narrow desktop widths.
+   * Stable slots, not a flexible blob. Status/provider/branch/time each
+   * reserve enough room for their normal domain; title/summary is the only
+   * pressure valve for ordinary row updates.
    */
 
-  .inbox-row-meta {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: var(--space-2);
+  .inbox-row-status,
+  .inbox-row-provider,
+  .inbox-row-branch,
+  .inbox-row-time {
     font-size: var(--inbox-meta-font);
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
     min-width: 0;
     overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .inbox-row-meta-line {
+  .inbox-row-status {
+    grid-area: status;
     display: inline-flex;
     align-items: center;
-    gap: var(--space-1);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    min-width: 0;
-  }
-
-  .inbox-row-meta-provider {
-    color: var(--text-muted);
-    text-transform: lowercase;
+    gap: var(--space-2);
   }
 
   .inbox-row-provider {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    flex-shrink: 0;
+    grid-area: provider;
+    text-transform: lowercase;
   }
 
   .inbox-row-branch {
-    color: var(--text-muted);
+    grid-area: branch;
     font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
     font-size: 10px;
-    max-width: 10ch;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .inbox-row-meta-status {
-    color: var(--text-muted);
-    flex-shrink: 0;
-  }
-
-  .inbox-row-meta-divider {
-    color: var(--color-border-primary);
-    flex-shrink: 0;
   }
 
   .inbox-row-status-dot {
@@ -314,14 +302,17 @@
     color: var(--text-secondary);
     text-transform: lowercase;
     transition: color 200ms ease, opacity 200ms ease;
-    flex-shrink: 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .inbox-row-time {
+    grid-area: time;
     color: var(--text-muted);
-    flex-shrink: 0;
-    margin-left: auto;
-    padding-left: var(--space-2);
+    justify-self: end;
+    text-align: right;
+    width: 100%;
   }
 
   /* ---------- Tuner panel ---------- */
@@ -429,26 +420,26 @@
   }
 
   /* ---------- Mobile ----------
-   * Single-column stack. Meta drops below the title/summary as one line,
-   * still nowrap+ellipsis so it never reflows the row when status changes.
+   * Main line first, then the two most useful live facts. Provider and
+   * branch are detail metadata, so they drop out on narrow screens.
    */
 
   @media (max-width: 720px) {
     .inbox-row {
-      grid-template-columns: 1fr;
-      gap: var(--space-1);
+      grid-template-columns: minmax(0, 1fr) minmax(0, var(--inbox-time-width));
+      grid-template-areas:
+        "main main"
+        "status time";
+      gap: var(--space-1) var(--space-2);
     }
 
-    .inbox-row-meta {
-      align-items: flex-start;
-      flex-direction: row;
-      gap: var(--space-3);
-      overflow: hidden;
+    .inbox-row-provider,
+    .inbox-row-branch {
+      display: none;
     }
 
-    .inbox-row-meta-line {
-      flex-shrink: 1;
-      min-width: 0;
+    .inbox-row-status {
+      justify-self: start;
     }
   }
 }

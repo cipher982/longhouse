@@ -18,7 +18,7 @@ interface TunerKnob {
   key: string;
   cssVar: string;
   label: string;
-  unit: "px" | "" | "%";
+  unit: "px" | "" | "%" | "ch";
   min: number;
   max: number;
   step: number;
@@ -32,7 +32,10 @@ const KNOBS: TunerKnob[] = [
   { key: "repoFont", cssVar: "--inbox-repo-font", label: "Repo font", unit: "px", min: 14, max: 28, step: 1, defaultValue: 22 },
   { key: "repoPadY", cssVar: "--inbox-repo-pad-y", label: "Repo pad y", unit: "px", min: 4, max: 24, step: 1, defaultValue: 7 },
   { key: "metaFont", cssVar: "--inbox-meta-font", label: "Meta font", unit: "px", min: 10, max: 18, step: 0.5, defaultValue: 15 },
-  { key: "metaMaxPct", cssVar: "--inbox-meta-max", label: "Meta max", unit: "%", min: 25, max: 60, step: 1, defaultValue: 46 },
+  { key: "statusWidth", cssVar: "--inbox-status-width", label: "Status slot", unit: "ch", min: 10, max: 26, step: 1, defaultValue: 17 },
+  { key: "providerWidth", cssVar: "--inbox-provider-width", label: "Provider slot", unit: "ch", min: 5, max: 14, step: 1, defaultValue: 7 },
+  { key: "branchWidth", cssVar: "--inbox-branch-width", label: "Branch slot", unit: "ch", min: 0, max: 20, step: 1, defaultValue: 8 },
+  { key: "timeWidth", cssVar: "--inbox-time-width", label: "Time slot", unit: "ch", min: 12, max: 24, step: 1, defaultValue: 16 },
   { key: "titleMaxPct", cssVar: "--inbox-title-max", label: "Title max", unit: "%", min: 25, max: 75, step: 5, defaultValue: 50 },
   { key: "groupGap", cssVar: "--inbox-group-gap", label: "Group gap", unit: "px", min: 0, max: 32, step: 2, defaultValue: 0 },
 ];
