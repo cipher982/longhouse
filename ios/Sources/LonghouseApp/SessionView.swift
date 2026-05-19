@@ -840,7 +840,7 @@ private struct UserBubble: View {
     let event: SessionEvent
     @State private var expanded = false
 
-    private var text: String { event.contentText ?? "" }
+    private var text: String { ClaudeChannelText.stripWrapper(event.contentText) }
     private var shouldCollapse: Bool { TranscriptTextPolicy.shouldCollapseMessage(text) }
     private var visibleText: String { TranscriptTextPolicy.visibleMessage(text, expanded: expanded) }
 
@@ -1723,7 +1723,7 @@ final class SessionViewModel: ObservableObject {
             guard input.phase == .sent || input.phase == .queued || input.phase == .submitting else { return false }
             let age = now.timeIntervalSince(input.createdAt)
             return events.contains { event in
-                guard event.role == "user", event.contentText == input.text else { return false }
+                guard event.role == "user", ClaudeChannelText.stripWrapper(event.contentText) == input.text else { return false }
                 guard let eventDate = LonghouseDateParser.parse(event.timestamp) else { return false }
                 // Near-realtime window: tight [-5s, +120s] around submit.
                 if eventDate >= input.createdAt.addingTimeInterval(-5)
