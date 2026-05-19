@@ -15,6 +15,7 @@ os.environ.setdefault("TESTING", "1")
 from zerg.database import Base
 from zerg.database import _auto_add_missing_columns
 from zerg.database import _migrate_agents_columns as _migrate_agents_columns_raw
+from zerg.database import _pre_migrate_session_inputs_identity_columns
 from zerg.database import make_engine
 
 
@@ -26,12 +27,14 @@ def _migrate_agents_columns(engine):
     do the same.
     """
 
+    _pre_migrate_session_inputs_identity_columns(engine)
     _auto_add_missing_columns(engine, Base.metadata, apply=True)
     _migrate_agents_columns_raw(engine)
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionTurn
 from zerg.models.models import JobRun
@@ -41,6 +44,83 @@ def _table_columns(engine, table_name: str) -> set[str]:
     with engine.connect() as conn:
         rows = conn.execute(text(f"PRAGMA table_info({table_name})")).fetchall()
     return {row[1] for row in rows}
+
+
+def test_sqlite_migration_renames_session_input_request_identity(tmp_path):
+    db_path = tmp_path / "session_input_identity_migration.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE session_inputs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id VARCHAR(36) NOT NULL,
+                text TEXT NOT NULL,
+                owner_id INTEGER,
+                intent VARCHAR(16) NOT NULL,
+                status VARCHAR(16) NOT NULL,
+                request_id VARCHAR(64),
+                last_error TEXT,
+                created_at DATETIME,
+                delivered_at DATETIME,
+                updated_at DATETIME
+            )
+            """
+        )
+        conn.exec_driver_sql(
+            """
+            CREATE UNIQUE INDEX ix_session_inputs_session_owner_request
+            ON session_inputs(session_id, owner_id, request_id)
+            WHERE request_id IS NOT NULL
+            """
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO session_inputs (
+                    session_id,
+                    text,
+                    owner_id,
+                    intent,
+                    status,
+                    request_id
+                )
+                VALUES (
+                    'session-1',
+                    'hello',
+                    7,
+                    'queue',
+                    'queued',
+                    'ios-existing-1'
+                )
+                """
+            )
+        )
+
+    _migrate_agents_columns(engine)
+
+    columns = _table_columns(engine, "session_inputs")
+    expected_columns = {col.name for col in SessionInput.__table__.columns}
+    assert expected_columns <= columns
+    assert "request_id" not in columns
+
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                """
+                SELECT client_request_id, delivery_request_id
+                FROM session_inputs
+                WHERE id = 1
+                """
+            )
+        ).one()
+        indexes = conn.execute(text("PRAGMA index_list(session_inputs)")).fetchall()
+
+    assert row.client_request_id == "ios-existing-1"
+    assert row.delivery_request_id is None
+    assert any(index[1] == "ix_session_inputs_session_owner_client_request" for index in indexes)
+    assert all(index[1] != "ix_session_inputs_session_owner_request" for index in indexes)
 
 
 def test_sqlite_migration_adds_current_model_columns(tmp_path):

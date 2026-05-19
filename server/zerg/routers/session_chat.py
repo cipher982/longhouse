@@ -65,6 +65,7 @@ from zerg.services.session_inputs import create_session_input
 from zerg.services.session_inputs import get_session_input
 from zerg.services.session_inputs import list_recent_inputs
 from zerg.services.session_inputs import mark_failed as _mark_input_failed
+from zerg.services.session_inputs import retry_failed_input
 from zerg.session_loop_mode import SessionLoopMode
 from zerg.session_loop_mode import coerce_session_loop_mode
 
@@ -177,6 +178,7 @@ class SessionInputResponse(BaseModel):
 
     outcome: str = Field(..., description="sent | queued")
     input_id: int
+    client_request_id: str | None = None
     intent: str
     queued: list[QueuedInputSummary] = Field(default_factory=list)
 
@@ -601,31 +603,28 @@ def _queued_summary(row) -> QueuedInputSummary:
     )
 
 
-def _request_id_for_input(body: SessionInputRequest) -> str:
+def _client_request_id_for_input(body: SessionInputRequest) -> str:
     client_request_id = (body.client_request_id or "").strip()
     if client_request_id:
         return client_request_id
     return uuid.uuid4().hex
 
 
+def _input_conflict(existing: SessionInput, *, reason: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "error_code": "input_conflict",
+            "existing_input_id": int(existing.id),
+            "reason": reason,
+        },
+    )
+
+
 def _conflict_for_existing_input(existing: SessionInput) -> HTTPException:
     status_value = str(existing.status or "")
-    if status_value == INPUT_STATUS_DELIVERING:
-        return HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "error_code": "input_in_flight",
-                "message": "This input is already being sent.",
-            },
-        )
     if status_value == INPUT_STATUS_CANCELLED:
-        return HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "error_code": "input_cancelled",
-                "message": "This submitted input was already cancelled. Edit and send it again.",
-            },
-        )
+        return _input_conflict(existing, reason="cancelled")
     if status_value == INPUT_STATUS_FAILED:
         last_error = str(existing.last_error or "").strip()
         if last_error == "turn_ended":
@@ -652,6 +651,27 @@ def _conflict_for_existing_input(existing: SessionInput) -> HTTPException:
     )
 
 
+def _find_existing_input(
+    *,
+    source_session,
+    owner_id: int,
+    client_request_id: str,
+    db: Session,
+) -> SessionInput | None:
+    if not client_request_id:
+        return None
+    return (
+        db.query(SessionInput)
+        .filter(
+            SessionInput.session_id == source_session.id,
+            SessionInput.owner_id == owner_id,
+            SessionInput.client_request_id == client_request_id,
+        )
+        .order_by(SessionInput.id.asc())
+        .first()
+    )
+
+
 def _existing_input_response(
     *,
     source_session,
@@ -662,25 +682,24 @@ def _existing_input_response(
     client_request_id = (body.client_request_id or "").strip()
     if not client_request_id:
         return None
-    existing = (
-        db.query(SessionInput)
-        .filter(
-            SessionInput.session_id == source_session.id,
-            SessionInput.owner_id == owner_id,
-            SessionInput.request_id == client_request_id,
-        )
-        .order_by(SessionInput.id.asc())
-        .first()
+    existing = _find_existing_input(
+        source_session=source_session,
+        owner_id=owner_id,
+        client_request_id=client_request_id,
+        db=db,
     )
     if existing is None:
         return None
-    if existing.status not in (INPUT_STATUS_DELIVERED, INPUT_STATUS_QUEUED):
+    if existing.body != body.text:
+        raise _input_conflict(existing, reason="different_text")
+    if existing.status not in (INPUT_STATUS_DELIVERED, INPUT_STATUS_QUEUED, INPUT_STATUS_DELIVERING):
         raise _conflict_for_existing_input(existing)
     recent = list_recent_inputs(db, source_session.id)
     outcome = "sent" if existing.status == INPUT_STATUS_DELIVERED else "queued"
     return SessionInputResponse(
         outcome=outcome,
         input_id=int(existing.id),
+        client_request_id=existing.client_request_id,
         intent=existing.intent,
         queued=[_queued_summary(r) for r in recent],
     )
@@ -694,7 +713,8 @@ def _create_session_input_or_existing(
     body: SessionInputRequest,
     intent: str,
     status_value: str,
-    request_id: str,
+    client_request_id: str,
+    delivery_request_id: str | None = None,
 ) -> SessionInput | SessionInputResponse:
     try:
         return create_session_input(
@@ -704,7 +724,8 @@ def _create_session_input_or_existing(
             owner_id=owner_id,
             intent=intent,
             status=status_value,
-            request_id=request_id,
+            client_request_id=client_request_id,
+            delivery_request_id=delivery_request_id,
         )
     except IntegrityError:
         db.rollback()
@@ -723,8 +744,10 @@ async def _dispatch_steer_input(
     source_session,
     owner_id: int,
     body: SessionInputRequest,
-    request_id: str,
+    client_request_id: str,
+    delivery_request_id: str,
     db: Session,
+    retry_row: SessionInput | None = None,
 ) -> SessionInputResponse:
     """Send a mid-turn steer, surfacing turn-ended races as a structured 409.
 
@@ -747,25 +770,37 @@ async def _dispatch_steer_input(
 
     # Record a delivering row so the steer attempt is audit-visible even on
     # failure (for drain-failure UX parity with intent=auto).
-    created = _create_session_input_or_existing(
-        db=db,
-        source_session=source_session,
-        owner_id=owner_id,
-        body=body,
-        intent=INPUT_INTENT_STEER,
-        status_value=INPUT_STATUS_DELIVERING,
-        request_id=request_id,
-    )
-    if isinstance(created, SessionInputResponse):
-        return created
-    row = created
+    if retry_row is not None:
+        row = retry_failed_input(
+            db,
+            int(retry_row.id),
+            intent=INPUT_INTENT_STEER,
+            status=INPUT_STATUS_DELIVERING,
+            delivery_request_id=delivery_request_id,
+        )
+        if row is None:
+            raise _conflict_for_existing_input(retry_row)
+    else:
+        created = _create_session_input_or_existing(
+            db=db,
+            source_session=source_session,
+            owner_id=owner_id,
+            body=body,
+            intent=INPUT_INTENT_STEER,
+            status_value=INPUT_STATUS_DELIVERING,
+            client_request_id=client_request_id,
+            delivery_request_id=delivery_request_id,
+        )
+        if isinstance(created, SessionInputResponse):
+            return created
+        row = created
 
     result = await steer_text_to_managed_local_session(
         db=db,
         owner_id=owner_id,
         session=source_session,
         text=body.text,
-        commis_id=request_id,
+        commis_id=delivery_request_id,
     )
 
     if result.ok:
@@ -776,6 +811,7 @@ async def _dispatch_steer_input(
         return SessionInputResponse(
             outcome="sent",
             input_id=int(row.id),
+            client_request_id=row.client_request_id,
             intent=INPUT_INTENT_STEER,
             queued=[_queued_summary(r) for r in recent],
         )
@@ -818,15 +854,27 @@ async def _create_session_input_response(
 
     _assert_live_session_send_available(db, source_session, owner_id=owner_id)
 
-    if existing_response := _existing_input_response(
+    client_request_id = _client_request_id_for_input(body)
+    delivery_request_id = uuid.uuid4().hex
+    existing_input = _find_existing_input(
         source_session=source_session,
         owner_id=owner_id,
-        body=body,
+        client_request_id=client_request_id,
         db=db,
-    ):
-        return existing_response
-
-    request_id = _request_id_for_input(body)
+    )
+    if existing_input is not None:
+        if existing_input.body != body.text:
+            raise _input_conflict(existing_input, reason="different_text")
+        if existing_input.status == INPUT_STATUS_CANCELLED:
+            raise _input_conflict(existing_input, reason="cancelled")
+        if existing_input.status != INPUT_STATUS_FAILED:
+            if existing_response := _existing_input_response(
+                source_session=source_session,
+                owner_id=owner_id,
+                body=body,
+                db=db,
+            ):
+                return existing_response
 
     def _cap_check_or_raise() -> None:
         current = count_queued(db, source_session.id)
@@ -841,29 +889,43 @@ async def _create_session_input_response(
             source_session=source_session,
             owner_id=owner_id,
             body=body,
-            request_id=request_id,
+            client_request_id=client_request_id,
+            delivery_request_id=delivery_request_id,
             db=db,
+            retry_row=existing_input,
         )
 
     # Queue intent always persists and returns without attempting dispatch.
     if body.intent == INPUT_INTENT_QUEUE:
         _cap_check_or_raise()
-        created = _create_session_input_or_existing(
-            db=db,
-            source_session=source_session,
-            owner_id=owner_id,
-            body=body,
-            intent=INPUT_INTENT_QUEUE,
-            status_value=INPUT_STATUS_QUEUED,
-            request_id=request_id,
-        )
-        if isinstance(created, SessionInputResponse):
-            return created
-        row = created
+        if existing_input is not None:
+            row = retry_failed_input(
+                db,
+                int(existing_input.id),
+                intent=INPUT_INTENT_QUEUE,
+                status=INPUT_STATUS_QUEUED,
+                delivery_request_id=None,
+            )
+            if row is None:
+                raise _conflict_for_existing_input(existing_input)
+        else:
+            created = _create_session_input_or_existing(
+                db=db,
+                source_session=source_session,
+                owner_id=owner_id,
+                body=body,
+                intent=INPUT_INTENT_QUEUE,
+                status_value=INPUT_STATUS_QUEUED,
+                client_request_id=client_request_id,
+            )
+            if isinstance(created, SessionInputResponse):
+                return created
+            row = created
         recent = list_recent_inputs(db, source_session.id)
         return SessionInputResponse(
             outcome="queued",
             input_id=int(row.id),
+            client_request_id=row.client_request_id,
             intent=INPUT_INTENT_QUEUE,
             queued=[_queued_summary(r) for r in recent],
         )
@@ -872,47 +934,72 @@ async def _create_session_input_response(
     lock_scope_id = str(source_session.thread_root_session_id or source_session.id)
     lock = await session_lock_manager.acquire(
         session_id=lock_scope_id,
-        holder=request_id,
+        holder=delivery_request_id,
         ttl_seconds=300,
     )
     if not lock:
         _cap_check_or_raise()
-        created = _create_session_input_or_existing(
-            db=db,
-            source_session=source_session,
-            owner_id=owner_id,
-            body=body,
-            intent=INPUT_INTENT_AUTO,
-            status_value=INPUT_STATUS_QUEUED,
-            request_id=request_id,
-        )
-        if isinstance(created, SessionInputResponse):
-            return created
-        row = created
+        if existing_input is not None:
+            row = retry_failed_input(
+                db,
+                int(existing_input.id),
+                intent=INPUT_INTENT_AUTO,
+                status=INPUT_STATUS_QUEUED,
+                delivery_request_id=None,
+            )
+            if row is None:
+                raise _conflict_for_existing_input(existing_input)
+        else:
+            created = _create_session_input_or_existing(
+                db=db,
+                source_session=source_session,
+                owner_id=owner_id,
+                body=body,
+                intent=INPUT_INTENT_AUTO,
+                status_value=INPUT_STATUS_QUEUED,
+                client_request_id=client_request_id,
+            )
+            if isinstance(created, SessionInputResponse):
+                return created
+            row = created
         recent = list_recent_inputs(db, source_session.id)
         return SessionInputResponse(
             outcome="queued",
             input_id=int(row.id),
+            client_request_id=row.client_request_id,
             intent=INPUT_INTENT_AUTO,
             queued=[_queued_summary(r) for r in recent],
         )
 
     # Lock acquired: record a delivering row for audit, then dispatch.
     try:
-        created = _create_session_input_or_existing(
-            db=db,
-            source_session=source_session,
-            owner_id=owner_id,
-            body=body,
-            intent=INPUT_INTENT_AUTO,
-            status_value=INPUT_STATUS_DELIVERING,
-            request_id=request_id,
-        )
+        if existing_input is not None:
+            row = retry_failed_input(
+                db,
+                int(existing_input.id),
+                intent=INPUT_INTENT_AUTO,
+                status=INPUT_STATUS_DELIVERING,
+                delivery_request_id=delivery_request_id,
+            )
+            if row is None:
+                raise _conflict_for_existing_input(existing_input)
+            created: SessionInput | SessionInputResponse = row
+        else:
+            created = _create_session_input_or_existing(
+                db=db,
+                source_session=source_session,
+                owner_id=owner_id,
+                body=body,
+                intent=INPUT_INTENT_AUTO,
+                status_value=INPUT_STATUS_DELIVERING,
+                client_request_id=client_request_id,
+                delivery_request_id=delivery_request_id,
+            )
     except Exception:
-        await session_lock_manager.release(lock_scope_id, request_id)
+        await session_lock_manager.release(lock_scope_id, delivery_request_id)
         raise
     if isinstance(created, SessionInputResponse):
-        await session_lock_manager.release(lock_scope_id, request_id)
+        await session_lock_manager.release(lock_scope_id, delivery_request_id)
         return created
     row = created
     try:
@@ -920,18 +1007,18 @@ async def _create_session_input_response(
             source_session=source_session,
             owner_id=owner_id,
             message=body.text,
-            request_id=request_id,
+            request_id=delivery_request_id,
             lock_scope_id=lock_scope_id,
             db=db,
         )
     except HTTPException:
-        await session_lock_manager.release(lock_scope_id, request_id)
+        await session_lock_manager.release(lock_scope_id, delivery_request_id)
         _mark_input_failed(db, int(row.id), error="dispatch rejected")
         raise
     except Exception as exc:
-        await session_lock_manager.release(lock_scope_id, request_id)
+        await session_lock_manager.release(lock_scope_id, delivery_request_id)
         _mark_input_failed(db, int(row.id), error=str(exc)[:200])
-        logger.exception(f"[{request_id}] Error dispatching session input")
+        logger.exception(f"[{delivery_request_id}] Error dispatching session input")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Internal error: {str(exc)[:200]}",
@@ -958,6 +1045,7 @@ async def _create_session_input_response(
     return SessionInputResponse(
         outcome="sent",
         input_id=int(row.id),
+        client_request_id=row.client_request_id,
         intent=INPUT_INTENT_AUTO,
         queued=[_queued_summary(r) for r in recent],
     )

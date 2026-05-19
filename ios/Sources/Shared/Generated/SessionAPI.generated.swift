@@ -281,6 +281,7 @@ struct APIQueuedInputSummary: Codable, Hashable, Sendable {
 struct APISessionInputResponse: Codable, Hashable, Sendable {
     let outcome: String
     let inputId: Int
+    let clientRequestId: String?
     let intent: String
     let queued: [APIQueuedInputSummary]?
 }

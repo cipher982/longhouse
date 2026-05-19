@@ -51,7 +51,8 @@ def create_session_input(
     intent: str,
     status: str,
     owner_id: int | None = None,
-    request_id: str | None = None,
+    client_request_id: str | None = None,
+    delivery_request_id: str | None = None,
 ) -> SessionInput:
     if intent not in VALID_INTENTS:
         raise ValueError(f"invalid intent: {intent}")
@@ -61,7 +62,8 @@ def create_session_input(
         owner_id=owner_id,
         intent=intent,
         status=status,
-        request_id=request_id,
+        client_request_id=client_request_id,
+        delivery_request_id=delivery_request_id,
     )
     db.add(row)
     db.commit()
@@ -148,7 +150,7 @@ def cancel_queued_input(db: Session, input_id: int) -> SessionInput | None:
     return get_session_input(db, input_id)
 
 
-def claim_next_queued(db: Session, session_id: UUID, *, request_id: str) -> SessionInput | None:
+def claim_next_queued(db: Session, session_id: UUID, *, delivery_request_id: str) -> SessionInput | None:
     """Atomically move the oldest queued input to delivering.
 
     Returns the claimed row or None if nothing to drain.
@@ -174,7 +176,7 @@ def claim_next_queued(db: Session, session_id: UUID, *, request_id: str) -> Sess
         .update(
             {
                 "status": INPUT_STATUS_DELIVERING,
-                "request_id": request_id,
+                "delivery_request_id": delivery_request_id,
                 "updated_at": datetime.now(timezone.utc),
             },
             synchronize_session=False,
@@ -185,6 +187,40 @@ def claim_next_queued(db: Session, session_id: UUID, *, request_id: str) -> Sess
         return None
     db.refresh(candidate)
     return candidate
+
+
+def retry_failed_input(
+    db: Session,
+    input_id: int,
+    *,
+    intent: str,
+    status: str,
+    delivery_request_id: str | None = None,
+) -> SessionInput | None:
+    if intent not in VALID_INTENTS:
+        raise ValueError(f"invalid intent: {intent}")
+    if status not in {INPUT_STATUS_QUEUED, INPUT_STATUS_DELIVERING}:
+        raise ValueError(f"invalid retry status: {status}")
+    now = datetime.now(timezone.utc)
+    updated = (
+        db.query(SessionInput)
+        .filter(SessionInput.id == input_id, SessionInput.status == INPUT_STATUS_FAILED)
+        .update(
+            {
+                "intent": intent,
+                "status": status,
+                "delivery_request_id": delivery_request_id,
+                "last_error": None,
+                "delivered_at": None,
+                "updated_at": now,
+            },
+            synchronize_session=False,
+        )
+    )
+    db.commit()
+    if updated != 1:
+        return None
+    return get_session_input(db, input_id)
 
 
 def mark_delivered(db: Session, input_id: int) -> None:
@@ -242,7 +278,7 @@ def requeue_stuck_delivering(db: Session, *, stale_after_secs: float = DELIVERIN
         .update(
             {
                 "status": INPUT_STATUS_QUEUED,
-                "request_id": None,
+                "delivery_request_id": None,
                 "updated_at": now,
             },
             synchronize_session=False,
