@@ -234,6 +234,7 @@ def _runtime_events_for_managed_leases(
         state = (lease.state or "").strip().lower()
         runtime_key = runtime_key_for_session(provider, str(lease.session_id))
         payload = lease.model_dump(mode="json")
+        occurred_at = normalize_utc(lease.observed_at) or received_at
 
         if state == "attached":
             events.append(
@@ -246,7 +247,7 @@ def _runtime_events_for_managed_leases(
                     kind="phase_signal",
                     phase=_managed_session_phase(lease),
                     tool_name=lease.tool_name,
-                    occurred_at=received_at,
+                    occurred_at=occurred_at,
                     freshness_ms=lease.lease_ttl_ms,
                     dedupe_key=_dedupe_key_for_lease(lease),
                     payload=payload,
@@ -263,7 +264,7 @@ def _runtime_events_for_managed_leases(
                     kind="phase_signal",
                     phase="blocked",
                     tool_name=lease.tool_name or "control path",
-                    occurred_at=received_at,
+                    occurred_at=occurred_at,
                     freshness_ms=lease.lease_ttl_ms,
                     dedupe_key=_dedupe_key_for_lease(lease),
                     payload=payload,
@@ -280,7 +281,7 @@ def _runtime_events_for_managed_leases(
                     kind="phase_signal",
                     phase="blocked",
                     tool_name=lease.tool_name or "control path",
-                    occurred_at=received_at,
+                    occurred_at=occurred_at,
                     freshness_ms=lease.lease_ttl_ms,
                     dedupe_key=_dedupe_key_for_lease(lease),
                     payload=payload,

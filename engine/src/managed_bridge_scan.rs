@@ -27,6 +27,7 @@ pub struct CodexBridgeObservation {
     pub ws_url: Option<String>,
     pub status: String,
     pub thread_id: Option<String>,
+    #[allow(dead_code)]
     pub thread_path: Option<String>,
     pub active_turn_id: Option<String>,
     pub last_turn_status: Option<String>,

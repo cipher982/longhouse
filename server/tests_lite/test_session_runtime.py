@@ -966,7 +966,7 @@ def test_heartbeat_attached_managed_codex_lease_materializes_live_idle_state(tmp
         runtime_key = runtime_key_for_session("codex", str(session_id))
 
     before_request = datetime.now(timezone.utc)
-    observed_at = now - timedelta(days=1)
+    observed_at = before_request
     for client in _client(SessionLocal):
         response = client.post(
             "/agents/heartbeat",
@@ -1003,7 +1003,7 @@ def test_heartbeat_attached_managed_codex_lease_materializes_live_idle_state(tmp
         assert state.last_runtime_signal_at is not None
         last_signal = state.last_runtime_signal_at.replace(tzinfo=timezone.utc)
         assert before_request <= last_signal <= after_request
-        assert last_signal != observed_at
+        assert last_signal == observed_at
         assert state.freshness_expires_at is not None
         lease_expiry = state.freshness_expires_at.replace(tzinfo=timezone.utc)
         assert lease_expiry >= before_request + timedelta(minutes=15)
@@ -1012,6 +1012,81 @@ def test_heartbeat_attached_managed_codex_lease_materializes_live_idle_state(tmp
         assert view.display_phase == "Idle"
         assert view.confidence == "live"
         assert stored_session.ended_at is None
+
+    engine.dispose()
+
+
+def test_heartbeat_lease_uses_observed_at_so_stale_lease_cannot_override_newer_hook(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_stale_lease_ordering.db")
+    now = datetime.now(timezone.utc)
+    stale_lease_at = now - timedelta(seconds=60)
+    hook_at = now - timedelta(seconds=5)
+
+    with SessionLocal() as db:
+        session = _seed_session(
+            db,
+            provider="claude",
+            started_at=now - timedelta(hours=1),
+        )
+        session.execution_home = "managed_local"
+        session.managed_transport = "claude_relay"
+        session_id = session.id
+        runtime_key = runtime_key_for_session("claude", str(session_id))
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session_id,
+                    provider="claude",
+                    device_id="runtime-device",
+                    source="claude_hook",
+                    kind="phase_signal",
+                    phase="thinking",
+                    occurred_at=hook_at,
+                    freshness_ms=phase_freshness_ms("thinking"),
+                    dedupe_key="fresh-hook-thinking",
+                    payload={},
+                )
+            ],
+        )
+        db.commit()
+
+    for client in _client(SessionLocal):
+        response = client.post(
+            "/agents/heartbeat",
+            json={
+                "version": "test",
+                "daemon_pid": 123,
+                "managed_sessions": [
+                    {
+                        "session_id": str(session_id),
+                        "provider": "claude",
+                        "machine_id": "cinder",
+                        "sequence": 44,
+                        "state": "attached",
+                        "phase": "blocked",
+                        "tool_name": "AskUserQuestion",
+                        "bridge_status": "ready",
+                        "thread_subscription_status": "subscribed",
+                        "observed_at": stale_lease_at.isoformat(),
+                        "lease_ttl_ms": 15 * 60 * 1000,
+                    }
+                ],
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert response.status_code == 204, response.text
+
+    with SessionLocal() as db:
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        observations = _runtime_observations(db, runtime_key)
+
+        assert state.phase == "thinking"
+        assert state.active_tool is None
+        assert state.last_runtime_signal_at.replace(tzinfo=timezone.utc) == hook_at
+        assert len(observations) == 2
+        assert observations[-1].observed_at.replace(tzinfo=timezone.utc) == stale_lease_at
 
     engine.dispose()
 
