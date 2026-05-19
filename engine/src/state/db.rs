@@ -43,6 +43,7 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             provider TEXT NOT NULL,
             queued_offset INTEGER NOT NULL DEFAULT 0,
             acked_offset INTEGER NOT NULL DEFAULT 0,
+            file_identity TEXT,
             session_id TEXT,
             provider_session_id TEXT,
             last_updated TEXT NOT NULL
@@ -76,6 +77,7 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             path TEXT PRIMARY KEY,
             provider TEXT NOT NULL,
             offset INTEGER NOT NULL DEFAULT 0,
+            file_identity TEXT,
             session_id TEXT,
             updated_at TEXT NOT NULL
         );
@@ -115,6 +117,22 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             PRIMARY KEY (provider, provider_session_id)
         );",
     )?;
+
+    let file_state_columns: std::collections::HashSet<String> = conn
+        .prepare("PRAGMA table_info(file_state)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<_, _>>()?;
+    if !file_state_columns.contains("file_identity") {
+        conn.execute_batch("ALTER TABLE file_state ADD COLUMN file_identity TEXT;")?;
+    }
+
+    let live_file_state_columns: std::collections::HashSet<String> = conn
+        .prepare("PRAGMA table_info(live_file_state)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<_, _>>()?;
+    if !live_file_state_columns.contains("file_identity") {
+        conn.execute_batch("ALTER TABLE live_file_state ADD COLUMN file_identity TEXT;")?;
+    }
 
     let unmanaged_binding_columns: std::collections::HashSet<String> = conn
         .prepare("PRAGMA table_info(unmanaged_process_binding_state)")?
