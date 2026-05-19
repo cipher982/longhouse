@@ -19,7 +19,10 @@ from __future__ import annotations
 import time
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime
+from datetime import timezone
 from typing import Literal
+from uuid import UUID
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -28,14 +31,21 @@ from fastapi import Request
 from fastapi import status
 from pydantic import BaseModel
 from pydantic import Field
+from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
+from zerg.database import get_db
 from zerg.dependencies.auth import require_admin
 from zerg.metrics import canary_latency_seconds
 from zerg.metrics import canary_observations_total
 from zerg.metrics import canary_seq_last_seen
 from zerg.metrics import event_end_to_end_latency_seconds
 from zerg.metrics import event_render_beacons_total
+from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionObservation
+from zerg.services.session_observations import OBS_KIND_CLIENT_RENDER
+from zerg.services.session_observations import SOURCE_DOMAIN_CLIENT
+from zerg.services.session_observations import record_session_observation
 
 
 def canary_token_matches(request: Request) -> bool:
@@ -99,6 +109,8 @@ class _Sample:
     surface: str
     managed: bool
     latency_s: float
+    session_id: str | None
+    event_id: str
 
 
 _samples: deque[_Sample] = deque(maxlen=2000)
@@ -106,8 +118,56 @@ _MAX_CLOCK_SKEW_MS = 30_000
 _MAX_LATENCY_S = 60.0
 
 
+def _utc_from_ms(ms: int) -> datetime:
+    return datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc)
+
+
+def _persist_render_beacon(db: Session, beacon: RenderBeacon, *, latency_ms: int) -> None:
+    if not beacon.session_id:
+        return
+    try:
+        session_id = UUID(str(beacon.session_id))
+    except ValueError:
+        return
+
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    provider = session.provider if session else "unknown"
+    observed_at = _utc_from_ms(beacon.rendered_at_ms - beacon.clock_skew_ms)
+    payload = {
+        "event_id": beacon.event_id,
+        "surface": beacon.surface,
+        "managed": beacon.managed,
+        "emitted_at_ms": beacon.emitted_at_ms,
+        "rendered_at_ms": beacon.rendered_at_ms,
+        "clock_skew_ms": beacon.clock_skew_ms,
+        "latency_ms": latency_ms,
+    }
+    record_session_observation(
+        db,
+        observation_id=(
+            f"client_render:{beacon.surface}:{session_id}:"
+            f"{beacon.event_id}:{beacon.rendered_at_ms}"
+        ),
+        session_id=session_id,
+        runtime_key=None,
+        provider=provider,
+        device_id=session.device_id if session else None,
+        source_domain=SOURCE_DOMAIN_CLIENT,
+        source="client_render_beacon",
+        kind=OBS_KIND_CLIENT_RENDER,
+        source_cursor=f"event:{beacon.event_id}",
+        observed_at=observed_at,
+        payload=payload,
+    )
+    db.commit()
+
+
 @beacon_router.post("/client-render", include_in_schema=False)
-async def client_render_beacon(beacons: list[RenderBeacon] | RenderBeacon, request: Request) -> dict:
+async def client_render_beacon(
+    beacons: list[RenderBeacon] | RenderBeacon,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
     """Accept one or a batch of render beacons.
 
     Publicly reachable so clients can beacon before auth resolves, but
@@ -151,10 +211,66 @@ async def client_render_beacon(beacons: list[RenderBeacon] | RenderBeacon, reque
         managed_label = "true" if b.managed else "false"
         event_end_to_end_latency_seconds.labels(surface=b.surface, managed=managed_label).observe(latency_s)
         event_render_beacons_total.labels(surface=b.surface, outcome="ok").inc()
-        _samples.append(_Sample(now_mono, b.surface, b.managed, latency_s))
+        _samples.append(_Sample(now_mono, b.surface, b.managed, latency_s, b.session_id, b.event_id))
+        try:
+            _persist_render_beacon(db, b, latency_ms=int(round(latency_ms)))
+        except Exception:
+            # Metrics must not depend on forensic persistence.
+            pass
         accepted += 1
 
     return {"accepted": accepted, "dropped_skew": dropped_skew, "dropped_range": dropped_range}
+
+
+@admin_router.get("/client-render/recent", include_in_schema=False)
+async def recent_client_render_beacons(
+    session_id: str | None = None,
+    event_id: str | None = None,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Return recent persisted browser/iOS render beacons for forensic debugging."""
+    query = (
+        db.query(SessionObservation)
+        .filter(SessionObservation.source_domain == SOURCE_DOMAIN_CLIENT)
+        .filter(SessionObservation.kind == OBS_KIND_CLIENT_RENDER)
+    )
+    if session_id:
+        try:
+            query = query.filter(SessionObservation.session_id == UUID(str(session_id)))
+        except ValueError:
+            return {"items": []}
+    if event_id:
+        query = query.filter(SessionObservation.source_cursor == f"event:{event_id}")
+
+    rows = (
+        query.order_by(SessionObservation.observed_at.desc(), SessionObservation.id.desc())
+        .limit(max(1, min(limit, 200)))
+        .all()
+    )
+    items = []
+    for row in rows:
+        import json
+
+        try:
+            payload = json.loads(row.payload_json or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        items.append(
+            {
+                "session_id": str(row.session_id) if row.session_id else None,
+                "event_id": payload.get("event_id"),
+                "surface": payload.get("surface"),
+                "managed": payload.get("managed"),
+                "latency_ms": payload.get("latency_ms"),
+                "emitted_at_ms": payload.get("emitted_at_ms"),
+                "rendered_at_ms": payload.get("rendered_at_ms"),
+                "clock_skew_ms": payload.get("clock_skew_ms"),
+                "observed_at": row.observed_at.isoformat() if row.observed_at else None,
+                "received_at": row.received_at.isoformat() if row.received_at else None,
+            }
+        )
+    return {"items": items}
 
 
 @admin_router.get("/latency-summary", include_in_schema=False)
