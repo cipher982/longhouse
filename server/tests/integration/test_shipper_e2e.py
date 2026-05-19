@@ -31,11 +31,13 @@ from __future__ import annotations
 import base64
 import json
 import os
+import shutil
 import sqlite3
 import socket
 import subprocess
 import time
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 import requests
@@ -177,6 +179,61 @@ def _get_events(server: str | dict[str, str], session_id: str) -> list[dict]:
     return data.get("events", data) if isinstance(data, dict) else data
 
 
+def _wait_for_session_events(
+    server: str | dict[str, str],
+    session_id: str,
+    *,
+    min_events: int,
+    timeout: float = 8.0,
+) -> list[dict]:
+    http = requests.Session()
+    http.trust_env = False
+    deadline = time.monotonic() + timeout
+    last_error = None
+    while time.monotonic() < deadline:
+        try:
+            session_response = http.get(
+                f"{_server_url(server)}/api/agents/sessions/{session_id}",
+                headers={"X-Agents-Token": _server_token(server)},
+                timeout=1,
+            )
+            if session_response.status_code != 404:
+                session_response.raise_for_status()
+                events_response = http.get(
+                    f"{_server_url(server)}/api/agents/sessions/{session_id}/events",
+                    headers={"X-Agents-Token": _server_token(server)},
+                    timeout=1,
+                )
+                events_response.raise_for_status()
+                data = events_response.json()
+                events = data.get("events", data) if isinstance(data, dict) else data
+                if len(events) >= min_events:
+                    return events
+        except Exception as exc:
+            last_error = exc
+        time.sleep(0.1)
+
+    raise AssertionError(f"Timed out waiting for {min_events} events for {session_id}; last_error={last_error!r}")
+
+
+def _wait_for_log_contains(log_dir: Path, needle: str, *, timeout: float = 8.0) -> str:
+    deadline = time.monotonic() + timeout
+    last_text = ""
+    while time.monotonic() < deadline:
+        texts = []
+        for path in sorted(log_dir.glob("engine.log.*")):
+            texts.append(path.read_text(errors="replace"))
+        last_text = "\n".join(texts)
+        if needle in last_text:
+            return last_text
+        time.sleep(0.1)
+    raise AssertionError(f"Timed out waiting for engine log to contain {needle!r}\n{last_text}")
+
+
+def _read_engine_logs(log_dir: Path) -> str:
+    return "\n".join(path.read_text(errors="replace") for path in sorted(log_dir.glob("engine.log.*")))
+
+
 def _export_session(server: str | dict[str, str], session_id: str) -> bytes:
     r = requests.get(
         f"{_server_url(server)}/api/agents/sessions/{session_id}/export",
@@ -191,6 +248,23 @@ def _sqlite_rows(server: dict[str, str], query: str, params: tuple[object, ...] 
     with sqlite3.connect(server["db_path"]) as conn:
         conn.row_factory = sqlite3.Row
         return conn.execute(query, params).fetchall()
+
+
+def _terminate_process(proc: subprocess.Popen[str]) -> str:
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+    output = ""
+    for pipe in (proc.stdout, proc.stderr):
+        if pipe is None:
+            continue
+        try:
+            output += pipe.read()
+        except Exception:
+            pass
+    return output
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +328,81 @@ def server(tmp_path_factory):
 # ---------------------------------------------------------------------------
 # Claude tests
 # ---------------------------------------------------------------------------
+
+
+def test_connect_daemon_ships_claude_transcript_from_filesystem_watch(server, tmp_path):
+    """Daemon connect mode ships a new transcript from the filesystem watcher hot lane."""
+    session_id = str(uuid4())
+    home = tmp_path / "home"
+    claude_root = home / ".claude"
+    projects_dir = claude_root / "projects" / "watcher-project"
+    projects_dir.mkdir(parents=True)
+    transcript = projects_dir / f"{session_id}.jsonl"
+    transcript.touch()
+    engine_db = tmp_path / "engine.db"
+    longhouse_home = Path("/tmp") / f"lh-e2e-{session_id[:8]}"
+    log_dir = tmp_path / "logs"
+
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "CLAUDE_CONFIG_DIR": str(claude_root),
+        "LONGHOUSE_HOME": str(longhouse_home),
+        "LONGHOUSE_LOG_DIR": str(log_dir),
+    }
+    proc = subprocess.Popen(
+        [
+            str(ENGINE_BIN),
+            "connect",
+            "--url",
+            _server_url(server),
+            "--token",
+            _server_token(server),
+            "--db",
+            str(engine_db),
+            "--compression",
+            "gzip",
+            "--flush-ms",
+            "50",
+            "--fallback-scan-secs",
+            "300",
+            "--spool-replay-secs",
+            "300",
+            "--machine-name",
+            "shipper-e2e-watcher",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    try:
+        _wait_for_log_contains(log_dir, "Daemon ready")
+        fixture_text = (FIXTURES_DIR / CLAUDE_FIXTURE).read_text()
+        with transcript.open("a") as f:
+            f.write(fixture_text.replace(CLAUDE_SESSION_ID, session_id))
+            f.flush()
+            os.fsync(f.fileno())
+        os.utime(transcript, None)
+
+        events = _wait_for_session_events(server, session_id, min_events=2)
+        assert len(events) >= 2
+        assert _sqlite_rows(
+            server,
+            "SELECT COUNT(*) AS count FROM events WHERE session_id = ?",
+            (session_id,),
+        )[0]["count"] >= 2
+    except Exception:
+        daemon_output = _terminate_process(proc)
+        raise AssertionError(
+            f"daemon watcher integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}"
+        ) from None
+    finally:
+        if proc.poll() is None:
+            _terminate_process(proc)
+        shutil.rmtree(longhouse_home, ignore_errors=True)
 
 
 class TestClaudeShipping:

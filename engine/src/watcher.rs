@@ -86,17 +86,18 @@ impl SessionWatcher {
                         .and_then(|e| e.to_str())
                         .map_or(false, |e| SESSION_EXTENSIONS.contains(&e));
                     if !ext_ok {
+                        tracing::debug!(path = %path.display(), "Skipping watcher event path without session extension");
                         continue;
                     }
 
                     // Skip temp files
                     if is_temp_file(&path) {
+                        tracing::debug!(path = %path.display(), "Skipping temporary watcher event path");
                         continue;
                     }
 
-                    // Bounded send. If the OS watcher floods, deterministic
-                    // hook catch-up should keep active sessions fresh; the
-                    // reconciliation scan repairs any remaining missed files.
+                    // Bounded send. If the OS watcher floods, reconciliation
+                    // scan repairs missed files.
                     let watcher_event = WatcherEvent {
                         path,
                         observed_at_ms: chrono::Utc::now().timestamp_millis(),
@@ -134,47 +135,37 @@ impl SessionWatcher {
         })
     }
 
-    /// Collect changed paths for `flush_interval`, then return the deduplicated batch.
+    /// Return a queued watcher event without relying on async wakeups from the
+    /// OS watcher thread.
+    pub fn try_next_event(&mut self) -> Option<WatcherEvent> {
+        self.rx.try_recv().ok()
+    }
+
+    /// Collect additional changed paths for `flush_interval` after `first`, then
+    /// return the deduplicated batch.
     ///
     /// This implements throttling (not debouncing): we always flush after the
     /// interval, even if writes are still happening. This prevents starvation
     /// on continuously-appended JSONL files.
     ///
-    /// Blocks until at least one event arrives, then collects for flush_interval.
-    /// Returns None if the watcher channel was closed.
-    pub async fn next_batch(&mut self, flush_interval: Duration) -> Option<Vec<WatcherEvent>> {
+    /// Call this only after a raw watcher event has already been received. The
+    /// internal coalescing wait is intentionally outside the main daemon
+    /// `select!` so a timer/control-channel branch cannot cancel the batch and
+    /// drop the first filesystem event.
+    pub async fn collect_batch_after(
+        &mut self,
+        first: WatcherEvent,
+        flush_interval: Duration,
+    ) -> Vec<WatcherEvent> {
         let mut batch: HashMap<PathBuf, i64> = HashMap::new();
+        batch.insert(first.path, first.observed_at_ms);
 
-        // Wait for the first event (blocks until something happens — zero CPU)
-        match self.rx.recv().await {
-            Some(event) => {
-                batch.insert(event.path, event.observed_at_ms);
-            }
-            None => return None, // Channel closed
-        }
-
-        // Collect additional events until flush_interval expires.
-        // biased toward the deadline so we always flush on time,
-        // even under sustained writes (throttle, not debounce).
-        let deadline = tokio::time::Instant::now() + flush_interval;
-        loop {
-            tokio::select! {
-                biased;
-                _ = tokio::time::sleep_until(deadline) => {
-                    break;
-                }
-                result = self.rx.recv() => {
-                    match result {
-                        Some(event) => {
-                            batch
-                                .entry(event.path)
-                                .and_modify(|observed| *observed = (*observed).min(event.observed_at_ms))
-                                .or_insert(event.observed_at_ms);
-                        }
-                        None => break,
-                    }
-                }
-            }
+        tokio::time::sleep(flush_interval).await;
+        while let Ok(event) = self.rx.try_recv() {
+            batch
+                .entry(event.path)
+                .and_modify(|observed| *observed = (*observed).min(event.observed_at_ms))
+                .or_insert(event.observed_at_ms);
         }
 
         let mut events: Vec<_> = batch
@@ -185,7 +176,7 @@ impl SessionWatcher {
             })
             .collect();
         events.sort_by(|a, b| a.path.cmp(&b.path));
-        Some(events)
+        events
     }
 }
 

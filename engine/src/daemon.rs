@@ -12,7 +12,6 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use rusqlite::Connection;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::io::AsyncReadExt;
@@ -60,13 +59,15 @@ const LOCAL_STATUS_INTERVAL_SECS: u64 = 1;
 const SERVER_HEARTBEAT_INTERVAL_SECS: u64 = 5 * 60;
 const FLIGHT_SAMPLE_INTERVAL_SECS: u64 = 5;
 const LOCAL_WORK_TICK_INTERVAL: Duration = Duration::from_millis(250);
+const WATCHER_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const OUTBOX_DRAIN_INTERVAL: Duration = Duration::from_millis(100);
 const ACTIVE_TRANSCRIPT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const ACTIVE_TRANSCRIPT_POLL_SLOW_THRESHOLD: Duration = Duration::from_secs(2);
 const ACTIVE_TRANSCRIPT_POLL_SLOW_BACKOFF: Duration = Duration::from_secs(5);
+#[cfg(test)]
 const ACTIVE_TRANSCRIPT_POLL_TTL: Duration = Duration::from_secs(2 * 60 * 60);
 const MAX_TRANSCRIPT_WAKE_TRACKED_PATHS: usize = 4096;
-const UNMANAGED_HOOK_CATCHUP_DELAY: Duration = Duration::from_secs(30);
+#[cfg(test)]
 const TERMINAL_CATCHUP_DELAYS: [Duration; 3] = [
     Duration::from_secs(0),
     Duration::from_secs(1),
@@ -343,6 +344,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     heartbeat_timer.tick().await; // consume first immediate tick
     let mut local_status_timer =
         tokio::time::interval(Duration::from_secs(LOCAL_STATUS_INTERVAL_SECS));
+    local_status_timer.tick().await; // consume first immediate tick
     let mut flight_sample_timer =
         tokio::time::interval(Duration::from_secs(FLIGHT_SAMPLE_INTERVAL_SECS));
     flight_sample_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -353,6 +355,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     outbox_timer.tick().await; // consume first immediate tick
     let mut local_retry_timer = tokio::time::interval(LOCAL_WORK_TICK_INTERVAL);
     local_retry_timer.tick().await; // consume first immediate tick
+    let mut watcher_poll_timer = tokio::time::interval(WATCHER_POLL_INTERVAL);
+    watcher_poll_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    watcher_poll_timer.tick().await; // consume first immediate tick
     let startup_reconciliation_timer = tokio::time::sleep(STARTUP_RECONCILIATION_SCAN_DELAY);
     tokio::pin!(startup_reconciliation_timer);
     let mut startup_reconciliation_pending = true;
@@ -362,13 +367,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut last_runtime_truth_signature: Option<String> = None;
     let mut runtime_truth_bootstrapped = false;
     let mut last_unmanaged_session_bindings: Option<Vec<heartbeat::UnmanagedSessionBinding>> = None;
-    let mut codex_terminal_catchup_marks: HashMap<PathBuf, String> = HashMap::new();
     let mut latest_transcript_wake_observed: HashMap<PathBuf, i64> = HashMap::new();
     let mut bridge_reaper = ManagedBridgeReaper::from_env();
     let mut outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
     let mut heartbeat_post_tasks: JoinSet<HeartbeatPostResult> = JoinSet::new();
     let mut claude_terminal_post_tasks: JoinSet<ClaudeTerminalPostResult> = JoinSet::new();
-    let mut outbox_signal_marks: HashSet<String> = HashSet::new();
     let mut live_claude_channels: HashMap<String, ClaudeLiveChannelSession> = HashMap::new();
     let mut pending_claude_terminal_signals: HashMap<String, ClaudeTerminalSignal> = HashMap::new();
 
@@ -645,40 +648,30 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // File change events (primary path). Keep collecting changes during
             // soft offline windows so short transport hiccups cannot stale the
             // local outbox or miss session wakeups.
-            batch = watcher.next_batch(config.flush_interval) => {
-                match batch {
-                    Some(events) if !events.is_empty() => {
-                        for event in events {
-                            let provider = match discovery::provider_for_path(&event.path, &providers) {
-                                Some(provider) => provider,
-                                None => {
-                                    tracing::debug!(
-                                        "Skipping file outside known providers: {}",
-                                        event.path.display()
-                                    );
-                                    continue;
-                                }
-                            };
+            _ = watcher_poll_timer.tick() => {
+                if let Some(first_event) = watcher.try_next_event() {
+                    let events = watcher.collect_batch_after(first_event, config.flush_interval).await;
+                    for event in events {
+                        if let Some(provider) = discovery::provider_for_path(&event.path, &providers) {
                             scheduler.enqueue_observed(
                                 event.path,
                                 provider,
-                                WorkPriority::Watch,
+                                WorkPriority::Live,
                                 "fsevent",
                                 event.observed_at_ms,
                             );
+                        } else {
+                            tracing::debug!(
+                                "Skipping file outside known providers: {}",
+                                event.path.display()
+                            );
                         }
-                    }
-                    Some(_) => {} // empty batch, timer elapsed with no events
-                    None => {
-                        tracing::warn!("File watcher stopped unexpectedly");
-                        break;
                     }
                 }
             }
 
-            // Periodic reconciliation scan — repair missed hook/watch work after
-            // restarts, sleeps, or dropped OS notifications. Active-session
-            // freshness should come from hook catch-up and watcher jobs.
+            // Periodic reconciliation scan — repair missed file-watch work after
+            // restarts, sleeps, or dropped OS notifications.
             _ = fallback_timer.tick(), if !offline.is_offline => {
                 maybe_start_reconciliation_scan(
                     &mut discovery_tasks,
@@ -703,31 +696,18 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
-            // Outbox drain: presence events written by hooks. Transcript
-            // catch-up is local truth, so keep collecting local phase signals
-            // even while remote POSTs are paused by offline mode.
+            // Outbox drain: presence events written by hooks. These are runtime
+            // overlay signals only; transcript shipping is owned by filesystem
+            // events plus reconciliation scans.
             _ = outbox_timer.tick() => {
                 let outbox_result = outbox::collect_outbox_with_local_state_result(
                     &outbox_dir,
                     config.shipper_config.db_path.as_deref(),
                 );
-                let new_signals =
-                    filter_new_outbox_signals(outbox_result.signals, &mut outbox_signal_marks);
-                if !new_signals.is_empty() {
-                    schedule_transcript_catchups_for_signals(
-                        &conn,
-                        &mut transcript_catchups,
-                        &mut active_transcript_polls,
-                        new_signals,
-                    );
-                    pump_ready_local_work(
-                        &mut scheduler,
-                        &mut in_flight,
-                        &task_context,
-                        &mut deferred_retries,
-                        &mut transcript_catchups,
-                        &mut active_transcript_polls,
-                        offline.is_offline,
+                if !outbox_result.signals.is_empty() {
+                    tracing::debug!(
+                        signal_count = outbox_result.signals.len(),
+                        "Ignoring hook outbox transcript catch-up signals"
                     );
                 }
                 if !outbox_result.posts.is_empty() {
@@ -831,12 +811,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &pending_claude_terminal_signals,
                     offline.is_offline,
                 );
-                schedule_transcript_catchups_for_codex_observations(
-                    &mut transcript_catchups,
-                    &mut active_transcript_polls,
-                    &mut codex_terminal_catchup_marks,
-                    &observations,
-                );
                 pump_ready_local_work(
                     &mut scheduler,
                     &mut in_flight,
@@ -917,12 +891,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     client.clone(),
                     &pending_claude_terminal_signals,
                     offline.is_offline,
-                );
-                schedule_transcript_catchups_for_codex_observations(
-                    &mut transcript_catchups,
-                    &mut active_transcript_polls,
-                    &mut codex_terminal_catchup_marks,
-                    &observations,
                 );
                 pump_ready_local_work(
                     &mut scheduler,
@@ -1602,13 +1570,6 @@ fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
-fn clean_optional_string(value: Option<String>) -> Option<String> {
-    value.and_then(|raw| {
-        let trimmed = raw.trim();
-        (!trimmed.is_empty()).then(|| trimmed.to_string())
-    })
-}
-
 fn start_ready_jobs(
     scheduler: &mut PathScheduler,
     in_flight: &mut JoinSet<PathTaskResult>,
@@ -1784,63 +1745,22 @@ fn backoff_slow_active_transcript_poll(
     );
 }
 
+#[cfg(test)]
 fn schedule_transcript_catchups_for_signals(
-    conn: &Connection,
-    transcript_catchups: &mut Vec<TranscriptCatchup>,
-    active_transcript_polls: &mut HashMap<PathBuf, ActiveTranscriptPoll>,
+    _conn: &rusqlite::Connection,
+    _transcript_catchups: &mut Vec<TranscriptCatchup>,
+    _active_transcript_polls: &mut HashMap<PathBuf, ActiveTranscriptPoll>,
     signals: Vec<outbox::DrainedPresenceSignal>,
 ) {
-    for signal in signals {
-        let Some(provider) = provider_name_to_static(&signal.provider) else {
-            tracing::debug!(
-                provider = %signal.provider,
-                session_id = %signal.session_id,
-                "Skipping transcript catch-up for unknown provider"
-            );
-            continue;
-        };
-
-        let Some(path) = resolve_transcript_path_for_signal(conn, &signal, provider) else {
-            tracing::debug!(
-                provider = %signal.provider,
-                session_id = %signal.session_id,
-                phase = %signal.phase,
-                "No transcript path known for presence-driven catch-up"
-            );
-            continue;
-        };
-
-        let managed_bound_path = path_has_session_binding(conn, &path, provider);
-        let observation_source = if managed_bound_path {
-            "outbox_signal"
-        } else {
-            "outbox_signal_unmanaged"
-        };
-
-        let catchup_start = transcript_catchups.len();
-        schedule_transcript_catchup(
-            transcript_catchups,
-            active_transcript_polls,
-            path,
-            provider,
-            &signal.phase,
-            observation_source,
-            signal.observed_at.timestamp_millis(),
-            None,
-            managed_bound_path,
-            None,
-            None,
-            None,
-            None,
+    if !signals.is_empty() {
+        tracing::debug!(
+            signal_count = signals.len(),
+            "Hook outbox signals do not schedule transcript shipping"
         );
-        if !managed_bound_path {
-            for catchup in &mut transcript_catchups[catchup_start..] {
-                catchup.due_at += UNMANAGED_HOOK_CATCHUP_DELAY;
-            }
-        }
     }
 }
 
+#[cfg(test)]
 fn filter_new_outbox_signals(
     signals: Vec<outbox::DrainedPresenceSignal>,
     seen: &mut HashSet<String>,
@@ -1855,6 +1775,7 @@ fn filter_new_outbox_signals(
         .collect()
 }
 
+#[cfg(test)]
 fn outbox_signal_mark(signal: &outbox::DrainedPresenceSignal) -> String {
     format!(
         "{}|{}|{}|{}|{}",
@@ -1871,8 +1792,8 @@ fn outbox_signal_mark(signal: &outbox::DrainedPresenceSignal) -> String {
 }
 
 fn schedule_transcript_catchup_for_wake(
-    transcript_catchups: &mut Vec<TranscriptCatchup>,
-    active_transcript_polls: &mut HashMap<PathBuf, ActiveTranscriptPoll>,
+    _transcript_catchups: &mut Vec<TranscriptCatchup>,
+    _active_transcript_polls: &mut HashMap<PathBuf, ActiveTranscriptPoll>,
     latest_transcript_wake_observed: &mut HashMap<PathBuf, i64>,
     signal: TranscriptWakeSignal,
 ) {
@@ -1906,20 +1827,17 @@ fn schedule_transcript_catchup_for_wake(
         );
         return;
     }
-    schedule_transcript_catchup(
-        transcript_catchups,
-        active_transcript_polls,
-        signal.path,
+    tracing::debug!(
         provider,
-        &signal.phase,
-        "wake_socket",
-        signal.observed_at_ms,
-        signal.received_at_ms,
-        true,
-        clean_optional_string(signal.session_id),
-        clean_optional_string(signal.turn_id),
-        clean_optional_string(signal.wake_reason),
-        signal.file_len_hint,
+        path = %signal.path.display(),
+        phase = %signal.phase,
+        wake_reason = signal.wake_reason.as_deref().unwrap_or("unknown"),
+        observed_at_ms = signal.observed_at_ms,
+        received_at_ms = signal.received_at_ms.unwrap_or(0),
+        session_id = signal.session_id.as_deref().unwrap_or("unknown"),
+        turn_id = signal.turn_id.as_deref().unwrap_or("unknown"),
+        file_len_hint = signal.file_len_hint.unwrap_or(0),
+        "Transcript wake recorded as a hint; filesystem watcher owns shipping"
     );
 }
 
@@ -1952,68 +1870,27 @@ fn remember_transcript_wake_observation(
     true
 }
 
+#[cfg(test)]
 fn schedule_transcript_catchups_for_codex_observations(
-    transcript_catchups: &mut Vec<TranscriptCatchup>,
-    active_transcript_polls: &mut HashMap<PathBuf, ActiveTranscriptPoll>,
-    terminal_catchup_marks: &mut HashMap<PathBuf, String>,
+    _transcript_catchups: &mut Vec<TranscriptCatchup>,
+    _active_transcript_polls: &mut HashMap<PathBuf, ActiveTranscriptPoll>,
+    _terminal_catchup_marks: &mut HashMap<PathBuf, String>,
     observations: &[managed_bridge_scan::CodexBridgeObservation],
 ) {
-    for observation in observations {
-        if !(observation.bridge_alive
-            || observation.has_tui_attachment
-            || observation.app_server_alive)
-        {
-            continue;
-        }
-        let Some(path) = observation
-            .thread_path
-            .as_deref()
-            .map(PathBuf::from)
-            .filter(|path| path.exists())
-        else {
-            continue;
-        };
-        let phase = codex_observation_transcript_phase(observation);
-        if is_terminal_or_attention_phase(phase) {
-            if terminal_catchup_marks.get(&path) == Some(&observation.updated_at) {
-                continue;
-            }
-            terminal_catchup_marks.insert(path.clone(), observation.updated_at.clone());
-        } else {
-            terminal_catchup_marks.remove(&path);
-        }
-
-        schedule_transcript_catchup(
-            transcript_catchups,
-            active_transcript_polls,
-            path,
-            "codex",
-            phase,
-            "bridge_scan",
-            now_ms(),
-            None,
-            true,
-            Some(observation.session_id.clone()),
-            observation.active_turn_id.clone(),
-            None,
-            None,
+    if !observations.is_empty() {
+        let transcript_path_hints = observations
+            .iter()
+            .filter(|observation| observation.thread_path.is_some())
+            .count();
+        tracing::debug!(
+            observation_count = observations.len(),
+            transcript_path_hints,
+            "Codex bridge observations do not schedule transcript shipping"
         );
     }
 }
 
-fn codex_observation_transcript_phase(
-    observation: &managed_bridge_scan::CodexBridgeObservation,
-) -> &'static str {
-    if observation.active_turn_id.is_some() {
-        return "running";
-    }
-
-    match observation.last_turn_status.as_deref() {
-        Some("completed") | Some("failed") | Some("cancelled") => "idle",
-        _ => "running",
-    }
-}
-
+#[cfg(test)]
 fn schedule_transcript_catchup(
     transcript_catchups: &mut Vec<TranscriptCatchup>,
     active_transcript_polls: &mut HashMap<PathBuf, ActiveTranscriptPoll>,
@@ -2122,48 +1999,15 @@ fn schedule_transcript_catchup(
 
 fn transcript_catchup_priority(observation_source: &str) -> WorkPriority {
     match observation_source {
-        "wake_socket" | "outbox_signal" => WorkPriority::Live,
+        "wake_socket" => WorkPriority::Live,
         "bridge_scan" => WorkPriority::Catchup,
         _ => WorkPriority::Watch,
     }
 }
 
-fn resolve_transcript_path_for_signal(
-    conn: &Connection,
-    signal: &outbox::DrainedPresenceSignal,
-    provider: &str,
-) -> Option<PathBuf> {
-    if let Some(path) = signal.transcript_path.as_ref() {
-        if path.exists() {
-            return Some(path.clone());
-        }
-        tracing::debug!(
-            provider,
-            session_id = %signal.session_id,
-            path = %path.display(),
-            "Hook-provided transcript path does not exist"
-        );
-    }
-
-    resolve_transcript_path_for_session(conn, &signal.session_id, provider)
-}
-
-fn path_has_session_binding(conn: &Connection, path: &Path, _provider: &str) -> bool {
-    let binding = crate::state::session_binding::SessionBinding::new(conn);
-    let canonical = std::fs::canonicalize(path)
-        .unwrap_or_else(|_| path.to_path_buf())
-        .to_string_lossy()
-        .to_string();
-    binding.get(&canonical).ok().flatten().is_some()
-        || binding
-            .get(&path.to_string_lossy())
-            .ok()
-            .flatten()
-            .is_some()
-}
-
+#[cfg(test)]
 fn resolve_transcript_path_for_session(
-    conn: &Connection,
+    conn: &rusqlite::Connection,
     session_id: &str,
     provider: &str,
 ) -> Option<PathBuf> {
@@ -2171,8 +2015,9 @@ fn resolve_transcript_path_for_session(
         .or_else(|| find_transcript_path(conn, "session_binding", session_id, provider))
 }
 
+#[cfg(test)]
 fn find_transcript_path(
-    conn: &Connection,
+    conn: &rusqlite::Connection,
     table: &str,
     session_id: &str,
     provider: &str,
@@ -2204,10 +2049,12 @@ fn find_transcript_path(
     }
 }
 
+#[cfg(test)]
 fn is_terminal_or_attention_phase(phase: &str) -> bool {
     matches!(phase, "idle" | "needs_user" | "blocked")
 }
 
+#[cfg(test)]
 fn is_active_phase(phase: &str) -> bool {
     matches!(phase, "thinking" | "running")
 }
@@ -3159,7 +3006,7 @@ mod tests {
     }
 
     #[test]
-    fn test_codex_bridge_observation_starts_transcript_polling() {
+    fn test_codex_bridge_observation_does_not_schedule_transcript_shipping() {
         let transcript = tempfile::NamedTempFile::new().unwrap();
         let observation =
             codex_bridge_observation(transcript.path(), None, None, "2026-05-01T00:00:00Z", true);
@@ -3174,23 +3021,12 @@ mod tests {
             &[observation],
         );
 
-        assert_eq!(catchups.len(), 1);
-        assert_eq!(catchups[0].path, transcript.path());
-        assert_eq!(catchups[0].provider, "codex");
-        assert!(active_polls.contains_key(transcript.path()));
-
-        let mut scheduler = PathScheduler::new(4);
-        drain_due_transcript_catchups(&mut scheduler, &mut catchups);
-        let job = scheduler
-            .pop_launchable()
-            .expect("bridge scan catch-up queued");
-        assert_eq!(job.path, transcript.path());
-        assert_eq!(job.priority, WorkPriority::Catchup);
-        assert_eq!(job.observation.source, "bridge_scan");
+        assert!(catchups.is_empty());
+        assert!(active_polls.is_empty());
     }
 
     #[test]
-    fn test_codex_bridge_observation_completed_turn_schedules_terminal_catchups() {
+    fn test_codex_bridge_observation_completed_turn_does_not_schedule_transcript_shipping() {
         let transcript = tempfile::NamedTempFile::new().unwrap();
         let observation = codex_bridge_observation(
             transcript.path(),
@@ -3210,11 +3046,9 @@ mod tests {
             &[observation],
         );
 
-        assert_eq!(catchups.len(), TERMINAL_CATCHUP_DELAYS.len());
+        assert!(catchups.is_empty());
         assert!(active_polls.is_empty());
-        assert!(catchups
-            .iter()
-            .all(|catchup| catchup.path == transcript.path()));
+        assert!(terminal_marks.is_empty());
 
         let repeated = codex_bridge_observation(
             transcript.path(),
@@ -3229,7 +3063,8 @@ mod tests {
             &mut terminal_marks,
             &[repeated],
         );
-        assert_eq!(catchups.len(), TERMINAL_CATCHUP_DELAYS.len());
+        assert!(catchups.is_empty());
+        assert!(terminal_marks.is_empty());
     }
 
     #[test]
@@ -3297,7 +3132,7 @@ mod tests {
     }
 
     #[test]
-    fn test_outbox_signal_catchup_uses_live_priority() {
+    fn test_legacy_outbox_signal_catchup_does_not_use_live_priority() {
         let ready = tempfile::NamedTempFile::new().unwrap();
         let now = Instant::now();
         let mut catchups = vec![TranscriptCatchup {
@@ -3318,7 +3153,7 @@ mod tests {
 
         let job = scheduler.pop_launchable().expect("outbox catch-up queued");
         assert_eq!(job.path, ready.path());
-        assert_eq!(job.priority, WorkPriority::Live);
+        assert_eq!(job.priority, WorkPriority::Watch);
         assert_eq!(job.observation.source, "outbox_signal");
     }
 
@@ -3496,7 +3331,7 @@ mod tests {
     }
 
     #[test]
-    fn test_presence_signal_schedules_bound_terminal_transcript() {
+    fn test_presence_signal_does_not_schedule_bound_terminal_transcript() {
         let db = tempfile::NamedTempFile::new().unwrap();
         let transcript = tempfile::NamedTempFile::new().unwrap();
         let conn = open_db(Some(db.path())).unwrap();
@@ -3521,21 +3356,18 @@ mod tests {
             }],
         );
 
-        assert_eq!(catchups.len(), 3);
-        assert!(catchups
-            .iter()
-            .all(|catchup| catchup.path == transcript.path()));
+        assert!(catchups.is_empty());
+        assert!(active_polls.is_empty());
     }
 
     #[test]
-    fn test_presence_signal_uses_hook_transcript_path_before_local_binding() {
+    fn test_presence_signal_with_hook_path_does_not_schedule_transcript_shipping() {
         let db = tempfile::NamedTempFile::new().unwrap();
         let transcript = tempfile::NamedTempFile::new().unwrap();
         let conn = open_db(Some(db.path())).unwrap();
 
         let mut catchups = Vec::new();
         let mut active_polls = HashMap::new();
-        let before = Instant::now();
         schedule_transcript_catchups_for_signals(
             &conn,
             &mut catchups,
@@ -3549,21 +3381,15 @@ mod tests {
             }],
         );
 
-        assert_eq!(catchups.len(), 1);
-        assert_eq!(catchups[0].path, transcript.path());
-        assert_eq!(catchups[0].observation_source, "outbox_signal_unmanaged");
-        assert!(
-            catchups[0].due_at >= before + UNMANAGED_HOOK_CATCHUP_DELAY,
-            "unmanaged hook catch-ups should yield the immediate lane to managed work"
-        );
+        assert!(catchups.is_empty());
         assert!(
             active_polls.is_empty(),
-            "unmanaged hook signals get one catch-up but do not arm active polling"
+            "hook outbox signals must not schedule transcript shipping"
         );
     }
 
     #[test]
-    fn test_managed_presence_signal_arms_active_polling() {
+    fn test_managed_presence_signal_does_not_arm_transcript_shipping() {
         let db = tempfile::NamedTempFile::new().unwrap();
         let transcript = tempfile::NamedTempFile::new().unwrap();
         let conn = open_db(Some(db.path())).unwrap();
@@ -3575,7 +3401,6 @@ mod tests {
 
         let mut catchups = Vec::new();
         let mut active_polls = HashMap::new();
-        let before = Instant::now();
         schedule_transcript_catchups_for_signals(
             &conn,
             &mut catchups,
@@ -3589,17 +3414,15 @@ mod tests {
             }],
         );
 
-        assert_eq!(catchups.len(), 1);
-        assert_eq!(catchups[0].observation_source, "outbox_signal");
+        assert!(catchups.is_empty());
         assert!(
-            catchups[0].due_at < before + UNMANAGED_HOOK_CATCHUP_DELAY,
-            "managed hook catch-ups must stay on the immediate lane"
+            active_polls.is_empty(),
+            "hook outbox signals must not arm transcript shipping"
         );
-        assert!(active_polls.contains_key(transcript.path()));
     }
 
     #[test]
-    fn test_transcript_wake_starts_active_polling() {
+    fn test_transcript_wake_does_not_start_transcript_shipping() {
         let transcript = tempfile::NamedTempFile::new().unwrap();
         let mut catchups = Vec::new();
         let mut active_polls = HashMap::new();
@@ -3623,11 +3446,12 @@ mod tests {
         );
 
         assert!(catchups.is_empty());
-        assert!(active_polls.contains_key(transcript.path()));
+        assert!(active_polls.is_empty());
+        assert_eq!(latest_wakes.get(transcript.path()), Some(&123));
     }
 
     #[test]
-    fn test_progress_wake_enqueues_live_catchup_with_metadata() {
+    fn test_progress_wake_records_hint_without_shipping() {
         let transcript = tempfile::NamedTempFile::new().unwrap();
         let mut catchups = Vec::new();
         let mut active_polls = HashMap::new();
@@ -3650,24 +3474,13 @@ mod tests {
             },
         );
 
-        assert_eq!(catchups.len(), 1);
-        assert!(active_polls.contains_key(transcript.path()));
-
-        let mut scheduler = PathScheduler::new(4);
-        drain_due_transcript_catchups(&mut scheduler, &mut catchups);
-        let job = scheduler.pop_launchable().expect("progress wake queued");
-        assert_eq!(job.priority, WorkPriority::Live);
-        assert_eq!(job.observation.source, "wake_socket");
-        assert_eq!(job.observation.observed_at_ms, 123);
-        assert_eq!(job.observation.wake_received_at_ms, Some(124));
-        assert_eq!(job.observation.session_id.as_deref(), Some("session-123"));
-        assert_eq!(job.observation.turn_id.as_deref(), Some("turn-123"));
-        assert_eq!(job.observation.wake_reason.as_deref(), Some("progress"));
-        assert_eq!(job.observation.file_len_hint, Some(456));
+        assert!(catchups.is_empty());
+        assert!(active_polls.is_empty());
+        assert_eq!(latest_wakes.get(transcript.path()), Some(&123));
     }
 
     #[test]
-    fn test_stale_active_wake_does_not_replace_newer_terminal_wake() {
+    fn test_stale_active_wake_does_not_replace_newer_wake_hint() {
         let transcript = tempfile::NamedTempFile::new().unwrap();
         let mut catchups = Vec::new();
         let mut active_polls = HashMap::new();
@@ -3707,18 +3520,9 @@ mod tests {
             },
         );
 
-        assert_eq!(catchups.len(), TERMINAL_CATCHUP_DELAYS.len());
+        assert!(catchups.is_empty());
         assert!(active_polls.is_empty());
-
-        let mut scheduler = PathScheduler::new(4);
-        drain_due_transcript_catchups(&mut scheduler, &mut catchups);
-        let job = scheduler.pop_launchable().expect("terminal wake queued");
-        assert_eq!(job.observation.source, "wake_socket");
-        assert_eq!(job.observation.observed_at_ms, 200);
-        assert_eq!(
-            job.observation.wake_reason.as_deref(),
-            Some("turn_completed")
-        );
+        assert_eq!(latest_wakes.get(transcript.path()), Some(&200));
     }
 
     #[test]
@@ -3836,83 +3640,8 @@ mod tests {
         assert!(catchups.is_empty());
     }
 
-    async fn spawn_ingest_server() -> (
-        std::net::SocketAddr,
-        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
-        tokio::task::JoinHandle<()>,
-    ) {
-        use std::sync::{Arc, Mutex};
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        use tokio::net::TcpListener;
-
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let paths: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-        let paths_clone = paths.clone();
-
-        let handle = tokio::spawn(async move {
-            loop {
-                let Ok((mut socket, _)) = listener.accept().await else {
-                    break;
-                };
-
-                let mut buf = vec![0u8; 4096];
-                let mut total = 0usize;
-                loop {
-                    let n = socket.read(&mut buf[total..]).await.unwrap_or(0);
-                    if n == 0 {
-                        break;
-                    }
-                    total += n;
-                    if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
-                        break;
-                    }
-                    if total == buf.len() {
-                        buf.resize(buf.len() * 2, 0);
-                    }
-                }
-
-                let head = String::from_utf8_lossy(&buf[..total]).into_owned();
-                let path = head
-                    .lines()
-                    .next()
-                    .and_then(|line| line.split_whitespace().nth(1))
-                    .unwrap_or("/")
-                    .to_string();
-                paths_clone.lock().unwrap().push(path);
-
-                let content_len = head
-                    .lines()
-                    .find(|line| line.to_ascii_lowercase().starts_with("content-length:"))
-                    .and_then(|line| line.split(':').nth(1))
-                    .and_then(|value| value.trim().parse::<usize>().ok())
-                    .unwrap_or(0);
-                let header_end = buf[..total]
-                    .windows(4)
-                    .position(|window| window == b"\r\n\r\n")
-                    .unwrap()
-                    + 4;
-                let mut body_read = total - header_end;
-                while body_read < content_len {
-                    let n = socket.read(&mut buf).await.unwrap_or(0);
-                    if n == 0 {
-                        break;
-                    }
-                    body_read += n;
-                }
-
-                let _ = socket
-                    .write_all(b"HTTP/1.1 204\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-                    .await;
-                let _ = socket.shutdown().await;
-            }
-        });
-
-        (addr, paths, handle)
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn test_presence_catchup_ships_bound_transcript_tail_and_advances_offset() {
+    #[test]
+    fn test_presence_catchup_does_not_ship_bound_transcript_tail() {
         let db = tempfile::NamedTempFile::new().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let transcript = dir
@@ -3951,56 +3680,14 @@ mod tests {
                 transcript_path: None,
             }],
         );
-        assert_eq!(catchups.len(), 3);
-
-        let mut scheduler = PathScheduler::new(4);
-        drain_due_transcript_catchups(&mut scheduler, &mut catchups);
-        let job = scheduler
-            .pop_launchable()
-            .expect("presence-driven catch-up queued");
-
-        let (addr, logged_paths, server) = spawn_ingest_server().await;
-        let api_url = format!("http://{}", addr);
-        let shipper_config = ShipperConfig::default().with_overrides(
-            Some(&api_url),
-            None,
-            Some(db.path()),
-            None,
-            None,
-            None,
-        );
-        let client =
-            ShipperClient::with_compression(&shipper_config, CompressionAlgo::Gzip).unwrap();
-        let task_context = PathTaskContext {
-            shipper_config,
-            client,
-            algo: CompressionAlgo::Gzip,
-            tracker: ConsecutiveErrorTracker::new(),
-            parse_tracker: RecentIssueTracker::new(),
-            ship_stats: RecentShipStatsTracker::new(),
-            flight_recorder: None,
-        };
-
-        let result = run_path_job(job, task_context).await;
-        assert_eq!(result.events_shipped, 1);
-
-        let expected_offset = std::fs::metadata(&transcript).unwrap().len();
+        assert!(catchups.is_empty());
+        assert!(active_polls.is_empty());
+        assert_eq!(FileState::new(&conn).get_offset(&canonical).unwrap_or(0), 0);
         assert_eq!(
-            FileState::new(&conn).get_offset(&canonical).unwrap(),
-            expected_offset
-        );
-        assert_eq!(
-            FileState::new(&conn)
-                .get_session(&canonical)
-                .unwrap()
-                .and_then(|tracked| tracked.session_id),
+            crate::state::session_binding::SessionBinding::new(&conn)
+                .get(&canonical)
+                .unwrap(),
             Some(managed_session_id.to_string())
-        );
-
-        server.abort();
-        assert_eq!(
-            logged_paths.lock().unwrap().as_slice(),
-            ["/api/agents/ingest"]
         );
     }
 
