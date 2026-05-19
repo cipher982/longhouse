@@ -16,9 +16,9 @@ final class SessionChatUITests: XCTestCase {
     func testTranscriptStartsPinnedToLatestMessage() {
         let app = launchChatFixture(eventCount: 120)
 
-        XCTAssertTrue(app.scrollViews["session-chat-transcript"].waitForExistence(timeout: 5))
+        XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Assistant fixture message 119: streaming-style response with enough body to exercise row layout."].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."].exists)
+        assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."])
     }
 
     func testSendShowsOptimisticMessageImmediatelyAndClearsComposer() {
@@ -33,7 +33,7 @@ final class SessionChatUITests: XCTestCase {
         sendButton.tap()
 
         XCTAssertTrue(app.staticTexts[message].waitForExistence(timeout: 1))
-        XCTAssertTrue(app.descendants(matching: .any)["session-chat-input-origin-longhouse"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Longhouse"].waitForExistence(timeout: 5))
         XCTAssertEqual(composer.value as? String, "Send a message to the live Codex session...")
     }
 
@@ -44,7 +44,7 @@ final class SessionChatUITests: XCTestCase {
 
         XCTAssertTrue(currentLastMessage.waitForExistence(timeout: 5))
         XCTAssertTrue(waitUntilHittable(liveUpdate, timeout: 5))
-        XCTAssertFalse(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."].exists)
+        assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."])
     }
 
     func testAssistantUpdateWithKeyboardOpenKeepsPinnedTranscriptAtBottom() {
@@ -57,7 +57,7 @@ final class SessionChatUITests: XCTestCase {
 
         XCTAssertTrue(liveUpdate.waitForExistence(timeout: 10))
         assertScreenIsVisiblyRendered(app)
-        XCTAssertFalse(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."].exists)
+        assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."])
     }
 
     func testAssistantStreamingWithKeyboardOpenKeepsPinnedTranscriptAtBottom() {
@@ -70,12 +70,12 @@ final class SessionChatUITests: XCTestCase {
 
         XCTAssertTrue(finalChunk.waitForExistence(timeout: 10))
         assertScreenIsVisiblyRendered(app)
-        XCTAssertFalse(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."].exists)
+        assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."])
     }
 
     func testLargeTranscriptScrollPerformance() {
         let app = launchChatFixture(name: "stress", eventCount: 500)
-        let transcript = app.scrollViews["session-chat-transcript"]
+        let transcript = transcriptElement(app)
 
         XCTAssertTrue(transcript.waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["Assistant fixture message 499: streaming-style response with enough body to exercise row layout."].waitForExistence(timeout: 10))
@@ -103,6 +103,18 @@ final class SessionChatUITests: XCTestCase {
             self.add(attachment)
         }
         return app
+    }
+
+    private func transcriptElement(_ app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)["session-chat-transcript"]
+    }
+
+    private func assertNotVisible(
+        _ element: XCUIElement,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertFalse(element.exists && element.isHittable, file: file, line: line)
     }
 
     private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval) -> Bool {

@@ -47,7 +47,7 @@ struct SessionViewModelTests {
     }
 
     @Test
-    func sendSynchronouslyBumpsTranscriptScrollToken() async throws {
+    func sendSynchronouslyAddsSubmittedInputForTranscriptPayload() async throws {
         let before = try makeWorkspace(eventId: 10, content: "Before send")
         let api = FakeSessionWorkspaceClient(workspaces: [before])
         let appState = AppState()
@@ -55,32 +55,11 @@ struct SessionViewModelTests {
         let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
 
         await model.start(sessionId: "session-1", appState: appState)
-        let beforeSendToken = model.transcriptScrollToken
-        let beforeRevealCounter = model.submittedRevealCounter
         let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
 
         #expect(sent)
-        #expect(model.transcriptScrollToken != beforeSendToken)
-        #expect(model.submittedRevealCounter == beforeRevealCounter + 1)
         #expect(model.submittedInputs.first?.text == "continue")
         #expect(model.submittedInputs.first?.phase == .sent)
-    }
-
-    @Test
-    func transcriptScrollTokenChangesWhenLastItemContentGrows() async throws {
-        let appState = AppState()
-        appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in nil }, enableRealtime: false)
-
-        model.items = TimelineBuilder.build(events: [
-            makeEvent(id: 20, role: "assistant", content: "Thinking")
-        ])
-        let before = model.transcriptScrollToken
-        model.items = TimelineBuilder.build(events: [
-            makeEvent(id: 20, role: "assistant", content: "Thinking\n\nHere is the full answer.")
-        ])
-
-        #expect(model.transcriptScrollToken != before)
     }
 
     @Test

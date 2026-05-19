@@ -1,8 +1,8 @@
 import SwiftUI
 import WebKit
 
-/// Research spike: render the transcript body in WebKit while leaving the
-/// session chrome, runtime controls, and composer native.
+/// Renders the transcript body in WebKit while leaving the session chrome,
+/// runtime controls, and composer native.
 struct WebTranscriptView: UIViewRepresentable {
     let items: [TimelineItem]
     let submittedInputs: [SubmittedInput]
@@ -25,6 +25,7 @@ struct WebTranscriptView: UIViewRepresentable {
         webView.isOpaque = false
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
+        webView.accessibilityIdentifier = "session-chat-transcript"
         context.coordinator.webView = webView
         webView.loadHTMLString(Self.documentHTML, baseURL: nil)
         return webView
@@ -215,7 +216,7 @@ struct WebTranscriptView: UIViewRepresentable {
         guard let text, !text.isEmpty else { return nil }
         let maxCharacters = 12_000
         guard text.count > maxCharacters else { return text }
-        return String(text.prefix(maxCharacters)) + "\n... truncated in iOS web transcript spike ..."
+        return String(text.prefix(maxCharacters)) + "\n... truncated in iOS transcript ..."
     }
 
     private static func submittedStatus(_ phase: SubmittedInputPhase, lastError: String?) -> String {
@@ -773,7 +774,7 @@ private extension WebTranscriptView {
         : '';
       if (item.role === 'user') {
         const origin = item.origin === 'longhouse'
-          ? '<div class="origin" aria-label="Sent via Longhouse">Longhouse</div>'
+          ? '<div id="session-chat-input-origin-longhouse" class="origin" aria-label="Sent via Longhouse">Longhouse</div>'
           : '';
         return `
           <div class="row message user">
@@ -831,8 +832,8 @@ private extension WebTranscriptView {
       }
     }
 
-    window.renderTranscript = function(base64, nativeStickToBottom) {
-      const wasAtBottom = nativeStickToBottom || isAtBottom();
+    window.renderTranscript = function(base64, shouldStickToBottom) {
+      const wasAtBottom = shouldStickToBottom || isAtBottom();
       const payload = decodePayload(base64);
       currentItems = payload.items || [];
       const root = document.getElementById('root');
