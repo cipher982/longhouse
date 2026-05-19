@@ -49,33 +49,25 @@ def _write_json_object(path: Path, data: dict[str, Any]) -> None:
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
-def _default_project_local_scope_entry() -> dict[str, Any]:
-    return {
-        "allowedTools": [],
-        "mcpContextUris": [],
-        "mcpServers": {},
-        "enabledMcpjsonServers": [],
-        "disabledMcpjsonServers": [],
-        "hasTrustDialogAccepted": False,
-        "projectOnboardingSeenCount": 0,
-        "hasClaudeMdExternalIncludesApproved": False,
-        "hasClaudeMdExternalIncludesWarningShown": False,
-    }
-
-
 def install_claude_channel_mcp_server(
     *,
-    workspace_path: str | Path,
+    workspace_path: str | Path | None = None,
     claude_dir: str | Path | None = None,
     command: str = "longhouse",
     args: list[str] | None = None,
 ) -> list[str]:
-    """Ensure the Longhouse Claude channel MCP server is registered in Claude's local project config."""
+    """Ensure the Longhouse Claude channel MCP server is registered in Claude's user config.
+
+    Native Claude channels are loaded by name from Claude's effective MCP config.
+    A project-local MCP server is ignored until that workspace is trusted, so it
+    can break managed launches in new directories. The Longhouse channel bridge
+    is a Longhouse-owned local transport, not workspace-provided code, so install
+    it at user scope where Claude can resolve it consistently.
+    """
 
     user_config_path = resolve_claude_user_config_path(claude_dir=claude_dir)
     settings = _read_json_object(user_config_path)
     actions: list[str] = []
-    project_key = resolve_claude_project_key(workspace_path)
 
     desired = {
         "type": "stdio",
@@ -84,27 +76,34 @@ def install_claude_channel_mcp_server(
         "env": {},
     }
 
-    projects = settings.setdefault("projects", {})
-    if not isinstance(projects, dict):
-        projects = {}
-        settings["projects"] = projects
-
-    project_settings = projects.get(project_key)
-    if not isinstance(project_settings, dict):
-        project_settings = _default_project_local_scope_entry()
-        projects[project_key] = project_settings
-    else:
-        project_settings.setdefault("mcpServers", {})
-
-    mcp_servers = project_settings.get("mcpServers")
+    mcp_servers = settings.get("mcpServers")
     if not isinstance(mcp_servers, dict):
         mcp_servers = {}
-        project_settings["mcpServers"] = mcp_servers
+        settings["mcpServers"] = mcp_servers
     current = mcp_servers.get(CLAUDE_CHANNEL_SERVER_NAME)
     if current != desired:
         mcp_servers[CLAUDE_CHANNEL_SERVER_NAME] = desired
+        actions.append(f"Updated {user_config_path} with user MCP server {CLAUDE_CHANNEL_SERVER_NAME}")
+
+    projects = settings.get("projects")
+    if isinstance(projects, dict):
+        removed_from: list[str] = []
+        for project_key, project_settings in projects.items():
+            if not isinstance(project_settings, dict):
+                continue
+            project_mcp_servers = project_settings.get("mcpServers")
+            if not isinstance(project_mcp_servers, dict):
+                continue
+            if project_mcp_servers.pop(CLAUDE_CHANNEL_SERVER_NAME, None) is not None:
+                removed_from.append(str(project_key))
+        if removed_from:
+            actions.append(
+                f"Removed project-local MCP server {CLAUDE_CHANNEL_SERVER_NAME} "
+                f"from {len(removed_from)} Claude project(s)"
+            )
+
+    if actions:
         _write_json_object(user_config_path, settings)
-        actions.append(f"Updated {user_config_path} with local MCP server {CLAUDE_CHANNEL_SERVER_NAME} for {project_key}")
 
     return actions
 
@@ -128,7 +127,11 @@ def build_claude_channel_state_file(
     normalized = str(session_id or "").strip()
     if not normalized:
         raise ValueError("session_id must not be empty")
-    return resolve_claude_channel_state_root(state_root=state_root, claude_dir=claude_dir) / "sessions" / f"{normalized}.json"
+    return (
+        resolve_claude_channel_state_root(state_root=state_root, claude_dir=claude_dir)
+        / "sessions"
+        / f"{normalized}.json"
+    )
 
 
 def read_claude_channel_state(

@@ -20,6 +20,7 @@ from zerg.cli._common import git_output
 from zerg.cli._common import interactive_stdio as _interactive_stdio
 from zerg.cli._common import load_api_credentials
 from zerg.cli._common import open_session_url as _open_session_url
+from zerg.services.claude_channel_bridge import CLAUDE_CHANNEL_SERVER_NAME
 from zerg.services.claude_channel_bridge import build_claude_channel_exec_command
 from zerg.services.claude_channel_bridge import install_claude_channel_mcp_server
 from zerg.services.session_continuity import get_machine_name_label
@@ -116,6 +117,28 @@ def _run_attach_command(attach_command: str) -> int:
 
 def _resolve_claude_dir(config_dir: Path | None) -> Path:
     return config_dir or (Path.home() / ".claude")
+
+
+def _verify_claude_channel_mcp_server(*, workspace_path: Path, timeout_secs: float = 15.0) -> None:
+    try:
+        completed = subprocess.run(
+            ["claude", "mcp", "get", CLAUDE_CHANNEL_SERVER_NAME],
+            cwd=str(workspace_path),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_secs,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise _NativeClaudeError(f"Could not verify Claude MCP server {CLAUDE_CHANNEL_SERVER_NAME}: {exc}") from exc
+
+    if completed.returncode == 0:
+        return
+
+    detail = (completed.stderr or completed.stdout or "").strip()
+    if not detail:
+        detail = f"claude mcp get {CLAUDE_CHANNEL_SERVER_NAME} exited {completed.returncode}"
+    raise _NativeClaudeError(f"Claude cannot resolve MCP server {CLAUDE_CHANNEL_SERVER_NAME}: {detail}")
 
 
 def _load_api_credentials(
@@ -271,6 +294,7 @@ def _ensure_native_claude_prereqs(
             workspace_path=workspace_path,
             claude_dir=resolved_claude_dir,
         )
+        _verify_claude_channel_mcp_server(workspace_path=workspace_path)
     except Exception as exc:  # pragma: no cover - exercised through CLI wrappers
         raise _NativeClaudeError(str(exc)) from exc
 
@@ -363,17 +387,6 @@ def _finalize_native_claude_launch(
     typer.echo(f"Provider session ID: {result.provider_session_id}")
     typer.echo(f"Session URL: {session_url}")
     typer.echo(f"Attach: {result.attach_command}")
-    typer.echo("Preparing native Claude bridge...")
-    try:
-        _ensure_native_claude_prereqs(
-            base_url=base_url,
-            token=token,
-            workspace_path=cwd,
-            config_dir=config_dir,
-        )
-    except _NativeClaudeError as exc:
-        typer.secho(f"Claude bridge setup failed: {exc}", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
 
     if open_browser:
         typer.echo("Opening session in browser...")
@@ -466,7 +479,8 @@ def claude(
         native_claude_channels_detail = f"forced by {_FORCE_NATIVE_CLAUDE_CHANNELS_ENV}"
         force_flag_capable_path = False
         typer.secho(
-            f"Forcing native Claude channels via {_FORCE_NATIVE_CLAUDE_CHANNELS_ENV}=1. " "This is a private unsupported local experiment.",
+            f"Forcing native Claude channels via {_FORCE_NATIVE_CLAUDE_CHANNELS_ENV}=1. "
+            "This is a private unsupported local experiment.",
             fg=typer.colors.YELLOW,
         )
     elif force_flag_capable_path:
@@ -485,6 +499,17 @@ def claude(
         config_dir=resolved_config_dir,
         exit_code=EXIT_SETUP_FAILED,
     )
+    typer.echo("Preparing native Claude bridge...")
+    try:
+        _ensure_native_claude_prereqs(
+            base_url=resolved_url,
+            token=resolved_token,
+            workspace_path=cwd,
+            config_dir=resolved_config_dir,
+        )
+    except _NativeClaudeError as exc:
+        typer.secho(f"Claude bridge setup failed: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(code=EXIT_SETUP_FAILED)
     typer.echo(f"Longhouse: {resolved_url}")
     result = _launch_managed_local_from_api(
         url=resolved_url,
