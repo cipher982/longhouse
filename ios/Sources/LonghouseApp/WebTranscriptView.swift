@@ -1,5 +1,6 @@
 import SwiftUI
 import WebKit
+import OSLog
 
 /// Renders the transcript body in WebKit while leaving the session chrome,
 /// runtime controls, and composer native.
@@ -8,6 +9,21 @@ struct WebTranscriptView: UIViewRepresentable {
     let submittedInputs: [SubmittedInput]
     let sessionEnded: Bool
     let errorMessage: String?
+    let onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?
+
+    init(
+        items: [TimelineItem],
+        submittedInputs: [SubmittedInput],
+        sessionEnded: Bool,
+        errorMessage: String?,
+        onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)? = nil
+    ) {
+        self.items = items
+        self.submittedInputs = submittedInputs
+        self.sessionEnded = sessionEnded
+        self.errorMessage = errorMessage
+        self.onDiagnostics = onDiagnostics
+    }
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -32,21 +48,45 @@ struct WebTranscriptView: UIViewRepresentable {
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
-        context.coordinator.send(payloadBase64(), to: webView)
+        context.coordinator.send(
+            preparedPayload(),
+            to: webView,
+            diagnosticsEnabled: WebTranscriptDiagnosticsFeature.isEnabled,
+            onDiagnostics: onDiagnostics
+        )
     }
 
-    private func payloadBase64() -> String {
+    private func preparedPayload() -> WebTranscriptPreparedPayload {
+        Self.preparedPayload(
+            timelineItems: items,
+            submittedInputs: submittedInputs,
+            sessionEnded: sessionEnded,
+            errorMessage: errorMessage
+        )
+    }
+
+    nonisolated static func preparedPayload(
+        timelineItems: [TimelineItem],
+        submittedInputs: [SubmittedInput],
+        sessionEnded: Bool,
+        errorMessage: String?
+    ) -> WebTranscriptPreparedPayload {
         let payload = WebTranscriptPayload(
             errorMessage: errorMessage,
             items: Self.payloadItems(
-                timelineItems: items,
+                timelineItems: timelineItems,
                 submittedInputs: submittedInputs,
                 sessionEnded: sessionEnded
             )
         )
         let encoder = JSONEncoder()
         let data = (try? encoder.encode(payload)) ?? Data()
-        return data.base64EncodedString()
+        return WebTranscriptPreparedPayload(
+            base64: data.base64EncodedString(),
+            payloadByteSize: data.count,
+            rowCount: payload.items.count,
+            latestItemId: payload.items.last?.id
+        )
     }
 
     nonisolated static func payloadItems(
@@ -258,14 +298,23 @@ struct WebTranscriptView: UIViewRepresentable {
 
     final class Coordinator: NSObject, WKNavigationDelegate, UIScrollViewDelegate {
         weak var webView: WKWebView?
+        private let logger = Logger(subsystem: "ai.longhouse.ios", category: "WebTranscript")
         private var isLoaded = false
         private var shouldStickToBottom = true
-        private var pendingPayload: String?
+        private var pendingPayload: WebTranscriptPreparedPayload?
         private var lastPayload: String?
+        private var renderSequence = 0
+        private var jsFailureCount = 0
+        private var diagnosticsEnabled = WebTranscriptDiagnosticsFeature.isEnabled
+        private var onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             isLoaded = true
-            flushPendingPayload(to: webView)
+            flushPendingPayload(
+                to: webView,
+                diagnosticsEnabled: diagnosticsEnabled,
+                onDiagnostics: onDiagnostics
+            )
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
@@ -273,22 +322,123 @@ struct WebTranscriptView: UIViewRepresentable {
             shouldStickToBottom = distanceFromBottom < 96
         }
 
-        func send(_ payload: String, to webView: WKWebView) {
+        func send(
+            _ payload: WebTranscriptPreparedPayload,
+            to webView: WKWebView,
+            diagnosticsEnabled: Bool,
+            onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?
+        ) {
             self.webView = webView
+            self.diagnosticsEnabled = diagnosticsEnabled
+            self.onDiagnostics = onDiagnostics
             pendingPayload = payload
-            guard isLoaded else { return }
-            flushPendingPayload(to: webView)
+            guard isLoaded else {
+                emitDiagnostics(
+                    stage: "queued",
+                    payload: payload,
+                    sequence: renderSequence + 1,
+                    error: nil,
+                    diagnosticsEnabled: diagnosticsEnabled,
+                    onDiagnostics: onDiagnostics
+                )
+                return
+            }
+            flushPendingPayload(
+                to: webView,
+                diagnosticsEnabled: diagnosticsEnabled,
+                onDiagnostics: onDiagnostics
+            )
         }
 
-        private func flushPendingPayload(to webView: WKWebView) {
-            guard let payload = pendingPayload, payload != lastPayload else { return }
+        private func flushPendingPayload(
+            to webView: WKWebView,
+            diagnosticsEnabled: Bool = WebTranscriptDiagnosticsFeature.isEnabled,
+            onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)? = nil
+        ) {
+            guard let payload = pendingPayload else { return }
             pendingPayload = nil
+            guard payload.base64 != lastPayload else {
+                emitDiagnostics(
+                    stage: "duplicate",
+                    payload: payload,
+                    sequence: renderSequence,
+                    error: nil,
+                    diagnosticsEnabled: diagnosticsEnabled,
+                    onDiagnostics: onDiagnostics
+                )
+                return
+            }
+
+            renderSequence += 1
+            let sequence = renderSequence
             let stick = shouldStickToBottom ? "true" : "false"
-            webView.evaluateJavaScript("window.renderTranscript('\(payload)', \(stick));") { [weak self] _, error in
-                guard error == nil else { return }
-                self?.lastPayload = payload
+            webView.evaluateJavaScript("window.renderTranscript('\(payload.base64)', \(stick));") { [weak self] _, error in
+                guard let self else { return }
+                if error == nil {
+                    self.lastPayload = payload.base64
+                } else {
+                    self.jsFailureCount += 1
+                }
+                self.emitDiagnostics(
+                    stage: error == nil ? "rendered" : "failed",
+                    payload: payload,
+                    sequence: sequence,
+                    error: error,
+                    diagnosticsEnabled: diagnosticsEnabled,
+                    onDiagnostics: onDiagnostics
+                )
             }
         }
+
+        private func emitDiagnostics(
+            stage: String,
+            payload: WebTranscriptPreparedPayload,
+            sequence: Int,
+            error: Error?,
+            diagnosticsEnabled: Bool,
+            onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?
+        ) {
+            guard diagnosticsEnabled else { return }
+            let diagnostics = RenderBeaconReporter.WebKitDiagnostics(
+                stage: stage,
+                payload_byte_size: payload.payloadByteSize,
+                row_count: payload.rowCount,
+                latest_item_id: payload.latestItemId,
+                render_sequence: sequence,
+                js_failure_count: jsFailureCount,
+                should_stick_to_bottom: shouldStickToBottom,
+                web_view_loaded: isLoaded,
+                error_description: error.map { String(describing: $0) }
+            )
+            logger.debug(
+                "webkit transcript stage=\(stage, privacy: .public) sequence=\(sequence) rows=\(payload.rowCount) bytes=\(payload.payloadByteSize) latest=\(payload.latestItemId ?? "none", privacy: .public) failures=\(self.jsFailureCount) stick=\(self.shouldStickToBottom)"
+            )
+            onDiagnostics?(diagnostics)
+        }
+    }
+}
+
+struct WebTranscriptPreparedPayload: Equatable {
+    let base64: String
+    let payloadByteSize: Int
+    let rowCount: Int
+    let latestItemId: String?
+}
+
+enum WebTranscriptDiagnosticsFeature {
+    static let environmentKey = "LONGHOUSE_WEBKIT_TRANSCRIPT_DIAGNOSTICS"
+    static let userDefaultsKey = "longhouse.webkitTranscriptDiagnostics.enabled"
+
+    static var isEnabled: Bool {
+        if let raw = ProcessInfo.processInfo.environment[environmentKey] {
+            let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return ["1", "true", "yes", "on"].contains(normalized)
+        }
+#if DEBUG
+        return true
+#else
+        return UserDefaults.standard.bool(forKey: userDefaultsKey)
+#endif
     }
 }
 

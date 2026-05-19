@@ -4,6 +4,32 @@ import XCTest
 @testable import Longhouse
 
 final class WebTranscriptViewTests: XCTestCase {
+    func testPreparedPayloadReportsDiagnosticsFacts() {
+        let payload = WebTranscriptView.preparedPayload(
+            timelineItems: [
+                .user(makeUserEvent(
+                    id: 11,
+                    content: "server projected text",
+                    inputOrigin: nil
+                )),
+            ],
+            submittedInputs: [
+                makeSubmittedInput(
+                    text: "queued text",
+                    clientRequestId: "ios-request-1",
+                    serverInputId: nil
+                ),
+            ],
+            sessionEnded: false,
+            errorMessage: nil
+        )
+
+        XCTAssertGreaterThan(payload.payloadByteSize, 0)
+        XCTAssertFalse(payload.base64.isEmpty)
+        XCTAssertEqual(payload.rowCount, 2)
+        XCTAssertEqual(payload.latestItemId, "ios-request-1")
+    }
+
     func testPayloadSuppressesSubmittedInputWhenDurableLonghouseEventHasSameSessionInputId() {
         let rows = WebTranscriptView.payloadItems(
             timelineItems: [

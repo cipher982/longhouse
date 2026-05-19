@@ -339,6 +339,34 @@ struct SessionViewModelTests {
         #expect(model.items.map(\.id) == ["user:11"])
     }
 
+    @Test
+    func transcriptDiagnosticsPostsRenderBeaconAfterWebKitRender() async throws {
+        let workspace = try makeWorkspace(eventId: 10, content: "Rendered in WebKit")
+        let api = FakeSessionWorkspaceClient(workspaces: [workspace])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let diagnostics = RenderBeaconReporter.WebKitDiagnostics(
+            stage: "rendered",
+            payload_byte_size: 2048,
+            row_count: 1,
+            latest_item_id: "user:10",
+            render_sequence: 1,
+            js_failure_count: 0,
+            should_stick_to_bottom: true,
+            web_view_loaded: true,
+            error_description: nil
+        )
+
+        await model.start(sessionId: "session-1", appState: appState)
+        await model.recordTranscriptDiagnostics(diagnostics, sessionId: "session-1", appState: appState)
+
+        let beacons = await api.renderBeacons()
+        #expect(beacons.count == 1)
+        #expect(beacons.first?.event_id == "10")
+        #expect(beacons.first?.webkit == diagnostics)
+    }
+
     nonisolated private func makeWorkspace(
         eventId: Int,
         content: String,
@@ -450,6 +478,7 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
     private var sendSteps: [FakeSendStep] = []
     private var workspaceRequests: [(id: String, limit: Int, branchMode: String)] = []
     private var sentInputs: [String] = []
+    private var postedRenderBeacons: [RenderBeaconReporter.Payload] = []
     private var lastClientRequestId: String?
 
     init(
@@ -504,7 +533,9 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
         LoopModeResponse(sessionId: id, loopMode: loopMode)
     }
 
-    func postRenderBeacon(_ payload: RenderBeaconReporter.Payload) async {}
+    func postRenderBeacon(_ payload: RenderBeaconReporter.Payload) async {
+        postedRenderBeacons.append(payload)
+    }
 
     func failFutureWorkspaceLoads() {
         shouldFailWorkspaceLoads = true
@@ -529,5 +560,9 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
 
     func sendRequests() -> [String] {
         sentInputs
+    }
+
+    func renderBeacons() -> [RenderBeaconReporter.Payload] {
+        postedRenderBeacons
     }
 }

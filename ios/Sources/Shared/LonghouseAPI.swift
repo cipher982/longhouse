@@ -8,6 +8,18 @@ import Foundation
 actor RenderBeaconReporter {
     static let shared = RenderBeaconReporter()
 
+    struct WebKitDiagnostics: Encodable, Equatable, Sendable {
+        let stage: String
+        let payload_byte_size: Int
+        let row_count: Int
+        let latest_item_id: String?
+        let render_sequence: Int
+        let js_failure_count: Int
+        let should_stick_to_bottom: Bool
+        let web_view_loaded: Bool
+        let error_description: String?
+    }
+
     struct Payload: Encodable, Sendable {
         let event_id: String
         let session_id: String?
@@ -16,18 +28,23 @@ actor RenderBeaconReporter {
         let emitted_at_ms: Int64
         let rendered_at_ms: Int64
         let clock_skew_ms: Int
+        let webkit: WebKitDiagnostics?
     }
 
-    private var lastBeaconedEventId: String?
+    private var lastBeaconKey: String?
 
     func payload(
         sessionId: String,
         latestEventId: String,
         emittedAt: Date,
-        managed: Bool
+        managed: Bool,
+        webkit: WebKitDiagnostics? = nil
     ) -> Payload? {
-        if lastBeaconedEventId == latestEventId { return nil }
-        lastBeaconedEventId = latestEventId
+        let stage = webkit?.stage ?? "rendered"
+        let sequence = webkit?.render_sequence ?? 0
+        let beaconKey = "\(latestEventId):\(stage):\(sequence)"
+        if lastBeaconKey == beaconKey { return nil }
+        lastBeaconKey = beaconKey
         return Payload(
             event_id: latestEventId,
             session_id: sessionId,
@@ -35,7 +52,8 @@ actor RenderBeaconReporter {
             managed: managed,
             emitted_at_ms: Int64(emittedAt.timeIntervalSince1970 * 1000),
             rendered_at_ms: Int64(Date().timeIntervalSince1970 * 1000),
-            clock_skew_ms: 0
+            clock_skew_ms: 0,
+            webkit: webkit
         )
     }
 }
