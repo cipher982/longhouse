@@ -438,6 +438,45 @@ def check_sqlite_version(engine: Engine) -> tuple[bool, str]:
     return is_compatible, version_str
 
 
+def _pre_migrate_session_inputs_identity_columns(engine: Engine) -> None:
+    """Rename the old overloaded request id before additive auto-migration runs."""
+    if engine.dialect.name != "sqlite":
+        return
+
+    try:
+        with engine.connect() as conn:
+            exists = conn.execute(
+                text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_inputs'")
+            ).fetchone()
+            if not exists:
+                return
+
+            columns = {row[1] for row in conn.execute(text("PRAGMA table_info(session_inputs)"))}
+            if "request_id" not in columns:
+                return
+
+            conn.execute(text("DROP INDEX IF EXISTS ix_session_inputs_session_owner_request"))
+            if "client_request_id" not in columns:
+                conn.execute(text("ALTER TABLE session_inputs RENAME COLUMN request_id TO client_request_id"))
+            else:
+                conn.execute(
+                    text(
+                        """
+                        UPDATE session_inputs
+                        SET client_request_id = request_id
+                        WHERE client_request_id IS NULL
+                          AND request_id IS NOT NULL
+                        """
+                    )
+                )
+            conn.commit()
+    except Exception:
+        logger.error(
+            "session_inputs request_id rename migration FAILED — client_request_id dedupe may be incomplete",
+            exc_info=True,
+        )
+
+
 def initialize_database(engine: Engine = None) -> None:
     """Initialize database tables using the given engine.
 
@@ -500,6 +539,7 @@ def initialize_database(engine: Engine = None) -> None:
     # paths converge to the same end state. New additive columns should be
     # added to the SQLAlchemy model with appropriate ``server_default`` and rely
     # on this path — NOT on `_migrate_agents_columns`.
+    _pre_migrate_session_inputs_identity_columns(target_engine)
     _auto_add_missing_columns(target_engine, Base.metadata, apply=True)
 
     # Residual imperative migrations: index/table adjustments, data
@@ -857,9 +897,9 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 conn.execute(
                     text(
                         """
-                        CREATE UNIQUE INDEX IF NOT EXISTS ix_session_inputs_session_owner_request
-                        ON session_inputs(session_id, owner_id, request_id)
-                        WHERE request_id IS NOT NULL
+                        CREATE UNIQUE INDEX IF NOT EXISTS ix_session_inputs_session_owner_client_request
+                        ON session_inputs(session_id, owner_id, client_request_id)
+                        WHERE client_request_id IS NOT NULL
                         """
                     )
                 )

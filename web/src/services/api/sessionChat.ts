@@ -26,6 +26,7 @@ export interface QueuedInputSummary {
 export interface SessionInputResponse {
   outcome: SessionInputOutcome;
   input_id: number;
+  client_request_id?: string | null;
   intent: SessionInputIntent;
   queued: QueuedInputSummary[];
 }

@@ -613,7 +613,7 @@ async def _drain_next_queued_input(
             )
             return
 
-        claimed = claim_next_queued(db, session_id, request_id=drain_request_id)
+        claimed = claim_next_queued(db, session_id, delivery_request_id=drain_request_id)
         if claimed is None:
             # Race: the row was cancelled or already claimed. Release and bail.
             await session_lock_manager.release(lock_scope_id, drain_request_id)

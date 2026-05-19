@@ -481,6 +481,7 @@ class SessionTurn(AgentsBase):
         index=True,
     )
     request_id = Column(String(64), nullable=True, index=True)
+    session_input_id = Column(Integer, nullable=True, index=True)
     source_kind = Column(
         String(32),
         nullable=False,
@@ -705,7 +706,8 @@ class SessionInput(AgentsBase):
     intent = Column(String(16), nullable=False)  # auto | queue | steer
     status = Column(String(16), nullable=False, server_default=text("'queued'"))
     # queued | delivering | delivered | cancelled | failed
-    request_id = Column(String(64), nullable=True)
+    client_request_id = Column(String(64), nullable=True)
+    delivery_request_id = Column(String(64), nullable=True)
     last_error = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
     delivered_at = Column(DateTime(timezone=True), nullable=True)
@@ -714,12 +716,12 @@ class SessionInput(AgentsBase):
     __table_args__ = (
         Index("ix_session_inputs_session_status_created", "session_id", "status", "created_at"),
         Index(
-            "ix_session_inputs_session_owner_request",
+            "ix_session_inputs_session_owner_client_request",
             "session_id",
             "owner_id",
-            "request_id",
+            "client_request_id",
             unique=True,
-            postgresql_where=text("request_id IS NOT NULL"),
-            sqlite_where=text("request_id IS NOT NULL"),
+            postgresql_where=text("client_request_id IS NOT NULL"),
+            sqlite_where=text("client_request_id IS NOT NULL"),
         ),
     )

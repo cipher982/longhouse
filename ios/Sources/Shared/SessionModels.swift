@@ -570,6 +570,7 @@ struct QueuedInputSummary: Codable, Sendable, Identifiable {
 struct SessionInputResponse: Codable, Sendable {
     let outcome: SessionInputOutcome
     let inputId: Int
+    let clientRequestId: String?
     let intent: String
     let queued: [QueuedInputSummary]
 

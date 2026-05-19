@@ -241,6 +241,7 @@ extension APISessionInputResponse {
         SessionInputResponse(
             outcome: SessionInputOutcome(rawValue: outcome) ?? .queued,
             inputId: inputId,
+            clientRequestId: clientRequestId,
             intent: intent,
             queued: (queued ?? []).map(\.queuedInputSummary)
         )

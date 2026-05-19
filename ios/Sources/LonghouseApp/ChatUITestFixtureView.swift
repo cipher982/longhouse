@@ -115,7 +115,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             timestamp: ISO8601DateFormatter().string(from: Date())
         ))
         nextEventID += 1
-        return SessionInputResponse(outcome: .sent, inputId: nextEventID, intent: intent, queued: [])
+        return SessionInputResponse(outcome: .sent, inputId: nextEventID, clientRequestId: nil, intent: intent, queued: [])
     }
 
     func draftReply(id: String, maxChars: Int) async throws -> DraftReplyResponse {

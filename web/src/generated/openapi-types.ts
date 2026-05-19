@@ -8048,6 +8048,8 @@ export interface components {
             outcome: string;
             /** Input Id */
             input_id: number;
+            /** Client Request Id */
+            client_request_id?: string | null;
             /** Intent */
             intent: string;
             /** Queued */

@@ -231,7 +231,8 @@ def test_client_request_id_dedupes_delivered_auto(monkeypatch, tmp_path):
         with session_local() as db:
             rows = db.query(SessionInput).filter(SessionInput.session_id == session_id).all()
             assert len(rows) == 1
-            assert rows[0].request_id == "ios-request-1"
+            assert rows[0].client_request_id == "ios-request-1"
+            assert rows[0].delivery_request_id
             assert rows[0].status == INPUT_STATUS_DELIVERED
     finally:
         asyncio.run(session_lock_manager.release(str(session_id)))
@@ -289,7 +290,8 @@ def test_client_request_id_dedupes_queued_input(monkeypatch, tmp_path):
         with session_local() as db:
             rows = db.query(SessionInput).filter(SessionInput.session_id == session_id).all()
             assert len(rows) == 1
-            assert rows[0].request_id == "ios-queued-1"
+            assert rows[0].client_request_id == "ios-queued-1"
+            assert rows[0].delivery_request_id is None
             assert rows[0].status == INPUT_STATUS_QUEUED
     finally:
         api_app_ref.dependency_overrides = {}
@@ -311,7 +313,7 @@ def test_client_request_id_unique_constraint_blocks_duplicate_rows(tmp_path):
             owner_id=user_id,
             intent="queue",
             status=INPUT_STATUS_QUEUED,
-            request_id="ios-unique-1",
+            client_request_id="ios-unique-1",
         )
         try:
             create_session_input(
@@ -321,7 +323,7 @@ def test_client_request_id_unique_constraint_blocks_duplicate_rows(tmp_path):
                 owner_id=user_id,
                 intent="queue",
                 status=INPUT_STATUS_QUEUED,
-                request_id="ios-unique-1",
+                client_request_id="ios-unique-1",
             )
         except IntegrityError:
             db.rollback()
@@ -333,7 +335,98 @@ def test_client_request_id_unique_constraint_blocks_duplicate_rows(tmp_path):
         assert rows[0].body == "once"
 
 
-def test_client_request_id_failed_retry_does_not_report_queued(monkeypatch, tmp_path):
+def test_queue_drain_preserves_client_request_id(tmp_path):
+    from zerg.services.session_inputs import claim_next_queued
+    from zerg.services.session_inputs import create_session_input
+
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+
+    with session_local() as db:
+        row = create_session_input(
+            db,
+            session_id=session_id,
+            text="drain me",
+            owner_id=user_id,
+            intent="queue",
+            status=INPUT_STATUS_QUEUED,
+            client_request_id="ios-drain-1",
+        )
+
+        claimed = claim_next_queued(db, session_id, delivery_request_id="drain-delivery-1")
+
+        assert claimed is not None
+        assert claimed.id == row.id
+        assert claimed.client_request_id == "ios-drain-1"
+        assert claimed.delivery_request_id == "drain-delivery-1"
+
+
+def test_client_request_id_different_text_conflicts(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    _stub_dispatch(monkeypatch)
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        first = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={"text": "original", "intent": "queue", "client_request_id": "ios-conflict-1"},
+        )
+        second = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={"text": "edited", "intent": "queue", "client_request_id": "ios-conflict-1"},
+        )
+
+        assert first.status_code == 200, first.text
+        assert second.status_code == 409, second.text
+        assert second.json()["detail"] == {
+            "error_code": "input_conflict",
+            "existing_input_id": first.json()["input_id"],
+            "reason": "different_text",
+        }
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_cancelled_client_request_id_conflicts_on_retry(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    _stub_dispatch(monkeypatch)
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        first = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={"text": "cancel me", "intent": "queue", "client_request_id": "ios-cancelled-1"},
+        )
+        assert first.status_code == 200, first.text
+
+        with session_local() as db:
+            row = db.query(SessionInput).filter(SessionInput.id == first.json()["input_id"]).one()
+            row.status = INPUT_STATUS_CANCELLED
+            db.commit()
+
+        retry = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={"text": "cancel me", "intent": "queue", "client_request_id": "ios-cancelled-1"},
+        )
+        assert retry.status_code == 409, retry.text
+        assert retry.json()["detail"] == {
+            "error_code": "input_conflict",
+            "existing_input_id": first.json()["input_id"],
+            "reason": "cancelled",
+        }
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_client_request_id_failed_retry_reuses_row(monkeypatch, tmp_path):
     from zerg.services.session_inputs import create_session_input
 
     session_local = _make_db(tmp_path)
@@ -348,9 +441,11 @@ def test_client_request_id_failed_retry_does_not_report_queued(monkeypatch, tmp_
             owner_id=user_id,
             intent="auto",
             status=INPUT_STATUS_FAILED,
-            request_id="ios-failed-1",
+            client_request_id="ios-failed-1",
+            delivery_request_id="old-delivery",
         )
         row.last_error = "provider disconnected"
+        input_id = int(row.id)
         db.commit()
 
     client, api_app_ref = _make_client(
@@ -362,10 +457,15 @@ def test_client_request_id_failed_retry_does_not_report_queued(monkeypatch, tmp_
             f"/api/sessions/{session_id}/input",
             json={"text": "failed once", "intent": "auto", "client_request_id": "ios-failed-1"},
         )
-        assert retry.status_code == 409, retry.text
-        body = retry.json()["detail"]
-        assert body["error_code"] == "input_failed"
-        assert "provider disconnected" in body["message"]
+        assert retry.status_code == 200, retry.text
+        assert retry.json()["outcome"] == "sent"
+        with session_local() as db:
+            rows = db.query(SessionInput).filter(SessionInput.session_id == session_id).all()
+            assert len(rows) == 1
+            assert rows[0].id == input_id
+            assert rows[0].client_request_id == "ios-failed-1"
+            assert rows[0].delivery_request_id != "old-delivery"
+            assert rows[0].status == INPUT_STATUS_DELIVERED
     finally:
         api_app_ref.dependency_overrides = {}
 
@@ -743,7 +843,8 @@ def test_startup_reconciliation_fails_stuck_steer_rows_instead_of_requeuing(tmp_
             text="redirect now",
             intent="steer",
             status="delivering",
-            request_id="crash-steer",
+            client_request_id="crash-steer",
+            delivery_request_id="crash-steer-delivery",
         )
         steer_row.updated_at = datetime.now(timezone.utc) - timedelta(seconds=300)
         auto_row = create_session_input(
@@ -752,7 +853,8 @@ def test_startup_reconciliation_fails_stuck_steer_rows_instead_of_requeuing(tmp_
             text="retryable",
             intent="auto",
             status="delivering",
-            request_id="crash-auto",
+            client_request_id="crash-auto",
+            delivery_request_id="crash-auto-delivery",
         )
         auto_row.updated_at = datetime.now(timezone.utc) - timedelta(seconds=300)
         db.commit()
@@ -785,7 +887,8 @@ def test_startup_reconciliation_rewinds_stuck_delivering(tmp_path):
             text="stuck",
             intent="auto",
             status="delivering",
-            request_id="old",
+            client_request_id="old",
+            delivery_request_id="old-delivery",
         )
         row.updated_at = datetime.now(timezone.utc) - timedelta(seconds=300)
         db.commit()
