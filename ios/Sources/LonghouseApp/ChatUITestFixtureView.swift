@@ -141,12 +141,12 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
 
     nonisolated func streamSource() -> SessionWorkspaceStreamSource {
         SessionWorkspaceStreamSource(
-            start: { await self.startRealtimeStream() },
+            start: { self.startRealtimeStream() },
             stop: { await self.stopRealtimeStream() }
         )
     }
 
-    func startRealtimeStream() -> AsyncStream<SessionWorkspaceStream.Event> {
+    nonisolated func startRealtimeStream() -> AsyncStream<SessionWorkspaceStream.Event> {
         AsyncStream { continuation in
             Task {
                 await self.attachRealtimeContinuation(continuation)
