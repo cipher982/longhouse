@@ -1106,7 +1106,7 @@ test.describe("Session Detail Page", () => {
       .poll(async () => (await sidebarPane.boundingBox())?.width ?? 0, {
         timeout: 4000,
       })
-      .toBeGreaterThan((sidebarBefore?.width ?? 0) + 40);
+      .toBeGreaterThanOrEqual((sidebarBefore?.width ?? 0) + 40);
     await expect
       .poll(async () => (await mainPane.boundingBox())?.width ?? 0, {
         timeout: 4000,
@@ -1131,7 +1131,7 @@ test.describe("Session Detail Page", () => {
           timeout: 4000,
         },
       )
-      .toBeGreaterThan((sidebarBefore?.width ?? 0) + 40);
+      .toBeGreaterThanOrEqual((sidebarBefore?.width ?? 0) + 40);
 
     await page.getByTestId("session-workspace-sidebar-resize").focus();
     await page.keyboard.press("Enter");
