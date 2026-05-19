@@ -578,6 +578,55 @@ def _ask_user_transcript_lines(session_id: str) -> tuple[list[dict], dict]:
     return initial_lines, answer_line
 
 
+def _write_outbox_presence(
+    longhouse_home: Path,
+    *,
+    session_id: str,
+    phase: str,
+    transcript: Path,
+    index: int,
+) -> None:
+    outbox_dir = longhouse_home / "agent" / "outbox"
+    outbox_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "session_id": session_id,
+        "provider": "claude",
+        "state": phase,
+        "tool_name": "AskUserQuestion" if phase == "blocked" else "",
+        "cwd": "/tmp/longhouse-test",
+        "transcript_path": str(transcript),
+    }
+    (outbox_dir / f"phase-{index}-{phase}.json").write_text(
+        json.dumps(payload, separators=(",", ":")),
+        encoding="utf-8",
+    )
+
+
+def _phase_matrix_line(session_id: str, phase: str, index: int) -> dict:
+    return {
+        "parentUuid": None if index == 0 else f"phase-{index - 1}",
+        "isSidechain": False,
+        "userType": "external",
+        "cwd": "/tmp/longhouse-test",
+        "sessionId": session_id,
+        "version": "2.0.76",
+        "type": "assistant",
+        "uuid": f"phase-{index}",
+        "timestamp": f"2026-01-10T12:01:{index:02d}.000Z",
+        "message": {
+            "id": f"msg_phase_{index}",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"hot lane append while phase is {phase}",
+                }
+            ],
+        },
+    }
+
+
 def test_connect_daemon_ships_ask_user_answer_append_from_filesystem_watch(server, tmp_path):
     """A blocked AskUserQuestion answer append ships through the filesystem hot lane."""
     daemon = _start_connect_daemon(
@@ -643,6 +692,72 @@ def test_connect_daemon_ships_ask_user_answer_append_from_filesystem_watch(serve
         daemon_output = _terminate_process(proc)
         raise AssertionError(
             f"daemon AskUserQuestion watcher integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}"
+        ) from None
+    finally:
+        if proc.poll() is None:
+            _terminate_process(proc)
+        shutil.rmtree(longhouse_home, ignore_errors=True)
+
+
+def test_connect_daemon_phase_signals_do_not_gate_filesystem_hot_lane(server, tmp_path):
+    """Filesystem appends ship live regardless of provider phase overlays."""
+    daemon = _start_connect_daemon(
+        server,
+        tmp_path,
+        project_name="phase-matrix-project",
+        machine_name="shipper-e2e-phase-matrix",
+    )
+    session_id = daemon["session_id"]
+    transcript = daemon["transcript"]
+    proc = daemon["proc"]
+    log_dir = daemon["log_dir"]
+    longhouse_home = daemon["longhouse_home"]
+
+    try:
+        _wait_for_log_contains(log_dir, "Daemon ready")
+
+        phases = ["thinking", "running", "blocked", "needs_user", "idle"]
+        for index, phase in enumerate(phases):
+            _write_outbox_presence(
+                longhouse_home,
+                session_id=session_id,
+                phase=phase,
+                transcript=transcript,
+                index=index,
+            )
+
+            offset = transcript.stat().st_size
+            with transcript.open("a") as f:
+                f.write(
+                    json.dumps(
+                        _phase_matrix_line(session_id, phase, index),
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                )
+                f.flush()
+                os.fsync(f.fileno())
+            os.utime(transcript, None)
+            new_offset = transcript.stat().st_size
+
+            events = _wait_for_session_events(server, session_id, min_events=index + 1)
+            assert any(
+                f"hot lane append while phase is {phase}" in (e.get("content_text") or "")
+                for e in events
+            ), events
+
+            trace = _wait_for_ship_trace(
+                server,
+                session_id,
+                offset=offset,
+                new_offset=new_offset,
+            )
+            assert trace["work_context"] == "live_transcript"
+            assert trace["observation_source"] == "fsevent"
+    except Exception:
+        daemon_output = _terminate_process(proc)
+        raise AssertionError(
+            f"daemon phase matrix watcher integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}"
         ) from None
     finally:
         if proc.poll() is None:
