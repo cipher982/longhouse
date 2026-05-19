@@ -22,7 +22,8 @@ final class TimelineBuilderTests: XCTestCase {
             toolCallId: callId,
             timestamp: ts,
             inActiveContext: true,
-            isHeadBranch: true
+            isHeadBranch: true,
+            inputOrigin: nil
         )
     }
 

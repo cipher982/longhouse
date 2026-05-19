@@ -14,14 +14,20 @@ from fastapi.testclient import TestClient
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
+os.environ.setdefault("JWT_SECRET", "test-jwt-secret-1234")
+os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-1234")
+os.environ.setdefault("GOOGLE_CLIENT_ID", "test-google-client-id")
+os.environ.setdefault("GOOGLE_CLIENT_SECRET", "test-google-client-secret")
 
 from zerg.database import get_db
 from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
+from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionInput
+from zerg.models.agents import SessionTurn
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
@@ -151,7 +157,7 @@ def _seed_live_session(session_local):
     return session_id, user_id
 
 
-def _stub_dispatch(monkeypatch):
+def _stub_dispatch(monkeypatch, *, emit_verified_user_event: bool = False):
     """Happy-path fake for live_session_dispatch + skip background tasks."""
     calls: list[dict] = []
 
@@ -167,7 +173,24 @@ def _stub_dispatch(monkeypatch):
         verification_timeout_secs=None,
     ):
         calls.append({"session_id": str(session.id), "text": text, "commis_id": commis_id})
-        return SimpleNamespace(ok=True, exit_code=0, error=None, verified_turn_started=True)
+        verified_user_event_id = None
+        if emit_verified_user_event:
+            event = AgentEvent(
+                session_id=session.id,
+                role="user",
+                content_text=text,
+                timestamp=datetime.now(timezone.utc),
+            )
+            db.add(event)
+            db.flush()
+            verified_user_event_id = int(event.id)
+        return SimpleNamespace(
+            ok=True,
+            exit_code=0,
+            error=None,
+            verified_turn_started=True,
+            verified_user_event_id=verified_user_event_id,
+        )
 
     monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
     monkeypatch.setattr("zerg.services.session_chat_impl._schedule_managed_local_lock_release", lambda **_kwargs: None)
@@ -234,6 +257,43 @@ def test_client_request_id_dedupes_delivered_auto(monkeypatch, tmp_path):
             assert rows[0].client_request_id == "ios-request-1"
             assert rows[0].delivery_request_id
             assert rows[0].status == INPUT_STATUS_DELIVERED
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
+        api_app_ref.dependency_overrides = {}
+
+
+def test_auto_input_links_session_turn_to_verified_user_event(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    _stub_dispatch(monkeypatch, emit_verified_user_event=True)
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        resp = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={"text": "linked from ios", "intent": "auto", "client_request_id": "ios-link-1"},
+        )
+        assert resp.status_code == 200, resp.text
+
+        with session_local() as db:
+            row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
+            assert row.status == INPUT_STATUS_DELIVERED
+            assert row.client_request_id == "ios-link-1"
+            assert row.delivery_request_id
+
+            turn = (
+                db.query(SessionTurn)
+                .filter(SessionTurn.session_id == session_id, SessionTurn.request_id == row.delivery_request_id)
+                .one()
+            )
+            assert turn.session_input_id == row.id
+            assert turn.user_event_id is not None
+
+            event = db.query(AgentEvent).filter(AgentEvent.id == turn.user_event_id).one()
+            assert event.content_text == "linked from ios"
     finally:
         asyncio.run(session_lock_manager.release(str(session_id)))
         api_app_ref.dependency_overrides = {}
@@ -359,6 +419,55 @@ def test_queue_drain_preserves_client_request_id(tmp_path):
         assert claimed.id == row.id
         assert claimed.client_request_id == "ios-drain-1"
         assert claimed.delivery_request_id == "drain-delivery-1"
+
+
+def test_queue_drain_links_session_turn_to_session_input(monkeypatch, tmp_path):
+    from zerg.services.session_chat_impl import _drain_next_queued_input
+    from zerg.services.session_inputs import create_session_input
+
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    _stub_dispatch(monkeypatch, emit_verified_user_event=True)
+
+    with session_local() as db:
+        row = create_session_input(
+            db,
+            session_id=session_id,
+            text="drained from ios",
+            owner_id=user_id,
+            intent="queue",
+            status=INPUT_STATUS_QUEUED,
+            client_request_id="ios-drain-origin-1",
+        )
+        db.commit()
+        input_id = int(row.id)
+        db_bind = db.get_bind()
+
+    try:
+        asyncio.run(
+            _drain_next_queued_input(
+                db_bind=db_bind,
+                session_id=session_id,
+                lock_scope_id=str(session_id),
+            )
+        )
+
+        with session_local() as db:
+            row = db.query(SessionInput).filter(SessionInput.id == input_id).one()
+            assert row.status == INPUT_STATUS_DELIVERED
+            assert row.client_request_id == "ios-drain-origin-1"
+            assert row.delivery_request_id
+            assert row.delivery_request_id.startswith("drain-")
+
+            turn = (
+                db.query(SessionTurn)
+                .filter(SessionTurn.session_id == session_id, SessionTurn.request_id == row.delivery_request_id)
+                .one()
+            )
+            assert turn.session_input_id == input_id
+            assert turn.user_event_id is not None
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
 
 
 def test_client_request_id_different_text_conflicts(monkeypatch, tmp_path):

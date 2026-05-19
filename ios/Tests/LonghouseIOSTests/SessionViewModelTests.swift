@@ -335,7 +335,8 @@ struct SessionViewModelTests {
             toolCallId: nil,
             timestamp: "2026-05-02T20:00:00Z",
             inActiveContext: true,
-            isHeadBranch: true
+            isHeadBranch: true,
+            inputOrigin: nil
         )
     }
 }

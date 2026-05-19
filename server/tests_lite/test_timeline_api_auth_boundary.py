@@ -33,6 +33,7 @@ from zerg.main import api_app
 from zerg.models import User
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionTurn
 from zerg.services.managed_local_transport import build_managed_local_attach_command
@@ -485,6 +486,11 @@ def test_timeline_session_workspace_projects_claude_channel_display_text(tmp_pat
                 "role": "user",
                 "content_text": "continue the migration",
                 "raw_content_text": raw_text,
+                "input_origin": {
+                    "authored_via": "terminal",
+                    "session_input_id": None,
+                    "client_request_id": None,
+                },
                 "tool_name": None,
                 "tool_input_json": None,
                 "tool_output_text": None,
@@ -504,6 +510,74 @@ def test_timeline_session_workspace_projects_claude_channel_display_text(tmp_pat
         with session_local() as db:
             stored = db.query(AgentEvent).filter(AgentEvent.id == event_id).one()
             assert stored.content_text == raw_text
+    finally:
+        auth_deps._strategy_cache.clear()
+        api_app.dependency_overrides.clear()
+
+
+def test_timeline_session_workspace_projects_longhouse_input_origin(tmp_path):
+    session_local = _make_db(tmp_path)
+    submitted_at = datetime.now(timezone.utc)
+    with session_local() as db:
+        _seed_user(db)
+        session_id = _seed_session(db)
+        event = AgentEvent(
+            session_id=session_id,
+            role="user",
+            content_text="sent from phone",
+            timestamp=submitted_at,
+        )
+        db.add(event)
+        db.flush()
+        session_input = SessionInput(
+            session_id=session_id,
+            body="sent from phone",
+            owner_id=1,
+            intent="auto",
+            status="delivered",
+            client_request_id="ios-origin-1",
+            delivery_request_id="delivery-origin-1",
+            delivered_at=submitted_at,
+        )
+        db.add(session_input)
+        db.flush()
+        db.add(
+            SessionTurn(
+                session_id=session_id,
+                request_id="delivery-origin-1",
+                session_input_id=session_input.id,
+                state="send_accepted",
+                user_event_id=event.id,
+                user_submitted_at=submitted_at,
+                send_accepted_at=submitted_at,
+            )
+        )
+        assistant_event = AgentEvent(
+            session_id=session_id,
+            role="assistant",
+            content_text="ack",
+            timestamp=submitted_at + timedelta(seconds=1),
+        )
+        db.add(assistant_event)
+        db.commit()
+
+    client = _make_client(session_local)
+
+    try:
+        with _force_browser_jwt_mode():
+            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
+            response = client.get(f"/timeline/sessions/{session_id}/workspace?limit=50")
+
+        assert response.status_code == 200
+        payload = response.json()
+        events = [item["event"] for item in payload["projection"]["items"] if item["kind"] == "event"]
+        assert len(events) == 2
+        assert events[0]["input_origin"] == {
+            "authored_via": "longhouse",
+            "session_input_id": 1,
+            "client_request_id": "ios-origin-1",
+        }
+        assert events[1]["input_origin"] is None
     finally:
         auth_deps._strategy_cache.clear()
         api_app.dependency_overrides.clear()

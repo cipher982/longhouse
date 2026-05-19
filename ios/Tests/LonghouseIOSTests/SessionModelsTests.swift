@@ -318,6 +318,72 @@ struct SessionModelsTests {
     }
 
     @Test
+    func sessionEventDecodesInputOriginStates() throws {
+        let longhouseJSON = """
+        {
+          "id": 43,
+          "role": "user",
+          "content_text": "sent from ios",
+          "tool_name": null,
+          "tool_input_json": null,
+          "tool_output_text": null,
+          "tool_call_id": null,
+          "timestamp": "2026-05-02T20:00:00Z",
+          "in_active_context": true,
+          "is_head_branch": true,
+          "input_origin": {
+            "authored_via": "longhouse",
+            "session_input_id": 7,
+            "client_request_id": "ios-origin-1"
+          }
+        }
+        """.data(using: .utf8)!
+        let omittedJSON = """
+        {
+          "id": 44,
+          "role": "assistant",
+          "content_text": "ack",
+          "tool_name": null,
+          "tool_input_json": null,
+          "tool_output_text": null,
+          "tool_call_id": null,
+          "timestamp": "2026-05-02T20:00:01Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+        """.data(using: .utf8)!
+        let unknownJSON = """
+        {
+          "id": 45,
+          "role": "user",
+          "content_text": "future origin",
+          "tool_name": null,
+          "tool_input_json": null,
+          "tool_output_text": null,
+          "tool_call_id": null,
+          "timestamp": "2026-05-02T20:00:02Z",
+          "in_active_context": true,
+          "is_head_branch": true,
+          "input_origin": {
+            "authored_via": "watch",
+            "session_input_id": null,
+            "client_request_id": null
+          }
+        }
+        """.data(using: .utf8)!
+
+        let longhouse = try JSONDecoder.snakeCase.decode(SessionEvent.self, from: longhouseJSON)
+        let omitted = try JSONDecoder.snakeCase.decode(SessionEvent.self, from: omittedJSON)
+        let unknown = try JSONDecoder.snakeCase.decode(SessionEvent.self, from: unknownJSON)
+
+        #expect(longhouse.inputOrigin?.authoredVia == .longhouse)
+        #expect(longhouse.inputOrigin?.sessionInputId == 7)
+        #expect(longhouse.inputOrigin?.clientRequestId == "ios-origin-1")
+        #expect(omitted.inputOrigin == nil)
+        #expect(unknown.inputOrigin?.authoredVia == .unknown("watch"))
+    }
+
+    @Test
     func generatedAPIEventToolInputJSONPreservesOriginalKeys() throws {
         let json = """
         {

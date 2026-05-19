@@ -17,11 +17,13 @@ from typing import List
 from typing import Literal
 from typing import Optional
 
+from sqlalchemy import and_
 from pydantic import BaseModel
 from pydantic import Field
 
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionTurn
 from zerg.services.agents_store import AgentsStore
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
@@ -775,6 +777,20 @@ class WallResponse(UTCBaseModel):
     total: int
 
 
+class InputOriginResponse(BaseModel):
+    """Semantic origin for a user-authored transcript event."""
+
+    authored_via: Literal["longhouse", "terminal"] = Field(
+        ...,
+        description="Where this user input was authored: longhouse|terminal",
+    )
+    session_input_id: Optional[int] = Field(None, description="SessionInput row when authored through Longhouse")
+    client_request_id: Optional[str] = Field(
+        None,
+        description="Client idempotency key when supplied by the Longhouse client",
+    )
+
+
 class EventResponse(UTCBaseModel):
     """Response for a single event."""
 
@@ -784,6 +800,10 @@ class EventResponse(UTCBaseModel):
     raw_content_text: Optional[str] = Field(
         None,
         description="Raw provider content when it differs from display content",
+    )
+    input_origin: Optional[InputOriginResponse] = Field(
+        None,
+        description="Semantic origin for user-authored input events",
     )
     tool_name: Optional[str] = Field(None, description="Tool name")
     tool_input_json: Optional[Dict[str, Any]] = Field(None, description="Tool input")
@@ -834,6 +854,10 @@ class SessionTurnResponse(UTCBaseModel):
     request_id: Optional[str] = Field(
         None,
         description=("Transport request id when available, otherwise a synthetic canonical id for reconstructed native turns"),
+    )
+    session_input_id: Optional[int] = Field(
+        None,
+        description="SessionInput row that authored this turn, when any",
     )
     state: str = Field(..., description="created|send_accepted|active|terminal|durable|failed")
     terminal_phase: Optional[str] = Field(None, description="Observed terminal phase when known")
@@ -1347,6 +1371,7 @@ def build_event_response(
     *,
     boundary: int | None,
     head_branch_id: int | None,
+    input_origin_map: dict[int, InputOriginResponse | None] | None = None,
 ) -> EventResponse:
     content_text = event.content_text
     raw_content_text = None
@@ -1361,6 +1386,7 @@ def build_event_response(
         role=event.role,
         content_text=content_text,
         raw_content_text=raw_content_text,
+        input_origin=_event_input_origin_response(store, event, input_origin_map=input_origin_map),
         tool_name=event.tool_name,
         tool_input_json=event.tool_input_json,
         tool_output_text=event.tool_output_text,
@@ -1377,12 +1403,80 @@ def build_event_response(
     )
 
 
+def _event_input_origin_response(
+    store: AgentsStore,
+    event: AgentEvent,
+    *,
+    input_origin_map: dict[int, InputOriginResponse | None] | None,
+) -> InputOriginResponse | None:
+    if input_origin_map is not None:
+        return input_origin_map.get(int(event.id))
+    return build_event_input_origin_map(store, [event]).get(int(event.id))
+
+
+def build_event_input_origin_map(store: AgentsStore, events: list[AgentEvent]) -> dict[int, InputOriginResponse | None]:
+    user_events = {
+        int(event.id): event
+        for event in events
+        if str(getattr(event, "role", "") or "").strip().lower() == "user"
+    }
+    origins: dict[int, InputOriginResponse | None] = {event_id: InputOriginResponse(authored_via="terminal") for event_id in user_events}
+    if not user_events:
+        return origins
+
+    turns = (
+        store.db.query(SessionTurn, SessionInput)
+        .outerjoin(
+            SessionInput,
+            and_(
+                SessionInput.id == SessionTurn.session_input_id,
+                SessionInput.session_id == SessionTurn.session_id,
+            ),
+        )
+        .filter(
+            SessionTurn.user_event_id.in_(list(user_events)),
+            SessionTurn.session_id.in_({event.session_id for event in user_events.values()}),
+        )
+        .order_by(SessionTurn.id.asc())
+        .all()
+    )
+    seen_event_ids: set[int] = set()
+    for turn, session_input in turns:
+        user_event_id = int(getattr(turn, "user_event_id", 0) or 0)
+        if user_event_id in seen_event_ids or user_event_id not in user_events:
+            continue
+        seen_event_ids.add(user_event_id)
+        if getattr(turn, "session_input_id", None) is None:
+            continue
+        if session_input is None:
+            logger.warning(
+                "Session turn %s links missing SessionInput %s for user event %s",
+                getattr(turn, "id", None),
+                getattr(turn, "session_input_id", None),
+                user_event_id,
+            )
+            continue
+        origins[user_event_id] = InputOriginResponse(
+            authored_via="longhouse",
+            session_input_id=int(session_input.id),
+            client_request_id=session_input.client_request_id,
+        )
+    return origins
+
+
+def build_event_input_origin_response(store: AgentsStore, event: AgentEvent) -> InputOriginResponse | None:
+    if str(getattr(event, "role", "") or "").strip().lower() != "user":
+        return None
+    return build_event_input_origin_map(store, [event]).get(int(event.id))
+
+
 def build_session_turn_response(turn: SessionTurn) -> SessionTurnResponse:
     timing = build_session_turn_timing_response(turn)
     return SessionTurnResponse(
         id=int(turn.id),
         session_id=str(turn.session_id),
         request_id=turn.request_id,
+        session_input_id=turn.session_input_id,
         state=turn.state,
         terminal_phase=turn.terminal_phase,
         error_code=turn.error_code,

@@ -19,6 +19,7 @@ from zerg.services.session_views import SessionProjectionResponse
 from zerg.services.session_views import SessionThreadResponse
 from zerg.services.session_views import SessionWorkspaceResponse
 from zerg.services.session_views import build_event_response
+from zerg.services.session_views import build_event_input_origin_map
 from zerg.services.session_views import build_session_response
 from zerg.services.unmanaged_bindings import load_binding_overlay
 from zerg.utils.server_timing import ServerTimingRecorder
@@ -122,6 +123,11 @@ def build_session_workspace(
 
     active_context_boundary_cache: dict[UUID, int | None] = {}
     head_branch_id_cache: dict[UUID, int | None] = {}
+    with timing.span("load_input_origins"):
+        input_origin_map = build_event_input_origin_map(
+            store,
+            [item.event for item in projection.items if item.kind == "event" and item.event is not None],
+        )
 
     def get_boundary(current_session_id: UUID) -> int | None:
         if current_session_id not in active_context_boundary_cache:
@@ -150,6 +156,7 @@ def build_session_workspace(
                             item.event,
                             boundary=get_boundary(item.session.id),
                             head_branch_id=get_head_branch_id(item.session.id),
+                            input_origin_map=input_origin_map,
                         ),
                     )
                 )

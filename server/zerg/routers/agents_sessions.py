@@ -71,6 +71,7 @@ from zerg.services.session_views import StartupContextResponse
 from zerg.services.session_views import WallResponse
 from zerg.services.session_views import build_active_session_response
 from zerg.services.session_views import build_event_response
+from zerg.services.session_views import build_event_input_origin_map
 from zerg.services.session_views import build_session_response
 from zerg.services.session_views import build_session_turn_response
 from zerg.services.session_views import normalize_utc_datetime
@@ -905,6 +906,7 @@ async def get_session_events(
     )
     boundary = store.get_active_context_boundary(session_id, branch_mode=branch_mode)
     head_branch_id = store.get_head_branch_id(session_id)
+    input_origin_map = build_event_input_origin_map(store, events)
 
     total = store.count_session_events(
         session_id,
@@ -933,6 +935,7 @@ async def get_session_events(
                 e,
                 boundary=boundary,
                 head_branch_id=head_branch_id,
+                input_origin_map=input_origin_map,
             )
             for e in events
         ],
@@ -989,6 +992,10 @@ async def get_session_projection(
         head = store.get_thread_head(session)
     active_context_boundary_cache: dict[UUID, int | None] = {}
     head_branch_id_cache: dict[UUID, int | None] = {}
+    input_origin_map = build_event_input_origin_map(
+        store,
+        [item.event for item in projection.items if item.kind == "event" and item.event is not None],
+    )
 
     def get_boundary(current_session_id: UUID) -> int | None:
         if current_session_id not in active_context_boundary_cache:
@@ -1017,6 +1024,7 @@ async def get_session_projection(
                             item.event,
                             boundary=get_boundary(item.session.id),
                             head_branch_id=get_head_branch_id(item.session.id),
+                            input_origin_map=input_origin_map,
                         ),
                     )
                 )

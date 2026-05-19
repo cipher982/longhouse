@@ -367,11 +367,18 @@ export type SessionExecutionHome =
   | "cloud_takeover";
 export type ManagedSessionTransport = "claude_channel_bridge" | "codex_app_server";
 
+export interface AgentEventInputOrigin {
+  authored_via: "longhouse" | "terminal";
+  session_input_id?: number | null;
+  client_request_id?: string | null;
+}
+
 export interface AgentEvent {
   id: number;
   role: string;
   content_text: string | null;
   raw_content_text?: string | null;
+  input_origin?: AgentEventInputOrigin | null;
   tool_name: string | null;
   tool_input_json: Record<string, unknown> | null;
   tool_output_text: string | null;

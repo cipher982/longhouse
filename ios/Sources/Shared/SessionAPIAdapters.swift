@@ -165,7 +165,18 @@ extension APIEventResponse {
             toolCallId: toolCallId,
             timestamp: timestamp,
             inActiveContext: inActiveContext ?? true,
-            isHeadBranch: isHeadBranch ?? true
+            isHeadBranch: isHeadBranch ?? true,
+            inputOrigin: inputOrigin?.sessionInputOrigin
+        )
+    }
+}
+
+extension APIInputOriginResponse {
+    var sessionInputOrigin: SessionInputOrigin {
+        SessionInputOrigin(
+            authoredVia: SessionInputAuthoredVia(serverValue: authoredVia),
+            sessionInputId: sessionInputId,
+            clientRequestId: clientRequestId
         )
     }
 }
@@ -273,6 +284,7 @@ extension APISessionTurnResponse {
         SessionTurn(
             id: id,
             sessionId: sessionId,
+            sessionInputId: sessionInputId,
             state: state,
             terminalPhase: terminalPhase,
             errorCode: errorCode,

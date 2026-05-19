@@ -862,6 +862,46 @@ struct SessionWorkspaceResponse: Codable, Sendable {
     }
 }
 
+enum SessionInputAuthoredVia: Codable, Hashable, Sendable {
+    case longhouse
+    case terminal
+    case unknown(String)
+
+    init(serverValue: String) {
+        switch serverValue {
+        case "longhouse":
+            self = .longhouse
+        case "terminal":
+            self = .terminal
+        default:
+            self = .unknown(serverValue)
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        self.init(serverValue: value)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .longhouse:
+            try container.encode("longhouse")
+        case .terminal:
+            try container.encode("terminal")
+        case .unknown(let value):
+            try container.encode(value)
+        }
+    }
+}
+
+struct SessionInputOrigin: Codable, Hashable, Sendable {
+    let authoredVia: SessionInputAuthoredVia
+    let sessionInputId: Int?
+    let clientRequestId: String?
+}
+
 struct SessionEvent: Codable, Identifiable, Sendable {
     let id: Int
     let role: String
@@ -873,6 +913,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
     let timestamp: String
     let inActiveContext: Bool
     let isHeadBranch: Bool
+    let inputOrigin: SessionInputOrigin?
 
     private enum CodingKeys: String, CodingKey {
         case id
@@ -885,6 +926,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         case timestamp
         case inActiveContext
         case isHeadBranch
+        case inputOrigin
     }
 
     /// Lookup a top-level key from the tool input JSON as a string.
@@ -938,6 +980,7 @@ enum JSONValue: Codable, Sendable, Hashable {
 struct SessionTurn: Codable, Identifiable, Sendable {
     let id: Int
     let sessionId: String
+    let sessionInputId: Int?
     let state: String
     let terminalPhase: String?
     let errorCode: String?
