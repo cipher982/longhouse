@@ -16,7 +16,7 @@
     --inbox-repo-font: 22px;
     --inbox-repo-pad-y: 7px;
     --inbox-meta-font: 15px;
-    --inbox-meta-width: 210px;
+    --inbox-meta-max: 46%;
     --inbox-title-max: 50%;
     --inbox-group-gap: 0px;
   }
@@ -122,7 +122,7 @@
     cursor: pointer;
 
     display: grid;
-    grid-template-columns: 1fr minmax(160px, var(--inbox-meta-width));
+    grid-template-columns: minmax(0, 1fr) fit-content(var(--inbox-meta-max));
     align-items: center;
     gap: var(--space-3);
     padding: var(--inbox-row-pad-y) var(--space-2);
@@ -221,8 +221,9 @@
   }
 
   /* ---------- Row meta (right side) ----------
-   * Single line, right-aligned. Reserved width — status changes only swap
-   * dot color and label text; the row geometry never shifts.
+   * Single line, right-aligned. The metadata cluster gets its natural width
+   * first; the summary/title side gives up space before metadata truncates.
+   * The percent cap is only a safety rail for narrow desktop widths.
    */
 
   .inbox-row-meta {
@@ -255,6 +256,7 @@
   .inbox-row-provider {
     overflow: hidden;
     text-overflow: ellipsis;
+    flex-shrink: 0;
   }
 
   .inbox-row-branch {
@@ -262,6 +264,7 @@
     font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
     font-size: 10px;
     max-width: 10ch;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
   }
@@ -283,6 +286,7 @@
     border-radius: 50%;
     background: var(--text-muted);
     transition: background-color 200ms ease, box-shadow 200ms ease;
+    flex-shrink: 0;
   }
 
   .inbox-row-status-dot[data-tone="thinking"],
@@ -310,11 +314,7 @@
     color: var(--text-secondary);
     text-transform: lowercase;
     transition: color 200ms ease, opacity 200ms ease;
-    /* status label is variable-length but the meta line is nowrap+overflow:hidden,
-     * so longer values truncate with ellipsis instead of pushing the time */
-    overflow: hidden;
-    text-overflow: ellipsis;
-    min-width: 0;
+    flex-shrink: 0;
   }
 
   .inbox-row-time {

@@ -32,7 +32,7 @@ const KNOBS: TunerKnob[] = [
   { key: "repoFont", cssVar: "--inbox-repo-font", label: "Repo font", unit: "px", min: 14, max: 28, step: 1, defaultValue: 22 },
   { key: "repoPadY", cssVar: "--inbox-repo-pad-y", label: "Repo pad y", unit: "px", min: 4, max: 24, step: 1, defaultValue: 7 },
   { key: "metaFont", cssVar: "--inbox-meta-font", label: "Meta font", unit: "px", min: 10, max: 18, step: 0.5, defaultValue: 15 },
-  { key: "metaWidth", cssVar: "--inbox-meta-width", label: "Meta width", unit: "px", min: 140, max: 320, step: 5, defaultValue: 210 },
+  { key: "metaMaxPct", cssVar: "--inbox-meta-max", label: "Meta max", unit: "%", min: 25, max: 60, step: 1, defaultValue: 46 },
   { key: "titleMaxPct", cssVar: "--inbox-title-max", label: "Title max", unit: "%", min: 25, max: 75, step: 5, defaultValue: 50 },
   { key: "groupGap", cssVar: "--inbox-group-gap", label: "Group gap", unit: "px", min: 0, max: 32, step: 2, defaultValue: 0 },
 ];
