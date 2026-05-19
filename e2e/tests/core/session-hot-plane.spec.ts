@@ -170,6 +170,7 @@ test.describe("Session hot plane", () => {
     const blockedAt = new Date(Date.now() - 30_000).toISOString();
     const answerAt = new Date().toISOString();
     const sourcePath = `/tmp/${sessionId}.jsonl`;
+    const renderBeacons: Record<string, unknown>[] = [];
 
     await ingestSessionEvents(request, {
       sessionId,
@@ -200,6 +201,20 @@ test.describe("Session hot plane", () => {
     });
     await configureManagedLocalSession(request, sessionId);
     await sendBlockedLease(request, sessionId, blockedAt);
+
+    await page.route("**/api/telemetry/client-render", async (route) => {
+      const raw = route.request().postData() || "{}";
+      try {
+        renderBeacons.push(JSON.parse(raw) as Record<string, unknown>);
+      } catch {
+        renderBeacons.push({});
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ accepted: 1, dropped_skew: 0, dropped_range: 0 }),
+      });
+    });
 
     await installWorkspaceFrameProbe(page, sessionId);
     await page.goto(`/timeline/${sessionId}`, { waitUntil: "domcontentloaded" });
@@ -245,6 +260,15 @@ test.describe("Session hot plane", () => {
         });
       }, { timeout: 5_000 })
       .toBeGreaterThan(0);
+
+    await expect
+      .poll(() => renderBeacons.length, { timeout: 5_000 })
+      .toBeGreaterThan(0);
+    expect(renderBeacons.at(-1)).toMatchObject({
+      session_id: sessionId,
+      surface: "web",
+      emitted_at_ms: Date.parse(answerAt),
+    });
 
     const clearedSession = await getSession(request, sessionId);
     expect(clearedSession.runtime_display?.signal_tier).toBe("transcript_progress");
