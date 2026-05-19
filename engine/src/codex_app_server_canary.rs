@@ -747,40 +747,31 @@ async fn spawn_client(
     hook_session_id: Option<&str>,
     logger: &mut JsonlLogger,
 ) -> Result<RpcClient> {
-    let listen_arg = match config.app_server_transport {
-        AppServerTransport::Stdio => "stdio://".to_string(),
-        AppServerTransport::WebSocket => format!("ws://127.0.0.1:{}", config.listen_port),
-    };
-    let mut command = Command::new(&config.codex_bin);
-    command
-        .arg("app-server")
-        .arg("--listen")
-        .arg(&listen_arg)
-        .arg("--enable")
-        .arg("hooks")
-        .arg("--enable")
-        .arg("exec_permission_approvals")
-        .arg("--enable")
-        .arg("request_permissions_tool")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    if config.app_server_transport == AppServerTransport::Stdio {
-        command.stdin(Stdio::piped());
-    } else {
-        command.stdin(Stdio::null());
-    }
-    if let Some(home) = home_override {
-        command.env("HOME", home);
-        command.env("CODEX_HOME", home.join(".codex"));
-    }
-    if let Some(session_id) = hook_session_id {
-        command.env("LONGHOUSE_MANAGED_SESSION_ID", session_id);
-    }
+    const TEXT_FILE_BUSY_OS_ERROR: i32 = 26;
+    const SPAWN_ATTEMPTS: usize = 5;
+    const SPAWN_RETRY_DELAY: Duration = Duration::from_millis(25);
 
-    let mut child = command
-        .spawn()
-        .with_context(|| format!("spawning `{}` app-server", config.codex_bin))?;
+    let mut child = None;
+    for attempt in 0..SPAWN_ATTEMPTS {
+        let mut command = app_server_command(config, home_override, hook_session_id);
+        match command.spawn() {
+            Ok(process) => {
+                child = Some(process);
+                break;
+            }
+            Err(error)
+                if error.raw_os_error() == Some(TEXT_FILE_BUSY_OS_ERROR)
+                    && attempt + 1 < SPAWN_ATTEMPTS =>
+            {
+                sleep(SPAWN_RETRY_DELAY).await;
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("spawning `{}` app-server", config.codex_bin));
+            }
+        }
+    }
+    let mut child = child.with_context(|| format!("spawning `{}` app-server", config.codex_bin))?;
     let stdout = child.stdout.take().context("missing app-server stdout")?;
     let stderr = child.stderr.take().context("missing app-server stderr")?;
 
@@ -897,6 +888,44 @@ async fn spawn_client(
         pending_methods: BTreeMap::new(),
         ws_url,
     })
+}
+
+fn app_server_command(
+    config: &CanaryConfig,
+    home_override: Option<&Path>,
+    hook_session_id: Option<&str>,
+) -> Command {
+    let listen_arg = match config.app_server_transport {
+        AppServerTransport::Stdio => "stdio://".to_string(),
+        AppServerTransport::WebSocket => format!("ws://127.0.0.1:{}", config.listen_port),
+    };
+    let mut command = Command::new(&config.codex_bin);
+    command
+        .arg("app-server")
+        .arg("--listen")
+        .arg(&listen_arg)
+        .arg("--enable")
+        .arg("hooks")
+        .arg("--enable")
+        .arg("exec_permission_approvals")
+        .arg("--enable")
+        .arg("request_permissions_tool")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    if config.app_server_transport == AppServerTransport::Stdio {
+        command.stdin(Stdio::piped());
+    } else {
+        command.stdin(Stdio::null());
+    }
+    if let Some(home) = home_override {
+        command.env("HOME", home);
+        command.env("CODEX_HOME", home.join(".codex"));
+    }
+    if let Some(session_id) = hook_session_id {
+        command.env("LONGHOUSE_MANAGED_SESSION_ID", session_id);
+    }
+    command
 }
 
 async fn send_notification(
