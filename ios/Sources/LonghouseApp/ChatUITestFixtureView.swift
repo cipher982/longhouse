@@ -154,7 +154,11 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         }
     }
 
-    func stopRealtimeStream() {
+    nonisolated func stopRealtimeStream() async {
+        await finishRealtimeStream()
+    }
+
+    private func finishRealtimeStream() {
         realtimeContinuation?.finish()
         realtimeContinuation = nil
     }
