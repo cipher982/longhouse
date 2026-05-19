@@ -1741,7 +1741,7 @@ final class SessionViewModel: ObservableObject {
         submittedInputs.removeAll { input in
             guard input.phase == .sent || input.phase == .queued || input.phase == .submitting else { return false }
             return events.contains { event in
-                guard event.role == "user", let origin = event.inputOrigin else { return false }
+                guard event.role == "user", event.isHeadBranch, let origin = event.inputOrigin else { return false }
                 if let serverInputId = input.serverInputId,
                    origin.sessionInputId == serverInputId {
                     return true

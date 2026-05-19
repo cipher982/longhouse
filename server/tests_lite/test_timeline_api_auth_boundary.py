@@ -33,6 +33,7 @@ from zerg.main import api_app
 from zerg.models import User
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionTurn
@@ -578,6 +579,78 @@ def test_timeline_session_workspace_projects_longhouse_input_origin(tmp_path):
             "client_request_id": "ios-origin-1",
         }
         assert events[1]["input_origin"] is None
+    finally:
+        auth_deps._strategy_cache.clear()
+        api_app.dependency_overrides.clear()
+
+
+def test_timeline_session_workspace_suppresses_origin_identity_off_head(tmp_path):
+    session_local = _make_db(tmp_path)
+    submitted_at = datetime.now(timezone.utc)
+    with session_local() as db:
+        _seed_user(db)
+        session_id = _seed_session(db)
+        old_branch = AgentSessionBranch(session_id=session_id, branch_reason="root", is_head=0)
+        head_branch = AgentSessionBranch(session_id=session_id, branch_reason="rewrite", is_head=1)
+        db.add_all([old_branch, head_branch])
+        db.flush()
+        old_event = AgentEvent(
+            session_id=session_id,
+            branch_id=old_branch.id,
+            role="user",
+            content_text="sent from phone",
+            timestamp=submitted_at,
+        )
+        head_event = AgentEvent(
+            session_id=session_id,
+            branch_id=head_branch.id,
+            role="assistant",
+            content_text="new head",
+            timestamp=submitted_at + timedelta(seconds=1),
+        )
+        db.add_all([old_event, head_event])
+        db.flush()
+        session_input = SessionInput(
+            session_id=session_id,
+            body="sent from phone",
+            owner_id=1,
+            intent="auto",
+            status="delivered",
+            client_request_id="ios-off-head-1",
+            delivery_request_id="delivery-off-head-1",
+            delivered_at=submitted_at,
+        )
+        db.add(session_input)
+        db.flush()
+        db.add(
+            SessionTurn(
+                session_id=session_id,
+                request_id="delivery-off-head-1",
+                session_input_id=session_input.id,
+                state="send_accepted",
+                user_event_id=old_event.id,
+                user_submitted_at=submitted_at,
+                send_accepted_at=submitted_at,
+            )
+        )
+        old_event_id = int(old_event.id)
+        head_event_id = int(head_event.id)
+        db.commit()
+
+    client = _make_client(session_local)
+
+    try:
+        with _force_browser_jwt_mode():
+            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
+            response = client.get(f"/timeline/sessions/{session_id}/workspace?branch_mode=all&limit=50")
+
+        assert response.status_code == 200
+        events = [item["event"] for item in response.json()["projection"]["items"] if item["kind"] == "event"]
+        old = next(event for event in events if event["id"] == old_event_id)
+        head = next(event for event in events if event["id"] == head_event_id)
+        assert old["is_head_branch"] is False
+        assert old["input_origin"] is None
+        assert head["is_head_branch"] is True
     finally:
         auth_deps._strategy_cache.clear()
         api_app.dependency_overrides.clear()

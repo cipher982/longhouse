@@ -1380,13 +1380,18 @@ def build_event_response(
         if display_text != content_text:
             content_text = display_text
             raw_content_text = event.content_text
+    is_head_branch = head_branch_id is None or event.branch_id in {None, head_branch_id}
 
     return EventResponse(
         id=event.id,
         role=event.role,
         content_text=content_text,
         raw_content_text=raw_content_text,
-        input_origin=_event_input_origin_response(store, event, input_origin_map=input_origin_map),
+        input_origin=(
+            _event_input_origin_response(store, event, input_origin_map=input_origin_map)
+            if is_head_branch
+            else None
+        ),
         tool_name=event.tool_name,
         tool_input_json=event.tool_input_json,
         tool_output_text=event.tool_output_text,
@@ -1394,7 +1399,7 @@ def build_event_response(
         timestamp=event.timestamp,
         in_active_context=store.is_event_in_active_context(event, boundary) if boundary is not None else True,
         branch_id=event.branch_id,
-        is_head_branch=(head_branch_id is None or event.branch_id in {None, head_branch_id}),
+        is_head_branch=is_head_branch,
         event_origin=event.event_origin or "durable",
         provisional_state=event.provisional_state,
         provisional_cursor=event.provisional_cursor,

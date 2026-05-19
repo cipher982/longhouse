@@ -38,8 +38,10 @@ from zerg.services.runner_connection_manager import get_runner_connection_manage
 from zerg.services.session_continuity import session_lock_manager
 from zerg.services.session_inputs import INPUT_STATUS_CANCELLED
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
+from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
 from zerg.services.session_inputs import INPUT_STATUS_FAILED
 from zerg.services.session_inputs import INPUT_STATUS_QUEUED
+from zerg.services.session_inputs import create_session_input
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
 
@@ -360,8 +362,6 @@ def test_client_request_id_dedupes_queued_input(monkeypatch, tmp_path):
 def test_client_request_id_unique_constraint_blocks_duplicate_rows(tmp_path):
     from sqlalchemy.exc import IntegrityError
 
-    from zerg.services.session_inputs import create_session_input
-
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_live_session(session_local)
 
@@ -395,9 +395,88 @@ def test_client_request_id_unique_constraint_blocks_duplicate_rows(tmp_path):
         assert rows[0].body == "once"
 
 
+def test_client_request_id_same_key_different_owner_creates_separate_inputs(tmp_path):
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+
+    with session_local() as db:
+        second_user = User(email="second-owner@test.local", role=UserRole.USER.value)
+        db.add(second_user)
+        db.flush()
+        first = create_session_input(
+            db,
+            session_id=session_id,
+            text="same owner scoped id",
+            owner_id=user_id,
+            intent="queue",
+            status=INPUT_STATUS_QUEUED,
+            client_request_id="shared-client-key",
+        )
+        second = create_session_input(
+            db,
+            session_id=session_id,
+            text="same owner scoped id",
+            owner_id=second_user.id,
+            intent="queue",
+            status=INPUT_STATUS_QUEUED,
+            client_request_id="shared-client-key",
+        )
+        db.commit()
+
+        assert first.id != second.id
+        rows = (
+            db.query(SessionInput)
+            .filter(SessionInput.session_id == session_id, SessionInput.client_request_id == "shared-client-key")
+            .all()
+        )
+        assert {row.owner_id for row in rows} == {user_id, second_user.id}
+
+
+def test_duplicate_integrity_retry_path_reuses_failed_input(tmp_path):
+    from zerg.routers.session_chat import SessionInputRequest
+    from zerg.routers.session_chat import _create_session_input_or_existing
+
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    with session_local() as db:
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        failed = create_session_input(
+            db,
+            session_id=session_id,
+            text="retry after failed race",
+            owner_id=user_id,
+            intent="auto",
+            status=INPUT_STATUS_FAILED,
+            client_request_id="race-client-key",
+            delivery_request_id="old-delivery",
+        )
+        db.commit()
+        failed_id = int(failed.id)
+
+        row = _create_session_input_or_existing(
+            db=db,
+            source_session=session,
+            owner_id=user_id,
+            body=SessionInputRequest(
+                text="retry after failed race",
+                intent="auto",
+                client_request_id="race-client-key",
+            ),
+            intent="auto",
+            status_value=INPUT_STATUS_DELIVERING,
+            client_request_id="race-client-key",
+            delivery_request_id="new-delivery",
+        )
+        db.commit()
+
+        assert isinstance(row, SessionInput)
+        assert int(row.id) == failed_id
+        assert row.status == INPUT_STATUS_DELIVERING
+        assert row.delivery_request_id == "new-delivery"
+
+
 def test_queue_drain_preserves_client_request_id(tmp_path):
     from zerg.services.session_inputs import claim_next_queued
-    from zerg.services.session_inputs import create_session_input
 
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_live_session(session_local)
