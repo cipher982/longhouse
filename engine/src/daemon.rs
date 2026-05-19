@@ -1152,10 +1152,18 @@ fn enqueue_discovered_files(
     priority: WorkPriority,
 ) -> usize {
     let count = all_files.len();
+    let source = discovery_observation_source(priority);
     for (path, provider) in all_files {
-        scheduler.enqueue_observed(path, provider, priority, "discovery_scan", now_ms());
+        scheduler.enqueue_observed(path, provider, priority, source, now_ms());
     }
     count
+}
+
+fn discovery_observation_source(priority: WorkPriority) -> &'static str {
+    match priority {
+        WorkPriority::Scan => "reconciliation_scan",
+        _ => "discovery_scan",
+    }
 }
 
 fn start_discovery_task(
@@ -3750,6 +3758,25 @@ mod tests {
         );
         assert_eq!(deferred_retries.len(), 1);
         assert!(deferred_retries.contains_key(&PathBuf::from("/tmp/retry-later.jsonl")));
+    }
+
+    #[test]
+    fn test_reconciliation_discovery_queues_reconciliation_source() {
+        let mut scheduler = PathScheduler::new(4);
+        let path = PathBuf::from("/tmp/reconciliation-session.jsonl");
+
+        let queued = enqueue_discovered_files(
+            &mut scheduler,
+            vec![(path.clone(), "claude")],
+            WorkPriority::Scan,
+        );
+
+        assert_eq!(queued, 1);
+        let job = scheduler.pop_launchable().expect("scan job queued");
+        assert_eq!(job.path, path);
+        assert_eq!(job.priority, WorkPriority::Scan);
+        assert_eq!(job.observation.source, "reconciliation_scan");
+        assert_eq!(work_context(job.priority), "reconciliation_scan");
     }
 
     #[test]
