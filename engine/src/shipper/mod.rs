@@ -3062,6 +3062,91 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_unacked_spool_gap_blocks_newer_bytes_until_replay_resolves() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("queuedgap1111-2222-3333-4444-555566667777.jsonl");
+        let path_str = path.to_string_lossy().to_string();
+
+        let first = make_line("queued-gap-1", "first");
+        let second = make_line("queued-gap-2", "second");
+        std::fs::write(&path, format!("{first}\n")).unwrap();
+
+        let prepared_first =
+            prepare_file_batches(&path, "claude", CompressionAlgo::Gzip, &conn, 10_000, None)
+                .unwrap()
+                .expect("first complete line should prepare");
+        let first_end = prepared_first.new_offset;
+
+        let (failing_url, _captured_fail, failing_handle) =
+            spawn_http_sequence_server(&[("500 Internal Server Error", "{}")]);
+        let failing_client = make_test_client(&failing_url);
+        let failed = ship_prepared_file(prepared_first, &failing_client, &conn, None, None)
+            .await
+            .unwrap();
+        failing_handle.join().unwrap();
+
+        assert!(!failed.fully_processed);
+        let file_state = FileState::new(&conn);
+        assert_eq!(file_state.get_offset(&path_str).unwrap(), 0);
+        assert_eq!(file_state.get_queued_offset(&path_str).unwrap(), first_end);
+        assert_eq!(Spool::new(&conn).pending_count().unwrap(), 1);
+
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(format!("{second}\n").as_bytes())
+            .unwrap();
+        let final_end = std::fs::metadata(&path).unwrap().len();
+
+        let blocked =
+            prepare_file_batches(&path, "claude", CompressionAlgo::Gzip, &conn, 10_000, None)
+                .unwrap();
+        assert!(
+            blocked.is_none(),
+            "fresh bytes must wait while an older queued gap is unacked"
+        );
+
+        let (replay_url, captured_replay, replay_handle) =
+            spawn_http_sequence_server(&[("200 OK", "{}")]);
+        let replay_client = make_test_client(&replay_url);
+        let replay = replay_spool_for_path_now_with_batch_bytes_and_parse_tracker(
+            &conn,
+            &replay_client,
+            CompressionAlgo::Gzip,
+            &path,
+            10,
+            10_000,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        replay_handle.join().unwrap();
+
+        assert_eq!(replay.resolved, 1);
+        assert_eq!(replay.failed, 0);
+        assert_eq!(file_state.get_offset(&path_str).unwrap(), first_end);
+        assert_eq!(file_state.get_queued_offset(&path_str).unwrap(), first_end);
+        assert_eq!(Spool::new(&conn).pending_count().unwrap(), 0);
+        assert_eq!(
+            decode_payload_source_offsets(&captured_replay.lock().unwrap()[0]),
+            vec![0]
+        );
+
+        let prepared_second =
+            prepare_file_batches(&path, "claude", CompressionAlgo::Gzip, &conn, 10_000, None)
+                .unwrap()
+                .expect("newer line should prepare once queued gap is resolved");
+        assert_eq!(prepared_second.offset, first_end);
+        assert_eq!(prepared_second.new_offset, final_end);
+        assert_eq!(prepared_second.total_event_count(), 1);
+    }
+
     #[test]
     fn test_prepare_file_batches_marks_user_only_partial_turn_as_not_reply_ready() {
         let (_tmp, conn) = make_db();
