@@ -1,4 +1,5 @@
 pub mod db;
+pub mod file_identity;
 pub mod file_state;
 pub mod live_file_state;
 pub mod managed_session_state;

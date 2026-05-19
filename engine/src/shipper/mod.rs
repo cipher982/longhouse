@@ -24,6 +24,7 @@ use crate::pipeline::compressor::{self, CompressionAlgo};
 use crate::pipeline::parser::{self, ParseResult};
 use crate::shipping::client::{ShipResult, ShipperClient};
 use crate::shipping_stats::{RecentShipStatsTracker, ShipAttemptOutcome};
+use crate::state::file_identity::identity_from_metadata;
 use crate::state::file_state::FileState;
 use crate::state::live_file_state::LiveFileState;
 use crate::state::spool::Spool;
@@ -60,16 +61,33 @@ pub fn prepare_file(
     let file_state = FileState::new(conn);
 
     let current_offset = file_state.get_offset(&path_str)?;
-    let file_size = match std::fs::metadata(path) {
-        Ok(m) => m.len(),
+    let metadata = match std::fs::metadata(path) {
+        Ok(m) => m,
         Err(e) => {
             tracing::warn!("Cannot stat {}: {}", path_str, e);
             return Ok(None);
         }
     };
+    let file_size = metadata.len();
+    let current_identity = identity_from_metadata(&metadata);
+    let stored_identity = file_state.get_file_identity(&path_str)?;
 
     // Detect truncation before parse dispatch.
-    let rewind_hint = if file_size < current_offset {
+    let rewind_hint = if file_identity_changed_for_cursor(
+        stored_identity.as_deref(),
+        current_identity.as_deref(),
+        current_offset,
+        current_offset,
+    ) {
+        tracing::warn!(
+            "File replaced: {} (identity {:?} -> {:?}), resetting",
+            path_str,
+            stored_identity,
+            current_identity
+        );
+        file_state.reset_offsets(&path_str)?;
+        Some(file_replacement_rewind_hint(&path_str))
+    } else if file_size < current_offset {
         tracing::warn!(
             "File truncated: {} (was {}, now {}), resetting",
             path_str,
@@ -79,6 +97,7 @@ pub fn prepare_file(
         file_state.reset_offsets(&path_str)?;
         Some(truncation_rewind_hint(&path_str))
     } else {
+        file_state.record_file_identity_if_missing(&path_str, current_identity.as_deref())?;
         None
     };
 
@@ -412,6 +431,14 @@ fn truncation_rewind_hint(path_str: &str) -> compressor::SourceRewindHint {
     }
 }
 
+fn file_replacement_rewind_hint(path_str: &str) -> compressor::SourceRewindHint {
+    compressor::SourceRewindHint {
+        source_path: path_str.to_string(),
+        source_offset: 0,
+        reason: "file_replaced".to_string(),
+    }
+}
+
 fn full_document_rewrite_hint(path_str: &str) -> compressor::SourceRewindHint {
     compressor::SourceRewindHint {
         source_path: path_str.to_string(),
@@ -422,6 +449,21 @@ fn full_document_rewrite_hint(path_str: &str) -> compressor::SourceRewindHint {
 
 fn is_full_document_provider(provider: &str) -> bool {
     provider.eq_ignore_ascii_case("gemini")
+}
+
+pub(crate) fn file_identity_changed_for_cursor(
+    stored_identity: Option<&str>,
+    current_identity: Option<&str>,
+    current_offset: u64,
+    queued_offset: u64,
+) -> bool {
+    if current_offset == 0 && queued_offset == 0 {
+        return false;
+    }
+    matches!(
+        (stored_identity, current_identity),
+        (Some(stored), Some(current)) if stored != current
+    )
 }
 
 fn dead_letter_from_compressed_range(
@@ -1015,15 +1057,51 @@ pub(crate) fn prepare_file_batches_with_source_line_mode_parse_tracker_and_trace
         CursorMode::Archive => file_state.get_queued_offset(&path_str)?,
         CursorMode::Live => current_offset,
     };
-    let file_size = match std::fs::metadata(path) {
-        Ok(m) => m.len(),
+    let metadata = match std::fs::metadata(path) {
+        Ok(m) => m,
         Err(e) => {
             tracing::warn!("Cannot stat {}: {}", path_str, e);
             return Ok(None);
         }
     };
+    let file_size = metadata.len();
+    let current_identity = identity_from_metadata(&metadata);
+    let stored_identity = match cursor_mode {
+        CursorMode::Archive => file_state.get_file_identity(&path_str)?,
+        CursorMode::Live => live_file_state.get_file_identity(&path_str)?,
+    };
 
-    let mut rewind_hint = if file_size < current_offset {
+    let mut rewind_hint = if file_identity_changed_for_cursor(
+        stored_identity.as_deref(),
+        current_identity.as_deref(),
+        current_offset,
+        queued_offset,
+    ) {
+        tracing::warn!(
+            "File replaced: {} (identity {:?} -> {:?}), resetting",
+            path_str,
+            stored_identity,
+            current_identity
+        );
+        match cursor_mode {
+            CursorMode::Archive => {
+                let stale = Spool::new(conn).dead_letter_pending_for_path(
+                    &path_str,
+                    "source file identity changed before replay; stale pointer retired",
+                )?;
+                if stale > 0 {
+                    tracing::warn!(
+                        path = %path_str,
+                        stale_pending_spool_entries = stale,
+                        "Retired stale pending spool entries after source replacement"
+                    );
+                }
+                file_state.reset_offsets(&path_str)?;
+            }
+            CursorMode::Live => live_file_state.reset_offset(&path_str)?,
+        }
+        Some(file_replacement_rewind_hint(&path_str))
+    } else if file_size < current_offset {
         tracing::warn!(
             "File truncated: {} (was {}, now {}), resetting",
             path_str,
@@ -1036,6 +1114,16 @@ pub(crate) fn prepare_file_batches_with_source_line_mode_parse_tracker_and_trace
         }
         Some(truncation_rewind_hint(&path_str))
     } else {
+        match cursor_mode {
+            CursorMode::Archive => {
+                file_state
+                    .record_file_identity_if_missing(&path_str, current_identity.as_deref())?;
+            }
+            CursorMode::Live => {
+                live_file_state
+                    .record_file_identity_if_missing(&path_str, current_identity.as_deref())?;
+            }
+        }
         None
     };
 
@@ -1990,10 +2078,35 @@ async fn replay_spool_entries(
 
     'entry_loop: for entry in pending {
         let path = PathBuf::from(&entry.file_path);
-        if !path.exists() {
-            tracing::warn!("Spool file missing: {}", entry.file_path);
-            spool.mark_failed_with_max(entry.id, "file missing", 0)?;
-            outcome.failed += 1;
+        let metadata = match std::fs::metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(_) => {
+                tracing::warn!("Spool file missing: {}", entry.file_path);
+                spool.mark_failed_with_max(entry.id, "file missing", 0)?;
+                outcome.failed += 1;
+                continue;
+            }
+        };
+        let current_identity = identity_from_metadata(&metadata);
+        let stored_identity = file_state.get_file_identity(&entry.file_path)?;
+        if file_identity_changed_for_cursor(
+            stored_identity.as_deref(),
+            current_identity.as_deref(),
+            entry.start_offset,
+            entry.end_offset,
+        ) {
+            tracing::warn!(
+                path = %entry.file_path,
+                stored_identity = ?stored_identity,
+                current_identity = ?current_identity,
+                "Stale spool pointer source was replaced; retiring pending ranges for path"
+            );
+            let retired = spool.dead_letter_pending_for_path(
+                &entry.file_path,
+                "source file identity changed before replay; stale pointer retired",
+            )?;
+            file_state.reset_offsets(&entry.file_path)?;
+            outcome.failed += retired.max(1);
             continue;
         }
 
@@ -2987,6 +3100,174 @@ mod tests {
             "Should start from offset 0 after truncation"
         );
         assert_eq!(item.event_count, 2);
+    }
+
+    #[test]
+    fn test_replaced_file_resets_cursor_and_retires_stale_spool_pointer() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("replace1111-2222-3333-4444-555566667777.jsonl");
+        let path_str = path.to_string_lossy().to_string();
+        let old_line = make_line("replace-old", "old");
+        std::fs::write(&path, format!("{old_line}\n")).unwrap();
+        let old_end = std::fs::metadata(&path).unwrap().len();
+
+        let fs = FileState::new(&conn);
+        let spool = Spool::new(&conn);
+        fs.set_queued_offset(
+            &path_str,
+            old_end,
+            "claude",
+            "replace1111-2222-3333-4444-555566667777",
+            "replace1111-2222-3333-4444-555566667777",
+        )
+        .unwrap();
+        spool
+            .enqueue(
+                "claude",
+                &path_str,
+                0,
+                old_end,
+                Some("replace1111-2222-3333-4444-555566667777"),
+            )
+            .unwrap();
+        assert_eq!(spool.pending_count().unwrap(), 1);
+
+        let replacement = dir.path().join("replacement.tmp");
+        let new_line = make_line("replace-new", "new file content after replacement");
+        std::fs::write(&replacement, format!("{new_line}\n")).unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+
+        let prepared =
+            prepare_file_batches(&path, "claude", CompressionAlgo::Gzip, &conn, 10_000, None)
+                .unwrap()
+                .expect("replacement should be treated as a fresh file");
+
+        assert_eq!(prepared.offset, 0);
+        assert_eq!(prepared.total_event_count(), 1);
+        assert_eq!(fs.get_offset(&path_str).unwrap(), 0);
+        assert_eq!(fs.get_queued_offset(&path_str).unwrap(), 0);
+        assert_eq!(spool.pending_count().unwrap(), 0);
+        assert_eq!(spool.dead_count().unwrap(), 1);
+
+        let first_ship = prepared
+            .actions
+            .iter()
+            .find_map(|action| match action {
+                PreparedAction::Ship(item) => Some(item),
+                PreparedAction::AckOnly(_) | PreparedAction::DeadLetter(_) => None,
+            })
+            .expect("replacement should prepare a ship payload");
+        assert_eq!(
+            decode_payload_rewind_hints(&first_ship.compressed),
+            vec![(path_str, 0, "file_replaced".to_string())]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_replay_dead_letters_stale_pointer_when_file_replaced() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("replayreplace1111-2222-3333-4444-555566667777.jsonl");
+        let path_str = path.to_string_lossy().to_string();
+        let old_line = make_line("replay-replace-old", "old");
+        std::fs::write(&path, format!("{old_line}\n")).unwrap();
+        let old_end = std::fs::metadata(&path).unwrap().len();
+
+        let fs = FileState::new(&conn);
+        let spool = Spool::new(&conn);
+        fs.set_queued_offset(
+            &path_str,
+            old_end,
+            "claude",
+            "replayreplace1111-2222-3333-4444-555566667777",
+            "replayreplace1111-2222-3333-4444-555566667777",
+        )
+        .unwrap();
+        spool
+            .enqueue(
+                "claude",
+                &path_str,
+                0,
+                old_end,
+                Some("replayreplace1111-2222-3333-4444-555566667777"),
+            )
+            .unwrap();
+
+        let replacement = dir.path().join("replay-replacement.tmp");
+        let new_line = make_line("replay-replace-new", "new file");
+        std::fs::write(&replacement, format!("{new_line}\n")).unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+
+        let client = make_test_client("http://127.0.0.1:9");
+        let replay = replay_spool_for_path_now_with_batch_bytes_and_parse_tracker(
+            &conn,
+            &client,
+            CompressionAlgo::Gzip,
+            &path,
+            10,
+            10_000,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(replay.resolved, 0);
+        assert_eq!(replay.failed, 1);
+        assert_eq!(spool.pending_count().unwrap(), 0);
+        assert_eq!(spool.dead_count().unwrap(), 1);
+        assert_eq!(fs.get_offset(&path_str).unwrap(), 0);
+        assert_eq!(fs.get_queued_offset(&path_str).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_replaced_file_resets_live_cursor() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("replacelive1111-2222-3333-4444-555566667777.jsonl");
+        let path_str = path.to_string_lossy().to_string();
+        let old_line = make_line("replace-live-old", "old live");
+        std::fs::write(&path, format!("{old_line}\n")).unwrap();
+        let old_end = std::fs::metadata(&path).unwrap().len();
+
+        let live = LiveFileState::new(&conn);
+        live.set_offset(
+            &path_str,
+            old_end,
+            "claude",
+            "replacelive1111-2222-3333-4444-555566667777",
+        )
+        .unwrap();
+
+        let replacement = dir.path().join("replacement-live.tmp");
+        let new_line = make_line("replace-live-new", "new live file");
+        std::fs::write(&replacement, format!("{new_line}\n")).unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+
+        let prepared = prepare_file_batches_with_source_line_mode_and_parse_tracker(
+            &path,
+            "claude",
+            CompressionAlgo::Gzip,
+            &conn,
+            10_000,
+            None,
+            None,
+            SourceLineMode::EventOnly,
+        )
+        .unwrap()
+        .expect("replacement should be treated as fresh live content");
+
+        assert_eq!(prepared.cursor_mode, CursorMode::Live);
+        assert_eq!(prepared.offset, 0);
+        assert_eq!(prepared.total_event_count(), 1);
+        assert_eq!(live.get_offset(&path_str).unwrap(), 0);
     }
 
     // ---------------------------------------------------------------

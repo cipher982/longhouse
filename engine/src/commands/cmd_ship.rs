@@ -12,6 +12,7 @@ use crate::pipeline::compressor::CompressionAlgo;
 use crate::shipper;
 use crate::shipping::client::ShipperClient;
 use crate::state::db::open_db;
+use crate::state::file_identity::identity_from_metadata;
 use crate::state::file_state::FileState;
 use crate::state::spool::Spool;
 
@@ -158,12 +159,40 @@ pub async fn cmd_ship(
     for (path, provider) in &all_files {
         let path_str = path.to_string_lossy();
         let current_offset = file_state.get_offset(&path_str)?;
-        let file_size = match std::fs::metadata(path) {
-            Ok(m) => m.len(),
+        let metadata = match std::fs::metadata(path) {
+            Ok(m) => m,
             Err(_) => continue,
         };
+        let file_size = metadata.len();
+        let current_identity = identity_from_metadata(&metadata);
+        let stored_identity = file_state.get_file_identity(&path_str)?;
 
-        if file_size < current_offset {
+        if shipper::file_identity_changed_for_cursor(
+            stored_identity.as_deref(),
+            current_identity.as_deref(),
+            current_offset,
+            file_state.get_queued_offset(&path_str)?,
+        ) {
+            tracing::warn!(
+                "File replaced: {} (identity {:?} -> {:?}), resetting",
+                path_str,
+                stored_identity,
+                current_identity
+            );
+            let stale = Spool::new(&conn).dead_letter_pending_for_path(
+                &path_str,
+                "source file identity changed before replay; stale pointer retired",
+            )?;
+            if stale > 0 {
+                tracing::warn!(
+                    path = %path_str,
+                    stale_pending_spool_entries = stale,
+                    "Retired stale pending spool entries after source replacement"
+                );
+            }
+            file_state.reset_offsets(&path_str)?;
+            files_to_ship.push((path.clone(), *provider, 0));
+        } else if file_size < current_offset {
             // File truncated (got smaller than our offset) — reset and re-ship
             tracing::warn!(
                 "File truncated: {} (was {}, now {}), resetting",
@@ -176,6 +205,8 @@ pub async fn cmd_ship(
         } else if file_size > current_offset {
             // New content available
             files_to_ship.push((path.clone(), *provider, current_offset));
+        } else {
+            file_state.record_file_identity_if_missing(&path_str, current_identity.as_deref())?;
         }
         // file_size == current_offset: no new content, skip
     }

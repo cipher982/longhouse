@@ -266,6 +266,21 @@ impl<'a> Spool<'a> {
         Ok(())
     }
 
+    /// Retire pending pointer ranges for a path when the source file epoch changes.
+    pub fn dead_letter_pending_for_path(&self, file_path: &str, error: &str) -> Result<usize> {
+        let now = Utc::now().to_rfc3339();
+        let changed = self.conn.execute(
+            "UPDATE spool_queue
+             SET status = 'dead',
+                 retry_count = retry_count + 1,
+                 last_error = ?1,
+                 next_retry_at = ?2
+             WHERE status = 'pending' AND file_path = ?3",
+            rusqlite::params![error, now, file_path],
+        )?;
+        Ok(changed)
+    }
+
     /// Advance the start offset for a pending entry after partial replay progress.
     pub fn advance_start(&self, entry_id: i64, new_start_offset: u64) -> Result<()> {
         self.conn.execute(

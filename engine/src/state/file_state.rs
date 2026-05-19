@@ -10,6 +10,8 @@ use anyhow::Result;
 use chrono::Utc;
 use rusqlite::Connection;
 
+use super::file_identity::current_file_identity;
+
 /// A tracked session file.
 #[derive(Debug, Clone)]
 pub struct TrackedFile {
@@ -58,6 +60,39 @@ impl<'a> FileState<'a> {
         }
     }
 
+    /// Get the recorded backing-file identity for a path, if known.
+    pub fn get_file_identity(&self, file_path: &str) -> Result<Option<String>> {
+        let result = self.conn.query_row(
+            "SELECT file_identity FROM file_state WHERE path = ?",
+            [file_path],
+            |row| row.get::<_, Option<String>>(0),
+        );
+        match result {
+            Ok(v) => Ok(v),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Backfill identity for old rows without changing offsets.
+    pub fn record_file_identity_if_missing(
+        &self,
+        file_path: &str,
+        file_identity: Option<&str>,
+    ) -> Result<()> {
+        let Some(file_identity) = file_identity else {
+            return Ok(());
+        };
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE file_state
+             SET file_identity = ?1, last_updated = ?2
+             WHERE path = ?3 AND file_identity IS NULL",
+            rusqlite::params![file_identity, now, file_path],
+        )?;
+        Ok(())
+    }
+
     /// Update both offsets (used on successful ship). Monotonic — never regresses.
     pub fn set_offset(
         &self,
@@ -68,16 +103,26 @@ impl<'a> FileState<'a> {
         provider: &str,
     ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
+        let file_identity = current_file_identity(file_path);
         self.conn.execute(
-            "INSERT INTO file_state (path, provider, queued_offset, acked_offset, session_id, provider_session_id, last_updated)
-             VALUES (?1, ?2, MAX(?3, 0), MAX(?3, 0), ?4, ?5, ?6)
+            "INSERT INTO file_state (path, provider, queued_offset, acked_offset, file_identity, session_id, provider_session_id, last_updated)
+             VALUES (?1, ?2, MAX(?3, 0), MAX(?3, 0), ?4, ?5, ?6, ?7)
              ON CONFLICT(path) DO UPDATE SET
                  queued_offset = MAX(queued_offset, ?3),
                  acked_offset = MAX(acked_offset, ?3),
-                 session_id = ?4,
-                 provider_session_id = ?5,
-                 last_updated = ?6",
-            rusqlite::params![file_path, provider, offset as i64, session_id, provider_session_id, now],
+                 file_identity = COALESCE(?4, file_identity),
+                 session_id = ?5,
+                 provider_session_id = ?6,
+                 last_updated = ?7",
+            rusqlite::params![
+                file_path,
+                provider,
+                offset as i64,
+                file_identity,
+                session_id,
+                provider_session_id,
+                now
+            ],
         )?;
         Ok(())
     }
@@ -92,15 +137,25 @@ impl<'a> FileState<'a> {
         provider_session_id: &str,
     ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
+        let file_identity = current_file_identity(file_path);
         self.conn.execute(
-            "INSERT INTO file_state (path, provider, queued_offset, acked_offset, session_id, provider_session_id, last_updated)
-             VALUES (?1, ?2, MAX(?3, 0), 0, ?4, ?5, ?6)
+            "INSERT INTO file_state (path, provider, queued_offset, acked_offset, file_identity, session_id, provider_session_id, last_updated)
+             VALUES (?1, ?2, MAX(?3, 0), 0, ?4, ?5, ?6, ?7)
              ON CONFLICT(path) DO UPDATE SET
                  queued_offset = MAX(queued_offset, ?3),
-                 session_id = COALESCE(?4, session_id),
-                 provider_session_id = COALESCE(?5, provider_session_id),
-                 last_updated = ?6",
-            rusqlite::params![file_path, provider, offset as i64, session_id, provider_session_id, now],
+                 file_identity = COALESCE(?4, file_identity),
+                 session_id = COALESCE(?5, session_id),
+                 provider_session_id = COALESCE(?6, provider_session_id),
+                 last_updated = ?7",
+            rusqlite::params![
+                file_path,
+                provider,
+                offset as i64,
+                file_identity,
+                session_id,
+                provider_session_id,
+                now
+            ],
         )?;
         Ok(())
     }
@@ -119,10 +174,15 @@ impl<'a> FileState<'a> {
     /// Reset both offsets to 0 (e.g., after file truncation).
     pub fn reset_offsets(&self, file_path: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
+        let file_identity = current_file_identity(file_path);
         self.conn.execute(
-            "UPDATE file_state SET queued_offset = 0, acked_offset = 0, last_updated = ?1
-             WHERE path = ?2",
-            rusqlite::params![now, file_path],
+            "UPDATE file_state
+             SET queued_offset = 0,
+                 acked_offset = 0,
+                 file_identity = COALESCE(?1, file_identity),
+                 last_updated = ?2
+             WHERE path = ?3",
+            rusqlite::params![file_identity, now, file_path],
         )?;
         Ok(())
     }
