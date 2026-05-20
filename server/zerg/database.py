@@ -1182,6 +1182,8 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 )
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_events_event_origin ON events(event_origin)"))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_events_provisional_state ON events(provisional_state)"))
+                if "event_origin" in columns:
+                    conn.execute(text("DELETE FROM events WHERE event_origin = 'live_provisional'"))
                 conn.commit()
     except Exception:
         logger.debug("events table migration skipped (table may not exist yet)", exc_info=True)

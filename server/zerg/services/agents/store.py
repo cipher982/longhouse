@@ -31,9 +31,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionRuntimeState
-from zerg.services.provisional_events import active_provisional_event_predicate
 from zerg.services.provisional_events import durable_transcript_event_predicate
-from zerg.services.provisional_events import reconcile_provisional_transcript_events
 from zerg.services.provisional_events import visible_transcript_event_predicate
 from zerg.services.raw_json_compression import decode_raw_json
 from zerg.services.session_observation_reducers import reduce_provider_event_observation
@@ -1589,8 +1587,6 @@ class AgentsStore:
                     session_obj.last_activity_at = latest_inserted_timestamp
 
         if events_inserted > 0 and transcript_changed:
-            reconcile_provisional_transcript_events(self.db, session_id=session_id)
-
             from zerg.services.ingest_task_queue import enqueue_ingest_tasks
 
             enqueue_ingest_tasks(self.db, str(session_id))
@@ -2461,7 +2457,7 @@ class AgentsStore:
         head_branch_id = self.get_head_branch_id(session_id)
         if head_branch_id is None:
             return stmt
-        return stmt.where(or_(AgentEvent.branch_id == head_branch_id, active_provisional_event_predicate()))
+        return stmt.where(AgentEvent.branch_id == head_branch_id)
 
     def get_session_events(
         self,

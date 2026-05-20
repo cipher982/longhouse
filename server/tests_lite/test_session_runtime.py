@@ -25,6 +25,7 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import SessionIngest
 from zerg.services.managed_control_state import load_managed_control_state_map
+from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_capabilities import project_current_session_capabilities_from_facts
 from zerg.services.session_liveness_facts import build_session_liveness_facts
@@ -499,7 +500,7 @@ def test_runtime_reducer_preserves_terminal_disconnected_reason(tmp_path):
     engine.dispose()
 
 
-def test_bridge_transcript_event_materializes_latest_provisional_event(tmp_path):
+def test_bridge_transcript_event_stores_latest_live_overlay_observation(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "bridge_transcript_preview.db")
     now = datetime.now(timezone.utc)
 
@@ -571,20 +572,21 @@ def test_bridge_transcript_event_materializes_latest_provisional_event(tmp_path)
             ],
         )
 
-        event = db.query(AgentEvent).filter(AgentEvent.session_id == session.id).one()
+        events = db.query(AgentEvent).filter(AgentEvent.session_id == session.id).all()
+        observations = db.query(SessionObservation).filter(SessionObservation.session_id == session.id).order_by(SessionObservation.id.asc()).all()
+        preview = load_active_provisional_preview_map(db, [session.id])[str(session.id)]
         state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).first()
 
     assert result.accepted == 2
     assert result.duplicates == 1
     assert result.updated_runtime_keys == [runtime_key]
     assert state is None
-    assert event.content_text == "hello"
-    assert event.event_origin == "live_provisional"
-    assert event.provisional_state == "active"
-    assert event.provisional_key == f"codex_bridge_live:{session.id}:thread-1:turn-1"
-    assert event.provisional_cursor == f"codex_bridge_live:{session.id}:thread-1:turn-1:2"
-    assert event.provisional_seq == 2
-    assert event.provisional_complete == 1
+    assert events == []
+    assert len(observations) == 2
+    assert preview.text == "hello"
+    assert preview.event_origin == "live_provisional"
+    assert preview.provisional_cursor == f"codex_bridge_live:{session.id}:thread-1:turn-1:2"
+    assert preview.provisional_complete is True
     engine.dispose()
 
 

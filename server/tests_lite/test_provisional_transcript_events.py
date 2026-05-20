@@ -7,22 +7,19 @@ from datetime import timezone
 
 from sqlalchemy.orm import sessionmaker
 
+from zerg.database import Base
 from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.models.agents import AgentEvent
-from zerg.models.agents import AgentSourceLine
-from zerg.database import Base
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionObservation
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
 from zerg.services.agents_store import SourceLineIngest
-from zerg.services.raw_json_compression import decode_raw_json
-from zerg.services.provisional_events import materialize_bridge_transcript_event
+from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.session_observation_reducers import reduce_bridge_transcript_observation
-from zerg.services.session_observation_reducers import reduce_source_line_observation
-from zerg.services.session_observations import record_session_observation
+from zerg.services.session_observations import OBS_KIND_BRIDGE_TRANSCRIPT_DELTA
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.session_execution_home import SessionExecutionHome
@@ -38,14 +35,14 @@ def _make_sessionmaker(tmp_path, name: str):
 def _make_initialized_sessionmaker(tmp_path, name: str):
     engine = make_engine(f"sqlite:///{tmp_path / name}")
     initialize_database(engine)
-    return sessionmaker(bind=engine)
+    return engine, sessionmaker(bind=engine)
 
 
 def _seed_managed_codex_session(db, *, started_at: datetime) -> AgentSession:
     session = AgentSession(
         provider="codex",
         environment="test",
-        project="provisional-events",
+        project="live-overlay-contract",
         device_id="cinder",
         cwd="/tmp/project",
         started_at=started_at,
@@ -91,50 +88,66 @@ def _bridge_transcript_event(
     )
 
 
-def _record_bridge_observation(
-    db,
-    *,
-    session_id,
-    observation_id: str,
-    occurred_at: datetime,
-    seq: int,
-    live_text: str,
-) -> SessionObservation:
-    result = record_session_observation(
-        db,
-        observation_id=observation_id,
-        session_id=session_id,
-        runtime_key=f"codex:{session_id}",
-        provider="codex",
-        device_id="cinder",
-        source_domain="runtime",
-        source="codex_bridge_live",
-        kind="bridge_transcript_delta",
-        source_cursor=f"progress_signal:{observation_id}",
-        observed_at=occurred_at,
-        payload={
-            "kind": "progress_signal",
-            "phase": None,
-            "tool_name": None,
-            "freshness_ms": None,
-            "payload": {
-                "progress_kind": "bridge_live_transcript_delta",
-                "managed_transport": "codex_app_server",
-                "thread_id": "thread-1",
-                "turn_id": "turn-1",
-                "seq": seq,
-                "method": "item/agentMessage/delta",
-                "delta": live_text[-1:],
-                "live_text": live_text,
-            },
-        },
+def _ingest_durable_session(db, *, session: AgentSession, now: datetime) -> None:
+    source_path = "/tmp/codex-rollout.jsonl"
+    events = [
+        EventIngest(
+            role="assistant",
+            content_text="I am using noteit.",
+            timestamp=now + timedelta(seconds=1),
+            source_path=source_path,
+            source_offset=100,
+            raw_json='{"type":"event_msg","payload":{"type":"agent_message","message":"I am using noteit."}}',
+        ),
+        EventIngest(
+            role="assistant",
+            tool_name="apply_patch",
+            tool_input_json={"patch": "*** Begin Patch"},
+            tool_call_id="call-1",
+            timestamp=now + timedelta(seconds=2),
+            source_path=source_path,
+            source_offset=200,
+            raw_json='{"type":"function_call","call_id":"call-1","name":"apply_patch"}',
+        ),
+        EventIngest(
+            role="tool",
+            tool_output_text="Success. Updated note.",
+            tool_call_id="call-1",
+            timestamp=now + timedelta(seconds=3),
+            source_path=source_path,
+            source_offset=300,
+            raw_json='{"type":"function_call_output","call_id":"call-1","output":"Success. Updated note."}',
+        ),
+        EventIngest(
+            role="assistant",
+            content_text="Updated the existing note.",
+            timestamp=now + timedelta(seconds=4),
+            source_path=source_path,
+            source_offset=400,
+            raw_json='{"type":"event_msg","payload":{"type":"agent_message","message":"Updated the existing note."}}',
+        ),
+    ]
+    source_lines = [
+        SourceLineIngest(source_path=source_path, source_offset=event.source_offset or 0, raw_json=event.raw_json or "{}")
+        for event in events
+    ]
+    AgentsStore(db).ingest_session(
+        SessionIngest(
+            id=session.id,
+            provider="codex",
+            environment="test",
+            project=session.project,
+            device_id=session.device_id,
+            cwd=session.cwd,
+            started_at=session.started_at,
+            events=events,
+            source_lines=source_lines,
+        )
     )
-    assert result.observation is not None
-    return result.observation
 
 
-def test_live_bridge_snapshots_upsert_one_active_provisional_event(tmp_path):
-    SessionLocal = _make_sessionmaker(tmp_path, "provisional_upsert.db")
+def test_live_bridge_snapshots_store_observations_not_events(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "live_overlay_observations.db")
     now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
 
     with SessionLocal() as db:
@@ -158,385 +171,48 @@ def test_live_bridge_snapshots_upsert_one_active_provisional_event(tmp_path):
         rows = db.query(AgentEvent).filter(AgentEvent.session_id == session.id).all()
         observations = db.query(SessionObservation).filter(SessionObservation.session_id == session.id).order_by(SessionObservation.id).all()
         visible = AgentsStore(db).get_session_events(session.id)
+        preview = load_active_provisional_preview_map(db, [session.id])[str(session.id)]
 
     assert result.accepted == 2
     assert result.duplicates == 1
-    assert len(rows) == 1
-    assert rows[0].event_origin == "live_provisional"
-    assert rows[0].provisional_state == "active"
-    assert rows[0].provisional_key == f"codex_bridge_live:{session.id}:thread-1:turn-1"
-    assert rows[0].provisional_cursor == f"codex_bridge_live:{session.id}:thread-1:turn-1:2"
-    assert rows[0].provisional_seq == 2
-    assert rows[0].content_text == "hello"
-    assert [observation.kind for observation in observations] == ["bridge_transcript_delta", "bridge_transcript_delta"]
+    assert rows == []
+    assert visible == []
+    assert [observation.kind for observation in observations] == [OBS_KIND_BRIDGE_TRANSCRIPT_DELTA, OBS_KIND_BRIDGE_TRANSCRIPT_DELTA]
     assert observations[0].source_domain == "runtime"
     assert observations[0].source == "codex_bridge_live"
     assert json.loads(observations[1].payload_json or "{}")["payload"]["live_text"] == "hello"
-    assert [event.id for event in visible] == [rows[0].id]
+    assert preview.text == "hello"
+    assert preview.provisional_cursor == f"codex_bridge_live:{session.id}:thread-1:turn-1:2"
+    assert preview.provisional_complete is False
 
 
-def test_bridge_transcript_observation_rebuilds_provisional_event(tmp_path):
-    SessionLocal = _make_sessionmaker(tmp_path, "provisional_observation_rebuild.db")
+def test_bridge_transcript_observation_rebuild_does_not_create_event(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "live_overlay_rebuild.db")
     now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
 
     with SessionLocal() as db:
         session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
         ingest_runtime_events(
             db,
-            [
-                _bridge_transcript_event(
-                    session_id=session.id,
-                    occurred_at=now,
-                    seq=7,
-                    live_text="rebuild me",
-                )
-            ],
+            [_bridge_transcript_event(session_id=session.id, occurred_at=now, seq=7, live_text="preview only")],
         )
         db.commit()
 
         observation = db.query(SessionObservation).filter(SessionObservation.session_id == session.id).one()
-        db.query(AgentEvent).filter(AgentEvent.session_id == session.id).delete(synchronize_session=False)
-        db.commit()
-
         rebuilt = reduce_bridge_transcript_observation(db, observation)
         db.commit()
-        visible = AgentsStore(db).get_session_events(session.id)
 
-    assert rebuilt is not None
-    assert rebuilt.content_text == "rebuild me"
-    assert rebuilt.provisional_key == f"codex_bridge_live:{session.id}:thread-1:turn-1"
-    assert [event.content_text for event in visible] == ["rebuild me"]
-
-
-def test_bridge_transcript_observation_replay_is_idempotent(tmp_path):
-    SessionLocal = _make_sessionmaker(tmp_path, "provisional_observation_replay.db")
-    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
-
-    with SessionLocal() as db:
-        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
-        observation = _record_bridge_observation(
-            db,
-            session_id=session.id,
-            observation_id="runtime:codex_bridge_live:same-observation",
-            occurred_at=now,
-            seq=1,
-            live_text="same replay",
-        )
-
-        reduce_bridge_transcript_observation(db, observation)
-        reduce_bridge_transcript_observation(db, observation)
-        db.commit()
         rows = db.query(AgentEvent).filter(AgentEvent.session_id == session.id).all()
+        preview = load_active_provisional_preview_map(db, [session.id])[str(session.id)]
 
-    assert len(rows) == 1
-    assert rows[0].content_text == "same replay"
+    assert rebuilt is None
+    assert rows == []
+    assert preview.text == "preview only"
 
 
-def test_bridge_transcript_same_seq_collision_is_deterministic(tmp_path):
-    SessionLocal = _make_sessionmaker(tmp_path, "provisional_same_seq_collision.db")
+def test_cumulative_live_snapshot_does_not_merge_durable_tool_sequence(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "live_overlay_merge_regression.db")
     now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
-
-    def _run(order: tuple[str, str]) -> str:
-        with SessionLocal() as db:
-            session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
-            observations = {
-                "a": _record_bridge_observation(
-                    db,
-                    session_id=session.id,
-                    observation_id=f"runtime:codex_bridge_live:{session.id}:a",
-                    occurred_at=now,
-                    seq=4,
-                    live_text="alpha same seq",
-                ),
-                "b": _record_bridge_observation(
-                    db,
-                    session_id=session.id,
-                    observation_id=f"runtime:codex_bridge_live:{session.id}:b",
-                    occurred_at=now,
-                    seq=4,
-                    live_text="beta same seq",
-                ),
-            }
-            for key in order:
-                reduce_bridge_transcript_observation(db, observations[key])
-            db.commit()
-            return db.query(AgentEvent).filter(AgentEvent.session_id == session.id).one().content_text
-
-    assert _run(("a", "b")) == "alpha same seq"
-    assert _run(("b", "a")) == "alpha same seq"
-
-
-def test_same_seq_observation_does_not_overwrite_existing_row_without_observation_id(tmp_path):
-    SessionLocal = _make_sessionmaker(tmp_path, "provisional_same_seq_legacy_row.db")
-    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
-
-    with SessionLocal() as db:
-        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
-        materialize_bridge_transcript_event(
-            db,
-            session_id=session.id,
-            provider="codex",
-            source="codex_bridge_live",
-            occurred_at=now,
-            received_at=now,
-            payload={
-                "progress_kind": "bridge_live_transcript_delta",
-                "thread_id": "thread-1",
-                "turn_id": "turn-1",
-                "seq": 2,
-                "live_text": "legacy same seq",
-            },
-        )
-        observation = _record_bridge_observation(
-            db,
-            session_id=session.id,
-            observation_id=f"runtime:codex_bridge_live:{session.id}:new",
-            occurred_at=now,
-            seq=2,
-            live_text="new same seq",
-        )
-
-        reduce_bridge_transcript_observation(db, observation)
-        db.commit()
-        row = db.query(AgentEvent).filter(AgentEvent.session_id == session.id).one()
-
-    assert row.content_text == "legacy same seq"
-
-
-def test_durable_ingest_reconciles_matching_provisional_event(tmp_path):
-    SessionLocal = _make_sessionmaker(tmp_path, "provisional_reconcile.db")
-    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
-    source_path = "/tmp/codex-rollout.jsonl"
-    assistant_line = (
-        '{"type":"response_item","timestamp":"2026-05-11T12:00:02Z",'
-        '"payload":{"type":"message","role":"assistant",'
-        '"content":[{"type":"output_text","text":"hello world"}]}}'
-    )
-
-    with SessionLocal() as db:
-        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
-        ingest_runtime_events(
-            db,
-            [
-                _bridge_transcript_event(
-                    session_id=session.id,
-                    occurred_at=now,
-                    seq=3,
-                    live_text="hello world",
-                    turn_completed=True,
-                )
-            ],
-        )
-        db.commit()
-
-        ingest_result = AgentsStore(db).ingest_session(
-            SessionIngest(
-                id=session.id,
-                provider="codex",
-                environment="test",
-                project="provisional-events",
-                device_id="cinder",
-                cwd="/tmp/project",
-                started_at=now - timedelta(minutes=1),
-                events=[
-                    EventIngest(
-                        role="assistant",
-                        content_text="hello world",
-                        timestamp=now + timedelta(seconds=2),
-                        source_path=source_path,
-                        source_offset=100,
-                        raw_json=assistant_line,
-                    )
-                ],
-                source_lines=[
-                    SourceLineIngest(source_path=source_path, source_offset=100, raw_json=assistant_line),
-                ],
-            )
-        )
-
-        rows = db.query(AgentEvent).filter(AgentEvent.session_id == session.id).order_by(AgentEvent.id.asc()).all()
-        observations = db.query(SessionObservation).filter(SessionObservation.session_id == session.id).order_by(SessionObservation.id.asc()).all()
-        visible = AgentsStore(db).get_session_events(session.id)
-
-    assert ingest_result.events_inserted == 1
-    assert [row.event_origin for row in rows] == ["live_provisional", "durable"]
-    assert rows[0].provisional_state == "reconciled"
-    assert rows[0].reconciled_event_id == rows[1].id
-    assert rows[1].content_text == "hello world"
-    kinds = [observation.kind for observation in observations]
-    assert "bridge_transcript_delta" in kinds
-    assert "provider_source_line" in kinds
-    source_observation = next(observation for observation in observations if observation.kind == "provider_source_line")
-    assert source_observation.source_domain == "transcript"
-    assert source_observation.source_path == source_path
-    assert source_observation.source_offset == 100
-    assert json.loads(source_observation.payload_json or "{}")["raw_json"] == assistant_line
-    assert [event.id for event in visible] == [rows[1].id]
-
-
-def test_source_line_observation_rebuilds_archive_row(tmp_path):
-    SessionLocal = _make_sessionmaker(tmp_path, "source_line_observation_rebuild.db")
-    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
-    source_path = "/tmp/codex-rollout.jsonl"
-    assistant_line = '{"type":"response_item","payload":{"type":"message","role":"assistant"}}'
-
-    with SessionLocal() as db:
-        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
-        AgentsStore(db).ingest_session(
-            SessionIngest(
-                id=session.id,
-                provider="codex",
-                environment="test",
-                project="provisional-events",
-                device_id="cinder",
-                cwd="/tmp/project",
-                started_at=now - timedelta(minutes=1),
-                events=[
-                    EventIngest(
-                        role="assistant",
-                        content_text="durable text",
-                        timestamp=now + timedelta(seconds=2),
-                        source_path=source_path,
-                        source_offset=100,
-                        raw_json=assistant_line,
-                    )
-                ],
-                source_lines=[
-                    SourceLineIngest(source_path=source_path, source_offset=100, raw_json=assistant_line),
-                ],
-            )
-        )
-        observation = db.query(SessionObservation).filter(SessionObservation.kind == "provider_source_line").one()
-        db.query(AgentSourceLine).filter(AgentSourceLine.session_id == session.id).delete(synchronize_session=False)
-        db.commit()
-
-        rebuilt = reduce_source_line_observation(db, observation)
-        db.commit()
-        rebuilt_values = (
-            rebuilt.source_path if rebuilt is not None else None,
-            rebuilt.source_offset if rebuilt is not None else None,
-            decode_raw_json(rebuilt) if rebuilt is not None else None,
-        )
-
-    assert rebuilt_values == (source_path, 100, assistant_line)
-
-
-def test_late_live_snapshot_does_not_reactivate_reconciled_provisional_event(tmp_path):
-    SessionLocal = _make_sessionmaker(tmp_path, "provisional_reconcile_late_live.db")
-    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
-    source_path = "/tmp/codex-rollout.jsonl"
-    assistant_line = '{"type":"response_item","payload":{"type":"message","role":"assistant"}}'
-
-    with SessionLocal() as db:
-        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
-        ingest_runtime_events(
-            db,
-            [
-                _bridge_transcript_event(
-                    session_id=session.id,
-                    occurred_at=now,
-                    seq=3,
-                    live_text="hello world",
-                    turn_completed=True,
-                )
-            ],
-        )
-        db.commit()
-
-        AgentsStore(db).ingest_session(
-            SessionIngest(
-                id=session.id,
-                provider="codex",
-                environment="test",
-                project="provisional-events",
-                started_at=now - timedelta(minutes=1),
-                events=[
-                    EventIngest(
-                        role="assistant",
-                        content_text="hello world",
-                        timestamp=now + timedelta(seconds=2),
-                        source_path=source_path,
-                        source_offset=100,
-                        raw_json=assistant_line,
-                    )
-                ],
-                source_lines=[
-                    SourceLineIngest(source_path=source_path, source_offset=100, raw_json=assistant_line),
-                ],
-            )
-        )
-        db.commit()
-
-        ingest_runtime_events(
-            db,
-            [
-                _bridge_transcript_event(
-                    session_id=session.id,
-                    occurred_at=now - timedelta(seconds=1),
-                    seq=4,
-                    live_text="stale bridge text after durable",
-                )
-            ],
-        )
-        db.commit()
-
-        rows = db.query(AgentEvent).filter(AgentEvent.session_id == session.id).order_by(AgentEvent.id.asc()).all()
-        visible = AgentsStore(db).get_session_events(session.id)
-
-    assert [row.event_origin for row in rows] == ["live_provisional", "durable"]
-    assert rows[0].provisional_state == "reconciled"
-    assert rows[0].reconciled_event_id == rows[1].id
-    assert rows[0].content_text == "hello world"
-    assert [event.id for event in visible] == [rows[1].id]
-
-
-def test_null_seq_live_snapshot_does_not_replace_known_newer_snapshot(tmp_path):
-    SessionLocal = _make_sessionmaker(tmp_path, "provisional_null_seq.db")
-    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
-
-    with SessionLocal() as db:
-        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
-        ingest_runtime_events(
-            db,
-            [
-                _bridge_transcript_event(session_id=session.id, occurred_at=now, seq=5, live_text="newer text"),
-                RuntimeEventIngest(
-                    runtime_key=f"codex:{session.id}",
-                    session_id=session.id,
-                    provider="codex",
-                    device_id="cinder",
-                    source="codex_bridge_live",
-                    kind="progress_signal",
-                    occurred_at=now + timedelta(milliseconds=10),
-                    dedupe_key=f"bridge:live:{session.id}:thread-1:turn-1:null",
-                    payload={
-                        "progress_kind": "bridge_live_transcript_delta",
-                        "thread_id": "thread-1",
-                        "turn_id": "turn-1",
-                        "method": "item/agentMessage/delta",
-                        "live_text": "unknown older text",
-                    },
-                ),
-            ],
-        )
-        db.commit()
-
-        row = db.query(AgentEvent).filter(AgentEvent.session_id == session.id).one()
-
-    assert row.provisional_state == "active"
-    assert row.provisional_seq == 5
-    assert row.content_text == "newer text"
-
-
-def test_durable_ingest_supersedes_unmatched_older_provisional_event(tmp_path):
-    SessionLocal = _make_sessionmaker(tmp_path, "provisional_supersede.db")
-    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
-    source_path = "/tmp/codex-rollout.jsonl"
-    assistant_line = (
-        '{"type":"response_item","timestamp":"2026-05-11T12:00:04Z",'
-        '"payload":{"type":"message","role":"assistant",'
-        '"content":[{"type":"output_text","text":"fresh durable reply"}]}}'
-    )
 
     with SessionLocal() as db:
         session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
@@ -547,48 +223,32 @@ def test_durable_ingest_supersedes_unmatched_older_provisional_event(tmp_path):
                     session_id=session.id,
                     occurred_at=now,
                     seq=1,
-                    live_text="older partial",
+                    live_text="I am using noteit.Updated the existing note.",
+                    turn_completed=True,
                 )
             ],
         )
+        _ingest_durable_session(db, session=session, now=now)
         db.commit()
 
-        AgentsStore(db).ingest_session(
-            SessionIngest(
-                id=session.id,
-                provider="codex",
-                environment="test",
-                project="provisional-events",
-                device_id="cinder",
-                cwd="/tmp/project",
-                started_at=now - timedelta(minutes=1),
-                events=[
-                    EventIngest(
-                        role="assistant",
-                        content_text="fresh durable reply",
-                        timestamp=now + timedelta(seconds=4),
-                        source_path=source_path,
-                        source_offset=100,
-                        raw_json=assistant_line,
-                    )
-                ],
-                source_lines=[
-                    SourceLineIngest(source_path=source_path, source_offset=100, raw_json=assistant_line),
-                ],
-            )
-        )
+        events = AgentsStore(db).get_session_events(session.id)
+        count = AgentsStore(db).count_session_events(session.id)
+        rows = db.query(AgentEvent).filter(AgentEvent.session_id == session.id).order_by(AgentEvent.timestamp, AgentEvent.id).all()
+        previews = load_active_provisional_preview_map(db, [session.id])
 
-        rows = db.query(AgentEvent).filter(AgentEvent.session_id == session.id).order_by(AgentEvent.id.asc()).all()
-        visible = AgentsStore(db).get_session_events(session.id)
-
-    assert [row.event_origin for row in rows] == ["live_provisional", "durable"]
-    assert rows[0].provisional_state == "superseded"
-    assert rows[0].reconciled_event_id is None
-    assert [event.content_text for event in visible] == ["fresh durable reply"]
+    assert len(rows) == 4
+    assert count == 4
+    assert [(event.role, event.content_text, event.tool_name, event.tool_call_id) for event in events] == [
+        ("assistant", "I am using noteit.", None, None),
+        ("assistant", None, "apply_patch", "call-1"),
+        ("tool", None, None, "call-1"),
+        ("assistant", "Updated the existing note.", None, None),
+    ]
+    assert previews == {}
 
 
-def test_cross_session_search_ignores_provisional_only_text(tmp_path):
-    SessionLocal = _make_initialized_sessionmaker(tmp_path, "provisional_search.db")
+def test_cross_session_search_ignores_live_preview_text(tmp_path):
+    _, SessionLocal = _make_initialized_sessionmaker(tmp_path, "live_overlay_search.db")
     now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
     source_path = "/tmp/codex-rollout.jsonl"
     durable_line = (
@@ -601,28 +261,21 @@ def test_cross_session_search_ignores_provisional_only_text(tmp_path):
         session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
         ingest_runtime_events(
             db,
-            [
-                _bridge_transcript_event(
-                    session_id=session.id,
-                    occurred_at=now,
-                    seq=1,
-                    live_text="only provisional needle",
-                )
-            ],
+            [_bridge_transcript_event(session_id=session.id, occurred_at=now, seq=1, live_text="only live preview needle")],
         )
         db.commit()
 
         store = AgentsStore(db)
-        provisional_sessions, provisional_total = store.list_sessions(include_test=True, query="needle")
-        assert provisional_sessions == []
-        assert provisional_total == 0
+        preview_sessions, preview_total = store.list_sessions(include_test=True, query="needle")
+        assert preview_sessions == []
+        assert preview_total == 0
 
         store.ingest_session(
             SessionIngest(
                 id=session.id,
                 provider="codex",
                 environment="test",
-                project="provisional-events",
+                project="live-overlay-contract",
                 device_id="cinder",
                 cwd="/tmp/project",
                 started_at=now - timedelta(minutes=1),
@@ -648,47 +301,37 @@ def test_cross_session_search_ignores_provisional_only_text(tmp_path):
     assert [session.id for session in durable_sessions] == [session.id]
 
 
-def test_closed_terminal_signal_supersedes_active_provisional_event(tmp_path):
-    SessionLocal = _make_sessionmaker(tmp_path, "provisional_terminal.db")
+def test_initialize_database_deletes_legacy_live_provisional_rows(tmp_path):
+    engine, SessionLocal = _make_initialized_sessionmaker(tmp_path, "live_overlay_cleanup.db")
     now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
 
     with SessionLocal() as db:
         session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
-        ingest_runtime_events(
-            db,
-            [
-                _bridge_transcript_event(
-                    session_id=session.id,
-                    occurred_at=now,
-                    seq=1,
-                    live_text="unfinished bridge output",
-                )
-            ],
+        db.add(
+            AgentEvent(
+                session_id=session.id,
+                role="assistant",
+                content_text="legacy live preview",
+                timestamp=now,
+                event_origin="live_provisional",
+                provisional_state="active",
+                provisional_key=f"codex_bridge_live:{session.id}:thread-1:turn-1",
+            )
         )
-        ingest_runtime_events(
-            db,
-            [
-                RuntimeEventIngest(
-                    runtime_key=f"codex:{session.id}",
-                    session_id=session.id,
-                    provider="codex",
-                    device_id="cinder",
-                    source="codex_bridge",
-                    kind="terminal_signal",
-                    occurred_at=now + timedelta(seconds=10),
-                    dedupe_key=f"bridge:terminal:{session.id}:1",
-                    payload={
-                        "terminal_state": "process_gone",
-                        "terminal_reason": "bridge_stop",
-                        "terminal_source": "codex_bridge",
-                    },
-                )
-            ],
+        db.add(
+            AgentEvent(
+                session_id=session.id,
+                role="assistant",
+                content_text="durable text",
+                timestamp=now + timedelta(seconds=1),
+                event_origin="durable",
+            )
         )
         db.commit()
 
-        row = db.query(AgentEvent).filter(AgentEvent.session_id == session.id).one()
-        visible = AgentsStore(db).get_session_events(session.id)
+    initialize_database(engine)
 
-    assert row.provisional_state == "superseded"
-    assert visible == []
+    with SessionLocal() as db:
+        rows = db.query(AgentEvent).order_by(AgentEvent.timestamp).all()
+
+    assert [(row.event_origin, row.content_text) for row in rows] == [("durable", "durable text")]
