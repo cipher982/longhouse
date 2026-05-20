@@ -98,8 +98,17 @@ async function sendAttachedIdleLease(
   ).toBe(204);
 }
 
+async function getSession(request: APIRequestContext, sessionId: string): Promise<any> {
+  const response = await request.get(`/api/agents/sessions/${sessionId}`);
+  expect(
+    response.ok(),
+    `get session failed: ${response.status()} ${await response.text()}`,
+  ).toBe(true);
+  return response.json();
+}
+
 test.describe("Managed Codex liveness", () => {
-  test("timeline keeps attached idle lease ready despite old transcript ended_at", async ({
+  test("timeline keeps attached lease controllable without provider phase", async ({
     page,
     request,
   }) => {
@@ -116,6 +125,12 @@ test.describe("Managed Codex liveness", () => {
     await configureManagedLocalSession(request, sessionId);
     await sendAttachedIdleLease(request, sessionId);
 
+    const session = await getSession(request, sessionId);
+    expect(session.runtime_facts?.control?.state).toBe("online");
+    expect(session.runtime_facts?.phase?.kind).toBeNull();
+    expect(session.capabilities?.live_control_available).toBe(true);
+    expect(session.capabilities?.composer_enabled).toBe(true);
+
     await page.goto(`/timeline?project=${project}`);
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
@@ -124,7 +139,6 @@ test.describe("Managed Codex liveness", () => {
       .filter({ hasText: token })
       .first();
     await expect(row).toBeVisible();
-    await expect(row).toHaveAttribute("data-status", "idle");
-    await expect(row).toContainText("idle");
+    await expect(row).toHaveAttribute("data-closed", "false");
   });
 });
