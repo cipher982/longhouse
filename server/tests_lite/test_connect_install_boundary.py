@@ -491,5 +491,6 @@ def test_attempt_post_auth_spool_replay_preserves_auth_success_context(monkeypat
     )
 
     assert messages == [
-        "Authenticated, but queued shipping could not be replayed immediately. Run `longhouse ship` if backlog stays stuck."
+        "Authenticated, but queued shipping could not be replayed immediately. "
+        "Run `longhouse ship` if backlog stays stuck."
     ]

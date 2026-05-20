@@ -236,12 +236,13 @@ def _runtime_events_for_managed_leases(
         payload = lease.model_dump(mode="json")
         if lease.observed_at is not None:
             payload["lease_observed_at"] = payload.get("observed_at")
+        payload["lease_refresh_at"] = received_at.isoformat()
         # A managed-session lease is a fresh assertion from the current
         # heartbeat snapshot. Some producers keep lease.observed_at pinned to
-        # the last provider phase transition, so using it as the runtime event
-        # timestamp lets live attached sessions go stale even while heartbeats
-        # keep arriving.
-        occurred_at = received_at
+        # the last provider phase transition, so the runtime reducer uses
+        # lease_refresh_at to extend freshness without reordering transcript
+        # progress events that happened after the provider phase timestamp.
+        occurred_at = normalize_utc(lease.observed_at) or received_at
 
         if state == "attached":
             events.append(
