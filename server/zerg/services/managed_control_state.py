@@ -21,6 +21,8 @@ from zerg.utils.time import normalize_utc
 
 CONTROL_SOURCE_HEARTBEAT = "machine_heartbeat"
 CONTROL_SOURCE_ENGINE_CHANNEL = "machine_control_ws"
+DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS = 15 * 60 * 1000
+_CONTROL_READY_BRIDGE_STATUSES = {"ready", "healthy", ""}
 
 
 @dataclass(frozen=True)
@@ -49,9 +51,20 @@ def _normalized(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _lease_control_state(lease_state: str) -> tuple[str, str | None]:
+def _lease_control_state(
+    *,
+    lease_state: str,
+    bridge_status: str | None,
+    thread_subscription_status: str | None,
+) -> tuple[str, str | None]:
     state = _normalized(lease_state).lower()
+    bridge = _normalized(bridge_status).lower()
+    thread = _normalized(thread_subscription_status).lower()
     if state == "attached":
+        if bridge not in _CONTROL_READY_BRIDGE_STATUSES:
+            return "degraded", "bridge_unavailable"
+        if thread == "failed":
+            return "degraded", "thread_subscription_failed"
         return "online", None
     if state == "degraded":
         return "degraded", "degraded"
@@ -104,9 +117,15 @@ def upsert_managed_control_leases(
             continue
         provider = _normalized(getattr(lease, "provider", None)).lower() or "unknown"
         lease_state = _normalized(getattr(lease, "state", None)).lower() or "unknown"
-        control_state, reason = _lease_control_state(lease_state)
-        ttl_ms = int(getattr(lease, "lease_ttl_ms", 0) or 0)
-        expires_at = seen_at + timedelta(milliseconds=ttl_ms) if ttl_ms > 0 else seen_at
+        bridge_status = _normalized(getattr(lease, "bridge_status", None)) or None
+        thread_subscription_status = _normalized(getattr(lease, "thread_subscription_status", None)) or None
+        control_state, reason = _lease_control_state(
+            lease_state=lease_state,
+            bridge_status=bridge_status,
+            thread_subscription_status=thread_subscription_status,
+        )
+        ttl_ms = int(getattr(lease, "lease_ttl_ms", 0) or 0) or DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS
+        expires_at = seen_at + timedelta(milliseconds=ttl_ms)
         row = db.query(ManagedSessionControlState).filter(ManagedSessionControlState.session_id == session_id).first()
         values = {
             "session_id": session_id,
@@ -123,8 +142,8 @@ def upsert_managed_control_leases(
             "lease_observed_at": normalize_utc(getattr(lease, "observed_at", None)),
             "lease_ttl_ms": ttl_ms,
             "control_expires_at": expires_at,
-            "bridge_status": _normalized(getattr(lease, "bridge_status", None)) or None,
-            "thread_subscription_status": _normalized(getattr(lease, "thread_subscription_status", None)) or None,
+            "bridge_status": bridge_status,
+            "thread_subscription_status": thread_subscription_status,
         }
         if row is None:
             db.add(ManagedSessionControlState(**values))
@@ -149,12 +168,10 @@ def mark_missing_managed_control_leases(
     seen_session_ids = {getattr(lease, "session_id", None) for lease in leases}
     seen_session_ids.discard(None)
     seen_at = normalize_utc(received_at) or _utc_now()
-    rows = (
-        db.query(ManagedSessionControlState)
-        .filter(ManagedSessionControlState.device_id == device_id)
-        .filter(ManagedSessionControlState.session_id.notin_(seen_session_ids) if seen_session_ids else True)
-        .all()
-    )
+    query = db.query(ManagedSessionControlState).filter(ManagedSessionControlState.device_id == device_id)
+    if seen_session_ids:
+        query = query.filter(ManagedSessionControlState.session_id.notin_(seen_session_ids))
+    rows = query.all()
     touched: set[UUID] = set()
     for row in rows:
         if row.control_state == "offline" and row.reason == "missing_from_snapshot":
