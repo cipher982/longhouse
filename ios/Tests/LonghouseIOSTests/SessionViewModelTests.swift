@@ -367,6 +367,50 @@ struct SessionViewModelTests {
         #expect(beacons.first?.webkit == diagnostics)
     }
 
+    @Test
+    func transcriptDiagnosticsIgnoresNonRenderStagesForBeacons() async throws {
+        let workspace = try makeWorkspace(eventId: 10, content: "Rendered in WebKit")
+        let api = FakeSessionWorkspaceClient(workspaces: [workspace])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        await model.recordTranscriptDiagnostics(
+            RenderBeaconReporter.WebKitDiagnostics(
+                stage: "queued",
+                payload_byte_size: 2048,
+                row_count: 1,
+                latest_item_id: "user:10",
+                render_sequence: 1,
+                js_failure_count: 0,
+                should_stick_to_bottom: true,
+                web_view_loaded: false,
+                error_description: nil
+            ),
+            sessionId: "session-1",
+            appState: appState
+        )
+        await model.recordTranscriptDiagnostics(
+            RenderBeaconReporter.WebKitDiagnostics(
+                stage: "duplicate",
+                payload_byte_size: 2048,
+                row_count: 1,
+                latest_item_id: "user:10",
+                render_sequence: 1,
+                js_failure_count: 0,
+                should_stick_to_bottom: true,
+                web_view_loaded: true,
+                error_description: nil
+            ),
+            sessionId: "session-1",
+            appState: appState
+        )
+
+        let beacons = await api.renderBeacons()
+        #expect(beacons.isEmpty)
+    }
+
     nonisolated private func makeWorkspace(
         eventId: Int,
         content: String,

@@ -301,6 +301,7 @@ struct WebTranscriptView: UIViewRepresentable {
         private let logger = Logger(subsystem: "ai.longhouse.ios", category: "WebTranscript")
         private var isLoaded = false
         private var shouldStickToBottom = true
+        private var userScrollInProgress = false
         private var pendingPayload: WebTranscriptPreparedPayload?
         private var lastPayload: String?
         private var renderSequence = 0
@@ -318,6 +319,27 @@ struct WebTranscriptView: UIViewRepresentable {
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            guard !userScrollInProgress else { return }
+            updateStickiness(scrollView)
+        }
+
+        func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+            userScrollInProgress = true
+            shouldStickToBottom = false
+        }
+
+        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+            guard !decelerate else { return }
+            userScrollInProgress = false
+            updateStickiness(scrollView)
+        }
+
+        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+            userScrollInProgress = false
+            updateStickiness(scrollView)
+        }
+
+        private func updateStickiness(_ scrollView: UIScrollView) {
             let distanceFromBottom = scrollView.contentSize.height - scrollView.contentOffset.y - scrollView.bounds.height
             shouldStickToBottom = distanceFromBottom < 96
         }
@@ -371,7 +393,7 @@ struct WebTranscriptView: UIViewRepresentable {
 
             renderSequence += 1
             let sequence = renderSequence
-            let stick = shouldStickToBottom ? "true" : "false"
+            let stick = shouldStickToBottom && !userScrollInProgress ? "true" : "false"
             webView.evaluateJavaScript("window.renderTranscript('\(payload.base64)', \(stick));") { [weak self] _, error in
                 guard let self else { return }
                 if error == nil {
