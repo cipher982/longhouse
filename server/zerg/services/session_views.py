@@ -1174,12 +1174,11 @@ def build_session_response(
     current_now = datetime.now(timezone.utc)
     if is_engine_session_attached:
         binding_host_state = "online"
-        if control_overlay is None:
-            control_overlay = live_transport_control_overlay(
-                session,
-                source=CONTROL_SOURCE_ENGINE_CHANNEL,
-                seen_at=current_now,
-            )
+        control_overlay = live_transport_control_overlay(
+            session,
+            source=CONTROL_SOURCE_ENGINE_CHANNEL,
+            seen_at=current_now,
+        )
     elif (capability_flags.live_control_available or capability_flags.host_reattach_available) and getattr(
         session, "source_runner_id", None
     ) is not None:

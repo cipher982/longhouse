@@ -101,10 +101,11 @@ def _upsert_runtime_state(
     *,
     phase: str = "running",
     phase_source: str = "semantic",
+    observed_at: datetime | None = None,
     freshness_expires_at: datetime | None = None,
     terminal_state: str | None = None,
 ) -> SessionRuntimeState:
-    now = datetime.now(timezone.utc)
+    now = observed_at or datetime.now(timezone.utc)
     runtime_key = runtime_key_for_session(str(session.provider or "codex"), str(session.id))
     state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).first()
     values = {
@@ -743,7 +744,13 @@ def test_current_session_capabilities_uses_engine_channel_without_runner_metadat
                     phase_source="codex_bridge",
                     freshness_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
                 )
-                _upsert_control_state(db, session)
+                _upsert_control_state(
+                    db,
+                    session,
+                    control_state="offline",
+                    reason="missing_from_snapshot",
+                    expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+                )
 
                 without_owner = current_session_capabilities(db, session)
                 assert without_owner.live_control_available is False
@@ -799,7 +806,13 @@ def test_session_response_uses_owner_for_engine_channel_capability(monkeypatch, 
                     phase_source="codex_bridge",
                     freshness_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
                 )
-                control_overlay = _upsert_control_state(db, session)
+                control_overlay = _upsert_control_state(
+                    db,
+                    session,
+                    control_state="offline",
+                    reason="missing_from_snapshot",
+                    expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+                )
 
                 def _runner_state_should_not_be_used(_db, _session):
                     raise AssertionError("engine-channel capability should not query runner host state")
@@ -835,7 +848,7 @@ def test_session_response_uses_owner_for_engine_channel_capability(monkeypatch, 
                 assert response.runtime_facts is not None
                 assert response.runtime_facts.host.state == "online"
                 assert response.runtime_facts.control.state == "online"
-                assert response.runtime_facts.control.source == "machine_heartbeat"
+                assert response.runtime_facts.control.source == "machine_control_ws"
                 assert response.runtime_facts.control.transport == "codex_app_server"
                 assert response.capabilities.live_control_available is True
                 assert response.capabilities.reply_to_live_session_available is True
@@ -847,6 +860,206 @@ def test_session_response_uses_owner_for_engine_channel_capability(monkeypatch, 
 
     try:
         asyncio.run(_run())
+    finally:
+        engine.dispose()
+
+
+def test_session_response_keeps_engine_control_live_after_phase_goes_stale(monkeypatch, tmp_path):
+    engine, session_local = _make_db(tmp_path)
+
+    async def _run():
+        registry = get_machine_control_channel_registry()
+        await registry.clear_for_tests()
+        try:
+            with session_local() as db:
+                current_now = datetime.now(timezone.utc)
+                old_signal_at = current_now - timedelta(days=30)
+                session = _seed_agent_session(
+                    db,
+                    source_runner_id=None,
+                    source_runner_name=None,
+                    device_id="cinder",
+                    started_at=current_now - timedelta(days=45),
+                )
+                _upsert_runtime_state(
+                    db,
+                    session,
+                    phase="running",
+                    phase_source="codex_bridge",
+                    observed_at=old_signal_at,
+                    freshness_expires_at=old_signal_at + timedelta(minutes=10),
+                )
+                stale_control_overlay = _upsert_control_state(
+                    db,
+                    session,
+                    control_state="offline",
+                    reason="missing_from_snapshot",
+                    expires_at=old_signal_at,
+                )
+
+                def _runner_state_should_not_be_used(_db, _session):
+                    raise AssertionError("engine-channel capability should not query runner host state")
+
+                monkeypatch.setattr(
+                    "zerg.services.session_views.managed_runner_host_state",
+                    _runner_state_should_not_be_used,
+                )
+                await registry.register(
+                    owner_id=7,
+                    device_id="cinder",
+                    machine_name="cinder",
+                    engine_build="abc123",
+                    supports=["codex.send", "codex.steer"],
+                    websocket=SimpleNamespace(),
+                )
+                runtime_overlay = resolve_runtime_overlay(
+                    session,
+                    last_activity_at=old_signal_at,
+                    runtime_state_map=load_runtime_state_map(db, [session.id]),
+                    now=current_now,
+                )
+
+                response = build_session_response(
+                    AgentsStore(db),
+                    session,
+                    last_activity_at=old_signal_at,
+                    runtime_overlay=runtime_overlay,
+                    owner_id=7,
+                    control_overlay=stale_control_overlay,
+                )
+
+                assert response.runtime_facts is not None
+                assert response.runtime_facts.lifecycle.state == "open"
+                assert response.runtime_facts.phase.kind is None
+                assert response.runtime_facts.control.state == "online"
+                assert response.runtime_facts.control.source == "machine_control_ws"
+                assert response.capabilities.live_control_available is True
+                assert response.capabilities.composer_enabled is True
+                assert response.capabilities.composer_disabled_reason is None
+                assert response.capabilities.display_label != "Control offline"
+        finally:
+            await registry.clear_for_tests()
+
+    try:
+        asyncio.run(_run())
+    finally:
+        engine.dispose()
+
+
+def test_session_response_fresh_control_lease_not_phase_age_drives_sendability(tmp_path):
+    engine, session_local = _make_db(tmp_path)
+
+    try:
+        with session_local() as db:
+            current_now = datetime.now(timezone.utc)
+            old_signal_at = current_now - timedelta(days=30)
+            session = _seed_agent_session(
+                db,
+                provider="claude",
+                managed_transport="claude_channel_bridge",
+                source_runner_id=17,
+                source_runner_name="cinder",
+                device_id="cinder",
+                started_at=current_now - timedelta(days=45),
+            )
+            _upsert_runtime_state(
+                db,
+                session,
+                phase="needs_user",
+                phase_source="managed_local_transport",
+                observed_at=old_signal_at,
+                freshness_expires_at=old_signal_at + timedelta(minutes=10),
+            )
+            fresh_control_overlay = _upsert_control_state(
+                db,
+                session,
+                control_state="online",
+                expires_at=current_now + timedelta(minutes=15),
+            )
+            runtime_overlay = resolve_runtime_overlay(
+                session,
+                last_activity_at=old_signal_at,
+                runtime_state_map=load_runtime_state_map(db, [session.id]),
+                now=current_now,
+            )
+
+            response = build_session_response(
+                AgentsStore(db),
+                session,
+                last_activity_at=old_signal_at,
+                runtime_overlay=runtime_overlay,
+                owner_id=7,
+                control_overlay=fresh_control_overlay,
+            )
+
+            assert response.runtime_facts is not None
+            assert response.runtime_facts.lifecycle.state == "open"
+            assert response.runtime_facts.phase.kind is None
+            assert response.runtime_facts.control.state == "online"
+            assert response.runtime_facts.control.source == "machine_heartbeat"
+            assert response.capabilities.live_control_available is True
+            assert response.capabilities.composer_enabled is True
+            assert response.capabilities.composer_disabled_reason is None
+            assert response.capabilities.display_label != "Control offline"
+            assert response.capabilities.display_label != "Closed"
+    finally:
+        engine.dispose()
+
+
+def test_session_response_stale_control_lease_is_offline_not_closed(tmp_path):
+    engine, session_local = _make_db(tmp_path)
+
+    try:
+        with session_local() as db:
+            current_now = datetime.now(timezone.utc)
+            old_signal_at = current_now - timedelta(days=30)
+            session = _seed_agent_session(
+                db,
+                source_runner_id=None,
+                source_runner_name=None,
+                device_id="cinder",
+                started_at=current_now - timedelta(days=45),
+            )
+            _upsert_runtime_state(
+                db,
+                session,
+                phase="running",
+                phase_source="codex_bridge",
+                observed_at=old_signal_at,
+                freshness_expires_at=old_signal_at + timedelta(minutes=10),
+            )
+            stale_control_overlay = _upsert_control_state(
+                db,
+                session,
+                control_state="offline",
+                reason="lease_stale",
+                expires_at=old_signal_at,
+            )
+            runtime_overlay = resolve_runtime_overlay(
+                session,
+                last_activity_at=old_signal_at,
+                runtime_state_map=load_runtime_state_map(db, [session.id]),
+                now=current_now,
+            )
+
+            response = build_session_response(
+                AgentsStore(db),
+                session,
+                last_activity_at=old_signal_at,
+                runtime_overlay=runtime_overlay,
+                owner_id=7,
+                control_overlay=stale_control_overlay,
+            )
+
+            assert response.runtime_facts is not None
+            assert response.runtime_facts.lifecycle.state == "open"
+            assert response.runtime_facts.phase.kind is None
+            assert response.runtime_facts.control.state == "offline"
+            assert response.runtime_facts.control.reason == "lease_stale"
+            assert response.capabilities.live_control_available is False
+            assert response.capabilities.composer_enabled is False
+            assert response.capabilities.display_label == "Control offline"
+            assert response.capabilities.display_label != "Closed"
     finally:
         engine.dispose()
 
