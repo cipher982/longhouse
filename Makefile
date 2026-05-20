@@ -8,7 +8,7 @@ COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/dock
 E2E_BACKEND_PORT ?=
 E2E_FRONTEND_PORT ?=
 
-.PHONY: help dev dev-demo stop test test-ios test-mobile-chat test-ios-helper test-frontend test-engine test-runner test-e2e test-e2e-core test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-sdk validate-ios-api validate-makefile validate-build-identity validate-managed-codex-contract validate-ship-monitor regen-ws generate-sdk generate-ios-api qa-live qa-unmanaged render-canary session-propagation-sla managed-claude-truth-probe managed-claude-poc reprovision deploy-status ship-watch ship release ui-capture qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-e2e-continuation-provider test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest eval dogfood dogfood-refresh dogfood-check
+.PHONY: help dev dev-demo stop test test-ios test-mobile-chat test-mobile-chat-stress test-ios-helper test-frontend test-engine test-runner test-e2e test-e2e-core test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-sdk validate-ios-api validate-makefile validate-build-identity validate-managed-codex-contract validate-ship-monitor regen-ws generate-sdk generate-ios-api qa-live qa-unmanaged render-canary session-propagation-sla managed-claude-truth-probe managed-claude-poc reprovision deploy-status ship-watch ship release ui-capture qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-e2e-continuation-provider test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest eval dogfood dogfood-refresh dogfood-check
 
 # ---------------------------------------------------------------------------
 # Help
@@ -75,6 +75,13 @@ test-mobile-chat: ## Focused mobile chat validation (web telemetry + iOS unit te
 		-destination "$$DESTINATION" \
 		-derivedDataPath "$$DERIVED_DATA_PATH" \
 		test
+
+test-mobile-chat-stress: ## Holistic iOS mobile chat fixture stress test
+	@python3 scripts/build/generate_build_identity.py
+	@bash scripts/build/stage_ios_build_identity.sh
+	@xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
+	@DESTINATION="$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj LonghouseChatStress)"; \
+	IOS_TEST_SCHEMES="LonghouseChatStress" ./scripts/ci/run_ios_tests.sh "$$DESTINATION"
 
 test-ios-helper: ## iOS simulator helper script tests
 	@bash scripts/tests/select-ios-simulator.test.sh

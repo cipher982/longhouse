@@ -1,0 +1,127 @@
+import XCTest
+
+@MainActor
+final class SessionChatStressUITests: XCTestCase {
+    private enum LaunchEnvironment {
+        static let chatFixture = "LONGHOUSE_UI_TEST_CHAT_FIXTURE"
+        static let chatEventCount = "LONGHOUSE_UI_TEST_CHAT_EVENT_COUNT"
+        static let diagnostics = "LONGHOUSE_WEBKIT_TRANSCRIPT_DIAGNOSTICS"
+        static let probePath = "LONGHOUSE_UI_TEST_CHAT_PROBE_PATH"
+        static let triggerPath = "LONGHOUSE_UI_TEST_CHAT_TRIGGER_PATH"
+    }
+
+    override func setUpWithError() throws {
+        continueAfterFailure = false
+    }
+
+    func testLoadedTranscriptDoesNotRenderStormOrSnapBackDuringUserScroll() {
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("longhouse-chat-stress-\(UUID().uuidString)", isDirectory: true)
+        let probeURL = scratch.appendingPathComponent("probe.txt")
+        let triggerURL = scratch.appendingPathComponent("trigger")
+        try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+
+        let app = XCUIApplication()
+        app.launchEnvironment[LaunchEnvironment.chatFixture] = "render-storm"
+        app.launchEnvironment[LaunchEnvironment.chatEventCount] = "160"
+        app.launchEnvironment[LaunchEnvironment.diagnostics] = "1"
+        app.launchEnvironment[LaunchEnvironment.probePath] = probeURL.path
+        app.launchEnvironment[LaunchEnvironment.triggerPath] = triggerURL.path
+        app.launchArguments += ["-AppleInterfaceStyle", "Light"]
+        app.launch()
+
+        addTeardownBlock { [weak self] in
+            guard let self, (self.testRun?.failureCount ?? 0) > 0 else { return }
+            let attachment = XCTAttachment(screenshot: app.screenshot())
+            attachment.name = "\(self.name)-failure"
+            attachment.lifetime = .keepAlways
+            self.add(attachment)
+        }
+
+        let transcript = app.descendants(matching: .any)["session-chat-transcript"]
+        XCTAssertTrue(transcript.waitForExistence(timeout: 10))
+
+        XCTAssertTrue(waitForProbeFile(probeURL, timeout: 15) { metrics in
+            metrics.renders >= 1 && metrics.rows == 160
+        }, readProbe(probeURL))
+
+        XCTAssertTrue(waitForProbeFile(probeURL, timeout: 5) { metrics in
+            metrics.tick == 40
+        }, readProbe(probeURL))
+
+        let afterParentChurn = probeMetrics(readProbe(probeURL))
+        XCTAssertLessThanOrEqual(afterParentChurn.renders, 1, readProbe(probeURL))
+        XCTAssertEqual(afterParentChurn.repeats, 0, readProbe(probeURL))
+
+        dragTowardOlderMessages(transcript)
+
+        try? "1".write(to: triggerURL, atomically: true, encoding: .utf8)
+
+        XCTAssertTrue(waitForProbeFile(probeURL, timeout: 10) { metrics in
+            metrics.rows == 161 && metrics.stage == "rendered"
+        }, readProbe(probeURL))
+
+        let afterLiveUpdate = probeMetrics(readProbe(probeURL))
+        XCTAssertLessThanOrEqual(afterLiveUpdate.renders, 2, readProbe(probeURL))
+        XCTAssertEqual(afterLiveUpdate.repeats, 0, readProbe(probeURL))
+        XCTAssertEqual(afterLiveUpdate.stick, 0, "Live update should not snap to bottom after user scrolled up. \(readProbe(probeURL))")
+    }
+
+    private func dragTowardOlderMessages(_ element: XCUIElement) {
+        let start = element.coordinate(withNormalizedOffset: CGVector(dx: 0.50, dy: 0.30))
+        let end = element.coordinate(withNormalizedOffset: CGVector(dx: 0.50, dy: 0.82))
+        start.press(forDuration: 0.05, thenDragTo: end)
+    }
+
+    private func waitForProbeFile(
+        _ url: URL,
+        timeout: TimeInterval,
+        predicate: (ProbeMetrics) -> Bool
+    ) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if predicate(probeMetrics(readProbe(url))) {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return false
+    }
+
+    private func readProbe(_ url: URL) -> String {
+        (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+    }
+
+    private func probeMetrics(_ label: String) -> ProbeMetrics {
+        ProbeMetrics(label: label)
+    }
+}
+
+private struct ProbeMetrics {
+    let renders: Int
+    let duplicates: Int
+    let repeats: Int
+    let rows: Int
+    let bytes: Int
+    let latest: String
+    let stage: String
+    let stick: Int
+    let tick: Int
+
+    init(label: String) {
+        let values = Dictionary(uniqueKeysWithValues: label.split(separator: " ").compactMap { token -> (String, String)? in
+            let parts = token.split(separator: "=", maxSplits: 1)
+            guard parts.count == 2 else { return nil }
+            return (String(parts[0]), String(parts[1]))
+        })
+        renders = Int(values["renders"] ?? "") ?? 0
+        duplicates = Int(values["duplicates"] ?? "") ?? 0
+        repeats = Int(values["repeats"] ?? "") ?? 0
+        rows = Int(values["rows"] ?? "") ?? 0
+        bytes = Int(values["bytes"] ?? "") ?? 0
+        latest = values["latest"] ?? "none"
+        stage = values["stage"] ?? "none"
+        stick = Int(values["stick"] ?? "") ?? 0
+        tick = Int(values["tick"] ?? "") ?? 0
+    }
+}

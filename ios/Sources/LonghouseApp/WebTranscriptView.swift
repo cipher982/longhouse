@@ -303,7 +303,9 @@ struct WebTranscriptView: UIViewRepresentable {
         private var shouldStickToBottom = true
         private var userScrollInProgress = false
         private var pendingPayload: WebTranscriptPreparedPayload?
+        private var inFlightPayload: WebTranscriptPreparedPayload?
         private var lastPayload: String?
+        private var lastDuplicatePayload: String?
         private var renderSequence = 0
         private var jsFailureCount = 0
         private var diagnosticsEnabled = WebTranscriptDiagnosticsFeature.isEnabled
@@ -353,6 +355,17 @@ struct WebTranscriptView: UIViewRepresentable {
             self.webView = webView
             self.diagnosticsEnabled = diagnosticsEnabled
             self.onDiagnostics = onDiagnostics
+            if payload.base64 == lastPayload
+                || payload.base64 == inFlightPayload?.base64
+                || payload.base64 == pendingPayload?.base64 {
+                emitDuplicateDiagnosticsOnce(
+                    payload: payload,
+                    diagnosticsEnabled: diagnosticsEnabled,
+                    onDiagnostics: onDiagnostics
+                )
+                return
+            }
+            lastDuplicatePayload = nil
             pendingPayload = payload
             guard isLoaded else {
                 emitDiagnostics(
@@ -377,14 +390,12 @@ struct WebTranscriptView: UIViewRepresentable {
             diagnosticsEnabled: Bool = WebTranscriptDiagnosticsFeature.isEnabled,
             onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)? = nil
         ) {
+            guard inFlightPayload == nil else { return }
             guard let payload = pendingPayload else { return }
             pendingPayload = nil
             guard payload.base64 != lastPayload else {
-                emitDiagnostics(
-                    stage: "duplicate",
+                emitDuplicateDiagnosticsOnce(
                     payload: payload,
-                    sequence: renderSequence,
-                    error: nil,
                     diagnosticsEnabled: diagnosticsEnabled,
                     onDiagnostics: onDiagnostics
                 )
@@ -394,6 +405,7 @@ struct WebTranscriptView: UIViewRepresentable {
             renderSequence += 1
             let sequence = renderSequence
             let stick = shouldStickToBottom && !userScrollInProgress ? "true" : "false"
+            inFlightPayload = payload
             webView.evaluateJavaScript("window.renderTranscript('\(payload.base64)', \(stick));") { [weak self] _, error in
                 guard let self else { return }
                 if error == nil {
@@ -401,11 +413,17 @@ struct WebTranscriptView: UIViewRepresentable {
                 } else {
                     self.jsFailureCount += 1
                 }
+                self.inFlightPayload = nil
                 self.emitDiagnostics(
                     stage: error == nil ? "rendered" : "failed",
                     payload: payload,
                     sequence: sequence,
                     error: error,
+                    diagnosticsEnabled: diagnosticsEnabled,
+                    onDiagnostics: onDiagnostics
+                )
+                self.flushPendingPayload(
+                    to: webView,
                     diagnosticsEnabled: diagnosticsEnabled,
                     onDiagnostics: onDiagnostics
                 )
@@ -436,6 +454,23 @@ struct WebTranscriptView: UIViewRepresentable {
                 "webkit transcript stage=\(stage, privacy: .public) sequence=\(sequence) rows=\(payload.rowCount) bytes=\(payload.payloadByteSize) latest=\(payload.latestItemId ?? "none", privacy: .public) failures=\(self.jsFailureCount) stick=\(self.shouldStickToBottom)"
             )
             onDiagnostics?(diagnostics)
+        }
+
+        private func emitDuplicateDiagnosticsOnce(
+            payload: WebTranscriptPreparedPayload,
+            diagnosticsEnabled: Bool,
+            onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?
+        ) {
+            guard payload.base64 != lastDuplicatePayload else { return }
+            lastDuplicatePayload = payload.base64
+            emitDiagnostics(
+                stage: "duplicate",
+                payload: payload,
+                sequence: renderSequence,
+                error: nil,
+                diagnosticsEnabled: diagnosticsEnabled,
+                onDiagnostics: onDiagnostics
+            )
         }
     }
 }

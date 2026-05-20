@@ -7,12 +7,15 @@ struct ChatUITestFixtureView: View {
     private let fixtureName: String
     private let client: ChatUITestWorkspaceClient
     @StateObject private var viewModel: SessionViewModel
+    @StateObject private var probe: ChatUITestProbe
+    @State private var invalidationTick = 0
 
     init(fixtureName: String) {
         let fixture = ChatUITestFixture(name: fixtureName)
         let client = ChatUITestWorkspaceClient(fixture: fixture)
         self.fixtureName = fixtureName
         self.client = client
+        _probe = StateObject(wrappedValue: ChatUITestProbe(path: UITestHooks.chatFixtureProbePath))
         _viewModel = StateObject(
             wrappedValue: SessionViewModel(
                 apiFactory: { _ in client },
@@ -27,10 +30,27 @@ struct ChatUITestFixtureView: View {
             SessionView(
                 sessionId: client.sessionID,
                 fallbackTitle: "Chat UI Fixture",
-                viewModel: viewModel
+                viewModel: viewModel,
+                onTranscriptDiagnostics: { diagnostics in
+                    Task { @MainActor in
+                        probe.record(diagnostics)
+                    }
+                }
             )
         }
         .task(id: fixtureName) {
+            if fixtureName == "render-storm" {
+                await waitForInitialWorkspaceLoad()
+                for tick in 1...40 {
+                    invalidationTick = tick
+                    probe.recordTick(tick)
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                }
+                await waitForStressTrigger()
+                await client.appendAssistantMessage("Assistant fixture stress update after user scroll.")
+                await viewModel.reload(sessionId: client.sessionID, appState: appState)
+                return
+            }
             guard fixtureName.hasPrefix("assistant-update") || fixtureName.hasPrefix("assistant-stream") else { return }
             await waitForInitialWorkspaceLoad()
 
@@ -64,6 +84,77 @@ struct ChatUITestFixtureView: View {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
     }
+
+    private func waitForStressTrigger() async {
+        guard let triggerPath = UITestHooks.chatFixtureTriggerPath else { return }
+        while !Task.isCancelled && !FileManager.default.fileExists(atPath: triggerPath) {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
+}
+
+@MainActor
+private final class ChatUITestProbe: ObservableObject {
+    private(set) var statusLine = "renders=0 duplicates=0 repeats=0 rows=0 bytes=0 latest=none stage=none stick=0 tick=0"
+
+    private let path: String?
+    private var renderCount = 0
+    private var duplicateCount = 0
+    private var repeatRenderCount = 0
+    private var lastRenderedKey: String?
+    private var tick = 0
+
+    init(path: String?) {
+        self.path = path
+        persist()
+    }
+
+    func record(_ diagnostics: RenderBeaconReporter.WebKitDiagnostics) {
+        let latest = diagnostics.latest_item_id ?? "none"
+        let key = "\(diagnostics.row_count)|\(diagnostics.payload_byte_size)|\(latest)"
+        if diagnostics.stage == "rendered" {
+            if key == lastRenderedKey {
+                repeatRenderCount += 1
+            }
+            lastRenderedKey = key
+            renderCount += 1
+        } else if diagnostics.stage == "duplicate" {
+            duplicateCount += 1
+        }
+
+        statusLine = [
+            "renders=\(renderCount)",
+            "duplicates=\(duplicateCount)",
+            "repeats=\(repeatRenderCount)",
+            "rows=\(diagnostics.row_count)",
+            "bytes=\(diagnostics.payload_byte_size)",
+            "latest=\(latest)",
+            "stage=\(diagnostics.stage)",
+            "stick=\(diagnostics.should_stick_to_bottom ? 1 : 0)",
+            "tick=\(tick)",
+        ].joined(separator: " ")
+        persist()
+    }
+
+    func recordTick(_ tick: Int) {
+        self.tick = tick
+        statusLine = statusLine.replacingOccurrences(
+            of: #"tick=\d+"#,
+            with: "tick=\(tick)",
+            options: .regularExpression
+        )
+        persist()
+    }
+
+    private func persist() {
+        guard let path else { return }
+        let url = URL(fileURLWithPath: path)
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try? statusLine.write(to: url, atomically: true, encoding: .utf8)
+    }
 }
 
 private struct ChatUITestFixture: Sendable {
@@ -94,7 +185,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             seedEvents.append(Self.makeEvent(
                 id: index + 1,
                 role: role,
-                content: Self.messageText(index: index, role: role),
+                content: Self.messageText(index: index, role: role, fixtureName: fixture.name),
                 timestamp: Self.fixedTimestamp(offset: index)
             ))
         }
@@ -348,9 +439,32 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         )
     }
 
-    private static func messageText(index: Int, role: String) -> String {
+    private static func messageText(index: Int, role: String, fixtureName: String) -> String {
         if role == "assistant" {
+            if fixtureName == "render-storm" {
+                return """
+                Assistant fixture message \(index): realistic long response with markdown, code, and enough text to stress WebKit rendering.
+
+                - Session event id: \(index)
+                - Tool summary: read, search, patch, validate
+                - Runtime state: streaming
+
+                ```swift
+                struct FixtureRow\(index) {
+                    let id = \(index)
+                    let text = "This is a realistic transcript payload with code blocks and wrapping text."
+                }
+                ```
+
+                The transcript renderer should handle this without repeatedly re-rendering identical payloads, without blocking touch scrolling, and without snapping back to the bottom when the user has intentionally scrolled upward.
+
+                \(String(repeating: "Detailed fixture paragraph for mobile rendering, scroll anchoring, markdown layout, and text wrapping. ", count: 8))
+                """
+            }
             return "Assistant fixture message \(index): streaming-style response with enough body to exercise row layout."
+        }
+        if fixtureName == "render-storm" {
+            return "User fixture message \(index): realistic request text for mobile chat stress testing, scroll anchoring, and duplicate render detection."
         }
         return "User fixture message \(index): request text for chat scroll anchoring."
     }
