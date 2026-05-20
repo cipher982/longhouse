@@ -19,6 +19,30 @@ actor RenderBeaconReporter {
         let web_view_loaded: Bool
         let render_duration_ms: Int?
         let error_description: String?
+
+        init(
+            stage: String,
+            payload_byte_size: Int,
+            row_count: Int,
+            latest_item_id: String?,
+            render_sequence: Int,
+            js_failure_count: Int,
+            should_stick_to_bottom: Bool,
+            web_view_loaded: Bool,
+            render_duration_ms: Int? = nil,
+            error_description: String?
+        ) {
+            self.stage = stage
+            self.payload_byte_size = payload_byte_size
+            self.row_count = row_count
+            self.latest_item_id = latest_item_id
+            self.render_sequence = render_sequence
+            self.js_failure_count = js_failure_count
+            self.should_stick_to_bottom = should_stick_to_bottom
+            self.web_view_loaded = web_view_loaded
+            self.render_duration_ms = render_duration_ms
+            self.error_description = error_description
+        }
     }
 
     struct Payload: Encodable, Sendable {
