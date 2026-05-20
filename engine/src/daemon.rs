@@ -428,10 +428,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             }
 
             Some(signal) = transcript_wake_rx.recv() => {
-                record_transcript_wake_hint(
+                if let Some((path, provider, observation)) = record_transcript_wake_hint(
                     &mut latest_transcript_wake_observed,
                     signal,
-                );
+                ) {
+                    scheduler.enqueue_observation(path, provider, WorkPriority::Live, observation);
+                }
                 pump_ready_local_work(
                     &mut scheduler,
                     &mut in_flight,
@@ -1683,13 +1685,13 @@ fn outbox_signal_mark(signal: &outbox::DrainedPresenceSignal) -> String {
 fn record_transcript_wake_hint(
     latest_transcript_wake_observed: &mut HashMap<PathBuf, i64>,
     signal: TranscriptWakeSignal,
-) {
+) -> Option<(PathBuf, &'static str, ObservationTrace)> {
     let Some(provider) = provider_name_to_static(&signal.provider) else {
         tracing::debug!(
             provider = %signal.provider,
             "Skipping transcript wake for unknown provider"
         );
-        return;
+        return None;
     };
     if !signal.path.exists() {
         tracing::debug!(
@@ -1697,7 +1699,7 @@ fn record_transcript_wake_hint(
             path = %signal.path.display(),
             "Skipping transcript wake for missing path"
         );
-        return;
+        return None;
     }
     if !remember_transcript_wake_observation(
         latest_transcript_wake_observed,
@@ -1712,8 +1714,9 @@ fn record_transcript_wake_hint(
             observed_at_ms = signal.observed_at_ms,
             "Skipping stale transcript wake"
         );
-        return;
+        return None;
     }
+    let should_ship = signal.wake_reason.as_deref() == Some("turn_completed");
     tracing::debug!(
         provider,
         path = %signal.path.display(),
@@ -1724,8 +1727,27 @@ fn record_transcript_wake_hint(
         session_id = signal.session_id.as_deref().unwrap_or("unknown"),
         turn_id = signal.turn_id.as_deref().unwrap_or("unknown"),
         file_len_hint = signal.file_len_hint.unwrap_or(0),
-        "Transcript wake recorded as a hint; filesystem watcher owns shipping"
+        should_ship,
+        "Transcript wake recorded"
     );
+    if !should_ship {
+        return None;
+    }
+    Some((
+        signal.path,
+        provider,
+        ObservationTrace {
+            source: "wake_socket",
+            observed_at_ms: signal.observed_at_ms,
+            latest_observed_at_ms: None,
+            wake_received_at_ms: signal.received_at_ms,
+            enqueued_at_ms: now_ms(),
+            session_id: signal.session_id,
+            turn_id: signal.turn_id,
+            wake_reason: signal.wake_reason,
+            file_len_hint: signal.file_len_hint,
+        },
+    ))
 }
 
 fn remember_transcript_wake_observation(
@@ -2493,7 +2515,7 @@ mod tests {
     }
 
     #[test]
-    fn test_codex_bridge_observation_does_not_schedule_transcript_shipping() {
+    fn test_codex_bridge_observation_without_completed_turn_does_not_schedule_transcript_shipping() {
         let transcript = tempfile::NamedTempFile::new().unwrap();
         let observation =
             codex_bridge_observation(transcript.path(), None, None, "2026-05-01T00:00:00Z", true);
@@ -2502,7 +2524,7 @@ mod tests {
     }
 
     #[test]
-    fn test_codex_bridge_observation_completed_turn_does_not_schedule_transcript_shipping() {
+    fn test_codex_bridge_completed_turn_observation_stays_runtime_only() {
         let transcript = tempfile::NamedTempFile::new().unwrap();
         let observation = codex_bridge_observation(
             transcript.path(),
@@ -2686,11 +2708,11 @@ mod tests {
     }
 
     #[test]
-    fn test_transcript_wake_does_not_start_transcript_shipping() {
+    fn test_turn_started_transcript_wake_records_hint_without_shipping() {
         let transcript = tempfile::NamedTempFile::new().unwrap();
         let mut latest_wakes = HashMap::new();
 
-        record_transcript_wake_hint(
+        let scheduled = record_transcript_wake_hint(
             &mut latest_wakes,
             TranscriptWakeSignal {
                 provider: "codex".to_string(),
@@ -2706,6 +2728,7 @@ mod tests {
         );
 
         assert_eq!(latest_wakes.get(transcript.path()), Some(&123));
+        assert!(scheduled.is_none());
     }
 
     #[test]
@@ -2713,7 +2736,7 @@ mod tests {
         let transcript = tempfile::NamedTempFile::new().unwrap();
         let mut latest_wakes = HashMap::new();
 
-        record_transcript_wake_hint(
+        let scheduled = record_transcript_wake_hint(
             &mut latest_wakes,
             TranscriptWakeSignal {
                 provider: "codex".to_string(),
@@ -2729,6 +2752,43 @@ mod tests {
         );
 
         assert_eq!(latest_wakes.get(transcript.path()), Some(&123));
+        assert!(scheduled.is_none());
+    }
+
+    #[test]
+    fn test_turn_completed_transcript_wake_schedules_live_archive_shipping() {
+        let transcript = tempfile::NamedTempFile::new().unwrap();
+        let mut latest_wakes = HashMap::new();
+
+        let scheduled = record_transcript_wake_hint(
+            &mut latest_wakes,
+            TranscriptWakeSignal {
+                provider: "codex".to_string(),
+                path: transcript.path().to_path_buf(),
+                phase: "idle".to_string(),
+                observed_at_ms: 123,
+                session_id: Some("session-123".to_string()),
+                turn_id: Some("turn-123".to_string()),
+                wake_reason: Some("turn_completed".to_string()),
+                file_len_hint: Some(456),
+                received_at_ms: Some(124),
+            },
+        )
+        .expect("completed turn wakes should schedule archive shipping");
+
+        assert_eq!(latest_wakes.get(transcript.path()), Some(&123));
+        assert_eq!(scheduled.0, transcript.path());
+        assert_eq!(scheduled.1, "codex");
+        assert_eq!(scheduled.2.source, "wake_socket");
+        assert_eq!(scheduled.2.observed_at_ms, 123);
+        assert_eq!(scheduled.2.wake_received_at_ms, Some(124));
+        assert_eq!(scheduled.2.session_id.as_deref(), Some("session-123"));
+        assert_eq!(scheduled.2.turn_id.as_deref(), Some("turn-123"));
+        assert_eq!(
+            scheduled.2.wake_reason.as_deref(),
+            Some("turn_completed")
+        );
+        assert_eq!(scheduled.2.file_len_hint, Some(456));
     }
 
     #[test]
@@ -2736,7 +2796,7 @@ mod tests {
         let transcript = tempfile::NamedTempFile::new().unwrap();
         let mut latest_wakes = HashMap::new();
 
-        record_transcript_wake_hint(
+        let scheduled = record_transcript_wake_hint(
             &mut latest_wakes,
             TranscriptWakeSignal {
                 provider: "codex".to_string(),
@@ -2750,8 +2810,9 @@ mod tests {
                 received_at_ms: Some(201),
             },
         );
+        assert!(scheduled.is_some());
 
-        record_transcript_wake_hint(
+        let stale_scheduled = record_transcript_wake_hint(
             &mut latest_wakes,
             TranscriptWakeSignal {
                 provider: "codex".to_string(),
@@ -2767,6 +2828,7 @@ mod tests {
         );
 
         assert_eq!(latest_wakes.get(transcript.path()), Some(&200));
+        assert!(stale_scheduled.is_none());
     }
 
     #[test]
