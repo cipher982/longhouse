@@ -1721,6 +1721,93 @@ def test_heartbeat_lease_does_not_resurrect_session_ended_managed_codex_session(
     engine.dispose()
 
 
+def test_heartbeat_reattach_does_not_clear_explicit_session_ended_runtime_terminal(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_session_ended_survives_reattach.db")
+    now = datetime.now(timezone.utc)
+    ended_at = now - timedelta(minutes=5)
+
+    with SessionLocal() as db:
+        session = _seed_session(
+            db,
+            provider="codex",
+            started_at=now - timedelta(hours=1),
+        )
+        session.execution_home = "managed_local"
+        session.managed_transport = "codex_app_server"
+        session.source_runner_id = 17
+        session.source_runner_name = "cinder"
+        session_id = session.id
+        runtime_key = runtime_key_for_session("codex", str(session_id))
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session_id,
+                    provider="codex",
+                    device_id="runtime-device",
+                    source="engine_attached_lease",
+                    kind="terminal_signal",
+                    occurred_at=ended_at,
+                    dedupe_key="explicit-session-ended-before-reattach",
+                    payload={"terminal_state": "session_ended"},
+                )
+            ],
+        )
+        db.commit()
+
+    for client in _client(SessionLocal):
+        response = client.post(
+            "/agents/heartbeat",
+            json={
+                "version": "test",
+                "daemon_pid": 123,
+                "managed_sessions": [
+                    {
+                        "session_id": str(session_id),
+                        "provider": "codex",
+                        "machine_id": "cinder",
+                        "sequence": 45,
+                        "state": "attached",
+                        "phase": "idle",
+                        "bridge_status": "ready",
+                        "thread_subscription_status": "subscribed",
+                        "observed_at": now.isoformat(),
+                        "lease_ttl_ms": 15 * 60 * 1000,
+                    }
+                ],
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert response.status_code == 204, response.text
+
+    with SessionLocal() as db:
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        stored_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        view = build_runtime_view(state=state, session=stored_session, now=datetime.now(timezone.utc))
+        control = db.query(ManagedSessionControlState).filter(ManagedSessionControlState.session_id == session_id).one()
+        response = build_session_response(
+            AgentsStore(db),
+            stored_session,
+            last_activity_at=stored_session.last_activity_at,
+            runtime_overlay=view,
+            owner_id=None,
+            control_overlay=control,
+        )
+
+        assert state.phase == "finished"
+        assert state.terminal_state == "session_ended"
+        assert state.terminal_source == "engine_attached_lease"
+        assert stored_session.ended_at is not None
+        assert stored_session.ended_at.replace(tzinfo=timezone.utc) == ended_at
+        assert response.runtime_facts is not None
+        assert response.runtime_facts.lifecycle.state == "closed"
+        assert response.runtime_facts.control.state == "online"
+        assert response.capabilities.live_control_available is False
+
+    engine.dispose()
+
+
 def test_heartbeat_detached_managed_codex_lease_is_recoverable_control_loss(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_managed_codex_detached.db")
     now = datetime.now(timezone.utc)
