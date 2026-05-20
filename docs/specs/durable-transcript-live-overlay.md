@@ -113,23 +113,23 @@ The current `SessionTranscriptPreviewResponse` can remain as the transport shape
 
 **Revisit if:** Session lists need preview queries over thousands of active sessions or multiple live providers add high-frequency streams.
 
-### Decision: Keep Legacy Columns Temporarily
+### Decision: Delete Legacy Live-Provisional Rows
 
 **Context:** `AgentEvent` already has `event_origin` and provisional fields in deployed DBs.
 
-**Choice:** Do not drop columns in this phase. Treat non-durable rows as legacy/hidden data and stop creating new ones.
+**Choice:** Do not drop columns in this phase, but delete rows with `event_origin='live_provisional'` during startup migration and stop creating new ones.
 
-**Rationale:** The launch-critical behavior is the read/write boundary. Dropping columns adds migration risk without improving user-facing truth.
+**Rationale:** This is pre-launch and zero-user. Hidden-but-present transcript-like rows are a future tax and can leak through branch/query edge cases. Dropping columns adds migration risk; deleting bad rows removes the user-visible lie.
 
 **Revisit if:** Before launch we schedule a schema cleanup pass.
 
-### Decision: Handle Archive Freshness Separately
+### Decision: Codex Turn Completion Pokes Archive Shipping
 
 **Context:** This incident also showed durable Codex JSONL ingest lagging behind live bridge output.
 
-**Choice:** The transcript truth redesign prevents preview pollution. A separate phase strengthens Codex turn-completion wakeups and tests archive freshness paths.
+**Choice:** The transcript truth redesign prevents preview pollution. A separate phase makes Codex turn-completion transcript wakes trigger an explicit archive stat/ship poke for the known rollout path. Live bridge observations still do not advance archive offsets by themselves.
 
-**Rationale:** Combining truth-boundary cleanup with shipper scheduling would blur two different failure modes.
+**Rationale:** The bridge already knows when a turn completed and which transcript path belongs to that turn. Treating that as a filesystem poke preserves the archive lane while avoiding discovery-scan latency.
 
 **Revisit if:** Tests reveal live overlay cannot be trusted without the shipper change in the same commit.
 
@@ -143,6 +143,8 @@ Acceptance criteria:
 - session event APIs return durable events only
 - search/count tests prove live preview text is not searchable archive content
 - preview tests prove cards can still show latest live text from observations
+- a direct regression covers the original symptom: a single cumulative live snapshot must not merge two durable assistant messages separated by tool activity
+- paginated event counts agree with returned durable events when a live preview exists
 
 Test commands:
 
@@ -155,9 +157,14 @@ cd server && DATABASE_URL=sqlite:// uv run pytest tests_lite/test_provisional_tr
 Acceptance criteria:
 
 - `reduce_bridge_transcript_observation` no longer materializes transcript events
-- `visible_transcript_event_predicate` is durable-only
+- `visible_transcript_event_predicate` is removed or made an alias of `durable_transcript_event_predicate`; transcript/event callsites use durable-only semantics
+- branch head filtering does not OR in `active_provisional_event_predicate`
 - `load_active_provisional_preview_map` or its replacement reads latest bridge transcript observations
-- terminal and durable-ingest reconciliation no longer depend on provisional `AgentEvent` rows
+- live overlay derivation specifies which observation wins per session, supersession against durable activity, and freshness windows for partial vs. completed turns
+- reducer/rebuild/terminal paths no longer depend on provisional `AgentEvent` reconciliation
+- dead provisional reconciliation/matching functions are deleted or reduced to startup cleanup helpers
+- startup initialization deletes legacy `live_provisional` event rows
+- timeline stream preview invalidation continues to notice bridge transcript observation changes
 - generated API type changes are avoided unless the response contract changes
 
 Test commands:
@@ -170,8 +177,8 @@ cd server && DATABASE_URL=sqlite:// uv run pytest tests_lite/test_provisional_tr
 
 Acceptance criteria:
 
-- Codex turn completion explicitly wakes or enqueues archive shipping for the current transcript path
-- engine tests cover turn-completed archive scheduling instead of asserting no scheduling
+- Codex turn completion explicitly wakes archive shipping for the current transcript path by forcing a filesystem stat/ship poke
+- engine tests cover turn-completed archive scheduling instead of asserting no scheduling for completed bridge observations
 - live bridge observations never advance archive offsets by themselves
 
 Test commands:
