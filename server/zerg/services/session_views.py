@@ -529,6 +529,8 @@ class SessionLivenessFactsResponse(UTCBaseModel):
     """
 
     control_path: str = Field(..., description="Does Longhouse own a control path? managed|unmanaged")
+    # Compatibility backstop for mixed-version clients/fixtures; response builders
+    # should always pass the explicit control observation from liveness facts.
     control: ControlObservationResponse = Field(
         default_factory=ControlObservationResponse,
         description="Observed managed-control availability",

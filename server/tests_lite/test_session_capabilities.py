@@ -851,6 +851,49 @@ def test_session_response_uses_owner_for_engine_channel_capability(monkeypatch, 
         engine.dispose()
 
 
+def test_session_response_projects_unmanaged_control_observation(tmp_path):
+    engine, session_local = _make_db(tmp_path)
+
+    try:
+        with session_local() as db:
+            session = _seed_agent_session(
+                db,
+                execution_home="unmanaged_local",
+                managed_transport=None,
+                source_runner_id=None,
+                source_runner_name=None,
+            )
+            _upsert_runtime_state(
+                db,
+                session,
+                phase="idle",
+                phase_source="semantic",
+                freshness_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+            )
+            runtime_overlay = resolve_runtime_overlay(
+                session,
+                last_activity_at=session.started_at,
+                runtime_state_map=load_runtime_state_map(db, [session.id]),
+                now=datetime.now(timezone.utc),
+            )
+
+            response = build_session_response(
+                AgentsStore(db),
+                session,
+                last_activity_at=session.started_at,
+                runtime_overlay=runtime_overlay,
+                owner_id=None,
+            )
+
+            assert response.runtime_facts is not None
+            assert response.runtime_facts.control_path == "unmanaged"
+            assert response.runtime_facts.control.state == "none"
+            assert response.runtime_facts.control.reason == "no_control_path"
+            assert response.capabilities.live_control_available is False
+    finally:
+        engine.dispose()
+
+
 def test_current_session_capabilities_do_not_treat_engine_online_as_bridge_attached(monkeypatch, tmp_path):
     engine, session_local = _make_db(tmp_path)
 

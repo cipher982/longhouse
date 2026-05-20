@@ -176,7 +176,7 @@ export interface LifecycleFact {
 
 export interface SessionLivenessFacts {
   control_path: "managed" | "unmanaged" | (string & {});
-  control?: ControlObservation | null;
+  control?: ControlObservation;
   process_state: "running" | "closed" | "unknown" | (string & {});
   host: HostObservation;
   process: ProcessObservation;
