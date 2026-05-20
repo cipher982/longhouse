@@ -21,6 +21,7 @@ from zerg.utils.time import normalize_utc
 
 CONTROL_SOURCE_HEARTBEAT = "machine_heartbeat"
 CONTROL_SOURCE_ENGINE_CHANNEL = "machine_control_ws"
+CONTROL_SOURCE_LEGACY_RUNNER = "legacy_runner"
 DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS = 15 * 60 * 1000
 _CONTROL_READY_BRIDGE_STATUSES = {"ready", "healthy", ""}
 
@@ -98,6 +99,37 @@ def _overlay_from_row(row: ManagedSessionControlState) -> ManagedControlOverlay:
         lease_observed_at=normalize_utc(row.lease_observed_at),
         lease_ttl_ms=int(row.lease_ttl_ms) if row.lease_ttl_ms is not None else None,
         control_expires_at=normalize_utc(row.control_expires_at),
+    )
+
+
+def live_transport_control_overlay(
+    session: AgentSession,
+    *,
+    source: str,
+    seen_at: datetime,
+    device_id: str | None = None,
+    machine_id: str | None = None,
+    ttl_ms: int = DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS,
+) -> ManagedControlOverlay:
+    """Represent an already-verified live control transport as control facts."""
+
+    normalized_seen_at = normalize_utc(seen_at) or _utc_now()
+    normalized_ttl_ms = int(ttl_ms or DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS)
+    return ManagedControlOverlay(
+        session_id=session.id,
+        provider=_normalized(getattr(session, "provider", None)).lower() or "unknown",
+        device_id=_normalized(device_id or getattr(session, "device_id", None)) or None,
+        machine_id=_normalized(machine_id or getattr(session, "source_runner_name", None)) or None,
+        transport=_normalized(getattr(session, "managed_transport", None)) or None,
+        lease_state="attached",
+        control_state="online",
+        reason=None,
+        source=source,
+        sequence=None,
+        last_control_seen_at=normalized_seen_at,
+        lease_observed_at=normalized_seen_at,
+        lease_ttl_ms=normalized_ttl_ms,
+        control_expires_at=normalized_seen_at + timedelta(milliseconds=normalized_ttl_ms),
     )
 
 

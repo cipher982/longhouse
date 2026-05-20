@@ -9,6 +9,9 @@ from zerg.models.agents import AgentSession
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
 from zerg.services.managed_control_dispatcher import select_managed_control_transport
+from zerg.services.managed_control_state import CONTROL_SOURCE_ENGINE_CHANNEL
+from zerg.services.managed_control_state import CONTROL_SOURCE_LEGACY_RUNNER
+from zerg.services.managed_control_state import live_transport_control_overlay
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.session_capabilities import SessionCapabilityFlags
 from zerg.services.session_capabilities import build_session_capabilities
@@ -18,6 +21,8 @@ from zerg.services.session_runner_state import managed_runner_host_state
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.session_execution_home import ManagedSessionTransport
+
+_ENGINE_ATTACHED_RUNTIME_SOURCES = {"codex_bridge", "codex_bridge_live"}
 
 
 def engine_control_online(session: AgentSession, owner_id: int | None) -> bool:
@@ -29,6 +34,15 @@ def engine_control_online(session: AgentSession, owner_id: int | None) -> bool:
         )
         == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
     )
+
+
+def engine_session_control_attached(session: AgentSession, runtime_overlay) -> bool:
+    """Return whether the engine channel is known to own this session."""
+
+    if str(getattr(session, "launch_state", "") or "").strip() == "live":
+        return True
+    runtime_source = str(getattr(runtime_overlay, "runtime_source", "") or "").strip()
+    return runtime_source in _ENGINE_ATTACHED_RUNTIME_SOURCES
 
 
 def with_engine_control_capability(
@@ -72,21 +86,37 @@ def current_session_capabilities(
         runtime_state_map=runtime_state_map,
         now=now,
     )
+    is_engine_session_attached = is_engine_control_online and engine_session_control_attached(session, runtime_overlay)
     capability_flags = with_engine_control_capability(
         capability_flags,
-        engine_control_online=is_engine_control_online,
+        engine_control_online=is_engine_session_attached,
     )
     binding_host_state = None
-    if is_engine_control_online:
+    control_overlay = control_state_map.get(session.id)
+    if is_engine_session_attached:
         binding_host_state = "online"
-    elif capability_flags.live_control_available or capability_flags.host_reattach_available:
+        if control_overlay is None:
+            control_overlay = live_transport_control_overlay(
+                session,
+                source=CONTROL_SOURCE_ENGINE_CHANNEL,
+                seen_at=now,
+            )
+    elif (capability_flags.live_control_available or capability_flags.host_reattach_available) and getattr(
+        session, "source_runner_id", None
+    ) is not None:
         binding_host_state = managed_runner_host_state(db, session)
+        if binding_host_state == "online" and control_overlay is None:
+            control_overlay = live_transport_control_overlay(
+                session,
+                source=CONTROL_SOURCE_LEGACY_RUNNER,
+                seen_at=now,
+            )
     liveness_facts = build_session_liveness_facts(
         runtime_view=runtime_overlay,
         capabilities=capability_flags,
         last_activity_at=last_activity_at,
         binding_host_state=binding_host_state,
-        control_overlay=control_state_map.get(session.id),
+        control_overlay=control_overlay,
         now=now,
     )
     return project_current_session_capabilities_from_facts(capability_flags, liveness_facts=liveness_facts, now=now)
@@ -95,5 +125,6 @@ def current_session_capabilities(
 __all__ = [
     "current_session_capabilities",
     "engine_control_online",
+    "engine_session_control_attached",
     "with_engine_control_capability",
 ]
