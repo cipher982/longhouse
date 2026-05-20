@@ -267,6 +267,10 @@ pub fn get_agent_outbox_dir() -> Result<PathBuf> {
     Ok(get_agent_dir()?.join("outbox"))
 }
 
+pub fn get_agent_runtime_events_outbox_dir() -> Result<PathBuf> {
+    Ok(get_agent_dir()?.join("runtime-events-outbox"))
+}
+
 pub fn get_agent_status_path() -> Result<PathBuf> {
     Ok(get_agent_dir()?.join("engine-status.json"))
 }

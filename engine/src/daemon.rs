@@ -336,12 +336,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut latest_transcript_wake_observed: HashMap<PathBuf, i64> = HashMap::new();
     let mut bridge_reaper = ManagedBridgeReaper::from_env();
     let mut outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
+    let mut runtime_outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
     let mut heartbeat_post_tasks: JoinSet<HeartbeatPostResult> = JoinSet::new();
     let mut claude_terminal_post_tasks: JoinSet<ClaudeTerminalPostResult> = JoinSet::new();
     let mut live_claude_channels: HashMap<String, ClaudeLiveChannelSession> = HashMap::new();
     let mut pending_claude_terminal_signals: HashMap<String, ClaudeTerminalSignal> = HashMap::new();
 
     let outbox_dir = config::get_agent_outbox_dir()?;
+    let runtime_events_outbox_dir = config::get_agent_runtime_events_outbox_dir()?;
     let status_path = config::get_agent_status_path()?;
     if let Some(parent) = status_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -488,6 +490,43 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     }
                     Some(Err(err)) => {
                         tracing::warn!("Outbox presence POST task failed: {}", err);
+                    }
+                    None => {}
+                }
+            }
+
+            runtime_outbox_post_result = runtime_outbox_post_tasks.join_next(), if !runtime_outbox_post_tasks.is_empty() => {
+                match runtime_outbox_post_result {
+                    Some(Ok((sent, kept, join_elapsed_ms, task_elapsed_ms))) => {
+                        let local_join_delay_ms = join_elapsed_ms.saturating_sub(task_elapsed_ms);
+                        if kept > 0 {
+                            tracing::warn!(
+                                sent,
+                                kept,
+                                task_elapsed_ms,
+                                join_elapsed_ms,
+                                local_join_delay_ms,
+                                "Outbox runtime-event POST kept files for retry"
+                            );
+                        } else if join_elapsed_ms > 1_000 {
+                            tracing::warn!(
+                                sent,
+                                task_elapsed_ms,
+                                join_elapsed_ms,
+                                local_join_delay_ms,
+                                "Outbox runtime-event POST was slow"
+                            );
+                        } else if sent > 0 {
+                            tracing::debug!(
+                                sent,
+                                task_elapsed_ms,
+                                join_elapsed_ms,
+                                "Outbox runtime-event POST sent files"
+                            );
+                        }
+                    }
+                    Some(Err(err)) => {
+                        tracing::warn!("Outbox runtime-event POST task failed: {}", err);
                     }
                     None => {}
                 }
@@ -701,6 +740,52 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         tracing::debug!(
                             pending_posts = outbox_result.posts.len(),
                             "Skipping outbox presence POST while previous POST is still in flight"
+                        );
+                    }
+                }
+
+                let runtime_posts = outbox::collect_runtime_event_outbox(&runtime_events_outbox_dir);
+                if !runtime_posts.is_empty() {
+                    if runtime_outbox_post_tasks.is_empty() {
+                        let client = client.clone();
+                        let post_count = runtime_posts.len();
+                        runtime_outbox_post_tasks.spawn_local(async move {
+                            let join_started = Instant::now();
+                            let post_task = tokio::spawn(async move {
+                                let task_started = Instant::now();
+                                let (sent, kept) = outbox::post_pending_runtime_event_files(
+                                    &client,
+                                    runtime_posts,
+                                )
+                                .await;
+                                (sent, kept, task_started.elapsed().as_millis() as u64)
+                            });
+                            match post_task.await {
+                                Ok((sent, kept, task_elapsed_ms)) => (
+                                    sent,
+                                    kept,
+                                    join_started.elapsed().as_millis() as u64,
+                                    task_elapsed_ms,
+                                ),
+                                Err(err) => {
+                                    tracing::warn!(
+                                        post_count,
+                                        "Outbox runtime-event POST worker task failed: {}",
+                                        err
+                                    );
+                                    (
+                                        0,
+                                        post_count,
+                                        join_started.elapsed().as_millis() as u64,
+                                        join_started.elapsed().as_millis() as u64,
+                                    )
+                                }
+                            }
+                        });
+                    } else {
+                        tracing::debug!(
+                            pending_posts = runtime_posts.len(),
+                            "Skipping outbox runtime-event POST while previous POST is still in flight"
                         );
                     }
                 }

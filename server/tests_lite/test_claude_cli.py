@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from types import SimpleNamespace
 
@@ -126,6 +127,7 @@ def test_launch_managed_local_from_api_uses_this_device_endpoint(monkeypatch, tm
             },
         }
     ]
+
 
 def test_claude_command_fails_when_native_channels_unavailable(monkeypatch, tmp_path):
     runner = CliRunner()
@@ -390,10 +392,12 @@ def test_verify_claude_channel_mcp_server_raises_actionable_setup_error(monkeypa
         claude_cli._verify_claude_channel_mcp_server(workspace_path=tmp_path)
 
 
-def test_post_claude_terminal_signal_posts_runtime_event(monkeypatch):
+def test_post_claude_terminal_signal_posts_runtime_event(monkeypatch, tmp_path):
     fake_client = _FakeClient(response=_FakeResponse(status_code=200, json_data={"accepted": 1}))
     monkeypatch.setattr(claude_cli.httpx, "Client", lambda timeout: fake_client)
     monkeypatch.setattr(claude_cli, "get_machine_name_label", lambda: "work-laptop")
+    outbox_dir = tmp_path / "runtime-events-outbox"
+    monkeypatch.setattr(claude_cli, "get_agent_runtime_events_outbox_dir", lambda: outbox_dir)
 
     ok = claude_cli._post_claude_terminal_signal(
         base_url="https://longhouse.test",
@@ -419,6 +423,41 @@ def test_post_claude_terminal_signal_posts_runtime_event(monkeypatch):
     assert event["payload"]["terminal_reason"] == "provider_exit"
     assert event["payload"]["terminal_source"] == "claude_channel_wrapper"
     assert event["payload"]["exit_code"] == 0
+    assert list(outbox_dir.glob("*.json")) == []
+
+
+def test_post_claude_terminal_signal_timeout_leaves_queued_event(monkeypatch, tmp_path, capsys):
+    class _TimeoutClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):
+            raise claude_cli.httpx.ReadTimeout("timed out")
+
+    monkeypatch.setattr(claude_cli.httpx, "Client", lambda timeout: _TimeoutClient())
+    monkeypatch.setattr(claude_cli, "get_machine_name_label", lambda: "work-laptop")
+    outbox_dir = tmp_path / "runtime-events-outbox"
+    monkeypatch.setattr(claude_cli, "get_agent_runtime_events_outbox_dir", lambda: outbox_dir)
+
+    ok = claude_cli._post_claude_terminal_signal(
+        base_url="https://longhouse.test",
+        token="zdt_test_token",
+        session_id="11111111-1111-4111-8111-111111111111",
+        provider_session_id="provider-123",
+        exit_code=0,
+    )
+
+    assert ok is False
+    assert "Queued for Machine Agent retry" in capsys.readouterr().out
+    queued = list(outbox_dir.glob("*.json"))
+    assert len(queued) == 1
+    event = json.loads(queued[0].read_text(encoding="utf-8"))
+    assert event["source"] == "claude_channel_wrapper"
+    assert event["kind"] == "terminal_signal"
+    assert event["payload"]["terminal_state"] == "session_ended"
 
 
 def test_collect_claude_launch_env_filters_empty_values(monkeypatch):
@@ -442,9 +481,7 @@ def test_launch_env_requires_flag_capable_claude_path_when_explicit_launch_env_r
     assert claude_cli._launch_env_requires_flag_capable_claude_path({}) is False
     assert claude_cli._launch_env_requires_flag_capable_claude_path({"AWS_PROFILE": "zh-qa-engineer"}) is False
     assert claude_cli._launch_env_requires_flag_capable_claude_path({"CLAUDE_CODE_USE_BEDROCK": ""}) is False
-    assert (
-        claude_cli._launch_env_requires_flag_capable_claude_path({"CLAUDE_CODE_USE_BEDROCK": "1"}) is True
-    )
+    assert claude_cli._launch_env_requires_flag_capable_claude_path({"CLAUDE_CODE_USE_BEDROCK": "1"}) is True
 
 
 def test_force_native_claude_channels_enabled_reads_hidden_override(monkeypatch):
@@ -659,10 +696,7 @@ def test_claude_command_force_native_channels_bypasses_bedrock_gate(monkeypatch,
     result = runner.invoke(app, ["claude", "--cwd", str(tmp_path)])
 
     assert result.exit_code == 0, result.output
-    assert (
-        f"Forcing native Claude channels via {claude_cli._FORCE_NATIVE_CLAUDE_CHANNELS_ENV}=1."
-        in result.output
-    )
+    assert f"Forcing native Claude channels via {claude_cli._FORCE_NATIVE_CLAUDE_CHANNELS_ENV}=1." in result.output
     assert "disabled by Claude launch env" not in result.output
     assert launch_calls[0]["native_claude_channels_available"] is True
     assert native_finalize_calls

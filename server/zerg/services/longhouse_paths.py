@@ -104,6 +104,11 @@ def get_agent_outbox_dir(base_dir: Path | None = None) -> Path:
     return get_agent_state_dir(base_dir) / "outbox"
 
 
+def get_agent_runtime_events_outbox_dir(base_dir: Path | None = None) -> Path:
+    """Return the durable runtime-event outbox directory."""
+    return get_agent_state_dir(base_dir) / "runtime-events-outbox"
+
+
 def get_agent_status_path(base_dir: Path | None = None) -> Path:
     """Return the local engine status file path."""
     return get_agent_state_dir(base_dir) / "engine-status.json"
