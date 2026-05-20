@@ -107,6 +107,37 @@ phase timestamp and still be sendable when the managed control lease is fresh.
 A session can have recent transcript activity and still be read-only when the
 managed control lease is stale.
 
+### Control State Truth Table
+
+Control freshness has two clocks:
+
+- **Control WebSocket clock:** the Machine Agent control channel is fresh when
+  its last heartbeat/command-result was seen within 90 seconds.
+- **Managed lease clock:** a managed lease is fresh until
+  `last_control_seen_at + lease_ttl_ms`. The current engine default is 15
+  minutes. The server may cap this to the accepted maximum.
+
+When both clocks exist, the control WebSocket is authoritative for `online`
+because it is the live command path. The heartbeat lease is the cold-start and
+compatibility source when the control WebSocket is absent.
+
+| Inputs | `control_state` | Notes |
+| --- | --- | --- |
+| `control_path=unmanaged` | `none` | Imported/read-only sessions do not have a control path. |
+| Lifecycle is closed | `offline` | Closed lifecycle wins; no later control signal can reopen without a new session. |
+| Fresh control WebSocket supports the session transport and the session is attached | `online` | Preferred live-control truth. |
+| No fresh control WebSocket, fresh managed lease with `state=attached` | `online` | Compatibility/cold-start truth. |
+| Fresh managed lease with `state=degraded` | `degraded` | Session remains open, but control is not sendable. |
+| Fresh managed lease with `state=detached` | `offline` | Session remains open during the reattach window. |
+| Full managed snapshot omits a previously managed session inside the reattach window | `offline` | Missing lease is control-down, not lifecycle-closed. |
+| Host is offline/unknown and no fresh control WebSocket exists | `unknown` | Runtime cannot prove whether the local control path still exists. |
+| Server restart or cold start with no fresh lease/control WebSocket yet | `unknown` | Fail closed for commands without closing lifecycle. |
+| Host online but lease/control WebSocket are stale or expired | `offline` | Control is unavailable, but lifecycle remains governed by closure rules. |
+
+Every `control_state != online` should carry a typed reason such as
+`no_control_path`, `cold_start`, `host_offline`, `lease_stale`,
+`ws_disconnected`, `degraded`, `detached`, or `closed`.
+
 ## Closure Rules
 
 ### Managed
@@ -203,53 +234,63 @@ This cleanup is complete when all of these are true:
 - Provider phase ordering remains about provider activity only.
 - Web and iOS consume the same server-side control contract instead of
   re-deriving control availability from stale phase/status strings.
+- Browser, iOS, and `/api/agents/*` command/capability surfaces consume the
+  same server-side projection.
+- Cold start with no fresh lease or control WebSocket yields
+  `control_state=unknown`, `can_send=false`, and open lifecycle until a closure
+  signal says otherwise.
+- Control-state transitions expose a typed reason for debugging and live QA.
 - The compatibility path that turns managed leases into provider phase signals
-  is removed or explicitly fenced as legacy-only with tests proving it no
-  longer drives control availability.
+  is removed, or explicitly fenced as legacy-only, with tests proving it no
+  longer drives control availability. No default production path may synthesize
+  provider `phase_signal` events merely to keep managed control available.
 
 ## Implementation Phases
 
-1. Lock the contract in tests.
-   Cover open+needs_user, closed+needs_user, stale activity, process gone,
-   host offline, managed detached, explicit terminal cases, stale phase with
-   fresh control lease, and recent transcript with stale control lease.
+1. Lock the existing lifecycle/activity contract in tests.
+   Cover open+needs_user, closed+needs_user, stale activity, process gone, host
+   offline, and explicit terminal cases without adding new control-axis behavior
+   yet.
 
-2. Complete unmanaged closure.
-   Full unmanaged heartbeat snapshots must stale missing bindings, close those
-   sessions as `process_gone`, and preserve old-engine compatibility when the
-   snapshot field is absent.
-
-3. Add host-expiry semantics.
-   Distinguish "machine offline too long" from "process gone" in both backend
-   projection and client-visible `terminal_reason`.
-
-4. Add managed disappearance semantics.
-   Treat managed detachment/missing managed leases as recoverable first. Close
-   only after a bounded reattach window, while preserving explicit terminal
-   signals as final.
-
-5. Add explicit managed control facts.
+2. Add explicit managed control facts.
    Introduce a `control`/`control_state` projection sourced from managed lease
    snapshots and the Machine Agent control channel. Keep compatibility with the
    current lease-derived runtime events until every caller consumes the new
    control fact.
 
-6. Move capability projection to control facts.
+3. Lock the control-axis contract in tests.
+   Cover stale phase with fresh control lease, recent transcript with stale
+   control lease, cold start with unknown control, detached/degraded control
+   with open lifecycle, and parity between browser/iOS capability projection
+   and `/api/agents/*`.
+
+4. Move capability projection to control facts.
    `live_control_available`, composer enablement, send-live, interrupt-live,
    and agent-facing capabilities should gate on lifecycle + structural managed
    control path + fresh control lease. They should not gate on phase freshness
    or transcript recency.
 
-7. Retire lease-as-phase compatibility.
-   Once capability and client projections consume explicit control facts, stop
-   generating provider `phase_signal` events merely to keep managed control
-   alive. Keep provider phase ordering solely for provider activity display.
-
-8. Verify client parity.
+5. Verify client parity.
    Web and iOS must consume `runtime_display.lifecycle`, `state`,
    `host_state`, `control_state`, and `terminal_reason` rather than
    re-deriving closure or control availability from `ended_at`, stale phase, or
    status strings.
+
+6. Fence and then retire lease-as-phase compatibility.
+   Ship one transition where explicit control facts and the old lease-derived
+   runtime events can coexist. Prove no capability or command gate consumes the
+   old phase path, then remove the default production path that generates
+   provider `phase_signal` events merely to keep managed control alive.
+
+7. Complete managed disappearance semantics.
+   Treat managed detachment/missing managed leases as recoverable first. Close
+   only after a bounded reattach window, while preserving explicit terminal
+   signals as final.
+
+8. Complete unmanaged closure and host-expiry semantics.
+   Full unmanaged heartbeat snapshots must stale missing bindings and close
+   those sessions as `process_gone`. Host expiry must remain distinguishable
+   from process death.
 
 ## Development Gate
 
@@ -263,6 +304,7 @@ lands:
 4. What persists so the state can be rebuilt after restart?
 5. Which projection field will web, iOS, and `/api/agents/*` consume?
 6. What positive and negative product-level regression prove the boundary?
+7. If another lane also reports related truth, what is the precedence rule?
 
 If a change needs one timestamp or reducer branch to answer more than one of
 those questions, split the fact before patching the edge case.
