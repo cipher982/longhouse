@@ -27,6 +27,9 @@ from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionTurn
 from zerg.services.agents_store import AgentsStore
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
+from zerg.services.managed_control_state import CONTROL_SOURCE_ENGINE_CHANNEL
+from zerg.services.managed_control_state import CONTROL_SOURCE_LEGACY_RUNNER
+from zerg.services.managed_control_state import live_transport_control_overlay
 from zerg.services.managed_local_transport import build_managed_local_attach_command
 from zerg.services.provisional_events import TranscriptPreview
 from zerg.services.session_capabilities import build_session_capabilities
@@ -35,6 +38,7 @@ from zerg.services.session_capabilities import build_session_input_presentation
 from zerg.services.session_capabilities import project_current_session_capabilities
 from zerg.services.session_capabilities import project_current_session_capabilities_from_facts
 from zerg.services.session_current_control import engine_control_online
+from zerg.services.session_current_control import engine_session_control_attached
 from zerg.services.session_current_control import with_engine_control_capability
 from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_runner_state import managed_runner_host_state
@@ -1156,7 +1160,8 @@ def build_session_response(
     include_runtime = should_include_runtime_view(session=session, runtime_view=runtime_overlay)
     capability_flags = build_session_capabilities(session)
     is_engine_control_online = engine_control_online(session, owner_id)
-    if is_engine_control_online:
+    is_engine_session_attached = is_engine_control_online and engine_session_control_attached(session, runtime_overlay)
+    if is_engine_session_attached:
         capability_flags = with_engine_control_capability(
             capability_flags,
             engine_control_online=True,
@@ -1166,10 +1171,25 @@ def build_session_response(
     if binding_overlay is not None:
         binding_host_state = binding_overlay.host_state
         binding_terminal_reason = binding_overlay.terminal_reason
-    if is_engine_control_online:
+    current_now = datetime.now(timezone.utc)
+    if is_engine_session_attached:
         binding_host_state = "online"
-    elif capability_flags.live_control_available or capability_flags.host_reattach_available:
+        if control_overlay is None:
+            control_overlay = live_transport_control_overlay(
+                session,
+                source=CONTROL_SOURCE_ENGINE_CHANNEL,
+                seen_at=current_now,
+            )
+    elif (capability_flags.live_control_available or capability_flags.host_reattach_available) and getattr(
+        session, "source_runner_id", None
+    ) is not None:
         binding_host_state = managed_runner_host_state(store.db, session) or binding_host_state
+        if binding_host_state == "online" and control_overlay is None:
+            control_overlay = live_transport_control_overlay(
+                session,
+                source=CONTROL_SOURCE_LEGACY_RUNNER,
+                seen_at=current_now,
+            )
     runtime_display = (
         build_session_runtime_display_response(
             runtime_overlay=runtime_overlay,
@@ -1331,8 +1351,15 @@ def build_active_session_response(
     message_count = (session.user_messages or 0) + (session.assistant_messages or 0)
     binding_host_state = binding_overlay.host_state if binding_overlay is not None else None
     binding_terminal_reason = binding_overlay.terminal_reason if binding_overlay is not None else None
+    current_now = datetime.now(timezone.utc)
     if capability_flags.live_control_available or capability_flags.host_reattach_available:
         binding_host_state = managed_runner_host_state(store.db, session) or binding_host_state
+        if binding_host_state == "online" and control_overlay is None:
+            control_overlay = live_transport_control_overlay(
+                session,
+                source=CONTROL_SOURCE_LEGACY_RUNNER,
+                seen_at=current_now,
+            )
     runtime_display = build_session_runtime_display_response(
         runtime_overlay=runtime_overlay,
         capability_flags=capability_flags,
