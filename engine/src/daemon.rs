@@ -58,7 +58,6 @@ const LOCAL_STATUS_INTERVAL_SECS: u64 = 1;
 const SERVER_HEARTBEAT_INTERVAL_SECS: u64 = 5 * 60;
 const FLIGHT_SAMPLE_INTERVAL_SECS: u64 = 5;
 const LOCAL_WORK_TICK_INTERVAL: Duration = Duration::from_millis(250);
-const WATCHER_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const OUTBOX_DRAIN_INTERVAL: Duration = Duration::from_millis(100);
 const MAX_TRANSCRIPT_WAKE_TRACKED_PATHS: usize = 4096;
 const OFFLINE_CONNECT_FAILURE_THRESHOLD: u32 = 3;
@@ -319,9 +318,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     outbox_timer.tick().await; // consume first immediate tick
     let mut local_retry_timer = tokio::time::interval(LOCAL_WORK_TICK_INTERVAL);
     local_retry_timer.tick().await; // consume first immediate tick
-    let mut watcher_poll_timer = tokio::time::interval(WATCHER_POLL_INTERVAL);
-    watcher_poll_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    watcher_poll_timer.tick().await; // consume first immediate tick
     let startup_reconciliation_timer = tokio::time::sleep(STARTUP_RECONCILIATION_SCAN_DELAY);
     tokio::pin!(startup_reconciliation_timer);
     let mut startup_reconciliation_pending = true;
@@ -599,25 +595,23 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // File change events (primary path). Keep collecting changes during
             // soft offline windows so short transport hiccups cannot stale the
             // local outbox or miss session wakeups.
-            _ = watcher_poll_timer.tick() => {
-                if let Some(first_event) = watcher.try_next_event() {
-                    let events = watcher.collect_batch_after(first_event, config.flush_interval).await;
-                    for event in events {
-                        if let Some(provider) = discovery::provider_for_path(&event.path, &providers) {
-                            scheduler.enqueue_observed_window(
-                                event.path,
-                                provider,
-                                WorkPriority::Live,
-                                "fsevent",
-                                event.observed_at_ms,
-                                event.latest_observed_at_ms,
-                            );
-                        } else {
-                            tracing::debug!(
-                                "Skipping file outside known providers: {}",
-                                event.path.display()
-                            );
-                        }
+            Some(first_event) = watcher.next_event() => {
+                let events = watcher.collect_batch_after(first_event, config.flush_interval).await;
+                for event in events {
+                    if let Some(provider) = discovery::provider_for_path(&event.path, &providers) {
+                        scheduler.enqueue_observed_window(
+                            event.path,
+                            provider,
+                            WorkPriority::Live,
+                            "fsevent",
+                            event.observed_at_ms,
+                            event.latest_observed_at_ms,
+                        );
+                    } else {
+                        tracing::debug!(
+                            "Skipping file outside known providers: {}",
+                            event.path.display()
+                        );
                     }
                 }
             }
