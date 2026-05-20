@@ -580,7 +580,7 @@ final class SessionViewModel: ObservableObject {
     @Published var isUpdatingLoopMode = false
     @Published var draftErrorMessage: String?
     @Published var loopModeErrorMessage: String?
-    @Published var transcriptDiagnostics: RenderBeaconReporter.WebKitDiagnostics?
+    private var transcriptDiagnostics: RenderBeaconReporter.WebKitDiagnostics?
     /// Most recent send outcome so the UI can distinguish an immediate
     /// dispatch from a queued input without pretending the latter was sent.
     @Published var lastSendOutcome: SessionInputOutcome?
