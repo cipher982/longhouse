@@ -185,7 +185,14 @@ def build_session_liveness_facts_response(
     control_overlay=None,
     now: datetime | None = None,
 ) -> SessionLivenessFactsResponse | None:
-    if runtime_overlay is None:
+    has_liveness_evidence = (
+        runtime_overlay is not None
+        or control_overlay is not None
+        or binding_overlay is not None
+        or binding_host_state is not None
+        or binding_terminal_reason is not None
+    )
+    if not has_liveness_evidence:
         return None
     facts = build_session_liveness_facts(
         runtime_view=runtime_overlay,
@@ -1184,8 +1191,6 @@ def build_session_response(
             binding_terminal_reason=binding_terminal_reason,
             control_overlay=control_overlay,
         )
-        if runtime_overlay is not None
-        else None
     )
     effective_capability_flags = project_current_session_capabilities_from_facts(
         capability_flags,
