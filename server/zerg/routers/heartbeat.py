@@ -234,7 +234,14 @@ def _runtime_events_for_managed_leases(
         state = (lease.state or "").strip().lower()
         runtime_key = runtime_key_for_session(provider, str(lease.session_id))
         payload = lease.model_dump(mode="json")
-        occurred_at = normalize_utc(lease.observed_at) or received_at
+        if lease.observed_at is not None:
+            payload["lease_observed_at"] = payload.get("observed_at")
+        # A managed-session lease is a fresh assertion from the current
+        # heartbeat snapshot. Some producers keep lease.observed_at pinned to
+        # the last provider phase transition, so using it as the runtime event
+        # timestamp lets live attached sessions go stale even while heartbeats
+        # keep arriving.
+        occurred_at = received_at
 
         if state == "attached":
             events.append(

@@ -49,7 +49,8 @@ EXPLICIT_CLOSED_TERMINAL_STATES = {"session_ended", "finished", "user_closed", "
 LIVE_EXECUTION_PHASES = {"thinking", "running"}
 ATTENTION_PHASES = {"blocked"}
 KNOWN_PHASES = {"thinking", "running", "blocked", "needs_user", "idle", "finished"}
-MANAGED_CODEX_RUNTIME_SOURCES = {"engine_attached_lease", "codex_bridge", "codex_bridge_live"}
+MANAGED_SESSION_LEASE_SOURCE = "engine_attached_lease"
+MANAGED_CODEX_RUNTIME_SOURCES = {MANAGED_SESSION_LEASE_SOURCE, "codex_bridge", "codex_bridge_live"}
 MANAGED_CODEX_INVARIANTS = ("ended_without_session_ended", "short_freshness")
 
 
@@ -69,6 +70,23 @@ def _payload_timestamp(payload: Mapping[str, Any], key: str) -> datetime | None:
         return normalize_utc(datetime.fromisoformat(raw.replace("Z", "+00:00")))
     except ValueError:
         return None
+
+
+def _stale_managed_lease_observed_at(
+    event: RuntimeEventIngest,
+    latest_phase_signal_at: datetime | None,
+) -> datetime | None:
+    if latest_phase_signal_at is None:
+        return None
+    if str(event.source or "").strip() != MANAGED_SESSION_LEASE_SOURCE:
+        return None
+    lease_observed_at = _payload_timestamp(event.payload or {}, "lease_observed_at") or _payload_timestamp(
+        event.payload or {},
+        "observed_at",
+    )
+    if lease_observed_at is None or lease_observed_at >= latest_phase_signal_at:
+        return None
+    return lease_observed_at
 
 
 def coerce_session_uuid(value: str | UUID | None) -> UUID | None:
@@ -765,6 +783,11 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
         next_phase = (event.phase or state.phase or "idle").strip() or "idle"
         if next_phase not in KNOWN_PHASES:
             next_phase = "idle"
+        stale_lease_observed_at = _stale_managed_lease_observed_at(event, latest_phase_signal_at)
+        if stale_lease_observed_at is not None:
+            current_phase = (state.phase or "idle").strip() or "idle"
+            if next_phase != current_phase:
+                return "ignored"
         next_active_tool = None
         if next_phase in {"running", "blocked"}:
             # Blocked-with-no-tool means "still blocked on the same tool as
@@ -773,6 +796,10 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
             next_active_tool = event.tool_name or (
                 state.active_tool if next_phase == "blocked" else None
             )
+        if stale_lease_observed_at is not None:
+            current_active_tool = state.active_tool if next_phase in {"running", "blocked"} else None
+            if (next_active_tool or None) != (current_active_tool or None):
+                return "ignored"
         phase_changed = state.phase != next_phase
         active_tool_changed = (
             next_phase in {"running", "blocked"}

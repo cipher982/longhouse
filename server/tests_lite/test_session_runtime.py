@@ -1111,7 +1111,6 @@ def test_heartbeat_attached_managed_codex_lease_materializes_live_idle_state(tmp
         assert state.last_runtime_signal_at is not None
         last_signal = state.last_runtime_signal_at.replace(tzinfo=timezone.utc)
         assert before_request <= last_signal <= after_request
-        assert last_signal == observed_at
         assert state.freshness_expires_at is not None
         lease_expiry = state.freshness_expires_at.replace(tzinfo=timezone.utc)
         assert lease_expiry >= before_request + timedelta(minutes=15)
@@ -1160,6 +1159,7 @@ def test_heartbeat_lease_uses_observed_at_so_stale_lease_cannot_override_newer_h
         )
         db.commit()
 
+    before_request = datetime.now(timezone.utc)
     for client in _client(SessionLocal):
         response = client.post(
             "/agents/heartbeat",
@@ -1185,6 +1185,7 @@ def test_heartbeat_lease_uses_observed_at_so_stale_lease_cannot_override_newer_h
             headers={"X-Agents-Token": "dev"},
         )
         assert response.status_code == 204, response.text
+    after_request = datetime.now(timezone.utc)
 
     with SessionLocal() as db:
         state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
@@ -1194,7 +1195,83 @@ def test_heartbeat_lease_uses_observed_at_so_stale_lease_cannot_override_newer_h
         assert state.active_tool is None
         assert state.last_runtime_signal_at.replace(tzinfo=timezone.utc) == hook_at
         assert len(observations) == 2
-        assert observations[-1].observed_at.replace(tzinfo=timezone.utc) == stale_lease_at
+        assert before_request <= observations[-1].observed_at.replace(tzinfo=timezone.utc) <= after_request
+        payload = _runtime_observation_payload(observations[-1])
+        assert payload["payload"]["lease_observed_at"].startswith(stale_lease_at.isoformat().replace("+00:00", ""))
+
+    engine.dispose()
+
+
+def test_heartbeat_lease_refreshes_same_phase_even_when_provider_phase_timestamp_is_old(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_stale_same_phase_lease.db")
+    now = datetime.now(timezone.utc)
+    stale_phase_at = now - timedelta(minutes=11)
+
+    with SessionLocal() as db:
+        session = _seed_session(
+            db,
+            provider="claude",
+            started_at=now - timedelta(hours=1),
+        )
+        session.execution_home = "managed_local"
+        session.managed_transport = "claude_channel_bridge"
+        session_id = session.id
+        runtime_key = runtime_key_for_session("claude", str(session_id))
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session_id,
+                    provider="claude",
+                    device_id="runtime-device",
+                    source="claude_hook",
+                    kind="phase_signal",
+                    phase="needs_user",
+                    occurred_at=stale_phase_at,
+                    freshness_ms=phase_freshness_ms("needs_user"),
+                    dedupe_key="old-needs-user",
+                    payload={},
+                )
+            ],
+        )
+        db.commit()
+
+    before_request = datetime.now(timezone.utc)
+    for client in _client(SessionLocal):
+        response = client.post(
+            "/agents/heartbeat",
+            json={
+                "version": "test",
+                "daemon_pid": 123,
+                "managed_sessions": [
+                    {
+                        "session_id": str(session_id),
+                        "provider": "claude",
+                        "machine_id": "cinder",
+                        "sequence": 45,
+                        "state": "attached",
+                        "phase": "needs_user",
+                        "tool_name": None,
+                        "bridge_status": "ready",
+                        "thread_subscription_status": None,
+                        "observed_at": stale_phase_at.isoformat(),
+                        "lease_ttl_ms": 15 * 60 * 1000,
+                    }
+                ],
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert response.status_code == 204, response.text
+    after_request = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+
+        assert state.phase == "needs_user"
+        assert before_request <= state.last_runtime_signal_at.replace(tzinfo=timezone.utc) <= after_request
+        assert state.freshness_expires_at is not None
+        assert state.freshness_expires_at.replace(tzinfo=timezone.utc) >= before_request + timedelta(minutes=15)
 
     engine.dispose()
 
