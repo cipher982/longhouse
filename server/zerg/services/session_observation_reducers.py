@@ -13,7 +13,6 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionObservation
-from zerg.services.provisional_events import materialize_bridge_transcript_event
 from zerg.services.raw_json_compression import CODEC_PLAIN
 from zerg.services.raw_json_compression import CODEC_ZSTD
 from zerg.services.raw_json_compression import compress_raw_json
@@ -30,27 +29,10 @@ class ProviderEventReduction:
 
 
 def reduce_bridge_transcript_observation(db: Session, observation: SessionObservation) -> AgentEvent | None:
-    if observation.kind != OBS_KIND_BRIDGE_TRANSCRIPT_DELTA:
+    _ = db
+    if observation.kind == OBS_KIND_BRIDGE_TRANSCRIPT_DELTA:
         return None
-    if observation.session_id is None:
-        return None
-
-    payload = _observation_payload(observation)
-    bridge_payload = payload.get("payload")
-    if not isinstance(bridge_payload, dict):
-        return None
-    bridge_payload = dict(bridge_payload)
-    bridge_payload["_session_observation_id"] = observation.observation_id
-
-    return materialize_bridge_transcript_event(
-        db,
-        session_id=observation.session_id,
-        provider=observation.provider,
-        source=observation.source,
-        occurred_at=observation.observed_at,
-        received_at=observation.received_at,
-        payload=bridge_payload,
-    )
+    return None
 
 
 def reduce_source_line_observation(db: Session, observation: SessionObservation) -> AgentSourceLine | None:

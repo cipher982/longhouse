@@ -1050,11 +1050,11 @@ def test_session_observation_rebuild_is_idempotent(tmp_path):
 
         events = db.query(AgentEvent).filter(AgentEvent.session_id == session.id).all()
 
-    assert first.agent_events == 1
-    assert second.agent_events == 1
-    assert len(events) == 1
-    assert events[0].content_text == "same after replay"
-    assert events[0].provisional_state == "active"
+    assert first.bridge_events_reduced == 1
+    assert second.bridge_events_reduced == 1
+    assert first.agent_events == 0
+    assert second.agent_events == 0
+    assert events == []
 
 
 def test_session_observation_rebuild_reports_reducer_errors(tmp_path):

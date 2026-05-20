@@ -20,7 +20,7 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionMessage
 from zerg.services.agents_store import AgentsStore
-from zerg.services.provisional_events import visible_transcript_event_predicate
+from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.session_messages import MESSAGE_STATUS_DELIVERING
 from zerg.services.session_messages import MESSAGE_STATUS_FAILED
 from zerg.services.session_messages import MESSAGE_STATUS_QUEUED
@@ -190,7 +190,7 @@ def load_session_tail(
         .filter(AgentEvent.session_id == session_id)
         .filter(AgentEvent.role.in_(["user", "assistant", "tool"]))
         .filter(AgentEvent.content_text.isnot(None))
-        .filter(visible_transcript_event_predicate())
+        .filter(durable_transcript_event_predicate())
         .order_by(AgentEvent.timestamp.desc(), AgentEvent.id.desc())
         .limit(limit)
         .all()

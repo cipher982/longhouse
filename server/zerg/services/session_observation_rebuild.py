@@ -19,7 +19,6 @@ from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.provisional_events import durable_transcript_event_predicate
-from zerg.services.provisional_events import reconcile_provisional_transcript_events
 from zerg.services.session_observation_reducers import reduce_bridge_transcript_observation
 from zerg.services.session_observation_reducers import reduce_provider_event_observation
 from zerg.services.session_observation_reducers import reduce_source_line_observation
@@ -97,12 +96,8 @@ def rebuild_session_observation_projections(
                 else:
                     skipped_observations += 1
             elif observation.kind == OBS_KIND_BRIDGE_TRANSCRIPT_DELTA:
-                event = reduce_bridge_transcript_observation(db, observation)
-                if event is not None:
-                    bridge_events_reduced += 1
-                    transcript_touched = True
-                else:
-                    skipped_observations += 1
+                reduce_bridge_transcript_observation(db, observation)
+                bridge_events_reduced += 1
             elif observation.kind == OBS_KIND_PROVIDER_SOURCE_LINE:
                 row = reduce_source_line_observation(db, observation)
                 if row is not None:
@@ -129,8 +124,6 @@ def rebuild_session_observation_projections(
 
     if session_id is not None:
         _rebuild_branch_prefix_projections(db, session_id=session_id)
-        if transcript_touched:
-            reconcile_provisional_transcript_events(db, session_id=session_id)
         _recompute_session_metadata(db, session_id=session_id)
 
     db.flush()

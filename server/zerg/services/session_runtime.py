@@ -33,7 +33,7 @@ from zerg.session_execution_home import SessionExecutionHome
 from zerg.utils.time import normalize_utc
 
 RuntimeEventKind = Literal["phase_signal", "progress_signal", "terminal_signal", "binding_signal"]
-RuntimeEventApplyOutcome = Literal["applied", "ignored", "protected_session_ended", "stored_provisional_transcript"]
+RuntimeEventApplyOutcome = Literal["applied", "ignored", "protected_session_ended", "stored_live_overlay"]
 
 PHASE_FRESHNESS = {
     "thinking": timedelta(seconds=90),
@@ -598,7 +598,7 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
             if observation_result.observation is None:
                 raise RuntimeError("accepted bridge transcript observation was not readable after insert")
             reduce_bridge_transcript_observation(db, observation_result.observation)
-            outcome = "stored_provisional_transcript"
+            outcome = "stored_live_overlay"
             _record_managed_codex_runtime_observation(event, outcome)
             if event.runtime_key not in updated_runtime_keys:
                 updated_runtime_keys.append(event.runtime_key)
@@ -925,10 +925,6 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
         phase_started_at = normalize_utc(state.phase_started_at)
         if phase_started_at is None or phase_started_at < occurred_at:
             state.phase_started_at = occurred_at
-        if terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES and event.session_id is not None:
-            from zerg.services.provisional_events import supersede_active_provisional_transcript_events
-
-            supersede_active_provisional_transcript_events(db, session_id=event.session_id)
         if terminal_state == "session_ended" and event.session_id is not None:
             session = db.query(AgentSession).filter(AgentSession.id == event.session_id).first()
             if session is not None:
