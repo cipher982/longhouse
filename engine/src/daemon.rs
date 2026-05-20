@@ -42,11 +42,17 @@ use crate::watcher::SessionWatcher;
 pub struct ConnectConfig {
     pub shipper_config: ShipperConfig,
     pub algo: CompressionAlgo,
-    pub flush_interval: Duration,
     pub fallback_scan_secs: u64,
     pub spool_replay_secs: u64,
     pub flight_recorder_dir: Option<PathBuf>,
 }
+
+/// How long to coalesce a burst of filesystem events before scheduling work.
+/// Short enough to leave the bulk of the 500ms file-append → HTTP-send budget
+/// for actual shipping; long enough to coalesce the typical JSONL append
+/// burst (production observation_window p95 ≈ 250ms — most events arrive
+/// within 100ms of each other).
+const WATCHER_FLUSH_INTERVAL: Duration = Duration::from_millis(100);
 
 const INITIAL_SPOOL_PATH_LIMIT: usize = 100;
 const PERIODIC_SPOOL_PATH_LIMIT: usize = 50;
@@ -262,7 +268,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut watcher = SessionWatcher::new(&providers)?;
     tracing::info!(
         "Daemon ready — watching for file changes (flush interval: {:?})",
-        config.flush_interval
+        WATCHER_FLUSH_INTERVAL
     );
 
     // 7. Build bounded per-path scheduler and queue startup work.
@@ -596,7 +602,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // soft offline windows so short transport hiccups cannot stale the
             // local outbox or miss session wakeups.
             Some(first_event) = watcher.next_event() => {
-                let events = watcher.collect_batch_after(first_event, config.flush_interval).await;
+                let events = watcher.collect_batch_after(first_event, WATCHER_FLUSH_INTERVAL).await;
                 for event in events {
                     if let Some(provider) = discovery::provider_for_path(&event.path, &providers) {
                         scheduler.enqueue_observed_window(

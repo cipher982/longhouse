@@ -147,10 +147,6 @@ enum Commands {
         #[arg(long, default_value = "zstd")]
         compression: String,
 
-        /// Flush interval in milliseconds (how long to coalesce file events)
-        #[arg(long, default_value = "500")]
-        flush_ms: u64,
-
         /// Reconciliation full scan interval in seconds
         #[arg(long, default_value = "300")]
         fallback_scan_secs: u64,
@@ -701,7 +697,6 @@ fn main() -> anyhow::Result<()> {
             token,
             db,
             compression,
-            flush_ms,
             fallback_scan_secs,
             spool_replay_secs,
             max_batch_bytes,
@@ -722,7 +717,6 @@ fn main() -> anyhow::Result<()> {
             let connect_config = daemon::ConnectConfig {
                 shipper_config,
                 algo,
-                flush_interval: std::time::Duration::from_millis(flush_ms),
                 fallback_scan_secs,
                 spool_replay_secs,
                 flight_recorder_dir: if flight::flight_recorder_enabled() {
