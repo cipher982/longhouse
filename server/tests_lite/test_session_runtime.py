@@ -41,6 +41,7 @@ from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_runtime import managed_codex_liveness_invariant_counts
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
+from zerg.services.session_views import build_session_response
 from zerg.services.unmanaged_bindings import load_binding_overlay
 
 
@@ -1060,7 +1061,7 @@ def test_current_presence_state_for_session_uses_runtime_overlay(tmp_path):
     engine.dispose()
 
 
-def test_heartbeat_attached_managed_codex_lease_materializes_live_idle_state(tmp_path):
+def test_heartbeat_attached_managed_codex_lease_materializes_control_without_runtime_phase(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_managed_codex_lease.db")
     now = datetime.now(timezone.utc)
 
@@ -1072,6 +1073,8 @@ def test_heartbeat_attached_managed_codex_lease_materializes_live_idle_state(tmp
         )
         session.execution_home = "managed_local"
         session.managed_transport = "codex_app_server"
+        session.source_runner_id = 17
+        session.source_runner_name = "cinder"
         session.ended_at = now - timedelta(hours=2)
         db.commit()
         session_id = session.id
@@ -1107,23 +1110,31 @@ def test_heartbeat_attached_managed_codex_lease_materializes_live_idle_state(tmp
     after_request = datetime.now(timezone.utc)
 
     with SessionLocal() as db:
-        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        assert db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).first() is None
         stored_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
-        view = build_runtime_view(state=state, session=stored_session, now=after_request)
+        control = db.query(ManagedSessionControlState).filter(ManagedSessionControlState.session_id == session_id).one()
 
-        assert state.phase == "idle"
-        assert state.last_runtime_signal_at is not None
-        last_signal = state.last_runtime_signal_at.replace(tzinfo=timezone.utc)
-        assert before_request <= last_signal <= after_request
-        assert last_signal == observed_at
-        assert state.freshness_expires_at is not None
-        lease_expiry = state.freshness_expires_at.replace(tzinfo=timezone.utc)
-        assert lease_expiry >= before_request + timedelta(minutes=15)
-        assert view.status == "idle"
-        assert view.presence_state == "idle"
-        assert view.display_phase == "Idle"
-        assert view.confidence == "live"
+        assert control.control_state == "online"
+        assert control.reason is None
+        assert control.source == "machine_heartbeat"
+        assert control.lease_observed_at.replace(tzinfo=timezone.utc) == observed_at
+        assert before_request <= control.last_control_seen_at.replace(tzinfo=timezone.utc) <= after_request
+        assert control.control_expires_at.replace(tzinfo=timezone.utc) >= before_request + timedelta(minutes=15)
         assert stored_session.ended_at is None
+
+        response = build_session_response(
+            AgentsStore(db),
+            stored_session,
+            last_activity_at=stored_session.last_activity_at,
+            runtime_overlay=None,
+            owner_id=None,
+            control_overlay=control,
+        )
+        assert response.runtime_display is None
+        assert response.runtime_facts is not None
+        assert response.runtime_facts.phase.kind is None
+        assert response.runtime_facts.control.state == "online"
+        assert response.capabilities.live_control_available is True
 
     engine.dispose()
 
@@ -1192,14 +1203,15 @@ def test_heartbeat_lease_uses_observed_at_so_stale_lease_cannot_override_newer_h
     with SessionLocal() as db:
         state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
         observations = _runtime_observations(db, runtime_key)
+        control = db.query(ManagedSessionControlState).filter(ManagedSessionControlState.session_id == session_id).one()
 
         assert state.phase == "thinking"
         assert state.active_tool is None
         assert state.last_runtime_signal_at.replace(tzinfo=timezone.utc) == hook_at
-        assert len(observations) == 2
-        assert observations[-1].observed_at.replace(tzinfo=timezone.utc) == stale_lease_at
-        payload = _runtime_observation_payload(observations[-1])
-        assert payload["payload"]["lease_observed_at"].startswith(stale_lease_at.isoformat().replace("+00:00", ""))
+        assert len(observations) == 1
+        assert observations[0].observed_at.replace(tzinfo=timezone.utc) == hook_at
+        assert control.control_state == "online"
+        assert control.lease_observed_at.replace(tzinfo=timezone.utc) == stale_lease_at
 
     engine.dispose()
 
@@ -1217,6 +1229,8 @@ def test_heartbeat_lease_refreshes_same_phase_even_when_provider_phase_timestamp
         )
         session.execution_home = "managed_local"
         session.managed_transport = "claude_channel_bridge"
+        session.source_runner_id = 17
+        session.source_runner_name = "cinder"
         session_id = session.id
         runtime_key = runtime_key_for_session("claude", str(session_id))
         ingest_runtime_events(
@@ -1269,13 +1283,36 @@ def test_heartbeat_lease_refreshes_same_phase_even_when_provider_phase_timestamp
 
     with SessionLocal() as db:
         state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        stored_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        view = build_runtime_view(state=state, session=stored_session, now=after_request)
+        control = db.query(ManagedSessionControlState).filter(ManagedSessionControlState.session_id == session_id).one()
+        capabilities = build_session_capabilities(stored_session)
+        facts = build_session_liveness_facts(
+            runtime_view=view,
+            capabilities=capabilities,
+            last_activity_at=stored_session.last_activity_at,
+            binding_host_state="online",
+            control_overlay=control,
+            now=after_request,
+        )
+        projected = project_current_session_capabilities_from_facts(
+            capabilities,
+            liveness_facts=facts,
+            now=after_request,
+        )
 
         assert state.phase == "needs_user"
         assert state.last_runtime_signal_at.replace(tzinfo=timezone.utc) == stale_phase_at
         assert state.last_live_at is not None
-        assert before_request <= state.last_live_at.replace(tzinfo=timezone.utc) <= after_request
+        assert state.last_live_at.replace(tzinfo=timezone.utc) == stale_phase_at
         assert state.freshness_expires_at is not None
-        assert state.freshness_expires_at.replace(tzinfo=timezone.utc) >= before_request + timedelta(minutes=15)
+        assert state.freshness_expires_at.replace(tzinfo=timezone.utc) < before_request
+        assert control.control_state == "online"
+        assert before_request <= control.last_control_seen_at.replace(tzinfo=timezone.utc) <= after_request
+        assert control.control_expires_at.replace(tzinfo=timezone.utc) >= before_request + timedelta(minutes=15)
+        assert facts.phase.kind is None
+        assert facts.control.state == "online"
+        assert projected.live_control_available is True
 
     engine.dispose()
 
@@ -1349,13 +1386,13 @@ def test_heartbeat_lease_refresh_after_progress_restores_control_projection(tmp_
         stored_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         view = build_runtime_view(state=state, session=stored_session, now=after_request)
         capabilities = build_session_capabilities(stored_session)
-        control_state_map = load_managed_control_state_map(db, [session_id])
+        control = db.query(ManagedSessionControlState).filter(ManagedSessionControlState.session_id == session_id).one()
         facts = build_session_liveness_facts(
             runtime_view=view,
             capabilities=capabilities,
             last_activity_at=stored_session.last_activity_at,
             binding_host_state="online",
-            control_overlay=control_state_map.get(session_id),
+            control_overlay=control,
             now=after_request,
         )
         projected = project_current_session_capabilities_from_facts(
@@ -1365,13 +1402,15 @@ def test_heartbeat_lease_refresh_after_progress_restores_control_projection(tmp_
         )
 
         assert state.phase == "idle"
-        assert state.phase_source == "engine_attached_lease"
+        assert state.phase_source == "progress"
         assert state.last_runtime_signal_at is None
-        assert state.last_live_at is not None
-        assert before_request <= state.last_live_at.replace(tzinfo=timezone.utc) <= after_request
-        assert view.runtime_source == "engine_attached_lease"
-        assert view.runtime_phase == "idle"
-        assert facts.phase.kind == "idle"
+        assert state.last_live_at is None
+        assert control.control_state == "online"
+        assert before_request <= control.last_control_seen_at.replace(tzinfo=timezone.utc) <= after_request
+        assert control.control_expires_at.replace(tzinfo=timezone.utc) >= before_request + timedelta(minutes=15)
+        assert view.runtime_source == "progress"
+        assert view.runtime_phase is None
+        assert facts.phase.kind is None
         assert facts.control.state == "online"
         assert facts.control.source == "machine_heartbeat"
         assert projected.live_control_available is True
@@ -1427,6 +1466,7 @@ def test_heartbeat_managed_lease_writes_control_state_without_phase_dependency(t
 
     with SessionLocal() as db:
         stored_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        assert db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session_id).first() is None
         control = db.query(ManagedSessionControlState).filter(ManagedSessionControlState.session_id == session_id).one()
         assert control.control_state == "online"
         assert control.reason is None
@@ -1456,6 +1496,19 @@ def test_heartbeat_managed_lease_writes_control_state_without_phase_dependency(t
         assert facts.phase.kind is None
         assert facts.control.state == "online"
         assert projected.live_control_available is True
+        response = build_session_response(
+            AgentsStore(db),
+            stored_session,
+            last_activity_at=stored_session.last_activity_at,
+            runtime_overlay=None,
+            owner_id=None,
+            control_overlay=control,
+        )
+        assert response.runtime_display is None
+        assert response.runtime_facts is not None
+        assert response.runtime_facts.phase.kind is None
+        assert response.runtime_facts.control.state == "online"
+        assert response.capabilities.live_control_available is True
 
     engine.dispose()
 
@@ -1710,16 +1763,28 @@ def test_heartbeat_detached_managed_codex_lease_is_recoverable_control_loss(tmp_
         assert response.status_code == 204, response.text
 
     with SessionLocal() as db:
-        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        assert db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).first() is None
         stored_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
-        view = build_runtime_view(state=state, session=stored_session, now=datetime.now(timezone.utc))
+        control = db.query(ManagedSessionControlState).filter(ManagedSessionControlState.session_id == session_id).one()
+        response = build_session_response(
+            AgentsStore(db),
+            stored_session,
+            last_activity_at=stored_session.last_activity_at,
+            runtime_overlay=None,
+            owner_id=None,
+            control_overlay=control,
+        )
 
-        assert state.phase == "blocked"
-        assert state.active_tool == "control path"
-        assert state.terminal_state is None
-        assert view.status == "active"
-        assert view.presence_state == "blocked"
-        assert view.display_phase == "Blocked on control path"
+        assert control.control_state == "offline"
+        assert control.reason == "detached"
+        assert response.runtime_display is None
+        assert response.runtime_facts is not None
+        assert response.runtime_facts.phase.kind is None
+        assert response.runtime_facts.lifecycle.state == "open"
+        assert response.runtime_facts.control.state == "offline"
+        assert response.runtime_facts.control.reason == "detached"
+        assert response.capabilities.live_control_available is False
+        assert response.capabilities.host_reattach_available is True
 
     engine.dispose()
 
@@ -2948,6 +3013,8 @@ def test_heartbeat_managed_reattach_reopens_synthetic_process_gone_terminal(tmp_
         session = _seed_session(db, provider="codex", started_at=now - timedelta(days=2))
         session.execution_home = "managed_local"
         session.managed_transport = "codex_app_server"
+        session.source_runner_id = 17
+        session.source_runner_name = "cinder"
         session_id = session.id
         runtime_key = runtime_key_for_session("codex", str(session_id))
         ingest_runtime_events(
@@ -2992,14 +3059,24 @@ def test_heartbeat_managed_reattach_reopens_synthetic_process_gone_terminal(tmp_
         assert response.status_code == 204, response.text
 
     with SessionLocal() as db:
-        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        assert db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).first() is None
         stored_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
-        view = build_runtime_view(state=state, session=stored_session, now=datetime.now(timezone.utc))
+        control = db.query(ManagedSessionControlState).filter(ManagedSessionControlState.session_id == session_id).one()
+        response = build_session_response(
+            AgentsStore(db),
+            stored_session,
+            last_activity_at=stored_session.last_activity_at,
+            runtime_overlay=None,
+            owner_id=None,
+            control_overlay=control,
+        )
 
-        assert state.phase == "idle"
-        assert state.terminal_state is None
-        assert view.status == "idle"
-        assert view.presence_state == "idle"
+        assert control.control_state == "online"
+        assert response.runtime_display is None
+        assert response.runtime_facts is not None
+        assert response.runtime_facts.lifecycle.state == "open"
+        assert response.runtime_facts.control.state == "online"
+        assert response.capabilities.live_control_available is True
 
     engine.dispose()
 

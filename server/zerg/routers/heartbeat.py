@@ -46,7 +46,6 @@ from zerg.services.managed_control_state import upsert_managed_control_leases
 from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
-from zerg.services.session_runtime import runtime_key_for_session
 from zerg.services.write_serializer import get_write_serializer
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
@@ -149,13 +148,6 @@ class HeartbeatIn(BaseModel):
     unmanaged_session_bindings: list[UnmanagedSessionBindingIn] = Field(default_factory=list)
 
 
-def _managed_session_phase(lease: ManagedSessionLeaseIn) -> str:
-    phase = (lease.phase or "").strip()
-    if phase in {"idle", "thinking", "running", "blocked", "needs_user"}:
-        return phase
-    return "idle"
-
-
 def _managed_lease_provider_label(lease: ManagedSessionLeaseIn) -> str:
     provider = (lease.provider or "").strip().lower()
     return provider if provider in MANAGED_SESSION_LEASE_PROVIDERS else "other"
@@ -197,11 +189,6 @@ def _record_managed_session_lease(lease: ManagedSessionLeaseIn) -> None:
     ).inc()
 
 
-def _dedupe_key_for_lease(lease: ManagedSessionLeaseIn) -> str:
-    machine_id = (lease.machine_id or "unknown").strip() or "unknown"
-    return f"engine-attached-lease:{machine_id}:{lease.session_id}:{lease.sequence}"
-
-
 def _is_managed_codex_session(session: AgentSession | None) -> bool:
     if session is None:
         return False
@@ -226,76 +213,44 @@ def _runtime_events_for_managed_leases(
     device_id: str,
     received_at: datetime,
 ) -> list[RuntimeEventIngest]:
-    events: list[RuntimeEventIngest] = []
+    del device_id, received_at
     for lease in leases:
         _record_managed_session_lease(lease)
-        provider = (lease.provider or "").strip().lower() or "unknown"
-        state = (lease.state or "").strip().lower()
-        runtime_key = runtime_key_for_session(provider, str(lease.session_id))
-        payload = lease.model_dump(mode="json")
-        if lease.observed_at is not None:
-            payload["lease_observed_at"] = payload.get("observed_at")
-        payload["lease_refresh_at"] = received_at.isoformat()
-        # A managed-session lease is a fresh assertion from the current
-        # heartbeat snapshot. Some producers keep lease.observed_at pinned to
-        # the last provider phase transition, so the runtime reducer uses
-        # lease_refresh_at to extend freshness without reordering transcript
-        # progress events that happened after the provider phase timestamp.
-        occurred_at = normalize_utc(lease.observed_at) or received_at
+    # Managed lease freshness is materialized into ManagedSessionControlState.
+    # The runtime reducer still accepts historical engine_attached_lease events,
+    # but the default heartbeat path must not synthesize provider phase events
+    # merely to keep managed control alive.
+    return []
 
-        if state == "attached":
-            events.append(
-                RuntimeEventIngest(
-                    runtime_key=runtime_key,
-                    session_id=lease.session_id,
-                    provider=provider,
-                    device_id=device_id,
-                    source=MANAGED_SESSION_LEASE_SOURCE,
-                    kind="phase_signal",
-                    phase=_managed_session_phase(lease),
-                    tool_name=lease.tool_name,
-                    occurred_at=occurred_at,
-                    freshness_ms=lease.lease_ttl_ms,
-                    dedupe_key=_dedupe_key_for_lease(lease),
-                    payload=payload,
-                )
-            )
-        elif state == "degraded":
-            events.append(
-                RuntimeEventIngest(
-                    runtime_key=runtime_key,
-                    session_id=lease.session_id,
-                    provider=provider,
-                    device_id=device_id,
-                    source=MANAGED_SESSION_LEASE_SOURCE,
-                    kind="phase_signal",
-                    phase="blocked",
-                    tool_name=lease.tool_name or "control path",
-                    occurred_at=occurred_at,
-                    freshness_ms=lease.lease_ttl_ms,
-                    dedupe_key=_dedupe_key_for_lease(lease),
-                    payload=payload,
-                )
-            )
-        elif state == "detached":
-            events.append(
-                RuntimeEventIngest(
-                    runtime_key=runtime_key,
-                    session_id=lease.session_id,
-                    provider=provider,
-                    device_id=device_id,
-                    source=MANAGED_SESSION_LEASE_SOURCE,
-                    kind="phase_signal",
-                    phase="blocked",
-                    tool_name=lease.tool_name or "control path",
-                    occurred_at=occurred_at,
-                    freshness_ms=lease.lease_ttl_ms,
-                    dedupe_key=_dedupe_key_for_lease(lease),
-                    payload=payload,
-                )
-            )
 
-    return events
+def _clear_synthetic_managed_missing_runtime_on_reattach(
+    db: Session,
+    leases: list[ManagedSessionLeaseIn],
+) -> set[UUID]:
+    """Drop synthetic missing-lease runtime terminals when control reattaches."""
+
+    attached_session_ids = {
+        lease.session_id
+        for lease in leases
+        if lease.session_id is not None and (lease.state or "").strip().lower() == "attached"
+    }
+    if not attached_session_ids:
+        return set()
+
+    touched_session_ids: set[UUID] = set()
+    rows = (
+        db.query(SessionRuntimeState)
+        .filter(SessionRuntimeState.session_id.in_(attached_session_ids))
+        .filter(SessionRuntimeState.terminal_state == "process_gone")
+        .filter(SessionRuntimeState.terminal_source == MANAGED_SESSION_LEASE_SOURCE)
+        .all()
+    )
+    for row in rows:
+        if row.session_id is None:
+            continue
+        touched_session_ids.add(row.session_id)
+        db.delete(row)
+    return touched_session_ids
 
 
 def _managed_lease_history_keys(db: Session, runtime_keys: list[str]) -> set[str]:
@@ -899,6 +854,14 @@ async def ingest_heartbeat(
                             session_id,
                             (None, MANAGED_SESSION_LEASE_SOURCE),
                         )
+                    for session_id in _clear_synthetic_managed_missing_runtime_on_reattach(
+                        write_db,
+                        _managed_leases,
+                    ):
+                        publish_sessions.setdefault(
+                            session_id,
+                            (None, MANAGED_SESSION_LEASE_SOURCE),
+                        )
                 if _managed_leases_present:
                     for session_id in mark_missing_managed_control_leases(
                         write_db,
@@ -941,16 +904,21 @@ async def ingest_heartbeat(
                             # Runtime state is the more specific signal when both runtime and binding snapshots touch
                             # the same session in one heartbeat.
                             publish_sessions[event.session_id] = (event.provider, event.source)
-                    for lease in _managed_leases:
-                        if (lease.state or "").strip().lower() != "attached":
-                            continue
-                        session = write_db.query(AgentSession).filter(AgentSession.id == lease.session_id).first()
-                        if (
-                            _is_managed_codex_session(session)
-                            and session.ended_at is not None
-                            and not _has_final_managed_codex_terminal(write_db, lease.session_id)
-                        ):
-                            session.ended_at = None
+                for lease in _managed_leases:
+                    if (lease.state or "").strip().lower() != "attached":
+                        continue
+                    session = write_db.query(AgentSession).filter(AgentSession.id == lease.session_id).first()
+                    if (
+                        _is_managed_codex_session(session)
+                        and session.ended_at is not None
+                        and not _has_final_managed_codex_terminal(write_db, lease.session_id)
+                    ):
+                        session.ended_at = None
+                        if lease.session_id is not None:
+                            publish_sessions.setdefault(
+                                lease.session_id,
+                                (lease.provider, MANAGED_SESSION_LEASE_SOURCE),
+                            )
                 return publish_sessions
 
             ws = get_write_serializer()

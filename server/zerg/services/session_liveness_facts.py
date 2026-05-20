@@ -170,7 +170,9 @@ def _control_observation(
     )
 
 
-def _explicit_lifecycle(runtime_view: SessionRuntimeView) -> LifecycleFact | None:
+def _explicit_lifecycle(runtime_view: SessionRuntimeView | None) -> LifecycleFact | None:
+    if runtime_view is None:
+        return None
     terminal_state = _normalized(runtime_view.terminal_state)
     if terminal_state is None:
         return None
@@ -183,7 +185,15 @@ def _explicit_lifecycle(runtime_view: SessionRuntimeView) -> LifecycleFact | Non
     return LifecycleFact(state="closed", reason=terminal_reason or "provider_signal", observed_at=observed_at)
 
 
-def _phase_observation(runtime_view: SessionRuntimeView) -> PhaseObservation:
+def _phase_observation(runtime_view: SessionRuntimeView | None) -> PhaseObservation:
+    if runtime_view is None:
+        return PhaseObservation(
+            kind=None,
+            tool=None,
+            source=None,
+            observed_at=None,
+            expires_at=None,
+        )
     source = _normalized(runtime_view.runtime_source)
     if source in {None, "fallback", "progress"} or runtime_view.confidence != "live":
         return PhaseObservation(
@@ -288,7 +298,7 @@ def _process_state(
 
 def build_session_liveness_facts(
     *,
-    runtime_view: SessionRuntimeView,
+    runtime_view: SessionRuntimeView | None,
     capabilities: SessionCapabilityFlags,
     last_activity_at: datetime | None,
     binding_overlay=None,
@@ -314,8 +324,8 @@ def build_session_liveness_facts(
     phase = _phase_observation(runtime_view)
     activity = ActivityObservation(
         last_transcript_at=last_activity_at,
-        last_runtime_signal_at=runtime_view.presence_updated_at,
-        last_progress_at=runtime_view.last_progress_at,
+        last_runtime_signal_at=runtime_view.presence_updated_at if runtime_view is not None else None,
+        last_progress_at=runtime_view.last_progress_at if runtime_view is not None else None,
     )
     lifecycle = _lifecycle(
         explicit=_explicit_lifecycle(runtime_view),
