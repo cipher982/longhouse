@@ -48,7 +48,6 @@ pub struct ConnectConfig {
     pub flight_recorder_dir: Option<PathBuf>,
 }
 
-const DAEMON_MAX_IN_FLIGHT_CAP: usize = 2;
 const INITIAL_SPOOL_PATH_LIMIT: usize = 100;
 const PERIODIC_SPOOL_PATH_LIMIT: usize = 50;
 const PATH_SPOOL_REPLAY_LIMIT: usize = 50;
@@ -268,7 +267,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     );
 
     // 7. Build bounded per-path scheduler and queue startup work.
-    let max_in_flight = daemon_max_in_flight(&config.shipper_config);
+    // Total breadth comes from `config.workers` (num_cpus by default); the
+    // scheduler enforces per-priority caps (LIVE_IN_FLIGHT_CAP=8 in scheduler.rs)
+    // and a Live reservation so backlog work can't drain Live slots.
+    let max_in_flight = config.shipper_config.workers.max(1);
     let mut scheduler = PathScheduler::new(max_in_flight);
     let mut in_flight = JoinSet::new();
     let mut discovery_tasks: JoinSet<DiscoveryTaskResult> = JoinSet::new();
@@ -1061,10 +1063,6 @@ fn runtime_truth_signature(payload: &heartbeat::HeartbeatPayload) -> String {
         managed.join(";"),
         unmanaged.join(";")
     )
-}
-
-fn daemon_max_in_flight(config: &ShipperConfig) -> usize {
-    config.workers.max(1).min(DAEMON_MAX_IN_FLIGHT_CAP)
 }
 
 fn local_retry_delay(priority: WorkPriority) -> Duration {
