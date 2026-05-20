@@ -27,8 +27,8 @@ from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionTurn
 from zerg.services.agents_store import AgentsStore
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
-from zerg.services.managed_control_state import CONTROL_SOURCE_ENGINE_CHANNEL
 from zerg.services.managed_control_state import CONTROL_SOURCE_LEGACY_RUNNER
+from zerg.services.managed_control_state import engine_channel_control_overlay
 from zerg.services.managed_control_state import live_transport_control_overlay
 from zerg.services.managed_local_transport import build_managed_local_attach_command
 from zerg.services.provisional_events import TranscriptPreview
@@ -1174,11 +1174,7 @@ def build_session_response(
     current_now = datetime.now(timezone.utc)
     if is_engine_session_attached:
         binding_host_state = "online"
-        control_overlay = live_transport_control_overlay(
-            session,
-            source=CONTROL_SOURCE_ENGINE_CHANNEL,
-            seen_at=current_now,
-        )
+        control_overlay = engine_channel_control_overlay(session, seen_at=current_now)
     elif (capability_flags.live_control_available or capability_flags.host_reattach_available) and getattr(
         session, "source_runner_id", None
     ) is not None:

@@ -95,6 +95,31 @@ async function findSessionIdViaAgentsApi(request: APIRequestContext): Promise<st
   return null;
 }
 
+async function findEngineControlSessionIdViaAgentsApi(request: APIRequestContext): Promise<string | null> {
+  const response = await request.get("/api/agents/sessions?limit=25");
+  if (!response.ok()) {
+    return null;
+  }
+
+  const body = await response.json();
+  const sessions = Array.isArray(body?.sessions) ? body.sessions : [];
+  for (const session of sessions) {
+    const source = session?.runtime_facts?.control?.source;
+    const state = session?.runtime_facts?.control?.state;
+    const liveControlAvailable = session?.capabilities?.live_control_available;
+    if (
+      typeof session?.id === "string" &&
+      source === "machine_control_ws" &&
+      state === "online" &&
+      liveControlAvailable === true
+    ) {
+      return session.id;
+    }
+  }
+
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Test 1: Auth + Timeline loads
 // ---------------------------------------------------------------------------
@@ -449,6 +474,35 @@ test("agents sessions API returns list", async ({ agentsRequest }) => {
     Array.isArray(sessions),
     `Expected sessions to be an array, got: ${JSON.stringify(body).slice(0, 200)}`,
   ).toBe(true);
+});
+
+test("managed engine-control session stays enabled in workspace projection", async ({
+  agentsRequest,
+  context,
+}) => {
+  test.setTimeout(20_000);
+
+  const sessionId = await findEngineControlSessionIdViaAgentsApi(agentsRequest).catch(() => null);
+  if (!sessionId) {
+    test.skip(true, "No connected managed engine-control session available");
+    return;
+  }
+
+  const workspaceResponse = await context.request.get(
+    `/api/timeline/sessions/${sessionId}/workspace?limit=5`,
+  );
+  expect(
+    workspaceResponse.ok(),
+    `GET /api/timeline/sessions/${sessionId}/workspace returned ${workspaceResponse.status()}`,
+  ).toBe(true);
+
+  const workspace = await workspaceResponse.json();
+  const session = workspace?.session;
+  expect(session?.runtime_facts?.control?.source).toBe("machine_control_ws");
+  expect(session?.runtime_facts?.control?.state).toBe("online");
+  expect(session?.capabilities?.live_control_available).toBe(true);
+  expect(session?.capabilities?.composer_enabled).toBe(true);
+  expect(session?.capabilities?.composer_disabled_reason ?? null).toBeNull();
 });
 
 // ---------------------------------------------------------------------------
