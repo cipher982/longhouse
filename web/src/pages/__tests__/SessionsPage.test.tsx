@@ -971,6 +971,14 @@ describe("SessionsPage", () => {
   ): NonNullable<agentsApi.AgentSession["runtime_facts"]> {
     return {
       control_path: "unmanaged",
+      control: {
+        state: "none",
+        reason: "unmanaged",
+        source: null,
+        last_seen_at: null,
+        expires_at: null,
+        transport: null,
+      },
       process_state: "unknown",
       host: {
         state: "unknown",

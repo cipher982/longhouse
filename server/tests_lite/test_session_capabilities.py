@@ -834,6 +834,9 @@ def test_session_response_uses_owner_for_engine_channel_capability(monkeypatch, 
 
                 assert response.runtime_facts is not None
                 assert response.runtime_facts.host.state == "online"
+                assert response.runtime_facts.control.state == "online"
+                assert response.runtime_facts.control.source == "machine_heartbeat"
+                assert response.runtime_facts.control.transport == "codex_app_server"
                 assert response.capabilities.live_control_available is True
                 assert response.capabilities.reply_to_live_session_available is True
                 assert response.capabilities.can_queue_next_input is True

@@ -37,6 +37,15 @@ struct APIActivityObservationResponse: Codable, Hashable, Sendable {
     let lastProgressAt: String?
 }
 
+struct APIControlObservationResponse: Codable, Hashable, Sendable {
+    let state: String?
+    let reason: String?
+    let source: String?
+    let lastSeenAt: String?
+    let expiresAt: String?
+    let transport: String?
+}
+
 struct APIHostObservationResponse: Codable, Hashable, Sendable {
     let state: String?
     let lastSeenAt: String?
@@ -71,6 +80,7 @@ struct APIProcessObservationResponse: Codable, Hashable, Sendable {
 
 struct APISessionLivenessFactsResponse: Codable, Hashable, Sendable {
     let controlPath: String
+    let control: APIControlObservationResponse?
     let processState: String
     let host: APIHostObservationResponse
     let process: APIProcessObservationResponse

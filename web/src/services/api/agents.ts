@@ -159,6 +159,15 @@ export interface ActivityObservation {
   last_progress_at?: string | null;
 }
 
+export interface ControlObservation {
+  state?: "online" | "degraded" | "offline" | "unknown" | "none" | (string & {});
+  reason?: string | null;
+  source?: string | null;
+  last_seen_at?: string | null;
+  expires_at?: string | null;
+  transport?: string | null;
+}
+
 export interface LifecycleFact {
   state: "open" | "closed" | "unknown" | (string & {});
   reason?: string | null;
@@ -167,6 +176,7 @@ export interface LifecycleFact {
 
 export interface SessionLivenessFacts {
   control_path: "managed" | "unmanaged" | (string & {});
+  control?: ControlObservation | null;
   process_state: "running" | "closed" | "unknown" | (string & {});
   host: HostObservation;
   process: ProcessObservation;

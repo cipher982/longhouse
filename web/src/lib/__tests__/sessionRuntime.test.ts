@@ -49,6 +49,14 @@ function makeRuntimeFacts(
 ): NonNullable<TimelineRuntimeSession["runtime_facts"]> {
   return {
     control_path: "managed",
+    control: {
+      state: "online",
+      reason: null,
+      source: "machine_heartbeat",
+      last_seen_at: "2026-03-21T12:00:00Z",
+      expires_at: "2026-03-21T12:15:00Z",
+      transport: "claude_channel_bridge",
+    },
     process_state: "unknown",
     host: {
       state: "unknown",

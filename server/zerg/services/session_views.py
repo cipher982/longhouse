@@ -502,7 +502,7 @@ class PhaseObservationResponse(UTCBaseModel):
 class ControlObservationResponse(UTCBaseModel):
     state: str = Field("unknown", description="Observed control state: online|degraded|offline|unknown|none")
     reason: Optional[str] = Field(None, description="Typed reason when control is not online")
-    source: Optional[str] = Field(None, description="Observation source, e.g. managed_control_lease")
+    source: Optional[str] = Field(None, description="Observation source, e.g. machine_heartbeat")
     last_seen_at: Optional[datetime] = Field(None, description="When the control path was last seen")
     expires_at: Optional[datetime] = Field(None, description="Control freshness expiry")
     transport: Optional[str] = Field(None, description="Managed transport for this control path")
@@ -529,7 +529,10 @@ class SessionLivenessFactsResponse(UTCBaseModel):
     """
 
     control_path: str = Field(..., description="Does Longhouse own a control path? managed|unmanaged")
-    control: ControlObservationResponse = Field(..., description="Observed managed-control availability")
+    control: ControlObservationResponse = Field(
+        default_factory=ControlObservationResponse,
+        description="Observed managed-control availability",
+    )
     process_state: Literal["running", "closed", "unknown"] = Field(
         ...,
         description="Observed provider-process state",
