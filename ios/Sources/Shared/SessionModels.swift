@@ -137,14 +137,44 @@ struct LifecycleFact: Codable, Hashable, Sendable {
     let observedAt: String?
 }
 
+struct ControlObservation: Codable, Hashable, Sendable {
+    let state: String?
+    let reason: String?
+    let source: String?
+    let lastSeenAt: String?
+    let expiresAt: String?
+    let transport: String?
+}
+
 struct SessionLivenessFacts: Codable, Hashable, Sendable {
     let controlPath: String
+    let control: ControlObservation?
     let processState: String?
     let host: HostObservation
     let process: ProcessObservation
     let phase: PhaseObservation
     let activity: ActivityObservation
     let lifecycle: LifecycleFact
+
+    init(
+        controlPath: String,
+        control: ControlObservation? = nil,
+        processState: String?,
+        host: HostObservation,
+        process: ProcessObservation,
+        phase: PhaseObservation,
+        activity: ActivityObservation,
+        lifecycle: LifecycleFact
+    ) {
+        self.controlPath = controlPath
+        self.control = control
+        self.processState = processState
+        self.host = host
+        self.process = process
+        self.phase = phase
+        self.activity = activity
+        self.lifecycle = lifecycle
+    }
 }
 
 struct SessionFactStatus: Hashable, Sendable {

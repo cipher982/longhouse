@@ -113,6 +113,7 @@ struct SessionModelsTests {
           "runtime_display": null,
           "runtime_facts": {
             "control_path": "managed",
+            "control": {"state": "online", "reason": null, "source": "machine_heartbeat", "last_seen_at": "2026-04-25T20:00:00Z", "expires_at": "2026-04-25T20:15:00Z", "transport": "claude_channel_bridge"},
             "process_state": "unknown",
             "host": {"state": "online", "last_seen_at": "2026-04-25T20:00:00Z", "source": "machine_heartbeat"},
             "process": {"status": "unknown", "pid": null, "process_start_time": null, "observed_at": null, "last_seen_at": null, "source_mtime": null, "source_path": null, "reason": null, "source": null},
@@ -1321,6 +1322,7 @@ struct SessionModelsTests {
           "runtime_display": null,
           "runtime_facts": {
             "control_path": "managed",
+            "control": {"state": "online", "reason": null, "source": "machine_heartbeat", "last_seen_at": "2026-04-25T20:00:00Z", "expires_at": "2026-04-25T20:15:00Z", "transport": "claude_channel_bridge"},
             "process_state": "unknown",
             "host": {"state": "online", "last_seen_at": "2026-04-25T20:00:00Z", "source": "machine_heartbeat"},
             "process": {"status": "unknown", "pid": null, "process_start_time": null, "observed_at": null, "last_seen_at": null, "source_mtime": null, "source_path": null, "reason": null, "source": null},
@@ -1365,6 +1367,8 @@ struct SessionModelsTests {
         #expect(session.timelineCard.status?.label == "Idle")
         #expect(session.timelineCard.borderTone == "idle")
         #expect(session.runtimeFacts?.controlPath == "managed")
+        #expect(session.runtimeFacts?.control?.state == "online")
+        #expect(session.runtimeFacts?.control?.source == "machine_heartbeat")
         #expect(session.runtimeFacts?.processState == "unknown")
         #expect(session.runtimeFacts?.phase.kind == "needs_user")
         #expect(summary.timelineCard?.ownership.label == "Managed")

@@ -5301,6 +5301,40 @@ export interface components {
             /** Seccomp Profile */
             seccomp_profile: string | null;
         };
+        /** ControlObservationResponse */
+        ControlObservationResponse: {
+            /**
+             * State
+             * @description Observed control state: online|degraded|offline|unknown|none
+             * @default unknown
+             */
+            state: string;
+            /**
+             * Reason
+             * @description Typed reason when control is not online
+             */
+            reason?: string | null;
+            /**
+             * Source
+             * @description Observation source, e.g. machine_heartbeat
+             */
+            source?: string | null;
+            /**
+             * Last Seen At
+             * @description When the control path was last seen
+             */
+            last_seen_at?: string | null;
+            /**
+             * Expires At
+             * @description Control freshness expiry
+             */
+            expires_at?: string | null;
+            /**
+             * Transport
+             * @description Managed transport for this control path
+             */
+            transport?: string | null;
+        };
         /**
          * CreateTokenRequest
          * @description Request to create a new device token.
@@ -8114,6 +8148,8 @@ export interface components {
              * @description Does Longhouse own a control path? managed|unmanaged
              */
             control_path: string;
+            /** @description Observed managed-control availability */
+            control?: components["schemas"]["ControlObservationResponse"];
             /**
              * Process State
              * @description Observed provider-process state

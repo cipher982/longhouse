@@ -90,10 +90,24 @@ extension APILifecycleFactResponse {
     }
 }
 
+extension APIControlObservationResponse {
+    var controlObservation: ControlObservation {
+        ControlObservation(
+            state: state,
+            reason: reason,
+            source: source,
+            lastSeenAt: lastSeenAt,
+            expiresAt: expiresAt,
+            transport: transport
+        )
+    }
+}
+
 extension APISessionLivenessFactsResponse {
     var sessionLivenessFacts: SessionLivenessFacts {
         SessionLivenessFacts(
             controlPath: controlPath,
+            control: control?.controlObservation,
             processState: processState,
             host: host.hostObservation,
             process: process.processObservation,
