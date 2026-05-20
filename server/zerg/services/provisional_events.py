@@ -132,13 +132,7 @@ def _preview_candidate_from_bridge_observation(row: SessionObservation) -> _Prev
         turn_id=_optional_str(bridge_payload.get("turn_id")),
     )
     seq = _coerce_seq(bridge_payload.get("seq"))
-    key = build_provisional_key(
-        source=row.source or "codex_bridge_live",
-        session_id=row.session_id,
-        thread_id=_optional_str(bridge_payload.get("thread_id")),
-        turn_id=_optional_str(bridge_payload.get("turn_id")),
-    )
-    cursor = build_provisional_cursor(key=key, seq=seq)
+    cursor = build_provisional_cursor(key=turn_key, seq=seq)
     timestamp = normalize_utc(row.observed_at) or row.received_at
     return _PreviewCandidate(
         session_id=str(row.session_id),

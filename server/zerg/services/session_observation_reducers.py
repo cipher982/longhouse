@@ -16,7 +16,6 @@ from zerg.models.agents import SessionObservation
 from zerg.services.raw_json_compression import CODEC_PLAIN
 from zerg.services.raw_json_compression import CODEC_ZSTD
 from zerg.services.raw_json_compression import compress_raw_json
-from zerg.services.session_observations import OBS_KIND_BRIDGE_TRANSCRIPT_DELTA
 from zerg.services.session_observations import OBS_KIND_PROVIDER_EVENT
 from zerg.services.session_observations import OBS_KIND_PROVIDER_SOURCE_LINE
 from zerg.utils.time import normalize_utc
@@ -29,9 +28,7 @@ class ProviderEventReduction:
 
 
 def reduce_bridge_transcript_observation(db: Session, observation: SessionObservation) -> AgentEvent | None:
-    _ = db
-    if observation.kind == OBS_KIND_BRIDGE_TRANSCRIPT_DELTA:
-        return None
+    _ = (db, observation)
     return None
 
 
