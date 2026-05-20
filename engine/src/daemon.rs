@@ -1502,14 +1502,9 @@ fn start_ready_jobs(
     in_flight: &mut JoinSet<PathTaskResult>,
     task_context: &PathTaskContext,
     live_only: bool,
-    allow_retry: bool,
 ) {
     let mut next_job = if live_only {
-        if allow_retry {
-            scheduler.pop_launchable_live_or_retry()
-        } else {
-            scheduler.pop_launchable_live()
-        }
+        scheduler.pop_launchable_live()
     } else {
         scheduler.pop_launchable()
     };
@@ -1517,11 +1512,7 @@ fn start_ready_jobs(
         let task_context = task_context.clone();
         in_flight.spawn_local(run_path_job(job, task_context));
         next_job = if live_only {
-            if allow_retry {
-                scheduler.pop_launchable_live_or_retry()
-            } else {
-                scheduler.pop_launchable_live()
-            }
+            scheduler.pop_launchable_live()
         } else {
             scheduler.pop_launchable()
         };
@@ -1537,9 +1528,9 @@ fn pump_ready_local_work(
 ) {
     drain_due_local_retries(scheduler, deferred_retries);
     if !offline {
-        start_ready_jobs(scheduler, in_flight, task_context, false, false);
+        start_ready_jobs(scheduler, in_flight, task_context, false);
     } else {
-        start_ready_jobs(scheduler, in_flight, task_context, true, false);
+        start_ready_jobs(scheduler, in_flight, task_context, true);
     }
 }
 
