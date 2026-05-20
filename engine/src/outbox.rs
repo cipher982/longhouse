@@ -16,6 +16,7 @@ use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
+use serde_json::Value;
 use tracing::warn;
 
 use crate::shipping::client::ShipperClient;
@@ -28,6 +29,8 @@ use crate::state::unmanaged_process_binding::{
 /// Maximum age for an outbox file before it is considered stale and deleted.
 const STALE_SECS: u64 = 600; // 10 minutes
 const PRESENCE_POST_TIMEOUT: Duration = Duration::from_secs(3);
+const RUNTIME_EVENT_POST_TIMEOUT: Duration = Duration::from_secs(3);
+const RUNTIME_EVENT_BATCH_LIMIT: usize = 128;
 
 #[derive(Debug, Clone, Deserialize)]
 struct PresenceOutboxPayload {
@@ -84,6 +87,12 @@ pub struct OutboxLocalDrainResult {
 pub struct PendingPresencePost {
     path: PathBuf,
     bytes: Vec<u8>,
+}
+
+#[derive(Debug)]
+pub struct PendingRuntimeEventPost {
+    path: PathBuf,
+    event: Value,
 }
 
 /// Drain all ready presence events from the outbox directory.
@@ -334,6 +343,84 @@ pub async fn post_pending_presence_files(
     post_pending_presence_files_with_timeout(client, posts, PRESENCE_POST_TIMEOUT).await
 }
 
+pub fn collect_runtime_event_outbox(dir: &Path) -> Vec<PendingRuntimeEventPost> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+
+    let now = SystemTime::now();
+    let mut posts = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let file_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_owned(),
+            None => continue,
+        };
+        if !file_name.ends_with(".json") || file_name.starts_with('.') {
+            prune_stale_dot_file(&entry, &path, now);
+            continue;
+        }
+
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        let event: Value = match serde_json::from_slice::<Value>(&bytes) {
+            Ok(value) if value.is_object() => value,
+            Ok(_) | Err(_) => {
+                let _ = std::fs::remove_file(&path);
+                continue;
+            }
+        };
+        posts.push(PendingRuntimeEventPost { path, event });
+    }
+    posts
+}
+
+pub async fn post_pending_runtime_event_files(
+    client: &ShipperClient,
+    posts: Vec<PendingRuntimeEventPost>,
+) -> (usize, usize) {
+    let mut sent = 0usize;
+    let mut kept = 0usize;
+    for chunk in posts.chunks(RUNTIME_EVENT_BATCH_LIMIT) {
+        let events: Vec<Value> = chunk.iter().map(|post| post.event.clone()).collect();
+        let body = match serde_json::to_vec(&serde_json::json!({ "events": events })) {
+            Ok(value) => value,
+            Err(_) => {
+                kept += chunk.len();
+                continue;
+            }
+        };
+        match client
+            .post_json_with_timeout(
+                "/api/agents/runtime/events/batch",
+                body,
+                Some(RUNTIME_EVENT_POST_TIMEOUT),
+            )
+            .await
+        {
+            Ok(_) => {
+                for post in chunk {
+                    let _ = std::fs::remove_file(&post.path);
+                }
+                sent += chunk.len();
+            }
+            Err(_) => {
+                kept += chunk.len();
+            }
+        }
+    }
+    (sent, kept)
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub async fn drain_runtime_event_outbox(dir: &Path, client: &ShipperClient) -> (usize, usize) {
+    let posts = collect_runtime_event_outbox(dir);
+    post_pending_runtime_event_files(client, posts).await
+}
+
 async fn post_pending_presence_files_with_timeout(
     client: &ShipperClient,
     posts: Vec<PendingPresencePost>,
@@ -375,6 +462,18 @@ fn observed_at_for_payload(
     }
 
     DateTime::<Utc>::from(now)
+}
+
+fn prune_stale_dot_file(entry: &std::fs::DirEntry, path: &Path, now: SystemTime) {
+    if let Ok(meta) = entry.metadata() {
+        if let Ok(modified) = meta.modified() {
+            if let Ok(age) = now.duration_since(modified) {
+                if age > Duration::from_secs(STALE_SECS) {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+        }
+    }
 }
 
 fn parse_rfc3339_utc(raw: &str) -> Option<DateTime<Utc>> {
@@ -439,6 +538,29 @@ mod tests {
             "tool_name": "",
             "cwd": "/tmp",
             "transcript_path": "/tmp/transcript.jsonl"
+        });
+        fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+        path
+    }
+
+    fn write_runtime_event(dir: &Path, name: &str, session_id: &str) -> PathBuf {
+        let path = dir.join(name);
+        let json = serde_json::json!({
+            "runtime_key": format!("claude:{}", session_id),
+            "session_id": session_id,
+            "provider": "claude",
+            "device_id": "work-laptop",
+            "source": "claude_channel_wrapper",
+            "kind": "terminal_signal",
+            "occurred_at": "2026-05-20T21:06:20Z",
+            "dedupe_key": format!("claude-terminal:{}:0:2026-05-20T21:06:20Z", session_id),
+            "payload": {
+                "terminal_state": "session_ended",
+                "terminal_reason": "provider_exit",
+                "terminal_source": "claude_channel_wrapper",
+                "provider_session_id": session_id,
+                "exit_code": 0
+            }
         });
         fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
         path
@@ -653,6 +775,79 @@ mod tests {
         let logged = paths.lock().unwrap().clone();
         assert_eq!(logged.len(), 1);
         assert_eq!(logged[0], "/api/agents/presence");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_drain_runtime_event_outbox_success_deletes_file() {
+        use crate::config::ShipperConfig;
+        use crate::pipeline::compressor::CompressionAlgo;
+        use crate::shipping::client::ShipperClient;
+
+        let (addr, paths, server) = spawn_http_server(204).await;
+        let dir = tempfile::tempdir().unwrap();
+        let f = write_runtime_event(dir.path(), "rte.ok.json", "sess-runtime-ok");
+
+        let url = format!("http://{}", addr);
+        let cfg = ShipperConfig::default().with_overrides(Some(&url), None, None, None, None, None);
+        let client = ShipperClient::with_compression(&cfg, CompressionAlgo::Gzip).unwrap();
+
+        let (sent, kept) = drain_runtime_event_outbox(dir.path(), &client).await;
+
+        assert_eq!(sent, 1);
+        assert_eq!(kept, 0);
+        assert!(
+            !f.exists(),
+            "runtime event file must be deleted after successful POST"
+        );
+
+        server.abort();
+        let logged = paths.lock().unwrap().clone();
+        assert_eq!(logged.len(), 1);
+        assert_eq!(logged[0], "/api/agents/runtime/events/batch");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_drain_runtime_event_outbox_failure_keeps_file() {
+        use crate::config::ShipperConfig;
+        use crate::pipeline::compressor::CompressionAlgo;
+        use crate::shipping::client::ShipperClient;
+
+        let (addr, _paths, server) = spawn_http_server(503).await;
+        let dir = tempfile::tempdir().unwrap();
+        let f = write_runtime_event(dir.path(), "rte.retry.json", "sess-runtime-retry");
+
+        let url = format!("http://{}", addr);
+        let cfg = ShipperConfig::default().with_overrides(Some(&url), None, None, None, None, None);
+        let client = ShipperClient::with_compression(&cfg, CompressionAlgo::Gzip).unwrap();
+
+        let (sent, kept) = drain_runtime_event_outbox(dir.path(), &client).await;
+
+        assert_eq!(sent, 0);
+        assert_eq!(kept, 1);
+        assert!(f.exists(), "runtime event file must remain for retry");
+
+        server.abort();
+    }
+
+    #[test]
+    fn test_collect_runtime_event_outbox_deletes_malformed_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let bad = dir.path().join("rte.bad.json");
+        let scalar = dir.path().join("rte.scalar.json");
+        fs::write(&bad, b"not valid json").unwrap();
+        fs::write(&scalar, b"[]").unwrap();
+
+        let posts = collect_runtime_event_outbox(dir.path());
+
+        assert!(posts.is_empty());
+        assert!(
+            !bad.exists(),
+            "malformed runtime event file must be deleted"
+        );
+        assert!(
+            !scalar.exists(),
+            "non-object runtime event file must be deleted"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

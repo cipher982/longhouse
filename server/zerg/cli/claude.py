@@ -8,6 +8,7 @@ import shlex
 import subprocess
 from datetime import datetime
 from datetime import timezone
+from hashlib import sha256
 from pathlib import Path
 
 import httpx
@@ -23,6 +24,7 @@ from zerg.cli._common import open_session_url as _open_session_url
 from zerg.services.claude_channel_bridge import CLAUDE_CHANNEL_SERVER_NAME
 from zerg.services.claude_channel_bridge import build_claude_channel_exec_command
 from zerg.services.claude_channel_bridge import install_claude_channel_mcp_server
+from zerg.services.longhouse_paths import get_agent_runtime_events_outbox_dir
 from zerg.services.session_continuity import get_machine_name_label
 from zerg.services.shipper import get_zerg_url
 from zerg.services.shipper import load_token
@@ -45,6 +47,7 @@ _CLAUDE_LAUNCH_ENV_KEYS = (
 _FORCE_NATIVE_CLAUDE_CHANNELS_ENV = "LONGHOUSE_FORCE_NATIVE_CLAUDE_CHANNELS"
 EXIT_SETUP_FAILED = 78
 _CLAUDE_TERMINAL_POST_TIMEOUT_SECS = 2.0
+_CLAUDE_TERMINAL_SOURCE = "claude_channel_wrapper"
 
 
 def _run_claude_auth_status() -> subprocess.CompletedProcess[str]:
@@ -337,23 +340,14 @@ def _post_claude_terminal_signal(
 ) -> bool:
     occurred_at = datetime.now(timezone.utc).isoformat()
     terminal_state = "session_ended" if exit_code == 0 else "process_gone"
-    event = {
-        "runtime_key": f"claude:{provider_session_id}",
-        "session_id": session_id,
-        "provider": "claude",
-        "device_id": get_machine_name_label(),
-        "source": "claude_channel_wrapper",
-        "kind": "terminal_signal",
-        "occurred_at": occurred_at,
-        "dedupe_key": f"claude-terminal:{provider_session_id}:{exit_code}:{occurred_at}",
-        "payload": {
-            "terminal_state": terminal_state,
-            "terminal_reason": "provider_exit",
-            "terminal_source": "claude_channel_wrapper",
-            "provider_session_id": provider_session_id,
-            "exit_code": exit_code,
-        },
-    }
+    event = _build_claude_terminal_event(
+        session_id=session_id,
+        provider_session_id=provider_session_id,
+        exit_code=exit_code,
+        terminal_state=terminal_state,
+        occurred_at=occurred_at,
+    )
+    queued_path = _queue_claude_terminal_runtime_event(event)
     try:
         with httpx.Client(timeout=_CLAUDE_TERMINAL_POST_TIMEOUT_SECS) as client:
             response = client.post(
@@ -362,13 +356,74 @@ def _post_claude_terminal_signal(
                 json={"events": [event]},
             )
             response.raise_for_status()
+            if queued_path is not None:
+                queued_path.unlink(missing_ok=True)
             return True
     except Exception as exc:
+        if queued_path is not None:
+            typer.secho(
+                f"Could not confirm Claude terminal lifecycle event before timeout ({exc}). "
+                "Queued for Machine Agent retry.",
+                fg=typer.colors.YELLOW,
+            )
+            return False
         typer.secho(
-            f"Could not post Claude terminal lifecycle event ({exc}). Machine Agent will reconcile.",
+            f"Could not confirm Claude terminal lifecycle event before timeout ({exc}). "
+            "Machine Agent will reconcile if the event was not accepted.",
             fg=typer.colors.YELLOW,
         )
         return False
+
+
+def _build_claude_terminal_event(
+    *,
+    session_id: str,
+    provider_session_id: str,
+    exit_code: int,
+    terminal_state: str,
+    occurred_at: str,
+) -> dict:
+    return {
+        "runtime_key": f"claude:{provider_session_id}",
+        "session_id": session_id,
+        "provider": "claude",
+        "device_id": get_machine_name_label(),
+        "source": _CLAUDE_TERMINAL_SOURCE,
+        "kind": "terminal_signal",
+        "occurred_at": occurred_at,
+        "dedupe_key": f"claude-terminal:{provider_session_id}:{exit_code}:{occurred_at}",
+        "payload": {
+            "terminal_state": terminal_state,
+            "terminal_reason": "provider_exit",
+            "terminal_source": _CLAUDE_TERMINAL_SOURCE,
+            "provider_session_id": provider_session_id,
+            "exit_code": exit_code,
+        },
+    }
+
+
+def _queue_claude_terminal_runtime_event(event: dict) -> Path | None:
+    try:
+        outbox_dir = get_agent_runtime_events_outbox_dir()
+        outbox_dir.mkdir(parents=True, exist_ok=True)
+        file_digest = sha256(f"{event.get('source', '')}:{event.get('dedupe_key', '')}".encode("utf-8")).hexdigest()[
+            :32
+        ]
+        final_path = outbox_dir / f"rte.{file_digest}.json"
+        tmp_path = outbox_dir / f".tmp.{file_digest}.{os.getpid()}"
+        payload = json.dumps(event, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        with tmp_path.open("wb") as file:
+            file.write(payload)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(tmp_path, final_path)
+        return final_path
+    except Exception as exc:
+        typer.secho(
+            f"Could not queue Claude terminal lifecycle event locally ({exc}).",
+            fg=typer.colors.YELLOW,
+        )
+        return None
 
 
 def _finalize_native_claude_launch(
