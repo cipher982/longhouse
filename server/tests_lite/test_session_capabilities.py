@@ -21,6 +21,7 @@ from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentSession
+from zerg.models.agents import ManagedSessionControlState
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents_store import AgentsStore
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
@@ -29,6 +30,7 @@ from zerg.services.session_capabilities import project_current_session_capabilit
 from zerg.services.session_capabilities import project_current_session_capabilities_from_facts
 from zerg.services.session_current_control import current_session_capabilities
 from zerg.services.session_liveness_facts import ActivityObservation
+from zerg.services.session_liveness_facts import ControlObservation
 from zerg.services.session_liveness_facts import HostObservation
 from zerg.services.session_liveness_facts import LifecycleFact
 from zerg.services.session_liveness_facts import PhaseObservation
@@ -134,6 +136,43 @@ def _upsert_runtime_state(
     return state
 
 
+def _upsert_control_state(
+    db,
+    session: AgentSession,
+    *,
+    control_state: str = "online",
+    reason: str | None = None,
+    expires_at: datetime | None = None,
+) -> ManagedSessionControlState:
+    now = datetime.now(timezone.utc)
+    row = db.query(ManagedSessionControlState).filter(ManagedSessionControlState.session_id == session.id).first()
+    values = {
+        "session_id": session.id,
+        "provider": str(session.provider or "codex"),
+        "device_id": session.device_id,
+        "machine_id": session.device_id,
+        "transport": session.managed_transport,
+        "lease_state": "attached" if control_state == "online" else control_state,
+        "control_state": control_state,
+        "reason": reason,
+        "source": "machine_heartbeat",
+        "sequence": 1,
+        "last_control_seen_at": now,
+        "lease_observed_at": now,
+        "lease_ttl_ms": 900_000,
+        "control_expires_at": expires_at or now + timedelta(minutes=15),
+    }
+    if row is None:
+        row = ManagedSessionControlState(**values)
+        db.add(row)
+    else:
+        for key, value in values.items():
+            setattr(row, key, value)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
 def _runtime_display(**overrides):
     values = {
         "lifecycle": "open",
@@ -166,6 +205,9 @@ def test_opencode_process_transport_is_managed_but_not_remote_controllable():
 def _liveness_facts(
     *,
     control_path: str = "managed",
+    control_state: str = "online",
+    control_reason: str | None = None,
+    control_expires_at: datetime | None = NOW + timedelta(minutes=5),
     host_state: str = "online",
     process_status: str = "unknown",
     lifecycle_state: str = "open",
@@ -179,8 +221,17 @@ def _liveness_facts(
     process_state = (
         "closed" if lifecycle_state == "closed" else "running" if process_status == "observed" else "unknown"
     )
+    effective_control_state = "none" if control_path == "unmanaged" else control_state
     return SessionLivenessFacts(
         control_path=control_path,
+        control=ControlObservation(
+            state=effective_control_state,
+            reason=control_reason,
+            source="managed_control_lease" if control_path == "managed" else None,
+            last_seen_at=NOW if effective_control_state not in {"unknown", "none"} else None,
+            expires_at=control_expires_at,
+            transport="claude_channel_bridge" if control_path == "managed" else None,
+        ),
         process_state=process_state,
         host=HostObservation(
             state=host_state,
@@ -410,7 +461,13 @@ def test_fact_capability_projection_marks_managed_offline_as_reattach_only():
 
     projected = project_current_session_capabilities_from_facts(
         capabilities,
-        liveness_facts=_liveness_facts(host_state="offline", phase_kind="running"),
+        liveness_facts=_liveness_facts(
+            host_state="offline",
+            phase_kind="running",
+            control_state="offline",
+            control_reason="host_offline",
+            control_expires_at=NOW - timedelta(seconds=1),
+        ),
         now=NOW,
     )
 
@@ -491,7 +548,7 @@ def test_fact_capability_projection_disables_closed_managed_session():
     assert projected.host_reattach_available is False
 
 
-def test_fact_capability_projection_treats_expired_phase_as_not_live():
+def test_fact_capability_projection_allows_live_send_with_stale_phase_when_control_online():
     session = _make_session(
         execution_home="managed_local",
         managed_transport="codex_app_server",
@@ -505,16 +562,20 @@ def test_fact_capability_projection_treats_expired_phase_as_not_live():
             phase_kind="running",
             phase_tool="shell",
             phase_expires_at=NOW - timedelta(seconds=1),
+            control_state="online",
+            control_expires_at=NOW + timedelta(minutes=5),
         ),
         now=NOW,
     )
 
-    assert projected.live_control_available is False
+    assert projected.live_control_available is True
+    assert projected.reply_to_live_session_available is True
+    assert projected.can_queue_next_input is True
     assert projected.can_steer_active_turn is False
-    assert projected.host_reattach_available is True
+    assert projected.host_reattach_available is False
 
 
-def test_fact_capability_projection_treats_unbounded_phase_as_not_live():
+def test_fact_capability_projection_rejects_recent_phase_when_control_offline():
     session = _make_session(
         execution_home="managed_local",
         managed_transport="codex_app_server",
@@ -527,13 +588,46 @@ def test_fact_capability_projection_treats_unbounded_phase_as_not_live():
         liveness_facts=_liveness_facts(
             phase_kind="running",
             phase_tool="shell",
-            phase_expires_at=None,
+            phase_expires_at=NOW + timedelta(minutes=5),
+            control_state="offline",
+            control_reason="lease_stale",
+            control_expires_at=NOW - timedelta(seconds=1),
         ),
         now=NOW,
     )
 
     assert projected.live_control_available is False
+    assert projected.reply_to_live_session_available is False
+    assert projected.can_queue_next_input is False
     assert projected.can_steer_active_turn is False
+    assert projected.host_reattach_available is True
+
+
+def test_fact_capability_projection_unknown_control_fails_closed_without_closing_lifecycle():
+    session = _make_session(
+        execution_home="managed_local",
+        managed_transport="claude_channel_bridge",
+        source_runner_id=17,
+    )
+    capabilities = build_session_capabilities(session)
+
+    facts = _liveness_facts(
+        lifecycle_state="open",
+        phase_kind=None,
+        control_state="unknown",
+        control_reason="cold_start",
+        control_expires_at=None,
+    )
+    projected = project_current_session_capabilities_from_facts(
+        capabilities,
+        liveness_facts=facts,
+        now=NOW,
+    )
+
+    assert facts.lifecycle.state == "open"
+    assert projected.live_control_available is False
+    assert projected.reply_to_live_session_available is False
+    assert projected.can_queue_next_input is False
     assert projected.host_reattach_available is True
 
 
@@ -575,6 +669,7 @@ def test_current_session_capabilities_uses_liveness_facts_for_runtime_gate(monke
                 phase="running",
                 freshness_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
             )
+            _upsert_control_state(db, session)
             monkeypatch.setattr(
                 "zerg.services.session_current_control.managed_runner_host_state",
                 lambda _db, _session: "online",
@@ -590,6 +685,13 @@ def test_current_session_capabilities_uses_liveness_facts_for_runtime_gate(monke
             monkeypatch.setattr(
                 "zerg.services.session_current_control.managed_runner_host_state",
                 lambda _db, _session: "offline",
+            )
+            _upsert_control_state(
+                db,
+                session,
+                control_state="offline",
+                reason="host_offline",
+                expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
             )
             offline = current_session_capabilities(db, session)
 
@@ -607,6 +709,13 @@ def test_current_session_capabilities_uses_liveness_facts_for_runtime_gate(monke
                 session,
                 phase="running",
                 freshness_expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+            )
+            _upsert_control_state(
+                db,
+                session,
+                control_state="offline",
+                reason="lease_stale",
+                expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
             )
             expired = current_session_capabilities(db, session)
 
@@ -634,6 +743,7 @@ def test_current_session_capabilities_uses_engine_channel_without_runner_metadat
                     phase_source="codex_bridge",
                     freshness_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
                 )
+                _upsert_control_state(db, session)
 
                 without_owner = current_session_capabilities(db, session)
                 assert without_owner.live_control_available is False
@@ -689,6 +799,7 @@ def test_session_response_uses_owner_for_engine_channel_capability(monkeypatch, 
                     phase_source="codex_bridge",
                     freshness_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
                 )
+                control_overlay = _upsert_control_state(db, session)
 
                 def _runner_state_should_not_be_used(_db, _session):
                     raise AssertionError("engine-channel capability should not query runner host state")
@@ -718,6 +829,7 @@ def test_session_response_uses_owner_for_engine_channel_capability(monkeypatch, 
                     last_activity_at=session.started_at,
                     runtime_overlay=runtime_overlay,
                     owner_id=7,
+                    control_overlay=control_overlay,
                 )
 
                 assert response.runtime_facts is not None

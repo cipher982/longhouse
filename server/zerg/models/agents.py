@@ -556,6 +556,41 @@ class SessionRuntimeState(AgentsBase):
     )
 
 
+class ManagedSessionControlState(AgentsBase):
+    """Reducer-owned control-liveness projection for a managed session.
+
+    This is intentionally separate from ``SessionRuntimeState``. Runtime state
+    answers what the provider is doing; this row answers whether Longhouse has
+    a fresh managed control path for the session.
+    """
+
+    __tablename__ = "managed_session_control_state"
+
+    session_id = Column(GUID(), primary_key=True)
+    provider = Column(String(64), nullable=False)
+    device_id = Column(String(255), nullable=True, index=True)
+    machine_id = Column(String(255), nullable=True)
+    transport = Column(String(64), nullable=True)
+    lease_state = Column(String(32), nullable=False, server_default=text("'unknown'"))
+    control_state = Column(String(32), nullable=False, server_default=text("'unknown'"))
+    reason = Column(String(64), nullable=True)
+    source = Column(String(64), nullable=False, server_default=text("'machine_heartbeat'"))
+    sequence = Column(Integer, nullable=True)
+    last_control_seen_at = Column(DateTime(timezone=True), nullable=True)
+    lease_observed_at = Column(DateTime(timezone=True), nullable=True)
+    lease_ttl_ms = Column(Integer, nullable=True)
+    control_expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    bridge_status = Column(String(64), nullable=True)
+    thread_subscription_status = Column(String(64), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_managed_control_device_state", "device_id", "control_state"),
+        Index("ix_managed_control_expires", "control_expires_at"),
+    )
+
+
 class UnmanagedSessionBinding(AgentsBase):
     """Machine-agent observed binding of an unmanaged provider CLI process to
     its JSONL transcript.

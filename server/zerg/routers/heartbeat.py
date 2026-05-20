@@ -41,6 +41,8 @@ from zerg.models.agents import UnmanagedSessionBinding
 from zerg.models.device_token import DeviceToken
 from zerg.observability import get_tracer
 from zerg.observability import set_span_attributes
+from zerg.services.managed_control_state import mark_missing_managed_control_leases
+from zerg.services.managed_control_state import upsert_managed_control_leases
 from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
@@ -207,10 +209,7 @@ def _is_managed_codex_session(session: AgentSession | None) -> bool:
         return False
     execution_home = str(getattr(session, "execution_home", "") or "").strip()
     managed_transport = str(getattr(session, "managed_transport", "") or "").strip()
-    return (
-        execution_home == SessionExecutionHome.MANAGED_LOCAL.value
-        or managed_transport == ManagedSessionTransport.CODEX_APP_SERVER.value
-    )
+    return execution_home == SessionExecutionHome.MANAGED_LOCAL.value or managed_transport == ManagedSessionTransport.CODEX_APP_SERVER.value
 
 
 def _is_managed_session(session: AgentSession | None) -> bool:
@@ -772,9 +771,7 @@ async def ingest_heartbeat(
                 last_ship_attempt_at: datetime | None = None
                 if payload.last_ship_attempt_at:
                     try:
-                        last_ship_attempt_at = datetime.fromisoformat(
-                            payload.last_ship_attempt_at.replace("Z", "+00:00")
-                        )
+                        last_ship_attempt_at = datetime.fromisoformat(payload.last_ship_attempt_at.replace("Z", "+00:00"))
                     except ValueError:
                         pass
 
@@ -890,6 +887,28 @@ async def ingest_heartbeat(
                         publish_sessions.setdefault(
                             session_id,
                             (None, UNMANAGED_PROCESS_SNAPSHOT_SOURCE),
+                        )
+                if _managed_leases:
+                    for session_id in upsert_managed_control_leases(
+                        write_db,
+                        _managed_leases,
+                        device_id=_device_id,
+                        received_at=_now,
+                    ):
+                        publish_sessions.setdefault(
+                            session_id,
+                            (None, MANAGED_SESSION_LEASE_SOURCE),
+                        )
+                if _managed_leases_present:
+                    for session_id in mark_missing_managed_control_leases(
+                        write_db,
+                        _managed_leases,
+                        device_id=_device_id,
+                        received_at=_now,
+                    ):
+                        publish_sessions.setdefault(
+                            session_id,
+                            (None, MANAGED_SESSION_LEASE_SOURCE),
                         )
                 runtime_events = _runtime_events_for_managed_leases(
                     _managed_leases,

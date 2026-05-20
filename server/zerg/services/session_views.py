@@ -17,9 +17,9 @@ from typing import List
 from typing import Literal
 from typing import Optional
 
-from sqlalchemy import and_
 from pydantic import BaseModel
 from pydantic import Field
+from sqlalchemy import and_
 
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
@@ -183,6 +183,8 @@ def build_session_liveness_facts_response(
     binding_overlay=None,
     binding_host_state: str | None = None,
     binding_terminal_reason: str | None = None,
+    control_overlay=None,
+    now: datetime | None = None,
 ) -> SessionLivenessFactsResponse | None:
     if runtime_overlay is None:
         return None
@@ -193,9 +195,19 @@ def build_session_liveness_facts_response(
         binding_overlay=binding_overlay,
         binding_host_state=binding_host_state,
         binding_terminal_reason=binding_terminal_reason,
+        control_overlay=control_overlay,
+        now=now,
     )
     return SessionLivenessFactsResponse(
         control_path=facts.control_path,
+        control=ControlObservationResponse(
+            state=facts.control.state,
+            reason=facts.control.reason,
+            source=facts.control.source,
+            last_seen_at=facts.control.last_seen_at,
+            expires_at=facts.control.expires_at,
+            transport=facts.control.transport,
+        ),
         process_state=facts.process_state,
         host=HostObservationResponse(
             state=facts.host.state,
@@ -488,6 +500,15 @@ class PhaseObservationResponse(UTCBaseModel):
     expires_at: Optional[datetime] = Field(None, description="Producer/debouncer freshness budget, not lifecycle truth")
 
 
+class ControlObservationResponse(UTCBaseModel):
+    state: str = Field("unknown", description="Observed control state: online|degraded|offline|unknown|none")
+    reason: Optional[str] = Field(None, description="Typed reason when control is not online")
+    source: Optional[str] = Field(None, description="Observation source, e.g. managed_control_lease")
+    last_seen_at: Optional[datetime] = Field(None, description="When the control path was last seen")
+    expires_at: Optional[datetime] = Field(None, description="Control freshness expiry")
+    transport: Optional[str] = Field(None, description="Managed transport for this control path")
+
+
 class ActivityObservationResponse(UTCBaseModel):
     last_transcript_at: Optional[datetime] = Field(None, description="Last transcript event/activity timestamp")
     last_runtime_signal_at: Optional[datetime] = Field(None, description="Last semantic runtime signal timestamp")
@@ -509,6 +530,7 @@ class SessionLivenessFactsResponse(UTCBaseModel):
     """
 
     control_path: str = Field(..., description="Does Longhouse own a control path? managed|unmanaged")
+    control: ControlObservationResponse = Field(..., description="Observed managed-control availability")
     process_state: Literal["running", "closed", "unknown"] = Field(
         ...,
         description="Observed provider-process state",
@@ -1116,6 +1138,7 @@ def build_session_response(
     transcript_preview: TranscriptPreview | None = None,
     owner_id: int | None = None,
     summary_status: str | None = None,
+    control_overlay=None,
 ) -> SessionResponse:
     cache = thread_cache if thread_cache is not None else {}
     thread_head_session_id, thread_continuation_count = get_thread_meta(store, session, cache)
@@ -1156,6 +1179,7 @@ def build_session_response(
             binding_overlay=binding_overlay,
             binding_host_state=binding_host_state,
             binding_terminal_reason=binding_terminal_reason,
+            control_overlay=control_overlay,
         )
         if runtime_overlay is not None
         else None
@@ -1287,6 +1311,7 @@ def build_active_session_response(
     attention: str,
     now: datetime,
     binding_overlay=None,
+    control_overlay=None,
 ) -> ActiveSessionResponse:
     capability_flags = build_session_capabilities(session)
     _started = (
@@ -1314,6 +1339,8 @@ def build_active_session_response(
         binding_overlay=binding_overlay,
         binding_host_state=binding_host_state,
         binding_terminal_reason=binding_terminal_reason,
+        control_overlay=control_overlay,
+        now=now,
     )
     effective_capability_flags = project_current_session_capabilities_from_facts(
         capability_flags,
@@ -1387,11 +1414,7 @@ def build_event_response(
         role=event.role,
         content_text=content_text,
         raw_content_text=raw_content_text,
-        input_origin=(
-            _event_input_origin_response(store, event, input_origin_map=input_origin_map)
-            if is_head_branch
-            else None
-        ),
+        input_origin=(_event_input_origin_response(store, event, input_origin_map=input_origin_map) if is_head_branch else None),
         tool_name=event.tool_name,
         tool_input_json=event.tool_input_json,
         tool_output_text=event.tool_output_text,
@@ -1420,11 +1443,7 @@ def _event_input_origin_response(
 
 
 def build_event_input_origin_map(store: AgentsStore, events: list[AgentEvent]) -> dict[int, InputOriginResponse | None]:
-    user_events = {
-        int(event.id): event
-        for event in events
-        if str(getattr(event, "role", "") or "").strip().lower() == "user"
-    }
+    user_events = {int(event.id): event for event in events if str(getattr(event, "role", "") or "").strip().lower() == "user"}
     origins: dict[int, InputOriginResponse | None] = {event_id: InputOriginResponse(authored_via="terminal") for event_id in user_events}
     if not user_events:
         return origins
