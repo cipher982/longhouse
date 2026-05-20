@@ -17,9 +17,17 @@ pub enum WorkPriority {
 
 const FAIR_SEQUENCE: [WorkPriority; 3] =
     [WorkPriority::Live, WorkPriority::Retry, WorkPriority::Scan];
+
+/// Per-priority concurrency cap for Live work. Live can always burst up to
+/// this number even when backlog work is hot.
 const LIVE_IN_FLIGHT_CAP: usize = 8;
-const RETRY_IN_FLIGHT_CAP: usize = 1;
-const SCAN_IN_FLIGHT_CAP: usize = 1;
+
+/// Number of `max_in_flight` slots reserved for Live work. Retry+Scan combined
+/// cannot take more than `max_in_flight - LIVE_RESERVED` slots, so a backlog
+/// burst (e.g. reconciliation scan after a long sleep) cannot drain all worker
+/// slots and stall live shipping. On hosts where `max_in_flight` is smaller
+/// than `LIVE_RESERVED`, Retry+Scan still get one slot so they can drain.
+const LIVE_RESERVED: usize = LIVE_IN_FLIGHT_CAP;
 
 /// One unit of daemon work keyed to a single file path.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -223,31 +231,6 @@ impl PathScheduler {
         None
     }
 
-    /// Return live work plus one bounded retry lane. This keeps foreground
-    /// transcript shipping hot while still allowing already-spooled ranges to
-    /// recover during long-running active sessions.
-    pub fn pop_launchable_live_or_retry(&mut self) -> Option<PathJob> {
-        if self.in_flight_count(WorkPriority::Retry) < RETRY_IN_FLIGHT_CAP
-            && self.in_flight_count(WorkPriority::Live) > 0
-        {
-            if let Some(job) = self.pop_ready_queue(WorkPriority::Retry) {
-                return Some(job);
-            }
-        }
-
-        if self.in_flight_count(WorkPriority::Live) < LIVE_IN_FLIGHT_CAP {
-            if let Some(job) = self.pop_ready_queue(WorkPriority::Live) {
-                return Some(job);
-            }
-        }
-
-        if self.in_flight_count(WorkPriority::Retry) < RETRY_IN_FLIGHT_CAP {
-            return self.pop_ready_queue(WorkPriority::Retry);
-        }
-
-        None
-    }
-
     /// Mark a path as completed. If the path was re-enqueued while running, or
     /// the task requests a follow-up pass, the path is queued again.
     pub fn complete(&mut self, path: &Path, task_rerun: Option<WorkPriority>) {
@@ -334,8 +317,12 @@ impl PathScheduler {
     fn can_launch_priority(&self, priority: WorkPriority) -> bool {
         match priority {
             WorkPriority::Live => self.in_flight_count(WorkPriority::Live) < LIVE_IN_FLIGHT_CAP,
-            WorkPriority::Retry => self.in_flight_count(WorkPriority::Retry) < RETRY_IN_FLIGHT_CAP,
-            WorkPriority::Scan => self.in_flight_count(WorkPriority::Scan) < SCAN_IN_FLIGHT_CAP,
+            WorkPriority::Retry | WorkPriority::Scan => {
+                let backlog_in_flight = self.in_flight_count(WorkPriority::Retry)
+                    + self.in_flight_count(WorkPriority::Scan);
+                let backlog_cap = self.max_in_flight.saturating_sub(LIVE_RESERVED).max(1);
+                backlog_in_flight < backlog_cap
+            }
         }
     }
 
@@ -771,16 +758,10 @@ mod tests {
     #[test]
     fn test_live_only_launch_skips_background_work() {
         let mut scheduler = PathScheduler::new(4);
-        scheduler.enqueue(
-            PathBuf::from("/tmp/scan.jsonl"),
-            "codex",
-            WorkPriority::Scan,
-        );
-        scheduler.enqueue(
-            PathBuf::from("/tmp/retry.jsonl"),
-            "codex",
-            WorkPriority::Retry,
-        );
+        let scan_path = PathBuf::from("/tmp/scan.jsonl");
+        let retry_path = PathBuf::from("/tmp/retry.jsonl");
+        scheduler.enqueue(scan_path.clone(), "codex", WorkPriority::Scan);
+        scheduler.enqueue(retry_path.clone(), "codex", WorkPriority::Retry);
 
         assert!(scheduler.pop_launchable_live().is_none());
 
@@ -793,42 +774,15 @@ mod tests {
         assert_eq!(live.priority, WorkPriority::Live);
         assert_eq!(live.path, PathBuf::from("/tmp/live.jsonl"));
 
-        assert_eq!(
-            scheduler.pop_launchable().unwrap().priority,
-            WorkPriority::Retry
-        );
-        assert_eq!(
-            scheduler.pop_launchable().unwrap().priority,
-            WorkPriority::Scan
-        );
-    }
+        // With combined backlog cap (= max_in_flight - LIVE_RESERVED, floored
+        // at 1), retry and scan share one slot. Drain one before the other.
+        let retry_job = scheduler.pop_launchable().unwrap();
+        assert_eq!(retry_job.priority, WorkPriority::Retry);
+        assert!(scheduler.pop_launchable().is_none());
 
-    #[test]
-    fn test_live_or_retry_launch_allows_one_retry_lane() {
-        let mut scheduler = PathScheduler::new(1);
-        let live_a = PathBuf::from("/tmp/live-a.jsonl");
-        let live_b = PathBuf::from("/tmp/live-b.jsonl");
-        let retry = PathBuf::from("/tmp/retry.jsonl");
-        let scan = PathBuf::from("/tmp/scan.jsonl");
-
-        scheduler.enqueue(live_a.clone(), "codex", WorkPriority::Live);
-        scheduler.enqueue(live_b.clone(), "codex", WorkPriority::Live);
-        scheduler.enqueue(retry.clone(), "claude", WorkPriority::Retry);
-        scheduler.enqueue(scan, "claude", WorkPriority::Scan);
-
-        let first = scheduler.pop_launchable_live_or_retry().unwrap();
-        assert_eq!(first.path, live_a);
-        assert_eq!(first.priority, WorkPriority::Live);
-
-        let second = scheduler.pop_launchable_live_or_retry().unwrap();
-        assert_eq!(second.path, retry);
-        assert_eq!(second.priority, WorkPriority::Retry);
-
-        let third = scheduler.pop_launchable_live_or_retry().unwrap();
-        assert_eq!(third.path, live_b);
-        assert_eq!(third.priority, WorkPriority::Live);
-
-        assert!(scheduler.pop_launchable_live_or_retry().is_none());
+        scheduler.complete(&retry_path, None);
+        let scan_job = scheduler.pop_launchable().unwrap();
+        assert_eq!(scan_job.priority, WorkPriority::Scan);
     }
 
     #[test]
