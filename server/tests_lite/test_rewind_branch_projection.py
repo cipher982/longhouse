@@ -14,7 +14,6 @@ from zerg.services.agents_store import SessionIngest
 from zerg.services.agents_store import SourceLineIngest
 from zerg.services.agents_store import SourceRewindHintIngest
 from zerg.services.provisional_events import EVENT_ORIGIN_LIVE_PROVISIONAL
-from zerg.services.provisional_events import PROVISIONAL_ACTIVE
 
 
 def _make_store(tmp_path):
@@ -199,7 +198,7 @@ def test_rewind_branch_does_not_copy_provisional_events_as_durable(tmp_path):
                 timestamp=_ts(3),
                 event_hash="provisional-hash",
                 event_origin=EVENT_ORIGIN_LIVE_PROVISIONAL,
-                provisional_state=PROVISIONAL_ACTIVE,
+                provisional_state="active",
                 provisional_key=f"codex_bridge_live:{session_id}:thread-1:turn-1",
                 provisional_cursor=f"codex_bridge_live:{session_id}:thread-1:turn-1:1",
                 provisional_seq=1,
