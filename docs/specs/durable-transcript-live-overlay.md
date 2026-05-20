@@ -1,6 +1,6 @@
 # Durable Transcript And Live Overlay Contract
 
-Status: Draft implementation plan
+Status: Implemented
 
 ## Executive Summary
 
@@ -137,6 +137,8 @@ The current `SessionTranscriptPreviewResponse` can remain as the transport shape
 
 ### Phase 1: Contract And Tests
 
+Status: Complete in `06533fae` and follow-up test alignment `b054a748`.
+
 Acceptance criteria:
 
 - durable transcript tests assert `codex_bridge_live` creates observations but no `AgentEvent`
@@ -153,6 +155,8 @@ cd server && DATABASE_URL=sqlite:// uv run pytest tests_lite/test_provisional_tr
 ```
 
 ### Phase 2: Server Projection
+
+Status: Complete in `06533fae`.
 
 Acceptance criteria:
 
@@ -175,6 +179,8 @@ cd server && DATABASE_URL=sqlite:// uv run pytest tests_lite/test_provisional_tr
 
 ### Phase 3: Codex Archive Freshness
 
+Status: Complete in `fd6da228`.
+
 Acceptance criteria:
 
 - Codex turn completion explicitly wakes archive shipping for the current transcript path by forcing a filesystem stat/ship poke
@@ -188,6 +194,8 @@ make test-engine
 ```
 
 ### Phase 4: End-To-End Review
+
+Status: Pending final independent review.
 
 Acceptance criteria:
 
@@ -206,3 +214,18 @@ Acceptance criteria:
 ## Open Follow-Up
 
 After this lands, inspect why manual `longhouse ship --file` reported shipping the missing tail while hosted visible event count did not change for the incident session. That is an archive ingestion/debuggability issue, not a reason to let runtime previews into archive truth.
+
+## Verification
+
+Completed before final review:
+
+```bash
+cd server && DATABASE_URL=sqlite:// uv run pytest tests_lite/test_provisional_transcript_events.py tests_lite/test_timeline_runtime_overlay.py tests_lite/test_session_runtime.py tests_lite/test_session_observation_rebuild.py tests_lite/test_timeline_stream.py -q
+# 115 passed
+
+make test-engine
+# 384 engine unit tests, 6 adversarial parser tests, 3 golden parser tests passed
+
+make test
+# 1740 passed, 1 skipped
+```
