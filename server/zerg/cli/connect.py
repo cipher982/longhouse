@@ -480,11 +480,6 @@ def connect(
         "-i",
         help="Fallback scan interval in seconds (engine --fallback-scan-secs)",
     ),
-    debounce: int = typer.Option(
-        500,
-        "--debounce",
-        help="Debounce delay in ms for watch mode",
-    ),
     claude_dir: str = typer.Option(
         None,
         "--claude-dir",
@@ -614,7 +609,7 @@ def connect(
         typer.secho(str(e), fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
-    engine_args = [engine, "connect", "--flush-ms", str(debounce)]
+    engine_args = [engine, "connect"]
     if interval != 300:
         engine_args += ["--fallback-scan-secs", str(interval)]
 

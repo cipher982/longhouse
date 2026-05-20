@@ -105,7 +105,6 @@ class ServiceConfig:
     url: str
     token: str | None = None
     claude_dir: str | None = None
-    flush_ms: int = 500
     fallback_scan_secs: int = 300
     spool_replay_secs: int = 30
     log_dir: str | None = None
@@ -311,8 +310,6 @@ def _generate_launchd_plist(config: ServiceConfig) -> str:
     args = [
         engine,
         "connect",
-        "--flush-ms",
-        str(config.flush_ms),
         "--fallback-scan-secs",
         str(config.fallback_scan_secs),
         "--spool-replay-secs",
@@ -384,7 +381,6 @@ def _generate_systemd_unit(config: ServiceConfig) -> str:
     machine_name_arg = f" --machine-name {config.machine_name}" if config.machine_name else ""
     exec_start = (
         f"{engine} connect"
-        f" --flush-ms {config.flush_ms}"
         f" --fallback-scan-secs {config.fallback_scan_secs}"
         f" --spool-replay-secs {config.spool_replay_secs}"
         f" --compression {config.compression}"
@@ -423,7 +419,6 @@ def install_service(
     url: str,
     token: str | None = None,
     claude_dir: str | None = None,
-    flush_ms: int = 500,
     fallback_scan_secs: int = 300,
     spool_replay_secs: int = 30,
     log_dir: str | None = None,
@@ -441,7 +436,6 @@ def install_service(
         url: Longhouse API URL (persisted to token file before this is called)
         token: API token (persisted to token file before this is called)
         claude_dir: Claude config directory override
-        flush_ms: Milliseconds to flush batched events
         fallback_scan_secs: Seconds between reconciliation directory scans
         spool_replay_secs: Seconds between spool replay attempts
         log_dir: Override for engine log directory
@@ -454,7 +448,6 @@ def install_service(
         url=url,
         token=token,
         claude_dir=claude_dir,
-        flush_ms=flush_ms,
         fallback_scan_secs=fallback_scan_secs,
         spool_replay_secs=spool_replay_secs,
         log_dir=log_dir,

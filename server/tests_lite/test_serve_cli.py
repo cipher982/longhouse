@@ -25,7 +25,7 @@ class _FakeSocket:
 def _base_config(*, public_url: str | None) -> config_file_cli.LonghouseConfig:
     return config_file_cli.LonghouseConfig(
         server=config_file_cli.ServerConfig(host="127.0.0.1", port=8080, public_url=public_url),
-        shipper=config_file_cli.ShipperConfig(flush_ms=500, fallback_scan_secs=300),
+        shipper=config_file_cli.ShipperConfig(fallback_scan_secs=300),
     )
 
 
@@ -144,7 +144,6 @@ def test_serve_domain_overrides_runtime_env_and_persists_config(monkeypatch, tmp
     assert os.environ["PUBLIC_SITE_URL"] == "https://longhouse.example.com"
     assert saved_configs[0]["server"]["public_url"] == "https://longhouse.example.com"
     assert saved_configs[0]["shipper"] == {
-        "flush_ms": 500,
         "fallback_scan_secs": 300,
     }
     assert uvicorn_calls[0][1]["host"] == "0.0.0.0"

@@ -20,7 +20,6 @@ def test_load_config_ignores_legacy_url_mirrors(tmp_path):
                 "",
                 "[shipper]",
                 'api_url = "https://stale-shipper.example.com"',
-                "flush_ms = 750",
                 "fallback_scan_secs = 120",
                 "",
             ]
@@ -32,7 +31,6 @@ def test_load_config_ignores_legacy_url_mirrors(tmp_path):
     assert config.server.host == "0.0.0.0"
     assert config.server.port == 9090
     assert config.server.public_url == "https://longhouse.example.com"
-    assert config.shipper.flush_ms == 750
     assert config.shipper.fallback_scan_secs == 120
     assert "browser.default_url" not in config._sources
     assert "shipper.api_url" not in config._sources
@@ -48,7 +46,6 @@ def test_save_loaded_config_drops_legacy_url_mirrors(tmp_path):
                 "",
                 "[shipper]",
                 'api_url = "https://stale-shipper.example.com"',
-                "flush_ms = 750",
                 "fallback_scan_secs = 120",
                 "",
             ]
@@ -70,7 +67,6 @@ def test_save_loaded_config_drops_legacy_url_mirrors(tmp_path):
             "public_url": None,
         },
         "shipper": {
-            "flush_ms": 750,
             "fallback_scan_secs": 120,
         },
     }
