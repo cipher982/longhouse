@@ -39,7 +39,7 @@ struct ChatUITestFixtureView: View {
             )
         }
         .task(id: fixtureName) {
-            if fixtureName == "render-storm" {
+            if fixtureName == "render-storm" || fixtureName == "replay-file" {
                 await waitForInitialWorkspaceLoad()
                 for tick in 1...40 {
                     invalidationTick = tick
@@ -95,13 +95,14 @@ struct ChatUITestFixtureView: View {
 
 @MainActor
 private final class ChatUITestProbe: ObservableObject {
-    private(set) var statusLine = "renders=0 duplicates=0 repeats=0 rows=0 bytes=0 latest=none stage=none stick=0 tick=0"
+    private(set) var statusLine = "renders=0 duplicates=0 repeats=0 rows=0 bytes=0 latest=none stage=none stick=0 render_ms=0 max_render_ms=0 tick=0"
 
     private let path: String?
     private var renderCount = 0
     private var duplicateCount = 0
     private var repeatRenderCount = 0
     private var lastRenderedKey: String?
+    private var maxRenderDurationMs = 0
     private var tick = 0
 
     init(path: String?) {
@@ -118,6 +119,7 @@ private final class ChatUITestProbe: ObservableObject {
             }
             lastRenderedKey = key
             renderCount += 1
+            maxRenderDurationMs = max(maxRenderDurationMs, diagnostics.render_duration_ms ?? 0)
         } else if diagnostics.stage == "duplicate" {
             duplicateCount += 1
         }
@@ -131,6 +133,8 @@ private final class ChatUITestProbe: ObservableObject {
             "latest=\(latest)",
             "stage=\(diagnostics.stage)",
             "stick=\(diagnostics.should_stick_to_bottom ? 1 : 0)",
+            "render_ms=\(diagnostics.render_duration_ms ?? 0)",
+            "max_render_ms=\(maxRenderDurationMs)",
             "tick=\(tick)",
         ].joined(separator: " ")
         persist()
@@ -138,11 +142,10 @@ private final class ChatUITestProbe: ObservableObject {
 
     func recordTick(_ tick: Int) {
         self.tick = tick
-        statusLine = statusLine.replacingOccurrences(
-            of: #"tick=\d+"#,
-            with: "tick=\(tick)",
-            options: .regularExpression
-        )
+        statusLine = statusLine
+            .split(separator: " ")
+            .map { token in token.hasPrefix("tick=") ? "tick=\(tick)" : String(token) }
+            .joined(separator: " ")
         persist()
     }
 
@@ -160,10 +163,12 @@ private final class ChatUITestProbe: ObservableObject {
 private struct ChatUITestFixture: Sendable {
     let name: String
     let eventCount: Int
+    let replayPath: String?
 
     init(name: String) {
         self.name = name
-        self.eventCount = max(0, UITestHooks.chatFixtureEventCount ?? (name == "stress" ? 500 : 80))
+        replayPath = name == "replay-file" ? UITestHooks.chatFixtureReplayPath : nil
+        eventCount = max(0, UITestHooks.chatFixtureEventCount ?? (name == "stress" ? 500 : 80))
     }
 
     var usesRealtimeStream: Bool {
@@ -180,17 +185,22 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
 
     init(fixture: ChatUITestFixture) {
         var seedEvents: [SessionEvent] = []
-        for index in 0..<fixture.eventCount {
-            let role = index.isMultiple(of: 2) ? "user" : "assistant"
-            seedEvents.append(Self.makeEvent(
-                id: index + 1,
-                role: role,
-                content: Self.messageText(index: index, role: role, fixtureName: fixture.name),
-                timestamp: Self.fixedTimestamp(offset: index)
-            ))
+        if let replayPath = fixture.replayPath,
+           let replayEvents = Self.loadReplayEvents(path: replayPath) {
+            seedEvents = replayEvents
+        } else {
+            for index in 0..<fixture.eventCount {
+                let role = index.isMultiple(of: 2) ? "user" : "assistant"
+                seedEvents.append(Self.makeEvent(
+                    id: index + 1,
+                    role: role,
+                    content: Self.messageText(index: index, role: role, fixtureName: fixture.name),
+                    timestamp: Self.fixedTimestamp(offset: index)
+                ))
+            }
         }
         events = seedEvents
-        nextEventID = fixture.eventCount + 1
+        nextEventID = (seedEvents.map(\.id).max() ?? 0) + 1
     }
 
     func sessionWorkspace(id: String, limit: Int, branchMode: String) async throws -> SessionWorkspaceResponse {
@@ -439,6 +449,31 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         )
     }
 
+    private static func loadReplayEvents(path: String) -> [SessionEvent]? {
+        let url = URL(fileURLWithPath: path)
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        do {
+            let fixture = try JSONDecoder().decode(ChatUITestReplayFile.self, from: data)
+            return fixture.events.enumerated().map { index, event in
+                SessionEvent(
+                    id: event.id ?? index + 1,
+                    role: event.role,
+                    contentText: event.contentText,
+                    toolName: event.toolName,
+                    toolInputJSON: nil,
+                    toolOutputText: event.toolOutputText,
+                    toolCallId: event.toolCallId,
+                    timestamp: event.timestamp,
+                    inActiveContext: true,
+                    isHeadBranch: true,
+                    inputOrigin: nil
+                )
+            }
+        } catch {
+            return nil
+        }
+    }
+
     private static func messageText(index: Int, role: String, fixtureName: String) -> String {
         if role == "assistant" {
             if fixtureName == "render-storm" {
@@ -473,5 +508,19 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         let date = Date(timeIntervalSince1970: 1_777_737_600 + TimeInterval(offset))
         return ISO8601DateFormatter().string(from: date)
     }
+}
+
+private struct ChatUITestReplayFile: Decodable {
+    let events: [ChatUITestReplayEvent]
+}
+
+private struct ChatUITestReplayEvent: Decodable {
+    let id: Int?
+    let role: String
+    let contentText: String?
+    let toolName: String?
+    let toolOutputText: String?
+    let toolCallId: String?
+    let timestamp: String
 }
 #endif

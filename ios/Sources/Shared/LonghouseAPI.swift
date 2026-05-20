@@ -17,6 +17,7 @@ actor RenderBeaconReporter {
         let js_failure_count: Int
         let should_stick_to_bottom: Bool
         let web_view_loaded: Bool
+        let render_duration_ms: Int?
         let error_description: String?
     }
 

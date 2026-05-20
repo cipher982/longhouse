@@ -406,8 +406,10 @@ struct WebTranscriptView: UIViewRepresentable {
             let sequence = renderSequence
             let stick = shouldStickToBottom && !userScrollInProgress ? "true" : "false"
             inFlightPayload = payload
+            let renderStartedAt = Date()
             webView.evaluateJavaScript("window.renderTranscript('\(payload.base64)', \(stick));") { [weak self] _, error in
                 guard let self else { return }
+                let renderDurationMs = Int(Date().timeIntervalSince(renderStartedAt) * 1000)
                 if error == nil {
                     self.lastPayload = payload.base64
                 } else {
@@ -419,6 +421,7 @@ struct WebTranscriptView: UIViewRepresentable {
                     payload: payload,
                     sequence: sequence,
                     error: error,
+                    renderDurationMs: renderDurationMs,
                     diagnosticsEnabled: diagnosticsEnabled,
                     onDiagnostics: onDiagnostics
                 )
@@ -435,6 +438,7 @@ struct WebTranscriptView: UIViewRepresentable {
             payload: WebTranscriptPreparedPayload,
             sequence: Int,
             error: Error?,
+            renderDurationMs: Int? = nil,
             diagnosticsEnabled: Bool,
             onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?
         ) {
@@ -448,10 +452,11 @@ struct WebTranscriptView: UIViewRepresentable {
                 js_failure_count: jsFailureCount,
                 should_stick_to_bottom: shouldStickToBottom,
                 web_view_loaded: isLoaded,
+                render_duration_ms: renderDurationMs,
                 error_description: error.map { String(describing: $0) }
             )
             logger.debug(
-                "webkit transcript stage=\(stage, privacy: .public) sequence=\(sequence) rows=\(payload.rowCount) bytes=\(payload.payloadByteSize) latest=\(payload.latestItemId ?? "none", privacy: .public) failures=\(self.jsFailureCount) stick=\(self.shouldStickToBottom)"
+                "webkit transcript stage=\(stage, privacy: .public) sequence=\(sequence) rows=\(payload.rowCount) bytes=\(payload.payloadByteSize) latest=\(payload.latestItemId ?? "none", privacy: .public) failures=\(self.jsFailureCount) stick=\(self.shouldStickToBottom) render_ms=\(renderDurationMs ?? -1)"
             )
             onDiagnostics?(diagnostics)
         }
