@@ -150,9 +150,7 @@ def build_session_input_presentation(
             default_input_intent="none",
             composer_enabled=False,
             composer_placeholder="Type a message...",
-            composer_disabled_reason=(
-                f"Longhouse can see this {provider_session}, but cannot send prompts until the engine reconnects."
-            ),
+            composer_disabled_reason=(f"Longhouse can see this {provider_session}, but cannot send prompts until the engine reconnects."),
         )
 
     return SessionInputPresentation(
@@ -224,6 +222,16 @@ def _phase_is_current(*, phase: Any, now: datetime) -> bool:
     return _utc(expires_at) > _utc(now)
 
 
+def _control_is_current(*, control: Any, now: datetime) -> bool:
+    state = _normalized_fact(_read_attr(control, "state"))
+    if state != "online":
+        return False
+    expires_at = _read_attr(control, "expires_at")
+    if expires_at is None:
+        return False
+    return _utc(expires_at) > _utc(now)
+
+
 def project_current_session_capabilities_from_facts(
     capability_flags: SessionCapabilityFlags,
     *,
@@ -234,22 +242,23 @@ def project_current_session_capabilities_from_facts(
 
     ``liveness_facts`` may be the internal dataclass model or the Pydantic API
     response model. The projection intentionally avoids display labels such as
-    "recent", "stale", or "Control offline"; it only gates actions on observed
-    host, phase, and lifecycle facts.
+    "recent", "stale", or "Control offline"; it gates send/interrupt actions
+    on explicit control facts, while steer still requires a current active
+    provider phase.
     """
 
     lifecycle = _read_attr(liveness_facts, "lifecycle")
-    host = _read_attr(liveness_facts, "host")
     phase = _read_attr(liveness_facts, "phase")
+    control = _read_attr(liveness_facts, "control")
     lifecycle_state = _normalized_fact(_read_attr(lifecycle, "state"))
-    host_state = _normalized_fact(_read_attr(host, "state"))
     current_now = now or datetime.now(timezone.utc)
+    control_current = _control_is_current(control=control, now=current_now)
     phase_current = _phase_is_current(phase=phase, now=current_now)
 
-    currently_live = capability_flags.live_control_available and lifecycle_state == "open" and host_state == "online" and phase_current
+    currently_live = capability_flags.live_control_available and lifecycle_state == "open" and control_current
     reattach_available = capability_flags.host_reattach_available and lifecycle_state != "closed" and not currently_live
     phase_kind = _normalized_fact(_read_attr(phase, "kind"))
-    can_steer = currently_live and capability_flags.can_steer_active_turn and phase_kind in STEERABLE_RUNTIME_STATES
+    can_steer = currently_live and phase_current and capability_flags.can_steer_active_turn and phase_kind in STEERABLE_RUNTIME_STATES
 
     return SessionCapabilityFlags(
         execution_home=capability_flags.execution_home,

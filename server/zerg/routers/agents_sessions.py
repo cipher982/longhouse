@@ -25,6 +25,7 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
 from zerg.models.device_token import DeviceToken
 from zerg.services.agents_store import AgentsStore
+from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.session_archive import SessionArchiveBundleResponse
 from zerg.services.session_archive import SessionArchiveManifestResponse
@@ -70,8 +71,8 @@ from zerg.services.session_views import StartupContextItemResponse
 from zerg.services.session_views import StartupContextResponse
 from zerg.services.session_views import WallResponse
 from zerg.services.session_views import build_active_session_response
-from zerg.services.session_views import build_event_response
 from zerg.services.session_views import build_event_input_origin_map
+from zerg.services.session_views import build_event_response
 from zerg.services.session_views import build_session_response
 from zerg.services.session_views import build_session_turn_response
 from zerg.services.session_views import normalize_utc_datetime
@@ -573,6 +574,7 @@ async def list_active_sessions(
         last_ai = store.get_last_message_map(session_ids, role="assistant", max_len=300)
         now = datetime.now(timezone.utc)
         runtime_state_map = load_runtime_state_map(db, [session.id for session in sessions])
+        control_state_map = load_managed_control_state_map(db, [session.id for session in sessions])
         binding_overlay_map = load_binding_overlay(db, session_ids, now=now)
         items: List[ActiveSessionResponse] = []
         for s in sessions:
@@ -602,6 +604,7 @@ async def list_active_sessions(
                     last_assistant_message=last_ai.get(s.id),
                     now=now,
                     binding_overlay=binding_overlay_map.get(s.id),
+                    control_overlay=control_state_map.get(s.id),
                 )
             )
 
@@ -760,6 +763,7 @@ async def get_session(
         runtime_state_map = load_runtime_state_map(db, [session.id])
         transcript_preview_map = load_active_provisional_preview_map(db, [session.id])
         binding_overlay_map = load_binding_overlay(db, [session.id], now=now)
+        control_state_map = load_managed_control_state_map(db, [session.id])
     with timing.span("build_response"):
         effective_owner_id = owner_id
         if effective_owner_id is None:
@@ -776,6 +780,7 @@ async def get_session(
             ),
             first_user_message=first_user_map.get(session.id),
             binding_overlay=binding_overlay_map.get(session.id),
+            control_overlay=control_state_map.get(session.id),
             transcript_preview=transcript_preview_map.get(str(session.id)),
             owner_id=effective_owner_id,
         )
@@ -819,6 +824,7 @@ async def get_session_thread(
         runtime_state_map = load_runtime_state_map(db, [item.id for item in thread_sessions])
         transcript_preview_map = load_active_provisional_preview_map(db, [item.id for item in thread_sessions])
         binding_overlay_map = load_binding_overlay(db, [item.id for item in thread_sessions], now=now)
+        control_state_map = load_managed_control_state_map(db, [item.id for item in thread_sessions])
 
     with timing.span("build_response"):
         effective_owner_id = owner_id
@@ -842,6 +848,7 @@ async def get_session_thread(
                     first_user_message=first_user_map.get(item.id),
                     transcript_preview=transcript_preview_map.get(str(item.id)),
                     binding_overlay=binding_overlay_map.get(item.id),
+                    control_overlay=control_state_map.get(item.id),
                     owner_id=effective_owner_id,
                 )
                 for item in thread_sessions

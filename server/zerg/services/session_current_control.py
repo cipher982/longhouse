@@ -9,6 +9,7 @@ from zerg.models.agents import AgentSession
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
 from zerg.services.managed_control_dispatcher import select_managed_control_transport
+from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.session_capabilities import SessionCapabilityFlags
 from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_capabilities import project_current_session_capabilities_from_facts
@@ -39,17 +40,6 @@ def with_engine_control_capability(
 ) -> SessionCapabilityFlags:
     if not engine_control_online:
         return capability_flags
-    if not engine_bridge_attached:
-        return SessionCapabilityFlags(
-            execution_home=capability_flags.execution_home,
-            managed_transport=capability_flags.managed_transport,
-            live_control_available=False,
-            host_reattach_available=capability_flags.host_reattach_available,
-            reply_to_live_session_available=False,
-            can_queue_next_input=False,
-            can_steer_active_turn=False,
-            home_label=capability_flags.home_label,
-        )
     can_steer = capability_flags.managed_transport == ManagedSessionTransport.CODEX_APP_SERVER
     return SessionCapabilityFlags(
         execution_home=capability_flags.execution_home,
@@ -83,6 +73,7 @@ def current_session_capabilities(
         getattr(session, "last_activity_at", None) or getattr(session, "ended_at", None) or getattr(session, "started_at", None)
     )
     runtime_state_map = load_runtime_state_map(db, [session.id])
+    control_state_map = load_managed_control_state_map(db, [session.id])
     runtime_overlay = resolve_runtime_overlay(
         session,
         last_activity_at=last_activity_at,
@@ -104,6 +95,8 @@ def current_session_capabilities(
         capabilities=capability_flags,
         last_activity_at=last_activity_at,
         binding_host_state=binding_host_state,
+        control_overlay=control_state_map.get(session.id),
+        now=now,
     )
     return project_current_session_capabilities_from_facts(capability_flags, liveness_facts=liveness_facts, now=now)
 

@@ -23,6 +23,7 @@ from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import SessionIngest
+from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_capabilities import project_current_session_capabilities_from_facts
 from zerg.services.session_liveness_facts import build_session_liveness_facts
@@ -1346,11 +1347,14 @@ def test_heartbeat_lease_refresh_after_progress_restores_control_projection(tmp_
         stored_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         view = build_runtime_view(state=state, session=stored_session, now=after_request)
         capabilities = build_session_capabilities(stored_session)
+        control_state_map = load_managed_control_state_map(db, [session_id])
         facts = build_session_liveness_facts(
             runtime_view=view,
             capabilities=capabilities,
             last_activity_at=stored_session.last_activity_at,
             binding_host_state="online",
+            control_overlay=control_state_map.get(session_id),
+            now=after_request,
         )
         projected = project_current_session_capabilities_from_facts(
             capabilities,
@@ -1366,6 +1370,8 @@ def test_heartbeat_lease_refresh_after_progress_restores_control_projection(tmp_
         assert view.runtime_source == "engine_attached_lease"
         assert view.runtime_phase == "idle"
         assert facts.phase.kind == "idle"
+        assert facts.control.state == "online"
+        assert facts.control.source == "machine_heartbeat"
         assert projected.live_control_available is True
         assert projected.host_reattach_available is False
 

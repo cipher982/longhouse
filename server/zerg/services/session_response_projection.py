@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionTask
 from zerg.services.agents_store import AgentsStore
+from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
@@ -128,6 +129,7 @@ def build_session_response_list(
     activity_map = store.get_last_activity_map(session_ids)
     now = datetime.now(timezone.utc)
     runtime_state_map = load_runtime_state_map(db, session_ids)
+    control_state_map = load_managed_control_state_map(db, session_ids)
     transcript_preview_map = load_active_provisional_preview_map(db, session_ids)
     first_user_map = store.get_first_message_map(session_ids, role="user", max_len=80)
     thread_cache: dict[str, tuple[str, int]] = store.batch_thread_meta(sessions)
@@ -164,6 +166,7 @@ def build_session_response_list(
                 match_role=match.get("role"),
                 match_score=sem_score_map.get(session.id),
                 binding_overlay=binding_overlay_map.get(session.id),
+                control_overlay=control_state_map.get(session.id),
                 transcript_preview=transcript_preview_map.get(str(session.id)),
                 owner_id=owner_id,
                 summary_status=summary_status,

@@ -224,6 +224,74 @@ def test_stale_phase_signal_is_timestamped_not_current_lifecycle_truth():
     assert facts.lifecycle.state == "unknown"
 
 
+def test_stale_phase_with_fresh_control_lease_keeps_managed_lifecycle_open():
+    observed_at = NOW - timedelta(minutes=30)
+    facts = build_session_liveness_facts(
+        runtime_view=_runtime_view(
+            signal_tier="phase_signal",
+            runtime_phase="idle",
+            runtime_source="semantic",
+            phase_started_at=observed_at,
+            presence_updated_at=observed_at,
+            last_live_at=observed_at,
+            confidence="stale",
+            freshness_expires_at=observed_at + timedelta(minutes=10),
+        ),
+        capabilities=_capabilities(managed=True),
+        last_activity_at=observed_at,
+        binding_host_state="online",
+        control_overlay=SimpleNamespace(
+            state="attached",
+            source="managed_control_lease",
+            last_control_seen_at=NOW,
+            control_expires_at=NOW + timedelta(minutes=15),
+            reason=None,
+            transport="claude_channel_bridge",
+        ),
+        now=NOW,
+    )
+
+    assert facts.control_path == "managed"
+    assert facts.phase.kind is None
+    assert facts.control.state == "online"
+    assert facts.control.reason is None
+    assert facts.control.last_seen_at == NOW
+    assert facts.lifecycle.state == "open"
+    assert facts.lifecycle.reason == "control_observed"
+
+
+def test_recent_activity_with_stale_control_lease_is_not_control_live():
+    last_activity = NOW - timedelta(seconds=10)
+    facts = build_session_liveness_facts(
+        runtime_view=_runtime_view(
+            signal_tier="transcript_progress",
+            runtime_phase=None,
+            runtime_source="progress",
+            last_progress_at=last_activity,
+            confidence="live",
+        ),
+        capabilities=_capabilities(managed=True),
+        last_activity_at=last_activity,
+        binding_host_state="online",
+        control_overlay=SimpleNamespace(
+            state="attached",
+            source="managed_control_lease",
+            last_control_seen_at=NOW - timedelta(minutes=20),
+            control_expires_at=NOW - timedelta(minutes=5),
+            reason=None,
+            transport="claude_channel_bridge",
+        ),
+        now=NOW,
+    )
+
+    assert facts.activity.last_transcript_at == last_activity
+    assert facts.phase.kind is None
+    assert facts.control.state == "offline"
+    assert facts.control.reason == "lease_stale"
+    assert facts.lifecycle.state == "open"
+    assert facts.lifecycle.reason == "control_observed"
+
+
 def test_explicit_provider_terminal_closes_session():
     terminal_at = NOW - timedelta(minutes=2)
     facts = build_session_liveness_facts(

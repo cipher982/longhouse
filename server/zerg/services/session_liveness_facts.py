@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from datetime import timezone
 
 from zerg.services.session_capabilities import SessionCapabilityFlags
 from zerg.services.session_runtime import SessionRuntimeView
@@ -46,6 +47,16 @@ class PhaseObservation:
 
 
 @dataclass(frozen=True)
+class ControlObservation:
+    state: str
+    reason: str | None = None
+    source: str | None = None
+    last_seen_at: datetime | None = None
+    expires_at: datetime | None = None
+    transport: str | None = None
+
+
+@dataclass(frozen=True)
 class ActivityObservation:
     last_transcript_at: datetime | None
     last_runtime_signal_at: datetime | None
@@ -62,6 +73,7 @@ class LifecycleFact:
 @dataclass(frozen=True)
 class SessionLivenessFacts:
     control_path: str
+    control: ControlObservation
     process_state: str
     host: HostObservation
     process: ProcessObservation
@@ -93,6 +105,69 @@ def _control_path(capabilities: SessionCapabilityFlags) -> str:
 def _normalized(value: str | None) -> str | None:
     normalized = (value or "").strip()
     return normalized or None
+
+
+def _utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _control_observation(
+    *,
+    control_path: str,
+    host: HostObservation,
+    control_overlay,
+    now: datetime,
+) -> ControlObservation:
+    if control_path != "managed":
+        return ControlObservation(state="none", reason="no_control_path")
+
+    normalized_now = _utc(now) or datetime.now(timezone.utc)
+    if control_overlay is None:
+        host_state = _normalized(host.state)
+        reason = "host_offline" if host_state in {"offline", "stale"} else "cold_start"
+        return ControlObservation(state="unknown", reason=reason)
+
+    raw_state = (
+        _normalized(getattr(control_overlay, "control_state", None))
+        or _normalized(getattr(control_overlay, "state", None))
+        or _normalized(getattr(control_overlay, "lease_state", None))
+        or "unknown"
+    )
+    source = _normalized(getattr(control_overlay, "source", None))
+    last_seen_at = _utc(getattr(control_overlay, "last_control_seen_at", None) or getattr(control_overlay, "last_seen_at", None))
+    expires_at = _utc(getattr(control_overlay, "control_expires_at", None) or getattr(control_overlay, "expires_at", None))
+    transport = _normalized(getattr(control_overlay, "transport", None))
+    reason = _normalized(getattr(control_overlay, "reason", None))
+    if raw_state == "attached":
+        state = "online"
+    elif raw_state in {"online", "degraded", "offline", "unknown"}:
+        state = raw_state
+    elif raw_state in {"detached", "missing"}:
+        state = "offline"
+        reason = reason or ("missing_from_snapshot" if raw_state == "missing" else "detached")
+    else:
+        state = "unknown"
+        reason = reason or "unknown_control_state"
+
+    if state == "online" and (expires_at is None or expires_at <= normalized_now):
+        state = "offline"
+        reason = "lease_stale"
+
+    if state in {"degraded", "offline"} and reason is None:
+        reason = raw_state if raw_state in {"degraded", "detached", "missing"} else state
+
+    return ControlObservation(
+        state=state,
+        reason=reason,
+        source=source,
+        last_seen_at=last_seen_at,
+        expires_at=expires_at,
+        transport=transport,
+    )
 
 
 def _explicit_lifecycle(runtime_view: SessionRuntimeView) -> LifecycleFact | None:
@@ -182,6 +257,7 @@ def _lifecycle(
     *,
     explicit: LifecycleFact | None,
     control_path: str,
+    control: ControlObservation,
     process: ProcessObservation,
     phase: PhaseObservation,
 ) -> LifecycleFact:
@@ -191,6 +267,8 @@ def _lifecycle(
         return LifecycleFact(state="open", reason="process_observed", observed_at=process.observed_at or process.last_seen_at)
     if control_path == "unmanaged" and process.status == "not_observed" and process.reason == "process_gone":
         return LifecycleFact(state="closed", reason="process_gone", observed_at=process.last_seen_at or process.observed_at)
+    if control_path == "managed" and control.source is not None and control.state in {"online", "degraded", "offline"}:
+        return LifecycleFact(state="open", reason="control_observed", observed_at=control.last_seen_at)
     if phase.kind is not None:
         return LifecycleFact(state="open", reason="phase_observed", observed_at=phase.observed_at)
     return LifecycleFact(state="unknown", reason=None, observed_at=None)
@@ -216,9 +294,18 @@ def build_session_liveness_facts(
     binding_overlay=None,
     binding_host_state: str | None = None,
     binding_terminal_reason: str | None = None,
+    control_overlay=None,
+    now: datetime | None = None,
 ) -> SessionLivenessFacts:
+    current_now = now or datetime.now(timezone.utc)
     control_path = _control_path(capabilities)
     host = _host_observation(binding_overlay=binding_overlay, binding_host_state=binding_host_state)
+    control = _control_observation(
+        control_path=control_path,
+        host=host,
+        control_overlay=control_overlay,
+        now=current_now,
+    )
     process = _process_observation(
         control_path=control_path,
         binding_overlay=binding_overlay,
@@ -233,6 +320,7 @@ def build_session_liveness_facts(
     lifecycle = _lifecycle(
         explicit=_explicit_lifecycle(runtime_view),
         control_path=control_path,
+        control=control,
         process=process,
         phase=phase,
     )
@@ -242,6 +330,7 @@ def build_session_liveness_facts(
     )
     return SessionLivenessFacts(
         control_path=control_path,
+        control=control,
         process_state=process_state,
         host=host,
         process=process,
