@@ -72,10 +72,9 @@ async function configureManagedLocalSession(
   ).toBe(true);
 }
 
-async function sendBlockedLease(
+async function sendAttachedControlLease(
   request: APIRequestContext,
   sessionId: string,
-  observedAt: string,
 ): Promise<void> {
   const response = await request.post("/api/agents/heartbeat", {
     data: {
@@ -88,11 +87,9 @@ async function sendBlockedLease(
           machine_id: "cinder",
           sequence: Date.now(),
           state: "attached",
-          phase: "blocked",
-          tool_name: "AskUserQuestion",
           bridge_status: "ready",
           thread_subscription_status: "subscribed",
-          observed_at: observedAt,
+          observed_at: new Date().toISOString(),
           lease_ttl_ms: 15 * 60 * 1000,
         },
       ],
@@ -103,6 +100,38 @@ async function sendBlockedLease(
     response.status(),
     `heartbeat failed: ${response.status()} ${await response.text()}`,
   ).toBe(204);
+}
+
+async function sendProviderBlockedPhase(
+  request: APIRequestContext,
+  sessionId: string,
+  occurredAt: string,
+): Promise<void> {
+  const response = await request.post("/api/agents/runtime/events/batch", {
+    data: {
+      events: [
+        {
+          runtime_key: `claude:${sessionId}`,
+          session_id: sessionId,
+          provider: "claude",
+          device_id: `device-${sessionId.slice(0, 8)}`,
+          source: "e2e",
+          kind: "phase_signal",
+          phase: "blocked",
+          tool_name: "AskUserQuestion",
+          occurred_at: occurredAt,
+          freshness_ms: 24 * 60 * 60 * 1000,
+          dedupe_key: `blocked-phase-${sessionId}-${Date.parse(occurredAt)}`,
+          payload: {},
+        },
+      ],
+    },
+  });
+
+  expect(
+    response.ok(),
+    `runtime ingest failed: ${response.status()} ${await response.text()}`,
+  ).toBe(true);
 }
 
 async function getSession(request: APIRequestContext, sessionId: string): Promise<any> {
@@ -214,7 +243,8 @@ test.describe("Session hot plane", () => {
       ],
     });
     await configureManagedLocalSession(request, sessionId);
-    await sendBlockedLease(request, sessionId, blockedAt);
+    await sendAttachedControlLease(request, sessionId);
+    await sendProviderBlockedPhase(request, sessionId, blockedAt);
 
     await installWorkspaceFrameProbe(page, sessionId);
     await page.goto(`/timeline/${sessionId}`, { waitUntil: "domcontentloaded" });
