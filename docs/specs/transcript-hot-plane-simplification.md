@@ -90,32 +90,12 @@ test between each.
   unchanged).
 - `make test-engine` still passes.
 
-#### T1.3 — Convert binding-wait sleep into a non-blocking re-enqueue
+#### T1.3 — DROPPED
 
-- Today: when offset==0 and no session-id binding exists, we
-  `std::thread::sleep(300ms)` on a blocking-pool thread, then re-check the
-  binding. If still missing, we ship under the parsed native id.
-- Risk that's NOT acceptable: shipping a managed Codex first batch under the
-  parsed native id permanently binds those events to the wrong session. The
-  reconciliation scan does not re-ingest already-acked ranges, so the split
-  is durable.
-- New behavior: when offset==0 && binding missing && provider is managed-codex
-  shaped (root under `~/.longhouse/runtimes/codex` OR
-  `~/.codex/sessions`), short-circuit `prepare_file_for_job`: return
-  `LocalRetryAfter(200ms)` and re-enqueue. No blocking sleep, no risky
-  fallback. Other providers (claude default flow) already have the binding
-  populated synchronously by the wake hint, so they don't enter this path.
-- After 5 retries (1s total), give up and ship under the parsed id — the
-  Codex bridge has likely failed to write the binding at all, which is its
-  own bug surface.
-
-**Success criteria**
-
-- No worker thread blocks for 300ms on cold-path prepare.
-- `session-hot-plane.spec.ts` and the existing managed Codex e2e tests pass
-  unmodified.
-- Add a flight-recorder counter `binding_retry_attempts` to confirm the new
-  path is exercised and bounded.
+Today's flight recorder shows `prepare_binding_wait_ms` p95 = 0ms on the
+fsevent path. The 300ms sleep only fires on managed-Codex cold-start (a
+rare event), and replacing it with a non-blocking re-enqueue carries real
+risk of permanently splitting transcripts. The cost isn't worth the cure.
 
 ### Tier 2 — delete the dead knobs
 
