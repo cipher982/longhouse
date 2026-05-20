@@ -8,6 +8,7 @@ final class SessionChatStressUITests: XCTestCase {
         static let diagnostics = "LONGHOUSE_WEBKIT_TRANSCRIPT_DIAGNOSTICS"
         static let probePath = "LONGHOUSE_UI_TEST_CHAT_PROBE_PATH"
         static let triggerPath = "LONGHOUSE_UI_TEST_CHAT_TRIGGER_PATH"
+        static let replayPath = "LONGHOUSE_UI_TEST_CHAT_REPLAY_PATH"
     }
 
     override func setUpWithError() throws {
@@ -15,6 +16,32 @@ final class SessionChatStressUITests: XCTestCase {
     }
 
     func testLoadedTranscriptDoesNotRenderStormOrSnapBackDuringUserScroll() {
+        runStressProbe(fixtureName: "render-storm", eventCount: "160", replayPath: nil, expectedInitialRows: 160)
+    }
+
+    func testReplayTranscriptDoesNotRenderStormOrSnapBackDuringUserScroll() throws {
+        guard let replayPath = Self.replayPathFromEnvironmentOrDefault() else {
+            throw XCTSkip("Set \(LaunchEnvironment.replayPath) or write /tmp/longhouse-chat-replay.json to run the local SQLite replay stress test.")
+        }
+        let replayURL = URL(fileURLWithPath: replayPath)
+        let expectedRows = try Self.countReplayEvents(at: replayURL)
+        XCTAssertGreaterThan(expectedRows, 0)
+        runStressProbe(
+            fixtureName: "replay-file",
+            eventCount: nil,
+            replayPath: replayURL.path,
+            expectedInitialRows: nil,
+            minimumInitialRows: min(100, expectedRows)
+        )
+    }
+
+    private func runStressProbe(
+        fixtureName: String,
+        eventCount: String?,
+        replayPath: String?,
+        expectedInitialRows: Int?,
+        minimumInitialRows: Int = 1
+    ) {
         let scratch = FileManager.default.temporaryDirectory
             .appendingPathComponent("longhouse-chat-stress-\(UUID().uuidString)", isDirectory: true)
         let probeURL = scratch.appendingPathComponent("probe.txt")
@@ -22,8 +49,13 @@ final class SessionChatStressUITests: XCTestCase {
         try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
 
         let app = XCUIApplication()
-        app.launchEnvironment[LaunchEnvironment.chatFixture] = "render-storm"
-        app.launchEnvironment[LaunchEnvironment.chatEventCount] = "160"
+        app.launchEnvironment[LaunchEnvironment.chatFixture] = fixtureName
+        if let eventCount {
+            app.launchEnvironment[LaunchEnvironment.chatEventCount] = eventCount
+        }
+        if let replayPath {
+            app.launchEnvironment[LaunchEnvironment.replayPath] = replayPath
+        }
         app.launchEnvironment[LaunchEnvironment.diagnostics] = "1"
         app.launchEnvironment[LaunchEnvironment.probePath] = probeURL.path
         app.launchEnvironment[LaunchEnvironment.triggerPath] = triggerURL.path
@@ -42,8 +74,14 @@ final class SessionChatStressUITests: XCTestCase {
         XCTAssertTrue(transcript.waitForExistence(timeout: 10))
 
         XCTAssertTrue(waitForProbeFile(probeURL, timeout: 15) { metrics in
-            metrics.renders >= 1 && metrics.rows == 160
+            guard metrics.renders >= 1 else { return false }
+            if let expectedInitialRows {
+                return metrics.rows == expectedInitialRows
+            }
+            return metrics.rows >= minimumInitialRows && metrics.bytes > 0
         }, readProbe(probeURL))
+
+        let afterInitialRender = probeMetrics(readProbe(probeURL))
 
         XCTAssertTrue(waitForProbeFile(probeURL, timeout: 5) { metrics in
             metrics.tick == 40
@@ -58,13 +96,29 @@ final class SessionChatStressUITests: XCTestCase {
         try? "1".write(to: triggerURL, atomically: true, encoding: .utf8)
 
         XCTAssertTrue(waitForProbeFile(probeURL, timeout: 10) { metrics in
-            metrics.rows == 161 && metrics.stage == "rendered"
+            metrics.rows > afterInitialRender.rows && metrics.stage == "rendered"
         }, readProbe(probeURL))
 
         let afterLiveUpdate = probeMetrics(readProbe(probeURL))
         XCTAssertLessThanOrEqual(afterLiveUpdate.renders, 2, readProbe(probeURL))
         XCTAssertEqual(afterLiveUpdate.repeats, 0, readProbe(probeURL))
+        XCTAssertLessThan(afterLiveUpdate.maxRenderMs, 2_500, "WebKit render should stay inside the mobile chat budget. \(readProbe(probeURL))")
         XCTAssertEqual(afterLiveUpdate.stick, 0, "Live update should not snap to bottom after user scrolled up. \(readProbe(probeURL))")
+    }
+
+    private static func countReplayEvents(at url: URL) throws -> Int {
+        let data = try Data(contentsOf: url)
+        let fixture = try JSONDecoder().decode(ReplayFixture.self, from: data)
+        return fixture.events.count
+    }
+
+    private static func replayPathFromEnvironmentOrDefault() -> String? {
+        let environment = ProcessInfo.processInfo.environment
+        if let replayPath = environment[LaunchEnvironment.replayPath], !replayPath.isEmpty {
+            return replayPath
+        }
+        let defaultPath = "/tmp/longhouse-chat-replay.json"
+        return FileManager.default.fileExists(atPath: defaultPath) ? defaultPath : nil
     }
 
     private func dragTowardOlderMessages(_ element: XCUIElement) {
@@ -97,6 +151,12 @@ final class SessionChatStressUITests: XCTestCase {
     }
 }
 
+private struct ReplayFixture: Decodable {
+    let events: [ReplayEvent]
+}
+
+private struct ReplayEvent: Decodable {}
+
 private struct ProbeMetrics {
     let renders: Int
     let duplicates: Int
@@ -106,6 +166,8 @@ private struct ProbeMetrics {
     let latest: String
     let stage: String
     let stick: Int
+    let renderMs: Int
+    let maxRenderMs: Int
     let tick: Int
 
     init(label: String) {
@@ -122,6 +184,8 @@ private struct ProbeMetrics {
         latest = values["latest"] ?? "none"
         stage = values["stage"] ?? "none"
         stick = Int(values["stick"] ?? "") ?? 0
+        renderMs = Int(values["render_ms"] ?? "") ?? 0
+        maxRenderMs = Int(values["max_render_ms"] ?? "") ?? 0
         tick = Int(values["tick"] ?? "") ?? 0
     }
 }
