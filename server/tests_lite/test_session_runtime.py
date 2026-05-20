@@ -24,6 +24,7 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import SessionIngest
 from zerg.services.session_capabilities import build_session_capabilities
+from zerg.services.session_capabilities import project_current_session_capabilities_from_facts
 from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
 from zerg.services.session_pubsub import TOPIC_TIMELINE
@@ -1272,6 +1273,101 @@ def test_heartbeat_lease_refreshes_same_phase_even_when_provider_phase_timestamp
         assert before_request <= state.last_live_at.replace(tzinfo=timezone.utc) <= after_request
         assert state.freshness_expires_at is not None
         assert state.freshness_expires_at.replace(tzinfo=timezone.utc) >= before_request + timedelta(minutes=15)
+
+    engine.dispose()
+
+
+def test_heartbeat_lease_refresh_after_progress_restores_control_projection(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_progress_projection.db")
+    now = datetime.now(timezone.utc)
+    progress_at = now - timedelta(minutes=1)
+    stale_phase_at = now - timedelta(minutes=11)
+
+    with SessionLocal() as db:
+        session = _seed_session(
+            db,
+            provider="claude",
+            started_at=now - timedelta(hours=1),
+        )
+        session.execution_home = "managed_local"
+        session.managed_transport = "claude_channel_bridge"
+        session.source_runner_id = 17
+        session.source_runner_name = "cinder"
+        session_id = session.id
+        runtime_key = runtime_key_for_session("claude", str(session_id))
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session_id,
+                    provider="claude",
+                    device_id="runtime-device",
+                    source="transcript",
+                    kind="progress_signal",
+                    occurred_at=progress_at,
+                    dedupe_key="progress-before-lease",
+                    payload={"progress_kind": "assistant_message"},
+                )
+            ],
+        )
+        db.commit()
+
+    before_request = datetime.now(timezone.utc)
+    for client in _client(SessionLocal):
+        response = client.post(
+            "/agents/heartbeat",
+            json={
+                "version": "test",
+                "daemon_pid": 123,
+                "managed_sessions": [
+                    {
+                        "session_id": str(session_id),
+                        "provider": "claude",
+                        "machine_id": "cinder",
+                        "sequence": 46,
+                        "state": "attached",
+                        "phase": "idle",
+                        "tool_name": None,
+                        "bridge_status": "ready",
+                        "thread_subscription_status": None,
+                        "observed_at": stale_phase_at.isoformat(),
+                        "lease_ttl_ms": 15 * 60 * 1000,
+                    }
+                ],
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert response.status_code == 204, response.text
+    after_request = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        stored_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        view = build_runtime_view(state=state, session=stored_session, now=after_request)
+        capabilities = build_session_capabilities(stored_session)
+        facts = build_session_liveness_facts(
+            runtime_view=view,
+            capabilities=capabilities,
+            last_activity_at=stored_session.last_activity_at,
+            binding_host_state="online",
+        )
+        projected = project_current_session_capabilities_from_facts(
+            capabilities,
+            liveness_facts=facts,
+            now=after_request,
+        )
+
+        assert state.phase == "idle"
+        assert state.phase_source == "engine_attached_lease"
+        assert state.last_runtime_signal_at is None
+        assert state.last_live_at is not None
+        assert before_request <= state.last_live_at.replace(tzinfo=timezone.utc) <= after_request
+        assert view.runtime_source == "engine_attached_lease"
+        assert view.runtime_phase == "idle"
+        assert facts.phase.kind == "idle"
+        assert projected.live_control_available is True
+        assert projected.host_reattach_available is False
 
     engine.dispose()
 

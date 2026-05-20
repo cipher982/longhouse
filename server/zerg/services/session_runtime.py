@@ -813,6 +813,9 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
                 if freshness_ms is not None
                 else None
             )
+            event_source = str(event.source or "").strip()
+            if event_source in MANAGED_CODEX_RUNTIME_SOURCES:
+                state.phase_source = event_source
             state.terminal_state = None
             state.terminal_reason = None
             state.terminal_source = None
