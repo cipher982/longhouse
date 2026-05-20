@@ -19,6 +19,7 @@ from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.agents import ManagedSessionControlState
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents_store import AgentsStore
@@ -33,6 +34,7 @@ from zerg.services.session_pubsub import get_pubsub
 from zerg.services.session_pubsub import reset_pubsub_for_test
 from zerg.services.session_pubsub import topic_session
 from zerg.services.session_runtime import RuntimeEventIngest
+from zerg.services.session_runtime import build_fallback_runtime_view
 from zerg.services.session_runtime import build_runtime_view
 from zerg.services.session_runtime import current_presence_state_for_session
 from zerg.services.session_runtime import ingest_runtime_events
@@ -1374,6 +1376,220 @@ def test_heartbeat_lease_refresh_after_progress_restores_control_projection(tmp_
         assert facts.control.source == "machine_heartbeat"
         assert projected.live_control_available is True
         assert projected.host_reattach_available is False
+
+    engine.dispose()
+
+
+def test_heartbeat_managed_lease_writes_control_state_without_phase_dependency(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_control_state.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(
+            db,
+            provider="claude",
+            started_at=now - timedelta(hours=1),
+        )
+        session.execution_home = "managed_local"
+        session.managed_transport = "claude_channel_bridge"
+        session.source_runner_id = 17
+        session.source_runner_name = "cinder"
+        session_id = session.id
+        db.commit()
+
+    before_request = datetime.now(timezone.utc)
+    for client in _client(SessionLocal):
+        response = client.post(
+            "/agents/heartbeat",
+            json={
+                "version": "test",
+                "daemon_pid": 123,
+                "managed_sessions": [
+                    {
+                        "session_id": str(session_id),
+                        "provider": "claude",
+                        "machine_id": "cinder",
+                        "sequence": 46,
+                        "state": "attached",
+                        "phase": None,
+                        "tool_name": None,
+                        "bridge_status": "ready",
+                        "thread_subscription_status": None,
+                        "observed_at": now.isoformat(),
+                        "lease_ttl_ms": 15 * 60 * 1000,
+                    }
+                ],
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert response.status_code == 204, response.text
+    after_request = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        stored_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        control = db.query(ManagedSessionControlState).filter(ManagedSessionControlState.session_id == session_id).one()
+        assert control.control_state == "online"
+        assert control.reason is None
+        assert control.source == "machine_heartbeat"
+        assert before_request <= control.last_control_seen_at.replace(tzinfo=timezone.utc) <= after_request
+        assert control.control_expires_at.replace(tzinfo=timezone.utc) > after_request
+
+        fallback_view = build_fallback_runtime_view(
+            session=stored_session,
+            last_activity_at=stored_session.last_activity_at,
+            now=after_request,
+        )
+        facts = build_session_liveness_facts(
+            runtime_view=fallback_view,
+            capabilities=build_session_capabilities(stored_session),
+            last_activity_at=stored_session.last_activity_at,
+            binding_host_state="online",
+            control_overlay=load_managed_control_state_map(db, [session_id]).get(session_id),
+            now=after_request,
+        )
+        projected = project_current_session_capabilities_from_facts(
+            build_session_capabilities(stored_session),
+            liveness_facts=facts,
+            now=after_request,
+        )
+
+        assert facts.phase.kind is None
+        assert facts.control.state == "online"
+        assert projected.live_control_available is True
+
+    engine.dispose()
+
+
+def test_heartbeat_attached_lease_with_bad_bridge_status_is_not_control_online(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_control_bridge_down.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, provider="claude", started_at=now - timedelta(hours=1))
+        session.execution_home = "managed_local"
+        session.managed_transport = "claude_channel_bridge"
+        session.source_runner_id = 17
+        session_id = session.id
+        db.commit()
+
+    for client in _client(SessionLocal):
+        response = client.post(
+            "/agents/heartbeat",
+            json={
+                "version": "test",
+                "daemon_pid": 123,
+                "managed_sessions": [
+                    {
+                        "session_id": str(session_id),
+                        "provider": "claude",
+                        "machine_id": "cinder",
+                        "sequence": 46,
+                        "state": "attached",
+                        "phase": "idle",
+                        "bridge_status": "bridge_down",
+                        "observed_at": now.isoformat(),
+                        "lease_ttl_ms": 15 * 60 * 1000,
+                    }
+                ],
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert response.status_code == 204, response.text
+
+    with SessionLocal() as db:
+        stored_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        control = load_managed_control_state_map(db, [session_id])[session_id]
+        facts = build_session_liveness_facts(
+            runtime_view=build_fallback_runtime_view(
+                session=stored_session,
+                last_activity_at=stored_session.last_activity_at,
+                now=now,
+            ),
+            capabilities=build_session_capabilities(stored_session),
+            last_activity_at=stored_session.last_activity_at,
+            binding_host_state="online",
+            control_overlay=control,
+            now=now,
+        )
+        projected = project_current_session_capabilities_from_facts(
+            build_session_capabilities(stored_session),
+            liveness_facts=facts,
+            now=now,
+        )
+
+        assert facts.control.state == "degraded"
+        assert facts.control.reason == "bridge_unavailable"
+        assert projected.live_control_available is False
+        assert projected.host_reattach_available is True
+
+    engine.dispose()
+
+
+def test_empty_managed_snapshot_marks_only_same_device_control_offline(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_heartbeat_control_missing_snapshot.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        first = _seed_session(db, provider="claude", started_at=now - timedelta(hours=1))
+        first.execution_home = "managed_local"
+        first.managed_transport = "claude_channel_bridge"
+        second = _seed_session(db, provider="claude", started_at=now - timedelta(hours=1))
+        second.execution_home = "managed_local"
+        second.managed_transport = "claude_channel_bridge"
+        db.add(
+            ManagedSessionControlState(
+                session_id=first.id,
+                provider="claude",
+                device_id="runtime-device",
+                machine_id="cinder",
+                transport="claude_channel_bridge",
+                lease_state="attached",
+                control_state="online",
+                source="machine_heartbeat",
+                last_control_seen_at=now,
+                lease_observed_at=now,
+                lease_ttl_ms=900_000,
+                control_expires_at=now + timedelta(minutes=15),
+            )
+        )
+        db.add(
+            ManagedSessionControlState(
+                session_id=second.id,
+                provider="claude",
+                device_id="other-device",
+                machine_id="cube",
+                transport="claude_channel_bridge",
+                lease_state="attached",
+                control_state="online",
+                source="machine_heartbeat",
+                last_control_seen_at=now,
+                lease_observed_at=now,
+                lease_ttl_ms=900_000,
+                control_expires_at=now + timedelta(minutes=15),
+            )
+        )
+        first_id = first.id
+        second_id = second.id
+        db.commit()
+
+    for client in _client(SessionLocal):
+        response = client.post(
+            "/agents/heartbeat",
+            json={
+                "version": "test",
+                "daemon_pid": 123,
+                "managed_sessions": [],
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert response.status_code == 204, response.text
+
+    with SessionLocal() as db:
+        rows = load_managed_control_state_map(db, [first_id, second_id])
+        assert rows[first_id].control_state == "offline"
+        assert rows[first_id].reason == "missing_from_snapshot"
+        assert rows[second_id].control_state == "online"
+        assert rows[second_id].reason is None
 
     engine.dispose()
 

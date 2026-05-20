@@ -15,7 +15,6 @@ from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_capabilities import project_current_session_capabilities_from_facts
 from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_runner_state import managed_runner_host_state
-from zerg.services.session_runtime import MANAGED_CODEX_RUNTIME_SOURCES
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.session_execution_home import ManagedSessionTransport
@@ -36,7 +35,6 @@ def with_engine_control_capability(
     capability_flags: SessionCapabilityFlags,
     *,
     engine_control_online: bool,
-    engine_bridge_attached: bool,
 ) -> SessionCapabilityFlags:
     if not engine_control_online:
         return capability_flags
@@ -51,12 +49,6 @@ def with_engine_control_capability(
         can_steer_active_turn=can_steer,
         home_label=capability_flags.home_label,
     )
-
-
-def engine_bridge_attached(runtime_overlay) -> bool:
-    source = str(getattr(runtime_overlay, "runtime_source", "") or "").strip().lower()
-    phase = str(getattr(runtime_overlay, "runtime_phase", "") or "").strip()
-    return source in MANAGED_CODEX_RUNTIME_SOURCES and getattr(runtime_overlay, "confidence", None) == "live" and bool(phase)
 
 
 def current_session_capabilities(
@@ -83,7 +75,6 @@ def current_session_capabilities(
     capability_flags = with_engine_control_capability(
         capability_flags,
         engine_control_online=is_engine_control_online,
-        engine_bridge_attached=engine_bridge_attached(runtime_overlay),
     )
     binding_host_state = None
     if is_engine_control_online:
@@ -103,7 +94,6 @@ def current_session_capabilities(
 
 __all__ = [
     "current_session_capabilities",
-    "engine_bridge_attached",
     "engine_control_online",
     "with_engine_control_capability",
 ]

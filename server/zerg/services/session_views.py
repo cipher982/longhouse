@@ -34,7 +34,6 @@ from zerg.services.session_capabilities import build_session_capability_display
 from zerg.services.session_capabilities import build_session_input_presentation
 from zerg.services.session_capabilities import project_current_session_capabilities
 from zerg.services.session_capabilities import project_current_session_capabilities_from_facts
-from zerg.services.session_current_control import engine_bridge_attached
 from zerg.services.session_current_control import engine_control_online
 from zerg.services.session_current_control import with_engine_control_capability
 from zerg.services.session_liveness_facts import build_session_liveness_facts
@@ -1149,7 +1148,6 @@ def build_session_response(
         capability_flags = with_engine_control_capability(
             capability_flags,
             engine_control_online=True,
-            engine_bridge_attached=engine_bridge_attached(runtime_overlay),
         )
     binding_host_state = None
     binding_terminal_reason = None
