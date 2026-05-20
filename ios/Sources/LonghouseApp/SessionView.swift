@@ -17,6 +17,7 @@ struct SessionWorkspaceStreamSource: Sendable {
 struct SessionView: View {
     let sessionId: String
     let fallbackTitle: String
+    let onTranscriptDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?
 
     @EnvironmentObject var appState: AppState
     @Environment(\.scenePhase) private var scenePhase
@@ -28,10 +29,12 @@ struct SessionView: View {
     init(
         sessionId: String,
         fallbackTitle: String,
-        viewModel: SessionViewModel = SessionViewModel()
+        viewModel: SessionViewModel = SessionViewModel(),
+        onTranscriptDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)? = nil
     ) {
         self.sessionId = sessionId
         self.fallbackTitle = fallbackTitle
+        self.onTranscriptDiagnostics = onTranscriptDiagnostics
         _viewModel = StateObject(wrappedValue: viewModel)
     }
 
@@ -159,6 +162,7 @@ struct SessionView: View {
                     sessionEnded: viewModel.isSessionEnded,
                     errorMessage: viewModel.errorMessage,
                     onDiagnostics: { diagnostics in
+                        onTranscriptDiagnostics?(diagnostics)
                         Task {
                             await viewModel.recordTranscriptDiagnostics(
                                 diagnostics,

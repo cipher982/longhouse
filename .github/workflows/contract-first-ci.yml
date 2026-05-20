@@ -245,6 +245,7 @@ jobs:
       run: |
         IOS_DERIVED_DATA_PATH="$RUNNER_TEMP/LonghouseIOSDerivedData" \
         IOS_RESULTS_DIR="$RUNNER_TEMP/ios-test-results" \
+        IOS_TEST_SCHEMES="Longhouse LonghouseChatStress" \
         ./scripts/ci/run_ios_tests.sh "${{ steps.simulator.outputs.destination }}"
 
     - name: Upload iOS test results

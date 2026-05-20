@@ -159,6 +159,26 @@ targets:
         CODE_SIGN_STYLE: Automatic
         TEST_TARGET_NAME: Longhouse
 
+  LonghouseChatStressUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    supportedDestinations: [iOS]
+    sources:
+      - path: ../Tests/LonghouseChatStressUITests
+        createIntermediateGroups: true
+    dependencies:
+      - target: Longhouse
+    configFiles:
+      Debug: Configs/Longhouse.xcconfig
+      Release: Configs/Longhouse.xcconfig
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.longhouse.ios.chatstress.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.0"
+        CODE_SIGN_STYLE: Automatic
+        TEST_TARGET_NAME: Longhouse
+
 schemes:
   Longhouse:
     build:
@@ -188,3 +208,17 @@ schemes:
       testPlans:
         - path: TestPlans/LonghouseSmoke.xctestplan
           defaultPlan: true
+
+  LonghouseChatStress:
+    build:
+      targets:
+        Longhouse: all
+        LonghouseWidgetExtension: all
+        LonghouseChatStressUITests: [test]
+    run:
+      config: Debug
+      executable: Longhouse
+    test:
+      config: Debug
+      targets:
+        - LonghouseChatStressUITests
