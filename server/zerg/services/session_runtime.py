@@ -89,6 +89,12 @@ def _stale_managed_lease_observed_at(
     return lease_observed_at
 
 
+def _managed_lease_refresh_at(event: RuntimeEventIngest, fallback: datetime) -> datetime:
+    if str(event.source or "").strip() != MANAGED_SESSION_LEASE_SOURCE:
+        return fallback
+    return _payload_timestamp(event.payload or {}, "lease_refresh_at") or fallback
+
+
 def coerce_session_uuid(value: str | UUID | None) -> UUID | None:
     if value is None:
         return None
@@ -778,16 +784,10 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
             state.last_progress_at,
             state.terminal_at,
         )
-        if latest_phase_signal_at is not None and occurred_at < latest_phase_signal_at:
-            return "ignored"
         next_phase = (event.phase or state.phase or "idle").strip() or "idle"
         if next_phase not in KNOWN_PHASES:
             next_phase = "idle"
         stale_lease_observed_at = _stale_managed_lease_observed_at(event, latest_phase_signal_at)
-        if stale_lease_observed_at is not None:
-            current_phase = (state.phase or "idle").strip() or "idle"
-            if next_phase != current_phase:
-                return "ignored"
         next_active_tool = None
         if next_phase in {"running", "blocked"}:
             # Blocked-with-no-tool means "still blocked on the same tool as
@@ -796,10 +796,32 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
             next_active_tool = event.tool_name or (
                 state.active_tool if next_phase == "blocked" else None
             )
-        if stale_lease_observed_at is not None:
+        if latest_phase_signal_at is not None and occurred_at < latest_phase_signal_at:
+            if stale_lease_observed_at is None:
+                return "ignored"
+            current_phase = (state.phase or "idle").strip() or "idle"
+            if next_phase != current_phase:
+                return "ignored"
             current_active_tool = state.active_tool if next_phase in {"running", "blocked"} else None
             if (next_active_tool or None) != (current_active_tool or None):
                 return "ignored"
+            refresh_at = _managed_lease_refresh_at(event, occurred_at)
+            freshness_ms = _phase_signal_freshness_ms(event, next_phase)
+            state.last_live_at = _latest_timestamp(state.last_live_at, refresh_at)
+            state.freshness_expires_at = (
+                refresh_at + timedelta(milliseconds=freshness_ms)
+                if freshness_ms is not None
+                else None
+            )
+            state.terminal_state = None
+            state.terminal_reason = None
+            state.terminal_source = None
+            state.terminal_at = None
+            if before != _state_snapshot(state):
+                state.runtime_version = int(state.runtime_version or 0) + 1
+                db.add(state)
+                return "applied"
+            return "ignored"
         phase_changed = state.phase != next_phase
         active_tool_changed = (
             next_phase in {"running", "blocked"}
@@ -817,10 +839,11 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
         else:
             state.active_tool = None
         state.last_runtime_signal_at = occurred_at
-        state.last_live_at = occurred_at
+        freshness_base_at = _managed_lease_refresh_at(event, occurred_at)
+        state.last_live_at = _latest_timestamp(occurred_at, freshness_base_at)
         freshness_ms = _phase_signal_freshness_ms(event, next_phase)
         state.freshness_expires_at = (
-            occurred_at + timedelta(milliseconds=freshness_ms)
+            freshness_base_at + timedelta(milliseconds=freshness_ms)
             if freshness_ms is not None
             else None
         )

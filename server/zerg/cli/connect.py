@@ -358,7 +358,8 @@ def _resolve_configured_url(url: object | None, config_dir: Path | None) -> str:
 
     typer.secho("No Longhouse URL configured.", fg=typer.colors.RED)
     typer.echo(
-        "Run `longhouse onboard` for a local setup, " "`longhouse auth --url <url>` for a remote instance, or pass `--url` explicitly."
+        "Run `longhouse onboard` for a local setup, "
+        "`longhouse auth --url <url>` for a remote instance, or pass `--url` explicitly."
     )
     raise typer.Exit(code=1)
 
@@ -479,6 +480,11 @@ def connect(
         "--interval",
         "-i",
         help="Fallback scan interval in seconds (engine --fallback-scan-secs)",
+    ),
+    debounce: int | None = typer.Option(
+        None,
+        "--debounce",
+        hidden=True,
     ),
     claude_dir: str = typer.Option(
         None,
@@ -843,7 +849,10 @@ def _handle_status() -> None:
                     detail = f"{detail} ({version})"
                 typer.echo(detail)
             elif runtime_mode == "broken-install":
-                typer.echo("Desktop App runtime: install is missing, broken, or unsupported (run: longhouse machine repair)")
+                typer.echo(
+                    "Desktop App runtime: install is missing, broken, or unsupported "
+                    "(run: longhouse machine repair)"
+                )
 
 
 def _handle_uninstall() -> None:
@@ -916,7 +925,11 @@ def _handle_install(
         fg=typer.colors.YELLOW if service_skipped else typer.colors.GREEN,
     )
     typer.echo(f"  Machine Agent: {install_result.service_result.get('service', 'N/A')}")
-    typer.echo("  Config: " f"{install_result.service_result.get('plist_path') or install_result.service_result.get('unit_path', 'N/A')}")
+    service_config_path = install_result.service_result.get("plist_path") or install_result.service_result.get(
+        "unit_path",
+        "N/A",
+    )
+    typer.echo(f"  Config: {service_config_path}")
 
     typer.echo("")
     typer.echo("Installing CLI hooks (Claude Code + Codex)...")
@@ -940,7 +953,10 @@ def _handle_install(
         typer.echo(f"  Config: {install_result.desktop_app_result.get('plist_path', 'N/A')}")
         if install_result.desktop_app_result.get("app_path"):
             typer.echo(f"  App: {install_result.desktop_app_result['app_path']}")
-        launch_path = install_result.desktop_app_result.get("launch_path") or install_result.desktop_app_result.get("binary_path", "N/A")
+        launch_path = install_result.desktop_app_result.get("launch_path") or install_result.desktop_app_result.get(
+            "binary_path",
+            "N/A",
+        )
         typer.echo("  Launch: " f"{launch_path}")
 
     # Verify PATH in a fresh shell
