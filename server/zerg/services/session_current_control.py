@@ -9,8 +9,8 @@ from zerg.models.agents import AgentSession
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
 from zerg.services.managed_control_dispatcher import select_managed_control_transport
-from zerg.services.managed_control_state import CONTROL_SOURCE_ENGINE_CHANNEL
 from zerg.services.managed_control_state import CONTROL_SOURCE_LEGACY_RUNNER
+from zerg.services.managed_control_state import engine_channel_control_overlay
 from zerg.services.managed_control_state import live_transport_control_overlay
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.session_capabilities import SessionCapabilityFlags
@@ -95,11 +95,7 @@ def current_session_capabilities(
     control_overlay = control_state_map.get(session.id)
     if is_engine_session_attached:
         binding_host_state = "online"
-        control_overlay = live_transport_control_overlay(
-            session,
-            source=CONTROL_SOURCE_ENGINE_CHANNEL,
-            seen_at=now,
-        )
+        control_overlay = engine_channel_control_overlay(session, seen_at=now)
     elif (capability_flags.live_control_available or capability_flags.host_reattach_available) and getattr(
         session, "source_runner_id", None
     ) is not None:

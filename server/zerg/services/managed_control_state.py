@@ -133,6 +133,20 @@ def live_transport_control_overlay(
     )
 
 
+def engine_channel_control_overlay(
+    session: AgentSession,
+    *,
+    seen_at: datetime,
+) -> ManagedControlOverlay:
+    """Represent the live Machine Agent control WebSocket as control facts."""
+
+    return live_transport_control_overlay(
+        session,
+        source=CONTROL_SOURCE_ENGINE_CHANNEL,
+        seen_at=seen_at,
+    )
+
+
 def upsert_managed_control_leases(
     db: Session,
     leases: list[Any],
