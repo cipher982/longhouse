@@ -59,7 +59,7 @@ test-ios: ## iOS unit + smoke tests (simulator)
 	@bash scripts/build/stage_ios_build_identity.sh
 	@xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
 	@DESTINATION="$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj Longhouse)"; \
-	./scripts/ci/run_ios_tests.sh "$$DESTINATION"
+	IOS_TEST_SCHEMES="Longhouse LonghouseSmoke" ./scripts/ci/run_ios_tests.sh "$$DESTINATION"
 
 test-mobile-chat: ## Focused mobile chat validation (web telemetry + iOS unit tests)
 	@cd web && bun run test -- --run src/components/session-workspace/__tests__/RenderTelemetryPanel.test.tsx src/pages/__tests__/SessionDetailPage.test.tsx

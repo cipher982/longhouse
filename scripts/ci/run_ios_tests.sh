@@ -12,6 +12,7 @@ fi
 
 DERIVED_DATA_PATH="${IOS_DERIVED_DATA_PATH:-${HOME}/Library/Developer/Xcode/DerivedData/LonghouseIOS-CI}"
 RESULTS_DIR="${IOS_RESULTS_DIR:-}"
+IOS_TEST_SCHEMES="${IOS_TEST_SCHEMES:-Longhouse}"
 
 mkdir -p "${DERIVED_DATA_PATH}"
 
@@ -50,5 +51,7 @@ run_scheme() {
   fi
 }
 
-run_scheme Longhouse
-run_scheme LonghouseSmoke
+echo "Running iOS schemes: ${IOS_TEST_SCHEMES}"
+for scheme in ${IOS_TEST_SCHEMES}; do
+  run_scheme "${scheme}"
+done
