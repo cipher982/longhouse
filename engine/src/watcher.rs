@@ -138,10 +138,12 @@ impl SessionWatcher {
         })
     }
 
-    /// Return a queued watcher event without relying on async wakeups from the
-    /// OS watcher thread.
-    pub fn try_next_event(&mut self) -> Option<WatcherEvent> {
-        self.rx.try_recv().ok()
+    /// Await the next filesystem event from the OS watcher thread.
+    ///
+    /// Returns `None` only if the channel has been closed (watcher dropped),
+    /// which signals daemon shutdown.
+    pub async fn next_event(&mut self) -> Option<WatcherEvent> {
+        self.rx.recv().await
     }
 
     /// Collect additional changed paths for `flush_interval` after `first`, then
