@@ -40,7 +40,6 @@ from zerg.services.session_capabilities import project_current_session_capabilit
 from zerg.services.session_capabilities import project_current_session_capabilities_from_facts
 from zerg.services.session_current_control import engine_control_online
 from zerg.services.session_current_control import engine_session_control_attached
-from zerg.services.session_current_control import with_engine_control_capability
 from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_runner_state import managed_runner_host_state
 from zerg.services.session_runtime import SessionRuntimeView
@@ -1181,11 +1180,6 @@ def build_session_response(
         control_overlay=control_overlay,
         now=current_now,
     )
-    if is_engine_session_attached:
-        capability_flags = with_engine_control_capability(
-            capability_flags,
-            engine_control_online=True,
-        )
     binding_host_state = None
     binding_terminal_reason = None
     if binding_overlay is not None:

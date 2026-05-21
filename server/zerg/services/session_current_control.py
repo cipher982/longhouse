@@ -6,6 +6,7 @@ from datetime import timezone
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
+from zerg.services.agents.kernel_capability_adapter import build_session_capabilities_from_kernel
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
 from zerg.services.managed_control_dispatcher import select_managed_control_transport
@@ -13,14 +14,12 @@ from zerg.services.managed_control_state import CONTROL_SOURCE_LEGACY_RUNNER
 from zerg.services.managed_control_state import engine_channel_control_overlay
 from zerg.services.managed_control_state import live_transport_control_overlay
 from zerg.services.managed_control_state import load_managed_control_state_map
-from zerg.services.agents.kernel_capability_adapter import build_session_capabilities_from_kernel
 from zerg.services.session_capabilities import SessionCapabilityFlags
 from zerg.services.session_capabilities import project_current_session_capabilities_from_facts
 from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_runner_state import managed_runner_host_state
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
-from zerg.session_execution_home import ManagedSessionTransport
 from zerg.utils.time import normalize_utc
 
 _ENGINE_ATTACHED_RUNTIME_SOURCES = {"codex_bridge", "codex_bridge_live"}
@@ -71,7 +70,13 @@ def engine_session_control_attached(
     control_overlay=None,
     now: datetime | None = None,
 ) -> bool:
-    """Return whether the engine channel is known to own this session."""
+    """Return whether the engine channel is known to own this session.
+
+    Used purely as a runtime-staleness signal for the liveness facts /
+    control overlay. It is no longer permitted to up-gate kernel-derived
+    capability flags — the kernel projection is the only place that can
+    grant live control.
+    """
 
     if str(getattr(session, "launch_state", "") or "").strip() == "live":
         return True
@@ -81,33 +86,18 @@ def engine_session_control_attached(
     return _control_overlay_attached(session, control_overlay, now=now or datetime.now(timezone.utc))
 
 
-def with_engine_control_capability(
-    capability_flags: SessionCapabilityFlags,
-    *,
-    engine_control_online: bool,
-) -> SessionCapabilityFlags:
-    if not engine_control_online:
-        return capability_flags
-    can_steer = capability_flags.managed_transport == ManagedSessionTransport.CODEX_APP_SERVER
-    return SessionCapabilityFlags(
-        execution_home=capability_flags.execution_home,
-        managed_transport=capability_flags.managed_transport,
-        live_control_available=True,
-        host_reattach_available=True,
-        reply_to_live_session_available=True,
-        can_queue_next_input=True,
-        can_steer_active_turn=can_steer,
-        home_label=capability_flags.home_label,
-    )
-
-
 def current_session_capabilities(
     db: Session,
     session: AgentSession,
     *,
     owner_id: int | None = None,
 ) -> SessionCapabilityFlags:
-    """Return user-action capabilities backed by current runtime truth."""
+    """Return user-action capabilities backed by current runtime truth.
+
+    Capability flags come from the kernel projection. Runtime/lifecycle
+    overlays may only down-gate (turn live → reattach/search-only); they
+    cannot promote a kernel-`False` flag to `True`.
+    """
     capability_flags = build_session_capabilities_from_kernel(db, session)
     is_engine_control_online = engine_control_online(session, owner_id)
     now = datetime.now(timezone.utc)
@@ -128,10 +118,6 @@ def current_session_capabilities(
         runtime_overlay,
         control_overlay=control_overlay,
         now=now,
-    )
-    capability_flags = with_engine_control_capability(
-        capability_flags,
-        engine_control_online=is_engine_session_attached,
     )
     binding_host_state = None
     if is_engine_session_attached:
@@ -162,5 +148,4 @@ __all__ = [
     "current_session_capabilities",
     "engine_control_online",
     "engine_session_control_attached",
-    "with_engine_control_capability",
 ]
