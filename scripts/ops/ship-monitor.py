@@ -53,6 +53,7 @@ class RunInfo:
     url: str
     headSha: str | None = None
     createdAt: str | None = None
+    event: str | None = None
 
 
 @dataclass(frozen=True)
@@ -120,7 +121,7 @@ def resolve_commit_sha(root: Path, rev: str) -> str:
     return proc.stdout.strip()
 
 
-def fetch_runs(repo: str, sha: str) -> list[RunInfo]:
+def fetch_runs_for_event(repo: str, sha: str, event: str) -> list[RunInfo]:
     proc = run(
         [
             "gh",
@@ -131,11 +132,11 @@ def fetch_runs(repo: str, sha: str) -> list[RunInfo]:
             "--commit",
             sha,
             "--event",
-            "push",
+            event,
             "--limit",
             "100",
             "--json",
-            "databaseId,workflowName,status,conclusion,url,headSha,createdAt",
+            "databaseId,workflowName,status,conclusion,url,headSha,createdAt,event",
         ]
     )
     payload = json.loads(proc.stdout or "[]")
@@ -152,8 +153,18 @@ def fetch_runs(repo: str, sha: str) -> list[RunInfo]:
                 url=item.get("url") or "",
                 headSha=item.get("headSha"),
                 createdAt=item.get("createdAt"),
+                event=item.get("event"),
             )
         )
+    return runs
+
+
+def fetch_runs(repo: str, sha: str) -> list[RunInfo]:
+    runs_by_id: dict[int, RunInfo] = {}
+    for event in ("push", "workflow_dispatch"):
+        for run_info in fetch_runs_for_event(repo, sha, event):
+            runs_by_id[run_info.databaseId] = run_info
+    runs = list(runs_by_id.values())
     runs.sort(key=lambda run: (run.workflowName, run.databaseId))
     return runs
 
@@ -290,7 +301,12 @@ def select_load_bearing_runs(runs: list[RunInfo]) -> tuple[list[RunInfo], list[s
     if not required_names:
         return runs, []
 
-    selected = [run for run in runs if run.workflowName in required_names]
+    selected: list[RunInfo] = []
+    for workflow_name in required_names:
+        matches = [run for run in runs if run.workflowName == workflow_name]
+        matches.sort(key=lambda run: run.databaseId, reverse=True)
+        selected.extend(matches[:1])
+    selected.sort(key=lambda run: (run.workflowName, run.databaseId))
     return selected, required_names
 
 
@@ -301,7 +317,8 @@ def summarize_runs(runs: list[RunInfo], short_sha: str, scope_label: str | None 
         lines = [f"Watching push workflows for {short_sha}:"]
     for run in runs:
         conclusion = run.conclusion or "-"
-        lines.append(f"  - {run.workflowName} #{run.databaseId}: {run.status}/{conclusion}")
+        event = f" [{run.event}]" if run.event and run.event != "push" else ""
+        lines.append(f"  - {run.workflowName} #{run.databaseId}{event}: {run.status}/{conclusion}")
     return "\n".join(lines)
 
 

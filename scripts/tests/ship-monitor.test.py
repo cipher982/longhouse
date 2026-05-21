@@ -36,6 +36,7 @@ def run_info(
     *,
     status: str = "completed",
     conclusion: str | None = "success",
+    event: str = "push",
 ) -> object:
     return ship_monitor.RunInfo(
         databaseId=run_id,
@@ -43,6 +44,7 @@ def run_info(
         status=status,
         conclusion=conclusion,
         url=f"https://example.test/runs/{run_id}",
+        event=event,
     )
 
 
@@ -162,9 +164,24 @@ def test_deploy_heartbeat_names_active_deploy_step() -> None:
     ) in summary
 
 
+def test_manual_deploy_recovery_supersedes_failed_push_deploy() -> None:
+    runs = [
+        run_info(ship_monitor.DEPLOY_AND_VERIFY, 1, conclusion="failure"),
+        run_info(ship_monitor.CI_WORKFLOW, 2),
+        run_info(ship_monitor.DEPLOY_AND_VERIFY, 3, event="workflow_dispatch"),
+    ]
+
+    selected, required_names = ship_monitor.select_load_bearing_runs(runs)
+
+    assert required_names == [ship_monitor.DEPLOY_AND_VERIFY]
+    assert [run.databaseId for run in selected] == [3]
+    assert ship_monitor.runs_succeeded(selected)
+
+
 if __name__ == "__main__":
     test_runtime_reuse_does_not_require_exact_live_sha()
     test_runtime_publish_requires_exact_live_sha()
     test_gate_heartbeat_names_blocking_ci_job_and_step()
     test_deploy_heartbeat_names_active_deploy_step()
+    test_manual_deploy_recovery_supersedes_failed_push_deploy()
     print("ship-monitor tests passed")
