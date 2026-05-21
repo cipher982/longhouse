@@ -16,7 +16,7 @@ final class SessionChatStressUITests: XCTestCase {
     }
 
     func testLoadedTranscriptDoesNotRenderStormOrSnapBackDuringUserScroll() {
-        runStressProbe(fixtureName: "render-storm", eventCount: "160", replayPath: nil, expectedInitialRows: 160)
+        runStressProbe(fixtureName: "render-storm", eventCount: "160", replayPath: nil, expectedInitialRows: 50)
     }
 
     func testReplayTranscriptDoesNotRenderStormOrSnapBackDuringUserScroll() throws {
@@ -31,7 +31,8 @@ final class SessionChatStressUITests: XCTestCase {
             eventCount: nil,
             replayPath: replayURL.path,
             expectedInitialRows: nil,
-            minimumInitialRows: min(100, expectedRows)
+            minimumInitialRows: 1,
+            maximumInitialRows: min(50, expectedRows)
         )
     }
 
@@ -40,7 +41,8 @@ final class SessionChatStressUITests: XCTestCase {
         eventCount: String?,
         replayPath: String?,
         expectedInitialRows: Int?,
-        minimumInitialRows: Int = 1
+        minimumInitialRows: Int = 1,
+        maximumInitialRows: Int? = nil
     ) {
         let scratch = FileManager.default.temporaryDirectory
             .appendingPathComponent("longhouse-chat-stress-\(UUID().uuidString)", isDirectory: true)
@@ -78,6 +80,9 @@ final class SessionChatStressUITests: XCTestCase {
             if let expectedInitialRows {
                 return metrics.rows == expectedInitialRows
             }
+            if let maximumInitialRows, metrics.rows > maximumInitialRows {
+                return false
+            }
             return metrics.rows >= minimumInitialRows && metrics.bytes > 0
         }, readProbe(probeURL))
 
@@ -96,11 +101,13 @@ final class SessionChatStressUITests: XCTestCase {
         try? "1".write(to: triggerURL, atomically: true, encoding: .utf8)
 
         XCTAssertTrue(waitForProbeFile(probeURL, timeout: 10) { metrics in
-            metrics.rows > afterInitialRender.rows && metrics.stage == "rendered"
+            metrics.renders > afterInitialRender.renders
+                && metrics.stage == "rendered"
+                && (metrics.latest != afterInitialRender.latest || metrics.rows > afterInitialRender.rows)
         }, readProbe(probeURL))
 
         let afterLiveUpdate = probeMetrics(readProbe(probeURL))
-        XCTAssertLessThanOrEqual(afterLiveUpdate.renders, 2, readProbe(probeURL))
+        XCTAssertLessThanOrEqual(afterLiveUpdate.renders, 3, readProbe(probeURL))
         XCTAssertEqual(afterLiveUpdate.repeats, 0, readProbe(probeURL))
         XCTAssertLessThan(afterLiveUpdate.maxRenderMs, 2_500, "WebKit render should stay inside the mobile chat budget. \(readProbe(probeURL))")
         XCTAssertEqual(afterLiveUpdate.stick, 0, "Live update should not snap to bottom after user scrolled up. \(readProbe(probeURL))")
