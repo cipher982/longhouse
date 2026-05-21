@@ -231,6 +231,37 @@ async def test_summary_reconciler_releases_active_claim_on_cancellation(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_summary_reconciler_finishes_siblings_before_raising_provider_error(tmp_path):
+    _, factory = _make_db(tmp_path)
+    db = factory()
+    try:
+        sessions = [_seed_session(db, project=f"session-{idx}") for idx in range(2)]
+        session_ids = {str(session.id) for session in sessions}
+        fail_id = str(sessions[0].id)
+    finally:
+        db.close()
+
+    calls: set[str] = set()
+
+    async def _generate(session_id: str) -> None:
+        calls.add(session_id)
+        await asyncio.sleep(0.01)
+        if session_id == fail_id:
+            raise RuntimeError("provider failed")
+
+    with pytest.raises(RuntimeError, match="provider failed"):
+        await reconcile_summaries_once(
+            session_factory=factory,
+            limit=10,
+            concurrency=2,
+            generate_summary=_generate,
+        )
+
+    assert calls == session_ids
+    assert await active_summary_session_ids() == set()
+
+
+@pytest.mark.asyncio
 async def test_old_summary_task_backlog_is_ignored(tmp_path):
     _, factory = _make_db(tmp_path)
     db = factory()
