@@ -114,7 +114,12 @@ async def lifespan(app: FastAPI):
 
                     queued_session_ids = [
                         row[0]
-                        for row in db.query(SessionInput.session_id).filter(SessionInput.status == INPUT_STATUS_QUEUED).distinct().all()
+                        for row in (
+                            db.query(SessionInput.session_id)
+                            .filter(SessionInput.status == INPUT_STATUS_QUEUED)
+                            .distinct()
+                            .all()
+                        )
                     ]
 
                 if queued_session_ids:
@@ -155,7 +160,9 @@ async def lifespan(app: FastAPI):
 
             if default_engine is not None and default_engine.dialect.name == "sqlite":
                 with default_engine.connect() as conn:
-                    fts_row = conn.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1")).fetchone()
+                    fts_row = conn.execute(
+                        text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1")
+                    ).fetchone()
                     if not fts_row:
                         raise RuntimeError("events_fts table is missing (FTS5 required).")
                     conn.execute(text("SELECT rowid FROM events_fts WHERE events_fts MATCH 'fts5' LIMIT 1")).fetchone()
@@ -294,6 +301,18 @@ async def lifespan(app: FastAPI):
                 failed.append(f"remote_launch_reaper ({e})")
                 logger.exception("Failed to start remote_launch_reaper")
 
+            # Live session summary/title enrichment. This scans session revision
+            # lag directly; it is intentionally separate from the legacy ingest
+            # task workers.
+            try:
+                from zerg.services.session_enrichment_reconciler import run_summary_reconciler
+
+                asyncio.create_task(run_summary_reconciler())
+                started.append("summary_reconciler")
+            except Exception as e:  # noqa: BLE001
+                failed.append(f"summary_reconciler ({e})")
+                logger.exception("Failed to start summary_reconciler")
+
             # Ingest task workers
             try:
                 from zerg.database import get_session_factory
@@ -339,7 +358,6 @@ async def lifespan(app: FastAPI):
             if _settings.job_queue_enabled and not _settings.testing:
                 try:
                     from apscheduler.schedulers.asyncio import AsyncIOScheduler
-
                     from zerg.jobs.commis import enqueue_missed_runs
                     from zerg.jobs.commis import run_queue_commis
                     from zerg.jobs.git_sync import GitSyncService
