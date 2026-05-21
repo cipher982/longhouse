@@ -608,6 +608,7 @@ final class SessionViewModel: ObservableObject {
     private var streamTask: Task<Void, Never>?
     private var streamConnected: Bool = false
     private var activeSessionId: String?
+    private var activeServerURL: String?
     private var lastWorkspaceEvents: [SessionEvent] = []
     private var loadedProjectionItemCount = 0
     private var totalProjectionItemCount = 0
@@ -618,25 +619,32 @@ final class SessionViewModel: ObservableObject {
     private let apiFactory: (String) -> SessionWorkspaceClient?
     private let streamFactory: (URL, String) -> SessionWorkspaceStreamSource
     private let enableRealtime: Bool
+    private let transcriptCache: SessionTranscriptCache?
     private let initialTailLimit = 50
     private let olderPageLimit = 50
+    private let cachedTailRefreshGraceInterval: TimeInterval = 30
 
     init(
         apiFactory: @escaping (String) -> SessionWorkspaceClient? = { LonghouseAPI(host: $0) },
         streamFactory: @escaping (URL, String) -> SessionWorkspaceStreamSource = { baseURL, sessionId in
             SessionWorkspaceStreamSource.live(baseURL: baseURL, sessionId: sessionId)
         },
-        enableRealtime: Bool = true
+        enableRealtime: Bool = true,
+        transcriptCache: SessionTranscriptCache? = nil
     ) {
         self.apiFactory = apiFactory
         self.streamFactory = streamFactory
         self.enableRealtime = enableRealtime
+        self.transcriptCache = transcriptCache ?? (enableRealtime ? .shared : nil)
     }
 
     func start(sessionId: String, appState: AppState) async {
         let sessionChanged = activeSessionId != sessionId
+        var restoredFromCache = false
+        var shouldRefreshCachedTail = false
         if sessionChanged {
             activeSessionId = sessionId
+            activeServerURL = appState.serverURL
             isInitialLoading = true
             detail = nil
             items = []
@@ -651,9 +659,23 @@ final class SessionViewModel: ObservableObject {
             prefetchTask?.cancel()
             prefetchTask = nil
             errorMessage = nil
+            if let snapshot = transcriptCache?.snapshot(serverURL: appState.serverURL, sessionId: sessionId) {
+                applyCachedSnapshot(snapshot)
+                restoredFromCache = true
+                shouldRefreshCachedTail = Date().timeIntervalSince(snapshot.savedAt) >= cachedTailRefreshGraceInterval
+            }
+        } else {
+            activeServerURL = appState.serverURL
         }
         if isInitialLoading || !sessionChanged {
             await reload(sessionId: sessionId, appState: appState)
+        } else if restoredFromCache, let api = apiFactory(appState.serverURL) {
+            scheduleOlderPrefetch(api: api, sessionId: sessionId)
+            if shouldRefreshCachedTail {
+                Task { [weak self] in
+                    try? await self?.refreshTail(api: api, sessionId: sessionId, allowFailure: true)
+                }
+            }
         }
         guard enableRealtime else { return }
         // Re-attach only when the session changed or the stream was torn down
@@ -678,6 +700,7 @@ final class SessionViewModel: ObservableObject {
         stream = nil
         streamConnected = false
         activeSessionId = nil
+        activeServerURL = nil
     }
 
     func reload(sessionId: String, appState: AppState) async {
@@ -944,6 +967,7 @@ final class SessionViewModel: ObservableObject {
             self.prefetchedOlderOffset = nil
             self.items = TimelineBuilder.build(events: mergedEvents)
             reconcileSubmittedInputs(with: mergedEvents)
+            saveCurrentCache()
             scheduleOlderPrefetch(api: api, sessionId: sessionId)
         } catch {
             if !allowFailure { throw error }
@@ -1015,7 +1039,34 @@ final class SessionViewModel: ObservableObject {
             lastWorkspaceEvents = olderEvents + lastWorkspaceEvents
             items = TimelineBuilder.build(events: lastWorkspaceEvents)
             reconcileSubmittedInputs(with: lastWorkspaceEvents)
+            saveCurrentCache()
         }
+    }
+
+    private func applyCachedSnapshot(_ snapshot: SessionTranscriptCache.Snapshot) {
+        detail = snapshot.detail
+        lastWorkspaceEvents = snapshot.events
+        loadedProjectionItemCount = snapshot.loadedProjectionItemCount
+        totalProjectionItemCount = snapshot.totalProjectionItemCount
+        tailSnapshotEventId = snapshot.tailSnapshotEventId
+        prefetchedOlderTail = nil
+        prefetchedOlderOffset = nil
+        items = TimelineBuilder.build(events: snapshot.events)
+        isInitialLoading = false
+        errorMessage = nil
+    }
+
+    private func saveCurrentCache() {
+        guard let transcriptCache, let activeServerURL, let activeSessionId, let detail else { return }
+        transcriptCache.store(
+            serverURL: activeServerURL,
+            sessionId: activeSessionId,
+            detail: detail,
+            events: lastWorkspaceEvents,
+            loadedProjectionItemCount: loadedProjectionItemCount,
+            totalProjectionItemCount: totalProjectionItemCount,
+            tailSnapshotEventId: tailSnapshotEventId
+        )
     }
 
     private func updateSubmittedInput(

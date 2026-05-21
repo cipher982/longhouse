@@ -83,6 +83,55 @@ struct SessionViewModelTests {
     }
 
     @Test
+    func startRestoresCachedTailWithoutBlockingOnNetwork() async throws {
+        let cached = try makeWorkspace(eventId: 20, content: "Cached tail")
+        let fresh = try makeWorkspace(eventId: 21, content: "Network tail")
+        let cache = SessionTranscriptCache()
+        cache.store(
+            serverURL: "https://example.longhouse.ai",
+            sessionId: "session-1",
+            detail: cached.session,
+            events: cached.events,
+            loadedProjectionItemCount: cached.events.count,
+            totalProjectionItemCount: cached.projection.total,
+            tailSnapshotEventId: cached.events.map(\.id).max()
+        )
+        let api = FakeSessionWorkspaceClient(workspaces: [fresh])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, transcriptCache: cache)
+
+        await model.start(sessionId: "session-1", appState: appState)
+
+        #expect(model.isInitialLoading == false)
+        #expect(model.detail?.id == "session-1")
+        #expect(model.items.map(\.id) == ["user:20"])
+        #expect(await api.workspaceRequestCount() == 0)
+    }
+
+    @Test
+    func cachePreservesLoadedOlderPagesAcrossViewModels() async throws {
+        let tail = try makeWorkspace(eventId: 51, content: "Recent tail", total: 100, pageOffset: 50)
+        let older = try makeWorkspace(eventId: 1, content: "Older page", total: 100, pageOffset: 0)
+        let fresh = try makeWorkspace(eventId: 52, content: "Network tail", total: 101, pageOffset: 51)
+        let cache = SessionTranscriptCache()
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+
+        let firstAPI = FakeSessionWorkspaceClient(workspaces: [tail, older])
+        let firstModel = SessionViewModel(apiFactory: { _ in firstAPI }, enableRealtime: false, transcriptCache: cache)
+        await firstModel.start(sessionId: "session-1", appState: appState)
+        await firstModel.loadOlder(sessionId: "session-1", appState: appState)
+
+        let secondAPI = FakeSessionWorkspaceClient(workspaces: [fresh])
+        let secondModel = SessionViewModel(apiFactory: { _ in secondAPI }, enableRealtime: false, transcriptCache: cache)
+        await secondModel.start(sessionId: "session-1", appState: appState)
+
+        #expect(secondModel.items.map(\.id) == ["user:1", "user:51"])
+        #expect(await secondAPI.workspaceRequestCount() == 0)
+    }
+
+    @Test
     func sendReturnsBeforeWorkspaceRefreshCompletes() async throws {
         let before = try makeWorkspace(eventId: 10, content: "Before send")
         let after = try makeWorkspace(eventId: 11, content: "After send")
