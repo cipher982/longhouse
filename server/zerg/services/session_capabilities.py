@@ -120,7 +120,7 @@ def build_session_input_presentation(
     provider = (provider_label or "").strip() or "session"
     provider_session = provider if provider.lower().endswith("session") else f"{provider} session"
 
-    if capability_flags.live_control_available or capability_flags.reply_to_live_session_available:
+    if capability_flags.reply_to_live_session_available:
         if capability_flags.can_steer_active_turn:
             default_intent = "steer"
         elif capability_flags.can_queue_next_input and is_executing:
@@ -256,7 +256,22 @@ def project_current_session_capabilities_from_facts(
     phase_current = _phase_is_current(phase=phase, now=current_now)
 
     currently_live = capability_flags.live_control_available and lifecycle_state == "open" and control_current
-    reattach_available = capability_flags.host_reattach_available and lifecycle_state != "closed" and not currently_live
+    # A stale-but-steerable session (kernel says live, runtime overlay says
+    # control offline) demotes live → reattach. Both buckets imply the same
+    # spawned_control / adopted_control plane; the kernel's reattach flag
+    # only false because the connection row hasn't been updated to detached
+    # yet. This is a down-gate of live, not an up-gate of reattach — it is
+    # gated on `live_control_available`, never on a kernel-False reattach.
+    live_demoted_to_reattach = (
+        capability_flags.live_control_available
+        and lifecycle_state != "closed"
+        and not currently_live
+    )
+    reattach_available = (
+        (capability_flags.host_reattach_available or live_demoted_to_reattach)
+        and lifecycle_state != "closed"
+        and not currently_live
+    )
     phase_kind = _normalized_fact(_read_attr(phase, "kind"))
     can_steer = currently_live and phase_current and capability_flags.can_steer_active_turn and phase_kind in STEERABLE_RUNTIME_STATES
 

@@ -77,7 +77,8 @@ def _truth_tier(
         runtime_source=runtime_source,
         presence_state=presence_state,
     )
-    if capabilities.host_reattach_available and has_fresh_signal and confidence != "stale":
+    is_managed = capabilities.live_control_available or capabilities.host_reattach_available
+    if is_managed and has_fresh_signal and confidence != "stale":
         return "managed-local"
     if has_fresh_signal and confidence != "stale":
         return "fresh"

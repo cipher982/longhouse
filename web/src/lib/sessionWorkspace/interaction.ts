@@ -41,7 +41,9 @@ export function getSessionInteractionCapabilities({
   const {
     live_control_available: liveControlAvailable,
     host_reattach_available: hostReattachAvailable,
+    reply_to_live_session_available: replyToLiveSessionAvailable,
   } = session.capabilities;
+  const canChatFromBrowser = Boolean(replyToLiveSessionAvailable ?? liveControlAvailable);
   const controlPath = session.runtime_facts?.control_path ?? session.runtime_display?.control_path;
   const isManagedLocalSession =
     controlPath === "managed"
@@ -179,7 +181,7 @@ export function getSessionInteractionCapabilities({
     isManagedLocalCodex,
     liveControlAvailable,
     hostReattachAvailable,
-    canChatFromBrowser: liveControlAvailable,
+    canChatFromBrowser,
     managementLabel,
     managementDescription,
     managedLaunchSuggestion,

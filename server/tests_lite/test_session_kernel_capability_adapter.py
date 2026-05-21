@@ -136,10 +136,10 @@ def test_managed_codex_attached_grants_steer_and_send(db):
     flags = build_session_capabilities_from_kernel(db, s)
 
     assert flags.live_control_available is True
-    # A live-attached session is also reattachable — both buckets imply a
-    # steerable control plane that can be reattached if the live session
-    # later goes stale.
-    assert flags.host_reattach_available is True
+    # Spec: host_reattach_available == (control_label == "reattach"). A live
+    # attached session is steerable now; the runtime overlay flips it to
+    # reattach if the attachment later goes stale.
+    assert flags.host_reattach_available is False
     assert flags.reply_to_live_session_available is True
     assert flags.can_queue_next_input is True
     assert flags.can_steer_active_turn is True
