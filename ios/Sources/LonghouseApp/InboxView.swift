@@ -21,30 +21,30 @@ struct TimelineView: View {
         #endif
     }
 
+    @ViewBuilder
+    private var content: some View {
+        switch viewModel.state {
+        case .initial:
+            ProgressView().controlSize(.large)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .empty:
+            emptyView
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .error(let message):
+            errorView(message)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .loaded(let sessions):
+            timelineBody(sessions: sessions)
+        }
+    }
+
     var body: some View {
         NavigationStack(path: $path) {
-            VStack(spacing: 0) {
-                // Render the strip above all content branches so empty,
-                // error, loading, and timeline states all share the same
-                // connection signal. timelineBody no longer renders its
-                // own copy.
+            content
+            .safeAreaInset(edge: .top, spacing: 0) {
                 ConnectionStatusStrip(state: effectiveConnectionState)
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
-                Group {
-                    if viewModel.isInitialLoading {
-                        ProgressView().controlSize(.large)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else if let error = viewModel.errorMessage, viewModel.isEmpty {
-                        errorView(error)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else if viewModel.isEmpty {
-                        emptyView
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else {
-                        timelineBody
-                    }
-                }
             }
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Timeline")
@@ -115,12 +115,10 @@ struct TimelineView: View {
         }
     }
 
-    private var timelineBody: some View {
+    private func timelineBody(sessions: [SessionSummary]) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 20) {
-                if !viewModel.recent.isEmpty {
-                    timelineSection(title: "Recent", sessions: viewModel.recent, emphasized: false)
-                }
+                timelineSection(title: "Recent", sessions: sessions, emphasized: false)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 18)
@@ -506,19 +504,25 @@ enum ConnectionState: Equatable, Hashable {
     }
 }
 
+/// Four-way state for the timeline screen. Replaces the prior cluster of
+/// `isInitialLoading` / `errorMessage` / `recent.isEmpty` booleans, which
+/// allowed nonsense combinations (loading + error + data) and forced the
+/// view body to re-derive the state from if-else order.
+enum TimelineLoadState: Equatable {
+    case initial
+    case empty
+    case error(String)
+    case loaded([SessionSummary])
+}
+
 @MainActor
 final class TimelineViewModel: ObservableObject {
-    @Published var attention: [SessionSummary] = []
-    @Published var recent: [SessionSummary] = []
-    @Published var errorMessage: String?
-    @Published var isInitialLoading = true
-    @Published var isRefreshing = false
+    @Published private(set) var state: TimelineLoadState = .initial
     @Published var lastUpdatedAt: Date?
     @Published private(set) var consecutiveRefreshFailures = 0
 
     private var autoRefreshTask: Task<Void, Never>?
     private var lastWidgetReloadAt: Date?
-    private var activeRefreshCount = 0
     private var isRefreshInFlight = false
     private var loggedFirstPaint = false
     private let logger = Logger(subsystem: "ai.longhouse.ios", category: "Timeline")
@@ -527,14 +531,21 @@ final class TimelineViewModel: ObservableObject {
         ConnectionState.derive(failures: consecutiveRefreshFailures, lastUpdatedAt: lastUpdatedAt)
     }
 
-    var isEmpty: Bool { attention.isEmpty && recent.isEmpty }
+    private var isInitial: Bool {
+        if case .initial = state { return true }
+        return false
+    }
+
+    private var hasLoadedSessions: Bool {
+        if case .loaded = state { return true }
+        return false
+    }
 
     func load(using appState: AppState) async {
-        if !isInitialLoading { return }
+        guard isInitial else { return }
         if let cached = TimelineCacheStore.load(serverURL: appState.serverURL) {
             applySessions(cached.sessions, source: "cache")
             lastUpdatedAt = cached.savedAt
-            isInitialLoading = false
             logger.info("timeline cache hit sessions=\(cached.sessions.count, privacy: .public)")
             Task { [weak self] in
                 await self?.refresh(using: appState, reloadWidget: true)
@@ -551,20 +562,12 @@ final class TimelineViewModel: ObservableObject {
             return
         }
         guard let api = LonghouseAPI(host: appState.serverURL) else {
-            errorMessage = "Invalid server URL"
-            isInitialLoading = false
+            state = .error("Invalid server URL")
             return
         }
         let startedAt = Date()
         isRefreshInFlight = true
-        activeRefreshCount += 1
-        isRefreshing = true
-        defer {
-            activeRefreshCount = max(0, activeRefreshCount - 1)
-            isRefreshing = activeRefreshCount > 0
-            isInitialLoading = false
-            isRefreshInFlight = false
-        }
+        defer { isRefreshInFlight = false }
 
         do {
             let sessions = try await api.recentSessions(limit: 40)
@@ -574,26 +577,31 @@ final class TimelineViewModel: ObservableObject {
             WidgetSessionSnapshotStore.save(sessions: sessions)
             PushNotificationStore.removeResolvedAttentionNotifications(activeSessionIDs: attentionIds)
             self.lastUpdatedAt = Date()
-            self.errorMessage = nil
             self.consecutiveRefreshFailures = 0
             if reloadWidget {
                 reloadWidgetTimelineIfNeeded()
             }
             logger.info("timeline refresh finished sessions=\(sessions.count, privacy: .public) elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
         } catch LonghouseAPIError.notAuthenticated {
-            errorMessage = "Session expired. Sign in again."
             consecutiveRefreshFailures += 1
+            // Auth errors override stale data — re-login is required.
+            state = .error("Session expired. Sign in again.")
             logger.error("timeline refresh unauthenticated elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
         } catch {
-            errorMessage = "Couldn't load sessions: \(error.localizedDescription)"
             consecutiveRefreshFailures += 1
+            // While we have data on screen, refresh failures are silent —
+            // the connection strip is the signal. Only surface an error
+            // page when there's nothing else to show.
+            if !hasLoadedSessions {
+                state = .error("Couldn't load sessions: \(error.localizedDescription)")
+            }
             logger.error("timeline refresh failed elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public) error=\(error.localizedDescription, privacy: .public)")
         }
     }
 
     func resumeAutoRefresh(using appState: AppState) {
         startAutoRefresh(using: appState)
-        guard !isInitialLoading else { return }
+        guard !isInitial else { return }
         Task { await refresh(using: appState, reloadWidget: true) }
     }
 
@@ -635,9 +643,7 @@ final class TimelineViewModel: ObservableObject {
     }
 
     private func applySessions(_ sessions: [SessionSummary], source: String) {
-        let attention = sessions.filter(\.needsAttention)
-        self.attention = attention
-        self.recent = sessions
+        state = sessions.isEmpty ? .empty : .loaded(sessions)
         if !loggedFirstPaint {
             loggedFirstPaint = true
             logger.info("timeline first paint source=\(source, privacy: .public) sessions=\(sessions.count, privacy: .public)")
