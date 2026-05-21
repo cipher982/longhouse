@@ -61,7 +61,6 @@ from zerg.services.managed_local_event_polling import get_managed_local_latest_e
 from zerg.services.managed_local_event_polling import get_session_turn_snapshot_best_effort
 from zerg.services.managed_local_event_polling import hydrate_turn_events_from_snapshot
 from zerg.services.agents.kernel_capability_adapter import build_session_capabilities_from_kernel
-from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_continuity import session_lock_manager
 from zerg.services.session_current_control import current_session_capabilities
 from zerg.services.session_turns import SESSION_TURN_ERROR_SEND_FAILED

@@ -445,9 +445,12 @@ def test_three_axis_fields_managed_stale_after_live():
     assert display.activity_recency == "stale"
 
 
-def test_three_axis_fields_managed_hosted_without_transport():
-    # MANAGED_HOSTED sessions whose transport is None must still be
-    # classified as "managed" on the control_path axis.
+def test_three_axis_fields_legacy_execution_home_does_not_grant_managed_path():
+    # Post-kernel, ``control_path == "managed"`` is sourced from the
+    # kernel-projected capability flags (live_control_available or
+    # host_reattach_available). A legacy ``MANAGED_HOSTED`` enum value
+    # with no kernel evidence must NOT promote a session to "managed" —
+    # the legacy columns are no longer authoritative.
     capabilities = SessionCapabilityFlags(
         execution_home=SessionExecutionHome.MANAGED_HOSTED,
         managed_transport=None,
@@ -464,7 +467,7 @@ def test_three_axis_fields_managed_hosted_without_transport():
         ended_at=None,
     )
 
-    assert display.control_path == "managed"
+    assert display.control_path == "unmanaged"
 
 
 def test_three_axis_fields_managed_live_running():

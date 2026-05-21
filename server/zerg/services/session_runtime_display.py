@@ -13,7 +13,6 @@ from datetime import datetime
 
 from zerg.services.session_capabilities import SessionCapabilityFlags
 from zerg.services.session_runtime import SessionRuntimeView
-from zerg.session_execution_home import SessionExecutionHome
 
 KNOWN_PRESENCE_STATES = {"thinking", "running", "idle", "needs_user", "blocked", "stalled"}
 LIVE_EXECUTION_STATES = {"thinking", "running"}
@@ -375,23 +374,16 @@ def build_session_runtime_display(
     )
 
 
-_MANAGED_EXECUTION_HOMES = {
-    SessionExecutionHome.MANAGED_LOCAL,
-    SessionExecutionHome.MANAGED_HOSTED,
-    SessionExecutionHome.CLOUD_TAKEOVER,
-}
-
-
 def _derive_control_path(capabilities: SessionCapabilityFlags) -> str:
     """Durable: does Longhouse own a control path for this session?
 
-    Based on execution_home / managed_transport, NOT on whether control is
-    currently live. A managed session whose bridge is offline is still
-    `managed`, with `host_state=offline` telling the story separately.
+    Sourced from the kernel-projected capability flags. A managed
+    session whose bridge is offline still projects ``host_reattach``,
+    so this stays "managed" and ``host_state=offline`` tells the story
+    separately. Legacy ``execution_home`` / ``managed_transport`` are
+    no longer authoritative.
     """
-    if capabilities.execution_home in _MANAGED_EXECUTION_HOMES:
-        return "managed"
-    if capabilities.managed_transport is not None:
+    if capabilities.live_control_available or capabilities.host_reattach_available:
         return "managed"
     return "unmanaged"
 
