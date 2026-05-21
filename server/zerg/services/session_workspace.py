@@ -25,6 +25,7 @@ from zerg.services.session_views import build_event_response
 from zerg.services.session_views import build_session_response
 from zerg.services.unmanaged_bindings import load_binding_overlay
 from zerg.utils.server_timing import ServerTimingRecorder
+from zerg.utils.time import normalize_utc
 
 
 def build_session_workspace(
@@ -85,7 +86,12 @@ def build_session_workspace(
         with timing.span("control_state"):
             control_state_map = load_managed_control_state_map(db, thread_session_ids)
         with timing.span("provisional_preview"):
-            transcript_preview_map = load_active_provisional_preview_map(db, thread_session_ids)
+            transcript_preview_map = _load_provisional_preview_map(
+                db,
+                thread_sessions=thread_sessions,
+                runtime_state_map=runtime_state_map,
+                now=now,
+            )
         with timing.span("binding_overlay"):
             binding_overlay_map = load_binding_overlay(db, thread_session_ids, now=now)
     with timing.span("build_thread_responses"):
@@ -222,7 +228,12 @@ def build_session_mobile_tail(
         with timing.span("control_state"):
             control_state_map = load_managed_control_state_map(db, thread_session_ids)
         with timing.span("provisional_preview"):
-            transcript_preview_map = load_active_provisional_preview_map(db, thread_session_ids)
+            transcript_preview_map = _load_provisional_preview_map(
+                db,
+                thread_sessions=thread_sessions,
+                runtime_state_map=runtime_state_map,
+                now=now,
+            )
         with timing.span("binding_overlay"):
             binding_overlay_map = load_binding_overlay(db, thread_session_ids, now=now)
 
@@ -265,6 +276,49 @@ def build_session_mobile_tail(
 def _projection_snapshot_event_id(store: AgentsStore, projection) -> int | None:
     latest_event_ids = [store.get_latest_event_id(path_session.id) for path_session in projection.path_sessions]
     return max((event_id for event_id in latest_event_ids if event_id is not None), default=None)
+
+
+def _load_provisional_preview_map(
+    db: Session,
+    *,
+    thread_sessions,
+    runtime_state_map,
+    now: datetime,
+):
+    preview_session_ids = [
+        item.id
+        for item in thread_sessions
+        if _session_may_have_live_provisional_preview(
+            item,
+            runtime_state=runtime_state_map.get(str(item.id)),
+            now=now,
+        )
+    ]
+    if not preview_session_ids:
+        return {}
+    return load_active_provisional_preview_map(db, preview_session_ids)
+
+
+def _session_may_have_live_provisional_preview(session, *, runtime_state, now: datetime) -> bool:
+    if normalize_utc(getattr(session, "ended_at", None)) is not None:
+        return False
+
+    if runtime_state is None:
+        return True
+
+    terminal_state = str(getattr(runtime_state, "terminal_state", "") or "").strip()
+    if terminal_state:
+        return False
+
+    phase = str(getattr(runtime_state, "phase", "") or "").strip()
+    if phase == "finished":
+        return False
+
+    freshness_expires_at = normalize_utc(getattr(runtime_state, "freshness_expires_at", None))
+    if freshness_expires_at is not None and freshness_expires_at <= now:
+        return False
+
+    return True
 
 
 def _build_projection_response(
