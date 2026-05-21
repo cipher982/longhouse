@@ -874,9 +874,6 @@ final class SessionViewModel: ObservableObject {
             "webkit_\(diagnostics.stage)",
             "rows=\(diagnostics.row_count) bytes=\(diagnostics.payload_byte_size)\(renderMs)"
         )
-        if diagnostics.stage == "rendered" {
-            openWaterfall = nil
-        }
         guard diagnostics.stage == "rendered" || diagnostics.stage == "failed" else { return }
         guard let api = apiFactory(appState.serverURL) else { return }
         await reportRenderBeacon(
