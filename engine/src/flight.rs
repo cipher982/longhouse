@@ -173,6 +173,7 @@ pub fn ship_stats_snapshot(summary: ShipStatsSummary) -> Value {
         "ship_server_errors_10m": summary.ship_server_errors_10m,
         "ship_retryable_client_errors_10m": summary.ship_retryable_client_errors_10m,
         "ship_connect_errors_10m": summary.ship_connect_errors_10m,
+        "events_per_sec_ewma_10s": summary.events_per_sec_ewma_10s,
     })
 }
 
