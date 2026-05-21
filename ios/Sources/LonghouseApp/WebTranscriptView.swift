@@ -11,6 +11,7 @@ struct WebTranscriptView: UIViewRepresentable {
     let errorMessage: String?
     let onNearTop: (() -> Void)?
     let onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?
+    let onLifecycle: ((String) -> Void)?
 
     init(
         items: [TimelineItem],
@@ -18,7 +19,8 @@ struct WebTranscriptView: UIViewRepresentable {
         sessionEnded: Bool,
         errorMessage: String?,
         onNearTop: (() -> Void)? = nil,
-        onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)? = nil
+        onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)? = nil,
+        onLifecycle: ((String) -> Void)? = nil
     ) {
         self.items = items
         self.submittedInputs = submittedInputs
@@ -26,6 +28,7 @@ struct WebTranscriptView: UIViewRepresentable {
         self.errorMessage = errorMessage
         self.onNearTop = onNearTop
         self.onDiagnostics = onDiagnostics
+        self.onLifecycle = onLifecycle
     }
 
     func makeCoordinator() -> Coordinator {
@@ -33,10 +36,8 @@ struct WebTranscriptView: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> WKWebView {
-        let configuration = WKWebViewConfiguration()
-        configuration.allowsInlineMediaPlayback = true
-
-        let webView = WKWebView(frame: .zero, configuration: configuration)
+        let pooled = WebTranscriptWebViewPool.takeOrCreate()
+        let webView = pooled.webView
         webView.navigationDelegate = context.coordinator
         webView.scrollView.delegate = context.coordinator
         webView.scrollView.keyboardDismissMode = .interactive
@@ -46,7 +47,11 @@ struct WebTranscriptView: UIViewRepresentable {
         webView.scrollView.backgroundColor = .clear
         webView.accessibilityIdentifier = "session-chat-transcript"
         context.coordinator.webView = webView
-        webView.loadHTMLString(Self.documentHTML, baseURL: nil)
+        context.coordinator.isLoaded = pooled.isLoaded
+        onLifecycle?(pooled.reused ? "webview_reused" : "webview_make")
+        if !pooled.isLoaded {
+            webView.loadHTMLString(Self.documentHTML, baseURL: nil)
+        }
         return webView
     }
 
@@ -56,7 +61,8 @@ struct WebTranscriptView: UIViewRepresentable {
             to: webView,
             diagnosticsEnabled: WebTranscriptDiagnosticsFeature.isEnabled,
             onNearTop: onNearTop,
-            onDiagnostics: onDiagnostics
+            onDiagnostics: onDiagnostics,
+            onLifecycle: onLifecycle
         )
     }
 
@@ -300,10 +306,10 @@ struct WebTranscriptView: UIViewRepresentable {
         }
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate, UIScrollViewDelegate {
+final class Coordinator: NSObject, WKNavigationDelegate, UIScrollViewDelegate {
         weak var webView: WKWebView?
         private let logger = Logger(subsystem: "ai.longhouse.ios", category: "WebTranscript")
-        private var isLoaded = false
+        fileprivate var isLoaded = false
         private var shouldStickToBottom = true
         private var userScrollInProgress = false
         private var pendingPayload: WebTranscriptPreparedPayload?
@@ -315,10 +321,12 @@ struct WebTranscriptView: UIViewRepresentable {
         private var diagnosticsEnabled = WebTranscriptDiagnosticsFeature.isEnabled
         private var onNearTop: (() -> Void)?
         private var onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?
+        private var onLifecycle: ((String) -> Void)?
         private var lastNearTopRequestAt = Date.distantPast
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             isLoaded = true
+            onLifecycle?("webview_html_loaded")
             flushPendingPayload(
                 to: webView,
                 diagnosticsEnabled: diagnosticsEnabled,
@@ -367,12 +375,14 @@ struct WebTranscriptView: UIViewRepresentable {
             to webView: WKWebView,
             diagnosticsEnabled: Bool,
             onNearTop: (() -> Void)?,
-            onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?
+            onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?,
+            onLifecycle: ((String) -> Void)?
         ) {
             self.webView = webView
             self.diagnosticsEnabled = diagnosticsEnabled
             self.onNearTop = onNearTop
             self.onDiagnostics = onDiagnostics
+            self.onLifecycle = onLifecycle
             if payload.base64 == lastPayload
                 || payload.base64 == inFlightPayload?.base64
                 || payload.base64 == pendingPayload?.base64 {
@@ -503,6 +513,70 @@ struct WebTranscriptPreparedPayload: Equatable {
     let payloadByteSize: Int
     let rowCount: Int
     let latestItemId: String?
+}
+
+@MainActor
+enum WebTranscriptWebViewPool {
+    struct PooledWebView {
+        let webView: WKWebView
+        let reused: Bool
+        let isLoaded: Bool
+    }
+
+    private static let logger = Logger(subsystem: "ai.longhouse.ios", category: "WebTranscript")
+    private static let processPool = WKProcessPool()
+    private static var warmedWebView: WKWebView?
+    private static var warmedWebViewLoaded = false
+    private static var prewarmDelegate: WebTranscriptPrewarmDelegate?
+
+    static func prewarm() {
+        guard warmedWebView == nil else { return }
+        let delegate = WebTranscriptPrewarmDelegate {
+            Task { @MainActor in
+                warmedWebViewLoaded = true
+                logger.info("webkit prewarm loaded")
+            }
+        }
+        let webView = configuredWebView()
+        prewarmDelegate = delegate
+        webView.navigationDelegate = delegate
+        webView.loadHTMLString(WebTranscriptView.documentHTML, baseURL: nil)
+        warmedWebView = webView
+        warmedWebViewLoaded = false
+        logger.info("webkit prewarm started")
+    }
+
+    static func takeOrCreate() -> PooledWebView {
+        if let webView = warmedWebView {
+            warmedWebView = nil
+            prewarmDelegate = nil
+            let loaded = warmedWebViewLoaded
+            warmedWebViewLoaded = false
+            logger.info("webkit prewarm reused loaded=\(loaded, privacy: .public)")
+            return PooledWebView(webView: webView, reused: true, isLoaded: loaded)
+        }
+        logger.info("webkit prewarm miss")
+        return PooledWebView(webView: configuredWebView(), reused: false, isLoaded: false)
+    }
+
+    private static func configuredWebView() -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.allowsInlineMediaPlayback = true
+        configuration.processPool = processPool
+        return WKWebView(frame: .zero, configuration: configuration)
+    }
+}
+
+private final class WebTranscriptPrewarmDelegate: NSObject, WKNavigationDelegate {
+    private let onLoaded: () -> Void
+
+    init(onLoaded: @escaping () -> Void) {
+        self.onLoaded = onLoaded
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        onLoaded()
+    }
 }
 
 enum WebTranscriptDiagnosticsFeature {

@@ -82,6 +82,7 @@ struct TimelineView: View {
             }
             .refreshable { await viewModel.refresh(using: appState, reloadWidget: true, force: true) }
             .task {
+                WebTranscriptWebViewPool.prewarm()
                 await viewModel.load(using: appState)
                 viewModel.startAutoRefresh(using: appState)
                 consumePendingPushIfNeeded()
@@ -90,6 +91,7 @@ struct TimelineView: View {
                 }
             }
             .onAppear {
+                WebTranscriptWebViewPool.prewarm()
                 viewModel.resumeAutoRefresh(using: appState)
             }
             .onDisappear {
