@@ -175,7 +175,7 @@ def test_managed_process_ended_imports(db):
     s = _make_session(db)
     t = _make_thread(db, s)
     r = _make_run(db, t, ended_at=datetime.now(timezone.utc))
-    _make_conn(db, r, state="ended", caps={"tail": 1})
+    _make_conn(db, r, state="ended", acquisition_kind="spawned_control", caps={"tail": 1})
     db.commit()
     caps = project_session_capabilities(db, session_id=s.id)
     assert caps.control_label == "imported"
@@ -294,6 +294,74 @@ def test_payload_is_pure_function_of_kernel_rows(db):
     assert t.id == snap_thread_id
     assert r.id == snap_run_id
     assert c.id == snap_conn_id
+
+
+def test_run_ended_overrides_attached_connection(db):
+    """A closed run with a stale attached connection must NOT project live.
+
+    Real-world cause: bridge connection row stays "attached" briefly after
+    the provider process exits because the bridge tracker hasn't seen the
+    close yet. The kernel projection must trust ``run.ended_at`` over the
+    connection state.
+    """
+    s = _make_session(db)
+    t = _make_thread(db, s)
+    r = _make_run(db, t, ended_at=datetime.now(timezone.utc))
+    _make_conn(db, r, state="attached", caps={"send": 1, "interrupt": 1, "tail": 1})
+    db.commit()
+    caps = project_session_capabilities(db, session_id=s.id)
+    assert caps.control_label == "imported"
+    assert caps.live_control_available is False
+    assert caps.can_send_input is False
+    assert caps.can_interrupt is False
+    assert caps.staleness_reason == "process_ended"
+
+
+def test_observe_only_with_stale_send_bit_does_not_project_live(db):
+    """``acquisition_kind=observe_only`` is the source of truth for control.
+
+    A log_tail observation row that somehow carries can_send_input=1
+    (corrupted write, race) must still project as search-only. The
+    acquisition_kind gate is what stops stale capability bits from
+    bleeding into the live bucket.
+    """
+    s = _make_session(db)
+    t = _make_thread(db, s)
+    r = _make_run(db, t, launch_origin="external_adopted")
+    _make_conn(
+        db, r,
+        control_plane="log_tail",
+        acquisition_kind="observe_only",
+        state="attached",
+        caps={"send": 1, "interrupt": 1, "tail": 1},
+    )
+    db.commit()
+    caps = project_session_capabilities(db, session_id=s.id)
+    assert caps.control_label == "search-only"
+    assert caps.live_control_available is False
+    assert caps.observe_only is True
+    assert caps.can_send_input is False
+    assert caps.can_interrupt is False
+    # Tail still surfaces — search-only is allowed to read.
+    assert caps.can_tail_output is True
+
+
+def test_empty_state_projects_imported(db):
+    """A connection row with an empty/whitespace state must project as
+    imported, not search-only. Empty state is no truth, not observe-only."""
+    s = _make_session(db)
+    t = _make_thread(db, s)
+    r = _make_run(db, t)
+    c = _make_conn(db, r, state="attached", caps={"tail": 1})
+    # Force an empty string on the persisted row — possible if some future
+    # writer trims to nothing before we add a check constraint.
+    c.state = ""
+    db.commit()
+    caps = project_session_capabilities(db, session_id=s.id)
+    assert caps.control_label == "imported"
+    assert caps.live_control_available is False
+    assert caps.search_only is True
+    assert caps.staleness_reason == "process_ended"
 
 
 def test_imported_returns_full_payload_shape(db):

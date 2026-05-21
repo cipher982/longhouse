@@ -83,7 +83,7 @@ def _connection_capability_count(conn: SessionConnection) -> int:
 
 
 def _connection_sort_key(conn: SessionConnection) -> tuple:
-    state = (conn.state or "ended").strip()
+    state = (conn.state or "").strip()
     state_priority = _STATE_PRIORITY.get(state, 0)
     cap_count = _connection_capability_count(conn)
     last_health = conn.last_health_at or datetime.min.replace(tzinfo=timezone.utc)
@@ -110,9 +110,18 @@ def _label_for(
     *,
     has_thread: bool,
     has_run: bool,
+    run_ended: bool,
     best: Optional[SessionConnection],
 ) -> tuple[str, bool, bool, bool, bool, Optional[str]]:
-    """Compute (control_label, live, reattach, observe_only, search_only, staleness_reason)."""
+    """Compute (control_label, live, reattach, observe_only, search_only, staleness_reason).
+
+    A live process is not proof Longhouse can steer it. Live control
+    requires (1) the latest run is still open, AND (2) the best connection
+    is attached/degraded with a steerable acquisition kind, AND (3) the
+    connection carries the relevant capability bits. The acquisition_kind
+    gate is what stops a stale ``can_send_input=1`` on a ``log_tail``
+    observe_only row from projecting as live.
+    """
 
     if not has_thread:
         return ("imported", False, False, False, True, "imported_only")
@@ -122,7 +131,17 @@ def _label_for(
         return ("imported", False, False, False, True, "no_connection")
 
     state = (best.state or "").strip()
-    can_steer = bool(best.can_send_input or best.can_interrupt or best.can_terminate)
+    if state == "" or state == "ended":
+        # Treat unknown/empty state the same as ended: no recent control
+        # truth, no live affordance.
+        return ("imported", False, False, False, True, "process_ended")
+    if run_ended:
+        # Process is gone — even an apparently-attached row is stale.
+        return ("imported", False, False, False, True, "process_ended")
+
+    acquisition = (best.acquisition_kind or "").strip()
+    is_steerable_kind = acquisition in ("spawned_control", "adopted_control")
+    can_steer = is_steerable_kind and bool(best.can_send_input or best.can_interrupt or best.can_terminate)
     can_tail = bool(best.can_tail_output)
 
     if state in ("attached", "degraded") and can_steer:
@@ -134,9 +153,6 @@ def _label_for(
 
     if can_tail and state in ("attached", "degraded"):
         return ("search-only", False, False, True, False, "observe_only")
-
-    if state == "ended":
-        return ("imported", False, False, False, True, "process_ended")
 
     return ("search-only", False, False, True, False, "observe_only")
 
@@ -154,14 +170,20 @@ def project_session_capabilities(
 
     sid = str(session_id)
 
+    # Defense-in-depth: the unique partial index ux_threads_one_primary_per_session
+    # makes this query return at most one row in a healthy DB. We still
+    # use first() with a stable order so a corrupted/migrating DB doesn't
+    # crash the projection — a bad primary state should degrade to a
+    # deterministic "imported" payload, not a 500.
     thread = (
         db.query(SessionThread)
         .filter(SessionThread.session_id == session_id, SessionThread.is_primary == 1)
-        .one_or_none()
+        .order_by(SessionThread.created_at.asc(), SessionThread.id.asc())
+        .first()
     )
     if thread is None:
         label, live, reattach, observe, search, reason = _label_for(
-            has_thread=False, has_run=False, best=None
+            has_thread=False, has_run=False, run_ended=False, best=None
         )
         return KernelSessionCapabilities(
             session_id=sid,
@@ -192,7 +214,7 @@ def project_session_capabilities(
 
     if latest_run is None:
         label, live, reattach, observe, search, reason = _label_for(
-            has_thread=True, has_run=False, best=None
+            has_thread=True, has_run=False, run_ended=False, best=None
         )
         return KernelSessionCapabilities(
             session_id=sid,
@@ -220,9 +242,10 @@ def project_session_capabilities(
         .all()
     )
     best = _select_best_connection(connections)
+    run_ended = latest_run.ended_at is not None
 
     label, live, reattach, observe, search, reason = _label_for(
-        has_thread=True, has_run=True, best=best
+        has_thread=True, has_run=True, run_ended=run_ended, best=best
     )
 
     if best is None:
