@@ -169,6 +169,7 @@ final class AppState: ObservableObject {
         if previousURL != trimmed, !previousURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             SharedAuthStore.clearManagedCookies(for: previousURL)
             SharedAuthStore.removeSharedCookieStorage(for: previousURL)
+            TimelineCacheStore.clear(serverURL: previousURL)
             KeychainHelper.deleteAuthToken()
         }
         SharedAuthStore.primeSharedCookieStorage(for: trimmed)
@@ -222,6 +223,7 @@ final class AppState: ObservableObject {
 
         KeychainHelper.deleteAuthToken()
         KeychainHelper.deleteServerURL()
+        TimelineCacheStore.clear()
         WidgetCenter.shared.reloadAllTimelines()
     }
 
@@ -244,6 +246,7 @@ final class AppState: ObservableObject {
             if previousURL != trimmed {
                 SharedAuthStore.clearManagedCookies(for: previousURL)
                 SharedAuthStore.removeSharedCookieStorage(for: previousURL)
+                TimelineCacheStore.clear(serverURL: previousURL)
                 KeychainHelper.deleteAuthToken()
             }
             SharedAuthStore.primeSharedCookieStorage(for: trimmed)
@@ -364,6 +367,7 @@ final class AppState: ObservableObject {
         SharedAuthStore.clearManagedCookies(for: serverURL)
         SharedAuthStore.removeSharedCookieStorage(for: serverURL)
         WidgetSessionSnapshotStore.clear()
+        TimelineCacheStore.clear(serverURL: serverURL)
         KeychainHelper.deleteAuthToken()
         isAuthenticated = false
     }

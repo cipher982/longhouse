@@ -80,7 +80,7 @@ struct TimelineView: View {
                     path.append(SessionRoute(sessionId: sessionId, fallbackTitle: "New session"))
                 }
             }
-            .refreshable { await viewModel.refresh(using: appState, reloadWidget: true) }
+            .refreshable { await viewModel.refresh(using: appState, reloadWidget: true, force: true) }
             .task {
                 await viewModel.load(using: appState)
                 viewModel.startAutoRefresh(using: appState)
@@ -167,7 +167,7 @@ struct TimelineView: View {
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
             Button("Try again") {
-                Task { await viewModel.refresh(using: appState, reloadWidget: true) }
+                Task { await viewModel.refresh(using: appState, reloadWidget: true, force: true) }
             }
             .buttonStyle(.borderedProminent)
         }
@@ -517,6 +517,8 @@ final class TimelineViewModel: ObservableObject {
     private var autoRefreshTask: Task<Void, Never>?
     private var lastWidgetReloadAt: Date?
     private var activeRefreshCount = 0
+    private var isRefreshInFlight = false
+    private var loggedFirstPaint = false
     private let logger = Logger(subsystem: "ai.longhouse.ios", category: "Timeline")
 
     var connectionState: ConnectionState {
@@ -527,30 +529,46 @@ final class TimelineViewModel: ObservableObject {
 
     func load(using appState: AppState) async {
         if !isInitialLoading { return }
+        if let cached = TimelineCacheStore.load(serverURL: appState.serverURL) {
+            applySessions(cached.sessions, source: "cache")
+            lastUpdatedAt = cached.savedAt
+            isInitialLoading = false
+            logger.info("timeline cache hit sessions=\(cached.sessions.count, privacy: .public)")
+            Task { [weak self] in
+                await self?.refresh(using: appState, reloadWidget: true)
+            }
+            return
+        }
+        logger.info("timeline cache miss")
         await refresh(using: appState, reloadWidget: true)
     }
 
-    func refresh(using appState: AppState, reloadWidget: Bool = false) async {
+    func refresh(using appState: AppState, reloadWidget: Bool = false, force: Bool = false) async {
+        if isRefreshInFlight && !force {
+            logger.debug("timeline refresh skipped reason=in_flight")
+            return
+        }
         guard let api = LonghouseAPI(host: appState.serverURL) else {
             errorMessage = "Invalid server URL"
             isInitialLoading = false
             return
         }
         let startedAt = Date()
+        isRefreshInFlight = true
         activeRefreshCount += 1
         isRefreshing = true
         defer {
             activeRefreshCount = max(0, activeRefreshCount - 1)
             isRefreshing = activeRefreshCount > 0
             isInitialLoading = false
+            isRefreshInFlight = false
         }
 
         do {
             let sessions = try await api.recentSessions(limit: 40)
-            let attention = sessions.filter(\.needsAttention)
-            let attentionIds = Set(attention.map(\.id))
-            self.attention = attention
-            self.recent = sessions
+            let attentionIds = Set(sessions.filter(\.needsAttention).map(\.id))
+            applySessions(sessions, source: "network")
+            TimelineCacheStore.save(sessions: sessions, serverURL: appState.serverURL)
             WidgetSessionSnapshotStore.save(sessions: sessions)
             PushNotificationStore.removeResolvedAttentionNotifications(activeSessionIDs: attentionIds)
             self.lastUpdatedAt = Date()
@@ -612,6 +630,16 @@ final class TimelineViewModel: ObservableObject {
         }
         WidgetCenter.shared.reloadAllTimelines()
         lastWidgetReloadAt = now
+    }
+
+    private func applySessions(_ sessions: [SessionSummary], source: String) {
+        let attention = sessions.filter(\.needsAttention)
+        self.attention = attention
+        self.recent = sessions
+        if !loggedFirstPaint {
+            loggedFirstPaint = true
+            logger.info("timeline first paint source=\(source, privacy: .public) sessions=\(sessions.count, privacy: .public)")
+        }
     }
 }
 
