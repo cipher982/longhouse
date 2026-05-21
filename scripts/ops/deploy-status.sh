@@ -3,8 +3,8 @@
 set -euo pipefail
 
 ZERG_HOST="${ZERG_HOST:-zerg}"
-CANARY_CONTAINER_NAME="${CANARY_CONTAINER_NAME:-}"
-CANARY_HEALTH_URL="${CANARY_HEALTH_URL:-}"
+CANARY_CONTAINER_NAME="${CANARY_CONTAINER_NAME:-longhouse-david010}"
+CANARY_HEALTH_URL="${CANARY_HEALTH_URL:-https://david010.longhouse.ai/api/health}"
 
 # --- Gather container state from zerg ----------------------------------------
 
