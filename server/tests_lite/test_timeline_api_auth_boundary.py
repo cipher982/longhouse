@@ -206,7 +206,6 @@ def test_timeline_session_detail_includes_attach_command_for_managed_local_codex
         payload = response.json()
         assert payload["home_label"] == "On this Mac"
         assert payload["control"] == {
-            "managed_transport": "codex_app_server",
             "source_runner_id": 9,
             "source_runner_name": "cinder",
             "attach_command": build_managed_local_attach_command(session=session),
@@ -264,7 +263,6 @@ def test_timeline_session_detail_includes_attach_command_for_native_claude_bridg
         payload = response.json()
         assert payload["home_label"] == "On this Mac"
         assert payload["control"] == {
-            "managed_transport": "claude_channel_bridge",
             "source_runner_id": 9,
             "source_runner_name": "work-laptop",
             "attach_command": build_managed_local_attach_command(session=session),
@@ -921,7 +919,6 @@ def test_timeline_session_detail_includes_attach_command_for_native_managed_loca
         payload = response.json()
         assert payload["home_label"] == "On this Mac"
         assert payload["control"] == {
-            "managed_transport": "codex_app_server",
             "source_runner_id": 9,
             "source_runner_name": "cinder",
             "attach_command": build_managed_local_attach_command(session=session),

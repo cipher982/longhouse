@@ -141,7 +141,6 @@ function buildOverview(hoursBack: number) {
         project: "zerg",
         device_id: "broken-machine",
         device_name: "cube",
-        managed_transport: "claude_channel_bridge",
         state: "durable",
         terminal_phase: "completed",
         error_code: null,

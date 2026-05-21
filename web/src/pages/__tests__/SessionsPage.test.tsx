@@ -710,7 +710,6 @@ describe("SessionsPage", () => {
               reply_to_live_session_available: true,
             }),
             control: {
-              managed_transport: "codex_app_server",
               source_runner_id: 7,
               source_runner_name: "cinder",
               attach_command: "longhouse-engine codex-bridge attach --session-id session-1",

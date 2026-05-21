@@ -48,7 +48,6 @@ from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_runtime import should_include_runtime_view
 from zerg.services.session_runtime_display import build_session_runtime_display
 from zerg.services.session_runtime_display import compact_runtime_tool_label
-from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_loop_mode import SessionLoopMode
 from zerg.session_loop_mode import coerce_session_loop_mode
 from zerg.utils.time import UTCBaseModel
@@ -375,14 +374,12 @@ def build_session_control_response(
     source_runner_name = str(getattr(session, "source_runner_name", "") or "").strip() or None
     attach_command = build_attach_command(session) if capability_flags.host_reattach_available else None
     if (
-        capability_flags.managed_transport is None
-        and getattr(session, "source_runner_id", None) is None
+        getattr(session, "source_runner_id", None) is None
         and source_runner_name is None
         and attach_command is None
     ):
         return None
     return SessionControlResponse(
-        managed_transport=capability_flags.managed_transport,
         source_runner_id=getattr(session, "source_runner_id", None),
         source_runner_name=source_runner_name,
         attach_command=attach_command,
@@ -395,10 +392,6 @@ def build_session_control_response(
 
 
 class SessionControlResponse(BaseModel):
-    managed_transport: Optional[ManagedSessionTransport] = Field(
-        None,
-        description="Managed transport when Longhouse owns the session runtime",
-    )
     source_runner_id: Optional[int] = Field(None, description="Runner id for managed local sessions")
     source_runner_name: Optional[str] = Field(None, description="Runner name for managed local sessions")
     attach_command: Optional[str] = Field(None, description="Local reattach command for managed-local sessions")
