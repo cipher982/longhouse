@@ -721,6 +721,14 @@ def _migrate_agents_columns(engine: Engine) -> None:
             ).fetchone()
             if runtime_state_exists:
                 columns = {row[1] for row in conn.execute(text("PRAGMA table_info(session_runtime_state)"))}
+                conn.execute(
+                    text(
+                        """
+                        CREATE INDEX IF NOT EXISTS ix_runtime_state_session_updated_version
+                        ON session_runtime_state(session_id, updated_at, runtime_version)
+                        """
+                    )
+                )
                 # terminal_reason / terminal_source ALTER ADDs handled by
                 # _auto_add_missing_columns (pure nullable adds). The
                 # phase-source normalization UPDATE below remains because it is
@@ -1296,6 +1304,14 @@ def _migrate_agents_columns(engine: Engine) -> None:
                     """
                     CREATE INDEX IF NOT EXISTS ix_session_observations_session_observed
                     ON session_observations(session_id, observed_at, id)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_session_observations_session_source_kind
+                    ON session_observations(session_id, source, kind, id)
                     """
                 )
             )

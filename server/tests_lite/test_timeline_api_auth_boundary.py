@@ -554,6 +554,10 @@ def test_timeline_session_mobile_tail_returns_compact_tail_and_detects_drift(tmp
         assert response.status_code == 200
         payload = response.json()
         assert response.headers["cache-control"] == "private, max-age=5"
+        assert "load_runtime;dur=" in response.headers["server-timing"]
+        assert "runtime_state;dur=" in response.headers["server-timing"]
+        assert "provisional_preview;dur=" in response.headers["server-timing"]
+        assert "binding_overlay;dur=" in response.headers["server-timing"]
         assert "thread" not in payload
         assert payload["session"]["id"] == session_id
         assert payload["snapshot_event_id"] == event_ids[-1]
