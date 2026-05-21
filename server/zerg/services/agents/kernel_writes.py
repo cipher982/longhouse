@@ -14,11 +14,16 @@ See docs/specs/session-identity-kernel.md.
 
 from __future__ import annotations
 
+from datetime import datetime
+from datetime import timezone
 from typing import Optional
 
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionConnection
+from zerg.models.agents import SessionLaunchAttempt
+from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionThread
 from zerg.models.agents import SessionThreadAlias
 
@@ -117,3 +122,137 @@ def resolve_thread_id_for_session(db: Session, session_id) -> Optional[str]:
         .one_or_none()
     )
     return row[0] if row is not None else None
+
+
+def record_launch_attempt(
+    db: Session,
+    *,
+    session: AgentSession,
+    thread: SessionThread | None,
+    provider: str,
+    host_id: str | None,
+    client_request_id: str | None = None,
+    command_id: str | None = None,
+    state: str = "pending",
+    expires_at: datetime | None = None,
+) -> SessionLaunchAttempt:
+    """Idempotent insert keyed by (session_id, client_request_id) when both provided.
+
+    Returns the existing or newly-created attempt. Caller manages commit.
+    """
+
+    if client_request_id:
+        existing = (
+            db.query(SessionLaunchAttempt)
+            .filter(
+                SessionLaunchAttempt.session_id == session.id,
+                SessionLaunchAttempt.client_request_id == client_request_id,
+            )
+            .one_or_none()
+        )
+        if existing is not None:
+            return existing
+
+    attempt = SessionLaunchAttempt(
+        session_id=session.id,
+        thread_id=thread.id if thread is not None else None,
+        provider=provider,
+        host_id=host_id,
+        client_request_id=client_request_id,
+        command_id=command_id,
+        state=state,
+        expires_at=expires_at,
+    )
+    db.add(attempt)
+    db.flush()
+    return attempt
+
+
+def update_launch_attempt(
+    db: Session,
+    attempt: SessionLaunchAttempt,
+    *,
+    state: str | None = None,
+    error_code: str | None = None,
+    error_message: str | None = None,
+    run: SessionRun | None = None,
+    expires_at: datetime | None = None,
+    clear_expires: bool = False,
+) -> None:
+    if state is not None:
+        attempt.state = state
+    if error_code is not None:
+        attempt.error_code = error_code
+    if error_message is not None:
+        attempt.error_message = error_message
+    if run is not None:
+        attempt.run_id = run.id
+    if clear_expires:
+        attempt.expires_at = None
+    elif expires_at is not None:
+        attempt.expires_at = expires_at
+    attempt.updated_at = datetime.now(timezone.utc)
+
+
+def record_run(
+    db: Session,
+    *,
+    thread: SessionThread,
+    provider: str,
+    host_id: str | None,
+    boot_id: str | None = None,
+    pid: int | None = None,
+    process_start_time: datetime | None = None,
+    cwd: str | None = None,
+    launch_origin: str = "longhouse_spawned",
+    started_at: datetime | None = None,
+) -> SessionRun:
+    """Insert a new SessionRun row. Caller manages commit."""
+
+    run = SessionRun(
+        thread_id=thread.id,
+        provider=provider,
+        host_id=host_id,
+        boot_id=boot_id,
+        pid=pid,
+        process_start_time=process_start_time,
+        cwd=cwd,
+        launch_origin=launch_origin,
+        started_at=started_at or datetime.now(timezone.utc),
+    )
+    db.add(run)
+    db.flush()
+    return run
+
+
+def record_connection(
+    db: Session,
+    *,
+    run: SessionRun,
+    control_plane: str,
+    acquisition_kind: str,
+    state: str = "attached",
+    external_name: str | None = None,
+    can_send_input: int = 0,
+    can_interrupt: int = 0,
+    can_terminate: int = 0,
+    can_tail_output: int = 0,
+    can_resume: int = 0,
+) -> SessionConnection:
+    """Insert a new SessionConnection row. Caller manages commit."""
+
+    conn = SessionConnection(
+        run_id=run.id,
+        control_plane=control_plane,
+        acquisition_kind=acquisition_kind,
+        state=state,
+        external_name=external_name,
+        can_send_input=can_send_input,
+        can_interrupt=can_interrupt,
+        can_terminate=can_terminate,
+        can_tail_output=can_tail_output,
+        can_resume=can_resume,
+    )
+    db.add(conn)
+    db.flush()
+    return conn

@@ -13,6 +13,10 @@ from sqlalchemy.orm import Session
 
 from zerg.crud import runner_crud
 from zerg.models.agents import AgentSession
+from zerg.services.agents.kernel_writes import ensure_primary_thread
+from zerg.services.agents.kernel_writes import record_connection
+from zerg.services.agents.kernel_writes import record_run
+from zerg.services.agents.kernel_writes import record_thread_alias
 from zerg.services.managed_local_runtime import mark_managed_local_session_launched
 from zerg.services.managed_local_transport import build_managed_local_attach_command
 from zerg.services.runner_connection_manager import get_runner_connection_manager
@@ -196,6 +200,37 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
     )
     db.add(session)
     db.flush()
+
+    # Phase 2 dual-write: materialize kernel rows alongside legacy launch path.
+    primary_thread = ensure_primary_thread(db, session)
+    record_thread_alias(
+        db,
+        thread=primary_thread,
+        provider=provider,
+        alias_kind="provider_session_id",
+        alias_value=provider_session_id,
+    )
+    run = record_run(
+        db,
+        thread=primary_thread,
+        provider=provider,
+        host_id=source_name,
+        cwd=cwd,
+        launch_origin="longhouse_spawned",
+    )
+    record_connection(
+        db,
+        run=run,
+        control_plane="codex_bridge" if provider == "codex" else "pty",
+        acquisition_kind="spawned_control",
+        state="attached",
+        external_name=session.managed_session_name,
+        can_send_input=1,
+        can_interrupt=1,
+        can_terminate=1,
+        can_tail_output=1,
+        can_resume=1,
+    )
 
     mark_managed_local_session_launched(db, session=session)
     attach_command = str(build_managed_local_attach_command(session=session) or "")

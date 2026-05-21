@@ -27,6 +27,12 @@ from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
 from zerg.models.device_token import DeviceToken
+from zerg.services.agents.kernel_writes import ensure_primary_thread
+from zerg.services.agents.kernel_writes import record_connection
+from zerg.services.agents.kernel_writes import record_launch_attempt
+from zerg.services.agents.kernel_writes import record_run
+from zerg.services.agents.kernel_writes import record_thread_alias
+from zerg.services.agents.kernel_writes import update_launch_attempt
 from zerg.services.machine_control_channel import MachineControlChannelRegistry
 from zerg.services.machine_control_channel import MachineControlCommandResponse
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
@@ -207,6 +213,28 @@ async def launch_remote_session(
         launch_client_request_id=client_request_id,
     )
     db.add(session)
+    db.flush()
+
+    # Phase 2 dual-write: materialize kernel rows alongside legacy launch_*.
+    primary_thread = ensure_primary_thread(db, session)
+    record_thread_alias(
+        db,
+        thread=primary_thread,
+        provider=provider,
+        alias_kind="provider_session_id",
+        alias_value=str(session_uuid),
+    )
+    launch_attempt = record_launch_attempt(
+        db,
+        session=session,
+        thread=primary_thread,
+        provider=provider,
+        host_id=device_id,
+        client_request_id=client_request_id,
+        command_id=command_id,
+        state="pending",
+        expires_at=lease_until,
+    )
     db.commit()
     db.refresh(session)
 
@@ -233,6 +261,11 @@ async def launch_remote_session(
         # the reaper / late-result reconcile path finish the job.
         session.launch_state = "launching_unknown"
         session.launch_error_message = response.error or "control channel transport failed"
+        update_launch_attempt(
+            db,
+            launch_attempt,
+            error_message=session.launch_error_message,
+        )
         db.commit()
         db.refresh(session)
         return RemoteLaunchResult(
@@ -248,6 +281,34 @@ async def launch_remote_session(
         session.launch_error_code = None
         session.launch_error_message = None
         session.launch_lease_until = None
+        run = record_run(
+            db,
+            thread=primary_thread,
+            provider=provider,
+            host_id=device_id,
+            cwd=cwd,
+            launch_origin="longhouse_spawned",
+        )
+        record_connection(
+            db,
+            run=run,
+            control_plane="codex_bridge" if provider == "codex" else "pty",
+            acquisition_kind="spawned_control",
+            state="attached",
+            external_name=info.machine_name or device_id,
+            can_send_input=1,
+            can_interrupt=1,
+            can_terminate=1,
+            can_tail_output=1,
+            can_resume=1,
+        )
+        update_launch_attempt(
+            db,
+            launch_attempt,
+            state="dispatched",
+            run=run,
+            clear_expires=True,
+        )
         db.commit()
         db.refresh(session)
         elapsed_ms = int((datetime.now(timezone.utc) - now).total_seconds() * 1000)
@@ -268,6 +329,14 @@ async def launch_remote_session(
     session.launch_error_message = err_msg
     session.launch_lease_until = None
     session.ended_at = datetime.now(timezone.utc)
+    update_launch_attempt(
+        db,
+        launch_attempt,
+        state="failed",
+        error_code=code,
+        error_message=err_msg,
+        clear_expires=True,
+    )
     db.commit()
     db.refresh(session)
     logger.warning(
@@ -304,11 +373,42 @@ def reconcile_launch_from_command_result(db: Session, message: dict) -> bool:
         return False
     if session.launch_state not in {"launching", "launching_unknown"}:
         return False
+    from zerg.models.agents import SessionLaunchAttempt as _SLA
+
+    attempt = (
+        db.query(_SLA)
+        .filter(_SLA.session_id == session.id, _SLA.command_id == command_id)
+        .one_or_none()
+    )
+    primary_thread = ensure_primary_thread(db, session)
     if message.get("ok"):
         session.launch_state = "live"
         session.launch_error_code = None
         session.launch_error_message = None
         session.launch_lease_until = None
+        run = record_run(
+            db,
+            thread=primary_thread,
+            provider=session.provider,
+            host_id=session.device_id,
+            cwd=session.cwd,
+            launch_origin="longhouse_spawned",
+        )
+        record_connection(
+            db,
+            run=run,
+            control_plane="codex_bridge" if session.provider == "codex" else "pty",
+            acquisition_kind="spawned_control",
+            state="attached",
+            external_name=session.device_name or session.device_id,
+            can_send_input=1,
+            can_interrupt=1,
+            can_terminate=1,
+            can_tail_output=1,
+            can_resume=1,
+        )
+        if attempt is not None:
+            update_launch_attempt(db, attempt, state="dispatched", run=run, clear_expires=True)
     else:
         error = message.get("error") or {}
         session.launch_state = "launch_failed"
@@ -317,6 +417,15 @@ def reconcile_launch_from_command_result(db: Session, message: dict) -> bool:
         session.launch_lease_until = None
         if session.ended_at is None:
             session.ended_at = datetime.now(timezone.utc)
+        if attempt is not None:
+            update_launch_attempt(
+                db,
+                attempt,
+                state="failed",
+                error_code=session.launch_error_code,
+                error_message=session.launch_error_message,
+                clear_expires=True,
+            )
     db.commit()
     return True
 
@@ -335,6 +444,8 @@ def reap_orphaned_launches(db: Session, *, now: datetime | None = None) -> int:
         .filter(AgentSession.launch_lease_until < cutoff)
         .all()
     )
+    from zerg.models.agents import SessionLaunchAttempt as _SLA
+
     for session in stale:
         session.launch_state = "launch_orphaned"
         session.launch_error_code = session.launch_error_code or "launch_timeout"
@@ -342,6 +453,20 @@ def reap_orphaned_launches(db: Session, *, now: datetime | None = None) -> int:
         session.launch_lease_until = None
         if session.ended_at is None:
             session.ended_at = cutoff
+        attempts = (
+            db.query(_SLA)
+            .filter(_SLA.session_id == session.id, _SLA.state.in_(["pending", "dispatched"]))
+            .all()
+        )
+        for attempt in attempts:
+            update_launch_attempt(
+                db,
+                attempt,
+                state="abandoned",
+                error_code=session.launch_error_code,
+                error_message=session.launch_error_message,
+                clear_expires=True,
+            )
     if stale:
         db.commit()
     return len(stale)
