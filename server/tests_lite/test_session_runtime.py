@@ -26,7 +26,7 @@ from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import SessionIngest
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.provisional_events import load_active_provisional_preview_map
-from zerg.services.session_capabilities import build_session_capabilities
+from tests_lite._capability_test_helper import build_session_capabilities
 from zerg.services.session_capabilities import project_current_session_capabilities_from_facts
 from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL

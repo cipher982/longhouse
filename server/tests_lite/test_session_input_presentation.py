@@ -13,7 +13,7 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret-value")
 os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-value")
 
-from zerg.services.session_capabilities import build_session_capabilities
+from tests_lite._capability_test_helper import build_session_capabilities
 from zerg.services.session_views import build_session_capabilities_response
 
 

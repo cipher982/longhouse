@@ -10,23 +10,40 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSessionBranch
+from zerg.services.agents.kernel_capability_adapter import build_session_capabilities_from_kernel
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
 from zerg.services.managed_control_dispatcher import select_managed_control_transport
 from zerg.services.managed_local_control import ManagedLocalSendResult
 from zerg.services.managed_local_control import send_text_to_managed_local_session
-from zerg.services.session_capabilities import resolve_execution_home
-from zerg.services.session_capabilities import supports_live_control
+from zerg.session_execution_home import SessionExecutionHome
 
 
-def live_text_dispatch_label(session: AgentSession | None) -> str | None:
-    if session is None:
+def live_text_dispatch_label(db: Session | None, session: AgentSession | None) -> str | None:
+    if session is None or db is None:
         return None
-    return resolve_execution_home(session).value
+    flags = build_session_capabilities_from_kernel(db, session)
+    return flags.execution_home.value
 
 
-def supports_live_text_dispatch_metadata(session: AgentSession | None, *, owner_id: int | None = None) -> bool:
-    """Structural precondition only; callers must check current liveness first."""
-    return supports_live_control(session) or (
+def supports_live_text_dispatch_metadata(
+    session: AgentSession | None,
+    *,
+    db: Session | None = None,
+    owner_id: int | None = None,
+) -> bool:
+    """Structural precondition only; callers must check current liveness first.
+
+    When ``db`` is provided, kernel projection decides managed-local
+    eligibility. The engine-channel transport check is independent of the
+    kernel and works without a DB session.
+    """
+    if session is None:
+        return False
+    if db is not None:
+        flags = build_session_capabilities_from_kernel(db, session)
+        if flags.live_control_available or flags.host_reattach_available:
+            return True
+    return (
         select_managed_control_transport(
             session,
             owner_id=owner_id,
@@ -116,7 +133,7 @@ async def send_text_to_live_session(
     implemented.
     """
 
-    if supports_live_text_dispatch_metadata(session, owner_id=owner_id):
+    if supports_live_text_dispatch_metadata(session, db=db, owner_id=owner_id):
         if _use_fake_live_text_dispatch():
             return await _fake_send_text_to_live_session(
                 db=db,
@@ -134,7 +151,11 @@ async def send_text_to_live_session(
             verification_timeout_secs=verification_timeout_secs,
         )
 
-    execution_home = resolve_execution_home(session).value if session is not None else "unknown"
+    execution_home = (
+        build_session_capabilities_from_kernel(db, session).execution_home.value
+        if session is not None
+        else SessionExecutionHome.UNMANAGED_LOCAL.value
+    )
     return ManagedLocalSendResult(
         ok=False,
         error=f"Live text dispatch is not supported for execution_home={execution_home}",

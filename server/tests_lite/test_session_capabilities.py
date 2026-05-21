@@ -25,7 +25,7 @@ from zerg.models.agents import ManagedSessionControlState
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents_store import AgentsStore
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
-from zerg.services.session_capabilities import build_session_capabilities
+from tests_lite._capability_test_helper import build_session_capabilities
 from zerg.services.session_capabilities import project_current_session_capabilities
 from zerg.services.session_capabilities import project_current_session_capabilities_from_facts
 from zerg.services.session_current_control import current_session_capabilities

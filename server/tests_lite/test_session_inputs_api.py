@@ -863,7 +863,7 @@ def test_intent_steer_turn_ended_returns_structured_409(monkeypatch, tmp_path):
 
 
 def test_capability_includes_can_queue_next_input():
-    from zerg.services.session_capabilities import build_session_capabilities
+    from tests_lite._capability_test_helper import build_session_capabilities
 
     session = SimpleNamespace(
         execution_home="managed_local",
