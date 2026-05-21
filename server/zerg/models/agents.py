@@ -134,6 +134,11 @@ class AgentSession(AgentsBase):
     # Sidechain flag: True when session is a Task sub-agent (not a human-initiated session)
     is_sidechain = Column(Integer, nullable=False, server_default=text("0"))
 
+    # Session identity kernel — primary thread pointer. Nullable during
+    # Phase 1/2 because backfill creates the thread row after the session.
+    # See docs/specs/session-identity-kernel.md.
+    primary_thread_id = Column(GUID(), nullable=True, index=True)
+
     # Remote-launch lifecycle (see docs/specs/remote-session-launch.md).
     # NULL means "launched the old way"; treat as equivalent to 'live'.
     launch_state = Column(String(32), nullable=True)
@@ -215,6 +220,8 @@ class AgentEvent(AgentsBase):
         nullable=False,
         index=True,
     )
+    # Session identity kernel — nullable in Phase 1, NOT NULL in Phase 3.
+    thread_id = Column(GUID(), nullable=True, index=True)
 
     # Event content
     role = Column(String(20), nullable=False, index=True)  # user, assistant, tool, system
@@ -311,6 +318,8 @@ class AgentSourceLine(AgentsBase):
         nullable=False,
         index=True,
     )
+    # Session identity kernel — nullable in Phase 1, NOT NULL in Phase 3.
+    thread_id = Column(GUID(), nullable=True, index=True)
     source_path = Column(Text, nullable=False)
     source_offset = Column(BigInteger, nullable=False)
     branch_id = Column(Integer, nullable=False, index=True)
@@ -359,6 +368,9 @@ class SessionObservation(AgentsBase):
     id = Column(Integer, primary_key=True, autoincrement=True)
     observation_id = Column(String(512), nullable=False)
     session_id = Column(GUID(), nullable=True, index=True)
+    # Session identity kernel — observations carry thread_id when known so
+    # subagent observations don't collide with the parent session's stream.
+    thread_id = Column(GUID(), nullable=True, index=True)
     runtime_key = Column(String(255), nullable=True, index=True)
     provider = Column(String(64), nullable=False)
     device_id = Column(String(255), nullable=True)
@@ -489,6 +501,9 @@ class SessionTurn(AgentsBase):
         nullable=False,
         index=True,
     )
+    # Session identity kernel — nullable in Phase 1, NOT NULL in Phase 3.
+    thread_id = Column(GUID(), nullable=True, index=True)
+    run_id = Column(GUID(), nullable=True, index=True)
     request_id = Column(String(64), nullable=True, index=True)
     session_input_id = Column(Integer, nullable=True, index=True)
     source_kind = Column(
@@ -540,6 +555,10 @@ class SessionRuntimeState(AgentsBase):
 
     runtime_key = Column(String(255), primary_key=True)
     session_id = Column(GUID(), nullable=True, index=True)
+    # Session identity kernel — runtime state moves to run-keyed parentage in
+    # Phase 3 so a stale run cannot pollute a resumed run. Nullable in Phase 1.
+    thread_id = Column(GUID(), nullable=True, index=True)
+    run_id = Column(GUID(), nullable=True, index=True)
     provider = Column(String(64), nullable=False)
     device_id = Column(String(255), nullable=True)
     phase = Column(String(32), nullable=False)
@@ -742,6 +761,8 @@ class SessionInput(AgentsBase):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     session_id = Column(GUID(), nullable=False, index=True)
+    # Session identity kernel — nullable in Phase 1, NOT NULL in Phase 3.
+    thread_id = Column(GUID(), nullable=True, index=True)
     body = Column("text", Text, nullable=False)
     owner_id = Column(Integer, nullable=True, index=True)  # authoring user, null on legacy rows
     intent = Column(String(16), nullable=False)  # auto | queue | steer
@@ -765,4 +786,271 @@ class SessionInput(AgentsBase):
             postgresql_where=text("client_request_id IS NOT NULL"),
             sqlite_where=text("client_request_id IS NOT NULL"),
         ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Session identity kernel — see docs/specs/session-identity-kernel.md
+#
+# Six new tables that split AgentSession's overloaded responsibilities into:
+#   - Thread:        Longhouse-owned causal continuity (survives quit/resume)
+#   - ThreadAlias:   provider/source identity evidence
+#   - Run:           one provider CLI process invocation
+#   - Connection:    Longhouse's relationship to a run (control plane + state)
+#   - LaunchAttempt: pre-process launch lifecycle for remote launches
+#
+# Phase 1 is purely additive. AgentSession child tables also gain nullable
+# thread_id / run_id columns to start the migration off session_id parentage;
+# those become NOT NULL in Phase 3.
+# ---------------------------------------------------------------------------
+
+
+class SessionThread(AgentsBase):
+    """Longhouse-owned causal continuity for a session's conversation lineage.
+
+    A thread is the unit that survives provider quit/resume. One session has
+    one primary thread today; subagents and future continuations attach as
+    child threads under the same session.
+
+    Identity is the Longhouse UUID. Provider-side ids live in ``thread_aliases``
+    as evidence, not identity.
+    """
+
+    __tablename__ = "session_threads"
+
+    id = Column(GUID(), primary_key=True, default=uuid4)
+    _session_fk = "sessions.id" if AGENTS_SCHEMA is None else f"{AGENTS_SCHEMA}.sessions.id"
+    session_id = Column(
+        GUID(),
+        ForeignKey(_session_fk, ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    provider = Column(String(64), nullable=False, index=True)
+
+    # Lineage — null for root threads; set for subagents and continuations.
+    parent_thread_id = Column(GUID(), nullable=True, index=True)
+    # Replaces AgentSession.branched_from_event_id; nullable.
+    parent_event_id = Column(Integer, nullable=True)
+    branch_kind = Column(
+        String(20),
+        nullable=False,
+        server_default=text("'root'"),
+    )  # root | subagent | continuation
+
+    # Denormalized "is this the session's primary thread" — matches
+    # sessions.primary_thread_id. Avoids a self-referential lookup on hot
+    # timeline paths.
+    is_primary = Column(Integer, nullable=False, server_default=text("1"))
+
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        Index("ix_threads_session_primary", "session_id", "is_primary"),
+        Index("ix_threads_parent", "parent_thread_id"),
+    )
+
+
+class SessionThreadAlias(AgentsBase):
+    """Provider/source identity evidence for a thread.
+
+    Aliases are non-authoritative pointers used by ingest and adoption to
+    resolve which thread a new observation belongs to. They are NOT thread
+    identity. Multiple threads may share an alias value (e.g. copied
+    transcripts pre-divergence); resolver rules in Phase 2/4 handle that.
+    """
+
+    __tablename__ = "session_thread_aliases"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    _thread_fk = "session_threads.id" if AGENTS_SCHEMA is None else f"{AGENTS_SCHEMA}.session_threads.id"
+    thread_id = Column(
+        GUID(),
+        ForeignKey(_thread_fk, ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    provider = Column(String(64), nullable=False)
+    alias_kind = Column(
+        String(48),
+        nullable=False,
+        index=True,
+    )  # provider_session_id | longhouse_session_id | source_path | forked_from_provider_session_id
+    alias_value = Column(String(1024), nullable=False)
+    first_seen_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    last_seen_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_thread_aliases_lookup", "provider", "alias_kind", "alias_value"),
+        Index("ix_thread_aliases_thread_kind", "thread_id", "alias_kind"),
+    )
+
+
+class SessionRun(AgentsBase):
+    """One provider CLI process invocation lifetime.
+
+    Records pid, host, cwd, started/ended, exit status. Restarting a laptop
+    and resuming the same thread creates a new run; it does not create a new
+    session or thread.
+
+    `boot_id` distinguishes pid reuse across reboots. `process_start_time`
+    distinguishes within a single boot.
+    """
+
+    __tablename__ = "session_runs"
+
+    id = Column(GUID(), primary_key=True, default=uuid4)
+    _thread_fk = "session_threads.id" if AGENTS_SCHEMA is None else f"{AGENTS_SCHEMA}.session_threads.id"
+    thread_id = Column(
+        GUID(),
+        ForeignKey(_thread_fk, ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    provider = Column(String(64), nullable=False)
+
+    # Where the process runs. host_id is the runner/machine identity that
+    # also routes commands (replaces AgentSession.source_runner_id).
+    host_id = Column(String(255), nullable=True, index=True)
+    boot_id = Column(String(64), nullable=True)
+    pid = Column(Integer, nullable=True)
+    process_start_time = Column(DateTime(timezone=True), nullable=True)
+    cwd = Column(Text, nullable=True)
+    argv_redacted_json = Column(JSON(), nullable=True)
+
+    launch_origin = Column(
+        String(32),
+        nullable=False,
+        server_default=text("'longhouse_spawned'"),
+    )  # longhouse_spawned | external_adopted
+
+    started_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    ended_at = Column(DateTime(timezone=True), nullable=True)
+    exit_status = Column(String(64), nullable=True)
+
+    __table_args__ = (
+        Index("ix_runs_thread_started", "thread_id", "started_at"),
+        Index("ix_runs_host_pid_start", "host_id", "pid", "process_start_time"),
+    )
+
+
+class SessionConnection(AgentsBase):
+    """Longhouse's relationship to a run.
+
+    A connection is the control attachment, not the run. Bridge dying
+    mid-turn flips ``state``; it does not change the run, thread, or session.
+    Multiple connections may exist for one run (e.g. log_tail observe + later
+    bridge attach); the capability projection picks the best one.
+    """
+
+    __tablename__ = "session_connections"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    _run_fk = "session_runs.id" if AGENTS_SCHEMA is None else f"{AGENTS_SCHEMA}.session_runs.id"
+    run_id = Column(
+        GUID(),
+        ForeignKey(_run_fk, ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    control_plane = Column(
+        String(32),
+        nullable=False,
+    )  # codex_bridge | pty | runner | log_tail | none
+    acquisition_kind = Column(
+        String(32),
+        nullable=False,
+    )  # spawned_control | adopted_control | observe_only
+    state = Column(
+        String(32),
+        nullable=False,
+        server_default=text("'attached'"),
+    )  # attached | degraded | detached | released | ended
+
+    # Optional human-friendly label for attach/debug paths (replaces
+    # AgentSession.managed_session_name).
+    external_name = Column(String(255), nullable=True)
+
+    # Typed capability gates. Small enumerated set; queryable.
+    can_send_input = Column(Integer, nullable=False, server_default=text("0"))
+    can_interrupt = Column(Integer, nullable=False, server_default=text("0"))
+    can_terminate = Column(Integer, nullable=False, server_default=text("0"))
+    can_tail_output = Column(Integer, nullable=False, server_default=text("0"))
+    can_resume = Column(Integer, nullable=False, server_default=text("0"))
+    capabilities_extra_json = Column(JSON(), nullable=True)
+
+    acquired_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    released_at = Column(DateTime(timezone=True), nullable=True)
+    last_health_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("ix_connections_run_state", "run_id", "state"),
+        Index("ix_connections_state_health", "state", "last_health_at"),
+    )
+
+
+class SessionLaunchAttempt(AgentsBase):
+    """Pre-process launch lifecycle for remote/managed launches.
+
+    Attempts can exist before any run does (the user clicked "launch" but
+    dispatch is still pending). Replaces AgentSession.launch_* columns.
+    Idempotency is keyed by (session_id, client_request_id).
+    """
+
+    __tablename__ = "session_launch_attempts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    _session_fk = "sessions.id" if AGENTS_SCHEMA is None else f"{AGENTS_SCHEMA}.sessions.id"
+    _thread_fk_la = "session_threads.id" if AGENTS_SCHEMA is None else f"{AGENTS_SCHEMA}.session_threads.id"
+    _run_fk_la = "session_runs.id" if AGENTS_SCHEMA is None else f"{AGENTS_SCHEMA}.session_runs.id"
+    session_id = Column(
+        GUID(),
+        ForeignKey(_session_fk, ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    thread_id = Column(GUID(), ForeignKey(_thread_fk_la, ondelete="SET NULL"), nullable=True)
+    run_id = Column(GUID(), ForeignKey(_run_fk_la, ondelete="SET NULL"), nullable=True)
+
+    provider = Column(String(64), nullable=False)
+    host_id = Column(String(255), nullable=True, index=True)
+
+    # Caller-provided idempotency key + dispatch correlation.
+    client_request_id = Column(String(64), nullable=True, index=True)
+    command_id = Column(String(64), nullable=True, index=True)
+
+    state = Column(
+        String(32),
+        nullable=False,
+        server_default=text("'pending'"),
+    )  # pending | dispatched | failed | adopted | abandoned
+    error_code = Column(String(64), nullable=True)
+    error_message = Column(Text, nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_launch_attempts_session_client_request",
+            "session_id",
+            "client_request_id",
+            unique=True,
+            postgresql_where=text("client_request_id IS NOT NULL"),
+            sqlite_where=text("client_request_id IS NOT NULL"),
+        ),
+        Index("ix_launch_attempts_state_created", "state", "created_at"),
     )

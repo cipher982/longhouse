@@ -130,7 +130,7 @@ sessions(
   ui_state_json
 )
 
-threads(
+session_threads(
   id,
   session_id,
   provider,
@@ -142,7 +142,7 @@ threads(
   updated_at
 )
 
-thread_aliases(
+session_thread_aliases(
   id,
   thread_id,
   provider,
@@ -152,7 +152,7 @@ thread_aliases(
   last_seen_at
 )
 
-runs(
+session_runs(
   id,
   thread_id,
   provider,
@@ -168,7 +168,7 @@ runs(
   exit_status
 )
 
-connections(
+session_connections(
   id,
   run_id,
   control_plane,            -- codex_bridge | pty | runner | log_tail | none
@@ -187,7 +187,7 @@ connections(
   last_health_at
 )
 
-launch_attempts(
+session_launch_attempts(
   id,
   session_id,               -- attempts can exist before a run does
   thread_id,                -- nullable until thread is resolved
@@ -207,6 +207,12 @@ launch_attempts(
 
 That is the schema delta for this epic. Six tables, no hash chains, no
 generations, no segments, no leases.
+
+> Naming note: tablenames are `session_*`-prefixed because the unprefixed
+> `threads` and `runs` tables are already taken by the fiche/agent execution
+> system (`server/zerg/models/thread.py`, `server/zerg/models/run.py`). The
+> SQLAlchemy classes are `SessionThread`, `SessionThreadAlias`, `SessionRun`,
+> `SessionConnection`, `SessionLaunchAttempt` for the same reason.
 
 ## `thread_id` on existing child tables
 
