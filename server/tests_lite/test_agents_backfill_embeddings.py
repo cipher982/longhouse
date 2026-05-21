@@ -86,3 +86,79 @@ def test_embedding_backfill_drains_all_slices_for_session(tmp_path, monkeypatch)
     assert agents_backfill._embedding_backfill_state["skipped"] == 0
     assert agents_backfill._embedding_backfill_state["errors"] == 0
     assert agents_backfill._embedding_backfill_state["remaining"] == 0
+
+
+def test_embedding_backfill_filters_and_clears_needs_embedding_rows(tmp_path, monkeypatch):
+    db_path = tmp_path / "embedding_backfill_filter.db"
+    database_url = f"sqlite:///{db_path}"
+    engine = make_engine(database_url)
+    Base.metadata.create_all(bind=engine)
+    factory = make_sessionmaker(engine)
+
+    db = factory()
+    dirty = AgentSession(
+        provider="codex",
+        environment="test",
+        project="zerg",
+        started_at=datetime.now(timezone.utc),
+        transcript_revision=5,
+        embedding_revision=0,
+        needs_embedding=1,
+    )
+    clean = AgentSession(
+        provider="codex",
+        environment="test",
+        project="zerg",
+        started_at=datetime.now(timezone.utc),
+        transcript_revision=5,
+        embedding_revision=5,
+        needs_embedding=0,
+    )
+    db.add_all([dirty, clean])
+    db.commit()
+    db.refresh(dirty)
+    db.refresh(clean)
+    db.add(
+        AgentEvent(
+            session_id=dirty.id,
+            role="user",
+            content_text="Backfill this dirty row.",
+            timestamp=datetime.now(timezone.utc),
+        )
+    )
+    db.commit()
+    dirty_id = str(dirty.id)
+    clean_id = str(clean.id)
+    db.close()
+
+    processed: list[str] = []
+
+    async def _fake_embed_session(session_id, *_args, **_kwargs):
+        processed.append(session_id)
+        return 0, 0
+
+    monkeypatch.setattr(agents_backfill, "get_settings", lambda: SimpleNamespace(database_url=database_url))
+    monkeypatch.setattr("zerg.services.session_processing.embeddings.embed_session", _fake_embed_session)
+
+    asyncio.run(
+        agents_backfill._run_embedding_backfill(
+            concurrency=1,
+            project=None,
+            force=False,
+            config=object(),
+            total=1,
+        )
+    )
+
+    assert processed == [dirty_id]
+
+    verify = factory()
+    try:
+        dirty_refreshed = verify.get(AgentSession, dirty_id)
+        clean_refreshed = verify.get(AgentSession, clean_id)
+        assert dirty_refreshed.needs_embedding == 0
+        assert dirty_refreshed.embedding_revision == 5
+        assert clean_refreshed.needs_embedding == 0
+        assert clean_refreshed.embedding_revision == 5
+    finally:
+        verify.close()
