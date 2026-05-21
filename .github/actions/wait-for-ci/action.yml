@@ -57,10 +57,51 @@ runs:
           const timeoutSeconds = Number(process.env.TIMEOUT_SECONDS || '1200');
           const maxAttempts = Math.max(1, Math.ceil((timeoutSeconds * 1000) / delayMs));
           const missingGraceAttempts = 6;
+          let lastMatchedRun = null;
 
           if (!sha) {
             core.info('No head_sha supplied; skipping wait');
             return;
+          }
+
+          async function describeRun(run) {
+            if (!run) {
+              return `no ${workflowId} run found for ${sha}`;
+            }
+
+            let summary = `${workflowId} run ${run.id}: status=${run.status} conclusion=${run.conclusion}`;
+            try {
+              const { data } = await github.rest.actions.listJobsForWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: run.id,
+                per_page: 100,
+              });
+              const jobs = data.jobs || [];
+              const blockingJob =
+                jobs.find((job) => job.status !== 'completed') ||
+                jobs.find((job) => job.conclusion && job.conclusion !== 'success');
+
+              if (!blockingJob) {
+                return summary;
+              }
+
+              summary += `; blocking job="${blockingJob.name}" status=${blockingJob.status} conclusion=${blockingJob.conclusion || '-'}`;
+              if (blockingJob.runner_name) {
+                summary += ` runner="${blockingJob.runner_name}"`;
+              }
+              if (blockingJob.labels && blockingJob.labels.length) {
+                summary += ` labels="${blockingJob.labels.join(',')}"`;
+              }
+
+              const blockingStep = (blockingJob.steps || []).find((step) => step.status !== 'completed');
+              if (blockingStep) {
+                summary += ` step="${blockingStep.name}" step_status=${blockingStep.status} step_conclusion=${blockingStep.conclusion || '-'}`;
+              }
+            } catch (error) {
+              summary += `; job detail unavailable: ${error.message || error}`;
+            }
+            return summary;
           }
 
           // When CI concludes with a non-success, wait one interval and re-check
@@ -88,6 +129,7 @@ runs:
 
             const run = data.workflow_runs.find((c) => c.head_sha === sha);
             if (run) {
+              lastMatchedRun = run;
               core.info(`${workflowId} run ${run.id}: status=${run.status} conclusion=${run.conclusion}`);
               if (run.status === 'completed') {
                 if (!requireSuccess || run.conclusion === 'success') {
@@ -117,13 +159,13 @@ runs:
           }
 
           if (allowMissing) {
-            core.warning(`Timed out waiting for ${workflowId} run for ${sha}; continuing because allow_missing=true`);
+            core.warning(`Timed out waiting for ${workflowId} run for ${sha}; ${await describeRun(lastMatchedRun)}; continuing because allow_missing=true`);
             return;
           }
 
           if (requireSuccess) {
-            core.setFailed(`Timed out waiting for ${workflowId} to pass for ${sha}`);
+            core.setFailed(`Timed out waiting for ${workflowId} to pass for ${sha}; ${await describeRun(lastMatchedRun)}`);
             return;
           }
 
-          core.setFailed(`Timed out waiting for ${workflowId} to complete for ${sha}`);
+          core.setFailed(`Timed out waiting for ${workflowId} to complete for ${sha}; ${await describeRun(lastMatchedRun)}`);
