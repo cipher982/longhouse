@@ -25,6 +25,8 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionTurn
+from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
+from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.agents.kernel_capability_adapter import build_session_capabilities_from_kernel
 from zerg.services.agents_store import AgentsStore
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
@@ -77,6 +79,7 @@ def build_session_capabilities_response(
     capability_flags=None,
     runtime_display=None,
     runtime_facts=None,
+    kernel_capabilities: KernelSessionCapabilities | None = None,
 ) -> SessionCapabilitiesResponse:
     capability_flags = capability_flags or build_session_capabilities(session)
     if runtime_facts is not None:
@@ -115,6 +118,15 @@ def build_session_capabilities_response(
         composer_enabled=input_presentation.composer_enabled,
         composer_placeholder=input_presentation.composer_placeholder,
         composer_disabled_reason=input_presentation.composer_disabled_reason,
+        control_label=(kernel_capabilities.control_label if kernel_capabilities is not None else None),
+        observe_only=(kernel_capabilities.observe_only if kernel_capabilities is not None else False),
+        search_only=(kernel_capabilities.search_only if kernel_capabilities is not None else False),
+        staleness_reason=(kernel_capabilities.staleness_reason if kernel_capabilities is not None else None),
+        can_send_input=(kernel_capabilities.can_send_input if kernel_capabilities is not None else False),
+        can_interrupt=(kernel_capabilities.can_interrupt if kernel_capabilities is not None else False),
+        can_terminate=(kernel_capabilities.can_terminate if kernel_capabilities is not None else False),
+        can_tail_output=(kernel_capabilities.can_tail_output if kernel_capabilities is not None else False),
+        can_resume=(kernel_capabilities.can_resume if kernel_capabilities is not None else False),
     )
 
 
@@ -424,6 +436,27 @@ class SessionCapabilitiesResponse(BaseModel):
     composer_enabled: bool = Field(False, description="True when clients should render an enabled composer")
     composer_placeholder: str = Field("Type a message...", description="Default composer placeholder text")
     composer_disabled_reason: Optional[str] = Field(None, description="User-facing reason the composer is disabled")
+    control_label: Optional[Literal["live", "reattach", "search-only", "imported"]] = Field(
+        None,
+        description="Kernel-projected control bucket for this session",
+    )
+    observe_only: bool = Field(
+        False,
+        description="True when Longhouse can read transcript output but cannot steer this session",
+    )
+    search_only: bool = Field(
+        False,
+        description="True when this session is an imported transcript with no active control plane",
+    )
+    staleness_reason: Optional[str] = Field(
+        None,
+        description="When live_control_available is False, why: e.g. no_run, connection_released, process_ended, imported_only",
+    )
+    can_send_input: bool = Field(False, description="Kernel: connection grants send-input capability and is currently live")
+    can_interrupt: bool = Field(False, description="Kernel: connection grants interrupt capability and is currently live")
+    can_terminate: bool = Field(False, description="Kernel: connection grants terminate capability and is currently live")
+    can_tail_output: bool = Field(False, description="Kernel: connection grants output tailing capability")
+    can_resume: bool = Field(False, description="Kernel: connection can be resumed (live or reattach)")
 
 
 class SessionRuntimeDisplayResponse(BaseModel):
@@ -1171,6 +1204,7 @@ def build_session_response(
     cache = thread_cache if thread_cache is not None else {}
     thread_head_session_id, thread_continuation_count = get_thread_meta(store, session, cache)
     include_runtime = should_include_runtime_view(session=session, runtime_view=runtime_overlay)
+    kernel_capabilities = project_session_capabilities(store.db, session_id=session.id)
     capability_flags = build_session_capabilities_from_kernel(store.db, session)
     is_engine_control_online = engine_control_online(session, owner_id)
     current_now = datetime.now(timezone.utc)
@@ -1278,6 +1312,7 @@ def build_session_response(
             capability_flags=capability_flags,
             runtime_display=runtime_display,
             runtime_facts=runtime_facts,
+            kernel_capabilities=kernel_capabilities,
         ),
         runtime_display=runtime_display,
         runtime_facts=runtime_facts,
@@ -1349,6 +1384,7 @@ def build_active_session_response(
     binding_overlay=None,
     control_overlay=None,
 ) -> ActiveSessionResponse:
+    kernel_capabilities = project_session_capabilities(store.db, session_id=session.id)
     capability_flags = build_session_capabilities_from_kernel(store.db, session)
     _started = (
         session.started_at.replace(tzinfo=timezone.utc) if session.started_at and session.started_at.tzinfo is None else session.started_at
@@ -1428,6 +1464,7 @@ def build_active_session_response(
             capability_flags=capability_flags,
             runtime_display=runtime_display,
             runtime_facts=runtime_facts,
+            kernel_capabilities=kernel_capabilities,
         ),
         runtime_display=runtime_display,
         runtime_facts=runtime_facts,
