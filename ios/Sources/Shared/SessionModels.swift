@@ -225,6 +225,9 @@ enum SummaryStatus: String, Codable, Sendable, Hashable {
 
 struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     let id: String
+    // Thread identity used by the timeline stream for upsert/remove dedup.
+    // Optional so cached payloads from before this field existed still decode.
+    let threadId: String?
     let title: String
     let presenceState: String
     let provider: String?
@@ -253,6 +256,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
 
     init(
         id: String,
+        threadId: String? = nil,
         title: String,
         presenceState: String,
         provider: String?,
@@ -280,6 +284,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         timelineCard: TimelineCardPresentation? = nil
     ) {
         self.id = id
+        self.threadId = threadId
         self.title = title
         self.presenceState = presenceState
         self.provider = provider
