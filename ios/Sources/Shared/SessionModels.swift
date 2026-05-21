@@ -660,6 +660,38 @@ struct SessionRuntimeDisplay: Codable, Hashable, Sendable {
     let terminalReason: String?
 }
 
+struct SessionTranscriptPreview: Codable, Hashable, Sendable {
+    let eventId: Int
+    let text: String
+    let eventOrigin: String
+    let timestamp: String
+    let isProvisional: Bool
+    let isComplete: Bool?
+    let contentCursor: String?
+    let isStale: Bool?
+    let staleReason: String?
+
+    var shouldRender: Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && isStale != true
+    }
+
+    var syntheticEvent: SessionEvent {
+        SessionEvent(
+            id: -abs(eventId),
+            role: "assistant",
+            contentText: text,
+            toolName: nil,
+            toolInputJSON: nil,
+            toolOutputText: nil,
+            toolCallId: nil,
+            timestamp: timestamp,
+            inActiveContext: true,
+            isHeadBranch: true,
+            inputOrigin: nil
+        )
+    }
+}
+
 enum SessionLoopMode: String, Codable, Sendable, CaseIterable, Hashable {
     case manual
     case assist
@@ -695,6 +727,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     let runtimeDisplay: SessionRuntimeDisplay?
     let runtimeFacts: SessionLivenessFacts?
     let loopMode: SessionLoopMode?
+    var transcriptPreview: SessionTranscriptPreview? = nil
 
     var displayTitle: String {
         summaryTitle ?? summary ?? provider
@@ -864,6 +897,36 @@ struct SessionDetail: Codable, Identifiable, Sendable {
             return runtimePhaseState == "running" || runtimePhaseState == "thinking"
         }
         return runtimeDisplay?.isExecuting == true || runtimePhaseState == "running" || runtimePhaseState == "thinking"
+    }
+
+    func replacingTranscriptPreview(_ transcriptPreview: SessionTranscriptPreview?) -> SessionDetail {
+        SessionDetail(
+            id: id,
+            provider: provider,
+            project: project,
+            cwd: cwd,
+            gitBranch: gitBranch,
+            summary: summary,
+            summaryTitle: summaryTitle,
+            presenceState: presenceState,
+            presenceTool: presenceTool,
+            userState: userState,
+            status: status,
+            lastActivityAt: lastActivityAt,
+            displayPhase: displayPhase,
+            activeTool: activeTool,
+            homeLabel: homeLabel,
+            originLabel: originLabel,
+            capabilities: capabilities,
+            runtimeDisplay: runtimeDisplay,
+            runtimeFacts: runtimeFacts,
+            loopMode: loopMode,
+            transcriptPreview: transcriptPreview
+        )
+    }
+
+    var withoutTranscriptPreview: SessionDetail {
+        replacingTranscriptPreview(nil)
     }
 }
 

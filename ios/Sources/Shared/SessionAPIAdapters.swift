@@ -89,6 +89,22 @@ extension APISessionRuntimeDisplayResponse {
     }
 }
 
+extension APISessionTranscriptPreviewResponse {
+    var sessionTranscriptPreview: SessionTranscriptPreview {
+        SessionTranscriptPreview(
+            eventId: eventId,
+            text: text,
+            eventOrigin: eventOrigin,
+            timestamp: timestamp,
+            isProvisional: isProvisional,
+            isComplete: isComplete,
+            contentCursor: contentCursor,
+            isStale: isStale,
+            staleReason: staleReason
+        )
+    }
+}
+
 extension APIHostObservationResponse {
     var hostObservation: HostObservation {
         HostObservation(state: state ?? "unknown", lastSeenAt: lastSeenAt, source: source)
@@ -205,7 +221,8 @@ extension APISessionResponse {
             capabilities: capabilities.sessionCapabilities,
             runtimeDisplay: runtimeDisplay?.sessionRuntimeDisplay,
             runtimeFacts: runtimeFacts?.sessionLivenessFacts,
-            loopMode: loopMode.flatMap(SessionLoopMode.init(rawValue:))
+            loopMode: loopMode.flatMap(SessionLoopMode.init(rawValue:)),
+            transcriptPreview: transcriptPreview?.sessionTranscriptPreview
         )
     }
 }
