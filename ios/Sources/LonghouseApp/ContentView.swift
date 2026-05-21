@@ -21,10 +21,10 @@ struct ContentView: View {
 
     @ViewBuilder
     private var normalContent: some View {
-        if appState.isValidating {
-            LoadingScreen()
-        } else if appState.isAuthenticated {
+        if appState.shouldShowAuthenticatedShell {
             AuthenticatedPager()
+        } else if appState.isValidating {
+            LoadingScreen()
         } else {
             LoginView()
                 .overlay(alignment: .topTrailing) {
