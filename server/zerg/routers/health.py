@@ -277,6 +277,20 @@ async def health_check():
     except Exception as e:
         checks["write_serializer"] = {"status": "warn", "error": str(e)}
 
+    # 8. SQLite WAL pressure: phase 1 instrumentation. WAL bytes is the cheapest
+    # leading indicator of write-side backpressure; the engine's adaptive
+    # controller (phase 2) reads this to back off when pressure climbs.
+    try:
+        from zerg.database import get_wal_bytes
+
+        wal_bytes = get_wal_bytes()
+        if wal_bytes is None:
+            checks["sqlite_wal"] = {"status": "skip", "reason": "wal path unknown"}
+        else:
+            checks["sqlite_wal"] = {"status": "pass", "wal_bytes": wal_bytes}
+    except Exception as e:
+        checks["sqlite_wal"] = {"status": "warn", "error": str(e)}
+
     health_status["checks"] = checks
     return health_status
 

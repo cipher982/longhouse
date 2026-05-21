@@ -1655,6 +1655,21 @@ def _sqlite_wal_path() -> Path | None:
     return Path(database).expanduser().resolve().with_name(Path(database).name + "-wal")
 
 
+def get_wal_bytes() -> int | None:
+    """Return current SQLite WAL file size in bytes, or None if unknown.
+
+    Phase 1 instrumentation: surfaced via /api/health so the engine and
+    operators can see when WAL pressure is the actual ingest bottleneck.
+    """
+    wal = _sqlite_wal_path()
+    if wal is None:
+        return None
+    try:
+        return wal.stat().st_size if wal.exists() else 0
+    except OSError:
+        return None
+
+
 def _checkpoint_counts(row) -> tuple[int, int, int, int]:
     """Return (busy, log_frames, checkpointed_frames, remaining_frames)."""
     if row is None:

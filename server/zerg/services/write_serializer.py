@@ -35,10 +35,12 @@ import heapq
 import logging
 import os
 import time
+from collections import deque
 from dataclasses import dataclass
 from dataclasses import field
 from typing import Any
 from typing import Callable
+from typing import Deque
 from typing import TypeVar
 
 from sqlalchemy.orm import Session
@@ -122,6 +124,17 @@ class _QueuedWrite:
     label: str = field(compare=False, default="")
 
 
+_HISTOGRAM_WINDOW = 256
+
+
+@dataclass
+class _LabelHistogram:
+    """Rolling per-label timing window. Bounded deque -> exact percentiles."""
+
+    queue_wait_ms: Deque[float] = field(default_factory=lambda: deque(maxlen=_HISTOGRAM_WINDOW))
+    exec_ms: Deque[float] = field(default_factory=lambda: deque(maxlen=_HISTOGRAM_WINDOW))
+
+
 @dataclass
 class WriteStats:
     """Cumulative write serializer statistics."""
@@ -133,6 +146,30 @@ class WriteStats:
     max_exec_ms: float = 0
     errors: int = 0
     _label_counts: dict[str, int] = field(default_factory=dict)
+    _label_histograms: dict[str, _LabelHistogram] = field(default_factory=dict)
+
+    def record_sample(self, label: str, queue_wait_ms: float, exec_ms: float) -> None:
+        key = label or "unlabeled"
+        hist = self._label_histograms.get(key)
+        if hist is None:
+            hist = _LabelHistogram()
+            self._label_histograms[key] = hist
+        hist.queue_wait_ms.append(queue_wait_ms)
+        hist.exec_ms.append(exec_ms)
+
+
+def _percentiles(samples: Deque[float]) -> dict[str, float]:
+    """Return p50/p95/p99 of an unsorted deque. Empty -> zeros."""
+    if not samples:
+        return {"p50": 0.0, "p95": 0.0, "p99": 0.0, "n": 0}
+    sorted_samples = sorted(samples)
+    n = len(sorted_samples)
+
+    def _pct(p: float) -> float:
+        idx = min(n - 1, max(0, int(round((p / 100.0) * (n - 1)))))
+        return round(sorted_samples[idx], 1)
+
+    return {"p50": _pct(50), "p95": _pct(95), "p99": _pct(99), "n": n}
 
 
 @dataclass
@@ -321,6 +358,7 @@ class WriteSerializer:
             self._stats.max_exec_ms = max(self._stats.max_exec_ms, exec_ms)
             if label:
                 self._stats._label_counts[label] = self._stats._label_counts.get(label, 0) + 1
+            self._stats.record_sample(label, queue_wait_ms, exec_ms)
             if isinstance(worker_exc, Exception):
                 self._stats.errors += 1
             # Phase 1 instrumentation: stash the timing for the calling Task so
@@ -426,8 +464,8 @@ class WriteSerializer:
             raise RuntimeError("WriteSerializer not configured and no fallback_db provided")
         return self._run_inline_with_timing(fn, fallback_db, auto_commit, label)
 
-    @staticmethod
     def _run_inline_with_timing(
+        self,
         fn: Callable[[Session], T],
         db: Session,
         auto_commit: bool,
@@ -443,6 +481,7 @@ class WriteSerializer:
         _last_write_timing.set(
             LastWriteTiming(label=label, queue_wait_ms=0.0, exec_ms=exec_ms)
         )
+        self._stats.record_sample(label, 0.0, exec_ms)
         return result
 
     def execute_sync(
@@ -499,6 +538,14 @@ class WriteSerializer:
         s = self._stats
         avg_wait = s.total_queue_wait_ms / s.total_writes if s.total_writes else 0
         avg_exec = s.total_exec_ms / s.total_writes if s.total_writes else 0
+        # Rolling per-label percentiles over the last _HISTOGRAM_WINDOW samples.
+        # The engine's adaptive controller (phase 2) consumes these via /api/health.
+        rolling: dict[str, dict[str, Any]] = {}
+        for key, hist in s._label_histograms.items():
+            rolling[key] = {
+                "queue_wait_ms": _percentiles(hist.queue_wait_ms),
+                "exec_ms": _percentiles(hist.exec_ms),
+            }
         return {
             "total_writes": s.total_writes,
             "errors": s.errors,
@@ -507,6 +554,8 @@ class WriteSerializer:
             "avg_exec_ms": round(avg_exec, 1),
             "max_exec_ms": round(s.max_exec_ms, 1),
             "label_counts": dict(s._label_counts),
+            "rolling_window": _HISTOGRAM_WINDOW,
+            "rolling_by_label": rolling,
         }
 
 
