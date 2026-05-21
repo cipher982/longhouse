@@ -10,8 +10,8 @@ from uuid import uuid4
 
 from sqlalchemy.orm import sessionmaker
 
-from zerg.database import make_engine
 from zerg.database import Base
+from zerg.database import make_engine
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionTask
 from zerg.services.agents_store import AgentsStore
@@ -469,19 +469,11 @@ def test_duplicate_replay_without_source_line_delta_does_not_requeue_post_ingest
 
         session_id = first.session_id
         assert first.events_inserted == 1
-        assert (
-            db.query(SessionTask)
-            .filter(SessionTask.session_id == str(session_id), SessionTask.status == "pending")
-            .count()
-            == 2
-        )
+        assert db.query(SessionTask).filter(SessionTask.session_id == str(session_id)).count() == 0
         initial_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         assert initial_session.transcript_revision == 1
+        assert initial_session.needs_embedding == 1
 
-        db.query(SessionTask).filter(SessionTask.session_id == str(session_id)).update(
-            {"status": "done"},
-            synchronize_session=False,
-        )
         session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         session.needs_embedding = 0
         db.commit()
@@ -525,10 +517,4 @@ def test_duplicate_replay_without_source_line_delta_does_not_requeue_post_ingest
         assert stored.assistant_messages == 0
         assert stored.tool_calls == 0
         assert store.count_session_events(session_id, branch_mode="head") == 1
-        assert db.query(SessionTask).filter(SessionTask.session_id == str(session_id)).count() == 2
-        assert (
-            db.query(SessionTask)
-            .filter(SessionTask.session_id == str(session_id), SessionTask.status == "pending")
-            .count()
-            == 0
-        )
+        assert db.query(SessionTask).filter(SessionTask.session_id == str(session_id)).count() == 0

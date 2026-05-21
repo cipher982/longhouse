@@ -101,9 +101,8 @@ def _timeout_for(task_type: str, attempts: int) -> float | None:
 
 
 def enqueue_ingest_tasks(db, session_id: str) -> None:
-    """Insert summary + embedding tasks for session (deduped, caller commits)."""
-    for task_type in ("summary", "embedding"):
-        _enqueue_if_not_active(db, session_id, task_type)
+    """Compatibility shim: summary/embed work is driven by revision lag."""
+    return None
 
 
 def _enqueue_if_not_active(db, session_id: str, task_type: str) -> None:
