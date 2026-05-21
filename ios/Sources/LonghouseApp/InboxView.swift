@@ -25,27 +25,42 @@ struct TimelineView: View {
     private var content: some View {
         switch viewModel.state {
         case .initial:
-            ProgressView().controlSize(.large)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            nonScrollingShell {
+                ProgressView().controlSize(.large)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         case .empty:
-            emptyView
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            nonScrollingShell {
+                emptyView
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         case .error(let message):
-            errorView(message)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            nonScrollingShell {
+                errorView(message)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         case .loaded(let sessions):
             timelineBody(sessions: sessions)
+        }
+    }
+
+    /// Wrap non-scroll states so the connection strip still appears at the
+    /// top of the screen even when there's no list to scroll. The loaded
+    /// state renders the strip *inside* the ScrollView instead so it
+    /// scrolls up with the large title.
+    @ViewBuilder
+    private func nonScrollingShell<Inner: View>(@ViewBuilder _ inner: () -> Inner) -> some View {
+        VStack(spacing: 0) {
+            ConnectionStatusStrip(state: effectiveConnectionState)
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+            inner()
         }
     }
 
     var body: some View {
         NavigationStack(path: $path) {
             content
-            .safeAreaInset(edge: .top, spacing: 0) {
-                ConnectionStatusStrip(state: effectiveConnectionState)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
-            }
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Timeline")
             .toolbar {
@@ -117,11 +132,17 @@ struct TimelineView: View {
 
     private func timelineBody(sessions: [SessionSummary]) -> some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 20) {
+            // Strip lives inside the scroll content so it scrolls up with
+            // the large title and tucks under the compact nav bar instead
+            // of pinning awkwardly under it like a stuck banner.
+            LazyVStack(alignment: .leading, spacing: 14) {
+                ConnectionStatusStrip(state: effectiveConnectionState)
+                    .padding(.horizontal, 0)
                 timelineSection(title: "Recent", sessions: sessions, emphasized: false)
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 18)
+            .padding(.top, 8)
+            .padding(.bottom, 18)
         }
         .navigationDestination(for: SessionRoute.self) { route in
             SessionView(sessionId: route.sessionId, fallbackTitle: route.fallbackTitle)
