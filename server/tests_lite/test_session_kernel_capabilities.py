@@ -171,6 +171,39 @@ def test_managed_detached_offers_reattach(db):
     assert caps.can_send_input is False
 
 
+def test_steerable_attached_without_bits_is_still_live(db):
+    """Bucket gate is state + acquisition_kind only — not the granted bit set.
+
+    A spawned_control attached connection with all capability bits cleared
+    (e.g. transport temporarily can't accept input) is still ``live`` per
+    spec. The bits surface separately on can_send_input/etc.
+    """
+    s = _make_session(db)
+    t = _make_thread(db, s)
+    r = _make_run(db, t)
+    _make_conn(db, r, state="attached", acquisition_kind="spawned_control", caps={})
+    db.commit()
+    caps = project_session_capabilities(db, session_id=s.id)
+    assert caps.control_label == "live"
+    assert caps.live_control_available is True
+    assert caps.can_send_input is False
+    assert caps.can_interrupt is False
+    assert caps.can_tail_output is False
+
+
+def test_steerable_detached_without_bits_is_still_reattach(db):
+    """Detached spawned_control with cleared bits stays reattach, not search-only."""
+    s = _make_session(db)
+    t = _make_thread(db, s)
+    r = _make_run(db, t)
+    _make_conn(db, r, state="detached", acquisition_kind="spawned_control", caps={})
+    db.commit()
+    caps = project_session_capabilities(db, session_id=s.id)
+    assert caps.control_label == "reattach"
+    assert caps.host_reattach_available is True
+    assert caps.live_control_available is False
+
+
 def test_managed_process_ended_imports(db):
     s = _make_session(db)
     t = _make_thread(db, s)
