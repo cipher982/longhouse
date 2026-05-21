@@ -22,11 +22,14 @@ from zerg.database import make_engine
 def _migrate_agents_columns(engine):
     """Mirror the production startup migration sequence (Phase 2).
 
-    ``initialize_database`` runs ``_auto_add_missing_columns`` first, then the
-    residual imperative blocks. Tests that exercise the legacy upgrade path must
-    do the same.
+    ``initialize_database`` runs ``Base.metadata.create_all`` first (creating
+    any tables that don't yet exist with their full modern schema), then
+    ``_auto_add_missing_columns`` (drift on existing tables), then the
+    residual imperative blocks. Tests that exercise the legacy upgrade path
+    must do the same.
     """
 
+    Base.metadata.create_all(bind=engine)
     _pre_migrate_session_inputs_identity_columns(engine)
     _auto_add_missing_columns(engine, Base.metadata, apply=True)
     _migrate_agents_columns_raw(engine)
