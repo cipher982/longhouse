@@ -73,6 +73,7 @@ final class AppState: ObservableObject {
     @Published var isValidating = true
     @Published var authError: String?
     @Published var hostedAuthAttemptURL: String?
+    private var apnsSyncInFlightSignature: String?
 
     init() {
         self.serverURL = KeychainHelper.loadServerURL() ?? ""
@@ -170,6 +171,7 @@ final class AppState: ObservableObject {
             SharedAuthStore.clearManagedCookies(for: previousURL)
             SharedAuthStore.removeSharedCookieStorage(for: previousURL)
             TimelineCacheStore.clear(serverURL: previousURL)
+            PushNotificationStore.clearAPNSDeviceSyncState()
             KeychainHelper.deleteAuthToken()
         }
         SharedAuthStore.primeSharedCookieStorage(for: trimmed)
@@ -223,6 +225,7 @@ final class AppState: ObservableObject {
 
         KeychainHelper.deleteAuthToken()
         KeychainHelper.deleteServerURL()
+        PushNotificationStore.clearAPNSDeviceSyncState()
         TimelineCacheStore.clear()
         WidgetCenter.shared.reloadAllTimelines()
     }
@@ -247,6 +250,7 @@ final class AppState: ObservableObject {
                 SharedAuthStore.clearManagedCookies(for: previousURL)
                 SharedAuthStore.removeSharedCookieStorage(for: previousURL)
                 TimelineCacheStore.clear(serverURL: previousURL)
+                PushNotificationStore.clearAPNSDeviceSyncState()
                 KeychainHelper.deleteAuthToken()
             }
             SharedAuthStore.primeSharedCookieStorage(for: trimmed)
@@ -279,12 +283,34 @@ final class AppState: ObservableObject {
         guard let deviceToken = PushNotificationStore.storedDeviceToken() else {
             return
         }
+        let signature = PushNotificationStore.apnsDeviceRegistrationSignature(
+            serverURL: serverURL,
+            deviceToken: deviceToken,
+            pushEnvironment: PushNotificationStore.pushEnvironment,
+            appBuildId: PushNotificationStore.currentAppBuildID,
+            platform: "ios"
+        )
+        guard apnsSyncInFlightSignature != signature else {
+            logger.debug("apns sync skipped reason=in_flight")
+            return
+        }
+        guard PushNotificationStore.shouldSyncAPNSDevice(signature: signature) else {
+            logger.debug("apns sync skipped reason=fresh")
+            return
+        }
+        apnsSyncInFlightSignature = signature
+        defer {
+            if apnsSyncInFlightSignature == signature {
+                apnsSyncInFlightSignature = nil
+            }
+        }
         do {
             try await api.registerAPNSDevice(
                 deviceToken: deviceToken,
                 pushEnvironment: PushNotificationStore.pushEnvironment,
                 appBuildId: PushNotificationStore.currentAppBuildID
             )
+            PushNotificationStore.markAPNSDeviceSynced(signature: signature)
             logger.debug("apns sync finished elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
         } catch LonghouseAPIError.notAuthenticated {
             return
@@ -368,6 +394,7 @@ final class AppState: ObservableObject {
         SharedAuthStore.removeSharedCookieStorage(for: serverURL)
         WidgetSessionSnapshotStore.clear()
         TimelineCacheStore.clear(serverURL: serverURL)
+        PushNotificationStore.clearAPNSDeviceSyncState()
         KeychainHelper.deleteAuthToken()
         isAuthenticated = false
     }

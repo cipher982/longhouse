@@ -32,6 +32,9 @@ enum PushNotificationStore {
     nonisolated(unsafe) private static let defaults = UserDefaults.standard
     private static let deviceTokenKey = "longhouse.apns.deviceToken"
     private static let pendingSessionKey = "longhouse.apns.pendingSession"
+    private static let registrationSignatureKey = "longhouse.apns.registrationSignature"
+    private static let registrationSyncedAtKey = "longhouse.apns.registrationSyncedAt"
+    static let registrationRefreshInterval: TimeInterval = 6 * 60 * 60
 
     static var pushEnvironment: String {
         #if DEBUG
@@ -59,6 +62,42 @@ enum PushNotificationStore {
     static func storedDeviceToken() -> String? {
         let token = defaults.string(forKey: deviceTokenKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return token.isEmpty ? nil : token
+    }
+
+    static func apnsDeviceRegistrationSignature(
+        serverURL: String,
+        deviceToken: String,
+        pushEnvironment: String,
+        appBuildId: String?,
+        platform: String
+    ) -> String {
+        [
+            serverURL.trimmingCharacters(in: .whitespacesAndNewlines),
+            platform.trimmingCharacters(in: .whitespacesAndNewlines),
+            pushEnvironment.trimmingCharacters(in: .whitespacesAndNewlines),
+            appBuildId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+            deviceToken.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+        ].joined(separator: "|")
+    }
+
+    static func shouldSyncAPNSDevice(signature: String, now: Date = Date()) -> Bool {
+        guard defaults.string(forKey: registrationSignatureKey) == signature else {
+            return true
+        }
+        guard let lastSyncedAt = defaults.object(forKey: registrationSyncedAtKey) as? Date else {
+            return true
+        }
+        return now.timeIntervalSince(lastSyncedAt) >= registrationRefreshInterval
+    }
+
+    static func markAPNSDeviceSynced(signature: String, at date: Date = Date()) {
+        defaults.set(signature, forKey: registrationSignatureKey)
+        defaults.set(date, forKey: registrationSyncedAtKey)
+    }
+
+    static func clearAPNSDeviceSyncState() {
+        defaults.removeObject(forKey: registrationSignatureKey)
+        defaults.removeObject(forKey: registrationSyncedAtKey)
     }
 
     static func storePendingSessionID(_ sessionID: String) {

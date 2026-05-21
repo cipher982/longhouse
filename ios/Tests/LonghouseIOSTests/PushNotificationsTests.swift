@@ -15,6 +15,30 @@ struct PushNotificationsTests {
     }
 
     @Test
+    func apnsDeviceRegistrationSkipsFreshSameSignature() throws {
+        PushNotificationStore.clearAPNSDeviceSyncState()
+        defer { PushNotificationStore.clearAPNSDeviceSyncState() }
+        let now = Date(timeIntervalSince1970: 1_000)
+        let signature = PushNotificationStore.apnsDeviceRegistrationSignature(
+            serverURL: " https://david010.longhouse.ai ",
+            deviceToken: "ABCD01EF",
+            pushEnvironment: "sandbox",
+            appBuildId: "debug+123",
+            platform: "ios"
+        )
+
+        #expect(PushNotificationStore.shouldSyncAPNSDevice(signature: signature, now: now))
+        PushNotificationStore.markAPNSDeviceSynced(signature: signature, at: now)
+
+        #expect(!PushNotificationStore.shouldSyncAPNSDevice(signature: signature, now: now.addingTimeInterval(60)))
+        #expect(PushNotificationStore.shouldSyncAPNSDevice(
+            signature: signature,
+            now: now.addingTimeInterval(PushNotificationStore.registrationRefreshInterval + 1)
+        ))
+        #expect(PushNotificationStore.shouldSyncAPNSDevice(signature: "\(signature)|changed", now: now.addingTimeInterval(60)))
+    }
+
+    @Test
     func pendingSessionConsumptionIsOneShot() throws {
         PushNotificationStore.storePendingSessionID("session-123")
 
