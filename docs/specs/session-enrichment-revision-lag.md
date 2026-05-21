@@ -1,15 +1,16 @@
 # Session Enrichment Revision-Lag Reconciliation
 
-Status: Reviewed by Hatch Opus; implementation ready
+Status: Implemented; final Hatch Opus review pending
 Owner: David Rose
 Created: 2026-05-20
 Reviewed: 2026-05-20 via Hatch Opus
+Implemented: 2026-05-20
 
 ## Executive Summary
 
-Longhouse should treat raw session ingest as the product truth and derived session metadata as opportunistic enrichment. The current post-ingest pipeline creates durable `SessionTask` rows for summary and embedding work, then drains those rows through a cold worker. This made remote API work behave like a local single-lane queue: live summary/title work, embeddings, historical reingest, retries, and backfill all competed behind the same worker and the same SQLite write serializer.
+Longhouse treats raw session ingest as the product truth and derived session metadata as opportunistic enrichment. The removed post-ingest pipeline created durable `SessionTask` rows for summary and embedding work, then drained those rows through a cold worker. That made remote API work behave like a local single-lane queue: live summary/title work, embeddings, historical reingest, retries, and backfill all competed behind the same worker and the same SQLite write serializer.
 
-Replace summary and embedding `SessionTask` usage with revision-lag reconciliation:
+The replacement is revision-lag reconciliation:
 
 ```text
 summary work is needed when summary_revision < transcript_revision
@@ -18,7 +19,7 @@ embedding work is needed when embedding_revision < transcript_revision or needs_
 
 The database state is the queue. Workers scan session rows, choose the highest-value stale sessions, run bounded concurrent remote API calls, and advance the relevant revision only if the write still matches the observed transcript revision. A missing summary/title never blocks the timeline: cards use stored summary/title when available and deterministic fallbacks otherwise.
 
-`SessionTask` may remain as a compatibility table, but summary and embedding enrichment must move out of it. Review also found no active production producer/executor for `turn_loop`, so Phase 4 should remove dormant ingest-task worker scaffolding unless a real consumer appears before that phase.
+`SessionTask` remains as a compatibility table, but summary and embedding enrichment moved out of it. Review also found no active production producer/executor for `turn_loop`, so Phase 4 removed dormant ingest-task worker scaffolding.
 
 ## Starting State
 
@@ -33,7 +34,7 @@ Useful existing primitives:
 - Summary and embedding implementations close read DB sessions before remote provider calls.
 - Timeline cards now have client-side first-user/title fallback and no longer display a fake "Generating summary" body.
 
-Problematic current shape:
+Removed shape:
 
 - `enqueue_ingest_tasks()` inserts `summary` and `embedding` `SessionTask` rows after every transcript-changing ingest.
 - The cold worker defaults to one concurrent task and claims one task at a time.
@@ -41,7 +42,7 @@ Problematic current shape:
 - Task claim/done/timeout writes go through `WriteSerializer`, so heavy archive ingest can delay even tiny bookkeeping writes.
 - `summary_status` projection currently reads latest `SessionTask(summary)` rows, so old/pending task rows leak queue internals into API/UI semantics.
 - Retry/resurrection logic exists for summary/embedding even though revision counters already describe whether the derived state is stale.
-- The hot `turn_loop` worker exists structurally, but current review found no production enqueue path and no `_run_task_impl` execution branch for `turn_loop`.
+- The hot `turn_loop` worker existed structurally, but review found no production enqueue path and no `_run_task_impl` execution branch for `turn_loop`.
 
 Observed failure:
 
@@ -358,8 +359,8 @@ Acceptance criteria:
 Test commands:
 
 ```bash
-cd server && DATABASE_URL=sqlite:////tmp/longhouse-test-$(uuidgen).db AUTH_DISABLED=1 SKIP_DEMO_SEED=1 FERNET_SECRET=$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())') TRIGGER_SIGNING_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))') OPENROUTER_API_KEY=test-openrouter-key uv run pytest tests_lite/test_agents_duplicate_sqlite.py tests_lite/test_ingest_task_queue.py tests_lite/test_session_revision_guards.py tests_lite/test_session_enrichment_reconciler.py
-cd server && uv run ruff check zerg/services/agents/store.py zerg/services/ingest_task_queue.py tests_lite/test_agents_duplicate_sqlite.py tests_lite/test_ingest_task_queue.py
+cd server && DATABASE_URL=sqlite:////tmp/longhouse-test-$(uuidgen).db AUTH_DISABLED=1 SKIP_DEMO_SEED=1 FERNET_SECRET=$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())') TRIGGER_SIGNING_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))') OPENROUTER_API_KEY=test-openrouter-key uv run pytest tests_lite/test_agents_duplicate_sqlite.py tests_lite/test_session_revision_guards.py tests_lite/test_session_enrichment_reconciler.py
+cd server && uv run ruff check tests_lite/test_agents_duplicate_sqlite.py
 ```
 
 ### Phase 4: Remove Generic Ingest Task Worker Runtime Paths
@@ -387,8 +388,8 @@ Acceptance criteria:
 Test commands:
 
 ```bash
-cd server && DATABASE_URL=sqlite:////tmp/longhouse-test-$(uuidgen).db AUTH_DISABLED=1 SKIP_DEMO_SEED=1 FERNET_SECRET=$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())') TRIGGER_SIGNING_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))') OPENROUTER_API_KEY=test-openrouter-key uv run pytest tests_lite/test_ingest_task_queue.py tests_lite/test_session_enrichment_reconciler.py tests_lite/test_session_summary_status.py tests_lite/test_embeddings.py
-cd server && uv run ruff check zerg/services/ingest_task_queue.py zerg/lifespan.py tests_lite/test_ingest_task_queue.py
+cd server && DATABASE_URL=sqlite:////tmp/longhouse-test-$(uuidgen).db AUTH_DISABLED=1 SKIP_DEMO_SEED=1 FERNET_SECRET=$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())') TRIGGER_SIGNING_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))') OPENROUTER_API_KEY=test-openrouter-key uv run pytest tests_lite/test_session_enrichment_reconciler.py tests_lite/test_session_summary_status.py tests_lite/test_embeddings.py tests_lite/test_session_enrichment_architecture.py
+cd server && uv run ruff check zerg/lifespan.py zerg/models/agents.py zerg/services/session_summaries.py tests_lite/test_session_enrichment_architecture.py
 ```
 
 ### Phase 5: Embedding Manual Backfill Verification
@@ -411,8 +412,8 @@ Acceptance criteria:
 Test commands:
 
 ```bash
-cd server && DATABASE_URL=sqlite:////tmp/longhouse-test-$(uuidgen).db AUTH_DISABLED=1 SKIP_DEMO_SEED=1 FERNET_SECRET=$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())') TRIGGER_SIGNING_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))') OPENROUTER_API_KEY=test-openrouter-key uv run pytest tests_lite/test_embeddings.py tests_lite/test_session_revision_guards.py tests_lite/test_agents_duplicate_sqlite.py
-cd server && uv run ruff check zerg/services/session_summaries.py zerg/services/session_processing/embeddings.py zerg/routers/agents_backfill.py
+cd server && DATABASE_URL=sqlite:////tmp/longhouse-test-$(uuidgen).db AUTH_DISABLED=1 SKIP_DEMO_SEED=1 FERNET_SECRET=$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())') TRIGGER_SIGNING_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))') OPENROUTER_API_KEY=test-openrouter-key uv run pytest tests_lite/test_agents_backfill_embeddings.py tests_lite/test_embeddings.py tests_lite/test_session_revision_guards.py tests_lite/test_agents_duplicate_sqlite.py
+cd server && uv run ruff check tests_lite/test_agents_backfill_embeddings.py
 ```
 
 ### Phase 6: Final Integration Review
@@ -429,6 +430,23 @@ Test commands:
 ```bash
 make test
 ```
+
+## Implementation Result
+
+Implemented in focused commits:
+
+- `caaf9ab3` derives timeline summary status from session revisions and ignores old summary tasks.
+- `79574818` adds the summary revision-lag reconciler; `fd677b7a` isolates sibling failures in a reconciler batch.
+- `9ede29c4` stops ingest from enqueueing summary/embedding tasks.
+- `a257fa96` removes the generic ingest task worker runtime path.
+- `3c73663d` adds a regression guard against reintroducing summary/embedding task queue usage.
+- `450b9307` verifies explicit embedding backfill drains `needs_embedding` rows.
+
+Verification:
+
+- `make test`: `1719 passed, 1 skipped`.
+- Focused phase tests and ruff checks passed as each phase landed.
+- Hatch Opus approved Phases 1, 2, 3, and 4. Final end-to-end review is pending.
 
 ## Rollout Notes
 
