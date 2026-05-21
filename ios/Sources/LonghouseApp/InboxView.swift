@@ -84,7 +84,7 @@ struct TimelineView: View {
             .task {
                 WebTranscriptWebViewPool.prewarm()
                 await viewModel.load(using: appState)
-                viewModel.startAutoRefresh(using: appState)
+                viewModel.startStream(using: appState)
                 consumePendingPushIfNeeded()
                 Task {
                     await appState.ensurePushRegistrationIfPossible()
@@ -92,19 +92,19 @@ struct TimelineView: View {
             }
             .onAppear {
                 WebTranscriptWebViewPool.prewarm()
-                viewModel.resumeAutoRefresh(using: appState)
+                viewModel.resumeStream(using: appState)
             }
             .onDisappear {
-                viewModel.stopAutoRefresh()
+                viewModel.stopStream()
             }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .active {
                     Task {
                         await viewModel.refresh(using: appState, reloadWidget: true)
-                        viewModel.startAutoRefresh(using: appState)
+                        viewModel.startStream(using: appState)
                     }
                 } else {
-                    viewModel.stopAutoRefresh()
+                    viewModel.stopStream()
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .longhouseOpenSessionFromPush)) { note in
@@ -521,10 +521,18 @@ final class TimelineViewModel: ObservableObject {
     @Published var lastUpdatedAt: Date?
     @Published private(set) var consecutiveRefreshFailures = 0
 
-    private var autoRefreshTask: Task<Void, Never>?
+    private var streamTask: Task<Void, Never>?
+    private var stream: TimelineSessionsStream?
+    private var reconcileTask: Task<Void, Never>?
+    private var persistTask: Task<Void, Never>?
     private var lastWidgetReloadAt: Date?
     private var isRefreshInFlight = false
     private var loggedFirstPaint = false
+    private var streamGeneration: UInt64 = 0
+    private var hasReceivedFirstConnect = false
+    private let limit = 40
+    private let reconcileIntervalNanoseconds: UInt64 = 120_000_000_000 // 120s safety net
+    private let persistDebounceNanoseconds: UInt64 = 250_000_000 // 250ms cache/widget coalesce
     private let logger = Logger(subsystem: "ai.longhouse.ios", category: "Timeline")
 
     var connectionState: ConnectionState {
@@ -566,15 +574,21 @@ final class TimelineViewModel: ObservableObject {
             return
         }
         let startedAt = Date()
+        let generation = streamGeneration
         isRefreshInFlight = true
         defer { isRefreshInFlight = false }
 
         do {
-            let sessions = try await api.recentSessions(limit: 40)
+            let sessions = try await api.recentSessions(limit: limit)
+            // Drop stale snapshots from a previous stream lifetime — a slow
+            // reconnect bootstrap mustn't overwrite newer stream-applied state.
+            guard generation == streamGeneration || generation == 0 else {
+                logger.info("timeline refresh dropped stale generation=\(generation, privacy: .public) current=\(self.streamGeneration, privacy: .public)")
+                return
+            }
             let attentionIds = Set(sessions.filter(\.needsAttention).map(\.id))
             applySessions(sessions, source: "network")
-            TimelineCacheStore.save(sessions: sessions, serverURL: appState.serverURL)
-            WidgetSessionSnapshotStore.save(sessions: sessions)
+            schedulePersist(sessions: sessions, appState: appState)
             PushNotificationStore.removeResolvedAttentionNotifications(activeSessionIDs: attentionIds)
             self.lastUpdatedAt = Date()
             self.consecutiveRefreshFailures = 0
@@ -599,38 +613,197 @@ final class TimelineViewModel: ObservableObject {
         }
     }
 
-    func resumeAutoRefresh(using appState: AppState) {
-        startAutoRefresh(using: appState)
+    func resumeStream(using appState: AppState) {
+        startStream(using: appState)
         guard !isInitial else { return }
         Task { await refresh(using: appState, reloadWidget: true) }
     }
 
-    func startAutoRefresh(using appState: AppState) {
-        guard autoRefreshTask == nil else { return }
-        autoRefreshTask = Task { [weak self] in
+    func startStream(using appState: AppState) {
+        guard streamTask == nil else { return }
+        guard let baseURL = URL(string: appState.serverURL) else {
+            logger.error("timeline stream invalid serverURL=\(appState.serverURL, privacy: .public)")
+            return
+        }
+        streamGeneration &+= 1
+        let generation = streamGeneration
+        hasReceivedFirstConnect = false
+        let stream = TimelineSessionsStream(baseURL: baseURL, limit: limit)
+        self.stream = stream
+        streamTask = Task { [weak self] in
+            let events = await stream.start()
+            for await event in events {
+                guard let self else { break }
+                await self.handleStreamEvent(event, generation: generation, appState: appState)
+            }
+            // Stream ended (cancellation or terminal 401). Clear the slot
+            // so resumeStream / scenePhase can spin up a new task.
+            await self?.streamLoopDidExit(generation: generation)
+        }
+        startReconcileSafetyNet(using: appState, generation: generation)
+    }
+
+    func stopStream() {
+        // Bump generation first so any event already in flight is dropped
+        // by the guard in handleStreamEvent before it can mutate state.
+        streamGeneration &+= 1
+        streamTask?.cancel()
+        streamTask = nil
+        if let stream {
+            Task { await stream.stop() }
+        }
+        stream = nil
+        reconcileTask?.cancel()
+        reconcileTask = nil
+        // Flush any pending debounced cache/widget save before tearing down
+        // so a fast stream stop (scene background) doesn't drop the last
+        // snapshot. The detached task in schedulePersist already snapshots
+        // sessions by value, so flushing == waiting for it to finish.
+        if let pending = persistTask {
+            persistTask = nil
+            Task { await pending.value }
+        }
+    }
+
+    private func streamLoopDidExit(generation: UInt64) {
+        guard generation == streamGeneration else { return }
+        streamTask = nil
+    }
+
+    private func startReconcileSafetyNet(using appState: AppState, generation: UInt64) {
+        reconcileTask?.cancel()
+        let interval = reconcileIntervalNanoseconds
+        reconcileTask = Task { [weak self] in
             while !Task.isCancelled {
-                let delay = self?.autoRefreshDelayNanoseconds ?? 4_000_000_000
-                try? await Task.sleep(nanoseconds: delay)
+                try? await Task.sleep(nanoseconds: interval)
                 if Task.isCancelled { break }
-                await self?.refresh(using: appState, reloadWidget: true)
+                guard let self else { break }
+                if await self.streamGenerationMatches(generation) {
+                    await self.refresh(using: appState, reloadWidget: true)
+                } else {
+                    break
+                }
             }
         }
     }
 
-    func stopAutoRefresh() {
-        autoRefreshTask?.cancel()
-        autoRefreshTask = nil
+    private func streamGenerationMatches(_ generation: UInt64) -> Bool {
+        generation == streamGeneration
     }
 
-    private var autoRefreshDelayNanoseconds: UInt64 {
-        switch consecutiveRefreshFailures {
-        case 0:
-            return 4_000_000_000
-        case 1:
-            return 8_000_000_000
-        default:
-            return 16_000_000_000
+    private func handleStreamEvent(
+        _ event: TimelineSessionsStream.Event,
+        generation: UInt64,
+        appState: AppState
+    ) async {
+        guard generation == streamGeneration else { return }
+        switch event {
+        case .connected:
+            consecutiveRefreshFailures = 0
+            // Reconnects need a snapshot resync because the stream has no
+            // Last-Event-ID replay. The very first connect is already
+            // covered by the `load()` REST bootstrap, so skip it. Don't
+            // stamp lastUpdatedAt yet on reconnects — wait until the
+            // bootstrap actually lands so connectionState doesn't lie.
+            if hasReceivedFirstConnect {
+                logger.info("timeline stream reconnected — bootstrapping snapshot")
+                await refresh(using: appState, reloadWidget: true)
+            } else {
+                hasReceivedFirstConnect = true
+                lastUpdatedAt = Date()
+            }
+        case .upsert(let card, _, _):
+            applyUpsert(card.sessionSummary, appState: appState)
+            lastUpdatedAt = Date()
+            consecutiveRefreshFailures = 0
+        case .remove(let threadId, _, _):
+            applyRemove(threadId: threadId, appState: appState)
+            lastUpdatedAt = Date()
+            consecutiveRefreshFailures = 0
+        case .heartbeat:
+            lastUpdatedAt = Date()
+            consecutiveRefreshFailures = 0
+        case .disconnected(let error):
+            consecutiveRefreshFailures += 1
+            if let apiError = error as? LonghouseAPIError, case .notAuthenticated = apiError {
+                state = .error("Session expired. Sign in again.")
+            }
+            logger.info("timeline stream disconnected error=\(error?.localizedDescription ?? "nil", privacy: .public)")
         }
+    }
+
+    private func applyUpsert(_ session: SessionSummary, appState: AppState) {
+        var current = currentSessions()
+        let incomingThread = session.threadId
+        // Match either by thread (when both sides have one) or by head id —
+        // pre-stream cached rows can have threadId == nil and would otherwise
+        // duplicate or fail to delete until the next REST bootstrap. Also
+        // sweep on head id always, so a legacy row without threadId still
+        // gets replaced when a stream upsert with a threadId arrives for it.
+        current.removeAll { existing in
+            if existing.id == session.id { return true }
+            if let incomingThread, let existingThread = existing.threadId {
+                return existingThread == incomingThread
+            }
+            return false
+        }
+        current.append(session)
+        current.sort { lhs, rhs in
+            anchorDate(for: lhs) > anchorDate(for: rhs)
+        }
+        if current.count > limit {
+            current = Array(current.prefix(limit))
+        }
+        applySessions(current, source: "stream")
+        schedulePersist(sessions: current, appState: appState)
+        reloadWidgetTimelineIfNeeded()
+    }
+
+    private func applyRemove(threadId: String, appState: AppState) {
+        var current = currentSessions()
+        let before = current.count
+        // Match by threadId when present, otherwise fall back to head id —
+        // legacy cached rows without a threadId still need to be reachable.
+        current.removeAll { existing in
+            if let existingThread = existing.threadId {
+                return existingThread == threadId
+            }
+            return existing.id == threadId
+        }
+        guard current.count != before else { return }
+        applySessions(current, source: "stream")
+        schedulePersist(sessions: current, appState: appState)
+        reloadWidgetTimelineIfNeeded()
+    }
+
+    private func currentSessions() -> [SessionSummary] {
+        if case .loaded(let sessions) = state { return sessions }
+        return []
+    }
+
+    /// Coalesce cache + widget-snapshot disk writes. Stream upsert/remove
+    /// bursts (5–20/sec during an active session) would otherwise hit the
+    /// main actor with synchronous JSON-encode + file writes per event.
+    private func schedulePersist(sessions: [SessionSummary], appState: AppState) {
+        persistTask?.cancel()
+        let serverURL = appState.serverURL
+        let delay = persistDebounceNanoseconds
+        persistTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: delay)
+            if Task.isCancelled { return }
+            await Task.detached(priority: .utility) {
+                TimelineCacheStore.save(sessions: sessions, serverURL: serverURL)
+                WidgetSessionSnapshotStore.save(sessions: sessions)
+            }.value
+            _ = self
+        }
+    }
+
+    private func anchorDate(for session: SessionSummary) -> Date {
+        if let anchor = session.timelineAnchor, let date = LonghouseDateParser.parse(anchor) {
+            return date
+        }
+        return .distantPast
     }
 
     private func reloadWidgetTimelineIfNeeded() {

@@ -361,6 +361,7 @@ extension APITimelineSessionCardResponse {
     var sessionSummary: SessionSummary {
         SessionSummary(
             id: head.id,
+            threadId: threadId,
             title: timelineCardTitle(for: head),
             presenceState: head.presenceState ?? "unknown",
             provider: head.provider,
