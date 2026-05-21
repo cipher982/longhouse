@@ -218,7 +218,9 @@ describe("useSessionWorkspace", () => {
             latest_event_id: number;
             thread_session_count: number;
             latest_event_emitted_at_ms?: number | null;
+            server_fanout_at_ms?: number | null;
             server_now_ms?: number;
+            pubsub_seq?: number;
           }) => void;
           onError?: () => void;
         }
@@ -256,7 +258,9 @@ describe("useSessionWorkspace", () => {
             latest_event_id: number;
             thread_session_count: number;
             latest_event_emitted_at_ms?: number | null;
+            server_fanout_at_ms?: number | null;
             server_now_ms?: number;
+            pubsub_seq?: number;
           }) => void;
           onError?: () => void;
         }
@@ -275,7 +279,9 @@ describe("useSessionWorkspace", () => {
         latest_event_id: 81,
         thread_session_count: 1,
         latest_event_emitted_at_ms: 1_779_220_000_000,
+        server_fanout_at_ms: 1_779_220_000_150,
         server_now_ms: 1_779_220_000_100,
+        pubsub_seq: 7,
       });
     });
 
@@ -290,6 +296,9 @@ describe("useSessionWorkspace", () => {
         latestEventId: 81,
         latestEventEmittedAtMs: 1_779_220_000_000,
         managed: false,
+        serverFanoutAtMs: 1_779_220_000_150,
+        clientReceivedAtMs: expect.any(Number),
+        pubsubSeq: 7,
       });
     });
   });

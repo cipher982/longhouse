@@ -42,6 +42,9 @@ describe("RenderTelemetryPanel", () => {
           emitted_at_ms: 1_769_482_800_000,
           rendered_at_ms: 1_769_482_800_124,
           clock_skew_ms: -8,
+          server_fanout_at_ms: 1_769_482_799_900,
+          client_received_at_ms: 1_769_482_800_010,
+          pubsub_seq: 42,
           webkit: {
             stage: "rendered",
             payload_byte_size: 4096,

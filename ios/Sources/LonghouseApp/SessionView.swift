@@ -588,6 +588,14 @@ struct SubmittedInput: Identifiable, Sendable {
 
 @MainActor
 final class SessionViewModel: ObservableObject {
+    private struct PendingRealtimeTelemetry {
+        let latestEventId: Int
+        let serverFanoutAtMs: Int64?
+        let clientReceivedAtMs: Int64
+        let clockSkewMs: Int
+        let pubsubSeq: Int?
+    }
+
     @Published var detail: SessionDetail?
     @Published var items: [TimelineItem] = []
     @Published var errorMessage: String?
@@ -617,6 +625,7 @@ final class SessionViewModel: ObservableObject {
     private var stream: SessionWorkspaceStreamSource?
     private var streamTask: Task<Void, Never>?
     private var streamConnected: Bool = false
+    private var pendingRealtimeTelemetry: PendingRealtimeTelemetry?
     private var activeSessionId: String?
     private var activeServerURL: String?
     private var lastWorkspaceEvents: [SessionEvent] = []
@@ -662,6 +671,7 @@ final class SessionViewModel: ObservableObject {
             items = []
             submittedInputs = []
             transcriptDiagnostics = nil
+            pendingRealtimeTelemetry = nil
             lastWorkspaceEvents = []
             loadedProjectionItemCount = 0
             totalProjectionItemCount = 0
@@ -932,8 +942,17 @@ final class SessionViewModel: ObservableObject {
             streamConnected = false
         case .heartbeat:
             break
-        case .changed:
+        case .changed(let change):
             // Push wake -> refetch the compact tail and emit render beacon.
+            let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+            let clockSkewMs = Int(clamping: await stream?.clockSkewMs() ?? 0)
+            pendingRealtimeTelemetry = PendingRealtimeTelemetry(
+                latestEventId: change.latest_event_id,
+                serverFanoutAtMs: change.server_fanout_at_ms,
+                clientReceivedAtMs: nowMs,
+                clockSkewMs: clockSkewMs,
+                pubsubSeq: change.pubsub_seq
+            )
             guard let api = apiFactory(appState.serverURL) else { return }
             try? await refreshTail(api: api, sessionId: sessionId, allowFailure: true)
         }
@@ -1157,17 +1176,31 @@ final class SessionViewModel: ObservableObject {
         webkitDiagnostics: RenderBeaconReporter.WebKitDiagnostics?
     ) async {
         guard let latest = events.last else { return }
-        guard let emittedAt = LonghouseDateParser.parse(latest.timestamp) else { return }
+        let pendingTelemetry = pendingRealtimeTelemetry
+        let eventForBeacon = pendingTelemetry.flatMap { pending in
+            events.last(where: { $0.id == pending.latestEventId })
+        } ?? latest
+        guard let emittedAt = LonghouseDateParser.parse(eventForBeacon.timestamp) else { return }
         let caps = detail?.capabilities
         let managed = (caps?.liveControlAvailable == true) || (caps?.hostReattachAvailable == true)
+        let realtimeTelemetry = pendingTelemetry?.latestEventId == eventForBeacon.id
+            ? pendingTelemetry
+            : nil
         if let payload = await RenderBeaconReporter.shared.payload(
             sessionId: sessionId,
-            latestEventId: String(latest.id),
+            latestEventId: String(eventForBeacon.id),
             emittedAt: emittedAt,
             managed: managed,
+            clockSkewMs: realtimeTelemetry?.clockSkewMs ?? 0,
+            serverFanoutAtMs: realtimeTelemetry?.serverFanoutAtMs,
+            clientReceivedAtMs: realtimeTelemetry?.clientReceivedAtMs,
+            pubsubSeq: realtimeTelemetry?.pubsubSeq,
             webkit: webkitDiagnostics
         ) {
             await api.postRenderBeacon(payload)
+        }
+        if pendingTelemetry != nil {
+            pendingRealtimeTelemetry = nil
         }
     }
 

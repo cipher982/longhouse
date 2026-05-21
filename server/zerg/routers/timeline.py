@@ -34,8 +34,8 @@ from sse_starlette.sse import EventSourceResponse
 from zerg.database import get_db
 from zerg.database import get_session_factory
 from zerg.dependencies.agents_auth import require_single_tenant
-from zerg.dependencies.browser_auth import get_current_browser_user_id_short_lived
 from zerg.dependencies.browser_auth import get_current_browser_user
+from zerg.dependencies.browser_auth import get_current_browser_user_id_short_lived
 from zerg.dependencies.browser_auth import require_current_browser_user_short_lived
 from zerg.models.agents import AgentSession
 from zerg.routers import agents_demo as _demo_router
@@ -669,7 +669,11 @@ def _load_workspace_signature(
 
     # Latest event emitted_at (the provider/engine timestamp on the newest event).
     # This feeds client beacons so we can measure true end-to-end latency.
-    latest_event_timestamp = db.query(func.max(AgentEvent.timestamp)).filter(AgentEvent.session_id.in_(thread_session_ids)).scalar()
+    latest_event_timestamp = (
+        db.query(func.max(AgentEvent.timestamp))
+        .filter(AgentEvent.session_id.in_(thread_session_ids))
+        .scalar()
+    )
 
     # Latest runtime signal across thread — the runtime state row advances on every
     # hook-driven phase change, so this replaces the old SessionPresence anchor.
@@ -732,6 +736,7 @@ async def _session_workspace_stream(
     # Highest pubsub seq actually consumed by this subscription. Used as the
     # SSE id: so reconnects never skip an event the client hadn't seen.
     consumed_seq: int = 0
+    consumed_payload: dict | None = None
     with bus.subscribe(topic, since_seq=last_event_id) as subscription:
         while True:
             if await request.is_disconnected():
@@ -740,9 +745,12 @@ async def _session_workspace_stream(
             if skip_initial:
                 skip_initial = False
                 wait_start = monotonic()
-                woke_seq = await _wait_for_session_change(subscription)
-                if woke_seq:
-                    consumed_seq = woke_seq
+                woke_msg = await _wait_for_session_change(subscription)
+                if woke_msg:
+                    consumed_seq = woke_msg.seq
+                    consumed_payload = woke_msg.payload
+                else:
+                    consumed_payload = None
                 continue
 
             with session_factory() as db:
@@ -764,9 +772,12 @@ async def _session_workspace_stream(
                     }
                     last_heartbeat = now
                 wait_start = monotonic()
-                woke_seq = await _wait_for_session_change(subscription)
-                if woke_seq:
-                    consumed_seq = woke_seq
+                woke_msg = await _wait_for_session_change(subscription)
+                if woke_msg:
+                    consumed_seq = woke_msg.seq
+                    consumed_payload = woke_msg.payload
+                else:
+                    consumed_payload = None
                 continue
 
             previous_sig = current_sig
@@ -777,6 +788,11 @@ async def _session_workspace_stream(
             if latest_event_ts is not None:
                 ts = latest_event_ts if latest_event_ts.tzinfo else latest_event_ts.replace(tzinfo=timezone.utc)
                 latest_event_ts_ms = int(ts.timestamp() * 1000)
+            server_fanout_at_ms = None
+            if consumed_payload is not None:
+                candidate_fanout_at = consumed_payload.get("server_fanout_at_ms")
+                if isinstance(candidate_fanout_at, int):
+                    server_fanout_at_ms = candidate_fanout_at
             # consumed_seq is the seq of the publish that woke this cycle —
             # safer than peek_latest_seq which can race ahead of our DB read.
             # On first emit before any wake (initial snapshot), fall back to 0.
@@ -790,6 +806,7 @@ async def _session_workspace_stream(
                         "thread_session_count": current_sig[5],
                         "detect_ms": detect_ms,
                         "latest_event_emitted_at_ms": latest_event_ts_ms,
+                        "server_fanout_at_ms": server_fanout_at_ms,
                         "server_now_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
                         "pubsub_seq": consumed_seq,
                     }
@@ -800,15 +817,17 @@ async def _session_workspace_stream(
             last_heartbeat = now
 
             wait_start = monotonic()
-            woke_seq = await _wait_for_session_change(subscription)
-            if woke_seq:
-                consumed_seq = woke_seq
+            woke_msg = await _wait_for_session_change(subscription)
+            if woke_msg:
+                consumed_seq = woke_msg.seq
+                consumed_payload = woke_msg.payload
+            else:
+                consumed_payload = None
 
 
-async def _wait_for_session_change(subscription) -> int:
-    """Wait for a publish or a short tick. Returns the seq of the message that woke us, or 0 on timeout."""
-    msg = await subscription.next_message(timeout=WORKSPACE_STREAM_CHANGE_WAIT_SECONDS)
-    return msg.seq if msg else 0
+async def _wait_for_session_change(subscription):
+    """Wait for a publish or a short tick. Returns the message that woke us, if any."""
+    return await subscription.next_message(timeout=WORKSPACE_STREAM_CHANGE_WAIT_SECONDS)
 
 
 @timeline_stream_router.get("/sessions/{session_id}/workspace/stream")

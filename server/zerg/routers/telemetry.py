@@ -115,6 +115,12 @@ class RenderBeacon(BaseModel):
     emitted_at_ms: int = Field(..., description="Server-stamped emitted_at for the event, in ms epoch")
     rendered_at_ms: int = Field(..., description="Client wall-clock render time, in ms epoch")
     clock_skew_ms: int = Field(0, description="Client-measured skew vs server (positive: client ahead)")
+    server_fanout_at_ms: int | None = Field(None, description="Server fanout timestamp from the SSE frame, in ms epoch")
+    client_received_at_ms: int | None = Field(
+        None,
+        description="Client wall-clock time when the SSE frame was received",
+    )
+    pubsub_seq: int | None = Field(None, description="Per-session pubsub sequence that woke the client")
     webkit: WebKitRenderDiagnostics | None = None
 
 
@@ -155,6 +161,9 @@ def _persist_render_beacon(db: Session, beacon: RenderBeacon, *, latency_ms: int
         "emitted_at_ms": beacon.emitted_at_ms,
         "rendered_at_ms": beacon.rendered_at_ms,
         "clock_skew_ms": beacon.clock_skew_ms,
+        "server_fanout_at_ms": beacon.server_fanout_at_ms,
+        "client_received_at_ms": beacon.client_received_at_ms,
+        "pubsub_seq": beacon.pubsub_seq,
         "latency_ms": latency_ms,
     }
     if beacon.webkit is not None:
@@ -287,6 +296,9 @@ async def recent_client_render_beacons(
                 "emitted_at_ms": payload.get("emitted_at_ms"),
                 "rendered_at_ms": payload.get("rendered_at_ms"),
                 "clock_skew_ms": payload.get("clock_skew_ms"),
+                "server_fanout_at_ms": payload.get("server_fanout_at_ms"),
+                "client_received_at_ms": payload.get("client_received_at_ms"),
+                "pubsub_seq": payload.get("pubsub_seq"),
                 "webkit": payload.get("webkit"),
                 "observed_at": row.observed_at.isoformat() if row.observed_at else None,
                 "received_at": row.received_at.isoformat() if row.received_at else None,

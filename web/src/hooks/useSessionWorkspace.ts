@@ -37,6 +37,9 @@ interface PendingRenderBeacon {
   sessionId: string;
   latestEventId: number;
   latestEventEmittedAtMs: number | null;
+  serverFanoutAtMs: number | null;
+  clientReceivedAtMs: number | null;
+  pubsubSeq: number | null;
 }
 
 function getProjectionItemKey(item: AgentSessionProjectionItem): string {
@@ -125,6 +128,9 @@ export function useSessionWorkspace(
             sessionId,
             latestEventId: data.latest_event_id,
             latestEventEmittedAtMs: data.latest_event_emitted_at_ms ?? null,
+            serverFanoutAtMs: data.server_fanout_at_ms ?? null,
+            clientReceivedAtMs: Date.now(),
+            pubsubSeq: data.pubsub_seq ?? null,
           };
           setPendingRenderBeaconVersion((version) => version + 1);
         },
@@ -297,6 +303,9 @@ export function useSessionWorkspace(
       latestEventId: pending.latestEventId,
       latestEventEmittedAtMs: pending.latestEventEmittedAtMs,
       managed,
+      serverFanoutAtMs: pending.serverFanoutAtMs,
+      clientReceivedAtMs: pending.clientReceivedAtMs,
+      pubsubSeq: pending.pubsubSeq,
     });
     pendingRenderBeaconRef.current = null;
   }, [pendingRenderBeaconVersion, events, sessionId, currentThreadSession]);

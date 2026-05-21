@@ -686,7 +686,9 @@ export interface SessionWorkspaceStreamChange {
   thread_session_count: number;
   detect_ms?: number;
   latest_event_emitted_at_ms?: number | null;
+  server_fanout_at_ms?: number | null;
   server_now_ms?: number;
+  pubsub_seq?: number;
 }
 
 export interface SessionWorkspaceStreamHandlers {

@@ -85,6 +85,7 @@ class IngestResult(BaseModel):
     session_id: UUID
     events_inserted: int
     events_skipped: int  # Duplicates that were skipped
+    latest_inserted_event_id: Optional[int] = None
     session_created: bool
     commit_count: int = 0
     commit_ms_total: float = 0.0

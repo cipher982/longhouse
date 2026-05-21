@@ -1446,6 +1446,7 @@ class AgentsStore:
         events_skipped = 0
         leaf_uuid_hint: str | None = None
         latest_inserted_timestamp: datetime | None = None
+        latest_inserted_event_id: int | None = None
 
         # Chunk commits every N events to release the SQLite write lock
         # periodically. A single 1000+ event transaction can hold the lock for
@@ -1505,8 +1506,15 @@ class AgentsStore:
                     reduction = None
                 if reduction is not None and reduction.inserted:
                     events_inserted += 1
+                    if reduction.event is not None and isinstance(reduction.event.id, int):
+                        latest_inserted_event_id = reduction.event.id
                     if fts_triggers_dropped:
-                        if reduction.event is not None and isinstance(reduction.event.id, int) and reduction.event.id > 0:
+                        has_inserted_event_id = (
+                            reduction.event is not None
+                            and isinstance(reduction.event.id, int)
+                            and reduction.event.id > 0
+                        )
+                        if has_inserted_event_id:
                             inserted_event_ids.append(reduction.event.id)
                         else:
                             needs_session_wide_fts_backfill = True
@@ -1667,6 +1675,7 @@ class AgentsStore:
             session_id=session_id,
             events_inserted=events_inserted,
             events_skipped=events_skipped,
+            latest_inserted_event_id=latest_inserted_event_id,
             session_created=session_created,
             commit_count=commit_count,
             commit_ms_total=round(commit_ms_total, 3),
