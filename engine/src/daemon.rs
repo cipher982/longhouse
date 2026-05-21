@@ -1987,6 +1987,29 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
     };
 
     if result.job.priority != WorkPriority::Live {
+        let replay_prepare_at_ms = chrono::Utc::now().timestamp_millis();
+        let replay_trace = shipper::ShipTraceContext {
+            work_context: "spool_replay",
+            observation_source: result.job.observation.source,
+            observed_at_ms: result.job.observation.observed_at_ms,
+            latest_observed_at_ms: result.job.observation.latest_observed_at_ms,
+            wake_received_at_ms: result.job.observation.wake_received_at_ms,
+            enqueued_at_ms: result.job.observation.enqueued_at_ms,
+            job_started_at_ms,
+            prepare_started_at_ms: replay_prepare_at_ms,
+            prepare_finished_at_ms: replay_prepare_at_ms,
+            prepare_blocking_queue_wait_ms: None,
+            prepare_open_db_ms: None,
+            prepare_identity_ms: None,
+            prepare_cursor_ms: None,
+            prepare_binding_wait_ms: None,
+            prepare_parse_ms: None,
+            prepare_batch_build_ms: None,
+            session_id_hint: result.job.observation.session_id.clone(),
+            turn_id: result.job.observation.turn_id.clone(),
+            wake_reason: result.job.observation.wake_reason.clone(),
+            file_len_hint: result.job.observation.file_len_hint,
+        };
         match shipper::replay_spool_for_path_with_batch_bytes_and_parse_tracker(
             &conn,
             &task_context.client,
@@ -1997,6 +2020,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
             Some(&task_context.parse_tracker),
             Some(&task_context.ship_stats),
             task_context.flight_recorder.as_ref(),
+            Some(&replay_trace),
         )
         .await
         {
@@ -2515,7 +2539,8 @@ mod tests {
     }
 
     #[test]
-    fn test_codex_bridge_observation_without_completed_turn_does_not_schedule_transcript_shipping() {
+    fn test_codex_bridge_observation_without_completed_turn_does_not_schedule_transcript_shipping()
+    {
         let transcript = tempfile::NamedTempFile::new().unwrap();
         let observation =
             codex_bridge_observation(transcript.path(), None, None, "2026-05-01T00:00:00Z", true);
@@ -2784,10 +2809,7 @@ mod tests {
         assert_eq!(scheduled.2.wake_received_at_ms, Some(124));
         assert_eq!(scheduled.2.session_id.as_deref(), Some("session-123"));
         assert_eq!(scheduled.2.turn_id.as_deref(), Some("turn-123"));
-        assert_eq!(
-            scheduled.2.wake_reason.as_deref(),
-            Some("turn_completed")
-        );
+        assert_eq!(scheduled.2.wake_reason.as_deref(), Some("turn_completed"));
         assert_eq!(scheduled.2.file_len_hint, Some(456));
     }
 

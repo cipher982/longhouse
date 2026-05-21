@@ -65,6 +65,11 @@ _LABEL_PRIORITIES: dict[str, int] = {
     # but it should not sit behind high-volume presence retries.
     "runtime-observations": 5,
     "ingest": 10,
+    # Daemon archive repair is intentionally behind health/control signals. It
+    # can be regenerated from local files and should not make the machine look
+    # offline while an old backlog drains.
+    "ingest-scan": 45,
+    "ingest-replay": 45,
     "runner-online": 10,
     "session-turn-active": 15,
     "session-turn-terminal": 15,

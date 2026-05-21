@@ -42,7 +42,8 @@ def _make_client(tmp_path):
 
 def test_ship_trace_live_transcript_uses_live_ingest_label():
     assert _write_serializer_label_for_ship_trace({"work_context": "live_transcript"}) == "ingest-live"
-    assert _write_serializer_label_for_ship_trace({"work_context": "reconciliation_scan"}) == "ingest"
+    assert _write_serializer_label_for_ship_trace({"work_context": "reconciliation_scan"}) == "ingest-scan"
+    assert _write_serializer_label_for_ship_trace({"work_context": "spool_replay"}) == "ingest-replay"
     assert _write_serializer_label_for_ship_trace(None) == "ingest"
 
 
