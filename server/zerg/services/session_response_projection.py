@@ -12,6 +12,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
+from zerg.services.agents.kernel_capabilities import project_capabilities_bulk
 from zerg.services.agents_store import AgentsStore
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.provisional_events import load_active_provisional_preview_map
@@ -78,6 +79,7 @@ def build_session_response_list(
     first_user_map = store.get_first_message_map(session_ids, role="user", max_len=80)
     thread_cache: dict[str, tuple[str, int]] = store.batch_thread_meta(sessions)
     binding_overlay_map = load_binding_overlay(db, session_ids, now=now)
+    kernel_capabilities_map = project_capabilities_bulk(db, session_ids=session_ids)
     match_map = match_map or {}
     semantic_snippet_map = semantic_snippet_map or {}
     sem_score_map = sem_score_map or {}
@@ -115,6 +117,7 @@ def build_session_response_list(
                 transcript_preview=transcript_preview_map.get(str(session.id)),
                 owner_id=owner_id,
                 summary_status=summary_status,
+                kernel_capabilities=kernel_capabilities_map.get(session.id),
             )
         )
 

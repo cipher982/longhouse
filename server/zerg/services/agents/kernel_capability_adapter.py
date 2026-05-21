@@ -77,6 +77,8 @@ def _home_label_from_kernel(kernel: KernelSessionCapabilities) -> str | None:
 def build_session_capabilities_from_kernel(
     db: Session,
     session: AgentSession | None,
+    *,
+    kernel: KernelSessionCapabilities | None = None,
 ) -> SessionCapabilityFlags:
     """Build the legacy capability dataclass from the kernel projection.
 
@@ -116,7 +118,8 @@ def build_session_capabilities_from_kernel(
             home_label=None,
         )
 
-    kernel = project_session_capabilities(db, session_id=session.id)
+    if kernel is None:
+        kernel = project_session_capabilities(db, session_id=session.id)
 
     live = bool(kernel.live_control_available)
     reattach = bool(kernel.host_reattach_available) or live
