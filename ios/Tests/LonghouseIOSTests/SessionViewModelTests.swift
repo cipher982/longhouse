@@ -63,6 +63,26 @@ struct SessionViewModelTests {
     }
 
     @Test
+    func refreshTailPreservesLoadedOlderPage() async throws {
+        let tail = try makeWorkspace(eventId: 51, content: "Recent tail", total: 100, pageOffset: 50)
+        let older = try makeWorkspace(eventId: 1, content: "Older page", total: 100, pageOffset: 0)
+        let refreshedTail = try makeWorkspace(eventId: 52, content: "Fresh tail", total: 101, pageOffset: 51)
+        let api = FakeSessionWorkspaceClient(workspaces: [tail, older, refreshedTail])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        await model.loadOlder(sessionId: "session-1", appState: appState)
+        await model.reload(sessionId: "session-1", appState: appState)
+
+        #expect(model.items.map(\.id) == ["user:1", "user:51", "user:52"])
+        let refreshRequest = await api.tailRequest(at: 2)
+        #expect(refreshRequest?.offset == 0)
+        #expect(refreshRequest?.snapshotEventId == nil)
+    }
+
+    @Test
     func sendReturnsBeforeWorkspaceRefreshCompletes() async throws {
         let before = try makeWorkspace(eventId: 10, content: "Before send")
         let after = try makeWorkspace(eventId: 11, content: "After send")

@@ -932,18 +932,43 @@ final class SessionViewModel: ObservableObject {
             guard activeSessionId == sessionId else { return }
             self.detail = tail.session
             let events = tail.events
-            self.lastWorkspaceEvents = events
-            self.loadedProjectionItemCount = max(0, tail.projection.total - tail.projection.pageOffset)
+            let mergedEvents = mergeRefreshedTail(events)
+            self.lastWorkspaceEvents = mergedEvents
+            self.loadedProjectionItemCount = min(
+                tail.projection.total,
+                max(0, max(tail.projection.total - tail.projection.pageOffset, mergedEvents.count))
+            )
             self.totalProjectionItemCount = tail.projection.total
             self.tailSnapshotEventId = tail.snapshotEventId
             self.prefetchedOlderTail = nil
             self.prefetchedOlderOffset = nil
-            self.items = TimelineBuilder.build(events: events)
-            reconcileSubmittedInputs(with: events)
+            self.items = TimelineBuilder.build(events: mergedEvents)
+            reconcileSubmittedInputs(with: mergedEvents)
             scheduleOlderPrefetch(api: api, sessionId: sessionId)
         } catch {
             if !allowFailure { throw error }
         }
+    }
+
+    private func mergeRefreshedTail(_ freshTailEvents: [SessionEvent]) -> [SessionEvent] {
+        let currentTailWindowCount = min(initialTailLimit, totalProjectionItemCount)
+        guard loadedProjectionItemCount > currentTailWindowCount else {
+            return freshTailEvents
+        }
+        guard let firstFreshTailEvent = freshTailEvents.first else {
+            return lastWorkspaceEvents
+        }
+
+        let freshTailEventIds = Set(freshTailEvents.map(\.id))
+        let olderEvents: [SessionEvent]
+        if let firstFreshIndex = lastWorkspaceEvents.firstIndex(where: { $0.id == firstFreshTailEvent.id }) {
+            olderEvents = lastWorkspaceEvents[..<firstFreshIndex].filter { !freshTailEventIds.contains($0.id) }
+        } else {
+            olderEvents = lastWorkspaceEvents.filter { event in
+                event.id < firstFreshTailEvent.id && !freshTailEventIds.contains(event.id)
+            }
+        }
+        return olderEvents + freshTailEvents
     }
 
     private func scheduleOlderPrefetch(api: SessionWorkspaceClient, sessionId: String) {
