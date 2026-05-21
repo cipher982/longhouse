@@ -62,7 +62,7 @@ pub fn cmd_parse(
             "claude",
             Some(&result.source_lines),
             None,
-            CompressionAlgo::Gzip,
+            CompressionAlgo::Zstd,
         )?;
         let compress_elapsed = compress_start.elapsed();
 
@@ -78,7 +78,7 @@ pub fn cmd_parse(
         let uncompressed = serde_json::to_vec(&payload)?;
 
         eprintln!(
-            "Compressed: {:.2} MB JSON → {:.2} MB gzip ({:.1}x ratio) in {:.3}s",
+            "Compressed: {:.2} MB JSON → {:.2} MB zstd ({:.1}x ratio) in {:.3}s",
             uncompressed.len() as f64 / 1_048_576.0,
             compressed.len() as f64 / 1_048_576.0,
             uncompressed.len() as f64 / compressed.len() as f64,
