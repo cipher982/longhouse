@@ -179,7 +179,7 @@ pub async fn ship_and_record(
     let result = client.ship(item.compressed).await;
 
     match result {
-        ShipResult::Ok => {
+        ShipResult::Ok { .. } => {
             // Emit recovery message if we were in an error state
             if let Some(t) = tracker {
                 if let Some(n) = t.record_success() {
@@ -1267,7 +1267,7 @@ async fn attempt_ship(
     }
     let error_kind = transient_error_kind(&result);
     let error_message = match &result {
-        ShipResult::Ok => None,
+        ShipResult::Ok { .. } => None,
         _ => Some(transient_error_message(&result)),
     };
     if let Some(kind) = error_kind {
@@ -1288,7 +1288,7 @@ async fn attempt_ship(
     }
 
     match result {
-        ShipResult::Ok => {
+        ShipResult::Ok { server_timing } => {
             record_flight_attempt(
                 flight_recorder,
                 &flight_record,
@@ -1307,6 +1307,15 @@ async fn attempt_ship(
                         n
                     );
                 }
+            }
+            if server_timing.is_observed() {
+                tracing::debug!(
+                    target: "longhouse_engine::server_timing",
+                    queue_wait_ms = ?server_timing.queue_wait_ms,
+                    exec_ms = ?server_timing.exec_ms,
+                    label = ?server_timing.label,
+                    "server-side ingest timing"
+                );
             }
             tracing::debug!(
                 "Shipped {} ({} events, {} bytes)",
@@ -1598,7 +1607,7 @@ fn remove_json_field(value: &mut Value, key: &str) {
 
 fn classify_ship_attempt_result(result: &ShipResult) -> (ShipAttemptOutcome, Option<u16>) {
     match result {
-        ShipResult::Ok => (ShipAttemptOutcome::Ok, None),
+        ShipResult::Ok { .. } => (ShipAttemptOutcome::Ok, None),
         ShipResult::RateLimited => (ShipAttemptOutcome::RateLimited, Some(429)),
         ShipResult::ServerError(code, _) => (ShipAttemptOutcome::ServerError, Some(*code)),
         ShipResult::PayloadRejected(code, _) => (ShipAttemptOutcome::PayloadRejected, Some(*code)),
@@ -1612,7 +1621,7 @@ fn classify_ship_attempt_result(result: &ShipResult) -> (ShipAttemptOutcome, Opt
 
 fn transient_error_kind(result: &ShipResult) -> Option<&'static str> {
     match result {
-        ShipResult::Ok => None,
+        ShipResult::Ok { .. } => None,
         ShipResult::RateLimited => Some("rate_limited"),
         ShipResult::ServerError(_, _) => Some("server_response"),
         ShipResult::PayloadRejected(_, _) => Some("payload_rejected"),
@@ -1625,7 +1634,7 @@ fn transient_error_kind(result: &ShipResult) -> Option<&'static str> {
 
 fn transient_error_message(result: &ShipResult) -> String {
     match result {
-        ShipResult::Ok => "ok".to_string(),
+        ShipResult::Ok { .. } => "ok".to_string(),
         ShipResult::RateLimited => "rate limited".to_string(),
         ShipResult::ServerError(code, body) => format!("{}:{}", code, truncate_http_body(body)),
         ShipResult::PayloadRejected(code, body) => format!("{}:{}", code, truncate_http_body(body)),
