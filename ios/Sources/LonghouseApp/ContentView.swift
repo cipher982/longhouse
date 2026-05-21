@@ -6,7 +6,9 @@ struct ContentView: View {
     var body: some View {
         Group {
 #if DEBUG
-            if let fixtureName = UITestHooks.chatFixtureName {
+            if UITestHooks.shouldUseTimelineOpenFixture {
+                TimelineOpenUITestFixtureView()
+            } else if let fixtureName = UITestHooks.chatFixtureName {
                 ChatUITestFixtureView(fixtureName: fixtureName)
             } else {
                 normalContent
