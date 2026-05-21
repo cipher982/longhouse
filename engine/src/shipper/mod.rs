@@ -1176,7 +1176,7 @@ pub(crate) fn prepare_file_batches_with_source_line_mode_parse_tracker_and_trace
 #[tracing::instrument(
     level = "info",
     name = "engine.ship.attempt",
-    skip(item, client, tracker, ship_stats, flight_recorder),
+    skip(item, client, tracker, ship_stats, flight_recorder, limiter),
     fields(
         otel.kind = "client",
         http.request.method = "POST",
@@ -1196,6 +1196,7 @@ async fn attempt_ship(
     ship_stats: Option<&RecentShipStatsTracker>,
     ship_trace: Option<&ShipTraceContext>,
     flight_recorder: Option<&FlightRecorder>,
+    limiter: Option<&crate::scheduler::AdaptiveLimiter>,
 ) -> AttemptedShip {
     let http_send_started_at_ms = chrono::Utc::now().timestamp_millis();
     let request_timeout = request_timeout_for_trace(ship_trace);
@@ -1321,6 +1322,12 @@ async fn attempt_ship(
                     label = ?server_timing.label,
                     "server-side ingest timing"
                 );
+            }
+            if let Some(limiter) = limiter {
+                match server_timing.queue_wait_ms {
+                    Some(qw) => limiter.observe(qw),
+                    None => limiter.note_missing_signal(),
+                }
             }
             tracing::debug!(
                 "Shipped {} ({} events, {} bytes)",
@@ -1658,7 +1665,10 @@ pub async fn ship_prepared_file(
     tracker: Option<&ConsecutiveErrorTracker>,
     ship_stats: Option<&RecentShipStatsTracker>,
 ) -> Result<ShipPreparedOutcome> {
-    ship_prepared_file_with_trace(prepared, client, conn, tracker, ship_stats, None, None).await
+    ship_prepared_file_with_trace(
+        prepared, client, conn, tracker, ship_stats, None, None, None,
+    )
+    .await
 }
 
 pub async fn ship_prepared_file_with_trace(
@@ -1669,6 +1679,7 @@ pub async fn ship_prepared_file_with_trace(
     ship_stats: Option<&RecentShipStatsTracker>,
     ship_trace: Option<&ShipTraceContext>,
     flight_recorder: Option<&FlightRecorder>,
+    limiter: Option<&crate::scheduler::AdaptiveLimiter>,
 ) -> Result<ShipPreparedOutcome> {
     let file_state = FileState::new(conn);
     let live_file_state = LiveFileState::new(conn);
@@ -1744,6 +1755,7 @@ pub async fn ship_prepared_file_with_trace(
                     ship_stats,
                     ship_trace,
                     flight_recorder,
+                    limiter,
                 )
                 .await
                 {
@@ -1994,6 +2006,7 @@ pub(crate) async fn replay_spool_batch_with_batch_bytes_and_parse_tracker(
         ship_stats,
         None,
         None,
+        None,
     )
     .await?;
 
@@ -2006,6 +2019,7 @@ pub(crate) async fn replay_spool_batch_with_batch_bytes_and_parse_tracker(
     Ok((outcome.resolved, outcome.failed))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn replay_spool_for_path_with_batch_bytes_and_parse_tracker(
     conn: &Connection,
     client: &ShipperClient,
@@ -2017,6 +2031,7 @@ pub(crate) async fn replay_spool_for_path_with_batch_bytes_and_parse_tracker(
     ship_stats: Option<&RecentShipStatsTracker>,
     flight_recorder: Option<&FlightRecorder>,
     ship_trace: Option<&ShipTraceContext>,
+    limiter: Option<&crate::scheduler::AdaptiveLimiter>,
 ) -> Result<ReplaySpoolOutcome> {
     let spool = Spool::new(conn);
     let pending = spool.pending_entries_for_path(&file_path.to_string_lossy(), limit)?;
@@ -2030,6 +2045,7 @@ pub(crate) async fn replay_spool_for_path_with_batch_bytes_and_parse_tracker(
         ship_stats,
         flight_recorder,
         ship_trace,
+        limiter,
     )
     .await
 }
@@ -2054,6 +2070,7 @@ pub(crate) async fn replay_spool_for_path_now_with_batch_bytes_and_parse_tracker
         max_batch_bytes,
         parse_tracker,
         ship_stats,
+        None,
         None,
         None,
     )
@@ -2092,9 +2109,10 @@ async fn prepare_spool_entry_for_replay(
 #[tracing::instrument(
     level = "info",
     name = "engine.spool.replay",
-    skip(conn, client, pending, parse_tracker, ship_stats, flight_recorder, ship_trace),
+    skip(conn, client, pending, parse_tracker, ship_stats, flight_recorder, ship_trace, limiter),
     fields(longhouse.spool.pending_entries = pending.len() as u64)
 )]
+#[allow(clippy::too_many_arguments)]
 async fn replay_spool_entries(
     conn: &Connection,
     client: &ShipperClient,
@@ -2105,6 +2123,7 @@ async fn replay_spool_entries(
     ship_stats: Option<&RecentShipStatsTracker>,
     flight_recorder: Option<&FlightRecorder>,
     ship_trace: Option<&ShipTraceContext>,
+    limiter: Option<&crate::scheduler::AdaptiveLimiter>,
 ) -> Result<ReplaySpoolOutcome> {
     let spool = Spool::new(conn);
     let file_state = FileState::new(conn);
@@ -2208,8 +2227,16 @@ async fn replay_spool_entries(
                     }
                 }
                 PreparedAction::Ship(item) => {
-                    match attempt_ship(item, client, None, ship_stats, ship_trace, flight_recorder)
-                        .await
+                    match attempt_ship(
+                        item,
+                        client,
+                        None,
+                        ship_stats,
+                        ship_trace,
+                        flight_recorder,
+                        limiter,
+                    )
+                    .await
                     {
                         AttemptedShip::Shipped(item) => {
                             outcome.events_shipped += item.event_count;
@@ -4128,6 +4155,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -4199,6 +4227,7 @@ mod tests {
             Some(&ship_stats),
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -4256,6 +4285,7 @@ mod tests {
             10_000,
             None,
             Some(&ship_stats),
+            None,
             None,
             None,
         )
@@ -4334,6 +4364,7 @@ mod tests {
             &path,
             10,
             10_000,
+            None,
             None,
             None,
             None,

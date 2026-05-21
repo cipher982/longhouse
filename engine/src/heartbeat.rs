@@ -85,6 +85,12 @@ pub struct HeartbeatPayload {
     /// whose provider process is confirmed gone.
     #[serde(default)]
     pub unmanaged_session_bindings: Vec<UnmanagedSessionBinding>,
+    /// Phase-2 adaptive backlog limiter snapshot. Drives AIMD off the
+    /// `X-Ingest-Queue-Wait-Ms` header on each successful ship; absent on
+    /// processes that haven't built a scheduler yet (e.g. legacy heartbeat
+    /// callers).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptive_backlog_limiter: Option<crate::scheduler::LimiterSnapshot>,
 }
 
 /// One machine-observed binding of an unmanaged provider CLI process to
@@ -209,6 +215,7 @@ impl HeartbeatPayload {
             is_offline: stats.is_offline,
             managed_sessions: Vec::new(),
             unmanaged_session_bindings: Vec::new(),
+            adaptive_backlog_limiter: None,
         }
     }
 }
@@ -645,6 +652,7 @@ mod tests {
             is_offline: false,
             managed_sessions: Vec::new(),
             unmanaged_session_bindings: Vec::new(),
+            adaptive_backlog_limiter: None,
         };
 
         // Must serialize correctly
@@ -716,6 +724,7 @@ mod tests {
                 lease_ttl_ms: 900_000,
             }],
             unmanaged_session_bindings: Vec::new(),
+            adaptive_backlog_limiter: None,
         };
 
         let json = serde_json::to_string(&payload).unwrap();
@@ -944,6 +953,7 @@ mod tests {
             is_offline: true,
             managed_sessions: Vec::new(),
             unmanaged_session_bindings: Vec::new(),
+            adaptive_backlog_limiter: None,
         };
 
         let json = serde_json::to_string(&payload).unwrap();
@@ -996,6 +1006,7 @@ mod tests {
             is_offline: false,
             managed_sessions: Vec::new(),
             unmanaged_session_bindings: Vec::new(),
+            adaptive_backlog_limiter: None,
         };
 
         spool
@@ -1117,6 +1128,7 @@ mod tests {
             is_offline: false,
             managed_sessions: Vec::new(),
             unmanaged_session_bindings: Vec::new(),
+            adaptive_backlog_limiter: None,
         };
         let stats = HeartbeatStats {
             spool: &spool,
@@ -1193,6 +1205,7 @@ mod tests {
             is_offline: false,
             managed_sessions: Vec::new(),
             unmanaged_session_bindings: Vec::new(),
+            adaptive_backlog_limiter: None,
         };
         let stats = HeartbeatStats {
             spool: &spool,
