@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import re
+import time
 from collections import defaultdict
 from datetime import datetime
 from datetime import timezone
@@ -1332,13 +1333,25 @@ class AgentsStore:
             return fallback_head_branch_id
         return target_branch_id_int
 
-    def ingest_session(self, data: SessionIngest) -> IngestResult:
+    def ingest_session(
+        self,
+        data: SessionIngest,
+        *,
+        chunk_size: int | None = None,
+    ) -> IngestResult:
         """Ingest a session with events, handling deduplication.
 
         Creates or updates the session and inserts non-duplicate events.
 
+        Args:
+            data: Parsed session payload.
+            chunk_size: Override the per-chunk commit interval. ``None`` uses
+                the default (200). Larger values reduce fsync overhead for
+                replay/scan paths; smaller values keep live ingest responsive.
+
         Returns:
-            IngestResult with counts of inserted/skipped events.
+            IngestResult with counts of inserted/skipped events plus commit
+            telemetry (``commit_count`` / ``commit_ms_total``).
         """
         session_id = data.id if data.id else uuid4()
         incoming_kind = _infer_continuation_kind_from_ingest(data)
@@ -1437,8 +1450,17 @@ class AgentsStore:
         # Chunk commits every N events to release the SQLite write lock
         # periodically. A single 1000+ event transaction can hold the lock for
         # seconds, causing health-check timeouts and cascading failures.
-        _INGEST_CHUNK = 200
+        _INGEST_CHUNK = max(1, chunk_size) if chunk_size is not None else 200
         _FTS_TRIGGER_DISABLE_THRESHOLD = 100
+        commit_count = 0
+        commit_ms_total = 0.0
+
+        def _commit_with_telemetry() -> None:
+            nonlocal commit_count, commit_ms_total
+            t0 = time.monotonic()
+            self.db.commit()
+            commit_ms_total += (time.monotonic() - t0) * 1000
+            commit_count += 1
         # Disabling triggers only pays off for genuinely large batches.
         # Small transcript appends should keep trigger maintenance inline.
         fts_triggers_dropped = len(data.events) >= _FTS_TRIGGER_DISABLE_THRESHOLD and self._disable_fts_triggers()
@@ -1500,7 +1522,7 @@ class AgentsStore:
                 # Release write lock between chunks so health checks and other
                 # readers aren't starved during large ingests.
                 if _since_commit >= _INGEST_CHUNK:
-                    self.db.commit()
+                    _commit_with_telemetry()
                     _since_commit = 0
         except Exception:
             if fts_triggers_dropped:
@@ -1563,7 +1585,7 @@ class AgentsStore:
                 _since_commit += 1
 
             if _since_commit >= _INGEST_CHUNK:
-                self.db.commit()
+                _commit_with_telemetry()
                 _since_commit = 0
 
         head_branch_for_counts = self._align_head_branch_from_leaf_uuid(session_id, ingest_branch.id, leaf_uuid_hint)
@@ -1621,7 +1643,7 @@ class AgentsStore:
             )
         ingest_runtime_events(self.db, runtime_events)
 
-        self.db.commit()
+        _commit_with_telemetry()
 
         if events_inserted > 0 and transcript_changed:
             from zerg.services.session_turns import materialize_managed_transcript_turns
@@ -1629,7 +1651,7 @@ class AgentsStore:
 
             maybe_mark_session_turn_durable(self.db, session_id=session_id)
             materialize_managed_transcript_turns(self.db, session_id=session_id)
-            self.db.commit()
+            _commit_with_telemetry()
 
         logger.info(
             "Ingested session %s branch=%s rewind=%s events inserted=%s skipped=%s source_lines_inserted=%s",
@@ -1646,6 +1668,8 @@ class AgentsStore:
             events_inserted=events_inserted,
             events_skipped=events_skipped,
             session_created=session_created,
+            commit_count=commit_count,
+            commit_ms_total=round(commit_ms_total, 3),
         )
 
     def get_session(self, session_id: UUID) -> Optional[AgentSession]:
