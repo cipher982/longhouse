@@ -134,6 +134,116 @@ def test_backfill_handles_new_sessions_after_first_run(tmp_path):
             assert s.primary_thread_id is not None
 
 
+def test_backfill_reuses_preexisting_primary_thread(tmp_path):
+    """If a primary thread already exists for a session, the backfill must
+    point sessions.primary_thread_id at it instead of creating a second one.
+    """
+    engine = _engine(tmp_path)
+    SessionLocal = sessionmaker(bind=engine)
+    with SessionLocal() as db:
+        s = _make_session(db, provider_session_id="codex-1")
+        existing = SessionThread(
+            session_id=s.id, provider="codex", branch_kind="root", is_primary=1
+        )
+        db.add(existing)
+        db.flush()
+        existing_id = existing.id
+        db.commit()
+
+        report = backfill_root_threads(db)
+        db.commit()
+
+        assert report["threads_created"] == 0
+        assert report["primary_pointers_set"] == 1
+        assert db.query(SessionThread).count() == 1
+        db.refresh(s)
+        assert s.primary_thread_id == existing_id
+
+
+def test_backfill_leaves_existing_primary_pointer_untouched(tmp_path):
+    """When sessions.primary_thread_id already points at the right thread,
+    the backfill should be a no-op for that session.
+    """
+    engine = _engine(tmp_path)
+    SessionLocal = sessionmaker(bind=engine)
+    with SessionLocal() as db:
+        s = _make_session(db, provider_session_id="codex-1")
+        thread = SessionThread(
+            session_id=s.id, provider="codex", branch_kind="root", is_primary=1
+        )
+        db.add(thread)
+        db.flush()
+        s.primary_thread_id = thread.id
+        db.commit()
+
+        report = backfill_root_threads(db)
+        db.commit()
+
+        assert report["threads_created"] == 0
+        assert report["primary_pointers_set"] == 0
+
+
+def test_backfill_same_provider_session_id_on_different_sessions(tmp_path):
+    """Two sessions with the same provider_session_id must each get their own
+    alias row — aliases are evidence, not identity, and the per-thread
+    uniqueness constraint scopes to thread.
+    """
+    engine = _engine(tmp_path)
+    SessionLocal = sessionmaker(bind=engine)
+    with SessionLocal() as db:
+        _make_session(db, provider_session_id="shared-codex")
+        _make_session(db, provider_session_id="shared-codex")
+        db.commit()
+
+        backfill_root_threads(db)
+        db.commit()
+
+        assert db.query(SessionThreadAlias).count() == 2
+
+
+def test_backfill_order_independent_final_state(tmp_path):
+    """Final state must be identical whether sessions are created all-up-front
+    or interleaved with backfill runs.
+    """
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    engine_a = _engine(tmp_path / "a")
+    engine_b = _engine(tmp_path / "b")
+    Sa = sessionmaker(bind=engine_a)
+    Sb = sessionmaker(bind=engine_b)
+
+    # Path A: all sessions created, then one backfill.
+    with Sa() as db:
+        _make_session(db, provider_session_id="codex-1")
+        _make_session(db, provider="claude", provider_session_id="claude-1")
+        _make_session(db, provider="gemini")
+        db.commit()
+        backfill_root_threads(db)
+        db.commit()
+        a_threads = db.query(SessionThread).count()
+        a_aliases = db.query(SessionThreadAlias).count()
+
+    # Path B: interleaved create / backfill / create / backfill.
+    with Sb() as db:
+        _make_session(db, provider_session_id="codex-1")
+        db.commit()
+        backfill_root_threads(db)
+        db.commit()
+        _make_session(db, provider="claude", provider_session_id="claude-1")
+        db.commit()
+        backfill_root_threads(db)
+        db.commit()
+        _make_session(db, provider="gemini")
+        db.commit()
+        backfill_root_threads(db)
+        db.commit()
+        b_threads = db.query(SessionThread).count()
+        b_aliases = db.query(SessionThreadAlias).count()
+
+    assert a_threads == b_threads == 3
+    assert a_aliases == b_aliases == 2
+
+
 def test_backfill_does_not_duplicate_aliases(tmp_path):
     """Re-running over a session with the same provider_session_id must not
     create a second alias row.

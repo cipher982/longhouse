@@ -198,3 +198,148 @@ def test_launch_attempt_idempotency_index(tmp_path):
     idx = by_name.get("ix_launch_attempts_session_client_request")
     assert idx is not None, "idempotency index missing"
     assert bool(idx.get("unique"))
+
+    # Verify the partial predicate actually landed in SQLite. SQLAlchemy's
+    # inspector exposes it via dialect_options on SQLite, but the canonical
+    # check is the persisted index SQL.
+    with engine.connect() as conn:
+        rows = conn.exec_driver_sql(
+            "SELECT sql FROM sqlite_master WHERE type='index' "
+            "AND name='ix_launch_attempts_session_client_request'"
+        ).fetchall()
+    assert rows, "idempotency index not persisted"
+    sql = (rows[0][0] or "").lower()
+    assert "where" in sql and "client_request_id is not null" in sql, sql
+
+
+def test_one_primary_thread_per_session_enforced(tmp_path):
+    """Two `is_primary=1` rows for the same session must be impossible.
+
+    The unique partial index protects backfill / Phase 2 from silently
+    creating a second primary thread on a race or bug.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    engine = _engine(tmp_path)
+    SessionLocal = sessionmaker(bind=engine)
+    with SessionLocal() as db:
+        s = AgentSession(
+            provider="codex",
+            environment="test",
+            project="zerg",
+            device_id="dev",
+            started_at=datetime(2026, 5, 21, tzinfo=timezone.utc),
+        )
+        db.add(s)
+        db.flush()
+        db.add(SessionThread(session_id=s.id, provider="codex", branch_kind="root", is_primary=1))
+        db.flush()
+
+        # Second primary on same session — must raise.
+        db.add(SessionThread(session_id=s.id, provider="codex", branch_kind="root", is_primary=1))
+        try:
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+        else:
+            raise AssertionError("expected IntegrityError on second primary thread")
+
+    # Non-primary children are fine: any number of subagent threads may exist.
+    with SessionLocal() as db:
+        s = AgentSession(
+            provider="codex",
+            environment="test",
+            project="zerg",
+            device_id="dev",
+            started_at=datetime(2026, 5, 21, tzinfo=timezone.utc),
+        )
+        db.add(s)
+        db.flush()
+        db.add(SessionThread(session_id=s.id, provider="codex", branch_kind="root", is_primary=1))
+        db.add(SessionThread(session_id=s.id, provider="codex", branch_kind="subagent", is_primary=0))
+        db.add(SessionThread(session_id=s.id, provider="codex", branch_kind="subagent", is_primary=0))
+        db.flush()
+
+
+def test_thread_alias_unique_per_thread_enforced(tmp_path):
+    """Same alias tuple on the same thread must not duplicate.
+
+    Globally the same alias may appear on multiple threads (e.g. copied
+    transcripts pre-divergence) — the constraint scopes to thread.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    engine = _engine(tmp_path)
+    SessionLocal = sessionmaker(bind=engine)
+    with SessionLocal() as db:
+        s = AgentSession(
+            provider="codex",
+            environment="test",
+            project="zerg",
+            device_id="dev",
+            started_at=datetime(2026, 5, 21, tzinfo=timezone.utc),
+        )
+        db.add(s)
+        db.flush()
+        t1 = SessionThread(session_id=s.id, provider="codex", branch_kind="root", is_primary=1)
+        db.add(t1)
+        db.flush()
+
+        db.add(
+            SessionThreadAlias(
+                thread_id=t1.id,
+                provider="codex",
+                alias_kind="provider_session_id",
+                alias_value="codex-1",
+            )
+        )
+        db.flush()
+
+        db.add(
+            SessionThreadAlias(
+                thread_id=t1.id,
+                provider="codex",
+                alias_kind="provider_session_id",
+                alias_value="codex-1",
+            )
+        )
+        try:
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+        else:
+            raise AssertionError("expected IntegrityError on duplicate alias")
+
+    # Same alias on a *different* thread is allowed (evidence, not identity).
+    with SessionLocal() as db:
+        s = AgentSession(
+            provider="codex",
+            environment="test",
+            project="zerg",
+            device_id="dev",
+            started_at=datetime(2026, 5, 21, tzinfo=timezone.utc),
+        )
+        db.add(s)
+        db.flush()
+        t1 = SessionThread(session_id=s.id, provider="codex", branch_kind="root", is_primary=1)
+        t2 = SessionThread(session_id=s.id, provider="codex", branch_kind="subagent", is_primary=0)
+        db.add(t1)
+        db.add(t2)
+        db.flush()
+        db.add(
+            SessionThreadAlias(
+                thread_id=t1.id,
+                provider="codex",
+                alias_kind="provider_session_id",
+                alias_value="shared-codex",
+            )
+        )
+        db.add(
+            SessionThreadAlias(
+                thread_id=t2.id,
+                provider="codex",
+                alias_kind="provider_session_id",
+                alias_value="shared-codex",
+            )
+        )
+        db.flush()
