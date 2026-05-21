@@ -115,12 +115,15 @@ def _label_for(
 ) -> tuple[str, bool, bool, bool, bool, Optional[str]]:
     """Compute (control_label, live, reattach, observe_only, search_only, staleness_reason).
 
-    A live process is not proof Longhouse can steer it. Live control
-    requires (1) the latest run is still open, AND (2) the best connection
-    is attached/degraded with a steerable acquisition kind, AND (3) the
-    connection carries the relevant capability bits. The acquisition_kind
-    gate is what stops a stale ``can_send_input=1`` on a ``log_tail``
-    observe_only row from projecting as live.
+    Bucket selection per spec (docs/specs/session-identity-kernel.md
+    "Live, reattach, observe-only — bucket gates"): the bucket is decided
+    by ``state`` + ``acquisition_kind`` only. The control capability bits
+    surface separately on ``can_send_input`` / ``can_interrupt`` etc — a
+    spawned_control attached connection with all bits cleared is still
+    "live", just with no actionable affordances.
+
+    The ``acquisition_kind`` gate is what stops a stale ``can_send_input=1``
+    on a ``log_tail`` observe_only row from projecting as live.
     """
 
     if not has_thread:
@@ -141,13 +144,12 @@ def _label_for(
 
     acquisition = (best.acquisition_kind or "").strip()
     is_steerable_kind = acquisition in ("spawned_control", "adopted_control")
-    can_steer = is_steerable_kind and bool(best.can_send_input or best.can_interrupt or best.can_terminate)
     can_tail = bool(best.can_tail_output)
 
-    if state in ("attached", "degraded") and can_steer:
+    if is_steerable_kind and state in ("attached", "degraded"):
         return ("live", True, False, False, False, None)
 
-    if can_steer and state in ("detached", "released"):
+    if is_steerable_kind and state in ("detached", "released"):
         # Process owner is gone but the control plane could be reattached.
         return ("reattach", False, True, False, False, "connection_released")
 
