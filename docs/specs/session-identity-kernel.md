@@ -134,13 +134,17 @@ session_threads(
   id,
   session_id,
   provider,
-  parent_thread_id,         -- null for root; set for subagents/branches
+  parent_thread_id,         -- null for root; set for subagents/branches; self-FK
   parent_event_id,          -- nullable; replaces AgentSession.branched_from_event_id
   branch_kind,              -- root | subagent | continuation
-  is_primary,               -- denormalized; matches sessions.primary_thread_id
+  is_primary,               -- denormalized; matches sessions.primary_thread_id; defaults 0
   created_at,
   updated_at
 )
+-- Unique partial: one primary thread per session.
+--   ux_threads_one_primary_per_session ON (session_id) WHERE is_primary = 1
+-- ``is_primary`` defaults to 0 so subagent/continuation threads created without
+-- an explicit override never silently become a second primary.
 
 session_thread_aliases(
   id,
@@ -151,6 +155,12 @@ session_thread_aliases(
   first_seen_at,
   last_seen_at
 )
+-- Unique within a thread: ux_thread_aliases_unique_per_thread
+--   ON (thread_id, provider, alias_kind, alias_value)
+-- Lookup index (non-unique): ix_thread_aliases_lookup
+--   ON (provider, alias_kind, alias_value)
+-- Aliases are evidence, not identity. The same alias may legitimately
+-- appear on multiple threads (copied transcripts pre-divergence).
 
 session_runs(
   id,
@@ -446,10 +456,13 @@ capability contract change.
 
 ## Open questions
 
-1. Does `thread_aliases.alias_value` need a uniqueness constraint within
+1. ~~Does `thread_aliases.alias_value` need a uniqueness constraint within
    `(provider, alias_kind)`, or are duplicate aliases legitimate (e.g. copied
-   transcripts pre-divergence)? Bias: not unique; aliases are evidence, not
-   identity.
+   transcripts pre-divergence)?~~ **Resolved (Phase 1, Codex review):** scoped
+   to thread. `(thread_id, provider, alias_kind, alias_value)` is unique;
+   global `(provider, alias_kind, alias_value)` is not. The lookup index on
+   `(provider, alias_kind, alias_value)` is non-unique by design. Aliases
+   remain evidence, not identity.
 2. Where does `AgentSessionBranch` (rewind branches) ultimately live? Out of
    scope here, but its relationship to `threads.branch_kind` should be
    decided before any future revision/branch work starts.

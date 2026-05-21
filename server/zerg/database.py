@@ -1404,6 +1404,41 @@ def _migrate_agents_columns(engine: Engine) -> None:
     except Exception:
         logger.debug("runners table migration skipped (table may not exist yet)", exc_info=True)
 
+    # Session identity kernel: indexes on the new nullable thread_id/run_id
+    # columns added to existing child tables. _auto_add_missing_columns() adds
+    # the columns themselves, but never creates indexes on already-existing
+    # tables — so without this block, prod DBs that pre-date the kernel never
+    # get the (thread_id, ...) lookups Phase 2/3 will rely on. Pure
+    # CREATE INDEX IF NOT EXISTS — idempotent, matches the spec.
+    try:
+        with engine.connect() as conn:
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_sessions_primary_thread_id "
+                    "ON sessions(primary_thread_id) WHERE primary_thread_id IS NOT NULL"
+                )
+            )
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_events_thread_id ON events(thread_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_source_lines_thread_id ON source_lines(thread_id)"))
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_session_observations_thread_id ON session_observations(thread_id)")
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_session_runtime_state_thread_id "
+                    "ON session_runtime_state(thread_id)"
+                )
+            )
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_session_runtime_state_run_id ON session_runtime_state(run_id)")
+            )
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_session_turns_thread_id ON session_turns(thread_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_session_turns_run_id ON session_turns(run_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_session_inputs_thread_id ON session_inputs(thread_id)"))
+            conn.commit()
+    except Exception:
+        logger.debug("session identity kernel index migration skipped", exc_info=True)
+
 
 def _auto_add_missing_columns(
     engine: Engine,

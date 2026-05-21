@@ -829,7 +829,15 @@ class SessionThread(AgentsBase):
     provider = Column(String(64), nullable=False, index=True)
 
     # Lineage — null for root threads; set for subagents and continuations.
-    parent_thread_id = Column(GUID(), nullable=True, index=True)
+    _parent_thread_fk = (
+        "session_threads.id" if AGENTS_SCHEMA is None else f"{AGENTS_SCHEMA}.session_threads.id"
+    )
+    parent_thread_id = Column(
+        GUID(),
+        ForeignKey(_parent_thread_fk, ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     # Replaces AgentSession.branched_from_event_id; nullable.
     parent_event_id = Column(Integer, nullable=True)
     branch_kind = Column(
@@ -839,9 +847,10 @@ class SessionThread(AgentsBase):
     )  # root | subagent | continuation
 
     # Denormalized "is this the session's primary thread" — matches
-    # sessions.primary_thread_id. Avoids a self-referential lookup on hot
-    # timeline paths.
-    is_primary = Column(Integer, nullable=False, server_default=text("1"))
+    # sessions.primary_thread_id. Defaults 0 so subagent/continuation threads
+    # created without an explicit override never silently become a second
+    # primary. Backfill and root-thread creation set this to 1 explicitly.
+    is_primary = Column(Integer, nullable=False, server_default=text("0"))
 
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(
@@ -852,6 +861,14 @@ class SessionThread(AgentsBase):
     )
 
     __table_args__ = (
+        # One primary thread per session, enforced by the DB.
+        Index(
+            "ux_threads_one_primary_per_session",
+            "session_id",
+            unique=True,
+            postgresql_where=text("is_primary = 1"),
+            sqlite_where=text("is_primary = 1"),
+        ),
         Index("ix_threads_session_primary", "session_id", "is_primary"),
         Index("ix_threads_parent", "parent_thread_id"),
     )
@@ -889,6 +906,18 @@ class SessionThreadAlias(AgentsBase):
     __table_args__ = (
         Index("ix_thread_aliases_lookup", "provider", "alias_kind", "alias_value"),
         Index("ix_thread_aliases_thread_kind", "thread_id", "alias_kind"),
+        # Aliases are evidence, not identity, but a given thread shouldn't
+        # accumulate exact-duplicate alias rows. Globally the same alias may
+        # legitimately appear on multiple threads (copied transcripts before
+        # divergence) — this index intentionally scopes to thread.
+        Index(
+            "ux_thread_aliases_unique_per_thread",
+            "thread_id",
+            "provider",
+            "alias_kind",
+            "alias_value",
+            unique=True,
+        ),
     )
 
 
