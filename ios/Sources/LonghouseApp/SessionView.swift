@@ -161,6 +161,9 @@ struct SessionView: View {
                     submittedInputs: viewModel.submittedInputs,
                     sessionEnded: viewModel.isSessionEnded,
                     errorMessage: viewModel.errorMessage,
+                    onNearTop: {
+                        Task { await viewModel.loadOlder(sessionId: sessionId, appState: appState) }
+                    },
                     onDiagnostics: { diagnostics in
                         onTranscriptDiagnostics?(diagnostics)
                         Task {
@@ -600,14 +603,23 @@ final class SessionViewModel: ObservableObject {
     private(set) var sendCounter: UInt64 = 0
 
     private var pollTask: Task<Void, Never>?
+    private var prefetchTask: Task<Void, Never>?
     private var stream: SessionWorkspaceStreamSource?
     private var streamTask: Task<Void, Never>?
     private var streamConnected: Bool = false
     private var activeSessionId: String?
     private var lastWorkspaceEvents: [SessionEvent] = []
+    private var loadedProjectionItemCount = 0
+    private var totalProjectionItemCount = 0
+    private var tailSnapshotEventId: Int?
+    private var prefetchedOlderTail: SessionMobileTailResponse?
+    private var prefetchedOlderOffset: Int?
+    private var isLoadingOlder = false
     private let apiFactory: (String) -> SessionWorkspaceClient?
     private let streamFactory: (URL, String) -> SessionWorkspaceStreamSource
     private let enableRealtime: Bool
+    private let initialTailLimit = 50
+    private let olderPageLimit = 50
 
     init(
         apiFactory: @escaping (String) -> SessionWorkspaceClient? = { LonghouseAPI(host: $0) },
@@ -631,6 +643,13 @@ final class SessionViewModel: ObservableObject {
             submittedInputs = []
             transcriptDiagnostics = nil
             lastWorkspaceEvents = []
+            loadedProjectionItemCount = 0
+            totalProjectionItemCount = 0
+            tailSnapshotEventId = nil
+            prefetchedOlderTail = nil
+            prefetchedOlderOffset = nil
+            prefetchTask?.cancel()
+            prefetchTask = nil
             errorMessage = nil
         }
         if isInitialLoading || !sessionChanged {
@@ -651,6 +670,8 @@ final class SessionViewModel: ObservableObject {
     func stop() {
         pollTask?.cancel()
         pollTask = nil
+        prefetchTask?.cancel()
+        prefetchTask = nil
         streamTask?.cancel()
         streamTask = nil
         Task { [stream] in await stream?.stop() }
@@ -666,7 +687,7 @@ final class SessionViewModel: ObservableObject {
             return
         }
         do {
-            try await refreshWorkspace(api: api, sessionId: sessionId)
+            try await refreshTail(api: api, sessionId: sessionId)
             errorMessage = nil
             loopModeErrorMessage = nil
         } catch LonghouseAPIError.notAuthenticated {
@@ -723,7 +744,7 @@ final class SessionViewModel: ObservableObject {
             clearSupersededSubmittedInputs(text: text, keepClientRequestId: clientRequestId)
             Task { [weak self] in
                 guard let self else { return }
-                try? await self.refreshWorkspace(api: api, sessionId: sessionId, allowFailure: true)
+                try? await self.refreshTail(api: api, sessionId: sessionId, allowFailure: true)
             }
             return true
         } catch let LonghouseAPIError.structured(_, code, message) where intent == "steer" && code == "turn_ended" {
@@ -791,7 +812,7 @@ final class SessionViewModel: ObservableObject {
         defer { isUpdatingLoopMode = false }
         do {
             _ = try await api.setSessionLoopMode(id: sessionId, loopMode: mode)
-            try await refreshWorkspace(api: api, sessionId: sessionId)
+            try await refreshTail(api: api, sessionId: sessionId)
         } catch {
             loopModeErrorMessage = "Mode unavailable: \(error.localizedDescription)"
         }
@@ -858,30 +879,117 @@ final class SessionViewModel: ObservableObject {
         case .heartbeat:
             break
         case .changed:
-            // Push wake → refetch workspace and emit render beacon.
+            // Push wake -> refetch the compact tail and emit render beacon.
             guard let api = apiFactory(appState.serverURL) else { return }
-            try? await refreshWorkspace(api: api, sessionId: sessionId, allowFailure: true)
+            try? await refreshTail(api: api, sessionId: sessionId, allowFailure: true)
         }
     }
 
     private func pollTick(sessionId: String, appState: AppState) async {
         guard let api = apiFactory(appState.serverURL) else { return }
-        try? await refreshWorkspace(api: api, sessionId: sessionId, allowFailure: true)
+        try? await refreshTail(api: api, sessionId: sessionId, allowFailure: true)
     }
 
-    private func refreshWorkspace(api: SessionWorkspaceClient, sessionId: String, allowFailure: Bool = false) async throws {
+    func loadOlder(sessionId: String, appState: AppState) async {
+        guard activeSessionId == sessionId else { return }
+        guard loadedProjectionItemCount < totalProjectionItemCount else { return }
+        guard !isLoadingOlder else { return }
+        guard let api = apiFactory(appState.serverURL) else { return }
+
+        if let prefetchedOlderTail, prefetchedOlderOffset == loadedProjectionItemCount {
+            applyOlderTail(prefetchedOlderTail)
+            self.prefetchedOlderTail = nil
+            self.prefetchedOlderOffset = nil
+            scheduleOlderPrefetch(api: api, sessionId: sessionId)
+            return
+        }
+
+        isLoadingOlder = true
+        defer { isLoadingOlder = false }
+        do {
+            let tail = try await fetchOlderTail(api: api, sessionId: sessionId, offset: loadedProjectionItemCount)
+            guard activeSessionId == sessionId else { return }
+            applyOlderTail(tail)
+            scheduleOlderPrefetch(api: api, sessionId: sessionId)
+        } catch let LonghouseAPIError.structured(_, code, _) where code == "projection_drift" {
+            try? await refreshTail(api: api, sessionId: sessionId, allowFailure: true)
+        } catch {
+            // Older history is opportunistic; keep the visible tail stable.
+        }
+    }
+
+    private func refreshTail(api: SessionWorkspaceClient, sessionId: String, allowFailure: Bool = false) async throws {
         guard activeSessionId == sessionId else { return }
 
         do {
-            let workspace = try await api.sessionWorkspace(id: sessionId, limit: 200, branchMode: "head")
+            let tail = try await api.sessionMobileTail(
+                id: sessionId,
+                limit: initialTailLimit,
+                offset: 0,
+                branchMode: "head",
+                snapshotEventId: nil
+            )
             guard activeSessionId == sessionId else { return }
-            self.detail = workspace.session
-            let events = workspace.events
+            self.detail = tail.session
+            let events = tail.events
             self.lastWorkspaceEvents = events
+            self.loadedProjectionItemCount = max(0, tail.projection.total - tail.projection.pageOffset)
+            self.totalProjectionItemCount = tail.projection.total
+            self.tailSnapshotEventId = tail.snapshotEventId
+            self.prefetchedOlderTail = nil
+            self.prefetchedOlderOffset = nil
             self.items = TimelineBuilder.build(events: events)
             reconcileSubmittedInputs(with: events)
+            scheduleOlderPrefetch(api: api, sessionId: sessionId)
         } catch {
             if !allowFailure { throw error }
+        }
+    }
+
+    private func scheduleOlderPrefetch(api: SessionWorkspaceClient, sessionId: String) {
+        prefetchTask?.cancel()
+        prefetchTask = nil
+        guard enableRealtime else { return }
+        guard activeSessionId == sessionId else { return }
+        guard loadedProjectionItemCount < totalProjectionItemCount else { return }
+        guard !isLoadingOlder else { return }
+        let offset = loadedProjectionItemCount
+        guard prefetchedOlderOffset != offset else { return }
+        prefetchTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let tail = try await self.fetchOlderTail(api: api, sessionId: sessionId, offset: offset)
+                guard self.activeSessionId == sessionId, self.loadedProjectionItemCount == offset else { return }
+                self.prefetchedOlderTail = tail
+                self.prefetchedOlderOffset = offset
+            } catch {
+                guard self.activeSessionId == sessionId, self.loadedProjectionItemCount == offset else { return }
+                self.prefetchedOlderTail = nil
+                self.prefetchedOlderOffset = nil
+            }
+            self.prefetchTask = nil
+        }
+    }
+
+    private func fetchOlderTail(api: SessionWorkspaceClient, sessionId: String, offset: Int) async throws -> SessionMobileTailResponse {
+        try await api.sessionMobileTail(
+            id: sessionId,
+            limit: olderPageLimit,
+            offset: offset,
+            branchMode: "head",
+            snapshotEventId: tailSnapshotEventId
+        )
+    }
+
+    private func applyOlderTail(_ tail: SessionMobileTailResponse) {
+        totalProjectionItemCount = tail.projection.total
+        loadedProjectionItemCount = max(loadedProjectionItemCount, tail.projection.total - tail.projection.pageOffset)
+        let existingEventIds = Set(lastWorkspaceEvents.map(\.id))
+        let olderEvents = tail.events.filter { !existingEventIds.contains($0.id) }
+        if !olderEvents.isEmpty {
+            lastWorkspaceEvents = olderEvents + lastWorkspaceEvents
+            items = TimelineBuilder.build(events: lastWorkspaceEvents)
+            reconcileSubmittedInputs(with: lastWorkspaceEvents)
         }
     }
 

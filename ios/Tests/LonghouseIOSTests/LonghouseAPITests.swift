@@ -25,6 +25,29 @@ struct LonghouseAPITests {
     }
 
     @Test
+    func sessionMobileTailURLIncludesTailPagingFields() throws {
+        let baseURL = try #require(URL(string: "https://david010.longhouse.ai"))
+
+        let url = LonghouseAPI.sessionMobileTailURL(
+            baseURL: baseURL,
+            id: "session-1",
+            limit: 50,
+            offset: 100,
+            branchMode: "head",
+            snapshotEventId: 42
+        )
+        let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
+
+        #expect(components.path == "/api/timeline/sessions/session-1/mobile-tail")
+        #expect(components.queryItems == [
+            URLQueryItem(name: "limit", value: "50"),
+            URLQueryItem(name: "offset", value: "100"),
+            URLQueryItem(name: "branch_mode", value: "head"),
+            URLQueryItem(name: "snapshot_event_id", value: "42"),
+        ])
+    }
+
+    @Test
     func sessionWorkspaceStreamURLSkipsInitialSnapshotByDefault() throws {
         let baseURL = try #require(URL(string: "https://david010.longhouse.ai"))
 

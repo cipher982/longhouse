@@ -910,6 +910,16 @@ struct SessionWorkspaceResponse: Codable, Sendable {
     }
 }
 
+struct SessionMobileTailResponse: Codable, Sendable {
+    let session: SessionDetail
+    let projection: SessionProjectionResponse
+    let snapshotEventId: Int?
+
+    var events: [SessionEvent] {
+        projection.items.compactMap(\.event)
+    }
+}
+
 enum SessionInputAuthoredVia: Codable, Hashable, Sendable {
     case longhouse
     case terminal

@@ -85,6 +85,13 @@ actor RenderBeaconReporter {
 
 protocol SessionWorkspaceClient: Sendable {
     func sessionWorkspace(id: String, limit: Int, branchMode: String) async throws -> SessionWorkspaceResponse
+    func sessionMobileTail(
+        id: String,
+        limit: Int,
+        offset: Int,
+        branchMode: String,
+        snapshotEventId: Int?
+    ) async throws -> SessionMobileTailResponse
     func sendInput(id: String, text: String, intent: String, clientRequestId: String?) async throws -> SessionInputResponse
     func draftReply(id: String, maxChars: Int) async throws -> DraftReplyResponse
     func setSessionLoopMode(id: String, loopMode: SessionLoopMode) async throws -> LoopModeResponse
@@ -145,6 +152,30 @@ struct LonghouseAPI: Sendable {
         return components.url!
     }
 
+    static func sessionMobileTailURL(
+        baseURL: URL,
+        id: String,
+        limit: Int = 50,
+        offset: Int = 0,
+        branchMode: String = "head",
+        snapshotEventId: Int? = nil
+    ) -> URL {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("/api/timeline/sessions/\(id)/mobile-tail"),
+            resolvingAgainstBaseURL: false
+        )!
+        var items = [
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "offset", value: String(offset)),
+            URLQueryItem(name: "branch_mode", value: branchMode),
+        ]
+        if let snapshotEventId {
+            items.append(URLQueryItem(name: "snapshot_event_id", value: String(snapshotEventId)))
+        }
+        components.queryItems = items
+        return components.url!
+    }
+
     func sessionWorkspace(id: String, limit: Int = 200, branchMode: String = "head") async throws -> SessionWorkspaceResponse {
         var request = URLRequest(url: Self.sessionWorkspaceURL(baseURL: baseURL, id: id, limit: limit, branchMode: branchMode))
         request.addValue("application/json", forHTTPHeaderField: "Accept")
@@ -154,6 +185,35 @@ struct LonghouseAPI: Sendable {
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
         return try JSONDecoder.snakeCase.decode(APISessionWorkspaceResponse.self, from: data).sessionWorkspaceResponse
+    }
+
+    func sessionMobileTail(
+        id: String,
+        limit: Int = 50,
+        offset: Int = 0,
+        branchMode: String = "head",
+        snapshotEventId: Int? = nil
+    ) async throws -> SessionMobileTailResponse {
+        var request = URLRequest(
+            url: Self.sessionMobileTailURL(
+                baseURL: baseURL,
+                id: id,
+                limit: limit,
+                offset: offset,
+                branchMode: branchMode,
+                snapshotEventId: snapshotEventId
+            )
+        )
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (data, httpResponse) = try await data(for: request)
+        guard httpResponse.statusCode == 200 else {
+            if let structured = Self.parseStructuredError(statusCode: httpResponse.statusCode, data: data) {
+                throw structured
+            }
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
+        return try JSONDecoder.snakeCase.decode(SessionMobileTailResponse.self, from: data)
     }
 
     func sessionTurns(id: String) async throws -> [SessionTurn] {

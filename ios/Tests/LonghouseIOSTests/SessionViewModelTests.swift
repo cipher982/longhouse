@@ -21,8 +21,11 @@ struct SessionViewModelTests {
         #expect(model.items.map(\.id) == ["user:10"])
         let firstRequest = await api.workspaceRequest(at: 0)
         #expect(firstRequest?.id == "session-1")
-        #expect(firstRequest?.limit == 200)
+        #expect(firstRequest?.limit == 50)
         #expect(firstRequest?.branchMode == "head")
+        let firstTailRequest = await api.tailRequest(at: 0)
+        #expect(firstTailRequest?.offset == 0)
+        #expect(firstTailRequest?.snapshotEventId == nil)
     }
 
     @Test
@@ -39,6 +42,24 @@ struct SessionViewModelTests {
 
         #expect(model.items.map(\.id) == ["user:11"])
         #expect(await api.workspaceRequestCount() == 2)
+    }
+
+    @Test
+    func loadOlderPrependsPreviousTailPage() async throws {
+        let tail = try makeWorkspace(eventId: 51, content: "Recent tail", total: 100, pageOffset: 50)
+        let older = try makeWorkspace(eventId: 1, content: "Older page", total: 100, pageOffset: 0)
+        let api = FakeSessionWorkspaceClient(workspaces: [tail, older])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        await model.loadOlder(sessionId: "session-1", appState: appState)
+
+        #expect(model.items.map(\.id) == ["user:1", "user:51"])
+        let olderRequest = await api.tailRequest(at: 1)
+        #expect(olderRequest?.offset == 50)
+        #expect(olderRequest?.snapshotEventId == 51)
     }
 
     @Test
@@ -416,7 +437,9 @@ struct SessionViewModelTests {
         content: String,
         timestamp: String = "2026-05-02T20:00:00Z",
         isHeadBranch: Bool = true,
-        inputOriginJSON: String? = nil
+        inputOriginJSON: String? = nil,
+        total: Int = 1,
+        pageOffset: Int = 0
     ) throws -> SessionWorkspaceResponse {
         let encodedContent = try jsonString(content)
         let encodedTimestamp = try jsonString(timestamp)
@@ -461,8 +484,8 @@ struct SessionViewModelTests {
                 }
               }
             ],
-            "total": 1,
-            "page_offset": 0,
+            "total": \(total),
+            "page_offset": \(pageOffset),
             "branch_mode": "head",
             "abandoned_events": 0
           }
@@ -521,6 +544,7 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
     private var sendError: Error?
     private var sendSteps: [FakeSendStep] = []
     private var workspaceRequests: [(id: String, limit: Int, branchMode: String)] = []
+    private var tailRequests: [(id: String, limit: Int, offset: Int, branchMode: String, snapshotEventId: Int?)] = []
     private var sentInputs: [String] = []
     private var postedRenderBeacons: [RenderBeaconReporter.Payload] = []
     private var lastClientRequestId: String?
@@ -537,6 +561,27 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
 
     func sessionWorkspace(id: String, limit: Int, branchMode: String) async throws -> SessionWorkspaceResponse {
         workspaceRequests.append((id: id, limit: limit, branchMode: branchMode))
+        return try nextWorkspace()
+    }
+
+    func sessionMobileTail(
+        id: String,
+        limit: Int,
+        offset: Int,
+        branchMode: String,
+        snapshotEventId: Int?
+    ) async throws -> SessionMobileTailResponse {
+        workspaceRequests.append((id: id, limit: limit, branchMode: branchMode))
+        tailRequests.append((id: id, limit: limit, offset: offset, branchMode: branchMode, snapshotEventId: snapshotEventId))
+        let workspace = try nextWorkspace()
+        return SessionMobileTailResponse(
+            session: workspace.session,
+            projection: workspace.projection,
+            snapshotEventId: workspace.events.map(\.id).max()
+        )
+    }
+
+    private func nextWorkspace() throws -> SessionWorkspaceResponse {
         if shouldFailWorkspaceLoads {
             throw URLError(.cannotConnectToHost)
         }
@@ -600,6 +645,11 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
     func workspaceRequest(at index: Int) -> (id: String, limit: Int, branchMode: String)? {
         guard workspaceRequests.indices.contains(index) else { return nil }
         return workspaceRequests[index]
+    }
+
+    func tailRequest(at index: Int) -> (id: String, limit: Int, offset: Int, branchMode: String, snapshotEventId: Int?)? {
+        guard tailRequests.indices.contains(index) else { return nil }
+        return tailRequests[index]
     }
 
     func sendRequests() -> [String] {
