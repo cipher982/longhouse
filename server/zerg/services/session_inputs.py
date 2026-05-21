@@ -56,8 +56,14 @@ def create_session_input(
 ) -> SessionInput:
     if intent not in VALID_INTENTS:
         raise ValueError(f"invalid intent: {intent}")
+    # Phase 2: stamp thread_id so Phase 3 can flip session_inputs to
+    # thread-keyed without a separate backfill pass.
+    from zerg.services.agents.kernel_writes import resolve_thread_id_for_session
+
+    thread_id = resolve_thread_id_for_session(db, session_id)
     row = SessionInput(
         session_id=session_id,
+        thread_id=thread_id,
         body=text,
         owner_id=owner_id,
         intent=intent,

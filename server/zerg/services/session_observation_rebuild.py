@@ -364,6 +364,7 @@ def _copy_source_prefix(
         db.add(
             AgentSourceLine(
                 session_id=session_id,
+                thread_id=row.thread_id,
                 source_path=row.source_path,
                 source_offset=row_offset,
                 branch_id=to_branch_id,
@@ -412,6 +413,7 @@ def _copy_event_prefix(
         db.add(
             AgentEvent(
                 session_id=session_id,
+                thread_id=event.thread_id,
                 branch_id=to_branch_id,
                 role=event.role,
                 content_text=event.content_text,

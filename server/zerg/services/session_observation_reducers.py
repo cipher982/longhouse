@@ -54,6 +54,7 @@ def reduce_source_line_observation(db: Session, observation: SessionObservation)
         sqlite_insert(AgentSourceLine)
         .values(
             session_id=observation.session_id,
+            thread_id=observation.thread_id,
             source_path=observation.source_path,
             source_offset=int(observation.source_offset),
             branch_id=branch_id,
@@ -119,6 +120,7 @@ def reduce_provider_event_observation(db: Session, observation: SessionObservati
         sqlite_insert(AgentEvent)
         .values(
             session_id=observation.session_id,
+            thread_id=observation.thread_id,
             branch_id=branch_id,
             role=role,
             content_text=_optional_str(payload.get("content_text")),

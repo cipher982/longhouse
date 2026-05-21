@@ -75,8 +75,12 @@ async def _fake_send_text_to_live_session(
 ) -> ManagedLocalSendResult:
     now = datetime.now(timezone.utc)
     head_branch_id = _ensure_head_branch_id(db, session.id)
+    from zerg.services.agents.kernel_writes import ensure_primary_thread
+
+    primary_thread = ensure_primary_thread(db, session)
     event = AgentEvent(
         session_id=session.id,
+        thread_id=primary_thread.id,
         role="user",
         content_text=text,
         timestamp=now,
