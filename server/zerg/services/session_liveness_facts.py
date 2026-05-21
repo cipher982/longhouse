@@ -14,7 +14,6 @@ from datetime import timezone
 
 from zerg.services.session_capabilities import SessionCapabilityFlags
 from zerg.services.session_runtime import SessionRuntimeView
-from zerg.session_execution_home import SessionExecutionHome
 
 
 @dataclass(frozen=True)
@@ -82,12 +81,6 @@ class SessionLivenessFacts:
     lifecycle: LifecycleFact
 
 
-_MANAGED_EXECUTION_HOMES = {
-    SessionExecutionHome.MANAGED_LOCAL,
-    SessionExecutionHome.MANAGED_HOSTED,
-    SessionExecutionHome.CLOUD_TAKEOVER,
-}
-
 # `process_gone` is an explicit engine-snapshot terminal fact: the process is
 # gone, not merely unverifiable.
 _EXPLICIT_CLOSED_TERMINAL_STATES = {"session_ended", "finished", "user_closed", "process_gone"}
@@ -95,9 +88,14 @@ _UNVERIFIED_TERMINAL_STATES = {"host_expired"}
 
 
 def _control_path(capabilities: SessionCapabilityFlags) -> str:
-    if capabilities.execution_home in _MANAGED_EXECUTION_HOMES:
-        return "managed"
-    if capabilities.managed_transport is not None:
+    """Derive control ownership from the kernel-projected capability flags.
+
+    A session is "managed" iff the kernel said Longhouse owns a control
+    path (live or reattach). The legacy ``execution_home`` /
+    ``managed_transport`` columns are no longer authoritative; the
+    capability adapter already collapses them out of the picture.
+    """
+    if capabilities.live_control_available or capabilities.host_reattach_available:
         return "managed"
     return "unmanaged"
 
