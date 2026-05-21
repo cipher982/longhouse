@@ -29,15 +29,91 @@ use crate::state::file_state::FileState;
 use crate::state::live_file_state::LiveFileState;
 use crate::state::spool::Spool;
 
-const TARGET_BATCH_BYTES: u64 = 512 * 1024;
+/// Live-transcript batch target. Each ship is one HTTP round trip; for live
+/// work this is a tail-latency knob, so we keep it small.
+const LIVE_TARGET_BATCH_BYTES: u64 = 512 * 1024;
+
+/// Archive / replay batch target. Per phase-4 review (codex), use two discrete
+/// bands rather than a log-shaped controller — a second controller layered on
+/// top of the phase-2 AIMD limiter is where oscillation comes from. 4 MiB
+/// compressed sits well below `max_batch_bytes` (default 50 MiB) and well below
+/// the server's 256 MiB decompressed cap, but lets archive/replay drains
+/// amortize an HTTP round trip across many more events than the 512 KiB live
+/// target.
+const ARCHIVE_TARGET_BATCH_BYTES: u64 = 4 * 1024 * 1024;
+
 // The Runtime Host allows /api/agents/ingest to run for 30s. Archive and
 // replay sends should not give up first; otherwise the server may still commit
 // the batch after the client has already marked it retryable.
 const ARCHIVE_INGEST_TIMEOUT: Duration = Duration::from_secs(35);
 const LIVE_TRANSCRIPT_INGEST_TIMEOUT: Duration = Duration::from_secs(20);
 
-fn target_batch_bytes(max_batch_bytes: u64) -> u64 {
-    max_batch_bytes.min(TARGET_BATCH_BYTES).max(1)
+/// Pick a batch target as a function of work mode. Live transcript ships stay
+/// small (latency); archive / replay ships go bigger (amortize round trip).
+/// `max_batch_bytes` (configurable hard ceiling) clamps both bands.
+fn target_batch_bytes_for_mode(mode: SourceLineMode, max_batch_bytes: u64) -> u64 {
+    let target = match mode {
+        SourceLineMode::EventOnly => LIVE_TARGET_BATCH_BYTES,
+        SourceLineMode::Full => ARCHIVE_TARGET_BATCH_BYTES,
+    };
+    max_batch_bytes.min(target).max(1)
+}
+
+#[cfg(test)]
+mod target_batch_bytes_tests {
+    use super::*;
+
+    #[test]
+    fn live_mode_keeps_small_target_regardless_of_ceiling() {
+        assert_eq!(
+            target_batch_bytes_for_mode(SourceLineMode::EventOnly, u64::MAX),
+            LIVE_TARGET_BATCH_BYTES
+        );
+        assert_eq!(
+            target_batch_bytes_for_mode(SourceLineMode::EventOnly, 50 * 1024 * 1024),
+            LIVE_TARGET_BATCH_BYTES
+        );
+    }
+
+    #[test]
+    fn archive_mode_grows_to_archive_target_when_ceiling_allows() {
+        assert_eq!(
+            target_batch_bytes_for_mode(SourceLineMode::Full, u64::MAX),
+            ARCHIVE_TARGET_BATCH_BYTES
+        );
+        assert_eq!(
+            target_batch_bytes_for_mode(SourceLineMode::Full, 50 * 1024 * 1024),
+            ARCHIVE_TARGET_BATCH_BYTES
+        );
+    }
+
+    #[test]
+    fn archive_target_is_strictly_larger_than_live_target() {
+        // Phase-4 invariant: archive/replay drains amortize the round trip
+        // across more events than live ships do.
+        assert!(ARCHIVE_TARGET_BATCH_BYTES > LIVE_TARGET_BATCH_BYTES);
+    }
+
+    #[test]
+    fn max_batch_bytes_clamps_both_bands() {
+        // A tight max_batch_bytes ceiling must still win, on both bands.
+        let tight: u64 = 64 * 1024;
+        assert_eq!(
+            target_batch_bytes_for_mode(SourceLineMode::EventOnly, tight),
+            tight
+        );
+        assert_eq!(
+            target_batch_bytes_for_mode(SourceLineMode::Full, tight),
+            tight
+        );
+    }
+
+    #[test]
+    fn zero_max_batch_bytes_floors_to_one() {
+        // Defensive: never return zero so the batcher's > 0 invariant holds.
+        assert_eq!(target_batch_bytes_for_mode(SourceLineMode::EventOnly, 0), 1);
+        assert_eq!(target_batch_bytes_for_mode(SourceLineMode::Full, 0), 1);
+    }
 }
 
 fn request_timeout_for_trace(ship_trace: Option<&ShipTraceContext>) -> Option<Duration> {
@@ -755,7 +831,7 @@ fn build_prepared_actions(
         &parse_result.events,
         start_offset,
         end_offset,
-        target_batch_bytes(max_batch_bytes),
+        target_batch_bytes_for_mode(source_line_mode, max_batch_bytes),
         max_batch_bytes,
     )? {
         match planned {
