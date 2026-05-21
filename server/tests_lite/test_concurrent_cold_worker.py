@@ -472,7 +472,7 @@ def test_embedding_continuations_leave_full_budget_for_later_errors(tmp_path, mo
 # ---------------------------------------------------------------------------
 
 
-def test_enqueue_sets_max_attempts_to_five(tmp_path, monkeypatch):
+def test_enqueue_ingest_tasks_is_noop_for_summary_embedding(tmp_path, monkeypatch):
     factory = _make_db(tmp_path, "max_attempts_five.db")
     db = factory()
     s = _add_session(db)
@@ -487,9 +487,7 @@ def test_enqueue_sets_max_attempts_to_five(tmp_path, monkeypatch):
         .filter(SessionTask.session_id == str(s.id))
         .all()
     )
-    assert len(rows) == 2
-    for row in rows:
-        assert row.max_attempts == MAX_ATTEMPTS_DEFAULT
+    assert rows == []
     db.close()
 
 

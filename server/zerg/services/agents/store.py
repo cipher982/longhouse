@@ -1586,11 +1586,6 @@ class AgentsStore:
                 if current is None or latest_inserted_timestamp > current:
                     session_obj.last_activity_at = latest_inserted_timestamp
 
-        if events_inserted > 0 and transcript_changed:
-            from zerg.services.ingest_task_queue import enqueue_ingest_tasks
-
-            enqueue_ingest_tasks(self.db, str(session_id))
-
         from zerg.services.session_runtime import RuntimeEventIngest
         from zerg.services.session_runtime import ingest_runtime_events
         from zerg.services.session_runtime import runtime_key_for_session
