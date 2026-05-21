@@ -218,10 +218,16 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         cwd=cwd,
         launch_origin="longhouse_spawned",
     )
+    if provider == "codex":
+        control_plane = "codex_bridge"
+    elif provider == "opencode":
+        control_plane = "opencode_process"
+    else:
+        control_plane = "claude_channel_bridge"
     record_connection(
         db,
         run=run,
-        control_plane="codex_bridge" if provider == "codex" else "pty",
+        control_plane=control_plane,
         acquisition_kind="spawned_control",
         state="attached",
         external_name=session.managed_session_name,

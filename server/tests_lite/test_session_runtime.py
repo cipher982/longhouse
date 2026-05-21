@@ -1078,6 +1078,9 @@ def test_heartbeat_attached_managed_codex_lease_materializes_control_without_run
         session.source_runner_id = 17
         session.source_runner_name = "cinder"
         session.ended_at = now - timedelta(hours=2)
+        from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+
+        seed_managed_kernel_rows(db, session, control_plane="codex_bridge")
         db.commit()
         session_id = session.id
         runtime_key = runtime_key_for_session("codex", str(session_id))
@@ -1435,6 +1438,9 @@ def test_heartbeat_managed_lease_writes_control_state_without_phase_dependency(t
         session.managed_transport = "claude_channel_bridge"
         session.source_runner_id = 17
         session.source_runner_name = "cinder"
+        from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+
+        seed_managed_kernel_rows(db, session, control_plane="claude_channel_bridge")
         session_id = session.id
         db.commit()
 
@@ -1738,6 +1744,9 @@ def test_heartbeat_reattach_does_not_clear_explicit_session_ended_runtime_termin
         session.managed_transport = "codex_app_server"
         session.source_runner_id = 17
         session.source_runner_name = "cinder"
+        from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+
+        seed_managed_kernel_rows(db, session, control_plane="codex_bridge")
         session_id = session.id
         runtime_key = runtime_key_for_session("codex", str(session_id))
         ingest_runtime_events(
@@ -1822,6 +1831,9 @@ def test_heartbeat_detached_managed_codex_lease_is_recoverable_control_loss(tmp_
         )
         session.execution_home = "managed_local"
         session.managed_transport = "codex_app_server"
+        from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+
+        seed_managed_kernel_rows(db, session, control_plane="codex_bridge", state="detached")
         db.commit()
         session_id = session.id
         runtime_key = runtime_key_for_session("codex", str(session_id))
@@ -3104,6 +3116,9 @@ def test_heartbeat_managed_reattach_reopens_synthetic_process_gone_terminal(tmp_
         session.managed_transport = "codex_app_server"
         session.source_runner_id = 17
         session.source_runner_name = "cinder"
+        from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+
+        seed_managed_kernel_rows(db, session, control_plane="codex_bridge")
         session_id = session.id
         runtime_key = runtime_key_for_session("codex", str(session_id))
         ingest_runtime_events(

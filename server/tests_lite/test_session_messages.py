@@ -108,6 +108,18 @@ def _seed_session(
         )
         db.merge(runner)
         get_runner_connection_manager().register(1, int(source_runner_id), SimpleNamespace())
+    db.flush()
+    db.refresh(session)
+    if execution_home == "managed_local":
+        from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+
+        if managed_transport == "codex_app_server":
+            kernel_plane = "codex_bridge"
+        elif managed_transport == "opencode_process":
+            kernel_plane = "opencode_process"
+        else:
+            kernel_plane = "claude_channel_bridge"
+        seed_managed_kernel_rows(db, session, control_plane=kernel_plane)
     db.commit()
     db.refresh(session)
     return session

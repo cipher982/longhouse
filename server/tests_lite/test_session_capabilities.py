@@ -68,7 +68,7 @@ def _make_db(tmp_path):
     return engine, make_sessionmaker(engine)
 
 
-def _seed_agent_session(db, **overrides) -> AgentSession:
+def _seed_agent_session(db, *, seed_kernel_rows: bool = True, **overrides) -> AgentSession:
     values = {
         "id": uuid4(),
         "provider": "codex",
@@ -92,6 +92,20 @@ def _seed_agent_session(db, **overrides) -> AgentSession:
     db.add(session)
     db.commit()
     db.refresh(session)
+    from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+
+    provider = str(session.provider or "").strip().lower()
+    transport = str(session.managed_transport or "").strip().lower()
+    home = str(session.execution_home or "").strip().lower()
+    if seed_kernel_rows and home == "managed_local":
+        if provider == "codex" or transport == "codex_app_server":
+            kernel_plane = "codex_bridge"
+        elif provider == "opencode" or transport == "opencode_process":
+            kernel_plane = "opencode_process"
+        else:
+            kernel_plane = "claude_channel_bridge"
+        seed_managed_kernel_rows(db, session, control_plane=kernel_plane)
+        db.commit()
     return session
 
 

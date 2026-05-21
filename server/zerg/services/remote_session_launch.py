@@ -294,7 +294,11 @@ async def launch_remote_session(
         record_connection(
             db,
             run=run,
-            control_plane="codex_bridge" if provider == "codex" else "pty",
+            control_plane=(
+                "codex_bridge" if provider == "codex"
+                else "opencode_process" if provider == "opencode"
+                else "claude_channel_bridge"
+            ),
             acquisition_kind="spawned_control",
             state="attached",
             external_name=info.machine_name or device_id,
@@ -405,7 +409,11 @@ def reconcile_launch_from_command_result(db: Session, message: dict) -> bool:
         record_connection(
             db,
             run=run,
-            control_plane="codex_bridge" if session.provider == "codex" else "pty",
+            control_plane=(
+                "codex_bridge" if session.provider == "codex"
+                else "opencode_process" if session.provider == "opencode"
+                else "claude_channel_bridge"
+            ),
             acquisition_kind="spawned_control",
             state="attached",
             external_name=session.device_name or session.device_id,

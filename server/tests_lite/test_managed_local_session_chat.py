@@ -148,6 +148,16 @@ def _seed_managed_local_session(db, *, runner: Runner, provider: str = "claude")
     db.add(session)
     db.commit()
     db.refresh(session)
+    from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+
+    if provider == "codex":
+        kernel_plane = "codex_bridge"
+    elif provider == "opencode":
+        kernel_plane = "opencode_process"
+    else:
+        kernel_plane = "claude_channel_bridge"
+    seed_managed_kernel_rows(db, session, control_plane=kernel_plane)
+    db.commit()
     _seed_live_runtime_state(db, session)
     return session
 
