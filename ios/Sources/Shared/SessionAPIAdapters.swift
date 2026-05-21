@@ -1,5 +1,48 @@
 import Foundation
 
+private func compactSessionText(_ value: String?) -> String? {
+    guard let value else { return nil }
+    let compact = value
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .split(whereSeparator: \.isWhitespace)
+        .joined(separator: " ")
+    return compact.isEmpty ? nil : compact
+}
+
+private func hasMeaningfulSessionTitle(_ value: String?) -> Bool {
+    guard let title = compactSessionText(value) else { return false }
+    switch title.lowercased() {
+    case "untitled session", "generating summary", "generating title":
+        return false
+    default:
+        return true
+    }
+}
+
+private func providerDisplayName(_ provider: String) -> String {
+    switch provider.lowercased() {
+    case "codex": return "Codex"
+    case "claude": return "Claude"
+    case "gemini": return "Gemini"
+    default:
+        return provider.prefix(1).uppercased() + String(provider.dropFirst())
+    }
+}
+
+private func timelineCardTitle(for session: APISessionResponse) -> String {
+    if hasMeaningfulSessionTitle(session.summaryTitle), let title = compactSessionText(session.summaryTitle) {
+        return title
+    }
+    if let firstUser = compactSessionText(session.firstUserMessage) {
+        return firstUser
+    }
+    let provider = providerDisplayName(session.provider)
+    if let project = compactSessionText(session.project), project != session.provider {
+        return "New \(provider) session in \(project)"
+    }
+    return "New \(provider) session"
+}
+
 extension APISessionCapabilitiesResponse {
     var sessionCapabilities: SessionCapabilities {
         SessionCapabilities(
@@ -318,13 +361,14 @@ extension APITimelineSessionCardResponse {
     var sessionSummary: SessionSummary {
         SessionSummary(
             id: head.id,
-            title: head.summaryTitle ?? head.summary ?? head.provider,
+            title: timelineCardTitle(for: head),
             presenceState: head.presenceState ?? "unknown",
             provider: head.provider,
             project: head.project,
             lastActivityAt: head.lastActivityAt,
             summary: head.summary,
             summaryStatus: head.summaryStatus,
+            firstUserMessage: head.firstUserMessage,
             userState: head.userState,
             status: head.status,
             displayPhase: head.displayPhase,

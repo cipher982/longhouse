@@ -232,6 +232,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     let lastActivityAt: String?
     let summary: String?
     let summaryStatus: String?
+    let firstUserMessage: String?
     let userState: String?
     let status: String?
     let displayPhase: String?
@@ -259,6 +260,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         lastActivityAt: String?,
         summary: String? = nil,
         summaryStatus: String? = nil,
+        firstUserMessage: String? = nil,
         userState: String? = nil,
         status: String? = nil,
         displayPhase: String? = nil,
@@ -285,6 +287,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         self.lastActivityAt = lastActivityAt
         self.summary = summary
         self.summaryStatus = summaryStatus
+        self.firstUserMessage = firstUserMessage
         self.userState = userState
         self.status = status
         self.displayPhase = displayPhase
@@ -525,6 +528,21 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
             return nil
         }
         return summary
+    }
+
+    var firstUserPreview: String? {
+        guard let firstUserMessage = firstUserMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !firstUserMessage.isEmpty else {
+            return nil
+        }
+        return firstUserMessage
+    }
+
+    var timelineSummaryPreview: String? {
+        if let summaryPreview {
+            return summaryPreview
+        }
+        guard let firstUserPreview else { return nil }
+        return firstUserPreview == title.trimmingCharacters(in: .whitespacesAndNewlines) ? nil : firstUserPreview
     }
 
     /// Decoded summary lifecycle. Falls back to inferring from `summary` when

@@ -1372,6 +1372,40 @@ struct SessionModelsTests {
         #expect(session.runtimeFacts?.processState == "unknown")
         #expect(session.runtimeFacts?.phase.kind == "needs_user")
         #expect(summary.timelineCard?.ownership.label == "Managed")
+
+        let pendingSessionJSON = sessionJSON
+            .replacingOccurrences(of: #""summary_title": "Timeline contract","#, with: #""summary_title": null,"#)
+            .replacingOccurrences(
+                of: #""summary": "Backend emits card presentation.","#,
+                with: #"""
+          "summary": null,
+          "summary_status": "pending",
+          "first_user_message": "Investigate stuck generated summary cards.",
+          """#
+            )
+        let pendingJSON = """
+        {
+          "sessions": [
+            {
+              "thread_id": "session-card-contract",
+              "timeline_anchor_at": "2026-04-25T20:05:00Z",
+              "head_origin_label": "On this Mac",
+              "head": \(pendingSessionJSON),
+              "detail": \(pendingSessionJSON),
+              "root": \(pendingSessionJSON),
+              "continuation_count": 0
+            }
+          ],
+          "total": 1,
+          "has_real_sessions": true
+        }
+        """
+        let pendingDecoded = try JSONDecoder.snakeCase.decode(APITimelineSessionsListResponse.self, from: Data(pendingJSON.utf8))
+        let pendingSummary = try #require(pendingDecoded.sessions.first?.sessionSummary)
+
+        #expect(pendingSummary.title == "Investigate stuck generated summary cards.")
+        #expect(pendingSummary.summaryStatusValue == .pending)
+        #expect(pendingSummary.timelineSummaryPreview == nil)
     }
 
     @Test

@@ -81,16 +81,20 @@ _LABEL_PRIORITIES: dict[str, int] = {
     "turn-review-existing": 30,
     "wakeup-ledger": 35,
     "heartbeat": 40,
-    "summary": 60,
+    # Summary task bookkeeping and the final summary row update are small and
+    # user-visible. Keep them ahead of archive ingest so a busy ingest storm
+    # cannot pin the cold worker in "running" after a timeout.
+    "summary": 7,
+    "summary-title": 7,
+    "task-claim": 7,
+    "task-done": 7,
+    "task-retry": 7,
+    "task-continue": 7,
+    "task-timeout": 7,
+    "task-fail": 7,
     "summary-backfill": 60,
-    "summary-title": 60,
     "embeddings": 60,
     # Background queue maintenance is lowest priority.
-    "task-claim": 80,
-    "task-done": 80,
-    "task-retry": 80,
-    "task-timeout": 80,
-    "task-fail": 80,
     "task-resurrect": 85,
     "commis-claim": 85,
     "commis-reclaim": 85,

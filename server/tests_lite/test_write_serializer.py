@@ -138,6 +138,47 @@ async def test_live_ingest_jumps_ahead_of_archive_ingest(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_summary_task_bookkeeping_jumps_ahead_of_archive_ingest(tmp_path):
+    db_path = tmp_path / "write-serializer-summary-task-priority.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    session_factory = make_sessionmaker(engine)
+
+    with engine.begin() as conn:
+        conn.exec_driver_sql("CREATE TABLE writes (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL)")
+
+    serializer = WriteSerializer()
+    serializer.configure(session_factory)
+
+    started = threading.Event()
+    run_order: list[str] = []
+
+    def _make_write(label: str, delay: float = 0.0):
+        def _write(db):
+            run_order.append(label)
+            if label == "first":
+                started.set()
+            if delay > 0:
+                time.sleep(delay)
+            db.execute(sa_text("INSERT INTO writes(label) VALUES (:label)"), {"label": label})
+
+        return _write
+
+    first = asyncio.create_task(serializer.execute(_make_write("first", delay=0.05), label="presence"))
+    await asyncio.to_thread(started.wait, 1.0)
+
+    archive = asyncio.create_task(serializer.execute(_make_write("archive"), label="ingest"))
+    task_timeout = asyncio.create_task(serializer.execute(_make_write("task-timeout"), label="task-timeout"))
+    summary = asyncio.create_task(serializer.execute(_make_write("summary"), label="summary"))
+    task_done = asyncio.create_task(serializer.execute(_make_write("task-done"), label="task-done"))
+    runtime = asyncio.create_task(serializer.execute(_make_write("runtime"), label="runtime-observations"))
+    live = asyncio.create_task(serializer.execute(_make_write("live"), label="ingest-live"))
+
+    await asyncio.gather(first, archive, task_timeout, summary, task_done, runtime, live)
+
+    assert run_order == ["first", "runtime", "live", "task-timeout", "summary", "task-done", "archive"]
+
+
+@pytest.mark.asyncio
 async def test_cancelled_write_keeps_writer_slot_until_worker_thread_finishes(tmp_path):
     db_path = tmp_path / "write-serializer-cancel.db"
     engine = make_engine(f"sqlite:///{db_path}")
