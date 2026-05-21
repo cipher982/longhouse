@@ -1200,12 +1200,14 @@ def build_session_response(
     owner_id: int | None = None,
     summary_status: str | None = None,
     control_overlay=None,
+    kernel_capabilities=None,
 ) -> SessionResponse:
     cache = thread_cache if thread_cache is not None else {}
     thread_head_session_id, thread_continuation_count = get_thread_meta(store, session, cache)
     include_runtime = should_include_runtime_view(session=session, runtime_view=runtime_overlay)
-    kernel_capabilities = project_session_capabilities(store.db, session_id=session.id)
-    capability_flags = build_session_capabilities_from_kernel(store.db, session)
+    if kernel_capabilities is None:
+        kernel_capabilities = project_session_capabilities(store.db, session_id=session.id)
+    capability_flags = build_session_capabilities_from_kernel(store.db, session, kernel=kernel_capabilities)
     is_engine_control_online = engine_control_online(session, owner_id)
     current_now = datetime.now(timezone.utc)
     is_engine_session_attached = is_engine_control_online and engine_session_control_attached(
@@ -1385,7 +1387,7 @@ def build_active_session_response(
     control_overlay=None,
 ) -> ActiveSessionResponse:
     kernel_capabilities = project_session_capabilities(store.db, session_id=session.id)
-    capability_flags = build_session_capabilities_from_kernel(store.db, session)
+    capability_flags = build_session_capabilities_from_kernel(store.db, session, kernel=kernel_capabilities)
     _started = (
         session.started_at.replace(tzinfo=timezone.utc) if session.started_at and session.started_at.tzinfo is None else session.started_at
     )
