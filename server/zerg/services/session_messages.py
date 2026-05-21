@@ -163,7 +163,7 @@ async def deliver_next_queued_session_message(
     message.delivery_status = MESSAGE_STATUS_DELIVERED
     message.delivery_attempts = int(getattr(message, "delivery_attempts", 0) or 0) + 1
     message.last_error = None
-    message.delivered_via = live_session_dispatch.live_text_dispatch_label(target_session)
+    message.delivered_via = live_session_dispatch.live_text_dispatch_label(db, target_session)
     message.delivered_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(message)

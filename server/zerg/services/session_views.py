@@ -35,7 +35,6 @@ from zerg.services.managed_control_state import engine_channel_control_overlay
 from zerg.services.managed_control_state import live_transport_control_overlay
 from zerg.services.managed_local_transport import build_managed_local_attach_command
 from zerg.services.provisional_events import TranscriptPreview
-from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_capabilities import build_session_capability_display
 from zerg.services.session_capabilities import build_session_input_presentation
 from zerg.services.session_capabilities import project_current_session_capabilities
@@ -80,7 +79,8 @@ def build_session_capabilities_response(
     runtime_facts=None,
     kernel_capabilities: KernelSessionCapabilities | None = None,
 ) -> SessionCapabilitiesResponse:
-    capability_flags = capability_flags or build_session_capabilities(session)
+    if capability_flags is None:
+        raise RuntimeError("capability_flags is required; the kernel adapter must build them")
     if runtime_facts is not None:
         capability_flags = project_current_session_capabilities_from_facts(
             capability_flags,
@@ -370,7 +370,8 @@ def build_session_control_response(
 ) -> SessionControlResponse | None:
     if session is None:
         return None
-    capability_flags = capability_flags or build_session_capabilities(session)
+    if capability_flags is None:
+        raise RuntimeError("capability_flags is required; the kernel adapter must build them")
     source_runner_name = str(getattr(session, "source_runner_name", "") or "").strip() or None
     attach_command = build_attach_command(session) if capability_flags.host_reattach_available else None
     if (
