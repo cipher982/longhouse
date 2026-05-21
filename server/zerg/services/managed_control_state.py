@@ -19,6 +19,62 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import ManagedSessionControlState
 from zerg.utils.time import normalize_utc
 
+
+_KERNEL_STATE_BY_CONTROL_STATE = {
+    "online": "attached",
+    "degraded": "degraded",
+    "offline": "detached",
+}
+
+
+def _kernel_connection_state(control_state: str) -> str:
+    return _KERNEL_STATE_BY_CONTROL_STATE.get(control_state, "detached")
+
+
+def _kernel_control_plane_for_provider(provider: str) -> str:
+    if provider == "codex":
+        return "codex_bridge"
+    return "pty"
+
+
+def _mirror_connection_state(
+    db: Session,
+    *,
+    session_id: UUID,
+    provider: str,
+    control_state: str,
+    external_name: str | None,
+    device_id: str | None,
+) -> None:
+    """Phase 2 dual-write: mirror managed control state to session_connections.
+
+    Best-effort: if the session row is gone or no thread/run exists yet, we
+    skip silently. Legacy ManagedSessionControlState remains authoritative
+    for reads in Phase 2.
+    """
+
+    from zerg.services.agents.kernel_writes import ensure_open_run_for_session
+    from zerg.services.agents.kernel_writes import upsert_connection_for_run
+
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    if session is None:
+        return
+
+    run = ensure_open_run_for_session(
+        db,
+        session,
+        launch_origin="external_adopted",
+        host_id=device_id,
+    )
+    upsert_connection_for_run(
+        db,
+        run=run,
+        control_plane=_kernel_control_plane_for_provider(provider),
+        acquisition_kind="adopted_control",
+        state=_kernel_connection_state(control_state),
+        external_name=external_name,
+    )
+
 CONTROL_SOURCE_HEARTBEAT = "machine_heartbeat"
 CONTROL_SOURCE_ENGINE_CHANNEL = "machine_control_ws"
 CONTROL_SOURCE_LEGACY_RUNNER = "legacy_runner"
@@ -194,12 +250,20 @@ def upsert_managed_control_leases(
         if row is None:
             db.add(ManagedSessionControlState(**values))
             touched.add(session_id)
-            continue
-        changed = any(getattr(row, key) != value for key, value in values.items() if key != "session_id")
-        for key, value in values.items():
-            setattr(row, key, value)
-        if changed:
-            touched.add(session_id)
+        else:
+            changed = any(getattr(row, key) != value for key, value in values.items() if key != "session_id")
+            for key, value in values.items():
+                setattr(row, key, value)
+            if changed:
+                touched.add(session_id)
+        _mirror_connection_state(
+            db,
+            session_id=session_id,
+            provider=provider,
+            control_state=control_state,
+            external_name=values.get("machine_id"),
+            device_id=device_id,
+        )
     return touched
 
 
@@ -229,6 +293,14 @@ def mark_missing_managed_control_leases(
         row.last_control_seen_at = seen_at
         row.control_expires_at = seen_at
         touched.add(row.session_id)
+        _mirror_connection_state(
+            db,
+            session_id=row.session_id,
+            provider=_normalized(row.provider).lower() or "unknown",
+            control_state="offline",
+            external_name=_normalized(row.machine_id) or None,
+            device_id=device_id,
+        )
     return touched
 
 

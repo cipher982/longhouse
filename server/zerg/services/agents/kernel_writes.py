@@ -225,6 +225,110 @@ def record_run(
     return run
 
 
+def ensure_open_run_for_session(
+    db: Session,
+    session: AgentSession,
+    *,
+    launch_origin: str = "external_adopted",
+    host_id: str | None = None,
+) -> SessionRun:
+    """Return the most recent open run for the session's primary thread.
+
+    Creates an ``external_adopted`` run if none exists. Used by paths that
+    observe live state (heartbeats, lease snapshots) on sessions that may
+    not have come through a Longhouse launcher.
+
+    Caller is responsible for ``db.commit()``.
+    """
+
+    thread = ensure_primary_thread(db, session)
+    open_run = (
+        db.query(SessionRun)
+        .filter(SessionRun.thread_id == thread.id)
+        .filter(SessionRun.ended_at.is_(None))
+        .order_by(SessionRun.started_at.desc())
+        .first()
+    )
+    if open_run is not None:
+        return open_run
+    return record_run(
+        db,
+        thread=thread,
+        provider=session.provider,
+        host_id=host_id or getattr(session, "device_id", None),
+        cwd=getattr(session, "cwd", None),
+        launch_origin=launch_origin,
+    )
+
+
+def upsert_connection_for_run(
+    db: Session,
+    *,
+    run: SessionRun,
+    control_plane: str,
+    acquisition_kind: str,
+    state: str,
+    external_name: str | None = None,
+    can_send_input: int | None = None,
+    can_interrupt: int | None = None,
+    can_terminate: int | None = None,
+    can_tail_output: int | None = None,
+    can_resume: int | None = None,
+) -> SessionConnection:
+    """Upsert one connection per (run, control_plane).
+
+    Capability flags are only updated when a non-None value is supplied so
+    callers that only know about state can leave capability bits alone.
+    Caller is responsible for ``db.commit()``.
+    """
+
+    existing = (
+        db.query(SessionConnection)
+        .filter(
+            SessionConnection.run_id == run.id,
+            SessionConnection.control_plane == control_plane,
+        )
+        .order_by(SessionConnection.id.desc())
+        .first()
+    )
+    now = datetime.now(timezone.utc)
+    if existing is None:
+        return record_connection(
+            db,
+            run=run,
+            control_plane=control_plane,
+            acquisition_kind=acquisition_kind,
+            state=state,
+            external_name=external_name,
+            can_send_input=can_send_input or 0,
+            can_interrupt=can_interrupt or 0,
+            can_terminate=can_terminate or 0,
+            can_tail_output=can_tail_output or 0,
+            can_resume=can_resume or 0,
+        )
+
+    if existing.state != state:
+        existing.state = state
+        if state in {"detached", "released", "ended"}:
+            existing.released_at = now
+        elif state == "attached":
+            existing.released_at = None
+    if external_name is not None and existing.external_name != external_name:
+        existing.external_name = external_name
+    if can_send_input is not None:
+        existing.can_send_input = can_send_input
+    if can_interrupt is not None:
+        existing.can_interrupt = can_interrupt
+    if can_terminate is not None:
+        existing.can_terminate = can_terminate
+    if can_tail_output is not None:
+        existing.can_tail_output = can_tail_output
+    if can_resume is not None:
+        existing.can_resume = can_resume
+    existing.last_health_at = now
+    return existing
+
+
 def record_connection(
     db: Session,
     *,
