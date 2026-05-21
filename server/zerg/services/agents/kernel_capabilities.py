@@ -273,11 +273,14 @@ def project_session_capabilities(
 
     # Capability bits surface from the best connection only when the bucket
     # actually grants control. An observe_only "search-only" session never
-    # exposes can_send_input even if the row carries a stale 1.
+    # exposes can_send_input even if the row carries a stale 1. Likewise,
+    # tail surfaces only on buckets that imply an active reader: closed-run
+    # "imported" sessions never expose tail, even if a stale row still has
+    # the bit set.
     can_send = bool(best.can_send_input) and live
     can_interrupt = bool(best.can_interrupt) and live
     can_terminate = bool(best.can_terminate) and live
-    can_tail = bool(best.can_tail_output)
+    can_tail = bool(best.can_tail_output) and (live or observe)
     can_resume = bool(best.can_resume) and (live or reattach)
 
     return KernelSessionCapabilities(

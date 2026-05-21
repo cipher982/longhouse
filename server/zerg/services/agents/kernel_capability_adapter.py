@@ -86,12 +86,11 @@ def build_session_capabilities_from_kernel(
 
     - ``live_control_available`` = ``control_label == "live"`` (carried
       through from the projection).
-    - ``host_reattach_available`` = ``control_label in {"live", "reattach"}``.
-      Both buckets imply the session has a steerable control plane that
-      could be reattached if the live attachment goes stale; the
+    - ``host_reattach_available`` = ``control_label == "reattach"``. The
       runtime-aware projection in
       ``project_current_session_capabilities_from_facts`` is what flips a
-      stale-control "live" session into the reattach affordance.
+      stale-control "live" session into the reattach affordance — until
+      that down-gate fires, ``live`` is sufficient on its own.
     - ``reply_to_live_session_available`` and ``can_queue_next_input`` =
       ``live_control_available AND can_send_input``. A live attached
       connection without the send capability does not show a reply
@@ -122,7 +121,7 @@ def build_session_capabilities_from_kernel(
         kernel = project_session_capabilities(db, session_id=session.id)
 
     live = bool(kernel.live_control_available)
-    reattach = bool(kernel.host_reattach_available) or live
+    reattach = bool(kernel.host_reattach_available)
     can_send = bool(kernel.can_send_input)
     reply_to_live = live and can_send
     can_queue = reply_to_live
