@@ -30,7 +30,10 @@ use crate::state::live_file_state::LiveFileState;
 use crate::state::spool::Spool;
 
 const TARGET_BATCH_BYTES: u64 = 512 * 1024;
-const ARCHIVE_INGEST_TIMEOUT: Duration = Duration::from_secs(15);
+// The Runtime Host allows /api/agents/ingest to run for 30s. Archive and
+// replay sends should not give up first; otherwise the server may still commit
+// the batch after the client has already marked it retryable.
+const ARCHIVE_INGEST_TIMEOUT: Duration = Duration::from_secs(35);
 const LIVE_TRANSCRIPT_INGEST_TIMEOUT: Duration = Duration::from_secs(20);
 
 fn target_batch_bytes(max_batch_bytes: u64) -> u64 {
@@ -1976,6 +1979,7 @@ pub(crate) async fn replay_spool_batch_with_batch_bytes_and_parse_tracker(
         parse_tracker,
         ship_stats,
         None,
+        None,
     )
     .await?;
 
@@ -1998,6 +2002,7 @@ pub(crate) async fn replay_spool_for_path_with_batch_bytes_and_parse_tracker(
     parse_tracker: Option<&RecentIssueTracker>,
     ship_stats: Option<&RecentShipStatsTracker>,
     flight_recorder: Option<&FlightRecorder>,
+    ship_trace: Option<&ShipTraceContext>,
 ) -> Result<ReplaySpoolOutcome> {
     let spool = Spool::new(conn);
     let pending = spool.pending_entries_for_path(&file_path.to_string_lossy(), limit)?;
@@ -2010,6 +2015,7 @@ pub(crate) async fn replay_spool_for_path_with_batch_bytes_and_parse_tracker(
         parse_tracker,
         ship_stats,
         flight_recorder,
+        ship_trace,
     )
     .await
 }
@@ -2034,6 +2040,7 @@ pub(crate) async fn replay_spool_for_path_now_with_batch_bytes_and_parse_tracker
         max_batch_bytes,
         parse_tracker,
         ship_stats,
+        None,
         None,
     )
     .await
@@ -2071,7 +2078,7 @@ async fn prepare_spool_entry_for_replay(
 #[tracing::instrument(
     level = "info",
     name = "engine.spool.replay",
-    skip(conn, client, pending, parse_tracker, ship_stats, flight_recorder),
+    skip(conn, client, pending, parse_tracker, ship_stats, flight_recorder, ship_trace),
     fields(longhouse.spool.pending_entries = pending.len() as u64)
 )]
 async fn replay_spool_entries(
@@ -2083,6 +2090,7 @@ async fn replay_spool_entries(
     parse_tracker: Option<&RecentIssueTracker>,
     ship_stats: Option<&RecentShipStatsTracker>,
     flight_recorder: Option<&FlightRecorder>,
+    ship_trace: Option<&ShipTraceContext>,
 ) -> Result<ReplaySpoolOutcome> {
     let spool = Spool::new(conn);
     let file_state = FileState::new(conn);
@@ -2186,7 +2194,8 @@ async fn replay_spool_entries(
                     }
                 }
                 PreparedAction::Ship(item) => {
-                    match attempt_ship(item, client, None, ship_stats, None, flight_recorder).await
+                    match attempt_ship(item, client, None, ship_stats, ship_trace, flight_recorder)
+                        .await
                     {
                         AttemptedShip::Shipped(item) => {
                             outcome.events_shipped += item.event_count;
@@ -2630,11 +2639,11 @@ mod tests {
 
         assert_eq!(
             request_timeout_for_trace(Some(&trace)),
-            Some(Duration::from_secs(15))
+            Some(Duration::from_secs(35))
         );
         assert_eq!(
             request_timeout_for_trace(None),
-            Some(Duration::from_secs(15))
+            Some(Duration::from_secs(35))
         );
     }
 
@@ -4104,6 +4113,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -4174,6 +4184,7 @@ mod tests {
             None,
             Some(&ship_stats),
             None,
+            None,
         )
         .await
         .unwrap();
@@ -4231,6 +4242,7 @@ mod tests {
             10_000,
             None,
             Some(&ship_stats),
+            None,
             None,
         )
         .await
@@ -4308,6 +4320,7 @@ mod tests {
             &path,
             10,
             10_000,
+            None,
             None,
             None,
             None,

@@ -57,8 +57,13 @@ def _ship_trace_from_request(request: Request) -> dict | None:
 
 
 def _write_serializer_label_for_ship_trace(ship_trace: dict | None) -> str:
-    if ship_trace and ship_trace.get("work_context") == "live_transcript":
+    work_context = ship_trace.get("work_context") if ship_trace else None
+    if work_context == "live_transcript":
         return "ingest-live"
+    if work_context == "spool_replay":
+        return "ingest-replay"
+    if work_context == "reconciliation_scan":
+        return "ingest-scan"
     return "ingest"
 
 

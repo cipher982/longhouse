@@ -29,6 +29,12 @@ const LIVE_IN_FLIGHT_CAP: usize = 8;
 /// than `LIVE_RESERVED`, Retry+Scan still get one slot so they can drain.
 const LIVE_RESERVED: usize = LIVE_IN_FLIGHT_CAP;
 
+/// Retry and reconciliation work is durable archive repair. The Runtime Host
+/// serializes SQLite writes per tenant, so multiple background archive writers
+/// mostly create server-side queueing and client timeouts. Keep this lane
+/// deliberately narrow; live work still has its own reserved slots above.
+const BACKLOG_IN_FLIGHT_CAP: usize = 1;
+
 /// One unit of daemon work keyed to a single file path.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PathJob {
@@ -320,7 +326,11 @@ impl PathScheduler {
             WorkPriority::Retry | WorkPriority::Scan => {
                 let backlog_in_flight = self.in_flight_count(WorkPriority::Retry)
                     + self.in_flight_count(WorkPriority::Scan);
-                let backlog_cap = self.max_in_flight.saturating_sub(LIVE_RESERVED).max(1);
+                let backlog_cap = self
+                    .max_in_flight
+                    .saturating_sub(LIVE_RESERVED)
+                    .max(1)
+                    .min(BACKLOG_IN_FLIGHT_CAP);
                 backlog_in_flight < backlog_cap
             }
         }
@@ -373,6 +383,55 @@ mod tests {
         assert_eq!(job.path, path);
         assert_eq!(job.priority, WorkPriority::Live);
         assert!(scheduler.pop_launchable().is_none());
+    }
+
+    #[test]
+    fn test_background_archive_work_is_capped_to_one_slot() {
+        let mut scheduler = PathScheduler::new(32);
+
+        scheduler.enqueue(
+            PathBuf::from("/tmp/retry-a.jsonl"),
+            "codex",
+            WorkPriority::Retry,
+        );
+        scheduler.enqueue(
+            PathBuf::from("/tmp/retry-b.jsonl"),
+            "codex",
+            WorkPriority::Retry,
+        );
+        scheduler.enqueue(
+            PathBuf::from("/tmp/scan-c.jsonl"),
+            "codex",
+            WorkPriority::Scan,
+        );
+
+        let first = scheduler.pop_launchable().unwrap();
+        assert_ne!(first.priority, WorkPriority::Live);
+        assert!(
+            scheduler.pop_launchable().is_none(),
+            "background retry/scan work should not fan out even when many workers are configured"
+        );
+    }
+
+    #[test]
+    fn test_live_work_can_launch_while_background_archive_work_is_running() {
+        let mut scheduler = PathScheduler::new(32);
+
+        scheduler.enqueue(
+            PathBuf::from("/tmp/retry.jsonl"),
+            "codex",
+            WorkPriority::Retry,
+        );
+        let retry = scheduler.pop_launchable().unwrap();
+        assert_eq!(retry.priority, WorkPriority::Retry);
+
+        scheduler.enqueue(
+            PathBuf::from("/tmp/live.jsonl"),
+            "codex",
+            WorkPriority::Live,
+        );
+        let live = scheduler.pop_launchable().unwrap();
+        assert_eq!(live.priority, WorkPriority::Live);
     }
 
     #[test]
@@ -817,6 +876,9 @@ mod tests {
             scheduler.pop_launchable().unwrap().priority,
             WorkPriority::Retry
         );
+        assert!(scheduler.pop_launchable().is_none());
+
+        scheduler.complete(&PathBuf::from("/tmp/retry.jsonl"), None);
         assert_eq!(
             scheduler.pop_launchable().unwrap().priority,
             WorkPriority::Scan

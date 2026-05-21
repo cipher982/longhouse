@@ -100,6 +100,46 @@ async def test_runtime_and_archive_writes_jump_ahead_of_presence_chatter(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_background_ingest_repair_stays_behind_machine_health_signals(tmp_path):
+    db_path = tmp_path / "write-serializer-background-ingest-priority.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    session_factory = make_sessionmaker(engine)
+
+    with engine.begin() as conn:
+        conn.exec_driver_sql("CREATE TABLE writes (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL)")
+
+    serializer = WriteSerializer()
+    serializer.configure(session_factory)
+
+    started = threading.Event()
+    run_order: list[str] = []
+
+    def _make_write(label: str, delay: float = 0.0):
+        def _write(db):
+            run_order.append(label)
+            if label == "first":
+                started.set()
+            if delay > 0:
+                time.sleep(delay)
+            db.execute(sa_text("INSERT INTO writes(label) VALUES (:label)"), {"label": label})
+
+        return _write
+
+    first = asyncio.create_task(serializer.execute(_make_write("first", delay=0.05), label="summary"))
+    await asyncio.to_thread(started.wait, 1.0)
+
+    replay = asyncio.create_task(serializer.execute(_make_write("replay"), label="ingest-replay"))
+    scan = asyncio.create_task(serializer.execute(_make_write("scan"), label="ingest-scan"))
+    presence = asyncio.create_task(serializer.execute(_make_write("presence"), label="presence"))
+    heartbeat = asyncio.create_task(serializer.execute(_make_write("heartbeat"), label="heartbeat"))
+    runtime = asyncio.create_task(serializer.execute(_make_write("runtime"), label="runtime-observations"))
+
+    await asyncio.gather(first, replay, scan, presence, heartbeat, runtime)
+
+    assert run_order == ["first", "runtime", "presence", "heartbeat", "replay", "scan"]
+
+
+@pytest.mark.asyncio
 async def test_live_ingest_jumps_ahead_of_archive_ingest(tmp_path):
     db_path = tmp_path / "write-serializer-live-ingest-priority.db"
     engine = make_engine(f"sqlite:///{db_path}")
