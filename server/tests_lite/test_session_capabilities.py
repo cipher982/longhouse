@@ -1016,6 +1016,48 @@ def test_session_response_fresh_control_lease_not_phase_age_drives_sendability(t
             assert response.capabilities.composer_disabled_reason is None
             assert response.capabilities.display_label != "Control offline"
             assert response.capabilities.display_label != "Closed"
+            assert response.capabilities.control_label == "live"
+            assert response.capabilities.observe_only is False
+            assert response.capabilities.search_only is False
+            assert response.capabilities.staleness_reason is None
+            assert response.capabilities.can_send_input is True
+            assert response.capabilities.can_tail_output is True
+    finally:
+        engine.dispose()
+
+
+def test_session_response_imported_session_surfaces_search_only_kernel_bucket(tmp_path):
+    """An imported session with no kernel rows projects as search-only.
+
+    Tests the kernel-bucket fields surface on SessionResponse so clients
+    don't have to re-derive them from the underlying booleans.
+    """
+
+    engine, session_local = _make_db(tmp_path)
+    try:
+        with session_local() as db:
+            session = _seed_agent_session(
+                db,
+                provider="claude",
+                execution_home="unmanaged_local",
+                managed_transport=None,
+                source_runner_id=None,
+                source_runner_name=None,
+                seed_kernel_rows=False,
+            )
+            response = build_session_response(
+                AgentsStore(db),
+                session,
+                last_activity_at=session.started_at,
+                runtime_overlay=None,
+            )
+            assert response.capabilities.control_label == "imported"
+            assert response.capabilities.search_only is True
+            assert response.capabilities.observe_only is False
+            assert response.capabilities.can_send_input is False
+            assert response.capabilities.can_tail_output is False
+            assert response.capabilities.can_resume is False
+            assert response.capabilities.staleness_reason == "imported_only"
     finally:
         engine.dispose()
 
