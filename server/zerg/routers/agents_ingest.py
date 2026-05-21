@@ -1,6 +1,7 @@
 """Agents API — session ingest endpoint."""
 
 import gzip
+import io
 import json
 import logging
 import time
@@ -113,11 +114,25 @@ def _persist_ship_trace_event(
         logger.debug("Failed to persist ship trace event", exc_info=True)
 
 
+# Hard cap on decompressed ingest bodies. Engine splits batches at
+# `max_batch_bytes` (default 50 MiB *compressed*); a healthy decompressed
+# JSONL batch decompresses to roughly 5-10× that. 256 MiB is comfortably
+# above the largest legitimate batch and well below memory pressure on a
+# Runtime Host. zstd bombs typically aim for 1000×+ ratios, so this caps
+# the worst case at the same order of magnitude as legitimate traffic.
+MAX_DECOMPRESSED_BODY_BYTES: int = 256 * 1024 * 1024
+
+
 async def decompress_if_gzipped(request: Request) -> tuple[bytes, int, str]:
     """Decompress request body if gzip or zstd encoded.
 
     Returns:
         Tuple of (decompressed request body, wire bytes, content encoding)
+
+    Raises 413 if the decompressed body would exceed
+    [`MAX_DECOMPRESSED_BODY_BYTES`]. This is the zstd/gzip-bomb guard:
+    upstream nginx caps the *compressed* request, but a tiny compressed
+    body can decompress to many GiB if we don't bound the stream.
     """
     body = await request.body()
     wire_bytes = len(body)
@@ -125,7 +140,7 @@ async def decompress_if_gzipped(request: Request) -> tuple[bytes, int, str]:
 
     if content_encoding == "gzip":
         try:
-            body = gzip.decompress(body)
+            body = _decompress_bounded_gzip(body)
         except gzip.BadGzipFile as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -133,15 +148,7 @@ async def decompress_if_gzipped(request: Request) -> tuple[bytes, int, str]:
             )
     elif content_encoding == "zstd":
         try:
-            dctx = zstandard.ZstdDecompressor()
-            chunks = []
-            with dctx.stream_reader(body) as reader:
-                while True:
-                    chunk = reader.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    chunks.append(chunk)
-            body = b"".join(chunks)
+            body = _decompress_bounded_zstd(body)
         except zstandard.ZstdError as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -149,6 +156,47 @@ async def decompress_if_gzipped(request: Request) -> tuple[bytes, int, str]:
             )
 
     return body, wire_bytes, content_encoding or "identity"
+
+
+def _decompress_bounded_gzip(body: bytes) -> bytes:
+    """Streaming gzip decompress with a hard size cap. 413 on overflow."""
+    out = bytearray()
+    with gzip.GzipFile(fileobj=io.BytesIO(body), mode="rb") as gz:
+        while True:
+            chunk = gz.read(1024 * 1024)
+            if not chunk:
+                break
+            if len(out) + len(chunk) > MAX_DECOMPRESSED_BODY_BYTES:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=(
+                        f"Decompressed gzip body exceeds "
+                        f"{MAX_DECOMPRESSED_BODY_BYTES} bytes"
+                    ),
+                )
+            out.extend(chunk)
+    return bytes(out)
+
+
+def _decompress_bounded_zstd(body: bytes) -> bytes:
+    """Streaming zstd decompress with a hard size cap. 413 on overflow."""
+    out = bytearray()
+    dctx = zstandard.ZstdDecompressor()
+    with dctx.stream_reader(body) as reader:
+        while True:
+            chunk = reader.read(1024 * 1024)
+            if not chunk:
+                break
+            if len(out) + len(chunk) > MAX_DECOMPRESSED_BODY_BYTES:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=(
+                        f"Decompressed zstd body exceeds "
+                        f"{MAX_DECOMPRESSED_BODY_BYTES} bytes"
+                    ),
+                )
+            out.extend(chunk)
+    return bytes(out)
 
 
 @router.post("/ingest", response_model=IngestResponse)
