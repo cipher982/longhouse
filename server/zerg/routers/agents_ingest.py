@@ -148,6 +148,10 @@ async def decompress_if_gzipped(request: Request) -> tuple[bytes, int, str]:
     [`MAX_DECOMPRESSED_BODY_BYTES`]. This is the zstd/gzip-bomb guard:
     upstream nginx caps the *compressed* request, but a tiny compressed
     body can decompress to many GiB if we don't bound the stream.
+
+    Identity (uncompressed) bodies are also bounded by the same cap, so
+    callers can't dodge the limit by simply not setting Content-Encoding.
+    Unsupported encodings are rejected with 415.
     """
     body = await request.body()
     wire_bytes = len(body)
@@ -156,7 +160,7 @@ async def decompress_if_gzipped(request: Request) -> tuple[bytes, int, str]:
     if content_encoding == "gzip":
         try:
             body = _decompress_bounded_gzip(body)
-        except gzip.BadGzipFile as e:
+        except (gzip.BadGzipFile, EOFError, OSError) as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid gzip content: {e}",
@@ -169,6 +173,19 @@ async def decompress_if_gzipped(request: Request) -> tuple[bytes, int, str]:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid zstd content: {e}",
             )
+    elif content_encoding in ("", "identity"):
+        if len(body) > MAX_DECOMPRESSED_BODY_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=(
+                    f"Identity body exceeds {MAX_DECOMPRESSED_BODY_BYTES} bytes"
+                ),
+            )
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=f"Unsupported Content-Encoding: {content_encoding}",
+        )
 
     return body, wire_bytes, content_encoding or "identity"
 

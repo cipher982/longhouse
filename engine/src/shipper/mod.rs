@@ -48,13 +48,24 @@ const ARCHIVE_TARGET_BATCH_BYTES: u64 = 4 * 1024 * 1024;
 const ARCHIVE_INGEST_TIMEOUT: Duration = Duration::from_secs(35);
 const LIVE_TRANSCRIPT_INGEST_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// Pick a batch target as a function of work mode. Live transcript ships stay
-/// small (latency); archive / replay ships go bigger (amortize round trip).
+/// Batch sizing band, independent of `SourceLineMode`. `SourceLineMode` is a
+/// Codex-specific axis (whether to ship full source lines or event-only); the
+/// batch band is keyed off `WorkPriority` so non-Codex live work also gets the
+/// 512 KiB live target instead of accidentally inheriting the 4 MiB archive
+/// target via `SourceLineMode::Full`. Phase-6 fix; see worktree commit log.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum BatchBand {
+    Live,
+    Archive,
+}
+
+/// Pick a batch target for the given band. Live transcript ships stay small
+/// (latency); archive / replay ships go bigger (amortize round trip).
 /// `max_batch_bytes` (configurable hard ceiling) clamps both bands.
-fn target_batch_bytes_for_mode(mode: SourceLineMode, max_batch_bytes: u64) -> u64 {
-    let target = match mode {
-        SourceLineMode::EventOnly => LIVE_TARGET_BATCH_BYTES,
-        SourceLineMode::Full => ARCHIVE_TARGET_BATCH_BYTES,
+fn target_batch_bytes_for_band(band: BatchBand, max_batch_bytes: u64) -> u64 {
+    let target = match band {
+        BatchBand::Live => LIVE_TARGET_BATCH_BYTES,
+        BatchBand::Archive => ARCHIVE_TARGET_BATCH_BYTES,
     };
     max_batch_bytes.min(target).max(1)
 }
@@ -64,25 +75,25 @@ mod target_batch_bytes_tests {
     use super::*;
 
     #[test]
-    fn live_mode_keeps_small_target_regardless_of_ceiling() {
+    fn live_band_keeps_small_target_regardless_of_ceiling() {
         assert_eq!(
-            target_batch_bytes_for_mode(SourceLineMode::EventOnly, u64::MAX),
+            target_batch_bytes_for_band(BatchBand::Live, u64::MAX),
             LIVE_TARGET_BATCH_BYTES
         );
         assert_eq!(
-            target_batch_bytes_for_mode(SourceLineMode::EventOnly, 50 * 1024 * 1024),
+            target_batch_bytes_for_band(BatchBand::Live, 50 * 1024 * 1024),
             LIVE_TARGET_BATCH_BYTES
         );
     }
 
     #[test]
-    fn archive_mode_grows_to_archive_target_when_ceiling_allows() {
+    fn archive_band_grows_to_archive_target_when_ceiling_allows() {
         assert_eq!(
-            target_batch_bytes_for_mode(SourceLineMode::Full, u64::MAX),
+            target_batch_bytes_for_band(BatchBand::Archive, u64::MAX),
             ARCHIVE_TARGET_BATCH_BYTES
         );
         assert_eq!(
-            target_batch_bytes_for_mode(SourceLineMode::Full, 50 * 1024 * 1024),
+            target_batch_bytes_for_band(BatchBand::Archive, 50 * 1024 * 1024),
             ARCHIVE_TARGET_BATCH_BYTES
         );
     }
@@ -99,11 +110,11 @@ mod target_batch_bytes_tests {
         // A tight max_batch_bytes ceiling must still win, on both bands.
         let tight: u64 = 64 * 1024;
         assert_eq!(
-            target_batch_bytes_for_mode(SourceLineMode::EventOnly, tight),
+            target_batch_bytes_for_band(BatchBand::Live, tight),
             tight
         );
         assert_eq!(
-            target_batch_bytes_for_mode(SourceLineMode::Full, tight),
+            target_batch_bytes_for_band(BatchBand::Archive, tight),
             tight
         );
     }
@@ -111,8 +122,8 @@ mod target_batch_bytes_tests {
     #[test]
     fn zero_max_batch_bytes_floors_to_one() {
         // Defensive: never return zero so the batcher's > 0 invariant holds.
-        assert_eq!(target_batch_bytes_for_mode(SourceLineMode::EventOnly, 0), 1);
-        assert_eq!(target_batch_bytes_for_mode(SourceLineMode::Full, 0), 1);
+        assert_eq!(target_batch_bytes_for_band(BatchBand::Live, 0), 1);
+        assert_eq!(target_batch_bytes_for_band(BatchBand::Archive, 0), 1);
     }
 }
 
@@ -792,6 +803,7 @@ fn build_prepared_actions(
     session_id_override: Option<&str>,
     rewind_hint: Option<&compressor::SourceRewindHint>,
     source_line_mode: SourceLineMode,
+    batch_band: BatchBand,
 ) -> Result<Vec<PreparedAction>> {
     if parse_result.events.is_empty()
         && parse_result.candidate_records == 0
@@ -831,7 +843,7 @@ fn build_prepared_actions(
         &parse_result.events,
         start_offset,
         end_offset,
-        target_batch_bytes_for_mode(source_line_mode, max_batch_bytes),
+        target_batch_bytes_for_band(batch_band, max_batch_bytes),
         max_batch_bytes,
     )? {
         match planned {
@@ -896,6 +908,7 @@ pub fn prepare_path_range(
         None,
         None,
         SourceLineMode::Full,
+        BatchBand::Archive,
     )
 }
 
@@ -910,6 +923,7 @@ pub(crate) fn prepare_path_range_with_parse_tracker(
     parse_tracker: Option<&RecentIssueTracker>,
     rewind_hint: Option<&compressor::SourceRewindHint>,
     source_line_mode: SourceLineMode,
+    batch_band: BatchBand,
 ) -> Result<Option<PreparedFile>> {
     prepare_path_range_with_parse_tracker_and_trace(
         path,
@@ -922,6 +936,7 @@ pub(crate) fn prepare_path_range_with_parse_tracker(
         parse_tracker,
         rewind_hint,
         source_line_mode,
+        batch_band,
         None,
     )
 }
@@ -937,6 +952,7 @@ pub(crate) fn prepare_path_range_with_parse_tracker_and_trace(
     parse_tracker: Option<&RecentIssueTracker>,
     rewind_hint: Option<&compressor::SourceRewindHint>,
     source_line_mode: SourceLineMode,
+    batch_band: BatchBand,
     mut prepare_trace: Option<&mut PrepareTraceTimings>,
 ) -> Result<Option<PreparedFile>> {
     let path_str = path.to_string_lossy().to_string();
@@ -1013,6 +1029,7 @@ pub(crate) fn prepare_path_range_with_parse_tracker_and_trace(
         session_id_override,
         rewind_hint,
         source_line_mode,
+        batch_band,
     )?;
     if let Some(trace) = prepare_trace.as_deref_mut() {
         trace.batch_build_ms = Some(batch_build_started.elapsed().as_millis() as u64);
@@ -1082,6 +1099,7 @@ pub(crate) fn prepare_file_batches_with_parse_tracker(
         session_id_override,
         parse_tracker,
         SourceLineMode::Full,
+        BatchBand::Archive,
     )
 }
 
@@ -1094,6 +1112,7 @@ pub(crate) fn prepare_file_batches_with_source_line_mode_and_parse_tracker(
     session_id_override: Option<&str>,
     parse_tracker: Option<&RecentIssueTracker>,
     source_line_mode: SourceLineMode,
+    batch_band: BatchBand,
 ) -> Result<Option<PreparedFile>> {
     prepare_file_batches_with_source_line_mode_parse_tracker_and_trace(
         path,
@@ -1104,6 +1123,7 @@ pub(crate) fn prepare_file_batches_with_source_line_mode_and_parse_tracker(
         session_id_override,
         parse_tracker,
         source_line_mode,
+        batch_band,
         None,
     )
 }
@@ -1117,6 +1137,7 @@ pub(crate) fn prepare_file_batches_with_source_line_mode_parse_tracker_and_trace
     session_id_override: Option<&str>,
     parse_tracker: Option<&RecentIssueTracker>,
     source_line_mode: SourceLineMode,
+    batch_band: BatchBand,
     mut prepare_trace: Option<&mut PrepareTraceTimings>,
 ) -> Result<Option<PreparedFile>> {
     let path_str = path.to_string_lossy().to_string();
@@ -1245,6 +1266,7 @@ pub(crate) fn prepare_file_batches_with_source_line_mode_parse_tracker_and_trace
         parse_tracker,
         rewind_hint.as_ref(),
         source_line_mode,
+        batch_band,
         prepare_trace,
     )
 }
@@ -2177,6 +2199,7 @@ async fn prepare_spool_entry_for_replay(
             parse_tracker.as_ref(),
             None,
             SourceLineMode::Full,
+            BatchBand::Archive,
         )
     })
     .await?
@@ -2924,6 +2947,7 @@ mod tests {
             Some("019d2869-1111-7222-8333-aaaaaaaaaaaa"),
             None,
             SourceLineMode::EventOnly,
+            BatchBand::Live,
         )
         .unwrap()
         .expect("codex user message should prepare");
@@ -2972,6 +2996,7 @@ mod tests {
             Some("019d2869-1111-7222-8333-aaaaaaaaaaaa"),
             None,
             SourceLineMode::EventOnly,
+            BatchBand::Live,
         )
         .unwrap()
         .expect("codex user message should prepare");
@@ -3399,6 +3424,7 @@ mod tests {
             None,
             None,
             SourceLineMode::EventOnly,
+            BatchBand::Live,
         )
         .unwrap()
         .expect("replacement should be treated as fresh live content");

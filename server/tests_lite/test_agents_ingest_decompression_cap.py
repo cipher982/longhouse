@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import gzip
 import os
 
 import pytest
 import zstandard
 from fastapi import HTTPException
+from starlette.requests import Request
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
@@ -16,7 +18,24 @@ from zerg.routers.agents_ingest import (
     MAX_DECOMPRESSED_BODY_BYTES,
     _decompress_bounded_gzip,
     _decompress_bounded_zstd,
+    decompress_if_gzipped,
 )
+
+
+def _request(body: bytes, content_encoding: str | None) -> Request:
+    headers: list[tuple[bytes, bytes]] = []
+    if content_encoding is not None:
+        headers.append((b"content-encoding", content_encoding.encode()))
+    scope = {"type": "http", "method": "POST", "headers": headers}
+    sent = {"done": False}
+
+    async def receive():
+        if sent["done"]:
+            return {"type": "http.disconnect"}
+        sent["done"] = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(scope, receive)
 
 
 def _zeros(n: int) -> bytes:
@@ -56,3 +75,17 @@ def test_gzip_bomb_is_rejected_with_413():
     with pytest.raises(HTTPException) as exc:
         _decompress_bounded_gzip(compressed)
     assert exc.value.status_code == 413
+
+
+def test_identity_body_over_cap_is_rejected_with_413():
+    # An attacker who skips Content-Encoding shouldn't get to dodge the cap.
+    body = _zeros(MAX_DECOMPRESSED_BODY_BYTES + 1)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(decompress_if_gzipped(_request(body, content_encoding=None)))
+    assert exc.value.status_code == 413
+
+
+def test_unknown_encoding_is_rejected_with_415():
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(decompress_if_gzipped(_request(b"hi", content_encoding="br")))
+    assert exc.value.status_code == 415

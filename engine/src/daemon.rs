@@ -1880,6 +1880,14 @@ async fn prepare_file_for_job(
     } else {
         shipper::SourceLineMode::Full
     };
+    // Band is keyed off WorkPriority, NOT SourceLineMode. Live work for any
+    // provider keeps the small live target so latency stays low; replay/scan
+    // gets the larger archive target to amortize the round trip.
+    let batch_band = if job.priority == WorkPriority::Live {
+        shipper::BatchBand::Live
+    } else {
+        shipper::BatchBand::Archive
+    };
     let blocking_span = tracing::info_span!(
         "engine.ship.prepare.blocking",
         longhouse.provider = %provider,
@@ -1947,6 +1955,7 @@ async fn prepare_file_for_job(
             session_id_override.as_deref(),
             Some(&parse_tracker),
             source_line_mode,
+            batch_band,
             Some(&mut trace_timings),
         )?;
         Ok(prepared.map(|prepared| PreparedPathJobFile {
