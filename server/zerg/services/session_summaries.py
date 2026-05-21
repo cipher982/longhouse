@@ -1,7 +1,7 @@
 """Background session summarization and embedding pipeline.
 
 Extracted from the agents router — these are background async tasks, not HTTP
-handlers.  Called from ingest endpoints and from ``ingest_task_queue``.
+handlers. Summary enrichment is driven by session revision-lag reconciliation.
 """
 
 from __future__ import annotations

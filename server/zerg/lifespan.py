@@ -313,47 +313,6 @@ async def lifespan(app: FastAPI):
                 failed.append(f"summary_reconciler ({e})")
                 logger.exception("Failed to start summary_reconciler")
 
-            # Ingest task workers
-            try:
-                from zerg.database import get_session_factory
-                from zerg.services.ingest_task_queue import HOT_INGEST_TASK_TYPES
-                from zerg.services.ingest_task_queue import HOT_WORKER_POLL_SECONDS
-                from zerg.services.ingest_task_queue import close_current_pending_tasks
-                from zerg.services.ingest_task_queue import reset_stale_running_tasks
-                from zerg.services.ingest_task_queue import run_failed_task_resurrector
-                from zerg.services.ingest_task_queue import run_ingest_task_worker
-
-                _itq_db = get_session_factory()()
-                try:
-                    reset_stale_running_tasks(_itq_db)
-                    while close_current_pending_tasks(_itq_db):
-                        pass
-                finally:
-                    _itq_db.close()
-                asyncio.create_task(
-                    run_ingest_task_worker(
-                        poll_seconds=HOT_WORKER_POLL_SECONDS,
-                        worker_name="hot",
-                        include_task_types=HOT_INGEST_TASK_TYPES,
-                    )
-                )
-                asyncio.create_task(
-                    run_ingest_task_worker(
-                        worker_name="cold",
-                        exclude_task_types=HOT_INGEST_TASK_TYPES,
-                    )
-                )
-                started.extend(["ingest_task_worker_hot", "ingest_task_worker_cold"])
-                try:
-                    asyncio.create_task(run_failed_task_resurrector())
-                    started.append("ingest_task_resurrector")
-                except Exception as e:  # noqa: BLE001
-                    failed.append(f"ingest_task_resurrector ({e})")
-                    logger.exception("Failed to start ingest_task_resurrector")
-            except Exception as e:  # noqa: BLE001
-                failed.append(f"ingest_task_worker ({e})")
-                logger.exception("Failed to start ingest_task_worker")
-
             # Job queue
             if _settings.job_queue_enabled and not _settings.testing:
                 try:
