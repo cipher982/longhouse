@@ -378,6 +378,14 @@ class SessionObservation(AgentsBase):
         UniqueConstraint("observation_id", name="uq_session_observations_observation_id"),
         Index("ix_session_observations_session_observed", "session_id", "observed_at", "id"),
         Index("ix_session_observations_session_source_kind", "session_id", "source", "kind", "id"),
+        Index(
+            "ix_session_observations_session_source_kind_observed",
+            "session_id",
+            "source",
+            "kind",
+            "observed_at",
+            "id",
+        ),
         Index("ix_session_observations_domain_kind", "source_domain", "kind", "observed_at"),
         Index("ix_session_observations_source_cursor", "source", "source_cursor"),
     )

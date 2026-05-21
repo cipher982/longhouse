@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import and_
 from sqlalchemy import func
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -80,14 +81,14 @@ def load_active_provisional_preview_map(db: Session, session_ids: list[UUID]) ->
         )
     }
 
-    rows = (
+    rows_query = (
         db.query(SessionObservation)
-        .filter(SessionObservation.session_id.in_(session_ids))
+        .filter(_active_preview_observation_window(session_ids, durable_activity))
         .filter(SessionObservation.source == "codex_bridge_live")
         .filter(SessionObservation.kind == OBS_KIND_BRIDGE_TRANSCRIPT_DELTA)
         .order_by(SessionObservation.observation_id.asc(), SessionObservation.id.asc())
-        .all()
     )
+    rows = rows_query.all()
     candidates_by_turn: dict[tuple[str, str], _PreviewCandidate] = {}
     for row in rows:
         candidate = _preview_candidate_from_bridge_observation(row)
@@ -109,6 +110,22 @@ def load_active_provisional_preview_map(db: Session, session_ids: list[UUID]) ->
         if existing is None or (candidate.preview.timestamp, candidate.row_id) > (existing.timestamp, existing.event_id):
             previews[candidate.session_id] = candidate.preview
     return previews
+
+
+def _active_preview_observation_window(session_ids: list[UUID], durable_activity: dict[str, datetime | None]):
+    filters = []
+    for session_id in session_ids:
+        latest_durable_at = durable_activity.get(str(session_id))
+        if latest_durable_at is None:
+            filters.append(SessionObservation.session_id == session_id)
+            continue
+        filters.append(
+            and_(
+                SessionObservation.session_id == session_id,
+                SessionObservation.observed_at >= latest_durable_at,
+            )
+        )
+    return or_(*filters)
 
 
 def _preview_candidate_from_bridge_observation(row: SessionObservation) -> _PreviewCandidate | None:
