@@ -1,3 +1,4 @@
+import OSLog
 import SwiftUI
 import WidgetKit
 
@@ -81,10 +82,12 @@ struct TimelineView: View {
             }
             .refreshable { await viewModel.refresh(using: appState, reloadWidget: true) }
             .task {
-                await appState.ensurePushRegistrationIfPossible()
                 await viewModel.load(using: appState)
                 viewModel.startAutoRefresh(using: appState)
                 consumePendingPushIfNeeded()
+                Task {
+                    await appState.ensurePushRegistrationIfPossible()
+                }
             }
             .onAppear {
                 viewModel.resumeAutoRefresh(using: appState)
@@ -514,6 +517,7 @@ final class TimelineViewModel: ObservableObject {
     private var autoRefreshTask: Task<Void, Never>?
     private var lastWidgetReloadAt: Date?
     private var activeRefreshCount = 0
+    private let logger = Logger(subsystem: "ai.longhouse.ios", category: "Timeline")
 
     var connectionState: ConnectionState {
         ConnectionState.derive(failures: consecutiveRefreshFailures, lastUpdatedAt: lastUpdatedAt)
@@ -532,6 +536,7 @@ final class TimelineViewModel: ObservableObject {
             isInitialLoading = false
             return
         }
+        let startedAt = Date()
         activeRefreshCount += 1
         isRefreshing = true
         defer {
@@ -554,12 +559,15 @@ final class TimelineViewModel: ObservableObject {
             if reloadWidget {
                 reloadWidgetTimelineIfNeeded()
             }
+            logger.info("timeline refresh finished sessions=\(sessions.count, privacy: .public) elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
         } catch LonghouseAPIError.notAuthenticated {
             errorMessage = "Session expired. Sign in again."
             consecutiveRefreshFailures += 1
+            logger.error("timeline refresh unauthenticated elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
         } catch {
             errorMessage = "Couldn't load sessions: \(error.localizedDescription)"
             consecutiveRefreshFailures += 1
+            logger.error("timeline refresh failed elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public) error=\(error.localizedDescription, privacy: .public)")
         }
     }
 
