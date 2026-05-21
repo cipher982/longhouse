@@ -48,13 +48,54 @@ def _mirror_connection_state(
 ) -> None:
     """Phase 2 dual-write: mirror managed control state to session_connections.
 
-    Best-effort: if the session row is gone or no thread/run exists yet, we
-    skip silently. Legacy ManagedSessionControlState remains authoritative
-    for reads in Phase 2.
+    Positive attach evidence (online/degraded) materializes a thread + open
+    run on demand and upserts an attached/degraded connection. Negative
+    evidence (offline) only flips an existing connection — it never
+    fabricates a run for a session we have no live record of, since that
+    would conflate "we don't know about it" with "it ended."
+
+    Capability flags are intentionally not asserted here. Launchers own
+    capabilities; the bridge only reports liveness. When we materialize a
+    new connection from adopted control evidence, capabilities default to
+    0 and a separate launcher path is responsible for re-asserting them
+    when ownership is reclaimed.
     """
 
+    from zerg.models.agents import SessionConnection
+    from zerg.models.agents import SessionRun
+    from zerg.models.agents import SessionThread
     from zerg.services.agents.kernel_writes import ensure_open_run_for_session
     from zerg.services.agents.kernel_writes import upsert_connection_for_run
+
+    kernel_state = _kernel_connection_state(control_state)
+    control_plane = _kernel_control_plane_for_provider(provider)
+
+    if kernel_state in {"detached", "released", "ended"}:
+        # Negative evidence: only flip an existing connection. Do not
+        # fabricate a run/connection just to record "offline."
+        existing = (
+            db.query(SessionConnection)
+            .join(SessionRun, SessionConnection.run_id == SessionRun.id)
+            .join(SessionThread, SessionRun.thread_id == SessionThread.id)
+            .filter(
+                SessionThread.session_id == session_id,
+                SessionConnection.control_plane == control_plane,
+            )
+            .order_by(SessionConnection.id.desc())
+            .first()
+        )
+        if existing is None:
+            return
+        # Reuse the upsert path so released_at semantics stay in one place.
+        upsert_connection_for_run(
+            db,
+            run=db.query(SessionRun).filter(SessionRun.id == existing.run_id).one(),
+            control_plane=control_plane,
+            acquisition_kind=existing.acquisition_kind,
+            state=kernel_state,
+            external_name=external_name,
+        )
+        return
 
     session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
     if session is None:
@@ -69,9 +110,9 @@ def _mirror_connection_state(
     upsert_connection_for_run(
         db,
         run=run,
-        control_plane=_kernel_control_plane_for_provider(provider),
+        control_plane=control_plane,
         acquisition_kind="adopted_control",
-        state=_kernel_connection_state(control_state),
+        state=kernel_state,
         external_name=external_name,
     )
 

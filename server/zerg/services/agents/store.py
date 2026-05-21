@@ -1160,6 +1160,9 @@ class AgentsStore:
         signal: RewindSignal,
     ) -> None:
         """Copy pre-rewind head state so the new branch remains fully reconstructable."""
+        from zerg.services.agents.kernel_writes import ensure_thread_id_for_session
+
+        fallback_thread_id = ensure_thread_id_for_session(self.db, session_id)
         parent_source_lines = (
             self.db.query(AgentSourceLine)
             .filter(AgentSourceLine.session_id == session_id)
@@ -1182,7 +1185,7 @@ class AgentsStore:
             source_copies.append(
                 AgentSourceLine(
                     session_id=session_id,
-                    thread_id=row.thread_id,
+                    thread_id=row.thread_id or fallback_thread_id,
                     source_path=row.source_path,
                     source_offset=row_offset,
                     branch_id=to_branch_id,
@@ -1213,7 +1216,7 @@ class AgentsStore:
             event_copies.append(
                 AgentEvent(
                     session_id=session_id,
-                    thread_id=event.thread_id,
+                    thread_id=event.thread_id or fallback_thread_id,
                     branch_id=to_branch_id,
                     role=event.role,
                     content_text=event.content_text,

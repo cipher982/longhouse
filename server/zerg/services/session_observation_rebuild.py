@@ -332,6 +332,9 @@ def _copy_source_prefix(
     source_path: str,
     offset: int,
 ) -> None:
+    from zerg.services.agents.kernel_writes import ensure_thread_id_for_session
+
+    fallback_thread_id = ensure_thread_id_for_session(db, session_id)
     parent_rows = (
         db.query(AgentSourceLine)
         .filter(AgentSourceLine.session_id == session_id)
@@ -364,7 +367,7 @@ def _copy_source_prefix(
         db.add(
             AgentSourceLine(
                 session_id=session_id,
-                thread_id=row.thread_id,
+                thread_id=row.thread_id or fallback_thread_id,
                 source_path=row.source_path,
                 source_offset=row_offset,
                 branch_id=to_branch_id,
@@ -387,6 +390,9 @@ def _copy_event_prefix(
     source_path: str,
     offset: int,
 ) -> None:
+    from zerg.services.agents.kernel_writes import ensure_thread_id_for_session
+
+    fallback_thread_id = ensure_thread_id_for_session(db, session_id)
     parent_events = (
         db.query(AgentEvent)
         .filter(AgentEvent.session_id == session_id)
@@ -413,7 +419,7 @@ def _copy_event_prefix(
         db.add(
             AgentEvent(
                 session_id=session_id,
-                thread_id=event.thread_id,
+                thread_id=event.thread_id or fallback_thread_id,
                 branch_id=to_branch_id,
                 role=event.role,
                 content_text=event.content_text,

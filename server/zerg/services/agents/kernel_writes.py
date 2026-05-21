@@ -18,6 +18,7 @@ from datetime import datetime
 from datetime import timezone
 from typing import Optional
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
@@ -94,23 +95,28 @@ def record_thread_alias(
     if existing is not None:
         return
 
-    db.add(
-        SessionThreadAlias(
-            thread_id=thread.id,
-            provider=provider,
-            alias_kind=alias_kind,
-            alias_value=alias_value,
-        )
-    )
+    try:
+        with db.begin_nested():
+            db.add(
+                SessionThreadAlias(
+                    thread_id=thread.id,
+                    provider=provider,
+                    alias_kind=alias_kind,
+                    alias_value=alias_value,
+                )
+            )
+    except IntegrityError:
+        # Concurrent insert won the race. The unique index made this safe;
+        # we just lost the write and the existing row is good.
+        pass
 
 
 def resolve_thread_id_for_session(db: Session, session_id) -> Optional[str]:
     """Cheap lookup: thread.id for the session's primary thread, or None.
 
-    Used by ingest reducers that need to stamp ``thread_id`` on a new row
-    but only have ``session_id`` in hand. Returns None when no primary
-    thread has been materialized yet (e.g. a brand-new session in the
-    same transaction before ``ensure_primary_thread`` ran).
+    Returns None when no session row exists yet OR no primary thread has
+    been materialized. Prefer ``ensure_thread_id_for_session`` for ingest
+    write paths so child rows never carry NULL thread_id.
     """
 
     row = (
@@ -122,6 +128,26 @@ def resolve_thread_id_for_session(db: Session, session_id) -> Optional[str]:
         .one_or_none()
     )
     return row[0] if row is not None else None
+
+
+def ensure_thread_id_for_session(db: Session, session_id) -> Optional[str]:
+    """Ensure-style: return the primary thread id, materializing it if absent.
+
+    Looks up the AgentSession row and calls ``ensure_primary_thread``. If
+    the session row itself does not exist (caller passed a stale id),
+    returns None — caller decides whether that is a hard error.
+    """
+
+    if session_id is None:
+        return None
+    existing = resolve_thread_id_for_session(db, session_id)
+    if existing is not None:
+        return existing
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    if session is None:
+        return None
+    thread = ensure_primary_thread(db, session)
+    return thread.id
 
 
 def record_launch_attempt(
@@ -163,8 +189,25 @@ def record_launch_attempt(
         state=state,
         expires_at=expires_at,
     )
-    db.add(attempt)
-    db.flush()
+    try:
+        with db.begin_nested():
+            db.add(attempt)
+            db.flush()
+    except IntegrityError:
+        # Concurrent caller won; re-read the row that landed first.
+        if not client_request_id:
+            raise
+        existing = (
+            db.query(SessionLaunchAttempt)
+            .filter(
+                SessionLaunchAttempt.session_id == session.id,
+                SessionLaunchAttempt.client_request_id == client_request_id,
+            )
+            .one_or_none()
+        )
+        if existing is None:
+            raise
+        return existing
     return attempt
 
 
@@ -293,19 +336,34 @@ def upsert_connection_for_run(
     )
     now = datetime.now(timezone.utc)
     if existing is None:
-        return record_connection(
-            db,
-            run=run,
-            control_plane=control_plane,
-            acquisition_kind=acquisition_kind,
-            state=state,
-            external_name=external_name,
-            can_send_input=can_send_input or 0,
-            can_interrupt=can_interrupt or 0,
-            can_terminate=can_terminate or 0,
-            can_tail_output=can_tail_output or 0,
-            can_resume=can_resume or 0,
-        )
+        try:
+            with db.begin_nested():
+                return record_connection(
+                    db,
+                    run=run,
+                    control_plane=control_plane,
+                    acquisition_kind=acquisition_kind,
+                    state=state,
+                    external_name=external_name,
+                    can_send_input=can_send_input or 0,
+                    can_interrupt=can_interrupt or 0,
+                    can_terminate=can_terminate or 0,
+                    can_tail_output=can_tail_output or 0,
+                    can_resume=can_resume or 0,
+                )
+        except IntegrityError:
+            # Concurrent caller landed first; fall through to the update path.
+            existing = (
+                db.query(SessionConnection)
+                .filter(
+                    SessionConnection.run_id == run.id,
+                    SessionConnection.control_plane == control_plane,
+                )
+                .order_by(SessionConnection.id.desc())
+                .first()
+            )
+            if existing is None:
+                raise
 
     if existing.state != state:
         existing.state = state
