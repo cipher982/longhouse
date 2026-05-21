@@ -1,8 +1,9 @@
 # Session Enrichment Revision-Lag Reconciliation
 
-Status: Draft for Hatch Opus review
+Status: Reviewed by Hatch Opus; implementation ready
 Owner: David Rose
 Created: 2026-05-20
+Reviewed: 2026-05-20 via Hatch Opus
 
 ## Executive Summary
 
@@ -17,7 +18,7 @@ embedding work is needed when embedding_revision < transcript_revision or needs_
 
 The database state is the queue. Workers scan session rows, choose the highest-value stale sessions, run bounded concurrent remote API calls, and advance the relevant revision only if the write still matches the observed transcript revision. A missing summary/title never blocks the timeline: cards use stored summary/title when available and deterministic fallbacks otherwise.
 
-`SessionTask` can remain for `turn_loop` while summary and embedding enrichment move out of it. The goal is deletion of the generic cold queue, not a bigger queue abstraction.
+`SessionTask` may remain as a compatibility table, but summary and embedding enrichment must move out of it. Review also found no active production producer/executor for `turn_loop`, so Phase 4 should remove dormant ingest-task worker scaffolding unless a real consumer appears before that phase.
 
 ## Starting State
 
@@ -40,6 +41,7 @@ Problematic current shape:
 - Task claim/done/timeout writes go through `WriteSerializer`, so heavy archive ingest can delay even tiny bookkeeping writes.
 - `summary_status` projection currently reads latest `SessionTask(summary)` rows, so old/pending task rows leak queue internals into API/UI semantics.
 - Retry/resurrection logic exists for summary/embedding even though revision counters already describe whether the derived state is stale.
+- The hot `turn_loop` worker exists structurally, but current review found no production enqueue path and no `_run_task_impl` execution branch for `turn_loop`.
 
 Observed failure:
 
@@ -59,14 +61,15 @@ Longhouse should satisfy these invariants:
 - Recent visible sessions are enriched before historical maintenance work.
 - Embeddings and backfill cannot delay live titles/summaries.
 - Provider API concurrency is governed by explicit remote-call budgets, not by a generic "cold worker" thread count.
+- `transcript_revision` increment and `needs_embedding=1` are committed atomically with transcript-changing event inserts.
 
 ## Non-Goals
 
-- Do not remove `SessionTask` entirely in this project. It still supports `turn_loop`.
 - Do not replace SQLite. The redesign should work with the current single-writer model.
 - Do not build a general job system.
 - Do not require summaries to exist before sessions appear on the timeline.
 - Do not make embeddings part of the live card path.
+- Do not require a destructive cleanup migration for old `summary`/`embedding` `SessionTask` rows.
 
 ## Design
 
@@ -78,6 +81,7 @@ Summary candidates are selected from `sessions`:
 SELECT id
 FROM sessions
 WHERE COALESCE(transcript_revision, 0) > COALESCE(summary_revision, 0)
+  AND COALESCE(transcript_revision, 0) > 0
   AND COALESCE(user_messages, 0) + COALESCE(assistant_messages, 0) >= 2
 ORDER BY
   CASE WHEN summary_title IS NULL OR summary_title = '' THEN 0 ELSE 1 END,
@@ -86,7 +90,7 @@ ORDER BY
 LIMIT :batch_size;
 ```
 
-Embedding candidates are selected from `sessions`:
+Embedding candidates remain derivable from `sessions`:
 
 ```sql
 SELECT id
@@ -106,64 +110,83 @@ Add a summary reconciliation loop that:
 - polls for stale summary candidates,
 - prefers sessions with no title and recent activity,
 - runs provider calls concurrently behind a summary-specific semaphore,
+- tracks an in-process `set[session_id]` of active summary reconciliations so concurrent scans do not duplicate provider calls,
+- always releases the in-process active claim in `finally`, including cancellation paths,
 - never holds DB sessions during provider calls,
 - writes results with a revision guard,
 - advances `summary_revision` when a session has too little meaningful content or no new durable events.
 
 Provider concurrency should be a named budget such as `SESSION_SUMMARY_CONCURRENCY`, not `COLD_INGEST_WORKER_CONCURRENCY`. The default should reflect remote API behavior and hosted cost control, not local CPU.
 
-The worker should call existing `generate_summary_impl(session_id)` first. If stale writes or CAS conflicts are found during implementation, prefer tightening revision guards in `generate_summary_impl` over creating task rows.
+The worker should call existing `generate_summary_impl(session_id)`. Live summary writes must continue using the `WriteSerializer` label `summary` so they stay ahead of backfill writes; do not route live work through the lower-priority `summary-backfill` label.
 
-### 3. Embedding Reconciler Is Separate Maintenance
+### 3. Embeddings Stay Manual/Backfill For Launch
 
-Embedding reconciliation is not part of live timeline enrichment.
+Embedding reconciliation is not part of live timeline enrichment. For launch, keep explicit `/api/agents/backfill-embeddings` as the embedding maintenance path.
 
-Options:
+Rationale:
 
-- Keep explicit `/api/agents/backfill-embeddings` as the main embedding maintenance path.
-- Add a low-priority embedding reconciler only if recall/search freshness needs it.
+- The observed incident affected visible summary/title freshness; embedding lag was collateral.
+- Search/recall quality degrades gracefully when embeddings lag; timeline comprehension does not depend on embeddings.
+- `needs_embedding=1` remains durable state, so no work is lost.
+- Adding an automatic embedding scanner now would duplicate the summary reconciler's concurrency, duplicate-call avoidance, and backpressure machinery before recall freshness is the primary launch constraint.
 
-If an always-on embedding reconciler is kept, it must:
+Deployment requirement: after summary/embedding task enqueueing is removed, hosted ops must run embedding backfill on a cron or manual cadence until a future product need justifies an automatic embedding scanner.
+
+If a future always-on embedding reconciler is added, it must:
 
 - have its own provider semaphore,
 - rank recent sessions first,
 - back off when live summary work is active,
 - never share a generic queue with summary work,
-- never influence timeline card status.
+- never influence timeline card status,
+- use normal read sessions plus `WriteSerializer`, not a second always-on write path patterned after the explicit backfill route.
 
 ### 4. Summary Status Projection Stops Reading `SessionTask`
 
 API `summary_status` should be derived from `sessions` only:
 
 ```text
-ready       summary is non-empty
-pending     summary is empty, enough content exists, and summary_revision < transcript_revision
-unavailable summary is empty and content is too small or transcript_revision is current
+ready       summary is non-empty after trimming whitespace
+pending     summary is empty, transcript_revision > 0, enough content exists, and summary_revision < transcript_revision
+unavailable summary is empty and content is too small, transcript_revision is 0, or summary_revision >= transcript_revision
 failed      reserved for explicit future terminal enrichment errors, not derived from old SessionTask rows
 ```
 
 This keeps UI state tied to actual session enrichment lag rather than queue internals. Existing old `summary` task rows become irrelevant.
 
+Truth table checkpoints:
+
+- Non-empty summary wins and returns `ready` even if revision counters lag.
+- Whitespace-only summary is empty.
+- `summary_revision >= transcript_revision` with `summary=null` is legitimate after low-content/no-new-events fast-forward and returns `unavailable`.
+- Old `SessionTask(summary)` rows must not affect the result.
+
 ### 5. Ingest Does Not Enqueue Summary/Embedding Tasks
 
 When ingest changes durable transcript content:
 
+- insert event/source-line rows,
 - increment `transcript_revision`,
 - set `needs_embedding = 1`,
 - update cheap card fields such as `last_activity_at`,
+- commit those changes in the same ingest transaction,
 - do not insert `summary` or `embedding` `SessionTask` rows.
 
-`turn_loop` task behavior may stay as-is until separately simplified.
+If no durable transcript content changed, ingest must not mark summary or embedding work dirty.
 
-### 6. Cold Worker Removal
+### 6. Ingest Task Worker Removal
 
-After summary and embedding no longer use `SessionTask`, remove the cold worker startup path:
+After summary and embedding no longer use `SessionTask`, remove the generic ingest task worker runtime path:
 
-- keep the hot `turn_loop` worker if still needed,
+- stop starting the cold ingest task worker from lifespan,
 - remove `COLD_INGEST_WORKER_CONCURRENCY`,
 - remove summary/embed timeout tiers from `ingest_task_queue`,
-- remove summary/embed retry/resurrection logic from `ingest_task_queue`,
-- update comments and tests so the module is no longer described as summary/embed infrastructure.
+- remove summary/embed claim priority, execution branches, retry, and resurrection code,
+- remove dormant hot `turn_loop` worker scaffolding unless a real production consumer lands first,
+- update comments/tests so `SessionTask` is not advertised as active summary/embedding infrastructure.
+
+`SessionTask` model/table may remain inert for compatibility and future cleanup, but production runtime should not claim or execute `task_type in ('summary', 'embedding')`.
 
 ### 7. Existing Backlog Cleanup
 
@@ -196,21 +219,21 @@ Revisit if: enrichment work needs per-attempt audit history for billing, abuse c
 
 Context: Timeline comprehension and semantic recall have different latency requirements.
 
-Choice: Summary/title enrichment gets a live lane; embeddings remain maintenance/backfill.
+Choice: Summary/title enrichment gets a live lane; embeddings remain explicit maintenance/backfill for launch.
 
 Rationale: A user can see missing title/summary immediately. Embedding freshness matters for search quality but should not block or slow visible cards.
 
 Revisit if: recall becomes the primary launch surface and needs fresh embeddings within seconds.
 
-### Decision: Keep `SessionTask` for `turn_loop` Initially
+### Decision: Delete Dormant Worker Scaffolding Unless A Real Producer Appears
 
-Context: `SessionTask` also supports `turn_loop` and removing that in the same change would widen the blast radius.
+Context: Hatch Opus review found no active `turn_loop` producer or `_run_task_impl` branch despite the hot worker scaffolding.
 
-Choice: Remove summary/embedding use of `SessionTask` first; leave turn-loop queue behavior intact.
+Choice: Phase 4 should remove the generic ingest task worker runtime path, including hot worker scaffolding, unless implementation discovers an active production consumer.
 
-Rationale: This delivers the queue simplification that caused the incident without mixing in unrelated loop behavior.
+Rationale: Keeping unused workers preserves the mental model that this is a general queue. The goal is to remove that abstraction for launch.
 
-Revisit if: a later review shows `turn_loop` can also be represented by direct runtime/session state.
+Revisit if: a concrete `turn_loop` producer lands before Phase 4 and needs durable queue semantics.
 
 ### Decision: Ignore Old Summary/Embedding Task Rows
 
@@ -222,6 +245,16 @@ Rationale: Ignoring stale queue rows is safer than relying on a bulk mutation du
 
 Revisit if: old rows create storage/performance issues.
 
+### Decision: Phase 2 And Phase 3 Must Land Together Or Phase 3 Lands First
+
+Context: If ingest stops enqueueing summary tasks before a revision-lag reconciler exists, new sessions may not be summarized.
+
+Choice: Build projection first, then add the live summary reconciler before or in the same phase as removing summary enqueueing.
+
+Rationale: This avoids a regression window while still moving toward deletion.
+
+Revisit if: a hotfix explicitly needs only the additive reconciler first.
+
 ## Implementation Phases
 
 ### Phase 0: Spec and Review
@@ -231,6 +264,7 @@ Acceptance criteria:
 - This spec exists under `docs/specs/`.
 - Hatch Opus reviews the design before code implementation.
 - Review feedback is folded into this spec.
+- Embeddings are explicitly decided as manual/backfill-only for launch.
 - Spec is committed independently.
 
 Test commands:
@@ -244,15 +278,19 @@ Goal: Decouple API/UI summary state from `SessionTask`.
 Work:
 
 - Remove `SessionTask` summary lookup from `session_response_projection.py`.
+- Delete `SUMMARY_TERMINAL_RESURRECTION_COUNT` and the comment linking projection to ingest task resurrection.
 - Derive `summary_status` from `summary`, `summary_revision`, `transcript_revision`, and message counts.
 - Update `server/tests_lite/test_session_summary_status.py` around revision lag instead of task rows.
 - Keep `failed` reserved but unreachable unless a future explicit field exists.
 
 Acceptance criteria:
 
-- A session with `summary=null`, enough content, and `summary_revision < transcript_revision` projects `summary_status=pending`.
+- A session with `summary=null`, enough content, `transcript_revision > 0`, and `summary_revision < transcript_revision` projects `summary_status=pending`.
 - A session with a non-empty summary projects `ready` even if revision counters lag.
+- A whitespace-only summary is not `ready`.
 - A session with too little content projects `unavailable`.
+- A session with `summary=null` and `summary_revision >= transcript_revision` projects `unavailable`.
+- A session with `transcript_revision=0` projects `unavailable`.
 - Old `SessionTask(summary)` rows do not affect `summary_status`.
 
 Test commands:
@@ -262,50 +300,31 @@ cd server && DATABASE_URL=sqlite:////tmp/longhouse-test-$(uuidgen).db AUTH_DISAB
 cd server && uv run ruff check zerg/services/session_response_projection.py tests_lite/test_session_summary_status.py
 ```
 
-### Phase 2: Stop Enqueueing Summary/Embedding Tasks on Ingest
+### Phase 2: Add Summary Revision-Lag Reconciler
 
-Goal: Ingest writes raw truth and dirty revision markers only.
-
-Work:
-
-- Change `enqueue_ingest_tasks()` or ingest caller behavior so transcript-changing ingest no longer inserts `summary` or `embedding` `SessionTask` rows.
-- Preserve `transcript_revision` increment and `needs_embedding=1`.
-- Update ingest duplicate/replay tests that currently expect two pending task rows.
-- Keep any `turn_loop` enqueueing behavior separate if it exists.
-
-Acceptance criteria:
-
-- New transcript-changing ingest increments `transcript_revision`.
-- New transcript-changing ingest sets `needs_embedding=1`.
-- New transcript-changing ingest creates no `summary` or `embedding` task rows.
-- Existing duplicate/replay behavior remains idempotent.
-
-Test commands:
-
-```bash
-cd server && DATABASE_URL=sqlite:////tmp/longhouse-test-$(uuidgen).db AUTH_DISABLED=1 SKIP_DEMO_SEED=1 FERNET_SECRET=$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())') TRIGGER_SIGNING_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))') OPENROUTER_API_KEY=test-openrouter-key uv run pytest tests_lite/test_agents_duplicate_sqlite.py tests_lite/test_ingest_task_queue.py tests_lite/test_session_revision_guards.py
-cd server && uv run ruff check zerg/services/agents/store.py zerg/services/ingest_task_queue.py tests_lite/test_agents_duplicate_sqlite.py tests_lite/test_ingest_task_queue.py
-```
-
-### Phase 3: Add Summary Revision-Lag Reconciler
-
-Goal: Replace summary task draining with direct session scanning.
+Goal: Add the non-task live summary path before removing task enqueueing.
 
 Work:
 
 - Add a small service for stale summary candidate selection and worker loop.
 - Start it from lifespan with a named summary concurrency setting.
 - Use existing `generate_summary_impl(session_id)` for per-session work.
+- Track in-process active session IDs to avoid duplicate provider calls across concurrent scans.
 - Ensure candidate selection never requires or mutates `SessionTask`.
-- Add tests for candidate ordering, stale/current filtering, and concurrency/claim behavior.
+- Add tests for candidate ordering, stale/current filtering, duplicate-call avoidance, cancellation cleanup, and concurrency caps.
 
 Acceptance criteria:
 
 - Stale recent sessions are selected before older stale sessions.
+- Missing-title stale sessions are selected before title-present stale sessions.
 - Sessions with no meaningful content are handled without provider calls and become current or unavailable according to existing summary logic.
-- Concurrent worker iterations do not permanently duplicate provider calls for the same stale revision.
+- Concurrent worker iterations do not duplicate provider calls for the same stale revision.
+- Active in-process claims are released in `finally`, including cancellation.
 - Summary writes are revision guarded.
-- The worker does not hold DB connections while provider calls are running.
+- The worker and scan loop do not hold DB connections while provider calls are running.
+- Live work uses `WriteSerializer` label `summary`, not `summary-backfill`.
+- Reconciler concurrency never exceeds `SESSION_SUMMARY_CONCURRENCY`.
+- With many stale old `SessionTask(summary)` rows present, the reconciler still advances stale sessions without reading `SessionTask`.
 
 Test commands:
 
@@ -314,52 +333,85 @@ cd server && DATABASE_URL=sqlite:////tmp/longhouse-test-$(uuidgen).db AUTH_DISAB
 cd server && uv run ruff check zerg/services/session_enrichment_reconciler.py tests_lite/test_session_enrichment_reconciler.py
 ```
 
-### Phase 4: Remove Cold Summary/Embedding Task Queue Paths
+### Phase 3: Stop Enqueueing Summary/Embedding Tasks on Ingest
 
-Goal: Delete the generic cold worker surface for summary/embedding.
+Goal: Ingest writes raw truth and dirty revision markers only.
 
 Work:
 
-- Stop starting the cold ingest task worker from lifespan.
-- Keep hot `turn_loop` worker if still used.
-- Remove `COLD_INGEST_WORKER_CONCURRENCY`, summary/embed timeout tiers, summary/embed claim priority, summary/embed execution branches, and related retry/resurrection code where no longer used.
-- Rename or update comments so `ingest_task_queue.py` describes the remaining `turn_loop` queue only.
+- Change ingest behavior so transcript-changing ingest no longer inserts `summary` or `embedding` `SessionTask` rows.
+- Preserve `transcript_revision` increment and `needs_embedding=1`.
+- Keep revision/dirty marker writes in the same transaction as event/source-line inserts.
+- Update ingest duplicate/replay tests that currently expect two pending task rows.
+- Update `test_duplicate_replay_without_source_line_delta_does_not_requeue_post_ingest_work` to assert no summary/embed tasks are created on either pass.
+- Delete or rewrite summary/embed-specific enqueue/dedup tests in `test_ingest_task_queue.py`.
+
+Acceptance criteria:
+
+- New transcript-changing ingest increments `transcript_revision`.
+- New transcript-changing ingest sets `needs_embedding=1`.
+- Event insert, `transcript_revision` increment, and `needs_embedding=1` are committed atomically in the same ingest transaction.
+- New transcript-changing ingest creates no `summary` or `embedding` task rows.
+- Existing duplicate/replay behavior remains idempotent.
+- Embedding debt remains visible via `needs_embedding=1` for explicit backfill.
+
+Test commands:
+
+```bash
+cd server && DATABASE_URL=sqlite:////tmp/longhouse-test-$(uuidgen).db AUTH_DISABLED=1 SKIP_DEMO_SEED=1 FERNET_SECRET=$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())') TRIGGER_SIGNING_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))') OPENROUTER_API_KEY=test-openrouter-key uv run pytest tests_lite/test_agents_duplicate_sqlite.py tests_lite/test_ingest_task_queue.py tests_lite/test_session_revision_guards.py tests_lite/test_session_enrichment_reconciler.py
+cd server && uv run ruff check zerg/services/agents/store.py zerg/services/ingest_task_queue.py tests_lite/test_agents_duplicate_sqlite.py tests_lite/test_ingest_task_queue.py
+```
+
+### Phase 4: Remove Generic Ingest Task Worker Runtime Paths
+
+Goal: Delete the generic worker surface that made summary/embedding look like cold queued work.
+
+Work:
+
+- Stop starting ingest task workers from lifespan.
+- Remove `COLD_INGEST_WORKER_CONCURRENCY`.
+- Remove summary/embed timeout tiers, claim priority, execution branches, and related retry/resurrection code.
+- Remove `_hot_worker_event`, `_notify_hot_worker`, `_wait_for_hot_worker_signal`, `HOT_INGEST_TASK_TYPES`, and hot worker startup unless a real production consumer lands first.
+- Rename or update comments so `SessionTask` is not described as active summary/embed infrastructure.
 - Remove/replace obsolete concurrent cold worker tests.
+- Add a grep-style regression test or equivalent check that production code outside legacy/model definitions does not reference `task_type == "summary"` or `task_type == "embedding"`.
 
 Acceptance criteria:
 
 - No runtime code claims or executes `SessionTask(task_type in ('summary', 'embedding'))`.
 - No environment variable named `COLD_INGEST_WORKER_CONCURRENCY` remains.
 - `SessionTask` comments do not advertise summary/embedding as active users.
-- Turn-loop tests still pass.
+- Lifespan starts the summary reconciler but no generic ingest task workers.
+- Importing runtime modules does not reference summary/embed task queue literals except compatibility/model comments.
 
 Test commands:
 
 ```bash
-cd server && DATABASE_URL=sqlite:////tmp/longhouse-test-$(uuidgen).db AUTH_DISABLED=1 SKIP_DEMO_SEED=1 FERNET_SECRET=$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())') TRIGGER_SIGNING_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))') OPENROUTER_API_KEY=test-openrouter-key uv run pytest tests_lite/test_ingest_task_queue.py tests_lite/test_session_enrichment_reconciler.py tests_lite/test_session_summary_status.py
+cd server && DATABASE_URL=sqlite:////tmp/longhouse-test-$(uuidgen).db AUTH_DISABLED=1 SKIP_DEMO_SEED=1 FERNET_SECRET=$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())') TRIGGER_SIGNING_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))') OPENROUTER_API_KEY=test-openrouter-key uv run pytest tests_lite/test_ingest_task_queue.py tests_lite/test_session_enrichment_reconciler.py tests_lite/test_session_summary_status.py tests_lite/test_embeddings.py
 cd server && uv run ruff check zerg/services/ingest_task_queue.py zerg/lifespan.py tests_lite/test_ingest_task_queue.py
 ```
 
-### Phase 5: Embedding Lane Decision
+### Phase 5: Embedding Manual Backfill Verification
 
-Goal: Keep embeddings from blocking live enrichment while preserving search/recall quality.
+Goal: Preserve search/recall quality without introducing an automatic embedding scanner.
 
 Work:
 
-- Decide whether to leave embeddings as explicit `/backfill-embeddings` only or add a low-priority direct session scanner.
-- If adding a scanner, implement it in a separate service with its own budget and tests.
-- Update backfill docs/API behavior if `needs_embedding` semantics change.
+- Verify `/api/agents/backfill-embeddings` still drains `needs_embedding=1` rows after ingest stops enqueueing embedding tasks.
+- Add or update tests showing `needs_embedding=1` can accumulate and explicit backfill clears it.
+- Document the hosted ops requirement for periodic embedding backfill if an appropriate ops doc exists.
 
 Acceptance criteria:
 
 - Embedding work does not use `SessionTask`.
 - Embedding work cannot block summary/title reconciliation.
+- `needs_embedding=1` rows are drained by explicit backfill.
 - Search/recall tests still pass.
 
 Test commands:
 
 ```bash
-cd server && DATABASE_URL=sqlite:////tmp/longhouse-test-$(uuidgen).db AUTH_DISABLED=1 SKIP_DEMO_SEED=1 FERNET_SECRET=$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())') TRIGGER_SIGNING_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))') OPENROUTER_API_KEY=test-openrouter-key uv run pytest tests_lite/test_embeddings.py tests_lite/test_session_revision_guards.py
+cd server && DATABASE_URL=sqlite:////tmp/longhouse-test-$(uuidgen).db AUTH_DISABLED=1 SKIP_DEMO_SEED=1 FERNET_SECRET=$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())') TRIGGER_SIGNING_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))') OPENROUTER_API_KEY=test-openrouter-key uv run pytest tests_lite/test_embeddings.py tests_lite/test_session_revision_guards.py tests_lite/test_agents_duplicate_sqlite.py
 cd server && uv run ruff check zerg/services/session_summaries.py zerg/services/session_processing/embeddings.py zerg/routers/agents_backfill.py
 ```
 
@@ -383,12 +435,18 @@ make test
 - Hosted tenants can deploy this without a schema migration because existing revision fields already exist.
 - Old `summary`/`embedding` task rows become ignored runtime debris.
 - If the hosted DB has many old rows, cleanup can happen after rollout.
+- After Phase 3, hosted ops must run `/api/agents/backfill-embeddings` on a cron or manual cadence until a future product need justifies an automatic embedding scanner.
 - If this touches iOS only through already-committed timeline fallback, David still needs an Xcode install for phone dogfood after that commit lands.
 
-## Open Review Questions For Hatch Opus
+## Hatch Opus Review Resolution
 
-- Is there any remaining reason summary/embedding need durable task rows rather than revision-lag scanning?
-- Should Phase 3 include an explicit short-lived in-process claim set to avoid duplicate provider calls across concurrent worker loops?
-- Should embedding reconciliation stay manual/backfill-only for launch?
-- Is `summary_status=pending` from revision lag useful to clients now that the iOS card no longer renders "Generating summary"?
-- What is the smallest safe first implementation slice that removes the observed failure mode without destabilizing ingest?
+Hatch Opus returned `APPROVE WITH FIXES`. Incorporated fixes:
+
+- revision counters remain the work contract,
+- embedding automatic scanner is deferred; manual backfill is the launch decision,
+- `summary_status` derives from session revision state and handles fast-forwarded empty summaries,
+- duplicate provider-call avoidance is required via an in-process active set,
+- live summary work must use the `summary` write label,
+- Phase 2/3 ordering is corrected so the reconciler lands before ingest stops enqueueing,
+- dormant hot-worker scaffolding is no longer preserved by default,
+- tests now explicitly cover empty summaries, duplicate-call avoidance, old task backlog ignorance, and backfill verification.
