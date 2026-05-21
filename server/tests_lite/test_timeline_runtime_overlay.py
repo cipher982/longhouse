@@ -78,6 +78,18 @@ def _seed_session(
         managed_session_name=managed_session_name,
     )
     db.add(session)
+    db.flush()
+    db.refresh(session)
+    if execution_home in {"managed_local", SessionExecutionHome.MANAGED_LOCAL.value}:
+        from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+
+        if managed_transport == "codex_app_server":
+            kernel_plane = "codex_bridge"
+        elif managed_transport == "opencode_process":
+            kernel_plane = "opencode_process"
+        else:
+            kernel_plane = "claude_channel_bridge"
+        seed_managed_kernel_rows(db, session, control_plane=kernel_plane)
     db.commit()
     db.refresh(session)
     return session

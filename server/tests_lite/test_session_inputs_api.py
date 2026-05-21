@@ -44,6 +44,7 @@ from zerg.services.session_inputs import INPUT_STATUS_QUEUED
 from zerg.services.session_inputs import create_session_input
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
+from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 
 
 def _make_db(tmp_path):
@@ -143,6 +144,7 @@ def _seed_live_session(session_local):
         session.source_runner_id = 1
         session.source_runner_name = "cinder"
         session.managed_session_name = "lh-input"
+        seed_managed_kernel_rows(db, session, control_plane="claude_channel_bridge")
         runner = Runner(
             id=1,
             owner_id=user.id,
@@ -735,10 +737,37 @@ def test_list_and_cancel_queued(monkeypatch, tmp_path):
 def _seed_codex_session(session_local):
     """Seed a managed-local session on codex_app_server transport so the
     capability gate for steer is satisfied."""
+    from zerg.models.agents import SessionConnection
+    from zerg.models.agents import SessionRun
+    from zerg.models.agents import SessionRuntimeState
+    from zerg.models.agents import SessionThread
+
     session_id, user_id = _seed_live_session(session_local)
     with session_local() as db:
         session = db.query(AgentSession).filter_by(id=session_id).one()
+        session.provider = "codex"
         session.managed_transport = "codex_app_server"
+        db.query(SessionRuntimeState).filter(
+            SessionRuntimeState.session_id == session.id
+        ).delete(synchronize_session=False)
+        thread = (
+            db.query(SessionThread)
+            .filter(SessionThread.session_id == session.id, SessionThread.is_primary == 1)
+            .one()
+        )
+        thread.provider = "codex"
+        run = (
+            db.query(SessionRun)
+            .filter(SessionRun.thread_id == thread.id, SessionRun.ended_at.is_(None))
+            .one()
+        )
+        run.provider = "codex"
+        conn = (
+            db.query(SessionConnection)
+            .filter(SessionConnection.run_id == run.id)
+            .one()
+        )
+        conn.control_plane = "codex_bridge"
         db.commit()
         _seed_live_runtime_state(db, session, phase="running")
     return session_id, user_id

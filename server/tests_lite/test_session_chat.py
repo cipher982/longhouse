@@ -84,6 +84,8 @@ def _make_machine_client(session_local, device_token):
 
 
 def _mark_session_live(db, session, *, owner_id: int, phase: str = "idle") -> None:
+    from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+
     runner_id = int(session.source_runner_id)
     runner = Runner(
         id=runner_id,
@@ -94,6 +96,15 @@ def _mark_session_live(db, session, *, owner_id: int, phase: str = "idle") -> No
     )
     db.merge(runner)
     get_runner_connection_manager().register(owner_id, runner_id, SimpleNamespace())
+    provider = (session.provider or "claude").strip().lower()
+    if provider == "codex":
+        plane = "codex_bridge"
+    elif provider == "opencode":
+        plane = "opencode_process"
+    else:
+        plane = "claude_channel_bridge"
+    seed_managed_kernel_rows(db, session, control_plane=plane)
+    db.commit()
 
     now = datetime.now(timezone.utc)
     freshness_ms = phase_freshness_ms(phase) or int(timedelta(minutes=5).total_seconds() * 1000)
@@ -116,44 +127,88 @@ def _mark_session_live(db, session, *, owner_id: int, phase: str = "idle") -> No
     db.commit()
 
 
-def test_managed_local_launch_response_requires_managed_local_execution_home():
-    result = SimpleNamespace(
-        session=SimpleNamespace(
-            id=uuid4(),
-            provider="claude",
+def _seed_kernel_session(session_local, *, provider: str, with_kernel_rows: bool, control_plane: str | None = None):
+    """Create a real AgentSession with optional kernel rows.
+
+    The kernel projection — not legacy ``execution_home`` columns — drives the
+    launch-response gate, so these helper-built sessions exercise the same
+    branches the SimpleNamespace placeholders used to.
+    """
+
+    from zerg.models.agents import AgentSession
+    from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+
+    sid = uuid4()
+    with session_local() as db:
+        user = User(email=f"launch-resp-{uuid4().hex[:6]}@test.local", role=UserRole.USER.value)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        session = AgentSession(
+            id=sid,
+            provider=provider,
+            environment="dev",
+            project="zerg",
+            started_at=datetime.now(timezone.utc),
             provider_session_id="provider-session",
-            execution_home="unmanaged_local",
-            managed_transport="claude_channel_bridge",
+            thread_root_session_id=sid,
+            user_messages=0,
+            assistant_messages=0,
+            tool_calls=0,
             loop_mode="assist",
             source_runner_id=1,
             source_runner_name="cinder",
             managed_session_name="lh-test",
-        ),
-        attach_command="longhouse claude-channel attach --session-id session-123",
+        )
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+        if with_kernel_rows:
+            seed_managed_kernel_rows(
+                db,
+                session,
+                control_plane=control_plane or ("codex_bridge" if provider == "codex" else "claude_channel_bridge"),
+            )
+            db.commit()
+            db.refresh(session)
+    return sid
+
+
+def test_managed_local_launch_response_requires_managed_local_execution_home(tmp_path):
+    session_local = _make_db(tmp_path)
+    sid = _seed_kernel_session(session_local, provider="claude", with_kernel_rows=False)
+
+    with session_local() as db:
+        from zerg.models.agents import AgentSession
+
+        session = db.query(AgentSession).filter_by(id=sid).one()
+        result = SimpleNamespace(
+            session=session,
+            attach_command="longhouse claude-channel attach --session-id session-123",
+        )
+        with pytest.raises(RuntimeError, match="kernel-managed session"):
+            session_chat._managed_local_launch_response(db, result)
+
+
+def test_managed_local_launch_response_requires_managed_transport(tmp_path):
+    session_local = _make_db(tmp_path)
+    sid = _seed_kernel_session(
+        session_local,
+        provider="claude",
+        with_kernel_rows=True,
+        control_plane="bogus_plane",  # not in adapter map → managed_transport=None
     )
 
-    with pytest.raises(RuntimeError, match="managed_local session"):
-        session_chat._managed_local_launch_response(result)
+    with session_local() as db:
+        from zerg.models.agents import AgentSession
 
-
-def test_managed_local_launch_response_requires_managed_transport():
-    result = SimpleNamespace(
-        session=SimpleNamespace(
-            id=uuid4(),
-            provider="claude",
-            provider_session_id="provider-session",
-            execution_home="managed_local",
-            managed_transport=None,
-            loop_mode="assist",
-            source_runner_id=1,
-            source_runner_name="cinder",
-            managed_session_name="lh-test",
-        ),
-        attach_command="longhouse claude-channel attach --session-id session-123",
-    )
-
-    with pytest.raises(RuntimeError, match="managed transport metadata"):
-        session_chat._managed_local_launch_response(result)
+        session = db.query(AgentSession).filter_by(id=sid).one()
+        result = SimpleNamespace(
+            session=session,
+            attach_command="longhouse claude-channel attach --session-id session-123",
+        )
+        with pytest.raises(RuntimeError, match="managed transport metadata"):
+            session_chat._managed_local_launch_response(db, result)
 def test_managed_local_claude_live_send_requires_live_control(tmp_path):
     session_local = _make_db(tmp_path)
     source_session_id = uuid4()
@@ -198,6 +253,14 @@ def test_managed_local_claude_live_send_requires_live_control(tmp_path):
         source_session.source_runner_id = None
         source_session.source_runner_name = "cinder"
         source_session.managed_session_name = "lh-claude-no-runner"
+        from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+
+        seed_managed_kernel_rows(
+            db,
+            source_session,
+            control_plane="claude_channel_bridge",
+            state="detached",  # reattachable bucket: no live control, but host attach is possible
+        )
         db.commit()
         user_id = user.id
 
@@ -259,6 +322,11 @@ def test_managed_local_codex_live_send_requires_host_attach(tmp_path):
         source_session.source_runner_id = None
         source_session.source_runner_name = "cinder"
         source_session.managed_session_name = "lh-codex-no-runner"
+        from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+
+        seed_managed_kernel_rows(
+            db, source_session, control_plane="codex_bridge", state="detached"
+        )
         db.commit()
         user_id = user.id
 

@@ -25,6 +25,7 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionTurn
+from zerg.services.agents.kernel_capability_adapter import build_session_capabilities_from_kernel
 from zerg.services.agents_store import AgentsStore
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.managed_control_state import CONTROL_SOURCE_LEGACY_RUNNER
@@ -1171,7 +1172,7 @@ def build_session_response(
     cache = thread_cache if thread_cache is not None else {}
     thread_head_session_id, thread_continuation_count = get_thread_meta(store, session, cache)
     include_runtime = should_include_runtime_view(session=session, runtime_view=runtime_overlay)
-    capability_flags = build_session_capabilities(session)
+    capability_flags = build_session_capabilities_from_kernel(store.db, session)
     is_engine_control_online = engine_control_online(session, owner_id)
     current_now = datetime.now(timezone.utc)
     is_engine_session_attached = is_engine_control_online and engine_session_control_attached(
@@ -1354,7 +1355,7 @@ def build_active_session_response(
     binding_overlay=None,
     control_overlay=None,
 ) -> ActiveSessionResponse:
-    capability_flags = build_session_capabilities(session)
+    capability_flags = build_session_capabilities_from_kernel(store.db, session)
     _started = (
         session.started_at.replace(tzinfo=timezone.utc) if session.started_at and session.started_at.tzinfo is None else session.started_at
     )

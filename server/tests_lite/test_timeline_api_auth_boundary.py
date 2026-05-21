@@ -187,6 +187,11 @@ def test_timeline_session_detail_includes_attach_command_for_managed_local_codex
             managed_session_name="lh-codex-managed-local",
         )
         db.add(session)
+        db.flush()
+        db.refresh(session)
+        from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+
+        seed_managed_kernel_rows(db, session, control_plane="codex_bridge")
         db.commit()
         session_id = str(session.id)
 
@@ -240,6 +245,11 @@ def test_timeline_session_detail_includes_attach_command_for_native_claude_bridg
             source_runner_name="work-laptop",
         )
         db.add(session)
+        db.flush()
+        db.refresh(session)
+        from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+
+        seed_managed_kernel_rows(db, session, control_plane="claude_channel_bridge")
         db.commit()
         session_id = str(session.id)
 
@@ -823,6 +833,13 @@ def test_timeline_workspace_does_not_claim_live_control_without_runner_truth(tmp
             source_runner_name="cinder",
         )
         db.add(session)
+        db.flush()
+        db.refresh(session)
+        from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+
+        seed_managed_kernel_rows(
+            db, session, control_plane="claude_channel_bridge", state="detached"
+        )
         db.add(
             SessionRuntimeState(
                 runtime_key=f"claude:{session.id}",
@@ -885,6 +902,11 @@ def test_timeline_session_detail_includes_attach_command_for_native_managed_loca
             source_runner_name="cinder",
         )
         db.add(session)
+        db.flush()
+        db.refresh(session)
+        from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+
+        seed_managed_kernel_rows(db, session, control_plane="codex_bridge")
         db.commit()
         session_id = str(session.id)
 

@@ -34,7 +34,9 @@ def _kernel_connection_state(control_state: str) -> str:
 def _kernel_control_plane_for_provider(provider: str) -> str:
     if provider == "codex":
         return "codex_bridge"
-    return "pty"
+    if provider == "opencode":
+        return "opencode_process"
+    return "claude_channel_bridge"
 
 
 def _mirror_connection_state(

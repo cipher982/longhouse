@@ -13,8 +13,8 @@ from zerg.services.managed_control_state import CONTROL_SOURCE_LEGACY_RUNNER
 from zerg.services.managed_control_state import engine_channel_control_overlay
 from zerg.services.managed_control_state import live_transport_control_overlay
 from zerg.services.managed_control_state import load_managed_control_state_map
+from zerg.services.agents.kernel_capability_adapter import build_session_capabilities_from_kernel
 from zerg.services.session_capabilities import SessionCapabilityFlags
-from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_capabilities import project_current_session_capabilities_from_facts
 from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_runner_state import managed_runner_host_state
@@ -108,7 +108,7 @@ def current_session_capabilities(
     owner_id: int | None = None,
 ) -> SessionCapabilityFlags:
     """Return user-action capabilities backed by current runtime truth."""
-    capability_flags = build_session_capabilities(session)
+    capability_flags = build_session_capabilities_from_kernel(db, session)
     is_engine_control_online = engine_control_online(session, owner_id)
     now = datetime.now(timezone.utc)
     last_activity_at = getattr(session, "last_activity_at", None)

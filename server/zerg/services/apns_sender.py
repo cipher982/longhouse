@@ -22,7 +22,7 @@ from zerg.models.apns_device_registration import APNSDeviceRegistration
 from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration
 from zerg.models.apns_widget_push_state import APNSWidgetPushState
 from zerg.models.user import User
-from zerg.services.session_capabilities import build_session_capabilities
+from zerg.services.agents.kernel_capability_adapter import build_session_capabilities_from_kernel
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.session_runtime_display import build_session_runtime_display
@@ -429,7 +429,7 @@ def prepare_session_live_activity_pushes(
     )
     runtime_display = build_session_runtime_display(
         runtime_view=runtime_overlay,
-        capabilities=build_session_capabilities(session),
+        capabilities=build_session_capabilities_from_kernel(db, session),
         ended_at=session.ended_at,
     )
     presence_state = runtime_display.state or str(current_state or getattr(session, "status", None) or "unknown")

@@ -60,6 +60,7 @@ from zerg.services.managed_local_event_polling import fetch_managed_local_events
 from zerg.services.managed_local_event_polling import get_managed_local_latest_event_id
 from zerg.services.managed_local_event_polling import get_session_turn_snapshot_best_effort
 from zerg.services.managed_local_event_polling import hydrate_turn_events_from_snapshot
+from zerg.services.agents.kernel_capability_adapter import build_session_capabilities_from_kernel
 from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_continuity import session_lock_manager
 from zerg.services.session_current_control import current_session_capabilities
@@ -176,11 +177,14 @@ def _resolve_agents_owner_id(db: Session, device_token: DeviceToken | None) -> i
     return int(owner[0])
 
 
-def _managed_local_launch_response(result) -> ManagedLocalSessionLaunchResponse:
+def _managed_local_launch_response(db: Session, result) -> ManagedLocalSessionLaunchResponse:
     session = result.session
-    capabilities = build_session_capabilities(session)
-    if capabilities.execution_home != SessionExecutionHome.MANAGED_LOCAL:
-        raise RuntimeError("Managed local launch response requires a managed_local session")
+    capabilities = build_session_capabilities_from_kernel(db, session)
+    # The kernel projection is the truth: a launch response is only valid if
+    # the kernel rows actually grant managed control. ``execution_home`` /
+    # ``managed_transport`` columns are no longer authoritative.
+    if not (capabilities.live_control_available or capabilities.host_reattach_available):
+        raise RuntimeError("Managed local launch response requires a kernel-managed session")
     if capabilities.managed_transport is None:
         raise RuntimeError("Managed local launch response is missing managed transport metadata")
     return ManagedLocalSessionLaunchResponse(

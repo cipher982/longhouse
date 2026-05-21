@@ -133,6 +133,15 @@ def _seed_managed_session(session_local, *, transport: str = "codex_app_server")
             auth_secret_hash="test",
         )
         db.merge(runner)
+        from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+
+        if transport == "codex_app_server":
+            kernel_plane = "codex_bridge"
+        elif transport == "opencode_process":
+            kernel_plane = "opencode_process"
+        else:
+            kernel_plane = "claude_channel_bridge"
+        seed_managed_kernel_rows(db, sess, control_plane=kernel_plane)
         db.commit()
         get_runner_connection_manager().register(user.id, 1, SimpleNamespace())
         _seed_live_runtime_state(db, sess)
