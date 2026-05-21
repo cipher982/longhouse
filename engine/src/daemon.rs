@@ -123,6 +123,7 @@ struct PathTaskContext {
     parse_tracker: RecentIssueTracker,
     ship_stats: RecentShipStatsTracker,
     flight_recorder: Option<FlightRecorder>,
+    limiter: std::sync::Arc<crate::scheduler::AdaptiveLimiter>,
 }
 
 struct PathTaskResult {
@@ -254,6 +255,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             "Machine Agent flight recorder enabled"
         );
     }
+    let adaptive_limiter = crate::scheduler::AdaptiveLimiter::new();
     let task_context = PathTaskContext {
         shipper_config: config.shipper_config.clone(),
         client: client.clone(),
@@ -262,6 +264,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         parse_tracker: parse_tracker.clone(),
         ship_stats: ship_stats.clone(),
         flight_recorder: flight_recorder.clone(),
+        limiter: std::sync::Arc::clone(&adaptive_limiter),
     };
 
     // 6. Start file watcher before catch-up work so live changes queue immediately.
@@ -276,7 +279,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     // scheduler enforces per-priority caps (LIVE_IN_FLIGHT_CAP=8 in scheduler.rs)
     // and a Live reservation so backlog work can't drain Live slots.
     let max_in_flight = config.shipper_config.workers.max(1);
-    let mut scheduler = PathScheduler::new(max_in_flight);
+    let mut scheduler =
+        PathScheduler::with_limiter(max_in_flight, std::sync::Arc::clone(&adaptive_limiter));
     let mut in_flight = JoinSet::new();
     let mut discovery_tasks: JoinSet<DiscoveryTaskResult> = JoinSet::new();
     let mut deferred_retries = HashMap::new();
@@ -876,6 +880,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     } else {
                         None
                     },
+                    Some(adaptive_limiter.as_ref()),
                 );
                 if !reused_unmanaged_bindings {
                     last_unmanaged_session_bindings =
@@ -953,6 +958,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     } else {
                         None
                     },
+                    Some(adaptive_limiter.as_ref()),
                 );
                 if !reused_unmanaged_bindings {
                     last_unmanaged_session_bindings =
@@ -988,6 +994,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_local_status_snapshot(
     conn: &rusqlite::Connection,
     tracker: &ConsecutiveErrorTracker,
@@ -1001,6 +1008,7 @@ fn write_local_status_snapshot(
     claude_observations: &[managed_claude_scan::ClaudeChannelObservation],
     control_channel: Option<Value>,
     unmanaged_session_binding_override: Option<&[heartbeat::UnmanagedSessionBinding]>,
+    limiter: Option<&crate::scheduler::AdaptiveLimiter>,
 ) -> heartbeat::HeartbeatPayload {
     let spool = Spool::new(conn);
     let stats = heartbeat::HeartbeatStats {
@@ -1012,6 +1020,7 @@ fn write_local_status_snapshot(
         last_ship_at: last_ship_at.clone(),
     };
     let mut payload = heartbeat::HeartbeatPayload::build(&stats);
+    payload.adaptive_backlog_limiter = limiter.map(|l| l.snapshot());
     let now = chrono::Utc::now();
     payload.managed_sessions =
         heartbeat::leases_from_observations(conn, machine_id, observations, now);
@@ -2021,6 +2030,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
             Some(&task_context.ship_stats),
             task_context.flight_recorder.as_ref(),
             Some(&replay_trace),
+            Some(task_context.limiter.as_ref()),
         )
         .await
         {
@@ -2098,6 +2108,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                 Some(&task_context.ship_stats),
                 Some(&ship_trace),
                 task_context.flight_recorder.as_ref(),
+                Some(task_context.limiter.as_ref()),
             )
             .await
             {
@@ -2209,6 +2220,7 @@ mod tests {
             is_offline: false,
             managed_sessions: Vec::new(),
             unmanaged_session_bindings: Vec::new(),
+            adaptive_backlog_limiter: None,
         }
     }
 
@@ -2280,6 +2292,7 @@ mod tests {
             &[],
             None,
             Some(&cached),
+            None,
         );
 
         assert_eq!(payload.unmanaged_session_bindings, cached);
