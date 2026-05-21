@@ -24,6 +24,7 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
 from zerg.models.device_token import DeviceToken
+from zerg.services.agents.kernel_capabilities import project_capabilities_bulk
 from zerg.services.agents_store import AgentsStore
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.provisional_events import load_active_provisional_preview_map
@@ -576,6 +577,7 @@ async def list_active_sessions(
         runtime_state_map = load_runtime_state_map(db, [session.id for session in sessions])
         control_state_map = load_managed_control_state_map(db, [session.id for session in sessions])
         binding_overlay_map = load_binding_overlay(db, session_ids, now=now)
+        kernel_capabilities_map = project_capabilities_bulk(db, session_ids=session_ids)
         items: List[ActiveSessionResponse] = []
         for s in sessions:
             last_activity_at = normalize_utc_datetime(last_activity.get(s.id) or s.ended_at or s.started_at) or now
@@ -605,6 +607,7 @@ async def list_active_sessions(
                     now=now,
                     binding_overlay=binding_overlay_map.get(s.id),
                     control_overlay=control_state_map.get(s.id),
+                    kernel_capabilities=kernel_capabilities_map.get(s.id),
                 )
             )
 

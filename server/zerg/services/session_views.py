@@ -1378,8 +1378,10 @@ def build_active_session_response(
     now: datetime,
     binding_overlay=None,
     control_overlay=None,
+    kernel_capabilities=None,
 ) -> ActiveSessionResponse:
-    kernel_capabilities = project_session_capabilities(store.db, session_id=session.id)
+    if kernel_capabilities is None:
+        kernel_capabilities = project_session_capabilities(store.db, session_id=session.id)
     capability_flags = build_session_capabilities_from_kernel(store.db, session, kernel=kernel_capabilities)
     _started = (
         session.started_at.replace(tzinfo=timezone.utc) if session.started_at and session.started_at.tzinfo is None else session.started_at
