@@ -1,9 +1,12 @@
 import GoogleSignIn
+import OSLog
 import SwiftUI
 import WidgetKit
 
 @main
 struct LonghouseApp: App {
+    private let logger = Logger(subsystem: "ai.longhouse.ios", category: "Startup")
+
     @StateObject private var appState = AppState()
     @UIApplicationDelegateAdaptor(LonghousePushAppDelegate.self) private var pushDelegate
 
@@ -22,7 +25,9 @@ struct LonghouseApp: App {
                     }
                 }
                 .task {
+                    let startedAt = Date()
                     let environment = ProcessInfo.processInfo.environment
+                    logger.info("launch task started reset=\(UITestHooks.shouldResetState, privacy: .public) widget_probe_only=\((environment["LONGHOUSE_WIDGET_PROBE_ONLY"] == "1"), privacy: .public)")
                     if UITestHooks.shouldResetState {
                         await appState.resetForUITests()
                     }
@@ -38,6 +43,7 @@ struct LonghouseApp: App {
                             WidgetSessionLoader.logProbeResult(result, source: "launch-probe")
                         }
                     }
+                    logger.info("launch task finished elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
                 }
         }
     }
@@ -60,6 +66,8 @@ struct LonghouseApp: App {
 
 @MainActor
 final class AppState: ObservableObject {
+    private let logger = Logger(subsystem: "ai.longhouse.ios", category: "Startup")
+
     @Published var serverURL: String
     @Published var isAuthenticated = false
     @Published var isValidating = true
@@ -75,14 +83,18 @@ final class AppState: ObservableObject {
     }
 
     func restoreSession() async {
+        let startedAt = Date()
         isValidating = true
         hostedAuthAttemptURL = nil
         SharedAuthStore.saveServerURL(serverURL)
-        if serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        let trimmedServerURL = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        logger.info("restore session started has_server=\((!trimmedServerURL.isEmpty), privacy: .public)")
+        if trimmedServerURL.isEmpty {
             isAuthenticated = false
             authError = nil
             isValidating = false
             WidgetCenter.shared.reloadAllTimelines()
+            logger.info("restore session finished result=no_server elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
             return
         }
 
@@ -104,7 +116,9 @@ final class AppState: ObservableObject {
         case .authenticated:
             isAuthenticated = true
             authError = nil
-            await syncStoredAPNSTokenIfPossible()
+            Task { [weak self] in
+                await self?.syncStoredAPNSTokenIfPossible()
+            }
         case .indeterminate:
             isAuthenticated = hasSession || hasRefresh
         case .unauthenticated:
@@ -112,6 +126,7 @@ final class AppState: ObservableObject {
         }
         isValidating = false
         WidgetCenter.shared.reloadAllTimelines()
+        logger.info("restore session finished result=\(String(describing: result), privacy: .public) authenticated=\(self.isAuthenticated, privacy: .public) elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
     }
 
     func finishLoginFromSharedCookies() async -> Bool {
@@ -254,6 +269,7 @@ final class AppState: ObservableObject {
     }
 
     func syncStoredAPNSTokenIfPossible() async {
+        let startedAt = Date()
         guard isAuthenticated, let api = LonghouseAPI(host: serverURL) else {
             return
         }
@@ -266,10 +282,11 @@ final class AppState: ObservableObject {
                 pushEnvironment: PushNotificationStore.pushEnvironment,
                 appBuildId: PushNotificationStore.currentAppBuildID
             )
+            logger.debug("apns sync finished elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
         } catch LonghouseAPIError.notAuthenticated {
             return
         } catch {
-            NSLog("Longhouse APNs sync failed: %@", error.localizedDescription)
+            logger.error("apns sync failed elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public) error=\(error.localizedDescription, privacy: .public)")
         }
     }
 
