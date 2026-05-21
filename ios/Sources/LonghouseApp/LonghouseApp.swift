@@ -69,18 +69,33 @@ final class AppState: ObservableObject {
     private let logger = Logger(subsystem: "ai.longhouse.ios", category: "Startup")
 
     @Published var serverURL: String
-    @Published var isAuthenticated = false
-    @Published var isValidating = true
+    @Published var isAuthenticated: Bool
+    @Published var isValidating: Bool
+    @Published private(set) var hasLocalSessionCandidate: Bool
     @Published var authError: String?
     @Published var hostedAuthAttemptURL: String?
     private var apnsSyncInFlightSignature: String?
 
     init() {
-        self.serverURL = KeychainHelper.loadServerURL() ?? ""
-        if !self.serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            SharedAuthStore.saveServerURL(self.serverURL)
-            SharedAuthStore.primeSharedCookieStorage(for: self.serverURL)
+        let savedServerURL = KeychainHelper.loadServerURL() ?? ""
+        let trimmedServerURL = savedServerURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasCandidate: Bool
+        if !trimmedServerURL.isEmpty {
+            SharedAuthStore.saveServerURL(trimmedServerURL)
+            SharedAuthStore.primeSharedCookieStorage(for: trimmedServerURL)
+            hasCandidate = SharedAuthStore.hasManagedCookies(for: trimmedServerURL)
+        } else {
+            hasCandidate = false
         }
+        self.serverURL = savedServerURL
+        self.hasLocalSessionCandidate = hasCandidate
+        self.isAuthenticated = false
+        self.isValidating = hasCandidate
+        logger.info("local session candidate loaded has_server=\((!trimmedServerURL.isEmpty), privacy: .public) candidate=\(hasCandidate, privacy: .public)")
+    }
+
+    var shouldShowAuthenticatedShell: Bool {
+        isAuthenticated || hasLocalSessionCandidate
     }
 
     func restoreSession() async {
@@ -92,6 +107,7 @@ final class AppState: ObservableObject {
         logger.info("restore session started has_server=\((!trimmedServerURL.isEmpty), privacy: .public)")
         if trimmedServerURL.isEmpty {
             isAuthenticated = false
+            hasLocalSessionCandidate = false
             authError = nil
             isValidating = false
             WidgetCenter.shared.reloadAllTimelines()
@@ -103,6 +119,7 @@ final class AppState: ObservableObject {
         let cookies = SharedAuthStore.managedCookies(for: serverURL)
         let hasRefresh = cookies.contains(where: { $0.name == SharedAuthStore.refreshCookieName })
         let hasSession = cookies.contains(where: { $0.name == SharedAuthStore.sessionCookieName })
+        hasLocalSessionCandidate = hasSession || hasRefresh
 
         let result: SessionRestoreResult
         if hasRefresh {
@@ -116,12 +133,14 @@ final class AppState: ObservableObject {
         switch result {
         case .authenticated:
             isAuthenticated = true
+            hasLocalSessionCandidate = true
             authError = nil
             Task { [weak self] in
                 await self?.syncStoredAPNSTokenIfPossible()
             }
         case .indeterminate:
             isAuthenticated = hasSession || hasRefresh
+            hasLocalSessionCandidate = hasSession || hasRefresh
         case .unauthenticated:
             await clearLocalSession()
         }
@@ -135,6 +154,7 @@ final class AppState: ObservableObject {
         if serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             authError = "Set your Longhouse server first"
             isAuthenticated = false
+            hasLocalSessionCandidate = false
             isValidating = false
             return false
         }
@@ -151,6 +171,7 @@ final class AppState: ObservableObject {
         }
 
         isAuthenticated = isSignedIn
+        hasLocalSessionCandidate = isSignedIn
         isValidating = false
         WidgetCenter.shared.reloadAllTimelines()
         return isSignedIn
@@ -165,6 +186,8 @@ final class AppState: ObservableObject {
         let previousURL = serverURL
         serverURL = trimmed
         KeychainHelper.saveServerURL(trimmed)
+        isAuthenticated = false
+        hasLocalSessionCandidate = false
         authError = nil
 
         if previousURL != trimmed, !previousURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -214,6 +237,7 @@ final class AppState: ObservableObject {
 
         serverURL = ""
         isAuthenticated = false
+        hasLocalSessionCandidate = false
         isValidating = false
         authError = nil
         hostedAuthAttemptURL = nil
@@ -243,6 +267,8 @@ final class AppState: ObservableObject {
         let previousURL = serverURL
         serverURL = trimmed
         KeychainHelper.saveServerURL(trimmed)
+        isAuthenticated = false
+        hasLocalSessionCandidate = false
         authError = nil
 
         Task {
@@ -397,6 +423,7 @@ final class AppState: ObservableObject {
         PushNotificationStore.clearAPNSDeviceSyncState()
         KeychainHelper.deleteAuthToken()
         isAuthenticated = false
+        hasLocalSessionCandidate = false
     }
 
     private static func apiErrorMessage(from data: Data) -> String? {
