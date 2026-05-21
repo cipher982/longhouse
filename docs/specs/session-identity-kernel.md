@@ -102,6 +102,59 @@ A live process is not proof Longhouse can steer it. Active transcript updates
 are not proof of live control. Live control requires an attached or degraded
 connection with the relevant capability.
 
+### Live, reattach, observe-only — bucket gates
+
+The bucket transitions in `_label_for` are intentionally tight to stop stale
+write-path artifacts from projecting as live:
+
+- **`live`** requires: thread exists, latest run is open (`ended_at IS NULL`),
+  best connection is `attached` or `degraded`, AND the connection's
+  `acquisition_kind` is `spawned_control` or `adopted_control`. An
+  `observe_only` connection (e.g. `log_tail`) carrying a stale
+  `can_send_input=1` must not project live — the kind is the gate, not the
+  bit.
+- **`reattach`** requires: same as live but state is `detached` or
+  `released`. The connection bits surface as capability gates only when the
+  bucket grants control; an `observe_only` connection cannot reach this
+  bucket.
+- **`search-only`** is the only bucket where capability bits surface
+  partially: `can_tail_output` may be true; send/interrupt/terminate must be
+  false even if the row carries stale ones.
+- **Closed run wins.** If `latest_run.ended_at IS NOT NULL`, the bucket is
+  `imported` (`process_ended`) regardless of what the connection says.
+  Bridge rows lingering "attached" briefly after the provider exits would
+  otherwise mis-project live.
+- **Empty/whitespace state** projects `imported`/`process_ended`, not
+  `search-only` — empty state is no truth, not observe-only.
+
+### Send / queue / steer mapping
+
+Per-action availability surfaces from the kernel projection, never from the
+old `managed_transport` enum:
+
+- `live_control_available` = `control_label == "live"`.
+- `host_reattach_available` = `control_label == "reattach"`.
+- `reply_to_live_session_available` = `live_control_available AND
+  can_send_input`. A live attached connection without the send capability
+  does not show a reply affordance.
+- `can_queue_next_input` = same as `reply_to_live_session_available`.
+- `can_steer_active_turn` = `live_control_available AND provider == "codex"
+  AND best_connection.control_plane == "codex_bridge" AND runtime phase in
+  {thinking, running}`. Today's writers stamp `control_plane="codex_bridge"`
+  for the Codex managed control channel; the legacy
+  `ManagedSessionTransport.CODEX_APP_SERVER` enum string is not what the
+  kernel records.
+
+### Runtime overlay rule: down-gate only
+
+Runtime/lifecycle overlays (freshness, host_state, lifecycle.closed) may
+turn `live_control_available` false based on staleness. They must NEVER
+promote a non-live kernel projection to live. Specifically:
+
+- A capability bit that the kernel projection set to `False` cannot be
+  flipped to `True` by any overlay or "engine control" boost. Helpers like
+  the legacy `with_engine_control_capability` are removed in Phase 4 (B).
+
 ### "Best connection" selection rules
 
 Without writer leases, ranking must be deterministic in the spec, not the
@@ -371,31 +424,98 @@ through services/routers/views.
 
 ### Phase 4 — capability projection
 
-Deliverables:
+#### Sub-commit A — projection (LANDED, `aab8a454` + `61e1ad0b`)
 
-- `session_capabilities` view materialized from
-  `(thread, latest run, best connection, latest run-keyed runtime_state)`
-  using the deterministic best-connection rules above.
-- `/api/agents/*`, `/api/sessions/*`, web, and iOS switch to consuming the
-  projection.
-- Delete client-side inference: scan for any reads of `execution_home`,
-  `managed_transport`, raw heartbeat freshness, or process liveness in
-  capability decisions; remove or replace.
-- Strip the now-unused hint fields from API responses; do not leave parallel
-  truth.
+- `project_session_capabilities` returns `KernelSessionCapabilities`
+  derived from `(thread, latest run, best connection)` with the bucket
+  gates and best-connection rules above.
+- 18 capability-matrix tests cover the rules.
+
+#### Sub-commit B — reader migration
+
+Order matters. Move the response shape first, then the central builders,
+then the overlay/display helpers, then the direct legacy reads. Doing this
+in any other order leaves a parallel-truth window.
+
+1. **Define the API capability response shape from the projection.**
+   `SessionCapabilitiesResponse` exposes the kernel fields directly:
+   `control_label`, `live_control_available`, `host_reattach_available`,
+   `observe_only`, `search_only`, `can_send_input`, `can_interrupt`,
+   `can_terminate`, `can_tail_output`, `can_resume`, `staleness_reason`.
+   Keep the small set of presentation helpers (`display_label`,
+   `display_detail`, `display_tone`, `input_mode`, `composer_*`) as
+   server-derived from the kernel projection — not as another truth source.
+2. **Adapter (translation only, not fallback).** Add
+   `build_session_capabilities_from_kernel(db, session) ->
+   SessionCapabilityFlags` that delegates to `project_session_capabilities`
+   and maps the kernel payload to the legacy flag dataclass. The adapter
+   must NOT read `session.execution_home` or `session.managed_transport`.
+   `execution_home` and `managed_transport` are no longer authoritative
+   capability inputs; the adapter exists only so call sites keep building
+   today and disappear in step 5. This is a translation, not a fallback —
+   there is one source of truth.
+3. **Swap central builders.** Replace every `build_session_capabilities`
+   call with the adapter:
+   - `server/zerg/services/session_views.py:74,362,1174,1352`
+     (`build_session_capabilities_response`, `build_session_response`,
+     active session response).
+   - `server/zerg/services/session_chat_impl.py:181`
+     (`_managed_local_launch_response` — gates on the projection's
+     `control_label`, not `execution_home == MANAGED_LOCAL`).
+   - `server/zerg/services/session_current_control.py:75`.
+   - `server/zerg/services/apns_sender.py:432` (live-activity push).
+4. **Overlays must be down-gate only.** Audit the runtime/lifecycle
+   overlay merge in `project_current_session_capabilities*` and the
+   "engine control" capability boost in
+   `session_views.with_engine_control_capability`. Any helper that
+   promotes a kernel-`False` capability to `True` is removed. The legacy
+   "engine session attached" path becomes a runtime-staleness signal that
+   only down-gates `live_control_available`, never up-gates.
+5. **Triage direct legacy reads.** Apply this heuristic to every read of
+   `session.execution_home` or `session.managed_transport`:
+   - **Capability decision** (UI affordance, API shape, send/steer
+     availability, reattach/search/read-only state, liveness ownership,
+     timeline badge, APNS payload, iOS/web DTO): replace with the kernel
+     projection.
+   - **Provider-routing decision** (which transport binary to spawn, which
+     dispatcher to dial, attach-command synthesis): may stay temporarily
+     as launch metadata. Annotate with a TODO removed in Phase 5.
+   - **Both gates and routes**: split the read.
+   Specific helpers known to derive control from legacy fields:
+   `session_liveness_facts._control_path`,
+   `session_runtime_display._derive_control_path`. Both must consume
+   kernel-derived control ownership or the kernel projection's
+   `control_label`.
+6. **Strip legacy hint fields from response payloads in the same
+   commit.** `execution_home`, `managed_transport` come out of
+   `SessionResponse`, `SessionCapabilitiesResponse`, web TypeScript
+   models, iOS Swift models, and any generated OpenAPI client. Web + iOS
+   + CLI ship in lockstep; pre-launch this is acceptable and required
+   ("no parallel truth").
+7. **Bulk projection for list endpoints.** `build_session_response` is
+   called per row. Add a bulk variant that runs three queries
+   (primary-thread fetch, latest-run-per-thread, connections-per-run) and
+   assembles the projection in Python, or accept the per-row cost as a
+   dogfood-only acknowledged regression with a Phase 5 cleanup item.
 
 Tests:
 
-- Capability matrix: managed-attached, managed-degraded, managed-detached,
-  managed-process-closed, unmanaged-running, unmanaged-gone, imported-only,
-  subagent-child. Every combination produces a deterministic
-  `session_capabilities` payload.
-- Web and iOS read identical capability values for the same session.
-- Liveness flapping (bridge degrade, heartbeat skip, process exit) cannot
-  flip `live_control_available` to true; cannot flip a managed session to
-  `search-only`.
+- 18 capability-matrix unit tests on the projection (already landed).
+- End-to-end: `build_session_capabilities_response` over a real DB
+  produces the expected payload for each of: managed-attached,
+  managed-degraded, managed-detached, managed-process-closed,
+  unmanaged-running, unmanaged-gone, imported-only, subagent-child.
+- Web + iOS DTO equivalence: same session_id, same kernel rows, both
+  clients deserialize identical `SessionCapabilitiesResponse`.
+- Overlay down-gate invariant: liveness flapping (bridge degrade,
+  heartbeat skip, process exit) cannot flip `live_control_available` to
+  true; cannot flip a managed session to `search-only` if the kernel
+  says live.
+- Grep gate: zero capability-decision reads of `session.execution_home`
+  or `session.managed_transport` outside the launch metadata path.
 
-Codex review gate: projection correctness; client cleanup completeness.
+Codex review gate: projection correctness; client cleanup completeness;
+no remaining "parallel truth" call sites.
 
 ### Phase 5 — cleanup
 
