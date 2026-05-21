@@ -15,6 +15,7 @@ See docs/specs/session-identity-kernel.md.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
@@ -183,73 +184,70 @@ def project_session_capabilities(
         .order_by(SessionThread.created_at.asc(), SessionThread.id.asc())
         .first()
     )
+    latest_run = None
+    connections: list = []
+    if thread is not None:
+        latest_run = (
+            db.query(SessionRun)
+            .filter(SessionRun.thread_id == thread.id)
+            .order_by(SessionRun.started_at.desc(), SessionRun.id.desc())
+            .first()
+        )
+        if latest_run is not None:
+            connections = (
+                db.query(SessionConnection)
+                .filter(SessionConnection.run_id == latest_run.id)
+                .all()
+            )
+    return _payload_from_rows(sid=sid, thread=thread, latest_run=latest_run, connections=connections)
+
+
+def _imported_payload(
+    *, sid: str, thread_id: Optional[str] = None, run_id: Optional[str] = None,
+    has_thread: bool, has_run: bool, run_ended: bool, best: Optional[SessionConnection],
+) -> KernelSessionCapabilities:
+    label, live, reattach, observe, search, reason = _label_for(
+        has_thread=has_thread, has_run=has_run, run_ended=run_ended, best=best
+    )
+    return KernelSessionCapabilities(
+        session_id=sid,
+        thread_id=thread_id,
+        run_id=run_id,
+        connection_id=None,
+        control_plane=None,
+        connection_state=None,
+        control_label=label,
+        live_control_available=live,
+        host_reattach_available=reattach,
+        observe_only=observe,
+        search_only=search,
+        can_send_input=False,
+        can_interrupt=False,
+        can_terminate=False,
+        can_tail_output=False,
+        can_resume=False,
+        staleness_reason=reason,
+    )
+
+
+def _payload_from_rows(
+    *,
+    sid: str,
+    thread: Optional[SessionThread],
+    latest_run: Optional[SessionRun],
+    connections: list[SessionConnection],
+) -> KernelSessionCapabilities:
     if thread is None:
-        label, live, reattach, observe, search, reason = _label_for(
-            has_thread=False, has_run=False, run_ended=False, best=None
-        )
-        return KernelSessionCapabilities(
-            session_id=sid,
-            thread_id=None,
-            run_id=None,
-            connection_id=None,
-            control_plane=None,
-            connection_state=None,
-            control_label=label,
-            live_control_available=live,
-            host_reattach_available=reattach,
-            observe_only=observe,
-            search_only=search,
-            can_send_input=False,
-            can_interrupt=False,
-            can_terminate=False,
-            can_tail_output=False,
-            can_resume=False,
-            staleness_reason=reason,
-        )
-
-    latest_run = (
-        db.query(SessionRun)
-        .filter(SessionRun.thread_id == thread.id)
-        .order_by(SessionRun.started_at.desc(), SessionRun.id.desc())
-        .first()
-    )
-
+        return _imported_payload(sid=sid, has_thread=False, has_run=False, run_ended=False, best=None)
     if latest_run is None:
-        label, live, reattach, observe, search, reason = _label_for(
-            has_thread=True, has_run=False, run_ended=False, best=None
+        return _imported_payload(
+            sid=sid, thread_id=str(thread.id), has_thread=True, has_run=False, run_ended=False, best=None
         )
-        return KernelSessionCapabilities(
-            session_id=sid,
-            thread_id=str(thread.id),
-            run_id=None,
-            connection_id=None,
-            control_plane=None,
-            connection_state=None,
-            control_label=label,
-            live_control_available=live,
-            host_reattach_available=reattach,
-            observe_only=observe,
-            search_only=search,
-            can_send_input=False,
-            can_interrupt=False,
-            can_terminate=False,
-            can_tail_output=False,
-            can_resume=False,
-            staleness_reason=reason,
-        )
-
-    connections = (
-        db.query(SessionConnection)
-        .filter(SessionConnection.run_id == latest_run.id)
-        .all()
-    )
     best = _select_best_connection(connections)
     run_ended = latest_run.ended_at is not None
-
     label, live, reattach, observe, search, reason = _label_for(
         has_thread=True, has_run=True, run_ended=run_ended, best=best
     )
-
     if best is None:
         return KernelSessionCapabilities(
             session_id=sid,
@@ -270,19 +268,11 @@ def project_session_capabilities(
             can_resume=False,
             staleness_reason=reason,
         )
-
-    # Capability bits surface from the best connection only when the bucket
-    # actually grants control. An observe_only "search-only" session never
-    # exposes can_send_input even if the row carries a stale 1. Likewise,
-    # tail surfaces only on buckets that imply an active reader: closed-run
-    # "imported" sessions never expose tail, even if a stale row still has
-    # the bit set.
     can_send = bool(best.can_send_input) and live
     can_interrupt = bool(best.can_interrupt) and live
     can_terminate = bool(best.can_terminate) and live
     can_tail = bool(best.can_tail_output) and (live or observe)
     can_resume = bool(best.can_resume) and (live or reattach)
-
     return KernelSessionCapabilities(
         session_id=sid,
         thread_id=str(thread.id),
@@ -307,15 +297,58 @@ def project_session_capabilities(
 def project_capabilities_bulk(
     db: Session, *, session_ids: list
 ) -> dict:
-    """Project capabilities for many sessions in one shot.
+    """Project capabilities for many sessions with three batched queries.
 
     Returns ``{session_id: KernelSessionCapabilities}``. Sessions without a
     primary thread still appear in the result with the "imported" payload.
+    Replaces the per-id loop so list endpoints don't pay an N×3-query tax.
     """
 
     out: dict = {}
+    if not session_ids:
+        return out
+
+    threads = (
+        db.query(SessionThread)
+        .filter(SessionThread.session_id.in_(session_ids), SessionThread.is_primary == 1)
+        .order_by(SessionThread.created_at.asc(), SessionThread.id.asc())
+        .all()
+    )
+    # Defense-in-depth: a corrupted DB might return >1 primary; keep the first.
+    thread_by_session: dict = {}
+    for t in threads:
+        thread_by_session.setdefault(t.session_id, t)
+
+    thread_ids = [t.id for t in thread_by_session.values()]
+    runs_by_thread: dict = {}
+    if thread_ids:
+        runs = (
+            db.query(SessionRun)
+            .filter(SessionRun.thread_id.in_(thread_ids))
+            .order_by(SessionRun.started_at.desc(), SessionRun.id.desc())
+            .all()
+        )
+        for r in runs:
+            runs_by_thread.setdefault(r.thread_id, r)
+
+    run_ids = [r.id for r in runs_by_thread.values()]
+    conns_by_run: dict = defaultdict(list)
+    if run_ids:
+        conns = (
+            db.query(SessionConnection)
+            .filter(SessionConnection.run_id.in_(run_ids))
+            .all()
+        )
+        for c in conns:
+            conns_by_run[c.run_id].append(c)
+
     for sid in session_ids:
-        out[sid] = project_session_capabilities(db, session_id=sid)
+        thread = thread_by_session.get(sid)
+        latest_run = runs_by_thread.get(thread.id) if thread is not None else None
+        connections = conns_by_run.get(latest_run.id, []) if latest_run is not None else []
+        out[sid] = _payload_from_rows(
+            sid=str(sid), thread=thread, latest_run=latest_run, connections=connections
+        )
     return out
 
 
