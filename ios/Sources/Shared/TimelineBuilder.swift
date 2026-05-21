@@ -46,11 +46,11 @@ enum TimelineItem: Identifiable, Sendable {
 
 /// Shared ISO8601 parsing for Longhouse backend timestamps.
 ///
-/// ISO8601DateFormatter is thread-safe for `date(from:)` once configured. We
-/// keep two pre-configured instances (fractional + plain) to avoid allocating
-/// them on every tool-row render — this got called O(tool_rows × re-renders)
-/// on the SessionView hot path.
+/// Keep two pre-configured formatters (fractional + plain) to avoid allocating
+/// them on every tool-row render. Access stays serialized because the parsers
+/// are shared across Swift Testing and timeline refresh tasks.
 enum LonghouseDateParser {
+    private static let lock = NSLock()
     nonisolated(unsafe) private static let fractional: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -63,7 +63,9 @@ enum LonghouseDateParser {
     }()
 
     static func parse(_ s: String) -> Date? {
-        fractional.date(from: s) ?? plain.date(from: s)
+        lock.lock()
+        defer { lock.unlock() }
+        return fractional.date(from: s) ?? plain.date(from: s)
     }
 }
 

@@ -29,6 +29,36 @@ struct SessionViewModelTests {
     }
 
     @Test
+    func startRendersFreshTranscriptPreviewAfterDurableTail() async throws {
+        let previewJSON = """
+        {
+          "event_id": 99,
+          "text": "Fresh live bridge text",
+          "event_origin": "live_provisional",
+          "timestamp": "2026-05-02T20:00:05Z",
+          "is_provisional": true,
+          "is_complete": false,
+          "content_cursor": "cursor-99",
+          "is_stale": false
+        }
+        """
+        let workspace = try makeWorkspace(
+            eventId: 10,
+            content: "Durable tail",
+            timestamp: "2026-05-02T20:00:00Z",
+            transcriptPreviewJSON: previewJSON
+        )
+        let api = FakeSessionWorkspaceClient(workspaces: [workspace])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+
+        #expect(model.items.map(\.id) == ["user:10", "prose:-99"])
+    }
+
+    @Test
     func startRefreshesAlreadyOpenSession() async throws {
         let before = try makeWorkspace(eventId: 10, content: "Before reentry")
         let after = try makeWorkspace(eventId: 11, content: "After reentry")
@@ -507,12 +537,14 @@ struct SessionViewModelTests {
         timestamp: String = "2026-05-02T20:00:00Z",
         isHeadBranch: Bool = true,
         inputOriginJSON: String? = nil,
+        transcriptPreviewJSON: String? = nil,
         total: Int = 1,
         pageOffset: Int = 0
     ) throws -> SessionWorkspaceResponse {
         let encodedContent = try jsonString(content)
         let encodedTimestamp = try jsonString(timestamp)
         let inputOriginField = inputOriginJSON.map { ",\n                  \"input_origin\": \($0)" } ?? ""
+        let transcriptPreviewField = transcriptPreviewJSON.map { ",\n            \"transcript_preview\": \($0)" } ?? ""
         let json = """
         {
           "session": {
@@ -526,7 +558,7 @@ struct SessionViewModelTests {
               "host_reattach_available": true,
               "reply_to_live_session_available": true
             },
-            "loop_mode": "assist"
+            "loop_mode": "assist"\(transcriptPreviewField)
           },
           "thread": {
             "root_session_id": "session-1",
