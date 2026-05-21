@@ -73,22 +73,89 @@ pub struct ShipStatsSummary {
     pub ship_server_errors_10m: u32,
     pub ship_retryable_client_errors_10m: u32,
     pub ship_connect_errors_10m: u32,
+    /// Phase 1 instrumentation: EWMA events/sec over the last ~10s of
+    /// successful ship attempts. Drives the phase 2 adaptive controller
+    /// and the bench harness's "events shipped per second" axis.
+    pub events_per_sec_ewma_10s: Option<f64>,
+}
+
+/// EWMA throughput tracker for successful ship events.
+///
+/// Phase 1 instrumentation: a 10s exponential moving average on
+/// events-per-second computed from successful ship attempts. The phase 2
+/// adaptive controller reads this together with server-side queue_wait_ms
+/// to decide whether to grow or shrink in-flight requests.
+#[derive(Debug, Clone, Default)]
+struct EwmaThroughput {
+    /// Last update timestamp (None until first sample).
+    last_at: Option<Instant>,
+    /// Current EWMA estimate of events/sec.
+    ewma_eps: f64,
+}
+
+impl EwmaThroughput {
+    /// 10s time-constant — half-life ≈ 6.9s. New samples weighted by the
+    /// elapsed-time fraction so bursty/idle gaps do not double-count.
+    const TIME_CONSTANT_SECS: f64 = 10.0;
+
+    fn record(&mut self, now: Instant, events: u32, latency_ms: u64) {
+        if events == 0 {
+            return;
+        }
+        // Prefer the actual ship duration (latency_ms) for the instantaneous
+        // rate, falling back to wall-clock elapsed since the last sample.
+        let dt_secs = (latency_ms.max(1) as f64) / 1000.0;
+        let instantaneous = (events as f64) / dt_secs;
+
+        let alpha = match self.last_at {
+            None => 1.0,
+            Some(prev) => {
+                let elapsed = now.saturating_duration_since(prev).as_secs_f64();
+                1.0 - (-elapsed / Self::TIME_CONSTANT_SECS).exp()
+            }
+        };
+        self.ewma_eps = alpha * instantaneous + (1.0 - alpha) * self.ewma_eps;
+        self.last_at = Some(now);
+    }
+
+    fn current(&self, now: Instant) -> Option<f64> {
+        let last = self.last_at?;
+        // Decay the estimate toward zero if no updates have arrived recently
+        // so a long idle period doesn't keep reporting stale throughput.
+        let elapsed = now.saturating_duration_since(last).as_secs_f64();
+        let decay = (-elapsed / Self::TIME_CONSTANT_SECS).exp();
+        let value = self.ewma_eps * decay;
+        if !value.is_finite() {
+            return None;
+        }
+        Some(value)
+    }
 }
 
 #[derive(Clone, Default)]
 pub struct RecentShipStatsTracker {
     inner: Arc<Mutex<VecDeque<ShipAttemptRecord>>>,
+    throughput: Arc<Mutex<EwmaThroughput>>,
 }
 
 impl RecentShipStatsTracker {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(VecDeque::new())),
+            throughput: Arc::new(Mutex::new(EwmaThroughput::default())),
         }
     }
 
     pub fn record(&self, outcome: ShipAttemptOutcome, latency_ms: u64, http_status: Option<u16>) {
         self.record_with_detail(outcome, latency_ms, http_status, None, None);
+    }
+
+    /// Record events shipped on a successful attempt for EWMA throughput.
+    /// Call this AFTER `record(...)` for `ShipAttemptOutcome::Ok` ships.
+    pub fn record_events_shipped(&self, events: u32, latency_ms: u64) {
+        if let Ok(mut t) = self.throughput.lock() {
+            t.record(Instant::now(), events, latency_ms);
+        }
     }
 
     pub fn record_with_detail(
@@ -176,6 +243,11 @@ impl RecentShipStatsTracker {
             latencies.sort_unstable();
             summary.ship_latency_p50_ms_1h = percentile(&latencies, 0.50);
             summary.ship_latency_p95_ms_1h = percentile(&latencies, 0.95);
+            summary.events_per_sec_ewma_10s = self
+                .throughput
+                .lock()
+                .ok()
+                .and_then(|t| t.current(now));
             summary
         } else {
             ShipStatsSummary::default()
@@ -378,6 +450,50 @@ mod tests {
         let message = summary.last_ship_error_message.unwrap();
         assert_eq!(message.chars().count(), 303);
         assert!(message.ends_with("..."));
+    }
+
+    #[test]
+    fn ewma_throughput_first_sample_uses_latency_for_instantaneous_rate() {
+        let mut tput = EwmaThroughput::default();
+        let t0 = Instant::now();
+        tput.record(t0, 100, 100); // 100 events in 100ms => 1000 eps
+        let v = tput.current(t0).unwrap();
+        assert!((v - 1000.0).abs() < 1e-6, "expected 1000 eps, got {v}");
+    }
+
+    #[test]
+    fn ewma_throughput_decays_toward_zero_during_idle() {
+        let mut tput = EwmaThroughput::default();
+        let t0 = Instant::now();
+        tput.record(t0, 100, 100); // 1000 eps initial
+        // 60s later, with TIME_CONSTANT 10s, decay factor ≈ e^-6 ≈ 0.0025
+        let later = t0 + Duration::from_secs(60);
+        let v = tput.current(later).unwrap();
+        assert!(v < 5.0, "expected near-zero after 60s idle, got {v}");
+    }
+
+    #[test]
+    fn record_events_shipped_surfaces_in_summary() {
+        let tracker = RecentShipStatsTracker::new();
+        // Record one successful ship of 200 events that took 50ms => 4000 eps.
+        tracker.record(ShipAttemptOutcome::Ok, 50, None);
+        tracker.record_events_shipped(200, 50);
+        let summary = tracker.summary();
+        let eps = summary.events_per_sec_ewma_10s.unwrap();
+        // The summary call may have advanced Instant::now() slightly, so we
+        // accept a small decay band rather than equality with 4000.
+        assert!(
+            eps > 3500.0 && eps <= 4000.5,
+            "expected ~4000 eps, got {eps}"
+        );
+    }
+
+    #[test]
+    fn record_events_shipped_zero_events_is_a_noop() {
+        let tracker = RecentShipStatsTracker::new();
+        tracker.record_events_shipped(0, 50);
+        let summary = tracker.summary();
+        assert_eq!(summary.events_per_sec_ewma_10s, None);
     }
 
     #[test]

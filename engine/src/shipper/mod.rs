@@ -1285,6 +1285,11 @@ async fn attempt_ship(
                 error_message.as_deref(),
             );
         }
+        if matches!(result, ShipResult::Ok { .. }) {
+            // Phase 1 instrumentation: feed the EWMA throughput tracker so
+            // the bench harness and phase-2 controller see real eps numbers.
+            stats.record_events_shipped(item.event_count as u32, latency_ms);
+        }
     }
 
     match result {
