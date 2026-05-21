@@ -303,3 +303,11 @@ def test_projection_endpoint_anchor_tail_returns_latest_window(tmp_path):
         assert data["total"] == 5
         assert data["page_offset"] == 3
         assert [item["event"]["content_text"] for item in data["items"]] == ["event 4", "event 5"]
+
+        response = client.get(f"/agents/sessions/{session_id_str}/projection?limit=2&anchor=tail&offset=2")
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["total"] == 5
+        assert data["page_offset"] == 1
+        assert [item["event"]["content_text"] for item in data["items"]] == ["event 2", "event 3"]

@@ -56,6 +56,7 @@ logger = logging.getLogger(__name__)
 
 PROVISIONAL_TRANSCRIPT_PARTIAL_FRESHNESS = timedelta(minutes=2)
 PROVISIONAL_TRANSCRIPT_COMPLETE_FRESHNESS = timedelta(minutes=10)
+MOBILE_TOOL_OUTPUT_MAX_CHARS = 2000
 
 # ---------------------------------------------------------------------------
 # Coercion helpers
@@ -845,6 +846,8 @@ class EventResponse(UTCBaseModel):
     tool_name: Optional[str] = Field(None, description="Tool name")
     tool_input_json: Optional[Dict[str, Any]] = Field(None, description="Tool input")
     tool_output_text: Optional[str] = Field(None, description="Tool output")
+    tool_output_truncated: bool = Field(False, description="True when tool_output_text was shortened for this response")
+    tool_output_original_chars: Optional[int] = Field(None, description="Original tool output length when truncated")
     tool_call_id: Optional[str] = Field(None, description="Cross-provider call/result linkage ID")
     timestamp: datetime = Field(..., description="Event timestamp")
     in_active_context: bool = Field(
@@ -964,6 +967,16 @@ class SessionWorkspaceResponse(BaseModel):
     session: SessionResponse = Field(..., description="Focused session metadata")
     thread: SessionThreadResponse = Field(..., description="Logical thread continuations for the focused session")
     projection: SessionProjectionResponse = Field(..., description="First page of the stitched lineage projection")
+
+
+class SessionMobileTailResponse(BaseModel):
+    """Small bootstrap payload for mobile session reads."""
+
+    session: SessionResponse = Field(..., description="Focused session metadata")
+    projection: SessionProjectionResponse = Field(..., description="Tail page of the stitched lineage projection")
+    snapshot_event_id: Optional[int] = Field(
+        None, description="Latest durable event id used to anchor older-page fetches"
+    )
 
 
 class IngestResponse(BaseModel):
@@ -1429,6 +1442,7 @@ def build_event_response(
     boundary: int | None,
     head_branch_id: int | None,
     input_origin_map: dict[int, InputOriginResponse | None] | None = None,
+    mobile_payload: bool = False,
 ) -> EventResponse:
     content_text = event.content_text
     raw_content_text = None
@@ -1438,16 +1452,27 @@ def build_event_response(
             content_text = display_text
             raw_content_text = event.content_text
     is_head_branch = head_branch_id is None or event.branch_id in {None, head_branch_id}
+    tool_output_text = event.tool_output_text
+    tool_output_truncated = False
+    tool_output_original_chars: int | None = None
+    if mobile_payload and tool_output_text is not None and len(tool_output_text) > MOBILE_TOOL_OUTPUT_MAX_CHARS:
+        tool_output_original_chars = len(tool_output_text)
+        tool_output_text = tool_output_text[:MOBILE_TOOL_OUTPUT_MAX_CHARS]
+        tool_output_truncated = True
 
     return EventResponse(
         id=event.id,
         role=event.role,
         content_text=content_text,
         raw_content_text=raw_content_text,
-        input_origin=(_event_input_origin_response(store, event, input_origin_map=input_origin_map) if is_head_branch else None),
+        input_origin=(
+            _event_input_origin_response(store, event, input_origin_map=input_origin_map) if is_head_branch else None
+        ),
         tool_name=event.tool_name,
         tool_input_json=event.tool_input_json,
-        tool_output_text=event.tool_output_text,
+        tool_output_text=tool_output_text,
+        tool_output_truncated=tool_output_truncated,
+        tool_output_original_chars=tool_output_original_chars,
         tool_call_id=event.tool_call_id,
         timestamp=event.timestamp,
         in_active_context=store.is_event_in_active_context(event, boundary) if boundary is not None else True,
