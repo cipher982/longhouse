@@ -50,6 +50,24 @@ def backfill_root_threads(db: Session) -> dict[str, int]:
     primary_pointers_set = 0
     aliases_created = 0
 
+    # Cheap early-out for converged DBs: no sessions are missing
+    # primary_thread_id. (Aliases and per-session thread checks still need a
+    # walk if pointers are set but a session lacks an alias — we rely on the
+    # caller's idempotency for that, since it's the rarer fix-up path.)
+    if (
+        db.query(AgentSession.id)
+        .filter(AgentSession.primary_thread_id.is_(None))
+        .limit(1)
+        .first()
+        is None
+    ):
+        return {
+            "sessions_seen": 0,
+            "threads_created": 0,
+            "primary_pointers_set": 0,
+            "aliases_created": 0,
+        }
+
     sessions = db.query(AgentSession).all()
     for session in sessions:
         sessions_seen += 1
@@ -126,10 +144,27 @@ def backfill_child_thread_ids(db: Session) -> dict[str, int]:
     primary thread per session and bulk-updates rows whose thread_id is
     currently NULL. Rows that already carry a thread_id are never touched.
 
-    Idempotent: re-running on a fully-backfilled DB is a no-op.
+    Idempotent: re-running on a fully-backfilled DB is a no-op. Includes a
+    cheap early-out so a converged DB exits in O(tables) probes instead of
+    O(sessions × tables) per-session updates.
     """
 
-    counts: dict[str, int] = {}
+    counts: dict[str, int] = {model.__tablename__: 0 for model in _CHILD_THREAD_ID_TABLES}
+
+    # Cheap early-out: if no child row anywhere has thread_id IS NULL, we're done.
+    has_null = False
+    for model in _CHILD_THREAD_ID_TABLES:
+        if (
+            db.query(model.thread_id)
+            .filter(model.thread_id.is_(None))
+            .limit(1)
+            .first()
+            is not None
+        ):
+            has_null = True
+            break
+    if not has_null:
+        return counts
 
     primaries = dict(
         db.query(SessionThread.session_id, SessionThread.id)
@@ -137,7 +172,6 @@ def backfill_child_thread_ids(db: Session) -> dict[str, int]:
         .all()
     )
     for model in _CHILD_THREAD_ID_TABLES:
-        table_name = model.__tablename__
         updated = 0
         for session_id, thread_id in primaries.items():
             stmt = (
@@ -147,25 +181,66 @@ def backfill_child_thread_ids(db: Session) -> dict[str, int]:
             )
             result = db.execute(stmt)
             updated += int(result.rowcount or 0)
-        counts[table_name] = updated
+        counts[model.__tablename__] = updated
     db.flush()
     return counts
 
 
 def backfill_runs_and_connections(db: Session) -> dict[str, int]:
-    """Synthesize one ``external_adopted`` run + connection per session.
+    """Synthesize one ``external_adopted`` run per primary thread that lacks
+    one, plus a ``log_tail`` observe-only connection on the synthesized run.
 
     Phase 2 launchers create their own runs eagerly, so this only fills in
-    history: sessions that pre-date the kernel get a single run keyed to
-    the primary thread, plus a ``log_tail`` observe-only connection.
+    history: pre-kernel sessions get a single run keyed to the primary thread.
 
-    Idempotent: skips threads that already have any run row.
+    For ``run_id`` stamping on legacy ``SessionRuntimeState`` and
+    ``SessionTurn`` rows, the **latest** run on the primary thread is used —
+    a resumed session must land on the active run, not the original. Rows
+    are filtered by ``thread_id == primary.id`` so subagent/branch threads
+    keep their own run pointer.
+
+    Launcher-owned runs are not touched and no connection is fabricated for
+    them — those came in through Phase 2 dual-write paths and any missing
+    connection there is a launcher bug, not a backfill concern.
+
+    Idempotent: skips threads that already have any run row. Re-running over
+    a converged DB is a no-op.
     """
 
     runs_created = 0
     connections_created = 0
     runtime_state_run_ids = 0
     turn_run_ids = 0
+
+    # Cheap early-out for converged DBs: no primary threads missing a run
+    # and no runtime/turn rows with run_id=NULL.
+    threads_missing_run_subq = (
+        db.query(SessionThread.id)
+        .outerjoin(SessionRun, SessionRun.thread_id == SessionThread.id)
+        .filter(SessionThread.is_primary == 1, SessionRun.id.is_(None))
+        .limit(1)
+        .first()
+    )
+    runtime_null = (
+        db.query(SessionRuntimeState.runtime_key)
+        .filter(SessionRuntimeState.run_id.is_(None))
+        .limit(1)
+        .first()
+    )
+    turn_null = (
+        db.query(SessionTurn.id).filter(SessionTurn.run_id.is_(None)).limit(1).first()
+    )
+    if (
+        threads_missing_run_subq is None
+        and runtime_null is None
+        and turn_null is None
+    ):
+        return {
+            "runs_created": 0,
+            "connections_created": 0,
+            "runtime_state_run_ids": 0,
+            "turn_run_ids": 0,
+        }
 
     threads = (
         db.query(SessionThread)
@@ -178,7 +253,7 @@ def backfill_runs_and_connections(db: Session) -> dict[str, int]:
         existing_run = (
             db.query(SessionRun)
             .filter(SessionRun.thread_id == thread.id)
-            .order_by(SessionRun.started_at.asc(), SessionRun.id.asc())
+            .order_by(SessionRun.started_at.desc(), SessionRun.id.desc())
             .first()
         )
         if existing_run is None:
@@ -201,15 +276,9 @@ def backfill_runs_and_connections(db: Session) -> dict[str, int]:
             db.add(run)
             db.flush()
             runs_created += 1
-        else:
-            run = existing_run
 
-        existing_conn = (
-            db.query(SessionConnection)
-            .filter(SessionConnection.run_id == run.id)
-            .first()
-        )
-        if existing_conn is None:
+            # Synthesize a log_tail connection only when we synthesized the
+            # run. A launcher-owned run is responsible for its own connection.
             db.add(
                 SessionConnection(
                     run_id=run.id,
@@ -224,12 +293,16 @@ def backfill_runs_and_connections(db: Session) -> dict[str, int]:
                 )
             )
             connections_created += 1
+        else:
+            run = existing_run
 
-        # Stamp run_id on runtime state / turns if NULL.
+        # Stamp run_id on runtime state / turns where NULL — but only on rows
+        # already keyed to *this* primary thread. Rows pointing at a child or
+        # branch thread keep their own (eventually-stamped) run pointer.
         result = db.execute(
             sql_update(SessionRuntimeState)
             .where(
-                SessionRuntimeState.session_id == thread.session_id,
+                SessionRuntimeState.thread_id == thread.id,
                 SessionRuntimeState.run_id.is_(None),
             )
             .values(run_id=run.id)
@@ -239,7 +312,7 @@ def backfill_runs_and_connections(db: Session) -> dict[str, int]:
         result = db.execute(
             sql_update(SessionTurn)
             .where(
-                SessionTurn.session_id == thread.session_id,
+                SessionTurn.thread_id == thread.id,
                 SessionTurn.run_id.is_(None),
             )
             .values(run_id=run.id)
