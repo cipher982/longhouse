@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 /// Client-side realtime latency beacon.
 ///
@@ -99,6 +100,8 @@ protocol SessionWorkspaceClient: Sendable {
 }
 
 struct LonghouseAPI: Sendable {
+    private static let logger = Logger(subsystem: "ai.longhouse.ios", category: "SessionOpen")
+
     let baseURL: URL
 
     init(baseURL: URL) {
@@ -206,14 +209,23 @@ struct LonghouseAPI: Sendable {
         )
         request.addValue("application/json", forHTTPHeaderField: "Accept")
 
+        let requestStartedAt = Date()
+        Self.logger.info("mobile-tail request started session=\(id, privacy: .public) limit=\(limit, privacy: .public) offset=\(offset, privacy: .public)")
         let (data, httpResponse) = try await data(for: request)
+        let responseMs = Int(Date().timeIntervalSince(requestStartedAt) * 1000)
+        let contentEncoding = httpResponse.value(forHTTPHeaderField: "content-encoding") ?? "none"
+        Self.logger.info("mobile-tail response received session=\(id, privacy: .public) status=\(httpResponse.statusCode, privacy: .public) bytes=\(data.count, privacy: .public) encoding=\(contentEncoding, privacy: .public) elapsed_ms=\(responseMs, privacy: .public)")
         guard httpResponse.statusCode == 200 else {
             if let structured = Self.parseStructuredError(statusCode: httpResponse.statusCode, data: data) {
                 throw structured
             }
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
-        return try JSONDecoder.snakeCase.decode(SessionMobileTailResponse.self, from: data)
+        let decodeStartedAt = Date()
+        let decoded = try JSONDecoder.snakeCase.decode(SessionMobileTailResponse.self, from: data)
+        let decodeMs = Int(Date().timeIntervalSince(decodeStartedAt) * 1000)
+        Self.logger.info("mobile-tail decode finished session=\(id, privacy: .public) events=\(decoded.events.count, privacy: .public) total=\(decoded.projection.total, privacy: .public) elapsed_ms=\(decodeMs, privacy: .public)")
+        return decoded
     }
 
     func sessionTurns(id: String) async throws -> [SessionTurn] {

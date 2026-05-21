@@ -140,7 +140,38 @@ struct SessionView: View {
     }
 
     private var transcript: some View {
-        Group {
+        let showTranscript = !viewModel.isInitialLoading
+            && (!viewModel.items.isEmpty || !viewModel.submittedInputs.isEmpty || viewModel.errorMessage == nil)
+
+        return ZStack {
+            WebTranscriptView(
+                items: viewModel.items,
+                submittedInputs: viewModel.submittedInputs,
+                sessionEnded: viewModel.isSessionEnded,
+                errorMessage: viewModel.errorMessage,
+                onNearTop: {
+                    Task { await viewModel.loadOlder(sessionId: sessionId, appState: appState) }
+                },
+                onDiagnostics: { diagnostics in
+                    onTranscriptDiagnostics?(diagnostics)
+                    Task {
+                        await viewModel.recordTranscriptDiagnostics(
+                            diagnostics,
+                            sessionId: sessionId,
+                            appState: appState
+                        )
+                    }
+                },
+                onLifecycle: { stage in
+                    viewModel.recordTranscriptLifecycle(stage)
+                }
+            )
+            .opacity(showTranscript ? 1 : 0.01)
+            .allowsHitTesting(showTranscript)
+            .accessibilityHidden(!showTranscript)
+            .accessibilityIdentifier("session-chat-transcript")
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
             if viewModel.isInitialLoading {
                 ProgressView().controlSize(.large)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -155,27 +186,6 @@ struct SessionView: View {
                 }
                 .padding()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                WebTranscriptView(
-                    items: viewModel.items,
-                    submittedInputs: viewModel.submittedInputs,
-                    sessionEnded: viewModel.isSessionEnded,
-                    errorMessage: viewModel.errorMessage,
-                    onNearTop: {
-                        Task { await viewModel.loadOlder(sessionId: sessionId, appState: appState) }
-                    },
-                    onDiagnostics: { diagnostics in
-                        onTranscriptDiagnostics?(diagnostics)
-                        Task {
-                            await viewModel.recordTranscriptDiagnostics(
-                                diagnostics,
-                                sessionId: sessionId,
-                                appState: appState
-                            )
-                        }
-                    }
-                )
-                .accessibilityIdentifier("session-chat-transcript")
             }
         }
     }
@@ -616,6 +626,7 @@ final class SessionViewModel: ObservableObject {
     private var prefetchedOlderTail: SessionMobileTailResponse?
     private var prefetchedOlderOffset: Int?
     private var isLoadingOlder = false
+    private var openWaterfall: SessionOpenWaterfall?
     private let apiFactory: (String) -> SessionWorkspaceClient?
     private let streamFactory: (URL, String) -> SessionWorkspaceStreamSource
     private let enableRealtime: Bool
@@ -643,6 +654,7 @@ final class SessionViewModel: ObservableObject {
         var restoredFromCache = false
         var shouldRefreshCachedTail = false
         if sessionChanged {
+            openWaterfall = SessionOpenWaterfall(sessionId: sessionId)
             activeSessionId = sessionId
             activeServerURL = appState.serverURL
             isInitialLoading = true
@@ -660,9 +672,16 @@ final class SessionViewModel: ObservableObject {
             prefetchTask = nil
             errorMessage = nil
             if let snapshot = transcriptCache?.snapshot(serverURL: appState.serverURL, sessionId: sessionId) {
+                let ageMs = Int(Date().timeIntervalSince(snapshot.savedAt) * 1000)
+                openWaterfall?.mark(
+                    "cache_hit",
+                    "events=\(snapshot.events.count) age_ms=\(ageMs)"
+                )
                 applyCachedSnapshot(snapshot)
                 restoredFromCache = true
                 shouldRefreshCachedTail = Date().timeIntervalSince(snapshot.savedAt) >= cachedTailRefreshGraceInterval
+            } else {
+                openWaterfall?.mark("cache_miss")
             }
         } else {
             activeServerURL = appState.serverURL
@@ -690,6 +709,8 @@ final class SessionViewModel: ObservableObject {
     }
 
     func stop() {
+        openWaterfall?.mark("stop")
+        openWaterfall = nil
         pollTask?.cancel()
         pollTask = nil
         prefetchTask?.cancel()
@@ -709,6 +730,7 @@ final class SessionViewModel: ObservableObject {
             isInitialLoading = false
             return
         }
+        openWaterfall?.mark("reload_start")
         do {
             try await refreshTail(api: api, sessionId: sessionId)
             errorMessage = nil
@@ -847,6 +869,14 @@ final class SessionViewModel: ObservableObject {
         appState: AppState
     ) async {
         transcriptDiagnostics = diagnostics
+        let renderMs = diagnostics.render_duration_ms.map { " render_ms=\($0)" } ?? ""
+        openWaterfall?.mark(
+            "webkit_\(diagnostics.stage)",
+            "rows=\(diagnostics.row_count) bytes=\(diagnostics.payload_byte_size)\(renderMs)"
+        )
+        if diagnostics.stage == "rendered" {
+            openWaterfall = nil
+        }
         guard diagnostics.stage == "rendered" || diagnostics.stage == "failed" else { return }
         guard let api = apiFactory(appState.serverURL) else { return }
         await reportRenderBeacon(
@@ -855,6 +885,10 @@ final class SessionViewModel: ObservableObject {
             events: lastWorkspaceEvents,
             webkitDiagnostics: diagnostics
         )
+    }
+
+    func recordTranscriptLifecycle(_ stage: String) {
+        openWaterfall?.mark(stage)
     }
 
     private func startVisiblePolling(sessionId: String, appState: AppState) {
@@ -945,6 +979,8 @@ final class SessionViewModel: ObservableObject {
         guard activeSessionId == sessionId else { return }
 
         do {
+            let requestStartedAt = Date()
+            openWaterfall?.mark("request_start", "limit=\(initialTailLimit)")
             let tail = try await api.sessionMobileTail(
                 id: sessionId,
                 limit: initialTailLimit,
@@ -952,9 +988,15 @@ final class SessionViewModel: ObservableObject {
                 branchMode: "head",
                 snapshotEventId: nil
             )
+            let requestMs = Int(Date().timeIntervalSince(requestStartedAt) * 1000)
             guard activeSessionId == sessionId else { return }
+            openWaterfall?.mark(
+                "request_finished",
+                "elapsed_ms=\(requestMs) events=\(tail.events.count) total=\(tail.projection.total)"
+            )
             self.detail = tail.session
             let events = tail.events
+            let buildStartedAt = Date()
             let mergedEvents = mergeRefreshedTail(events)
             self.lastWorkspaceEvents = mergedEvents
             self.loadedProjectionItemCount = min(
@@ -965,7 +1007,13 @@ final class SessionViewModel: ObservableObject {
             self.tailSnapshotEventId = tail.snapshotEventId
             self.prefetchedOlderTail = nil
             self.prefetchedOlderOffset = nil
-            self.items = TimelineBuilder.build(events: mergedEvents)
+            let builtItems = TimelineBuilder.build(events: mergedEvents)
+            self.items = builtItems
+            let buildMs = Int(Date().timeIntervalSince(buildStartedAt) * 1000)
+            openWaterfall?.mark(
+                "timeline_built",
+                "events=\(mergedEvents.count) items=\(builtItems.count) elapsed_ms=\(buildMs)"
+            )
             reconcileSubmittedInputs(with: mergedEvents)
             saveCurrentCache()
             scheduleOlderPrefetch(api: api, sessionId: sessionId)
@@ -1054,6 +1102,7 @@ final class SessionViewModel: ObservableObject {
         items = TimelineBuilder.build(events: snapshot.events)
         isInitialLoading = false
         errorMessage = nil
+        openWaterfall?.mark("cache_applied", "events=\(snapshot.events.count) items=\(items.count)")
     }
 
     private func saveCurrentCache() {
