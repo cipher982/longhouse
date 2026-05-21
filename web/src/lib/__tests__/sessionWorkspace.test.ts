@@ -171,7 +171,6 @@ describe("getSessionInteractionCapabilities", () => {
         provider: "codex",
         home_label: "On this Mac",
         control: {
-          managed_transport: "codex_app_server",
           source_runner_id: 7,
           source_runner_name: "cinder",
         },
@@ -235,7 +234,6 @@ describe("getSessionInteractionCapabilities", () => {
         provider: "codex",
         home_label: "On this Mac",
         control: {
-          managed_transport: "codex_app_server",
           source_runner_id: null,
           source_runner_name: null,
         },
@@ -282,7 +280,6 @@ describe("getSessionInteractionCapabilities", () => {
         provider: "claude",
         home_label: "On this Mac",
         control: {
-          managed_transport: "claude_channel_bridge",
           source_runner_id: null,
           source_runner_name: null,
         },

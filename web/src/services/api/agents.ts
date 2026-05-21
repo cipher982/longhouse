@@ -202,7 +202,6 @@ export interface TimelineCardPresentation {
 }
 
 export interface SessionControl {
-  managed_transport: ManagedSessionTransport | null;
   source_runner_id: number | null;
   source_runner_name: string | null;
   attach_command?: string | null;
@@ -370,13 +369,6 @@ export type PresenceState =
 
 export type UserStateAction = "park" | "snooze" | "archive" | "resume";
 export type SessionLoopMode = "assist" | "autopilot";
-export type SessionExecutionHome =
-  | "unmanaged_local"
-  | "managed_local"
-  | "managed_hosted"
-  | "cloud_takeover";
-export type ManagedSessionTransport = "claude_channel_bridge" | "codex_app_server";
-
 export interface AgentEventInputOrigin {
   authored_via: "longhouse" | "terminal";
   session_input_id?: number | null;

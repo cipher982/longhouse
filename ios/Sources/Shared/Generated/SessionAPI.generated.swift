@@ -20,12 +20,18 @@ struct APISessionCapabilitiesResponse: Codable, Hashable, Sendable {
     let composerEnabled: Bool?
     let composerPlaceholder: String?
     let composerDisabledReason: String?
+    let controlLabel: String?
+    let observeOnly: Bool?
+    let searchOnly: Bool?
+    let stalenessReason: String?
+    let canSendInput: Bool?
+    let canInterrupt: Bool?
+    let canTerminate: Bool?
+    let canTailOutput: Bool?
+    let canResume: Bool?
 }
 
-typealias APIManagedSessionTransport = String
-
 struct APISessionControlResponse: Codable, Hashable, Sendable {
-    let managedTransport: APIManagedSessionTransport?
     let sourceRunnerId: Int?
     let sourceRunnerName: String?
     let attachCommand: String?
@@ -243,6 +249,8 @@ struct APIEventResponse: Codable, Hashable, Sendable {
     let toolName: String?
     let toolInputJson: [String: JSONValue]?
     let toolOutputText: String?
+    let toolOutputTruncated: Bool?
+    let toolOutputOriginalChars: Int?
     let toolCallId: String?
     let timestamp: String
     let inActiveContext: Bool?

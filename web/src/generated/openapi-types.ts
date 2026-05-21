@@ -3301,6 +3301,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/timeline/sessions/{session_id}/mobile-tail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Timeline Session Mobile Tail */
+        get: operations["get_timeline_session_mobile_tail_timeline_sessions__session_id__mobile_tail_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/timeline/sessions/{session_id}/export": {
         parameters: {
             query?: never;
@@ -5697,6 +5714,17 @@ export interface components {
              */
             tool_output_text?: string | null;
             /**
+             * Tool Output Truncated
+             * @description True when tool_output_text was shortened for this response
+             * @default false
+             */
+            tool_output_truncated: boolean;
+            /**
+             * Tool Output Original Chars
+             * @description Original tool output length when truncated
+             */
+            tool_output_original_chars?: number | null;
+            /**
              * Tool Call Id
              * @description Cross-provider call/result linkage ID
              */
@@ -8019,11 +8047,61 @@ export interface components {
              * @description User-facing reason the composer is disabled
              */
             composer_disabled_reason?: string | null;
+            /**
+             * Control Label
+             * @description Kernel-projected control bucket for this session
+             */
+            control_label?: ("live" | "reattach" | "search-only" | "imported") | null;
+            /**
+             * Observe Only
+             * @description True when Longhouse can read transcript output but cannot steer this session
+             * @default false
+             */
+            observe_only: boolean;
+            /**
+             * Search Only
+             * @description True when this session is an imported transcript with no active control plane
+             * @default false
+             */
+            search_only: boolean;
+            /**
+             * Staleness Reason
+             * @description When live_control_available is False, why: e.g. no_run, connection_released, process_ended, imported_only
+             */
+            staleness_reason?: string | null;
+            /**
+             * Can Send Input
+             * @description Kernel: connection grants send-input capability and is currently live
+             * @default false
+             */
+            can_send_input: boolean;
+            /**
+             * Can Interrupt
+             * @description Kernel: connection grants interrupt capability and is currently live
+             * @default false
+             */
+            can_interrupt: boolean;
+            /**
+             * Can Terminate
+             * @description Kernel: connection grants terminate capability and is currently live
+             * @default false
+             */
+            can_terminate: boolean;
+            /**
+             * Can Tail Output
+             * @description Kernel: connection grants output tailing capability
+             * @default false
+             */
+            can_tail_output: boolean;
+            /**
+             * Can Resume
+             * @description Kernel: connection can be resumed (live or reattach)
+             * @default false
+             */
+            can_resume: boolean;
         };
         /** SessionControlResponse */
         SessionControlResponse: {
-            /** @description Managed transport when Longhouse owns the session runtime */
-            managed_transport?: components["schemas"]["ManagedSessionTransport"] | null;
             /**
              * Source Runner Id
              * @description Runner id for managed local sessions
@@ -8231,6 +8309,21 @@ export interface components {
              * @description User message
              */
             message: string;
+        };
+        /**
+         * SessionMobileTailResponse
+         * @description Small bootstrap payload for mobile session reads.
+         */
+        SessionMobileTailResponse: {
+            /** @description Focused session metadata */
+            session: components["schemas"]["SessionResponse"];
+            /** @description Tail page of the stitched lineage projection */
+            projection: components["schemas"]["SessionProjectionResponse"];
+            /**
+             * Snapshot Event Id
+             * @description Latest durable event id used to anchor older-page fetches
+             */
+            snapshot_event_id?: number | null;
         };
         /**
          * SessionPreviewMessage
@@ -15877,6 +15970,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionWorkspaceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_timeline_session_mobile_tail_timeline_sessions__session_id__mobile_tail_get: {
+        parameters: {
+            query?: {
+                /** @description Branch projection mode: head|all */
+                branch_mode?: string;
+                /** @description Max projected tail items */
+                limit?: number;
+                /** @description Items before the latest tail window */
+                offset?: number;
+                /** @description Previous snapshot marker for older-page drift detection */
+                snapshot_event_id?: number | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionMobileTailResponse"];
                 };
             };
             /** @description Validation Error */

@@ -111,7 +111,6 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     branched_from_event_id: null,
     is_writable_head: true,
     control: {
-      managed_transport: "codex_app_server",
       source_runner_id: 7,
       source_runner_name: "cinder",
       attach_command:
