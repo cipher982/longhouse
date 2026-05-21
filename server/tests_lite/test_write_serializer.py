@@ -414,3 +414,63 @@ def test_full_app_ingest_succeeds_in_subprocess_without_testing_flag(tmp_path):
     assert result.returncode == 0, (
         f"subprocess exited {result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
+
+
+@pytest.mark.asyncio
+async def test_last_write_timing_records_per_call_metrics(tmp_path):
+    """Phase 1 instrumentation: each awaited execute() must leave its timing
+    on the calling Task's contextvar so the ingest router can emit headers.
+    """
+    from zerg.services.write_serializer import last_write_timing
+
+    db_path = tmp_path / "write-serializer-last-timing.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    session_factory = make_sessionmaker(engine)
+
+    with engine.begin() as conn:
+        conn.exec_driver_sql("CREATE TABLE writes (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL)")
+
+    serializer = WriteSerializer()
+    serializer.configure(session_factory)
+
+    def _write(db):
+        time.sleep(0.01)
+        db.execute(sa_text("INSERT INTO writes(label) VALUES ('only')"))
+
+    assert last_write_timing() is None
+    await serializer.execute(_write, label="ingest-replay")
+
+    timing = last_write_timing()
+    assert timing is not None
+    assert timing.label == "ingest-replay"
+    assert timing.exec_ms >= 10.0
+    assert timing.queue_wait_ms >= 0.0
+
+
+@pytest.mark.asyncio
+async def test_last_write_timing_isolated_between_tasks(tmp_path):
+    """ContextVar must NOT leak across concurrent tasks."""
+    from zerg.services.write_serializer import last_write_timing
+
+    db_path = tmp_path / "write-serializer-task-isolation.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    session_factory = make_sessionmaker(engine)
+
+    with engine.begin() as conn:
+        conn.exec_driver_sql("CREATE TABLE writes (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL)")
+
+    serializer = WriteSerializer()
+    serializer.configure(session_factory)
+
+    def _write(label: str):
+        def _do(db):
+            db.execute(sa_text("INSERT INTO writes(label) VALUES (:l)"), {"l": label})
+        return _do
+
+    async def _run(label: str) -> str | None:
+        await serializer.execute(_write(label), label=label)
+        t = last_write_timing()
+        return t.label if t else None
+
+    labels = await asyncio.gather(_run("ingest-live"), _run("ingest-replay"), _run("presence"))
+    assert sorted(labels) == ["ingest-live", "ingest-replay", "presence"]
