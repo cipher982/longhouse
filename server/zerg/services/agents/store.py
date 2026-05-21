@@ -307,7 +307,7 @@ class AgentsStore:
                 abandoned_events += max(0, forensic_total - visible_count)
 
         if load_from_end:
-            offset = max(0, total - limit)
+            offset = max(0, total - limit - offset)
 
         items: list[SessionProjectionItem] = []
         remaining_offset = offset

@@ -54,6 +54,7 @@ from zerg.services.session_views import SessionActionRequest
 from zerg.services.session_views import SessionActionResponse
 from zerg.services.session_views import SessionLoopModeRequest
 from zerg.services.session_views import SessionLoopModeResponse
+from zerg.services.session_views import SessionMobileTailResponse
 from zerg.services.session_views import SessionPreviewResponse
 from zerg.services.session_views import SessionProjectionResponse
 from zerg.services.session_views import SessionResponse
@@ -62,6 +63,7 @@ from zerg.services.session_views import SessionThreadResponse
 from zerg.services.session_views import SessionTurnEnvelopeResponse
 from zerg.services.session_views import SessionTurnsListResponse
 from zerg.services.session_views import SessionWorkspaceResponse
+from zerg.services.session_workspace import build_session_mobile_tail
 from zerg.services.session_workspace import build_session_workspace
 from zerg.services.timeline_session_listing import TimelineSessionListParams
 from zerg.services.timeline_session_listing import TimelineSessionsListResponse
@@ -572,6 +574,35 @@ async def get_timeline_session_workspace(
         session_id=session_id,
         branch_mode=branch_mode,
         limit=limit,
+        timing=timing,
+        owner_id=int(current_user.id),
+    )
+    timing.apply(response)
+    return result
+
+
+@router.get("/sessions/{session_id}/mobile-tail", response_model=SessionMobileTailResponse)
+async def get_timeline_session_mobile_tail(
+    session_id: UUID,
+    response: Response,
+    branch_mode: str = Query("head", description="Branch projection mode: head|all"),
+    limit: int = Query(50, ge=1, le=200, description="Max projected tail items"),
+    offset: int = Query(0, ge=0, description="Items before the latest tail window"),
+    snapshot_event_id: Optional[int] = Query(
+        None, description="Previous snapshot marker for older-page drift detection"
+    ),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_browser_user),
+):
+    timing = ServerTimingRecorder()
+    response.headers["Cache-Control"] = "private, max-age=5"
+    result = build_session_mobile_tail(
+        db=db,
+        session_id=session_id,
+        branch_mode=branch_mode,
+        limit=limit,
+        offset=offset,
+        snapshot_event_id=snapshot_event_id,
         timing=timing,
         owner_id=int(current_user.id),
     )

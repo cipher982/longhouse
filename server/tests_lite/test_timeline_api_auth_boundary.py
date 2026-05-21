@@ -495,6 +495,8 @@ def test_timeline_session_workspace_projects_claude_channel_display_text(tmp_pat
                 "tool_name": None,
                 "tool_input_json": None,
                 "tool_output_text": None,
+                "tool_output_truncated": False,
+                "tool_output_original_chars": None,
                 "tool_call_id": None,
                 "timestamp": events[0]["timestamp"],
                 "in_active_context": True,
@@ -511,6 +513,85 @@ def test_timeline_session_workspace_projects_claude_channel_display_text(tmp_pat
         with session_local() as db:
             stored = db.query(AgentEvent).filter(AgentEvent.id == event_id).one()
             assert stored.content_text == raw_text
+    finally:
+        auth_deps._strategy_cache.clear()
+        api_app.dependency_overrides.clear()
+
+
+def test_timeline_session_mobile_tail_returns_compact_tail_and_detects_drift(tmp_path):
+    session_local = _make_db(tmp_path)
+    with session_local() as db:
+        _seed_user(db)
+        session_id = _seed_session(db)
+        base = datetime.now(timezone.utc)
+        events = [
+            AgentEvent(session_id=session_id, role="user", content_text="event 1", timestamp=base),
+            AgentEvent(
+                session_id=session_id, role="assistant", content_text="event 2", timestamp=base + timedelta(seconds=1)
+            ),
+            AgentEvent(
+                session_id=session_id,
+                role="tool",
+                tool_name="Bash",
+                tool_output_text="x" * 2500,
+                timestamp=base + timedelta(seconds=2),
+            ),
+            AgentEvent(
+                session_id=session_id, role="assistant", content_text="event 4", timestamp=base + timedelta(seconds=3)
+            ),
+        ]
+        db.add_all(events)
+        db.commit()
+        event_ids = [event.id for event in events]
+
+    client = _make_client(session_local)
+
+    try:
+        with _force_browser_jwt_mode():
+            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
+            response = client.get(f"/timeline/sessions/{session_id}/mobile-tail?limit=2")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert response.headers["cache-control"] == "private, max-age=5"
+        assert "thread" not in payload
+        assert payload["session"]["id"] == session_id
+        assert payload["snapshot_event_id"] == event_ids[-1]
+        assert payload["projection"]["total"] == 4
+        assert payload["projection"]["page_offset"] == 2
+        tail_events = [item["event"] for item in payload["projection"]["items"] if item["kind"] == "event"]
+        assert [event["id"] for event in tail_events] == event_ids[-2:]
+        assert len(tail_events[0]["tool_output_text"]) == 2000
+        assert tail_events[0]["tool_output_truncated"] is True
+        assert tail_events[0]["tool_output_original_chars"] == 2500
+
+        with _force_browser_jwt_mode():
+            response = client.get(
+                f"/timeline/sessions/{session_id}/mobile-tail?limit=2&offset=2&snapshot_event_id={payload['snapshot_event_id']}"
+            )
+
+        assert response.status_code == 200
+        older_events = [item["event"] for item in response.json()["projection"]["items"] if item["kind"] == "event"]
+        assert [event["id"] for event in older_events] == event_ids[:2]
+
+        with session_local() as db:
+            db.add(
+                AgentEvent(
+                    session_id=session_id,
+                    role="assistant",
+                    content_text="event 5",
+                    timestamp=base + timedelta(seconds=4),
+                )
+            )
+            db.commit()
+
+        with _force_browser_jwt_mode():
+            response = client.get(
+                f"/timeline/sessions/{session_id}/mobile-tail?limit=2&offset=2&snapshot_event_id={payload['snapshot_event_id']}"
+            )
+
+        assert response.status_code == 409
+        assert response.json()["detail"]["error_code"] == "projection_drift"
     finally:
         auth_deps._strategy_cache.clear()
         api_app.dependency_overrides.clear()
