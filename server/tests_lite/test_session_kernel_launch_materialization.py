@@ -154,6 +154,51 @@ def test_record_thread_alias_is_idempotent(tmp_path):
     assert len(rows) == 1
 
 
+def test_upsert_connection_idempotent_per_run_and_plane(tmp_path):
+    from zerg.services.agents.kernel_writes import ensure_open_run_for_session
+    from zerg.services.agents.kernel_writes import upsert_connection_for_run
+
+    db = _session(tmp_path)
+    session = _make_session_row(db, provider="codex")
+    run = ensure_open_run_for_session(db, session)
+
+    c1 = upsert_connection_for_run(
+        db,
+        run=run,
+        control_plane="codex_bridge",
+        acquisition_kind="adopted_control",
+        state="attached",
+        can_send_input=1,
+    )
+    c2 = upsert_connection_for_run(
+        db,
+        run=run,
+        control_plane="codex_bridge",
+        acquisition_kind="adopted_control",
+        state="degraded",
+    )
+    db.commit()
+
+    assert c1.id == c2.id
+    rows = db.query(SessionConnection).filter(SessionConnection.run_id == run.id).all()
+    assert len(rows) == 1
+    assert rows[0].state == "degraded"
+    # capability bits left alone when caller passes None
+    assert rows[0].can_send_input == 1
+
+
+def test_open_run_reused_by_external_adoption(tmp_path):
+    from zerg.services.agents.kernel_writes import ensure_open_run_for_session
+
+    db = _session(tmp_path)
+    session = _make_session_row(db)
+    r1 = ensure_open_run_for_session(db, session, launch_origin="external_adopted")
+    r2 = ensure_open_run_for_session(db, session, launch_origin="external_adopted")
+    db.commit()
+
+    assert r1.id == r2.id
+
+
 def test_update_launch_attempt_state_run_link(tmp_path):
     db = _session(tmp_path)
     session = _make_session_row(db)
