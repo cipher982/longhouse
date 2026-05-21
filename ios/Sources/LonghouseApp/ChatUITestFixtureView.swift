@@ -207,6 +207,23 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         Self.makeWorkspace(sessionID: sessionID, events: events)
     }
 
+    func sessionMobileTail(
+        id: String,
+        limit: Int,
+        offset: Int,
+        branchMode: String,
+        snapshotEventId: Int?
+    ) async throws -> SessionMobileTailResponse {
+        let page = Self.tailPage(events: events, limit: limit, offset: offset)
+        return Self.makeMobileTail(
+            sessionID: sessionID,
+            events: page.events,
+            total: events.count,
+            pageOffset: page.pageOffset,
+            snapshotEventId: events.map(\.id).max()
+        )
+    }
+
     func sendInput(id: String, text: String, intent: String, clientRequestId: String?) async throws -> SessionInputResponse {
         try await Task.sleep(nanoseconds: 650_000_000)
         let inputID = nextEventID
@@ -336,6 +353,92 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
     }
 
     private static func makeWorkspace(sessionID: String, events: [SessionEvent]) -> SessionWorkspaceResponse {
+        let detail = makeDetail(sessionID: sessionID, events: events)
+        let projectionItems = events.map { event in
+            SessionProjectionItem(
+                kind: "event",
+                sessionId: sessionID,
+                timestamp: event.timestamp,
+                event: event,
+                continuedFromSessionId: nil,
+                continuationKind: nil,
+                originLabel: nil,
+                parentOriginLabel: nil,
+                parentContinuationKind: nil,
+                branchedFromEventId: nil
+            )
+        }
+        return SessionWorkspaceResponse(
+            session: detail,
+            thread: SessionThreadResponse(
+                rootSessionId: sessionID,
+                headSessionId: sessionID,
+                sessions: [detail]
+            ),
+            projection: SessionProjectionResponse(
+                rootSessionId: sessionID,
+                focusSessionId: sessionID,
+                headSessionId: sessionID,
+                pathSessionIds: [sessionID],
+                items: projectionItems,
+                total: projectionItems.count,
+                pageOffset: 0,
+                branchMode: "head",
+                abandonedEvents: 0
+            )
+        )
+    }
+
+    private static func makeMobileTail(
+        sessionID: String,
+        events: [SessionEvent],
+        total: Int,
+        pageOffset: Int,
+        snapshotEventId: Int?
+    ) -> SessionMobileTailResponse {
+        let detail = makeDetail(sessionID: sessionID, events: events)
+        let projectionItems = events.map { event in
+            SessionProjectionItem(
+                kind: "event",
+                sessionId: sessionID,
+                timestamp: event.timestamp,
+                event: event,
+                continuedFromSessionId: nil,
+                continuationKind: nil,
+                originLabel: nil,
+                parentOriginLabel: nil,
+                parentContinuationKind: nil,
+                branchedFromEventId: nil
+            )
+        }
+        return SessionMobileTailResponse(
+            session: detail,
+            projection: SessionProjectionResponse(
+                rootSessionId: sessionID,
+                focusSessionId: sessionID,
+                headSessionId: sessionID,
+                pathSessionIds: [sessionID],
+                items: projectionItems,
+                total: total,
+                pageOffset: pageOffset,
+                branchMode: "head",
+                abandonedEvents: 0
+            ),
+            snapshotEventId: snapshotEventId
+        )
+    }
+
+    private static func tailPage(events: [SessionEvent], limit: Int, offset: Int) -> (events: [SessionEvent], pageOffset: Int) {
+        let total = events.count
+        let pageOffset = max(0, total - limit - offset)
+        let end = max(0, total - offset)
+        guard pageOffset < end else {
+            return ([], pageOffset)
+        }
+        return (Array(events[pageOffset..<end]), pageOffset)
+    }
+
+    private static func makeDetail(sessionID: String, events: [SessionEvent]) -> SessionDetail {
         let detail = SessionDetail(
             id: sessionID,
             provider: "codex",
@@ -392,39 +495,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             runtimeFacts: nil,
             loopMode: .assist
         )
-        let projectionItems = events.map { event in
-            SessionProjectionItem(
-                kind: "event",
-                sessionId: sessionID,
-                timestamp: event.timestamp,
-                event: event,
-                continuedFromSessionId: nil,
-                continuationKind: nil,
-                originLabel: nil,
-                parentOriginLabel: nil,
-                parentContinuationKind: nil,
-                branchedFromEventId: nil
-            )
-        }
-        return SessionWorkspaceResponse(
-            session: detail,
-            thread: SessionThreadResponse(
-                rootSessionId: sessionID,
-                headSessionId: sessionID,
-                sessions: [detail]
-            ),
-            projection: SessionProjectionResponse(
-                rootSessionId: sessionID,
-                focusSessionId: sessionID,
-                headSessionId: sessionID,
-                pathSessionIds: [sessionID],
-                items: projectionItems,
-                total: projectionItems.count,
-                pageOffset: 0,
-                branchMode: "head",
-                abandonedEvents: 0
-            )
-        )
+        return detail
     }
 
     private static func makeEvent(

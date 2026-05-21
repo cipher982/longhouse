@@ -9,6 +9,7 @@ struct WebTranscriptView: UIViewRepresentable {
     let submittedInputs: [SubmittedInput]
     let sessionEnded: Bool
     let errorMessage: String?
+    let onNearTop: (() -> Void)?
     let onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?
 
     init(
@@ -16,12 +17,14 @@ struct WebTranscriptView: UIViewRepresentable {
         submittedInputs: [SubmittedInput],
         sessionEnded: Bool,
         errorMessage: String?,
+        onNearTop: (() -> Void)? = nil,
         onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)? = nil
     ) {
         self.items = items
         self.submittedInputs = submittedInputs
         self.sessionEnded = sessionEnded
         self.errorMessage = errorMessage
+        self.onNearTop = onNearTop
         self.onDiagnostics = onDiagnostics
     }
 
@@ -52,6 +55,7 @@ struct WebTranscriptView: UIViewRepresentable {
             preparedPayload(),
             to: webView,
             diagnosticsEnabled: WebTranscriptDiagnosticsFeature.isEnabled,
+            onNearTop: onNearTop,
             onDiagnostics: onDiagnostics
         )
     }
@@ -309,7 +313,9 @@ struct WebTranscriptView: UIViewRepresentable {
         private var renderSequence = 0
         private var jsFailureCount = 0
         private var diagnosticsEnabled = WebTranscriptDiagnosticsFeature.isEnabled
+        private var onNearTop: (() -> Void)?
         private var onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?
+        private var lastNearTopRequestAt = Date.distantPast
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             isLoaded = true
@@ -321,6 +327,7 @@ struct WebTranscriptView: UIViewRepresentable {
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            emitNearTopIfNeeded(scrollView)
             guard !userScrollInProgress else { return }
             updateStickiness(scrollView)
         }
@@ -346,14 +353,25 @@ struct WebTranscriptView: UIViewRepresentable {
             shouldStickToBottom = distanceFromBottom < 96
         }
 
+        private func emitNearTopIfNeeded(_ scrollView: UIScrollView) {
+            guard scrollView.contentSize.height > scrollView.bounds.height + 240 else { return }
+            guard scrollView.contentOffset.y < 180 else { return }
+            let now = Date()
+            guard now.timeIntervalSince(lastNearTopRequestAt) > 0.75 else { return }
+            lastNearTopRequestAt = now
+            onNearTop?()
+        }
+
         func send(
             _ payload: WebTranscriptPreparedPayload,
             to webView: WKWebView,
             diagnosticsEnabled: Bool,
+            onNearTop: (() -> Void)?,
             onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?
         ) {
             self.webView = webView
             self.diagnosticsEnabled = diagnosticsEnabled
+            self.onNearTop = onNearTop
             self.onDiagnostics = onDiagnostics
             if payload.base64 == lastPayload
                 || payload.base64 == inFlightPayload?.base64
@@ -1086,8 +1104,15 @@ private extension WebTranscriptView {
 
     window.renderTranscript = function(base64, shouldStickToBottom) {
       const wasAtBottom = shouldStickToBottom || isAtBottom();
+      const previousItems = currentItems;
+      const previousFirstId = previousItems.length > 0 ? previousItems[0].id : null;
+      const previousScrollHeight = document.documentElement.scrollHeight;
+      const previousScrollY = window.scrollY;
       const payload = decodePayload(base64);
       currentItems = payload.items || [];
+      const newFirstId = currentItems.length > 0 ? currentItems[0].id : null;
+      const prepended = previousFirstId && newFirstId && previousFirstId !== newFirstId
+        && currentItems.some(item => item.id === previousFirstId);
       const root = document.getElementById('root');
       if (payload.errorMessage && currentItems.length === 0) {
         root.innerHTML = `<div class="error">${escapeHtml(payload.errorMessage)}</div>`;
@@ -1101,6 +1126,10 @@ private extension WebTranscriptView {
         attachExpandHandlers();
       }
       if (wasAtBottom) scrollToBottom();
+      else if (prepended) {
+        const delta = document.documentElement.scrollHeight - previousScrollHeight;
+        window.scrollTo(0, previousScrollY + delta);
+      }
     };
   </script>
 </body>
