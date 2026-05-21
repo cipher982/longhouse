@@ -655,13 +655,12 @@ class UnmanagedSessionBinding(AgentsBase):
 
 
 class SessionTask(AgentsBase):
-    """Durable task queue for post-ingest background work.
+    """Legacy durable task rows retained for old tenant databases.
 
-    Replaces FastAPI BackgroundTasks for summary generation, embeddings, and
-    turn-loop evaluation so tasks
-    survive process restarts. Worker polls this table and retries failures.
-
-    task_type: 'summary' | 'embedding' | 'turn_loop'
+    Summary and embedding enrichment are now driven by session revision lag,
+    not this table. Keep the model so existing rows remain readable until a
+    future cleanup migration removes them.
+    task_type: legacy string
     status:    'pending' | 'running' | 'done' | 'failed'
     """
 
@@ -669,14 +668,12 @@ class SessionTask(AgentsBase):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
     session_id = Column(String(36), nullable=False)
-    task_type = Column(String(32), nullable=False)  # summary | embedding | turn_loop
+    task_type = Column(String(32), nullable=False)
     status = Column(String(16), nullable=False, default="pending")
     attempts = Column(Integer, nullable=False, server_default=text("0"))
     max_attempts = Column(Integer, nullable=False, server_default=text("5"))
     retry_later_count = Column(Integer, nullable=False, server_default=text("0"))
-    # House cleaner: number of times a terminally-failed task has been
-    # resurrected back to pending. Capped at 5 so genuinely broken work
-    # eventually stays terminal instead of looping forever.
+    # Legacy resurrection counter from the removed ingest task worker.
     resurrection_count = Column(Integer, nullable=False, server_default=text("0"))
     error = Column(Text, nullable=True)
     created_at = Column(
@@ -692,9 +689,8 @@ class SessionTask(AgentsBase):
     )
 
     __table_args__ = (
-        # Fast lookup of pending tasks ordered by creation time
+        # Legacy lookup indexes retained for existing tenant DBs.
         Index("ix_session_tasks_status_created", "status", "created_at"),
-        # Index for dedup check: find existing active tasks per session
         Index("ix_session_tasks_session_type_status", "session_id", "task_type", "status"),
     )
 
