@@ -346,7 +346,8 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
     nonisolated func streamSource() -> SessionWorkspaceStreamSource {
         SessionWorkspaceStreamSource(
             start: { self.startRealtimeStream() },
-            stop: { await self.stopRealtimeStream() }
+            stop: { await self.stopRealtimeStream() },
+            clockSkewMs: { 0 }
         )
     }
 
