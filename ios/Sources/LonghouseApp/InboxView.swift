@@ -225,25 +225,12 @@ struct TimelineSessionCardRow: View {
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
 
-                switch session.summaryStatusValue {
-                case .ready:
-                    if let summary = session.summaryPreview {
-                        Text(summary)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(3)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                case .pending:
-                    Text("Generating summary")
+                if let summary = session.timelineSummaryPreview {
+                    Text(summary)
                         .font(.subheadline)
-                        .foregroundStyle(.tertiary)
-                case .failed:
-                    Text("Summary unavailable")
-                        .font(.subheadline)
-                        .foregroundStyle(.tertiary)
-                case .unavailable:
-                    EmptyView()
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
