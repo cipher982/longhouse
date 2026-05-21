@@ -1318,6 +1318,14 @@ def _migrate_agents_columns(engine: Engine) -> None:
             conn.execute(
                 text(
                     """
+                    CREATE INDEX IF NOT EXISTS ix_session_observations_session_source_kind_observed
+                    ON session_observations(session_id, source, kind, observed_at, id)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                     CREATE INDEX IF NOT EXISTS ix_session_observations_domain_kind
                     ON session_observations(source_domain, kind, observed_at)
                     """
