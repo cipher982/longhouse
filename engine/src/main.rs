@@ -124,8 +124,8 @@ enum Commands {
         #[arg(long, default_value = "0")]
         workers: usize,
 
-        /// Compression algorithm: gzip (default) or zstd
-        #[arg(long, default_value = "gzip")]
+        /// Compression algorithm: zstd (default) or gzip
+        #[arg(long, default_value = "zstd")]
         compression: String,
 
         /// Mode B: actually POST each compressed payload to this ingest URL
@@ -217,8 +217,8 @@ enum Commands {
         #[arg(long)]
         json: bool,
 
-        /// Compression algorithm: gzip (default) or zstd
-        #[arg(long, default_value = "gzip")]
+        /// Compression algorithm: zstd (default) or gzip
+        #[arg(long, default_value = "zstd")]
         compression: String,
 
         /// Maximum compressed batch size in bytes before splitting/dead-lettering
