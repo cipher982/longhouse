@@ -618,6 +618,24 @@ async def configure_test_session_runtime(
         get_runner_connection_manager().register(owner_id, runner_id, SimpleNamespace())
         if request.clear_ended_at:
             session.ended_at = None
+
+        from zerg.services.agents.kernel_writes import ensure_open_run_for_session
+        from zerg.services.agents.kernel_writes import upsert_connection_for_run
+
+        run = ensure_open_run_for_session(db, session, launch_origin="longhouse_spawned")
+        upsert_connection_for_run(
+            db,
+            run=run,
+            control_plane="codex_app_server",
+            acquisition_kind="spawned_control",
+            state="attached",
+            external_name=session.managed_session_name,
+            can_send_input=1,
+            can_interrupt=1,
+            can_terminate=1,
+            can_tail_output=1,
+            can_resume=1,
+        )
     else:
         session.managed_transport = request.managed_transport
         session.source_runner_id = request.source_runner_id
