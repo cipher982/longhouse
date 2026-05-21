@@ -45,10 +45,15 @@ struct WebTranscriptView: UIViewRepresentable {
         webView.isOpaque = false
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
-        webView.accessibilityIdentifier = "session-chat-transcript"
         context.coordinator.webView = webView
         context.coordinator.isLoaded = pooled.isLoaded
-        onLifecycle?(pooled.reused ? "webview_reused" : "webview_make")
+        let lifecycleStage = pooled.reused ? "webview_reused" : "webview_make"
+        Task { @MainActor in
+            onLifecycle?(lifecycleStage)
+            if pooled.reused && pooled.isLoaded {
+                onLifecycle?("webview_html_loaded")
+            }
+        }
         if !pooled.isLoaded {
             webView.loadHTMLString(Self.documentHTML, baseURL: nil)
         }
@@ -306,7 +311,7 @@ struct WebTranscriptView: UIViewRepresentable {
         }
     }
 
-final class Coordinator: NSObject, WKNavigationDelegate, UIScrollViewDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate, UIScrollViewDelegate {
         weak var webView: WKWebView?
         private let logger = Logger(subsystem: "ai.longhouse.ios", category: "WebTranscript")
         fileprivate var isLoaded = false
@@ -326,7 +331,9 @@ final class Coordinator: NSObject, WKNavigationDelegate, UIScrollViewDelegate {
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             isLoaded = true
-            onLifecycle?("webview_html_loaded")
+            Task { @MainActor in
+                self.onLifecycle?("webview_html_loaded")
+            }
             flushPendingPayload(
                 to: webView,
                 diagnosticsEnabled: diagnosticsEnabled,
@@ -547,6 +554,8 @@ enum WebTranscriptWebViewPool {
     }
 
     static func takeOrCreate() -> PooledWebView {
+        // Single-shot warm spare: active transcript web views are not returned
+        // to this pool, so a reused view should contain only the empty document.
         if let webView = warmedWebView {
             warmedWebView = nil
             prewarmDelegate = nil
