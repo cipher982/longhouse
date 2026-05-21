@@ -127,6 +127,21 @@ enum Commands {
         /// Compression algorithm: gzip (default) or zstd
         #[arg(long, default_value = "gzip")]
         compression: String,
+
+        /// Mode B: actually POST each compressed payload to this ingest URL
+        /// and measure end-to-end shipping throughput (events/sec, server
+        /// queue/exec p50/p95). When unset the bench is parse+compress only
+        /// (Mode A).
+        #[arg(long)]
+        ship_url: Option<String>,
+
+        /// Auth token for --ship-url (required when ship-url is set).
+        #[arg(long)]
+        ship_token: Option<String>,
+
+        /// Number of concurrent in-flight POSTs in Mode B.
+        #[arg(long, default_value = "1")]
+        ship_concurrency: usize,
     },
 
     /// Daemon mode: watch for file changes and ship incrementally
@@ -756,9 +771,21 @@ fn main() -> anyhow::Result<()> {
             parallel,
             workers,
             compression,
+            ship_url,
+            ship_token,
+            ship_concurrency,
         } => {
             let algo = parse_compression_algo(&compression)?;
-            commands::cmd_bench::cmd_bench(&level, compress, parallel, workers, algo)?;
+            commands::cmd_bench::cmd_bench(
+                &level,
+                compress,
+                parallel,
+                workers,
+                algo,
+                ship_url.as_deref(),
+                ship_token.as_deref(),
+                ship_concurrency.max(1),
+            )?;
         }
         Commands::Ship {
             url,

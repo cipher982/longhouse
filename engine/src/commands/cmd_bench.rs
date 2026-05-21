@@ -4,12 +4,16 @@ use std::path::PathBuf;
 
 use crate::pipeline::compressor::CompressionAlgo;
 
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_bench(
     level: &str,
     compress: bool,
     parallel: bool,
     workers: usize,
     algo: CompressionAlgo,
+    ship_url: Option<&str>,
+    ship_token: Option<&str>,
+    ship_concurrency: usize,
 ) -> anyhow::Result<()> {
     eprintln!("Discovering session files...");
     let all_files = crate::bench::discover_session_files();
@@ -49,6 +53,12 @@ pub fn cmd_bench(
         workers
     };
 
+    let mode_label = match (parallel, ship_url) {
+        (_, Some(url)) => format!("ship -> {} (concurrency {})", url, ship_concurrency),
+        (true, None) => format!("parallel ({} workers)", num_workers),
+        (false, None) => "sequential".to_string(),
+    };
+
     eprintln!(
         "\n--- {} benchmark: {} files, {:.2} GB ---",
         level.to_uppercase(),
@@ -57,20 +67,23 @@ pub fn cmd_bench(
     );
     eprintln!(
         "Mode: {}, Compress: {}",
-        if parallel {
-            format!("parallel ({} workers)", num_workers)
-        } else {
-            "sequential".to_string()
-        },
+        mode_label,
         if compress { "yes" } else { "parse-only" }
     );
 
-    let result = if parallel {
-        crate::bench::run_benchmark_parallel_with(&files, compress, num_workers, algo)
+    if let Some(url) = ship_url {
+        let token = ship_token.ok_or_else(|| {
+            anyhow::anyhow!("--ship-token is required when --ship-url is set")
+        })?;
+        let result = crate::bench::run_benchmark_ship(&files, url, token, ship_concurrency, algo)?;
+        result.print_summary();
+    } else if parallel {
+        let result = crate::bench::run_benchmark_parallel_with(&files, compress, num_workers, algo);
+        result.print_summary();
     } else {
-        crate::bench::run_benchmark_with(&files, compress, algo)
-    };
-    result.print_summary();
+        let result = crate::bench::run_benchmark_with(&files, compress, algo);
+        result.print_summary();
+    }
 
     Ok(())
 }
