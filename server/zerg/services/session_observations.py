@@ -24,12 +24,14 @@ from zerg.utils.time import normalize_utc
 SOURCE_DOMAIN_TRANSCRIPT = "transcript"
 SOURCE_DOMAIN_RUNTIME = "runtime"
 SOURCE_DOMAIN_CLIENT = "client"
+SOURCE_DOMAIN_SERVER = "server"
 
 OBS_KIND_PROVIDER_SOURCE_LINE = "provider_source_line"
 OBS_KIND_PROVIDER_EVENT = "provider_event"
 OBS_KIND_RUNTIME_SIGNAL = "runtime_signal"
 OBS_KIND_BRIDGE_TRANSCRIPT_DELTA = "bridge_transcript_delta"
 OBS_KIND_CLIENT_RENDER = "client_render"
+OBS_KIND_SERVER_FANOUT = "server_fanout"
 
 
 @dataclass(frozen=True)

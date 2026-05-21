@@ -433,6 +433,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             latest_event_id: latestID,
             thread_session_count: 1,
             latest_event_emitted_at_ms: Int64(Date().timeIntervalSince1970 * 1000),
+            server_fanout_at_ms: Int64(Date().timeIntervalSince1970 * 1000),
             server_now_ms: Int64(Date().timeIntervalSince1970 * 1000),
             pubsub_seq: latestID
         )))

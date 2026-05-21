@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from fastapi import APIRouter
 from fastapi import Depends
+from fastapi import HTTPException
 from fastapi import Query
 from sqlalchemy.orm import Session
 
@@ -14,6 +17,7 @@ from zerg.schemas.observability import MachineHealthListResponse
 from zerg.schemas.observability import MachineHealthStatus
 from zerg.schemas.observability import ManagedTurnsSummaryEnvelopeResponse
 from zerg.schemas.observability import ObservabilityOverviewResponse
+from zerg.schemas.observability import RealtimePropagationSessionReportResponse
 from zerg.schemas.observability import SlowTurnsListResponse
 from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEALTH_RECENT_WITHIN_SECONDS
 from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS
@@ -22,6 +26,7 @@ from zerg.services.observability_views import build_machine_health_list_response
 from zerg.services.observability_views import build_managed_turns_summary_envelope_response
 from zerg.services.observability_views import build_observability_overview_response
 from zerg.services.observability_views import build_slow_turns_list_response
+from zerg.services.realtime_propagation import build_realtime_propagation_session_report
 from zerg.services.session_turns import list_managed_completed_turns
 from zerg.services.session_turns import list_slow_session_turns
 from zerg.services.session_turns import materialize_recent_managed_transcript_turns
@@ -35,6 +40,24 @@ router = APIRouter(
 
 def _resolve_recent_machine_window_seconds(*, recent_within_hours: int) -> int:
     return max(1, recent_within_hours) * 60 * 60
+
+
+@router.get("/sessions/{session_id}/latency", response_model=RealtimePropagationSessionReportResponse)
+async def read_session_realtime_latency(
+    session_id: UUID,
+    event_limit: int = Query(20, ge=1, le=100, description="Recent durable transcript events to inspect"),
+    surface: str | None = Query(None, description="Optional client surface filter such as web or ios"),
+    db: Session = Depends(get_db),
+) -> RealtimePropagationSessionReportResponse:
+    report = build_realtime_propagation_session_report(
+        db,
+        session_id=session_id,
+        event_limit=event_limit,
+        surface=surface,
+    )
+    if report is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return report
 
 
 @router.get("/machines/health", response_model=MachineHealthListResponse)

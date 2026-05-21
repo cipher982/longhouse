@@ -23,6 +23,7 @@ actor SessionWorkspaceStream {
         let latest_event_id: Int
         let thread_session_count: Int?
         let latest_event_emitted_at_ms: Int64?
+        let server_fanout_at_ms: Int64?
         let server_now_ms: Int64?
         let pubsub_seq: Int?
     }
@@ -190,7 +191,6 @@ actor SessionWorkspaceStream {
             }
         case "workspace_changed":
             if let w = try? JSONDecoder().decode(WorkspaceChanged.self, from: data) {
-                setSkew(w.server_now_ms)
                 emit(.changed(w))
             }
         case "heartbeat":

@@ -54,6 +54,9 @@ actor RenderBeaconReporter {
         let emitted_at_ms: Int64
         let rendered_at_ms: Int64
         let clock_skew_ms: Int
+        let server_fanout_at_ms: Int64?
+        let client_received_at_ms: Int64?
+        let pubsub_seq: Int?
         let webkit: WebKitDiagnostics?
     }
 
@@ -64,11 +67,14 @@ actor RenderBeaconReporter {
         latestEventId: String,
         emittedAt: Date,
         managed: Bool,
+        clockSkewMs: Int = 0,
+        serverFanoutAtMs: Int64? = nil,
+        clientReceivedAtMs: Int64? = nil,
+        pubsubSeq: Int? = nil,
         webkit: WebKitDiagnostics? = nil
     ) -> Payload? {
         let stage = webkit?.stage ?? "rendered"
-        let sequence = webkit?.render_sequence ?? 0
-        let beaconKey = "\(latestEventId):\(stage):\(sequence)"
+        let beaconKey = "\(sessionId):\(latestEventId):\(stage)"
         if lastBeaconKey == beaconKey { return nil }
         lastBeaconKey = beaconKey
         return Payload(
@@ -78,7 +84,10 @@ actor RenderBeaconReporter {
             managed: managed,
             emitted_at_ms: Int64(emittedAt.timeIntervalSince1970 * 1000),
             rendered_at_ms: Int64(Date().timeIntervalSince1970 * 1000),
-            clock_skew_ms: 0,
+            clock_skew_ms: clockSkewMs,
+            server_fanout_at_ms: serverFanoutAtMs,
+            client_received_at_ms: clientReceivedAtMs,
+            pubsub_seq: pubsubSeq,
             webkit: webkit
         )
     }

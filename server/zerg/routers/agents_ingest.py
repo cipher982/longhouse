@@ -69,6 +69,11 @@ def _write_serializer_label_for_ship_trace(ship_trace: dict | None) -> str:
     return "ingest"
 
 
+def _ship_trace_id(ship_trace: dict | None) -> str | None:
+    trace_id = str(ship_trace.get("trace_id") or "").strip() if ship_trace else ""
+    return trace_id or None
+
+
 # Phase 5: per-label commit chunk sizing. Live ingest stays conservative so
 # health checks and SSE readers aren't starved between chunks; replay/scan
 # can amortise the WAL fsync cost over much larger transactions.
@@ -127,6 +132,50 @@ def _persist_ship_trace_event(
         )
     except Exception:
         logger.debug("Failed to persist ship trace event", exc_info=True)
+
+
+def _persist_server_fanout_observation(
+    db: Session,
+    *,
+    session_id: UUID,
+    provider: str,
+    device_id: str | None,
+    payload: dict,
+    ship_trace: dict | None,
+) -> None:
+    try:
+        from zerg.services.session_observations import OBS_KIND_SERVER_FANOUT
+        from zerg.services.session_observations import SOURCE_DOMAIN_SERVER
+        from zerg.services.session_observations import record_session_observation
+
+        fanout_at_ms = payload.get("server_fanout_at_ms")
+        fanout_at = (
+            datetime.fromtimestamp(int(fanout_at_ms) / 1000.0, tz=timezone.utc)
+            if isinstance(fanout_at_ms, int)
+            else datetime.now(timezone.utc)
+        )
+        trace_id = _ship_trace_id(ship_trace)
+        cursor = f"trace:{trace_id}" if trace_id else f"event:{payload.get('latest_event_id') or 'unknown'}"
+        record_session_observation(
+            db,
+            observation_id=(
+                f"server_fanout:{session_id}:"
+                f"{trace_id or payload.get('latest_event_id') or payload.get('server_fanout_at_ms')}"
+            ),
+            session_id=session_id,
+            runtime_key=None,
+            provider=provider,
+            device_id=device_id,
+            source_domain=SOURCE_DOMAIN_SERVER,
+            source="session_pubsub",
+            kind=OBS_KIND_SERVER_FANOUT,
+            observed_at=fanout_at,
+            source_cursor=cursor,
+            payload=payload,
+        )
+        db.commit()
+    except Exception:
+        logger.warning("Failed to persist server fanout observation", exc_info=True)
 
 
 # Hard cap on decompressed ingest bodies. Engine splits batches at
@@ -464,14 +513,32 @@ async def ingest_session(
 
                 bus = get_pubsub()
                 session_id_str = str(result.session_id)
+                fanout_at_ms = _unix_ms()
+                latest_event_id = result.latest_inserted_event_id
+                trace_id = _ship_trace_id(ship_trace)
                 payload = {
                     "kind": "ingest",
                     "session_id": session_id_str,
                     "events_inserted": result.events_inserted,
                     "provider": provider_label,
+                    "latest_event_id": latest_event_id,
+                    "server_fanout_at_ms": fanout_at_ms,
+                    "ship_trace_id": trace_id,
                 }
-                bus.publish(topic_session(session_id_str), payload)
-                bus.publish(TOPIC_TIMELINE, payload)
+                session_pubsub_seq = bus.publish(topic_session(session_id_str), payload)
+                timeline_pubsub_seq = bus.publish(TOPIC_TIMELINE, payload)
+                _persist_server_fanout_observation(
+                    db,
+                    session_id=result.session_id,
+                    provider=provider_label,
+                    device_id=data.device_id,
+                    payload={
+                        **payload,
+                        "session_pubsub_seq": session_pubsub_seq,
+                        "timeline_pubsub_seq": timeline_pubsub_seq,
+                    },
+                    ship_trace=ship_trace,
+                )
 
             set_span_attributes(
                 span,

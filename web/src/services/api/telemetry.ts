@@ -9,6 +9,9 @@ export interface ClientRenderBeaconItem {
   emitted_at_ms: number | null;
   rendered_at_ms: number | null;
   clock_skew_ms: number | null;
+  server_fanout_at_ms: number | null;
+  client_received_at_ms: number | null;
+  pubsub_seq: number | null;
   webkit?: ClientRenderWebKitDiagnostics | null;
   observed_at: string | null;
   received_at: string | null;

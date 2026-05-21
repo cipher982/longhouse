@@ -20,6 +20,9 @@ interface BeaconPayload {
   emitted_at_ms: number;
   rendered_at_ms: number;
   clock_skew_ms: number;
+  server_fanout_at_ms?: number | null;
+  client_received_at_ms?: number | null;
+  pubsub_seq?: number | null;
 }
 
 let _skewMs = 0;
@@ -46,6 +49,9 @@ export function emitRenderBeacon(params: {
   latestEventId: number;
   latestEventEmittedAtMs: number | null | undefined;
   managed: boolean;
+  serverFanoutAtMs?: number | null;
+  clientReceivedAtMs?: number | null;
+  pubsubSeq?: number | null;
 }): void {
   if (typeof window === "undefined") return;
   if (!params.latestEventEmittedAtMs) return;
@@ -61,6 +67,9 @@ export function emitRenderBeacon(params: {
       emitted_at_ms: params.latestEventEmittedAtMs!,
       rendered_at_ms: Date.now(),
       clock_skew_ms: _skewMs,
+      server_fanout_at_ms: params.serverFanoutAtMs ?? null,
+      client_received_at_ms: params.clientReceivedAtMs ?? null,
+      pubsub_seq: params.pubsubSeq ?? null,
     };
 
     try {
