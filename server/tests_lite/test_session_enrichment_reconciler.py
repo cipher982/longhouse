@@ -1,0 +1,286 @@
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
+from uuid import uuid4
+
+import pytest
+
+from zerg.database import Base
+from zerg.database import make_engine
+from zerg.database import make_sessionmaker
+from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionTask
+from zerg.services.session_enrichment_reconciler import active_summary_session_ids
+from zerg.services.session_enrichment_reconciler import reconcile_summaries_once
+from zerg.services.session_enrichment_reconciler import select_stale_summary_session_ids
+from zerg.services.write_serializer import get_write_serializer
+
+
+def _make_db(tmp_path, name: str = "session_enrichment_reconciler.db", **engine_kwargs):
+    db_path = tmp_path / name
+    engine = make_engine(f"sqlite:///{db_path}", **engine_kwargs)
+    Base.metadata.create_all(bind=engine)
+    factory = make_sessionmaker(engine)
+    get_write_serializer().configure(factory)
+    return engine, factory
+
+
+def _seed_session(
+    db,
+    *,
+    project: str = "zerg",
+    summary: str | None = None,
+    summary_title: str | None = None,
+    user_messages: int = 2,
+    assistant_messages: int = 2,
+    transcript_revision: int = 3,
+    summary_revision: int = 0,
+    last_activity_at: datetime | None = None,
+) -> AgentSession:
+    now = datetime.now(timezone.utc)
+    session = AgentSession(
+        provider="codex",
+        environment="test",
+        project=project,
+        started_at=last_activity_at or now,
+        last_activity_at=last_activity_at or now,
+        user_messages=user_messages,
+        assistant_messages=assistant_messages,
+        tool_calls=0,
+        summary=summary,
+        summary_title=summary_title,
+        transcript_revision=transcript_revision,
+        summary_revision=summary_revision,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+def _seed_summary_task(db, session: AgentSession, *, status: str = "pending") -> None:
+    db.add(
+        SessionTask(
+            id=str(uuid4()),
+            session_id=str(session.id),
+            task_type="summary",
+            status=status,
+        )
+    )
+    db.commit()
+
+
+def test_select_stale_summary_sessions_orders_missing_title_then_recency(tmp_path):
+    _, factory = _make_db(tmp_path)
+    db = factory()
+    try:
+        old = datetime.now(timezone.utc) - timedelta(days=3)
+        recent = datetime.now(timezone.utc) - timedelta(minutes=1)
+        missing_old = _seed_session(db, project="missing-old", summary_title=None, last_activity_at=old)
+        titled_recent = _seed_session(db, project="titled-recent", summary_title="Has title", last_activity_at=recent)
+        missing_recent = _seed_session(db, project="missing-recent", summary_title=None, last_activity_at=recent)
+
+        assert select_stale_summary_session_ids(db, limit=10) == [
+            str(missing_recent.id),
+            str(missing_old.id),
+            str(titled_recent.id),
+        ]
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_low_content_stale_sessions_fast_forward_without_provider_call(tmp_path):
+    _, factory = _make_db(tmp_path)
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            user_messages=1,
+            assistant_messages=0,
+            transcript_revision=4,
+            summary_revision=0,
+        )
+        session_id = str(session.id)
+    finally:
+        db.close()
+
+    async def _generate(_session_id: str) -> None:
+        raise AssertionError("low-content session should not call summary provider")
+
+    result = await reconcile_summaries_once(
+        session_factory=factory,
+        limit=10,
+        concurrency=2,
+        generate_summary=_generate,
+    )
+    assert result.fast_forwarded == 1
+    assert result.started == 0
+
+    verify = factory()
+    try:
+        refreshed = verify.get(AgentSession, session_id)
+        assert refreshed is not None
+        assert refreshed.summary_revision == 4
+    finally:
+        verify.close()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_scans_do_not_duplicate_provider_calls(tmp_path):
+    _, factory = _make_db(tmp_path)
+    db = factory()
+    try:
+        session = _seed_session(db)
+        session_id = str(session.id)
+    finally:
+        db.close()
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    calls: list[str] = []
+
+    async def _generate(generated_session_id: str) -> None:
+        calls.append(generated_session_id)
+        entered.set()
+        await release.wait()
+
+    first = asyncio.create_task(
+        reconcile_summaries_once(session_factory=factory, limit=10, concurrency=1, generate_summary=_generate)
+    )
+    await entered.wait()
+
+    second = await reconcile_summaries_once(
+        session_factory=factory,
+        limit=10,
+        concurrency=1,
+        generate_summary=_generate,
+    )
+    assert second.started == 0
+    assert calls == [session_id]
+
+    release.set()
+    first_result = await first
+    assert first_result.started == 1
+    assert await active_summary_session_ids() == set()
+
+
+@pytest.mark.asyncio
+async def test_summary_reconciler_respects_concurrency_cap(tmp_path):
+    _, factory = _make_db(tmp_path)
+    db = factory()
+    try:
+        for idx in range(5):
+            _seed_session(db, project=f"session-{idx}")
+    finally:
+        db.close()
+
+    current = 0
+    max_seen = 0
+    lock = asyncio.Lock()
+
+    async def _generate(_session_id: str) -> None:
+        nonlocal current, max_seen
+        async with lock:
+            current += 1
+            max_seen = max(max_seen, current)
+        await asyncio.sleep(0.02)
+        async with lock:
+            current -= 1
+
+    result = await reconcile_summaries_once(
+        session_factory=factory,
+        limit=10,
+        concurrency=2,
+        generate_summary=_generate,
+    )
+    assert result.started == 5
+    assert max_seen <= 2
+
+
+@pytest.mark.asyncio
+async def test_summary_reconciler_releases_active_claim_on_cancellation(tmp_path):
+    _, factory = _make_db(tmp_path)
+    db = factory()
+    try:
+        session = _seed_session(db)
+        session_id = str(session.id)
+    finally:
+        db.close()
+
+    entered = asyncio.Event()
+
+    async def _generate(_session_id: str) -> None:
+        entered.set()
+        await asyncio.sleep(60)
+
+    task = asyncio.create_task(
+        reconcile_summaries_once(session_factory=factory, limit=10, concurrency=1, generate_summary=_generate)
+    )
+    await entered.wait()
+    assert await active_summary_session_ids() == {session_id}
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert await active_summary_session_ids() == set()
+
+
+@pytest.mark.asyncio
+async def test_old_summary_task_backlog_is_ignored(tmp_path):
+    _, factory = _make_db(tmp_path)
+    db = factory()
+    try:
+        session = _seed_session(db)
+        session_id = str(session.id)
+        for _ in range(20):
+            _seed_summary_task(db, session, status="pending")
+    finally:
+        db.close()
+
+    calls: list[str] = []
+
+    async def _generate(generated_session_id: str) -> None:
+        calls.append(generated_session_id)
+
+    result = await reconcile_summaries_once(
+        session_factory=factory,
+        limit=10,
+        concurrency=2,
+        generate_summary=_generate,
+    )
+    assert result.started == 1
+    assert calls == [session_id]
+
+
+@pytest.mark.asyncio
+async def test_summary_reconciler_does_not_hold_db_connection_during_provider_call(tmp_path):
+    engine, factory = _make_db(
+        tmp_path,
+        "summary_reconciler_connection_release.db",
+        pool_size=1,
+        max_overflow=0,
+    )
+    db = factory()
+    try:
+        _seed_session(db)
+    finally:
+        db.close()
+
+    checked_out: list[int] = []
+
+    async def _generate(_session_id: str) -> None:
+        checked_out.append(engine.pool.checkedout())
+
+    result = await reconcile_summaries_once(
+        session_factory=factory,
+        limit=10,
+        concurrency=1,
+        generate_summary=_generate,
+    )
+    assert result.started == 1
+    assert checked_out == [0]
