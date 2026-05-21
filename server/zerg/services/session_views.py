@@ -1173,7 +1173,13 @@ def build_session_response(
     include_runtime = should_include_runtime_view(session=session, runtime_view=runtime_overlay)
     capability_flags = build_session_capabilities(session)
     is_engine_control_online = engine_control_online(session, owner_id)
-    is_engine_session_attached = is_engine_control_online and engine_session_control_attached(session, runtime_overlay)
+    current_now = datetime.now(timezone.utc)
+    is_engine_session_attached = is_engine_control_online and engine_session_control_attached(
+        session,
+        runtime_overlay,
+        control_overlay=control_overlay,
+        now=current_now,
+    )
     if is_engine_session_attached:
         capability_flags = with_engine_control_capability(
             capability_flags,
@@ -1184,7 +1190,6 @@ def build_session_response(
     if binding_overlay is not None:
         binding_host_state = binding_overlay.host_state
         binding_terminal_reason = binding_overlay.terminal_reason
-    current_now = datetime.now(timezone.utc)
     if is_engine_session_attached:
         binding_host_state = "online"
         control_overlay = engine_channel_control_overlay(session, seen_at=current_now)

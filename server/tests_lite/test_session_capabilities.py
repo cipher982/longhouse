@@ -1152,3 +1152,132 @@ def test_current_session_capabilities_do_not_treat_engine_online_as_bridge_attac
         asyncio.run(_run())
     finally:
         engine.dispose()
+
+
+def test_current_session_capabilities_use_fresh_managed_control_lease_for_codex_semantic_phase(monkeypatch, tmp_path):
+    engine, session_local = _make_db(tmp_path)
+
+    async def _run():
+        registry = get_machine_control_channel_registry()
+        await registry.clear_for_tests()
+        try:
+            with session_local() as db:
+                session = _seed_agent_session(db, source_runner_id=None, device_id="cinder")
+                _upsert_runtime_state(
+                    db,
+                    session,
+                    phase="thinking",
+                    phase_source="semantic",
+                    freshness_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+                )
+                _upsert_control_state(
+                    db,
+                    session,
+                    control_state="online",
+                    expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),
+                )
+
+                def _runner_state_should_not_be_used(_db, _session):
+                    raise AssertionError("engine-channel capability should not query runner host state")
+
+                monkeypatch.setattr(
+                    "zerg.services.session_current_control.managed_runner_host_state",
+                    _runner_state_should_not_be_used,
+                )
+                await registry.register(
+                    owner_id=7,
+                    device_id="cinder",
+                    machine_name="cinder",
+                    engine_build="abc123",
+                    supports=["codex.send", "codex.steer"],
+                    websocket=SimpleNamespace(),
+                )
+                capabilities = current_session_capabilities(db, session, owner_id=7)
+
+                assert capabilities.live_control_available is True
+                assert capabilities.can_queue_next_input is True
+                assert capabilities.can_steer_active_turn is True
+                assert capabilities.host_reattach_available is False
+        finally:
+            await registry.clear_for_tests()
+
+    try:
+        asyncio.run(_run())
+    finally:
+        engine.dispose()
+
+
+def test_session_response_uses_managed_control_lease_when_codex_phase_source_is_semantic(monkeypatch, tmp_path):
+    engine, session_local = _make_db(tmp_path)
+
+    async def _run():
+        registry = get_machine_control_channel_registry()
+        await registry.clear_for_tests()
+        try:
+            with session_local() as db:
+                session = _seed_agent_session(
+                    db,
+                    source_runner_id=None,
+                    source_runner_name=None,
+                    device_id="cinder",
+                )
+                _upsert_runtime_state(
+                    db,
+                    session,
+                    phase="thinking",
+                    phase_source="semantic",
+                    freshness_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+                )
+                control_overlay = _upsert_control_state(
+                    db,
+                    session,
+                    control_state="online",
+                    expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),
+                )
+
+                def _runner_state_should_not_be_used(_db, _session):
+                    raise AssertionError("engine-channel capability should not query runner host state")
+
+                monkeypatch.setattr(
+                    "zerg.services.session_views.managed_runner_host_state",
+                    _runner_state_should_not_be_used,
+                )
+                await registry.register(
+                    owner_id=7,
+                    device_id="cinder",
+                    machine_name="cinder",
+                    engine_build="abc123",
+                    supports=["codex.send", "codex.steer"],
+                    websocket=SimpleNamespace(),
+                )
+                runtime_overlay = resolve_runtime_overlay(
+                    session,
+                    last_activity_at=session.started_at,
+                    runtime_state_map=load_runtime_state_map(db, [session.id]),
+                    now=datetime.now(timezone.utc),
+                )
+
+                response = build_session_response(
+                    AgentsStore(db),
+                    session,
+                    last_activity_at=session.started_at,
+                    runtime_overlay=runtime_overlay,
+                    owner_id=7,
+                    control_overlay=control_overlay,
+                )
+
+                assert response.runtime_facts is not None
+                assert response.runtime_facts.phase.source == "semantic"
+                assert response.runtime_facts.control.state == "online"
+                assert response.capabilities.live_control_available is True
+                assert response.capabilities.can_queue_next_input is True
+                assert response.capabilities.can_steer_active_turn is True
+                assert response.capabilities.host_reattach_available is False
+                assert response.capabilities.display_label != "Control offline"
+        finally:
+            await registry.clear_for_tests()
+
+    try:
+        asyncio.run(_run())
+    finally:
+        engine.dispose()
