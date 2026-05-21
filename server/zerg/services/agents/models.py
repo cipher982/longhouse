@@ -86,6 +86,8 @@ class IngestResult(BaseModel):
     events_inserted: int
     events_skipped: int  # Duplicates that were skipped
     session_created: bool
+    commit_count: int = 0
+    commit_ms_total: float = 0.0
 
 
 @dataclass(frozen=True)

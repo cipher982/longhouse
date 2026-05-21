@@ -69,6 +69,21 @@ def _write_serializer_label_for_ship_trace(ship_trace: dict | None) -> str:
     return "ingest"
 
 
+# Phase 5: per-label commit chunk sizing. Live ingest stays conservative so
+# health checks and SSE readers aren't starved between chunks; replay/scan
+# can amortise the WAL fsync cost over much larger transactions.
+_INGEST_CHUNK_BY_LABEL: dict[str, int] = {
+    "ingest-live": 200,
+    "ingest": 500,
+    "ingest-replay": 1000,
+    "ingest-scan": 1000,
+}
+
+
+def _ingest_chunk_for_label(label: str) -> int:
+    return _INGEST_CHUNK_BY_LABEL.get(label, 200)
+
+
 def _persist_ship_trace_event(
     db: Session,
     *,
@@ -364,10 +379,12 @@ async def ingest_session(
             ws = get_write_serializer()
             write_label = _write_serializer_label_for_ship_trace(ship_trace)
 
+            ingest_chunk = _ingest_chunk_for_label(write_label)
+
             def _do_ingest(write_db):
                 write_started_at_ms = _unix_ms()
                 store = AgentsStore(write_db)
-                result = store.ingest_session(data)
+                result = store.ingest_session(data, chunk_size=ingest_chunk)
                 store_returned_at_ms = _unix_ms()
                 _persist_ship_trace_event(
                     write_db,
@@ -401,6 +418,9 @@ async def ingest_session(
                     response.headers["X-Ingest-Exec-Ms"] = f"{timing.exec_ms:.1f}"
                     if timing.label:
                         response.headers["X-Ingest-Label"] = timing.label
+                response.headers["X-Ingest-Commit-Count"] = str(result.commit_count)
+                response.headers["X-Ingest-Commit-Ms"] = f"{result.commit_ms_total:.1f}"
+                response.headers["X-Ingest-Chunk-Size"] = str(ingest_chunk)
                 set_span_attributes(
                     write_span,
                     {
@@ -410,6 +430,9 @@ async def ingest_session(
                         "longhouse.ingest.session_created": result.session_created,
                         "longhouse.ingest.write_ms": write_ms,
                         "longhouse.ingest.write_label": write_label,
+                        "longhouse.ingest.commit_count": result.commit_count,
+                        "longhouse.ingest.commit_ms_total": result.commit_ms_total,
+                        "longhouse.ingest.chunk_size": ingest_chunk,
                     },
                 )
                 agents_ingest_events_total.labels(provider=provider_label, kind="inserted").inc(result.events_inserted)
