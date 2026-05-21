@@ -474,3 +474,68 @@ async def test_last_write_timing_isolated_between_tasks(tmp_path):
 
     labels = await asyncio.gather(_run("ingest-live"), _run("ingest-replay"), _run("presence"))
     assert sorted(labels) == ["ingest-live", "ingest-replay", "presence"]
+
+
+@pytest.mark.asyncio
+async def test_get_metrics_includes_rolling_per_label_percentiles(tmp_path):
+    """Phase 1 instrumentation: get_metrics() must surface rolling p50/p95/p99
+    timings per label so /api/health can drive the engine's adaptive
+    controller in phase 2."""
+    db_path = tmp_path / "write-serializer-rolling.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    session_factory = make_sessionmaker(engine)
+
+    with engine.begin() as conn:
+        conn.exec_driver_sql("CREATE TABLE writes (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL)")
+
+    serializer = WriteSerializer()
+    serializer.configure(session_factory)
+
+    def _write(label: str):
+        def _do(db):
+            db.execute(sa_text("INSERT INTO writes(label) VALUES (:l)"), {"l": label})
+        return _do
+
+    for _ in range(5):
+        await serializer.execute(_write("ingest-live"), label="ingest-live")
+        await serializer.execute(_write("ingest-replay"), label="ingest-replay")
+
+    metrics = serializer.get_metrics()
+    assert "rolling_window" in metrics
+    assert metrics["rolling_window"] >= 1
+    rolling = metrics["rolling_by_label"]
+    assert "ingest-live" in rolling
+    assert "ingest-replay" in rolling
+    for key in ("ingest-live", "ingest-replay"):
+        for axis in ("queue_wait_ms", "exec_ms"):
+            stats = rolling[key][axis]
+            assert stats["n"] == 5
+            assert {"p50", "p95", "p99"} <= set(stats.keys())
+            # Sample size 5 is small but percentiles should be monotonic
+            assert stats["p50"] <= stats["p95"] <= stats["p99"]
+
+
+def test_get_wal_bytes_returns_int_or_none(tmp_path, monkeypatch):
+    """get_wal_bytes() reports current SQLite WAL file size for /api/health."""
+    db_path = tmp_path / "wal-probe.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+
+    # Force WAL mode on this engine and write something so a WAL file exists.
+    with engine.begin() as conn:
+        conn.exec_driver_sql("PRAGMA journal_mode=WAL")
+        conn.exec_driver_sql("CREATE TABLE writes (id INTEGER PRIMARY KEY)")
+        conn.exec_driver_sql("INSERT INTO writes DEFAULT VALUES")
+
+    # The helper points at the *default* engine. Patch its url.database to
+    # this temp DB so the helper resolves the correct WAL path.
+    import zerg.database as database_mod
+
+    original_engine = database_mod.default_engine
+    monkeypatch.setattr(database_mod, "default_engine", engine)
+    try:
+        wal_bytes = database_mod.get_wal_bytes()
+        assert wal_bytes is not None
+        assert isinstance(wal_bytes, int)
+        assert wal_bytes >= 0
+    finally:
+        monkeypatch.setattr(database_mod, "default_engine", original_engine)
