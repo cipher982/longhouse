@@ -13,6 +13,7 @@ from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Request
+from fastapi import Response
 from fastapi import status
 from sqlalchemy.orm import Session
 
@@ -153,6 +154,7 @@ async def decompress_if_gzipped(request: Request) -> tuple[bytes, int, str]:
 @router.post("/ingest", response_model=IngestResponse)
 async def ingest_session(
     request: Request,
+    response: Response,
     db: Session = Depends(get_db),
     auth_token: DeviceToken | ManagedLocalHookToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
@@ -340,6 +342,17 @@ async def ingest_session(
                 result = await ws.execute_or_direct(_do_ingest, db, label=write_label)
                 write_ms = round((time.monotonic() - write_started) * 1000, 1)
                 agents_ingest_write_seconds.labels(provider=provider_label).observe(write_ms / 1000.0)
+
+                # Phase 1: surface server-side queue/exec timing so the engine
+                # can adapt concurrency in phase 2 without re-instrumenting.
+                from zerg.services.write_serializer import last_write_timing
+
+                timing = last_write_timing()
+                if timing is not None:
+                    response.headers["X-Ingest-Queue-Wait-Ms"] = f"{timing.queue_wait_ms:.1f}"
+                    response.headers["X-Ingest-Exec-Ms"] = f"{timing.exec_ms:.1f}"
+                    if timing.label:
+                        response.headers["X-Ingest-Label"] = timing.label
                 set_span_attributes(
                     write_span,
                     {

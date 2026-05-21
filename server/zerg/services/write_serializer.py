@@ -30,6 +30,7 @@ Architecture:
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import heapq
 import logging
 import os
@@ -132,6 +133,31 @@ class WriteStats:
     max_exec_ms: float = 0
     errors: int = 0
     _label_counts: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass
+class LastWriteTiming:
+    """Per-call timing for the last write executed in this asyncio Task.
+
+    Read via ``last_write_timing()`` after awaiting ``execute()``. Surfaced as
+    response headers by the ingest router so the engine can read the server's
+    real queue/exec cost on every request.
+    """
+
+    label: str
+    queue_wait_ms: float
+    exec_ms: float
+
+
+_last_write_timing: contextvars.ContextVar[LastWriteTiming | None] = contextvars.ContextVar(
+    "longhouse_write_serializer_last_timing",
+    default=None,
+)
+
+
+def last_write_timing() -> LastWriteTiming | None:
+    """Return the timing of the most recent write in this asyncio context."""
+    return _last_write_timing.get()
 
 
 class WriteSerializer:
@@ -297,6 +323,15 @@ class WriteSerializer:
                 self._stats._label_counts[label] = self._stats._label_counts.get(label, 0) + 1
             if isinstance(worker_exc, Exception):
                 self._stats.errors += 1
+            # Phase 1 instrumentation: stash the timing for the calling Task so
+            # the router can surface it as response headers.
+            _last_write_timing.set(
+                LastWriteTiming(
+                    label=label,
+                    queue_wait_ms=queue_wait_ms,
+                    exec_ms=exec_ms,
+                )
+            )
 
             if queue_wait_ms > 500 or exec_ms > 1000:
                 logger.warning(
@@ -384,17 +419,30 @@ class WriteSerializer:
             # per-test SQLite files. Once the app startup configures the global
             # serializer, routing those writes through the process-wide factory
             # hits the wrong database and breaks request-scoped assertions.
-            result = fn(fallback_db)
-            if auto_commit:
-                fallback_db.commit()
-            return result
+            return self._run_inline_with_timing(fn, fallback_db, auto_commit, label)
         if self._configured:
             return await self.execute(fn, label=label, priority=priority, auto_commit=auto_commit)
         if fallback_db is None:
             raise RuntimeError("WriteSerializer not configured and no fallback_db provided")
-        result = fn(fallback_db)
+        return self._run_inline_with_timing(fn, fallback_db, auto_commit, label)
+
+    @staticmethod
+    def _run_inline_with_timing(
+        fn: Callable[[Session], T],
+        db: Session,
+        auto_commit: bool,
+        label: str,
+    ) -> T:
+        """Inline-execute fn, still recording timing on the contextvar so
+        callers (the ingest router) can surface uniform headers."""
+        t0 = time.monotonic()
+        result = fn(db)
         if auto_commit:
-            fallback_db.commit()
+            db.commit()
+        exec_ms = (time.monotonic() - t0) * 1000
+        _last_write_timing.set(
+            LastWriteTiming(label=label, queue_wait_ms=0.0, exec_ms=exec_ms)
+        )
         return result
 
     def execute_sync(

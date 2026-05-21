@@ -116,3 +116,55 @@ def test_agents_ingest_persists_ship_trace_runtime_event(tmp_path):
             assert runtime_payload["server_trace"]["store_write_ms"] >= 0
     finally:
         api_app.dependency_overrides.clear()
+
+
+def test_agents_ingest_emits_phase1_timing_headers(tmp_path):
+    """Phase 1 instrumentation: every successful ingest response carries
+    X-Ingest-Queue-Wait-Ms / X-Ingest-Exec-Ms / X-Ingest-Label so the engine
+    can adapt concurrency in phase 2."""
+    client, _ = _make_client(tmp_path)
+    try:
+        session_id = "11111111-2222-3333-4444-555555555555"
+        payload = {
+            "id": session_id,
+            "provider": "codex",
+            "environment": "test",
+            "project": "zerg",
+            "started_at": "2026-01-01T00:00:00Z",
+            "events": [
+                {
+                    "role": "assistant",
+                    "content_text": "hi",
+                    "timestamp": "2026-01-01T00:00:01Z",
+                    "source_path": "/tmp/headers.jsonl",
+                    "source_offset": 0,
+                    "raw_json": '{"type":"assistant","text":"hi"}',
+                }
+            ],
+        }
+        ship_trace = {
+            "schema": "ship_trace.v1",
+            "trace_id": f"{session_id}:0:64:1778220000000",
+            "provider": "codex",
+            "session_id": session_id,
+            "work_context": "spool_replay",
+            "event_count": 1,
+            "offset": 0,
+            "new_offset": 64,
+        }
+        response = client.post(
+            "/agents/ingest",
+            json=payload,
+            headers={
+                "X-Agents-Token": "dev",
+                "X-Longhouse-Ship-Trace": json.dumps(ship_trace, separators=(",", ":")),
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert "X-Ingest-Queue-Wait-Ms" in response.headers
+        assert "X-Ingest-Exec-Ms" in response.headers
+        assert response.headers.get("X-Ingest-Label") == "ingest-replay"
+        float(response.headers["X-Ingest-Queue-Wait-Ms"])
+        assert float(response.headers["X-Ingest-Exec-Ms"]) >= 0.0
+    finally:
+        api_app.dependency_overrides.clear()
