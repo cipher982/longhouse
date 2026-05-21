@@ -188,9 +188,9 @@ def create_session_turn(
 
     # Phase 2: stamp thread_id on every new turn so Phase 3 can flip
     # session_turns to thread-keyed.
-    from zerg.services.agents.kernel_writes import resolve_thread_id_for_session
+    from zerg.services.agents.kernel_writes import ensure_thread_id_for_session
 
-    thread_id = resolve_thread_id_for_session(db, session_id)
+    thread_id = ensure_thread_id_for_session(db, session_id)
     turn = SessionTurn(
         session_id=session_id,
         thread_id=thread_id,

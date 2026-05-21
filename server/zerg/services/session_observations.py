@@ -59,6 +59,15 @@ def record_session_observation(
     source_cursor: str | None = None,
     thread_id: UUID | None = None,
 ) -> ObservationWriteResult:
+    # Phase 2 dual-write: ensure thread_id stamping never silently drops to NULL.
+    # Callers may pass an explicit thread_id; when absent and a session_id is
+    # available, materialize the primary thread on the fly so observations
+    # always carry the kernel pointer.
+    if thread_id is None and session_id is not None:
+        from zerg.services.agents.kernel_writes import ensure_thread_id_for_session
+
+        thread_id = ensure_thread_id_for_session(db, session_id)
+
     payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     stmt = (
         sqlite_insert(SessionObservation)

@@ -1435,6 +1435,14 @@ def _migrate_agents_columns(engine: Engine) -> None:
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_session_turns_thread_id ON session_turns(thread_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_session_turns_run_id ON session_turns(run_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_session_inputs_thread_id ON session_inputs(thread_id)"))
+            # One control attachment per (run, control_plane) — capability
+            # projection invariant. Phase 2 upsert depends on this.
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ux_connections_run_plane "
+                    "ON session_connections(run_id, control_plane)"
+                )
+            )
             conn.commit()
     except Exception:
         logger.debug("session identity kernel index migration skipped", exc_info=True)

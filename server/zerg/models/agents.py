@@ -1022,6 +1022,15 @@ class SessionConnection(AgentsBase):
     __table_args__ = (
         Index("ix_connections_run_state", "run_id", "state"),
         Index("ix_connections_state_health", "state", "last_health_at"),
+        # One control attachment per (run, control_plane). Capability projection
+        # depends on this — a single run cannot have two competing pty/bridge
+        # connections for the same plane.
+        Index(
+            "ux_connections_run_plane",
+            "run_id",
+            "control_plane",
+            unique=True,
+        ),
     )
 
 

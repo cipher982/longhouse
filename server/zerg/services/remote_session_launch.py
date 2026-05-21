@@ -257,13 +257,15 @@ async def launch_remote_session(
     )
 
     if not response.transport_ok:
-        # Timeout or transport error — leave state as launching_unknown and let
-        # the reaper / late-result reconcile path finish the job.
+        # Timeout or transport error — the command may already be on the wire.
+        # Mark dispatched so the reaper recognizes it as in-flight; the late
+        # reconcile path will flip to failed/abandoned with the real outcome.
         session.launch_state = "launching_unknown"
         session.launch_error_message = response.error or "control channel transport failed"
         update_launch_attempt(
             db,
             launch_attempt,
+            state="dispatched",
             error_message=session.launch_error_message,
         )
         db.commit()
@@ -372,6 +374,12 @@ def reconcile_launch_from_command_result(db: Session, message: dict) -> bool:
     if session is None:
         return False
     if session.launch_state not in {"launching", "launching_unknown"}:
+        return False
+    # Defense-in-depth: if the Machine Agent reported back a session_id, it
+    # must match the one we pre-allocated. Mismatch means the command_id
+    # was reused or rebound — refuse to mutate state on the wrong row.
+    reported_session_id = str(message.get("session_id") or "").strip()
+    if reported_session_id and reported_session_id != str(session.id):
         return False
     from zerg.models.agents import SessionLaunchAttempt as _SLA
 

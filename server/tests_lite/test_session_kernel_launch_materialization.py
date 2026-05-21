@@ -199,6 +199,70 @@ def test_open_run_reused_by_external_adoption(tmp_path):
     assert r1.id == r2.id
 
 
+def test_bridge_offline_does_not_create_phantom_run(tmp_path):
+    """Negative bridge evidence must not fabricate a run for unknown sessions."""
+    from datetime import datetime as _dt
+    from datetime import timezone as _tz
+
+    from zerg.models.agents import SessionConnection
+    from zerg.models.agents import SessionRun
+    from zerg.services.managed_control_state import _mirror_connection_state
+
+    db = _session(tmp_path)
+    session = _make_session_row(db, provider="codex")
+    db.commit()
+
+    # No prior run/connection — offline mirror must skip rather than adopt.
+    _mirror_connection_state(
+        db,
+        session_id=session.id,
+        provider="codex",
+        control_state="offline",
+        external_name=None,
+        device_id="laptop-1",
+    )
+    db.commit()
+
+    assert db.query(SessionRun).count() == 0
+    assert db.query(SessionConnection).count() == 0
+
+
+def test_bridge_online_then_offline_flips_existing_connection(tmp_path):
+    from zerg.models.agents import SessionConnection
+    from zerg.services.managed_control_state import _mirror_connection_state
+
+    db = _session(tmp_path)
+    session = _make_session_row(db, provider="codex")
+    db.commit()
+
+    _mirror_connection_state(
+        db,
+        session_id=session.id,
+        provider="codex",
+        control_state="online",
+        external_name="laptop-1",
+        device_id="laptop-1",
+    )
+    db.commit()
+    online = db.query(SessionConnection).one()
+    assert online.state == "attached"
+
+    _mirror_connection_state(
+        db,
+        session_id=session.id,
+        provider="codex",
+        control_state="offline",
+        external_name=None,
+        device_id="laptop-1",
+    )
+    db.commit()
+    rows = db.query(SessionConnection).all()
+    assert len(rows) == 1, "should reuse existing connection, not create a new one"
+    assert rows[0].id == online.id
+    assert rows[0].state == "detached"
+    assert rows[0].released_at is not None
+
+
 def test_update_launch_attempt_state_run_link(tmp_path):
     db = _session(tmp_path)
     session = _make_session_row(db)
