@@ -17,7 +17,10 @@ from zerg.database import make_engine
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionThread
 from zerg.models.agents import SessionThreadAlias
+from zerg.services.agents.kernel_backfill import backfill_child_thread_ids
 from zerg.services.agents.kernel_backfill import backfill_root_threads
+from zerg.services.agents.kernel_backfill import backfill_runs_and_connections
+from zerg.services.agents.kernel_backfill import backfill_session_identity_kernel
 
 
 def _engine(tmp_path):
@@ -242,6 +245,124 @@ def test_backfill_order_independent_final_state(tmp_path):
 
     assert a_threads == b_threads == 3
     assert a_aliases == b_aliases == 2
+
+
+def test_backfill_child_thread_ids_stamps_legacy_rows(tmp_path):
+    """Child rows created with thread_id=NULL should be stamped on backfill."""
+    from zerg.models.agents import AgentEvent
+    from zerg.models.agents import AgentSourceLine
+    from zerg.models.agents import SessionInput
+
+    engine = _engine(tmp_path)
+    SessionLocal = sessionmaker(bind=engine)
+    with SessionLocal() as db:
+        s = _make_session(db, provider_session_id="codex-1")
+        # Insert legacy children with NULL thread_id (Phase 0 shape).
+        db.add(AgentEvent(session_id=s.id, role="user", content_text="hi", timestamp=datetime.now(timezone.utc)))
+        db.add(
+            AgentSourceLine(
+                session_id=s.id,
+                source_path="/tmp/p",
+                source_offset=0,
+                branch_id=0,
+                revision=1,
+                line_hash="h1",
+                raw_json="{}",
+            )
+        )
+        db.add(SessionInput(session_id=s.id, body="hello", intent="auto", status="queued"))
+        db.commit()
+
+        # Pre-thread backfill: child rows have NULL thread_id.
+        from zerg.models.agents import AgentEvent as _E
+
+        assert db.query(_E).filter(_E.thread_id.is_(None)).count() == 1
+
+        backfill_root_threads(db)
+        db.commit()
+        report = backfill_child_thread_ids(db)
+        db.commit()
+
+        # Each table got one row stamped.
+        assert report["events"] == 1
+        assert report["source_lines"] == 1
+        assert report["session_inputs"] == 1
+        # Re-running is a no-op.
+        again = backfill_child_thread_ids(db)
+        assert sum(again.values()) == 0
+
+
+def test_backfill_runs_and_connections_synthesizes_observe_only(tmp_path):
+    from zerg.models.agents import SessionConnection
+    from zerg.models.agents import SessionRun
+
+    engine = _engine(tmp_path)
+    SessionLocal = sessionmaker(bind=engine)
+    with SessionLocal() as db:
+        _make_session(db, provider_session_id="codex-1")
+        _make_session(db, provider="claude", provider_session_id="claude-1")
+        db.commit()
+        backfill_root_threads(db)
+        db.commit()
+
+        report = backfill_runs_and_connections(db)
+        db.commit()
+
+        assert report["runs_created"] == 2
+        assert report["connections_created"] == 2
+        runs = db.query(SessionRun).all()
+        assert {r.launch_origin for r in runs} == {"external_adopted"}
+        conns = db.query(SessionConnection).all()
+        assert {c.control_plane for c in conns} == {"log_tail"}
+        assert all(c.acquisition_kind == "observe_only" for c in conns)
+        # Re-running is a no-op.
+        again = backfill_runs_and_connections(db)
+        assert again["runs_created"] == 0
+        assert again["connections_created"] == 0
+
+
+def test_backfill_runs_does_not_displace_launcher_owned_run(tmp_path):
+    from zerg.models.agents import SessionRun
+
+    engine = _engine(tmp_path)
+    SessionLocal = sessionmaker(bind=engine)
+    with SessionLocal() as db:
+        s = _make_session(db, provider_session_id="codex-1")
+        db.commit()
+        backfill_root_threads(db)
+        db.commit()
+        # Launcher already created a run.
+        thread = db.query(SessionThread).filter(SessionThread.session_id == s.id).one()
+        owned = SessionRun(thread_id=thread.id, provider="codex", launch_origin="longhouse_spawned")
+        db.add(owned)
+        db.commit()
+
+        report = backfill_runs_and_connections(db)
+        db.commit()
+
+        # No new run created — launcher's run is reused.
+        assert report["runs_created"] == 0
+        assert db.query(SessionRun).count() == 1
+
+
+def test_combined_backfill_is_idempotent_end_to_end(tmp_path):
+    engine = _engine(tmp_path)
+    SessionLocal = sessionmaker(bind=engine)
+    with SessionLocal() as db:
+        _make_session(db, provider_session_id="codex-1")
+        _make_session(db, provider="claude")
+        db.commit()
+
+        first = backfill_session_identity_kernel(db)
+        db.commit()
+        second = backfill_session_identity_kernel(db)
+        db.commit()
+
+        assert first["threads"]["threads_created"] == 2
+        assert second["threads"]["threads_created"] == 0
+        assert second["runs"]["runs_created"] == 0
+        assert second["runs"]["connections_created"] == 0
+        assert sum(second["children"].values()) == 0
 
 
 def test_backfill_does_not_duplicate_aliases(tmp_path):
