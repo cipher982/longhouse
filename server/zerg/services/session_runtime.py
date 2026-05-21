@@ -728,9 +728,13 @@ def _ensure_state(db: Session, event: RuntimeEventIngest) -> SessionRuntimeState
         return state
 
     occurred_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
+    from zerg.services.agents.kernel_writes import resolve_thread_id_for_session
+
+    thread_id = resolve_thread_id_for_session(db, event.session_id) if event.session_id is not None else None
     state = SessionRuntimeState(
         runtime_key=event.runtime_key,
         session_id=event.session_id,
+        thread_id=thread_id,
         provider=event.provider,
         device_id=event.device_id,
         phase=(event.phase or "idle").strip() or "idle",
@@ -773,6 +777,9 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
 
     if event.session_id is not None and state.session_id != event.session_id:
         state.session_id = event.session_id
+        from zerg.services.agents.kernel_writes import resolve_thread_id_for_session
+
+        state.thread_id = resolve_thread_id_for_session(db, event.session_id)
     if event.provider and state.provider != event.provider:
         state.provider = event.provider
     if event.device_id is not None and state.device_id != event.device_id:

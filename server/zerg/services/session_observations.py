@@ -57,6 +57,7 @@ def record_session_observation(
     source_path: str | None = None,
     source_offset: int | None = None,
     source_cursor: str | None = None,
+    thread_id: UUID | None = None,
 ) -> ObservationWriteResult:
     payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     stmt = (
@@ -64,6 +65,7 @@ def record_session_observation(
         .values(
             observation_id=observation_id,
             session_id=session_id,
+            thread_id=thread_id,
             runtime_key=runtime_key,
             provider=(provider or "unknown").strip() or "unknown",
             device_id=device_id,
@@ -94,6 +96,7 @@ def record_runtime_observation(
     event: Any,
     *,
     received_at: datetime | None = None,
+    thread_id: UUID | None = None,
 ) -> ObservationWriteResult:
     payload = event.payload or {}
     dedupe_key = _runtime_dedupe_key(event)
@@ -102,6 +105,7 @@ def record_runtime_observation(
         db,
         observation_id=f"runtime:{event.source}:{dedupe_key}",
         session_id=event.session_id,
+        thread_id=thread_id,
         runtime_key=event.runtime_key,
         provider=event.provider,
         device_id=event.device_id,
@@ -137,6 +141,7 @@ def record_source_line_observation(
     raw_json: str,
     observed_at: datetime,
     received_at: datetime | None = None,
+    thread_id: UUID | None = None,
 ) -> ObservationWriteResult:
     observation_id = "source_line:" + _hash_parts(
         str(session_id),
@@ -149,6 +154,7 @@ def record_source_line_observation(
         db,
         observation_id=observation_id,
         session_id=session_id,
+        thread_id=thread_id,
         runtime_key=None,
         provider=provider,
         device_id=device_id,
@@ -191,6 +197,7 @@ def record_provider_event_observation(
     event_uuid: str | None = None,
     parent_event_uuid: str | None = None,
     received_at: datetime | None = None,
+    thread_id: UUID | None = None,
 ) -> ObservationWriteResult:
     identity = event_uuid or _hash_parts(
         str(session_id),
@@ -206,6 +213,7 @@ def record_provider_event_observation(
         db,
         observation_id=observation_id,
         session_id=session_id,
+        thread_id=thread_id,
         runtime_key=None,
         provider=provider,
         device_id=device_id,

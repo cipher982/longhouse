@@ -35,6 +35,8 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.provisional_events import visible_transcript_event_predicate
 from zerg.services.raw_json_compression import decode_raw_json
+from zerg.services.agents.kernel_writes import ensure_primary_thread
+from zerg.services.agents.kernel_writes import record_thread_alias
 from zerg.services.session_observation_reducers import reduce_provider_event_observation
 from zerg.services.session_observation_reducers import reduce_source_line_observation
 from zerg.services.session_observations import record_provider_event_observation
@@ -1180,6 +1182,7 @@ class AgentsStore:
             source_copies.append(
                 AgentSourceLine(
                     session_id=session_id,
+                    thread_id=row.thread_id,
                     source_path=row.source_path,
                     source_offset=row_offset,
                     branch_id=to_branch_id,
@@ -1210,6 +1213,7 @@ class AgentsStore:
             event_copies.append(
                 AgentEvent(
                     session_id=session_id,
+                    thread_id=event.thread_id,
                     branch_id=to_branch_id,
                     role=event.role,
                     content_text=event.content_text,
@@ -1434,6 +1438,21 @@ class AgentsStore:
             existing = session
             session_created = True
 
+        # Phase 2: materialize the primary thread for this session and mirror
+        # any provider_session_id evidence as a thread alias. Reducers below
+        # use observation.thread_id to stamp child rows.
+        primary_thread = ensure_primary_thread(self.db, existing)
+        thread_id = primary_thread.id
+        if existing.provider_session_id:
+            record_thread_alias(
+                self.db,
+                thread=primary_thread,
+                provider=existing.provider,
+                alias_kind="provider_session_id",
+                alias_value=str(existing.provider_session_id),
+            )
+        self.db.flush()
+
         source_lines = self._normalize_source_lines_for_ingest(data)
         ingest_branch, rewind_signal = self._resolve_ingest_branch(
             session_id,
@@ -1481,6 +1500,7 @@ class AgentsStore:
                 observation_result = record_provider_event_observation(
                     self.db,
                     session_id=session_id,
+                    thread_id=thread_id,
                     provider=data.provider,
                     device_id=data.device_id,
                     source="agents_ingest",
@@ -1570,6 +1590,7 @@ class AgentsStore:
             observation_result = record_source_line_observation(
                 self.db,
                 session_id=session_id,
+                thread_id=thread_id,
                 provider=data.provider,
                 device_id=data.device_id,
                 source="agents_ingest",
