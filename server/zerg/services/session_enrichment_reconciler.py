@@ -198,12 +198,15 @@ async def reconcile_summaries_once(
 
     tasks = [asyncio.create_task(_run_one(session_id)) for session_id in claimed_ids]
     try:
-        await asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
     except asyncio.CancelledError:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         raise
+    failures = [result for result in results if isinstance(result, Exception)]
+    if failures:
+        raise failures[0]
 
     return SummaryReconcileResult(
         fast_forwarded=fast_forwarded,
