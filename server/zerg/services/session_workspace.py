@@ -80,10 +80,14 @@ def build_session_workspace(
     thread_cache = store.batch_thread_meta(thread_sessions)
     now = datetime.now(timezone.utc)
     with timing.span("load_runtime"):
-        runtime_state_map = load_runtime_state_map(db, [item.id for item in thread_sessions])
-        control_state_map = load_managed_control_state_map(db, [item.id for item in thread_sessions])
-        transcript_preview_map = load_active_provisional_preview_map(db, [item.id for item in thread_sessions])
-        binding_overlay_map = load_binding_overlay(db, [item.id for item in thread_sessions], now=now)
+        with timing.span("runtime_state"):
+            runtime_state_map = load_runtime_state_map(db, thread_session_ids)
+        with timing.span("control_state"):
+            control_state_map = load_managed_control_state_map(db, thread_session_ids)
+        with timing.span("provisional_preview"):
+            transcript_preview_map = load_active_provisional_preview_map(db, thread_session_ids)
+        with timing.span("binding_overlay"):
+            binding_overlay_map = load_binding_overlay(db, thread_session_ids, now=now)
     with timing.span("build_thread_responses"):
         thread_response_map = {
             str(item.id): build_session_response(
@@ -213,10 +217,14 @@ def build_session_mobile_tail(
     thread_cache = store.batch_thread_meta(thread_sessions)
     now = datetime.now(timezone.utc)
     with timing.span("load_runtime"):
-        runtime_state_map = load_runtime_state_map(db, thread_session_ids)
-        control_state_map = load_managed_control_state_map(db, thread_session_ids)
-        transcript_preview_map = load_active_provisional_preview_map(db, thread_session_ids)
-        binding_overlay_map = load_binding_overlay(db, thread_session_ids, now=now)
+        with timing.span("runtime_state"):
+            runtime_state_map = load_runtime_state_map(db, thread_session_ids)
+        with timing.span("control_state"):
+            control_state_map = load_managed_control_state_map(db, thread_session_ids)
+        with timing.span("provisional_preview"):
+            transcript_preview_map = load_active_provisional_preview_map(db, thread_session_ids)
+        with timing.span("binding_overlay"):
+            binding_overlay_map = load_binding_overlay(db, thread_session_ids, now=now)
 
     with timing.span("build_session"):
         session_response = build_session_response(

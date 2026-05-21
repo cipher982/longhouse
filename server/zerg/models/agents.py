@@ -377,6 +377,7 @@ class SessionObservation(AgentsBase):
     __table_args__ = (
         UniqueConstraint("observation_id", name="uq_session_observations_observation_id"),
         Index("ix_session_observations_session_observed", "session_id", "observed_at", "id"),
+        Index("ix_session_observations_session_source_kind", "session_id", "source", "kind", "id"),
         Index("ix_session_observations_domain_kind", "source_domain", "kind", "observed_at"),
         Index("ix_session_observations_source_cursor", "source", "source_cursor"),
     )
@@ -550,6 +551,7 @@ class SessionRuntimeState(AgentsBase):
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
+        Index("ix_runtime_state_session_updated_version", "session_id", "updated_at", "runtime_version"),
         Index("ix_runtime_state_anchor", "timeline_anchor_at"),
         Index("ix_runtime_state_updated", "updated_at"),
         Index("ix_runtime_state_device_provider", "device_id", "provider"),

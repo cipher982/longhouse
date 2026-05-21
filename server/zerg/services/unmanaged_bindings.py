@@ -121,8 +121,8 @@ def load_binding_overlay(
 
     heartbeat_keys = {_heartbeat_key(b) for b in bindings}
     heartbeat_keys.discard("")
-    host_state_by_key = _latest_heartbeat_state(db, heartbeat_keys, now=current)
     host_seen_at_by_key = _latest_heartbeat_at(db, heartbeat_keys)
+    host_state_by_key = _heartbeat_state_from_latest(host_seen_at_by_key, heartbeat_keys, now=current)
 
     overlay: dict[UUID, BindingOverlay] = {}
     for binding in bindings:
@@ -192,6 +192,28 @@ def _latest_heartbeat_at(db: Session, device_ids: set[str]) -> dict[str, datetim
     return {device_id: received for device_id, received in rows if received is not None}
 
 
+def _heartbeat_state_from_latest(
+    latest: dict[str, datetime],
+    device_ids: set[str],
+    *,
+    now: datetime,
+) -> dict[str, str]:
+    states: dict[str, str] = {}
+    for device_id in device_ids:
+        received = latest.get(device_id)
+        if received is None:
+            states[device_id] = "unknown"
+            continue
+        age = now - _as_utc(received)
+        if age <= HOST_ONLINE_WINDOW:
+            states[device_id] = "online"
+        elif age <= HOST_STALE_WINDOW:
+            states[device_id] = "stale"
+        else:
+            states[device_id] = "offline"
+    return states
+
+
 def _latest_heartbeat_state(
     db: Session,
     device_ids: set[str],
@@ -218,20 +240,7 @@ def _latest_heartbeat_state(
 
     latest: dict[str, datetime] = {device_id: received for device_id, received in rows}
 
-    states: dict[str, str] = {}
-    for device_id in device_ids:
-        received = latest.get(device_id)
-        if received is None:
-            states[device_id] = "unknown"
-            continue
-        age = now - _as_utc(received)
-        if age <= HOST_ONLINE_WINDOW:
-            states[device_id] = "online"
-        elif age <= HOST_STALE_WINDOW:
-            states[device_id] = "stale"
-        else:
-            states[device_id] = "offline"
-    return states
+    return _heartbeat_state_from_latest(latest, device_ids, now=now)
 
 
 def _as_utc(value: datetime | None) -> datetime:
