@@ -601,6 +601,34 @@ def test_timeline_session_mobile_tail_returns_compact_tail_and_detects_drift(tmp
         api_app.dependency_overrides.clear()
 
 
+def test_timeline_session_mobile_tail_skips_provisional_preview_for_ended_session(tmp_path):
+    session_local = _make_db(tmp_path)
+    with session_local() as db:
+        _seed_user(db)
+        session_id = _seed_session(db)
+        base = datetime.now(timezone.utc)
+        db.add(AgentEvent(session_id=session_id, role="assistant", content_text="done", timestamp=base))
+        db.commit()
+
+    client = _make_client(session_local)
+
+    try:
+        with _force_browser_jwt_mode():
+            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
+            with patch(
+                "zerg.services.session_workspace.load_active_provisional_preview_map",
+                side_effect=AssertionError("ended sessions should not scan provisional preview observations"),
+            ):
+                response = client.get(f"/timeline/sessions/{session_id}/mobile-tail?limit=1")
+
+        assert response.status_code == 200
+        assert response.json()["session"]["transcript_preview"] is None
+        assert "provisional_preview;dur=" in response.headers["server-timing"]
+    finally:
+        auth_deps._strategy_cache.clear()
+        api_app.dependency_overrides.clear()
+
+
 def test_timeline_session_workspace_projects_longhouse_input_origin(tmp_path):
     session_local = _make_db(tmp_path)
     submitted_at = datetime.now(timezone.utc)
