@@ -1,6 +1,6 @@
 # Session Enrichment Revision-Lag Reconciliation
 
-Status: Implemented; final Hatch Opus review pending
+Status: Implemented
 Owner: David Rose
 Created: 2026-05-20
 Reviewed: 2026-05-20 via Hatch Opus
@@ -446,7 +446,7 @@ Verification:
 
 - `make test`: `1719 passed, 1 skipped`.
 - Focused phase tests and ruff checks passed as each phase landed.
-- Hatch Opus approved Phases 1, 2, 3, and 4. Final end-to-end review is pending.
+- Hatch Opus approved Phases 1, 2, 3, 4, and the final end-to-end implementation review.
 
 ## Rollout Notes
 
