@@ -215,7 +215,8 @@ struct LonghouseAPI: Sendable {
         let responseMs = Int(Date().timeIntervalSince(requestStartedAt) * 1000)
         let contentEncoding = httpResponse.value(forHTTPHeaderField: "content-encoding") ?? "none"
         let wireContentLength = httpResponse.value(forHTTPHeaderField: "content-length") ?? "unknown"
-        Self.logger.info("mobile-tail response received session=\(id, privacy: .public) status=\(httpResponse.statusCode, privacy: .public) decoded_bytes=\(data.count, privacy: .public) wire_content_length=\(wireContentLength, privacy: .public) encoding=\(contentEncoding, privacy: .public) elapsed_ms=\(responseMs, privacy: .public)")
+        let serverTiming = httpResponse.value(forHTTPHeaderField: "server-timing") ?? "none"
+        Self.logger.info("mobile-tail response received session=\(id, privacy: .public) status=\(httpResponse.statusCode, privacy: .public) decoded_bytes=\(data.count, privacy: .public) wire_content_length=\(wireContentLength, privacy: .public) encoding=\(contentEncoding, privacy: .public) elapsed_ms=\(responseMs, privacy: .public) server_timing=\(serverTiming, privacy: .public)")
         guard httpResponse.statusCode == 200 else {
             if let structured = Self.parseStructuredError(statusCode: httpResponse.statusCode, data: data) {
                 throw structured

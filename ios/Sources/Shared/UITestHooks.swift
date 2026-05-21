@@ -8,6 +8,8 @@ enum UITestHooks {
     static let chatFixtureProbePathEnvironmentKey = "LONGHOUSE_UI_TEST_CHAT_PROBE_PATH"
     static let chatFixtureTriggerPathEnvironmentKey = "LONGHOUSE_UI_TEST_CHAT_TRIGGER_PATH"
     static let chatFixtureReplayPathEnvironmentKey = "LONGHOUSE_UI_TEST_CHAT_REPLAY_PATH"
+    static let timelineOpenFixtureEnvironmentKey = "LONGHOUSE_UI_TEST_TIMELINE_OPEN_FIXTURE"
+    static let mobileTailDelayMsEnvironmentKey = "LONGHOUSE_UI_TEST_MOBILE_TAIL_DELAY_MS"
 
     static var shouldResetState: Bool {
         ProcessInfo.processInfo.environment[resetStateEnvironmentKey] == "1"
@@ -46,5 +48,16 @@ enum UITestHooks {
         let raw = ProcessInfo.processInfo.environment[chatFixtureReplayPathEnvironmentKey]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return raw?.isEmpty == false ? raw : nil
+    }
+
+    static var shouldUseTimelineOpenFixture: Bool {
+        ProcessInfo.processInfo.environment[timelineOpenFixtureEnvironmentKey] == "1"
+    }
+
+    static var mobileTailDelayMs: Int? {
+        guard let raw = ProcessInfo.processInfo.environment[mobileTailDelayMsEnvironmentKey] else {
+            return nil
+        }
+        return Int(raw)
     }
 }

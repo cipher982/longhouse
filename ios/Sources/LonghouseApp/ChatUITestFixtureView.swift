@@ -94,6 +94,88 @@ struct ChatUITestFixtureView: View {
 }
 
 @MainActor
+struct TimelineOpenUITestFixtureView: View {
+    @StateObject private var probe = ChatUITestProbe(path: UITestHooks.chatFixtureProbePath)
+
+    private let sessions: [TimelineOpenFixtureSession]
+
+    init() {
+        sessions = (1...3).map { index in
+            TimelineOpenFixtureSession(
+                id: "ui-test-timeline-session-\(index)",
+                title: "Timeline open fixture \(index)",
+                fixture: ChatUITestFixture(name: index == 1 ? "stress" : "basic")
+            )
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                LazyVStack(spacing: 10) {
+                    ForEach(sessions) { session in
+                        NavigationLink {
+                            destination(for: session)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(session.title)
+                                    .font(.headline.weight(.semibold))
+                                Text("Fixture transcript")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(14)
+                            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 8))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("timeline-open-session-\(session.index)")
+                    }
+                }
+                .padding(16)
+            }
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("Timeline")
+            .task {
+                WebTranscriptWebViewPool.prewarm()
+            }
+            .onAppear {
+                WebTranscriptWebViewPool.prewarm()
+            }
+        }
+    }
+
+    private func destination(for session: TimelineOpenFixtureSession) -> some View {
+        let client = ChatUITestWorkspaceClient(fixture: session.fixture, sessionID: session.id)
+        let viewModel = SessionViewModel(
+            apiFactory: { _ in client },
+            streamFactory: { _, _ in client.streamSource() },
+            enableRealtime: false
+        )
+        return SessionView(
+            sessionId: session.id,
+            fallbackTitle: session.title,
+            viewModel: viewModel,
+            onTranscriptDiagnostics: { diagnostics in
+                Task { @MainActor in
+                    probe.record(diagnostics)
+                }
+            }
+        )
+    }
+}
+
+private struct TimelineOpenFixtureSession: Identifiable {
+    let id: String
+    let title: String
+    let fixture: ChatUITestFixture
+
+    var index: Int {
+        Int(id.split(separator: "-").last ?? "0") ?? 0
+    }
+}
+
+@MainActor
 private final class ChatUITestProbe: ObservableObject {
     private(set) var statusLine = "renders=0 duplicates=0 repeats=0 rows=0 bytes=0 latest=none stage=none stick=0 render_ms=0 max_render_ms=0 tick=0"
 
@@ -177,13 +259,14 @@ private struct ChatUITestFixture: Sendable {
 }
 
 private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
-    let sessionID = "ui-test-chat-session"
+    let sessionID: String
     private var nextEventID = 1
     private var events: [SessionEvent]
     private var realtimeContinuation: AsyncStream<SessionWorkspaceStream.Event>.Continuation?
     private var streamingAssistantEventID: Int?
 
-    init(fixture: ChatUITestFixture) {
+    init(fixture: ChatUITestFixture, sessionID: String = "ui-test-chat-session") {
+        self.sessionID = sessionID
         var seedEvents: [SessionEvent] = []
         if let replayPath = fixture.replayPath,
            let replayEvents = Self.loadReplayEvents(path: replayPath) {
@@ -214,6 +297,9 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         branchMode: String,
         snapshotEventId: Int?
     ) async throws -> SessionMobileTailResponse {
+        if let delayMs = UITestHooks.mobileTailDelayMs, delayMs > 0 {
+            try? await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
+        }
         let page = Self.tailPage(events: events, limit: limit, offset: offset)
         return Self.makeMobileTail(
             sessionID: sessionID,
