@@ -5,7 +5,7 @@
 //! Max queue size: 10,000 entries (backpressure).
 
 use anyhow::Result;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension};
 
 /// Maximum spool entries before backpressure kicks in.
@@ -257,6 +257,24 @@ impl<'a> Spool<'a> {
             result.push(row?);
         }
         Ok(result)
+    }
+
+    /// Return the next scheduled retry time for a path, if it has pending work.
+    pub fn next_retry_at_for_path(&self, file_path: &str) -> Result<Option<DateTime<Utc>>> {
+        let value: Option<String> = self.conn.query_row(
+            "SELECT MIN(next_retry_at)
+             FROM spool_queue
+             WHERE status = 'pending' AND file_path = ?1",
+            [file_path],
+            |row| row.get(0),
+        )?;
+        value
+            .map(|raw| {
+                DateTime::parse_from_rfc3339(&raw)
+                    .map(|parsed| parsed.with_timezone(&Utc))
+                    .map_err(Into::into)
+            })
+            .transpose()
     }
 
     /// Remove a successfully shipped entry.
@@ -528,16 +546,57 @@ mod tests {
     }
 
     #[test]
+    fn test_next_retry_at_for_path_returns_oldest_pending_retry() {
+        let (_tmp, conn) = setup();
+        conn.execute(
+            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, created_at, next_retry_at, status)
+             VALUES ('codex', '/target.jsonl', 0, 10, '2026-03-11T00:00:00+00:00', '2026-03-11T00:00:05+00:00', 'pending')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, created_at, next_retry_at, status)
+             VALUES ('codex', '/target.jsonl', 10, 20, '2026-03-11T00:00:01+00:00', '2026-03-11T00:00:03+00:00', 'pending')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, created_at, next_retry_at, status)
+             VALUES ('codex', '/target.jsonl', 20, 30, '2026-03-11T00:00:02+00:00', '2026-03-11T00:00:01+00:00', 'dead')",
+            [],
+        )
+        .unwrap();
+
+        let spool = Spool::new(&conn);
+        let retry_at = spool
+            .next_retry_at_for_path("/target.jsonl")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(retry_at.to_rfc3339(), "2026-03-11T00:00:03+00:00");
+        assert!(
+            spool
+                .next_retry_at_for_path("/missing.jsonl")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
     fn test_enqueue_is_idempotent_for_pending_range() {
         let (_tmp, conn) = setup();
         let spool = Spool::new(&conn);
 
-        assert!(spool
-            .enqueue("claude", "/dup.jsonl", 100, 500, Some("s1"))
-            .unwrap());
-        assert!(spool
-            .enqueue("claude", "/dup.jsonl", 100, 500, Some("s1"))
-            .unwrap());
+        assert!(
+            spool
+                .enqueue("claude", "/dup.jsonl", 100, 500, Some("s1"))
+                .unwrap()
+        );
+        assert!(
+            spool
+                .enqueue("claude", "/dup.jsonl", 100, 500, Some("s1"))
+                .unwrap()
+        );
 
         let count: i64 = conn
             .query_row(
