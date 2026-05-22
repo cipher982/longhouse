@@ -13,12 +13,33 @@ use crate::config;
 /// Default DB filename (same as Python).
 const DB_FILENAME: &str = "longhouse-shipper.db";
 
+/// Resolve the configured DB path (or default) without touching the file.
+pub fn resolve_db_path(db_path: Option<&Path>) -> Result<PathBuf> {
+    match db_path {
+        Some(p) => Ok(p.to_path_buf()),
+        None => default_db_path(),
+    }
+}
+
+/// Open a fresh connection to an *already-initialized* shipper DB.
+///
+/// Skips the schema bootstrap `open_db` runs at startup. Use this on the hot
+/// path (per-job prepare/ship) once `open_db` has been called once for the
+/// process lifetime. Only sets the per-connection PRAGMAs — `journal_mode=WAL`
+/// is a database-level setting persisted to the file by the cold open.
+pub fn open_connection(db_path: &Path) -> Result<Connection> {
+    let conn = Connection::open(db_path)
+        .with_context(|| format!("opening SQLite DB: {}", db_path.display()))?;
+    conn.execute_batch(
+        "PRAGMA synchronous=NORMAL;
+         PRAGMA busy_timeout=5000;",
+    )?;
+    Ok(conn)
+}
+
 /// Open (or create) the shipper database with WAL mode and proper pragmas.
 pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
-    let path = match db_path {
-        Some(p) => p.to_path_buf(),
-        None => default_db_path()?,
-    };
+    let path = resolve_db_path(db_path)?;
 
     // Ensure parent directory exists
     if let Some(parent) = path.parent() {
