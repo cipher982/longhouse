@@ -391,10 +391,33 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         );
 
         tokio::select! {
+            biased;
+
             // Shutdown signals
             _ = shutdown_signal() => {
                 tracing::info!("Shutdown signal received, exiting gracefully...");
                 break;
+            }
+
+            // Managed transcript wakes are the lowest-latency completion lane.
+            // Periodic local status/outbox work can do synchronous filesystem
+            // and SQLite reads, so do not let a ready timer win the select race
+            // while a turn-completion wake is already waiting.
+            Some(signal) = transcript_wake_rx.recv() => {
+                if let Some(path) = enqueue_transcript_wake_signal(
+                    &mut scheduler,
+                    &mut latest_transcript_wake_observed,
+                    signal,
+                ) {
+                    deferred_retries.remove(&path);
+                    pump_ready_local_work(
+                        &mut scheduler,
+                        &mut in_flight,
+                        &task_context,
+                        &mut deferred_retries,
+                        offline.is_offline,
+                    );
+                }
             }
 
             task_result = in_flight.join_next(), if scheduler.has_in_flight() => {
@@ -449,23 +472,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         return Err(anyhow::anyhow!("path task failed: {}", e));
                     }
                     None => {}
-                }
-            }
-
-            Some(signal) = transcript_wake_rx.recv() => {
-                if let Some(path) = enqueue_transcript_wake_signal(
-                    &mut scheduler,
-                    &mut latest_transcript_wake_observed,
-                    signal,
-                ) {
-                    deferred_retries.remove(&path);
-                    pump_ready_local_work(
-                        &mut scheduler,
-                        &mut in_flight,
-                        &task_context,
-                        &mut deferred_retries,
-                        offline.is_offline,
-                    );
                 }
             }
 
