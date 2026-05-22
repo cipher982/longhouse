@@ -550,15 +550,8 @@ def initialize_database(engine: Engine = None) -> None:
     if target_engine.dialect.name == "sqlite":
         # Keep a ledger table ready for explicit heavy migrations.
         from zerg.db_migrations import ensure_migration_ledger
-        from zerg.db_migrations import pending_heavy_migration_names
 
         ensure_migration_ledger(target_engine)
-        pending = pending_heavy_migration_names(target_engine)
-        if pending:
-            logger.warning(
-                "Pending heavy SQLite migrations detected (%s). " "Run `longhouse migrate --apply` to complete legacy data upgrades.",
-                ", ".join(pending),
-            )
 
     # SQLite-only: ensure FTS5 index for agent events
     if target_engine.dialect.name == "sqlite":
