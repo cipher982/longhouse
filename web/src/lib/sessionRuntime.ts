@@ -8,6 +8,7 @@ import type {
 export type KnownPresenceState = "thinking" | "running" | "idle" | "needs_user" | "blocked" | "stalled";
 export type RuntimeTruthTier = "none" | "stale" | "fresh" | "managed-local";
 export type RuntimeTone = "inactive" | "active" | "thinking" | "running" | "blocked" | "stalled" | "idle" | "closed";
+const TRANSCRIPT_SYNC_STATE = "syncing_transcript";
 
 type TimelineRuntimeOverlay = {
   timeline_anchor_at?: string | null;
@@ -117,6 +118,9 @@ export function resolveSessionStatusLabel(
   const display = runtime.runtimeDisplay;
   if (display?.lifecycle === "closed") {
     return "Closed";
+  }
+  if (display?.state === TRANSCRIPT_SYNC_STATE) {
+    return display.headline || "Syncing";
   }
 
   const controlPath = display?.control_path ?? fallbackControlPath;
@@ -404,39 +408,43 @@ export function resolveSessionRuntimeState(
 ): SessionRuntimeState {
   const serverDisplay = session.runtime_display ?? null;
   const runtimeFacts = session.runtime_facts ?? null;
-  const factStatus = resolveSessionFactStatus(runtimeFacts);
+  const rawFactStatus = resolveSessionFactStatus(runtimeFacts);
+  const displayOverridesFacts =
+    serverDisplay?.state === TRANSCRIPT_SYNC_STATE && runtimeFacts?.lifecycle?.state !== "closed";
+  const factStatus = displayOverridesFacts ? null : rawFactStatus;
   const hasFacts = runtimeFacts != null;
-  const sessionTruthTier = hasFacts ? "none" : getRuntimeTruthTier(session);
+  const hasFactsForRuntime = hasFacts && !displayOverridesFacts;
+  const sessionTruthTier = hasFactsForRuntime ? "none" : getRuntimeTruthTier(session);
   const status = session.status ?? null;
   const isClosed = hasFacts ? runtimeFacts?.lifecycle?.state === "closed" : serverDisplay?.lifecycle === "closed";
-  const rawPresenceState = hasFacts ? null : normalizePresenceState(serverDisplay ? serverDisplay.state : session.presence_state ?? null);
+  const rawPresenceState = hasFactsForRuntime ? null : normalizePresenceState(serverDisplay ? serverDisplay.state : session.presence_state ?? null);
   const presenceState = isClosed ? null : rawPresenceState;
-  const presenceTool = hasFacts ? null : (session.active_tool ?? session.presence_tool ?? null);
+  const presenceTool = hasFactsForRuntime ? null : (session.active_tool ?? session.presence_tool ?? null);
   const lastLiveAt =
-    hasFacts
+    hasFactsForRuntime
       ? null
       : (session.last_live_at ??
         session.presence_updated_at ??
         (presenceState ? session.last_activity_at ?? null : null));
-  const runtimeSource = hasFacts ? null : normalizeRuntimeSource(session.runtime_source ?? null);
-  const confidence = hasFacts ? null : (session.confidence ?? null);
-  const truthTier = hasFacts ? "none" : (normalizeRuntimeTruthTier(serverDisplay?.truth_tier) ?? sessionTruthTier);
+  const runtimeSource = hasFactsForRuntime ? null : normalizeRuntimeSource(session.runtime_source ?? null);
+  const confidence = hasFactsForRuntime ? null : (session.confidence ?? null);
+  const truthTier = hasFactsForRuntime ? "none" : (normalizeRuntimeTruthTier(serverDisplay?.truth_tier) ?? sessionTruthTier);
 
-  const isExecuting = hasFacts || isClosed
+  const isExecuting = hasFactsForRuntime || isClosed
     ? false
     : (serverDisplay?.is_executing ?? (presenceState === "thinking" || presenceState === "running"));
-  const needsAttention = hasFacts || isClosed
+  const needsAttention = hasFactsForRuntime || isClosed
     ? false
     : (serverDisplay?.needs_attention ?? (presenceState === "blocked" || presenceState === "stalled"));
 
-  const isLive = hasFacts || isClosed ? false : (serverDisplay?.is_live ?? isExecuting);
+  const isLive = hasFactsForRuntime || isClosed ? false : (serverDisplay?.is_live ?? isExecuting);
   const isIdle = isClosed
     ? true
-    : hasFacts
+    : hasFactsForRuntime
     ? false
     : (serverDisplay?.is_idle ?? (presenceState === "idle" || presenceState === "needs_user"));
-  const isStalled = hasFacts || isClosed ? false : (serverDisplay?.is_stalled ?? presenceState === "stalled");
-  const hasSignal = hasFacts
+  const isStalled = hasFactsForRuntime || isClosed ? false : (serverDisplay?.is_stalled ?? presenceState === "stalled");
+  const hasSignal = hasFactsForRuntime
     ? factStatus != null
     : (serverDisplay?.has_signal ?? (truthTier !== "none" || presenceState != null || status != null || lastLiveAt != null));
 
@@ -467,7 +475,7 @@ export function resolveSessionRuntimeState(
     needsAttention,
     isIdle,
     isStalled,
-    isManagedLocalTruth: hasFacts ? false : (serverDisplay?.is_managed_local_truth ?? truthTier === "managed-local"),
+    isManagedLocalTruth: hasFactsForRuntime ? false : (serverDisplay?.is_managed_local_truth ?? truthTier === "managed-local"),
     hasSignal,
     tone,
     runtimeDisplay: serverDisplay,

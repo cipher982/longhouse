@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentSessionProjectionItem } from "../../services/api/agents";
+import type { AgentEvent, AgentSession, AgentSessionProjectionItem } from "../../services/api/agents";
 import { parseUTC } from "../dateUtils";
 import type {
   NoiseGroup,
@@ -130,6 +130,60 @@ export function parseLonghouseOutput(
 }
 
 const DROPPED_TOOL_AGE_MS = 3600 * 1000;
+
+function nonEmptyText(value: string | null | undefined): string {
+  return (value || "").trim();
+}
+
+export function projectionItemsWithTranscriptPreview(
+  projectionItems: AgentSessionProjectionItem[],
+  session: AgentSession | null | undefined,
+): AgentSessionProjectionItem[] {
+  const preview = session?.transcript_preview;
+  const previewText = nonEmptyText(preview?.text);
+  if (!session || !preview || !previewText || preview.is_stale) {
+    return projectionItems;
+  }
+
+  const durableEvents = projectionItems
+    .map((item) => (item.kind === "event" ? item.event : null))
+    .filter((event): event is AgentEvent => Boolean(event));
+
+  const lastDurableAssistant = [...durableEvents]
+    .reverse()
+    .find((event) => event.role === "assistant" && nonEmptyText(event.content_text));
+  if (lastDurableAssistant && nonEmptyText(lastDurableAssistant.content_text) === previewText) {
+    return projectionItems;
+  }
+
+  const latestDurable = durableEvents[durableEvents.length - 1];
+  const previewAt = Date.parse(preview.timestamp);
+  const latestDurableAt = latestDurable ? Date.parse(latestDurable.timestamp) : Number.NaN;
+  if (!Number.isNaN(previewAt) && !Number.isNaN(latestDurableAt) && latestDurableAt >= previewAt) {
+    return projectionItems;
+  }
+
+  return [
+    ...projectionItems,
+    {
+      kind: "event",
+      session_id: session.id,
+      timestamp: preview.timestamp,
+      event: {
+        id: -Math.abs(preview.event_id),
+        role: "assistant",
+        content_text: previewText,
+        tool_name: null,
+        tool_input_json: null,
+        tool_output_text: null,
+        tool_call_id: null,
+        timestamp: preview.timestamp,
+        in_active_context: true,
+        is_head_branch: true,
+      },
+    },
+  ];
+}
 
 export function isToolInteractionDropped(
   interaction: ToolInteraction,

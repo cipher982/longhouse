@@ -134,7 +134,7 @@ def _build_managed_session_name(seed: str, *, fallback: str) -> str:
     return cleaned[:_MANAGED_LOCAL_NAME_MAX].rstrip("-")
 
 
-async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchParams) -> ManagedLocalLaunchResult:
+def launch_managed_local_session_sync(db: Session, params: ManagedLocalLaunchParams) -> ManagedLocalLaunchResult:
     provider = params.provider or "claude"
     if provider not in _VALID_PROVIDERS:
         raise ManagedLocalLaunchError(f"Unsupported provider '{provider}' for managed local", status_code=400)
@@ -245,9 +245,14 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
     return ManagedLocalLaunchResult(session=session, attach_command=attach_command)
 
 
+async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchParams) -> ManagedLocalLaunchResult:
+    return launch_managed_local_session_sync(db, params)
+
+
 __all__ = [
     "ManagedLocalLaunchError",
     "ManagedLocalLaunchParams",
     "ManagedLocalLaunchResult",
     "launch_managed_local_session",
+    "launch_managed_local_session_sync",
 ]

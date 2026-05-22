@@ -45,6 +45,7 @@ from zerg.services.session_messages import create_session_message
 from zerg.services.session_messages import resolve_session_message_owner_id
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
+from zerg.services.session_turns import execute_session_turn_write
 from zerg.services.session_turns import get_session_turn_by_id
 from zerg.services.session_turns import list_session_turns
 from zerg.services.session_turns import materialize_managed_transcript_turns
@@ -485,8 +486,12 @@ async def get_session_turns(
             detail=f"Session {session_id} not found",
         )
 
-    if materialize_managed_transcript_turns(db, session_id=session.id):
-        db.commit()
+    if session.managed_transport:
+        await execute_session_turn_write(
+            db_bind=db.get_bind(),
+            label="session-turn-terminal",
+            fn=lambda turn_db: materialize_managed_transcript_turns(turn_db, session_id=session.id),
+        )
 
     normalized_order = str(order or "asc").strip().lower()
     if normalized_order not in {"asc", "desc"}:
@@ -1083,7 +1088,7 @@ async def get_session_workspace(
 ) -> SessionWorkspaceResponse:
     """Get the focused session, its thread, and the first projection page in one round trip."""
     timing = ServerTimingRecorder()
-    response.headers["Cache-Control"] = "private, max-age=5"
+    response.headers["Cache-Control"] = "no-store"
     owner_id = _resolve_agents_owner_id(db, _auth if isinstance(_auth, DeviceToken) else None)
     result = build_session_workspace(
         db=db,

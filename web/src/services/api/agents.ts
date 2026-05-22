@@ -810,7 +810,10 @@ export async function fetchAgentSessionProjection(
   const queryString = params.toString();
   const path = `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/projection${queryString ? `?${queryString}` : ""}`;
 
-  return request<AgentSessionProjectionResponse>(path, { method: "GET" });
+  return request<AgentSessionProjectionResponse>(path, {
+    method: "GET",
+    cache: "no-store",
+  });
 }
 
 export async function fetchAgentSessionWorkspace(
@@ -828,7 +831,10 @@ export async function fetchAgentSessionWorkspace(
   const queryString = params.toString();
   const path = `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/workspace${queryString ? `?${queryString}` : ""}`;
 
-  return request<AgentSessionWorkspaceResponse>(path, { method: "GET" });
+  return request<AgentSessionWorkspaceResponse>(path, {
+    method: "GET",
+    cache: "no-store",
+  });
 }
 
 export async function fetchAgentSessionTurns(

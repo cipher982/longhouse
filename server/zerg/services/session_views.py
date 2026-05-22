@@ -45,6 +45,7 @@ from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_runner_state import managed_runner_host_state
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_runtime import should_include_runtime_view
+from zerg.services.session_runtime_display import TRANSCRIPT_SYNC_STATE
 from zerg.services.session_runtime_display import build_session_runtime_display
 from zerg.services.session_runtime_display import compact_runtime_tool_label
 from zerg.session_loop_mode import SessionLoopMode
@@ -156,6 +157,11 @@ def build_session_runtime_display_response(
     ended_at: datetime | None,
     binding_host_state: str | None = None,
     binding_terminal_reason: str | None = None,
+    last_activity_at: datetime | None = None,
+    user_messages: int | None = None,
+    assistant_messages: int | None = None,
+    has_visible_transcript_preview: bool = False,
+    now: datetime | None = None,
 ) -> SessionRuntimeDisplayResponse | None:
     if runtime_overlay is None:
         return None
@@ -165,6 +171,11 @@ def build_session_runtime_display_response(
         ended_at=ended_at,
         binding_host_state=binding_host_state,
         binding_terminal_reason=binding_terminal_reason,
+        last_activity_at=last_activity_at,
+        user_messages=user_messages,
+        assistant_messages=assistant_messages,
+        has_visible_transcript_preview=has_visible_transcript_preview,
+        now=now,
     )
     return SessionRuntimeDisplayResponse(
         truth_tier=display.truth_tier,
@@ -271,6 +282,7 @@ def build_session_timeline_card_response(
     *,
     runtime_facts: SessionLivenessFactsResponse | None,
     capability_flags,
+    runtime_display: SessionRuntimeDisplayResponse | None = None,
 ) -> TimelineCardPresentationResponse:
     if runtime_facts is not None:
         control_path = runtime_facts.control_path
@@ -285,11 +297,24 @@ def build_session_timeline_card_response(
         label="Managed" if control_path == "managed" else "Unmanaged",
         tone="neutral",
     )
-    status = _timeline_status_from_liveness_facts(runtime_facts)
+    status = _timeline_status_from_display(runtime_display) or _timeline_status_from_liveness_facts(runtime_facts)
     return TimelineCardPresentationResponse(
         ownership=ownership,
         status=status,
         border_tone=status.tone if status is not None else "inactive",
+    )
+
+
+def _timeline_status_from_display(
+    runtime_display: SessionRuntimeDisplayResponse | None,
+) -> TimelineStatusPresentationResponse | None:
+    if runtime_display is None or runtime_display.state != TRANSCRIPT_SYNC_STATE:
+        return None
+    return TimelineStatusPresentationResponse(
+        label="Syncing",
+        tone="active",
+        seen_at=None,
+        seen_at_prefix="Updated",
     )
 
 
@@ -1228,6 +1253,16 @@ def build_session_response(
                 source=CONTROL_SOURCE_LEGACY_RUNNER,
                 seen_at=current_now,
             )
+    transcript_preview_response = build_session_transcript_preview_response(
+        transcript_preview,
+        last_activity_at=last_activity_at,
+        now=current_now,
+    )
+    has_visible_transcript_preview = bool(
+        transcript_preview_response is not None
+        and transcript_preview_response.text.strip()
+        and not transcript_preview_response.is_stale
+    )
     runtime_display = (
         build_session_runtime_display_response(
             runtime_overlay=runtime_overlay,
@@ -1235,6 +1270,11 @@ def build_session_response(
             ended_at=session.ended_at,
             binding_host_state=binding_host_state,
             binding_terminal_reason=binding_terminal_reason,
+            last_activity_at=last_activity_at,
+            user_messages=session.user_messages or 0,
+            assistant_messages=session.assistant_messages or 0,
+            has_visible_transcript_preview=has_visible_transcript_preview,
+            now=current_now,
         )
         if include_runtime
         else None
@@ -1312,13 +1352,11 @@ def build_session_response(
         ),
         runtime_display=runtime_display,
         runtime_facts=runtime_facts,
-        transcript_preview=build_session_transcript_preview_response(
-            transcript_preview,
-            last_activity_at=last_activity_at,
-        ),
+        transcript_preview=transcript_preview_response,
         timeline_card=build_session_timeline_card_response(
             runtime_facts=runtime_facts,
             capability_flags=capability_flags,
+            runtime_display=runtime_display,
         ),
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
         user_state=session.user_state or "active",

@@ -21,7 +21,11 @@ extension SessionDetail {
         let state: String
         let tool: String?
         let phase: String?
-        if let factStatus = sessionFactStatus(runtimeFacts) {
+        if runtimeDisplay?.state == transcriptSyncState, let runtimeDisplay {
+            state = runtimeDisplay.state ?? "unknown"
+            tool = RuntimeDisplayText.canonicalToolLabel(runtimeDisplay.compactToolLabel)
+            phase = RuntimeDisplayText.canonicalDisplayText(Optional(runtimeDisplay.phaseLabel))
+        } else if let factStatus = sessionFactStatus(runtimeFacts) {
             state = "unknown"
             tool = nil
             phase = factStatus.label

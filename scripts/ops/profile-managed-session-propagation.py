@@ -1251,6 +1251,8 @@ except Exception as exc:
         env = os.environ.copy()
         if session_id_file is not None:
             env["LONGHOUSE_BROWSER_OBSERVER_SESSION_ID_FILE"] = str(session_id_file)
+        if self.args.profile == "warm-live" and observer_kind == "warm":
+            env["LONGHOUSE_BROWSER_OBSERVER_EXIT_AFTER_DETAIL_TRANSCRIPT"] = "1"
 
         proc = subprocess.Popen(
             [
@@ -1281,10 +1283,15 @@ except Exception as exc:
             "close_painted": "browser_close_card_painted",
             "awaiting_session_id": "browser_awaiting_session_id",
             "session_id_received": "browser_session_id_received",
+            "detail_navigation_started": "browser_detail_navigation_started",
+            "detail_loaded": "browser_detail_loaded",
+            "timeline_page_closed_after_card": "browser_timeline_page_closed_after_card",
             "timeline_stream_connected": "browser_timeline_stream_connected",
             "timeline_stream_heartbeat": "browser_timeline_stream_heartbeat",
             "timeline_stream_session_upsert": "browser_timeline_stream_session_upsert",
             "timeline_stream_session_remove": "browser_timeline_stream_session_remove",
+            "live_transcript_first_painted": "browser_live_transcript_first_painted",
+            "live_transcript_nonce_painted": "browser_live_transcript_nonce_painted",
         }
         timeout_map = {
             "card_painted_timeout": "browser_timeline_card_painted_timeout",
@@ -1292,6 +1299,8 @@ except Exception as exc:
             "preview_word_painted_timeout": "browser_transcript_preview_word_painted_timeout",
             "preview_nonce_painted_timeout": "browser_transcript_preview_nonce_painted_timeout",
             "close_painted_timeout": "browser_close_card_painted_timeout",
+            "live_transcript_first_painted_timeout": "browser_live_transcript_first_painted_timeout",
+            "live_transcript_nonce_painted_timeout": "browser_live_transcript_nonce_painted_timeout",
         }
         if observer_kind == "cold":
             event_map = {

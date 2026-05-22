@@ -4,6 +4,7 @@ import {
   getSessionInteractionCapabilities,
   getTimelineMessagePreview,
   isToolInteractionDropped,
+  projectionItemsWithTranscriptPreview,
 } from "../sessionWorkspace";
 import type { ToolInteraction } from "../sessionWorkspace";
 import type { AgentEvent, AgentSession, AgentSessionProjectionItem, SessionCapabilities } from "../../services/api/agents";
@@ -89,6 +90,92 @@ describe("buildTimelineModel", () => {
       throw new Error("Expected an orphan tool selection");
     }
     expect(selection.interaction.toolName).toBe("Bash");
+  });
+});
+
+describe("projectionItemsWithTranscriptPreview", () => {
+  const baseEvent: AgentEvent = {
+    id: 1,
+    role: "user",
+    content_text: "Prompt",
+    tool_name: null,
+    tool_input_json: null,
+    tool_output_text: null,
+    tool_call_id: null,
+    timestamp: "2026-03-22T22:00:00Z",
+    in_active_context: true,
+  };
+
+  it("appends a fresh provisional preview as a synthetic assistant event", () => {
+    const session = makeSession({
+      transcript_preview: {
+        event_id: 42,
+        text: "Partial live answer",
+        event_origin: "live_provisional",
+        timestamp: "2026-03-22T22:00:05Z",
+        is_provisional: true,
+        is_complete: false,
+        content_cursor: "cursor-1",
+        is_stale: false,
+        stale_reason: null,
+      },
+    });
+    const items: AgentSessionProjectionItem[] = [
+      {
+        kind: "event",
+        session_id: session.id,
+        timestamp: baseEvent.timestamp,
+        event: baseEvent,
+      },
+    ];
+
+    const withPreview = projectionItemsWithTranscriptPreview(items, session);
+
+    expect(withPreview).toHaveLength(2);
+    expect(withPreview[1]?.event).toMatchObject({
+      id: -42,
+      role: "assistant",
+      content_text: "Partial live answer",
+      timestamp: "2026-03-22T22:00:05Z",
+    });
+  });
+
+  it("skips previews already superseded by durable transcript events", () => {
+    const session = makeSession({
+      transcript_preview: {
+        event_id: 42,
+        text: "Partial live answer",
+        event_origin: "live_provisional",
+        timestamp: "2026-03-22T22:00:05Z",
+        is_provisional: true,
+        is_complete: true,
+        content_cursor: "cursor-1",
+        is_stale: false,
+        stale_reason: null,
+      },
+    });
+    const items: AgentSessionProjectionItem[] = [
+      {
+        kind: "event",
+        session_id: session.id,
+        timestamp: baseEvent.timestamp,
+        event: baseEvent,
+      },
+      {
+        kind: "event",
+        session_id: session.id,
+        timestamp: "2026-03-22T22:00:06Z",
+        event: {
+          ...baseEvent,
+          id: 2,
+          role: "assistant",
+          content_text: "Partial live answer",
+          timestamp: "2026-03-22T22:00:06Z",
+        },
+      },
+    ];
+
+    expect(projectionItemsWithTranscriptPreview(items, session)).toBe(items);
   });
 });
 

@@ -32,7 +32,7 @@ from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
 from zerg.services.managed_local_launcher import ManagedLocalLaunchError
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
-from zerg.services.managed_local_launcher import launch_managed_local_session
+from zerg.services.managed_local_launcher import launch_managed_local_session_sync
 from zerg.services.remote_session_launch import RemoteLaunchError
 from zerg.services.remote_session_launch import RemoteLaunchParams
 from zerg.services.remote_session_launch import launch_remote_session
@@ -66,6 +66,7 @@ from zerg.services.session_inputs import get_session_input
 from zerg.services.session_inputs import list_recent_inputs
 from zerg.services.session_inputs import mark_failed as _mark_input_failed
 from zerg.services.session_inputs import retry_failed_input
+from zerg.services.write_serializer import get_write_serializer
 from zerg.session_loop_mode import SessionLoopMode
 from zerg.session_loop_mode import coerce_session_loop_mode
 
@@ -483,22 +484,25 @@ async def launch_managed_local_this_device(
     runner_target = token_device_id
 
     try:
-        result = await launch_managed_local_session(
+        params = ManagedLocalLaunchParams(
+            owner_id=owner_id,
+            runner_target=runner_target,
+            cwd=body.cwd,
+            provider=body.provider,
+            project=body.project,
+            git_repo=body.git_repo,
+            git_branch=body.git_branch,
+            display_name=body.display_name,
+            loop_mode=coerce_session_loop_mode(body.loop_mode).value,
+            machine_name=machine_name,
+            native_claude_channels_available=body.native_claude_channels_available,
+            claude_launch_env=body.claude_launch_env,
+        )
+        ws = get_write_serializer()
+        result = await ws.execute_or_direct(
+            lambda write_db: launch_managed_local_session_sync(write_db, params),
             db,
-            ManagedLocalLaunchParams(
-                owner_id=owner_id,
-                runner_target=runner_target,
-                cwd=body.cwd,
-                provider=body.provider,
-                project=body.project,
-                git_repo=body.git_repo,
-                git_branch=body.git_branch,
-                display_name=body.display_name,
-                loop_mode=coerce_session_loop_mode(body.loop_mode).value,
-                machine_name=machine_name,
-                native_claude_channels_available=body.native_claude_channels_available,
-                claude_launch_env=body.claude_launch_env,
-            ),
+            label="managed-launch",
         )
     except ManagedLocalLaunchError as exc:
         db.rollback()

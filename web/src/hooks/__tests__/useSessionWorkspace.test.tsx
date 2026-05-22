@@ -35,7 +35,7 @@ const baseSession = {
   thread_head_session_id: "session-1",
   provider: "claude",
   project: "session-workspace-test",
-} as const;
+};
 
 function makeEvents(count: number) {
   const startedAt = Date.parse("2026-03-14T12:00:00.000Z");
@@ -52,13 +52,14 @@ function makeEvents(count: number) {
   }));
 }
 
-function seedHookMocks(eventCount: number = 80) {
+function seedHookMocks(eventCount: number = 80, sessionOverrides: Record<string, unknown> = {}) {
   const events = makeEvents(eventCount);
+  const session = { ...baseSession, ...sessionOverrides };
   agentSessionMocks.useAgentSessionWorkspace.mockReturnValue({
     data: {
-      session: baseSession,
+      session,
       thread: {
-        sessions: [baseSession],
+        sessions: [session],
         head_session_id: baseSession.id,
         root_session_id: baseSession.id,
       },
@@ -163,6 +164,35 @@ describe("useSessionWorkspace", () => {
     document.body.innerHTML = "";
     visibilityMocks.useDocumentVisible.mockReturnValue(true);
     seedHookMocks();
+  });
+
+  it("renders a fresh server transcript preview as a synthetic assistant event", () => {
+    seedHookMocks(1, {
+      transcript_preview: {
+        event_id: 99,
+        text: "Live preview text before durable transcript arrives",
+        event_origin: "live_provisional",
+        timestamp: "2026-03-14T12:00:05.000Z",
+        is_provisional: true,
+        is_complete: false,
+        content_cursor: "cursor-99",
+        is_stale: false,
+        stale_reason: null,
+      },
+    });
+
+    const { result } = renderHook(() => useSessionWorkspace(baseSession.id));
+
+    expect(result.current.events.map((event) => event.content_text)).toContain(
+      "Live preview text before durable transcript arrives",
+    );
+    expect(result.current.items.at(-1)).toMatchObject({
+      kind: "message",
+      event: {
+        id: -99,
+        role: "assistant",
+      },
+    });
   });
 
   it("scrolls the timeline list to the latest context when the container is already scrollable", async () => {

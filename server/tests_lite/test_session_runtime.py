@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
+from tests_lite._capability_test_helper import build_session_capabilities
 from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
@@ -26,7 +27,6 @@ from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import SessionIngest
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.provisional_events import load_active_provisional_preview_map
-from tests_lite._capability_test_helper import build_session_capabilities
 from zerg.services.session_capabilities import project_current_session_capabilities_from_facts
 from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
@@ -573,7 +573,12 @@ def test_bridge_transcript_event_stores_latest_live_overlay_observation(tmp_path
         )
 
         events = db.query(AgentEvent).filter(AgentEvent.session_id == session.id).all()
-        observations = db.query(SessionObservation).filter(SessionObservation.session_id == session.id).order_by(SessionObservation.id.asc()).all()
+        observations = (
+            db.query(SessionObservation)
+            .filter(SessionObservation.session_id == session.id)
+            .order_by(SessionObservation.id.asc())
+            .all()
+        )
         preview = load_active_provisional_preview_map(db, [session.id])[str(session.id)]
         state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).first()
 
@@ -4099,4 +4104,100 @@ def test_runtime_batch_hoists_apns_prep_per_batch(tmp_path, monkeypatch):
         runtime_state_map_call_count["n"] == 1
     ), f"expected 1 load_runtime_state_map call, got {runtime_state_map_call_count['n']}"
 
+    engine.dispose()
+
+
+def test_runtime_batch_live_transcript_skips_apns_and_owner_work(tmp_path, monkeypatch):
+    reset_pubsub_for_test()
+    engine, SessionLocal = _make_db(tmp_path, "runtime_live_fast_path.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=20), provider="codex")
+        runtime_key = runtime_key_for_session("codex", str(session.id))
+
+    from zerg.routers import runtime as runtime_router
+
+    call_counts = {
+        "targets": 0,
+        "widget": 0,
+        "runtime_map": 0,
+        "owner": 0,
+        "current_presence": 0,
+    }
+
+    def count(name):
+        def _inner(*args, **kwargs):
+            call_counts[name] += 1
+            if name == "owner":
+                return 1
+            if name == "runtime_map":
+                return {}
+            return None
+
+        return _inner
+
+    monkeypatch.setattr(runtime_router, "active_ios_targets_for_owner", count("targets"))
+    monkeypatch.setattr(runtime_router, "prepare_widget_timeline_push", count("widget"))
+    monkeypatch.setattr(runtime_router, "load_runtime_state_map", count("runtime_map"))
+    monkeypatch.setattr(runtime_router, "resolve_session_message_owner_id", count("owner"))
+    monkeypatch.setattr(runtime_router, "current_presence_state_for_session", count("current_presence"))
+
+    for client in _client(SessionLocal):
+        resp = client.post(
+            "/agents/runtime/events/batch",
+            json={
+                "events": [
+                    {
+                        "runtime_key": runtime_key,
+                        "session_id": str(session.id),
+                        "provider": "codex",
+                        "device_id": "cinder",
+                        "source": "codex_bridge_live",
+                        "kind": "progress_signal",
+                        "occurred_at": now.isoformat(),
+                        "dedupe_key": f"bridge:live:{session.id}:thread-1:turn-1:1",
+                        "payload": {
+                            "progress_kind": "bridge_live_transcript_delta",
+                            "managed_transport": "codex_app_server",
+                            "thread_id": "thread-1",
+                            "turn_id": "turn-1",
+                            "seq": 1,
+                            "method": "item/agentMessage/delta",
+                            "delta": "LH",
+                            "live_text": "LH",
+                            "turn_completed": False,
+                        },
+                    }
+                ]
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["updated_runtime_keys"] == [runtime_key]
+        assert resp.headers["X-Runtime-Label"] == "runtime-live"
+        assert float(resp.headers["X-Runtime-Queue-Wait-Ms"]) >= 0.0
+        assert float(resp.headers["X-Runtime-Exec-Ms"]) >= 0.0
+
+    assert call_counts == {
+        "targets": 0,
+        "widget": 0,
+        "runtime_map": 0,
+        "owner": 0,
+        "current_presence": 0,
+    }
+
+    bus = get_pubsub()
+    with bus.subscribe(topic_session(str(session.id)), since_seq=0) as session_sub:
+        msg = asyncio.run(session_sub.next_message(timeout=0.1))
+        assert msg is not None
+        assert msg.payload == {
+            "kind": "runtime",
+            "session_id": str(session.id),
+            "provider": "codex",
+            "source": "codex_bridge_live",
+        }
+    assert bus.peek_latest_seq(TOPIC_TIMELINE) == 1
+
+    reset_pubsub_for_test()
     engine.dispose()

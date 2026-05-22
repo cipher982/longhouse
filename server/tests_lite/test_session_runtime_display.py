@@ -1,9 +1,13 @@
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+import os
 from types import SimpleNamespace
 
 import pytest
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.session_capabilities import SessionCapabilityFlags
@@ -358,6 +362,65 @@ def test_transcript_progress_does_not_create_active_display():
     assert display.signal_tier == "transcript_progress"
     assert display.headline == "Inactive"
     assert display.has_signal is True
+
+
+def test_managed_idle_after_user_prompt_displays_transcript_sync():
+    now = datetime(2026, 4, 26, 12, 0, tzinfo=timezone.utc)
+    display = build_session_runtime_display(
+        runtime_view=_runtime_view(
+            signal_tier="phase_signal",
+            runtime_phase="idle",
+            runtime_source="managed_local_transport",
+            status="idle",
+            presence_state="idle",
+            presence_updated_at=now,
+            last_live_at=now,
+            confidence="live",
+            display_phase="Idle",
+        ),
+        capabilities=_capabilities(managed=True),
+        ended_at=None,
+        last_activity_at=now - timedelta(milliseconds=500),
+        user_messages=2,
+        assistant_messages=1,
+        has_visible_transcript_preview=False,
+        now=now,
+    )
+
+    assert display.state == "syncing_transcript"
+    assert display.headline == "Syncing"
+    assert display.detail == "Waiting for transcript"
+    assert display.phase_label == "Syncing transcript"
+    assert display.tone == "active"
+    assert display.is_idle is False
+
+
+def test_managed_idle_after_user_prompt_keeps_idle_when_preview_is_visible():
+    now = datetime(2026, 4, 26, 12, 0, tzinfo=timezone.utc)
+    display = build_session_runtime_display(
+        runtime_view=_runtime_view(
+            signal_tier="phase_signal",
+            runtime_phase="idle",
+            runtime_source="managed_local_transport",
+            status="idle",
+            presence_state="idle",
+            presence_updated_at=now,
+            last_live_at=now,
+            confidence="live",
+            display_phase="Idle",
+        ),
+        capabilities=_capabilities(managed=True),
+        ended_at=None,
+        last_activity_at=now - timedelta(milliseconds=500),
+        user_messages=2,
+        assistant_messages=1,
+        has_visible_transcript_preview=True,
+        now=now,
+    )
+
+    assert display.state == "idle"
+    assert display.headline == "Idle"
+    assert display.phase_label == "Idle"
 
 
 def test_stale_progress_source_is_inactive():

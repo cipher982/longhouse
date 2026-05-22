@@ -606,6 +606,52 @@ describe("resolveSessionRuntimeState", () => {
     });
   });
 
+  it("lets server display show transcript sync while raw facts still report idle", () => {
+    const runtime = resolveSessionRuntimeState(
+      makeSession({
+        status: "idle",
+        presence_state: "idle",
+        runtime_display: makeRuntimeDisplay({
+          state: "syncing_transcript",
+          tone: "active",
+          headline: "Syncing",
+          detail: "Waiting for transcript",
+          phase_label: "Syncing transcript",
+          is_idle: false,
+          is_executing: false,
+          is_live: false,
+          control_path: "managed",
+          activity_recency: "live",
+        }),
+        runtime_facts: makeRuntimeFacts({
+          control_path: "managed",
+          phase: {
+            kind: "idle",
+            tool: null,
+            source: "claude_hook",
+            observed_at: "2026-03-21T12:00:05Z",
+            expires_at: "2026-03-21T12:10:05Z",
+          },
+          lifecycle: {
+            state: "open",
+            reason: "phase_observed",
+            observed_at: "2026-03-21T12:00:05Z",
+          },
+        }),
+      }),
+    );
+
+    expect(runtime.factStatus).toBeNull();
+    expect(runtime.displayPhase).toBe("Syncing transcript");
+    expect(runtime.tone).toBe("active");
+    expect(runtime.isIdle).toBe(false);
+    expect(resolveSessionStatusLabel(runtime)).toBe("Syncing");
+    expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
+      headline: "Syncing",
+      detail: "Waiting for transcript",
+    });
+  });
+
   it("maps runtime fact phases to visual tones without timestamp inference", () => {
     const cases: Array<[string, string, string]> = [
       ["thinking", "Thinking", "thinking"],

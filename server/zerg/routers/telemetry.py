@@ -46,6 +46,7 @@ from zerg.models.agents import SessionObservation
 from zerg.services.session_observations import OBS_KIND_CLIENT_RENDER
 from zerg.services.session_observations import SOURCE_DOMAIN_CLIENT
 from zerg.services.session_observations import record_session_observation
+from zerg.services.write_serializer import get_write_serializer
 
 
 def canary_token_matches(request: Request) -> bool:
@@ -185,7 +186,20 @@ def _persist_render_beacon(db: Session, beacon: RenderBeacon, *, latency_ms: int
         observed_at=observed_at,
         payload=payload,
     )
-    db.commit()
+
+
+async def _persist_render_beacons(
+    db: Session,
+    beacons: list[tuple[RenderBeacon, int]],
+) -> None:
+    if not beacons:
+        return
+
+    def _do(write_db: Session) -> None:
+        for beacon, latency_ms in beacons:
+            _persist_render_beacon(write_db, beacon, latency_ms=latency_ms)
+
+    await get_write_serializer().execute_or_direct(_do, db, label="client-render")
 
 
 @beacon_router.post("/client-render", include_in_schema=False)
@@ -211,6 +225,7 @@ async def client_render_beacon(
     accepted = 0
     dropped_skew = 0
     dropped_range = 0
+    persistable: list[tuple[RenderBeacon, int]] = []
 
     for b in beacons:
         # Drop samples with implausible client clocks — they poison percentiles.
@@ -242,12 +257,14 @@ async def client_render_beacon(
             event_end_to_end_latency_seconds.labels(surface=b.surface, managed=managed_label).observe(latency_s)
             event_render_beacons_total.labels(surface=b.surface, outcome="ok").inc()
             _samples.append(_Sample(now_mono, b.surface, b.managed, latency_s, b.session_id, b.event_id))
-        try:
-            _persist_render_beacon(db, b, latency_ms=int(round(latency_ms)))
-        except Exception:
-            # Metrics must not depend on forensic persistence.
-            pass
+        persistable.append((b, int(round(latency_ms))))
         accepted += 1
+
+    try:
+        await _persist_render_beacons(db, persistable)
+    except Exception:
+        # Metrics must not depend on forensic persistence.
+        pass
 
     return {"accepted": accepted, "dropped_skew": dropped_skew, "dropped_range": dropped_range}
 

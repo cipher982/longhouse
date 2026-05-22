@@ -3,15 +3,29 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
+import os
+from datetime import datetime
+from datetime import timezone
 from unittest.mock import patch
 from uuid import uuid4
 
+from cryptography.fernet import Fernet
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
+os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
+os.environ.setdefault("JWT_SECRET", "test-jwt-secret-1234")
+os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-1234")
+
 import zerg.dependencies.auth as _auth_deps  # noqa: F401 — triggers settings init
 import zerg.routers.timeline as timeline_mod
-from zerg.database import make_engine, make_sessionmaker
 from zerg.database import Base
-from zerg.models.agents import AgentEvent, AgentSession, SessionRuntimeState
+from zerg.database import make_engine
+from zerg.database import make_sessionmaker
+from zerg.models.agents import AgentEvent
+from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionObservation
+from zerg.models.agents import SessionRuntimeState
 
 
 async def _noop_coro() -> None:
@@ -169,6 +183,80 @@ def test_workspace_stream_detects_new_event(tmp_path):
 
 
 @patch.object(timeline_mod, "_wait_for_session_change", lambda _sub: _noop_coro())
+def test_workspace_stream_detects_live_bridge_preview_observation(tmp_path):
+    """Pure live preview deltas should advance the detail stream signature."""
+    from zerg.services.session_observations import OBS_KIND_BRIDGE_TRANSCRIPT_DELTA
+
+    sf = _make_db(tmp_path)
+    now = datetime.now(timezone.utc)
+
+    with sf() as db:
+        session = AgentSession(
+            provider="codex",
+            environment="production",
+            project="test",
+            started_at=now,
+            user_messages=1,
+            assistant_messages=0,
+        )
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+        session_id = session.id
+
+    class _MutatePreview:
+        def __init__(self):
+            self._checks = 0
+
+        async def is_disconnected(self) -> bool:
+            self._checks += 1
+            if self._checks == 2:
+                with sf() as db:
+                    db.add(
+                        SessionObservation(
+                            observation_id=f"runtime:codex_bridge_live:preview:{session_id}:1",
+                            session_id=session_id,
+                            runtime_key=f"codex:{session_id}",
+                            provider="codex",
+                            source_domain="runtime",
+                            source="codex_bridge_live",
+                            kind=OBS_KIND_BRIDGE_TRANSCRIPT_DELTA,
+                            observed_at=now,
+                            received_at=now,
+                            source_cursor="progress_signal:preview-1",
+                            payload_json=json.dumps(
+                                {
+                                    "kind": "progress_signal",
+                                    "payload": {
+                                        "progress_kind": "bridge_live_transcript_delta",
+                                        "thread_id": "thread-1",
+                                        "turn_id": "turn-1",
+                                        "seq": 1,
+                                        "live_text": "hello live",
+                                    },
+                                }
+                            ),
+                        )
+                    )
+                    db.commit()
+            return self._checks > 3
+
+    async def _run():
+        request = _MutatePreview()
+        events: list[dict] = []
+        async for event in timeline_mod._session_workspace_stream(
+            request, session_factory=sf, session_id=session_id, skip_initial=False,
+        ):
+            events.append(event)
+        return events
+
+    events = asyncio.run(_run())
+    grouped = _collect_stream_events(events)
+
+    assert len(grouped.get("workspace_changed", [])) == 2
+
+
+@patch.object(timeline_mod, "_wait_for_session_change", lambda _sub: _noop_coro())
 def test_workspace_stream_detects_presence_change(tmp_path):
     """Stream should detect presence mutations."""
     sf = _make_db(tmp_path)
@@ -279,6 +367,82 @@ def test_workspace_stream_emits_pubsub_seq_and_id(tmp_path):
     assert changed.get("pubsub_seq") == 0
     changed_events = [e for e in events if e["event"] == "workspace_changed"]
     assert changed_events[0].get("id") is None
+
+
+def test_workspace_stream_wake_includes_fanout_metadata(tmp_path):
+    """Real pubsub wake should carry the shared downlink timing fields."""
+    from zerg.services.session_pubsub import get_pubsub
+    from zerg.services.session_pubsub import reset_pubsub_for_test
+    from zerg.services.session_pubsub import topic_session
+
+    reset_pubsub_for_test()
+    sf = _make_db(tmp_path, name="workspace_stream_wake.db")
+    now = datetime.now(timezone.utc)
+
+    with sf() as db:
+        session = AgentSession(
+            provider="claude",
+            environment="production",
+            project="test",
+            started_at=now,
+            user_messages=1,
+            assistant_messages=1,
+        )
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+        session_id = session.id
+
+    async def _run():
+        request = _DisconnectAfterNCycles(4)
+        events: list[dict] = []
+
+        async def mutate_and_publish():
+            await asyncio.sleep(0.01)
+            with sf() as db:
+                event = AgentEvent(
+                    session_id=str(session_id),
+                    role="assistant",
+                    content_text="Hello from the shared downlink",
+                    timestamp=now,
+                )
+                db.add(event)
+                db.commit()
+                db.refresh(event)
+
+                get_pubsub().publish(
+                    topic_session(str(session_id)),
+                    {
+                        "kind": "ingest",
+                        "session_id": str(session_id),
+                        "latest_event_id": event.id,
+                        "server_fanout_at_ms": 1_779_220_000_150,
+                        "ship_trace_id": "trace-1",
+                    },
+                )
+
+        publish_task = asyncio.create_task(mutate_and_publish())
+        async for event in timeline_mod._session_workspace_stream(
+            request,
+            session_factory=sf,
+            session_id=session_id,
+            skip_initial=True,
+        ):
+            events.append(event)
+            if event.get("event") == "workspace_changed":
+                break
+        await publish_task
+        return events
+
+    events = asyncio.run(_run())
+    changed_events = [event for event in events if event["event"] == "workspace_changed"]
+
+    assert len(changed_events) == 1
+    assert changed_events[0]["id"] == "1"
+    changed = json.loads(changed_events[0]["data"])
+    assert changed["latest_event_id"] > 0
+    assert changed["pubsub_seq"] == 1
+    assert changed["server_fanout_at_ms"] == 1_779_220_000_150
 
 
 @patch.object(timeline_mod, "_wait_for_session_change", lambda _sub: _noop_coro())

@@ -189,8 +189,12 @@ struct LonghouseAPI: Sendable {
     }
 
     func sessionWorkspace(id: String, limit: Int = 200, branchMode: String = "head") async throws -> SessionWorkspaceResponse {
-        var request = URLRequest(url: Self.sessionWorkspaceURL(baseURL: baseURL, id: id, limit: limit, branchMode: branchMode))
+        var request = URLRequest(
+            url: Self.sessionWorkspaceURL(baseURL: baseURL, id: id, limit: limit, branchMode: branchMode),
+            cachePolicy: .reloadIgnoringLocalCacheData
+        )
         request.addValue("application/json", forHTTPHeaderField: "Accept")
+        request.addValue("no-cache", forHTTPHeaderField: "Cache-Control")
 
         let (data, httpResponse) = try await data(for: request)
         guard httpResponse.statusCode == 200 else {
@@ -214,9 +218,11 @@ struct LonghouseAPI: Sendable {
                 offset: offset,
                 branchMode: branchMode,
                 snapshotEventId: snapshotEventId
-            )
+            ),
+            cachePolicy: .reloadIgnoringLocalCacheData
         )
         request.addValue("application/json", forHTTPHeaderField: "Accept")
+        request.addValue("no-cache", forHTTPHeaderField: "Cache-Control")
 
         let requestStartedAt = Date()
         Self.logger.info("mobile-tail request started session=\(id, privacy: .public) limit=\(limit, privacy: .public) offset=\(offset, privacy: .public)")
