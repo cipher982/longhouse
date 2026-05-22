@@ -12,6 +12,8 @@ from zerg.services.session_views import SessionTurnTimingResponse
 from zerg.utils.time import UTCBaseModel
 
 MachineHealthStatus = Literal["healthy", "degraded", "offline", "broken"]
+ProductHealthCheckVerdict = Literal["ok", "degraded", "failing", "unknown"]
+ProductHealthCheckCoverage = Literal["full", "partial", "none"]
 
 
 class MachineHealthItemResponse(UTCBaseModel):
@@ -163,6 +165,68 @@ class ObservabilityOverviewResponse(UTCBaseModel):
         ...,
         description="Total slow turns in the current filtered turn slice before slow_turn_limit truncation.",
     )
+
+
+class ProductHealthCheckThresholdsResponse(UTCBaseModel):
+    render_p95_ms_ok: int
+    render_p95_ms_failing: int
+
+
+class ProductHealthCheckEvidenceRefResponse(UTCBaseModel):
+    kind: str
+    id: str
+    reason: str
+    latency_ms: int | None = None
+
+
+class ProductHealthCheckLivePreviewDimensionResponse(UTCBaseModel):
+    provider: str | None = None
+    surface: str | None = None
+    managed: bool | None = None
+
+
+class ProductHealthCheckLivePreviewSignalsResponse(UTCBaseModel):
+    events: int = 0
+    sessions: int = 0
+    render_p50_ms: int | None = None
+    render_p95_ms: int | None = None
+    render_max_ms: int | None = None
+    ios_render_duration_events: int = 0
+    ios_render_duration_p50_ms: int | None = None
+    ios_render_duration_p95_ms: int | None = None
+    ios_render_duration_max_ms: int | None = None
+
+
+class ProductHealthCheckLivePreviewCellResponse(UTCBaseModel):
+    dimension: ProductHealthCheckLivePreviewDimensionResponse
+    applicable: bool
+    coverage: ProductHealthCheckCoverage
+    verdict: ProductHealthCheckVerdict
+    truncated: bool = False
+    signals: ProductHealthCheckLivePreviewSignalsResponse
+    thresholds: ProductHealthCheckThresholdsResponse
+    missing: list[str]
+    evidence_refs: list[ProductHealthCheckEvidenceRefResponse]
+
+
+class ProductHealthCheckSummaryResponse(UTCBaseModel):
+    check: str
+    verdict: ProductHealthCheckVerdict
+    coverage: ProductHealthCheckCoverage
+    window: str
+    generated_at: datetime
+    headline: str
+
+
+class ProductHealthCheckListResponse(UTCBaseModel):
+    checks: list[ProductHealthCheckSummaryResponse]
+
+
+class ProductHealthCheckLivePreviewResponse(UTCBaseModel):
+    check: Literal["live_preview"]
+    window: str
+    generated_at: datetime
+    cells: list[ProductHealthCheckLivePreviewCellResponse]
 
 
 RealtimePropagationStageStatus = Literal["measured", "missing"]

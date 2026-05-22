@@ -369,6 +369,7 @@ def test_beacon_persists_ios_webkit_diagnostics():
         "payload_byte_size": 4096,
         "row_count": 18,
         "latest_item_id": "assistant:123",
+        "render_duration_ms": 37,
         "render_sequence": 7,
         "js_failure_count": 0,
         "should_stick_to_bottom": True,

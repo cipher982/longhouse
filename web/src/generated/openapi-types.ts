@@ -2127,6 +2127,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/observability/checks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Product Health Checks */
+        get: operations["list_product_health_checks_observability_checks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/observability/checks/live_preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Live Preview Health Check */
+        get: operations["read_live_preview_health_check_observability_checks_live_preview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/observability/sessions/{session_id}/latency": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Session Realtime Latency */
+        get: operations["read_session_realtime_latency_observability_sessions__session_id__latency_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/observability/machines/health": {
         parameters: {
             query?: never;
@@ -6974,6 +7025,136 @@ export interface components {
              */
             source?: string | null;
         };
+        /** ProductHealthCheckEvidenceRefResponse */
+        ProductHealthCheckEvidenceRefResponse: {
+            /** Kind */
+            kind: string;
+            /** Id */
+            id: string;
+            /** Reason */
+            reason: string;
+            /** Latency Ms */
+            latency_ms?: number | null;
+        };
+        /** ProductHealthCheckListResponse */
+        ProductHealthCheckListResponse: {
+            /** Checks */
+            checks: components["schemas"]["ProductHealthCheckSummaryResponse"][];
+        };
+        /** ProductHealthCheckLivePreviewCellResponse */
+        ProductHealthCheckLivePreviewCellResponse: {
+            dimension: components["schemas"]["ProductHealthCheckLivePreviewDimensionResponse"];
+            /** Applicable */
+            applicable: boolean;
+            /**
+             * Coverage
+             * @enum {string}
+             */
+            coverage: "full" | "partial" | "none";
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "ok" | "degraded" | "failing" | "unknown";
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
+            signals: components["schemas"]["ProductHealthCheckLivePreviewSignalsResponse"];
+            thresholds: components["schemas"]["ProductHealthCheckThresholdsResponse"];
+            /** Missing */
+            missing: string[];
+            /** Evidence Refs */
+            evidence_refs: components["schemas"]["ProductHealthCheckEvidenceRefResponse"][];
+        };
+        /** ProductHealthCheckLivePreviewDimensionResponse */
+        ProductHealthCheckLivePreviewDimensionResponse: {
+            /** Provider */
+            provider?: string | null;
+            /** Surface */
+            surface?: string | null;
+            /** Managed */
+            managed?: boolean | null;
+        };
+        /** ProductHealthCheckLivePreviewResponse */
+        ProductHealthCheckLivePreviewResponse: {
+            /**
+             * Check
+             * @constant
+             */
+            check: "live_preview";
+            /** Window */
+            window: string;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Cells */
+            cells: components["schemas"]["ProductHealthCheckLivePreviewCellResponse"][];
+        };
+        /** ProductHealthCheckLivePreviewSignalsResponse */
+        ProductHealthCheckLivePreviewSignalsResponse: {
+            /**
+             * Events
+             * @default 0
+             */
+            events: number;
+            /**
+             * Sessions
+             * @default 0
+             */
+            sessions: number;
+            /** Render P50 Ms */
+            render_p50_ms?: number | null;
+            /** Render P95 Ms */
+            render_p95_ms?: number | null;
+            /** Render Max Ms */
+            render_max_ms?: number | null;
+            /**
+             * Ios Render Duration Events
+             * @default 0
+             */
+            ios_render_duration_events: number;
+            /** Ios Render Duration P50 Ms */
+            ios_render_duration_p50_ms?: number | null;
+            /** Ios Render Duration P95 Ms */
+            ios_render_duration_p95_ms?: number | null;
+            /** Ios Render Duration Max Ms */
+            ios_render_duration_max_ms?: number | null;
+        };
+        /** ProductHealthCheckSummaryResponse */
+        ProductHealthCheckSummaryResponse: {
+            /** Check */
+            check: string;
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "ok" | "degraded" | "failing" | "unknown";
+            /**
+             * Coverage
+             * @enum {string}
+             */
+            coverage: "full" | "partial" | "none";
+            /** Window */
+            window: string;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Headline */
+            headline: string;
+        };
+        /** ProductHealthCheckThresholdsResponse */
+        ProductHealthCheckThresholdsResponse: {
+            /** Render P95 Ms Ok */
+            render_p95_ms_ok: number;
+            /** Render P95 Ms Failing */
+            render_p95_ms_failing: number;
+        };
         /** QueuedInputSummary */
         QueuedInputSummary: {
             /** Id */
@@ -6988,6 +7169,259 @@ export interface components {
             last_error?: string | null;
             /** Created At */
             created_at?: string | null;
+        };
+        /** RealtimePropagationBottleneckResponse */
+        RealtimePropagationBottleneckResponse: {
+            /** Stage Key */
+            stage_key: string;
+            /** Label */
+            label: string;
+            /** Duration Ms */
+            duration_ms: number;
+        };
+        /** RealtimePropagationClientRenderResponse */
+        RealtimePropagationClientRenderResponse: {
+            /** Surface */
+            surface: string;
+            /** Event Id */
+            event_id?: string | null;
+            /** Matched By */
+            matched_by: string;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /**
+             * Received At
+             * Format: date-time
+             */
+            received_at: string;
+            /** Emitted At Ms */
+            emitted_at_ms?: number | null;
+            /** Rendered At Ms */
+            rendered_at_ms?: number | null;
+            /** Clock Skew Ms */
+            clock_skew_ms?: number | null;
+            /** Server Fanout At Ms */
+            server_fanout_at_ms?: number | null;
+            /** Client Received At Ms */
+            client_received_at_ms?: number | null;
+            /** Pubsub Seq */
+            pubsub_seq?: number | null;
+            /** Latency Ms */
+            latency_ms?: number | null;
+            /** Webkit Stage */
+            webkit_stage?: string | null;
+            /** Latest Item Id */
+            latest_item_id?: string | null;
+        };
+        /** RealtimePropagationEventResponse */
+        RealtimePropagationEventResponse: {
+            /** Event Id */
+            event_id: number;
+            /** Role */
+            role: string;
+            /**
+             * Timestamp
+             * Format: date-time
+             */
+            timestamp: string;
+            /** Source Path */
+            source_path?: string | null;
+            /** Source Offset */
+            source_offset?: number | null;
+            /** Event Uuid */
+            event_uuid?: string | null;
+            /** Event Origin */
+            event_origin?: string | null;
+            provider_observation?: components["schemas"]["RealtimePropagationObservationRefResponse"] | null;
+            ship_trace?: components["schemas"]["RealtimePropagationShipTraceResponse"] | null;
+            server_fanout?: components["schemas"]["RealtimePropagationServerFanoutResponse"] | null;
+            /** Client Renders */
+            client_renders: components["schemas"]["RealtimePropagationClientRenderResponse"][];
+            first_client_render?: components["schemas"]["RealtimePropagationClientRenderResponse"] | null;
+            /** Total Provider To First Render Ms */
+            total_provider_to_first_render_ms?: number | null;
+            /** Measured Total Ms */
+            measured_total_ms?: number | null;
+            /** Unaccounted Ms */
+            unaccounted_ms?: number | null;
+            /** Client Clock Skew Ms */
+            client_clock_skew_ms?: number | null;
+            bottleneck?: components["schemas"]["RealtimePropagationBottleneckResponse"] | null;
+            /** Stages */
+            stages: components["schemas"]["RealtimePropagationStageResponse"][];
+            /** Gaps */
+            gaps: string[];
+        };
+        /** RealtimePropagationObservationRefResponse */
+        RealtimePropagationObservationRefResponse: {
+            /** Observation Id */
+            observation_id: string;
+            /** Source */
+            source: string;
+            /** Kind */
+            kind: string;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /**
+             * Received At
+             * Format: date-time
+             */
+            received_at: string;
+            /** Source Offset */
+            source_offset?: number | null;
+            /** Source Cursor */
+            source_cursor?: string | null;
+        };
+        /** RealtimePropagationServerFanoutResponse */
+        RealtimePropagationServerFanoutResponse: {
+            /** Observation Id */
+            observation_id: string;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /**
+             * Received At
+             * Format: date-time
+             */
+            received_at: string;
+            /** Latest Event Id */
+            latest_event_id?: number | null;
+            /** Server Fanout At Ms */
+            server_fanout_at_ms?: number | null;
+            /** Session Pubsub Seq */
+            session_pubsub_seq?: number | null;
+            /** Timeline Pubsub Seq */
+            timeline_pubsub_seq?: number | null;
+            /** Ship Trace Id */
+            ship_trace_id?: string | null;
+        };
+        /** RealtimePropagationSessionReportResponse */
+        RealtimePropagationSessionReportResponse: {
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            session: components["schemas"]["RealtimePropagationSessionResponse"];
+            /** Event Limit */
+            event_limit: number;
+            /** Surface */
+            surface?: string | null;
+            /** Events */
+            events: components["schemas"]["RealtimePropagationEventResponse"][];
+            /** Gaps */
+            gaps: string[];
+            /** Known Unimplemented Probes */
+            known_unimplemented_probes: string[];
+        };
+        /** RealtimePropagationSessionResponse */
+        RealtimePropagationSessionResponse: {
+            /** Session Id */
+            session_id: string;
+            /** Provider */
+            provider: string;
+            /** Project */
+            project?: string | null;
+            /** Device Id */
+            device_id?: string | null;
+            /** Device Name */
+            device_name?: string | null;
+            /** Managed Transport */
+            managed_transport?: string | null;
+            /** Execution Home */
+            execution_home?: string | null;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Last Activity At */
+            last_activity_at?: string | null;
+        };
+        /** RealtimePropagationShipTraceResponse */
+        RealtimePropagationShipTraceResponse: {
+            /** Trace Id */
+            trace_id: string;
+            /** Work Context */
+            work_context?: string | null;
+            /** Observation Source */
+            observation_source?: string | null;
+            /** Event Count */
+            event_count?: number | null;
+            /** Offset */
+            offset?: number | null;
+            /** New Offset */
+            new_offset?: number | null;
+            /** Range Bytes */
+            range_bytes?: number | null;
+            /** Observed At */
+            observed_at?: string | null;
+            /** Enqueued At */
+            enqueued_at?: string | null;
+            /** Job Started At */
+            job_started_at?: string | null;
+            /** Http Send Started At */
+            http_send_started_at?: string | null;
+            /** Server Handler Entered At */
+            server_handler_entered_at?: string | null;
+            /** Server Store Returned At */
+            server_store_returned_at?: string | null;
+            /** Observation To Enqueue Ms */
+            observation_to_enqueue_ms?: number | null;
+            /** Enqueue To Job Ms */
+            enqueue_to_job_ms?: number | null;
+            /** Job To Http Ms */
+            job_to_http_ms?: number | null;
+            /** Server Store Write Ms */
+            server_store_write_ms?: number | null;
+            /**
+             * Raw
+             * @description Trace timing metadata only. Transcript payload/content is not included.
+             */
+            raw?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Raw Dropped Keys
+             * @description Count of ship_trace keys omitted by the safe metadata allowlist.
+             * @default 0
+             */
+            raw_dropped_keys: number;
+        };
+        /** RealtimePropagationStageResponse */
+        RealtimePropagationStageResponse: {
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "measured" | "missing";
+            /**
+             * Confidence
+             * @enum {string}
+             */
+            confidence: "observed" | "derived" | "missing";
+            /** Started At */
+            started_at?: string | null;
+            /** Ended At */
+            ended_at?: string | null;
+            /** Duration Ms */
+            duration_ms?: number | null;
+            /** Source */
+            source?: string | null;
+            /** Note */
+            note?: string | null;
         };
         /**
          * RecallMatch
@@ -13755,6 +14189,118 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TopAutomationsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_product_health_checks_observability_checks_get: {
+        parameters: {
+            query?: {
+                /** @description Recent observation window such as 15m, 1h, or 7d */
+                window?: string;
+                /** @description Filter live-preview observations by provider */
+                provider?: string | null;
+                /** @description Filter live-preview observations by client surface */
+                surface?: string | null;
+                /** @description Filter live-preview observations by managed-session flag */
+                managed?: boolean | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductHealthCheckListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_live_preview_health_check_observability_checks_live_preview_get: {
+        parameters: {
+            query?: {
+                /** @description Recent observation window such as 15m, 1h, or 7d */
+                window?: string;
+                /** @description Filter observations by provider */
+                provider?: string | null;
+                /** @description Filter observations by client surface */
+                surface?: string | null;
+                /** @description Filter observations by managed-session flag */
+                managed?: boolean | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductHealthCheckLivePreviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_session_realtime_latency_observability_sessions__session_id__latency_get: {
+        parameters: {
+            query?: {
+                /** @description Recent durable transcript events to inspect */
+                event_limit?: number;
+                /** @description Optional client surface filter such as web or ios */
+                surface?: string | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RealtimePropagationSessionReportResponse"];
                 };
             };
             /** @description Validation Error */
