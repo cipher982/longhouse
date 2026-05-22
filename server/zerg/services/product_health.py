@@ -21,12 +21,17 @@ from zerg.schemas.observability import ProductHealthCheckLivePreviewResponse
 from zerg.schemas.observability import ProductHealthCheckLivePreviewSignalsResponse
 from zerg.schemas.observability import ProductHealthCheckSummaryResponse
 from zerg.schemas.observability import ProductHealthCheckThresholdsResponse
+from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS
+from zerg.services.agent_heartbeat_health import list_machine_transport_health
 from zerg.services.session_observations import OBS_KIND_CLIENT_RENDER
 from zerg.services.session_observations import SOURCE_DOMAIN_CLIENT
 from zerg.utils.time import normalize_utc
 from zerg.utils.time import utc_now
 
+MACHINE_CONNECTED_CHECK_ID = "machine_connected"
+RENDER_FRESHNESS_CHECK_ID = "render_freshness"
 LIVE_PREVIEW_CHECK_ID = "live_preview"
+RENDER_FRESHNESS_OK_SECONDS = 5 * 60
 LIVE_PREVIEW_RENDER_P95_OK_MS = 500
 LIVE_PREVIEW_RENDER_P95_FAILING_MS = 1_500
 LIVE_PREVIEW_EVIDENCE_LIMIT = 5
@@ -49,6 +54,7 @@ class _RenderObservation:
     provider: str | None
     surface: str | None
     managed: bool | None
+    observed_at: datetime | None
     latency_ms: int | None
     ios_render_duration_ms: int | None
 
@@ -74,15 +80,33 @@ def build_product_health_checks(
     surface: str | None = None,
     managed: bool | None = None,
 ) -> ProductHealthCheckListResponse:
+    resolved_window = _parse_window(window)
+    generated_at = utc_now()
+    since = generated_at - resolved_window.delta
+    render_observations = _load_render_observations(
+        db,
+        since=since,
+        provider=provider,
+        surface=surface,
+        managed=managed,
+    )
     live_preview = build_live_preview_check(
         db,
-        window=window,
+        resolved_window=resolved_window,
+        generated_at=generated_at,
+        observations=render_observations,
         provider=provider,
         surface=surface,
         managed=managed,
     )
     return ProductHealthCheckListResponse(
         checks=[
+            _build_machine_connected_summary(db, window=resolved_window, generated_at=generated_at),
+            _build_render_freshness_summary(
+                render_observations.rows,
+                window=resolved_window,
+                generated_at=generated_at,
+            ),
             _summarize_live_preview_check(live_preview),
         ]
     )
@@ -92,20 +116,24 @@ def build_live_preview_check(
     db: Session,
     *,
     window: str = "15m",
+    resolved_window: _Window | None = None,
+    generated_at: datetime | None = None,
+    observations: _RenderObservationSet | None = None,
     provider: str | None = None,
     surface: str | None = None,
     managed: bool | None = None,
 ) -> ProductHealthCheckLivePreviewResponse:
-    resolved_window = _parse_window(window)
-    generated_at = utc_now()
-    since = generated_at - resolved_window.delta
-    observations = _load_render_observations(
-        db,
-        since=since,
-        provider=provider,
-        surface=surface,
-        managed=managed,
-    )
+    resolved_window = resolved_window or _parse_window(window)
+    generated_at = generated_at or utc_now()
+    if observations is None:
+        since = generated_at - resolved_window.delta
+        observations = _load_render_observations(
+            db,
+            since=since,
+            provider=provider,
+            surface=surface,
+            managed=managed,
+        )
     cells = _build_live_preview_cells(
         observations.rows,
         truncated=observations.truncated,
@@ -163,6 +191,7 @@ def _load_render_observations(
                 provider=row.provider or None,
                 surface=row_surface,
                 managed=row_managed,
+                observed_at=normalize_utc(row.observed_at),
                 latency_ms=_int_or_none(payload.get("latency_ms")),
                 ios_render_duration_ms=_int_or_none(webkit.get("render_duration_ms")),
             )
@@ -326,6 +355,99 @@ def _live_preview_thresholds() -> ProductHealthCheckThresholdsResponse:
     )
 
 
+def _build_machine_connected_summary(
+    db: Session,
+    *,
+    window: _Window,
+    generated_at: datetime,
+) -> ProductHealthCheckSummaryResponse:
+    window_seconds = max(1, int(window.delta.total_seconds()))
+    machines, total = list_machine_transport_health(
+        db,
+        stale_after_seconds=DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS,
+        recent_within_seconds=window_seconds,
+        limit=10_000,
+    )
+    if total == 0:
+        return ProductHealthCheckSummaryResponse(
+            check=MACHINE_CONNECTED_CHECK_ID,
+            verdict="unknown",
+            coverage="none",
+            window=window.label,
+            generated_at=generated_at,
+            headline=f"No machine heartbeats in the last {window.label}.",
+        )
+
+    healthy = sum(1 for machine in machines if machine.status == "healthy")
+    broken = sum(1 for machine in machines if machine.status == "broken")
+    unhealthy = total - healthy
+    if healthy == total:
+        verdict = "ok"
+        headline = _machine_connected_headline(total=total, healthy=healthy, unhealthy=0)
+    elif healthy == 0 and broken == total:
+        verdict = "failing"
+        headline = f"All {total} recent machine connection{'' if total == 1 else 's'} are broken."
+    else:
+        # Product-level health should flag partial machine impact without
+        # declaring the whole runtime unusable while at least one machine is healthy.
+        verdict = "degraded"
+        headline = _machine_connected_headline(total=total, healthy=healthy, unhealthy=unhealthy)
+
+    return ProductHealthCheckSummaryResponse(
+        check=MACHINE_CONNECTED_CHECK_ID,
+        verdict=verdict,
+        coverage="full",
+        window=window.label,
+        generated_at=generated_at,
+        headline=headline,
+    )
+
+
+def _machine_connected_headline(*, total: int, healthy: int, unhealthy: int) -> str:
+    machine_label = "machine" if total == 1 else "machines"
+    if unhealthy == 0:
+        return f"{healthy} recent {machine_label} connected and healthy."
+    attention = "needs" if unhealthy == 1 else "need"
+    return f"{healthy} of {total} recent {machine_label} healthy; {unhealthy} {attention} attention."
+
+
+def _build_render_freshness_summary(
+    observations: list[_RenderObservation],
+    *,
+    window: _Window,
+    generated_at: datetime,
+) -> ProductHealthCheckSummaryResponse:
+    latest = max(
+        (observation.observed_at for observation in observations if observation.observed_at is not None),
+        default=None,
+    )
+    if latest is None:
+        return ProductHealthCheckSummaryResponse(
+            check=RENDER_FRESHNESS_CHECK_ID,
+            verdict="unknown",
+            coverage="none",
+            window=window.label,
+            generated_at=generated_at,
+            headline=f"Render freshness has no signal; no render beacons arrived in the last {window.label}.",
+        )
+
+    age_seconds = max(0, int((generated_at - latest).total_seconds()))
+    if age_seconds <= RENDER_FRESHNESS_OK_SECONDS:
+        verdict = "ok"
+        headline = f"Render beacons are fresh; latest arrived {_format_age(age_seconds)} ago."
+    else:
+        verdict = "degraded"
+        headline = f"Render beacons are stale; latest arrived {_format_age(age_seconds)} ago."
+    return ProductHealthCheckSummaryResponse(
+        check=RENDER_FRESHNESS_CHECK_ID,
+        verdict=verdict,
+        coverage="full",
+        window=window.label,
+        generated_at=generated_at,
+        headline=headline,
+    )
+
+
 def _summarize_live_preview_check(
     detail: ProductHealthCheckLivePreviewResponse,
 ) -> ProductHealthCheckSummaryResponse:
@@ -402,6 +524,16 @@ def _parse_payload(raw: str | None) -> dict[str, Any]:
     except (TypeError, ValueError):
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def _format_age(seconds: int) -> str:
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m"
+    hours = minutes // 60
+    return f"{hours}h"
 
 
 def _str_or_none(value: Any) -> str | None:

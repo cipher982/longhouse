@@ -196,6 +196,22 @@ function buildProductChecks() {
   return {
     checks: [
       {
+        check: "machine_connected",
+        verdict: "ok",
+        coverage: "full",
+        window: "15m",
+        generated_at: "2026-04-23T21:00:00Z",
+        headline: "1 recent machine connected and healthy.",
+      },
+      {
+        check: "render_freshness",
+        verdict: "ok",
+        coverage: "full",
+        window: "15m",
+        generated_at: "2026-04-23T21:00:00Z",
+        headline: "Render beacons are fresh; latest arrived 10s ago.",
+      },
+      {
         check: "live_preview",
         verdict: "ok",
         coverage: "full",
@@ -262,9 +278,13 @@ describe("ObservabilityPage", () => {
 
     expect(screen.getByText("What the current window says")).toBeInTheDocument();
     expect(screen.getByText("Can users work right now")).toBeInTheDocument();
+    expect(screen.getByText("Machine Connected")).toBeInTheDocument();
+    expect(screen.getByText("1 recent machine connected and healthy.")).toBeInTheDocument();
+    expect(screen.getByText("Render Freshness")).toBeInTheDocument();
+    expect(screen.getByText("Render beacons are fresh; latest arrived 10s ago.")).toBeInTheDocument();
     expect(screen.getByText("Live Preview")).toBeInTheDocument();
     expect(screen.getByText("Live preview latency is within threshold.")).toBeInTheDocument();
-    expect(screen.getByText("15m · full coverage")).toBeInTheDocument();
+    expect(screen.getAllByText("15m · full coverage")).toHaveLength(3);
     expect(screen.getByText("Which providers are contributing to the pain")).toBeInTheDocument();
     expect(screen.getByText("Shipping truth from the latest heartbeats")).toBeInTheDocument();
     expect(screen.getByText("The slowest managed turns in this window")).toBeInTheDocument();

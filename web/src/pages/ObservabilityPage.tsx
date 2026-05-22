@@ -183,6 +183,10 @@ function productCheckBadgeVariant(verdict: string): StatusBadgeVariant {
 
 function productCheckTitle(check: string): string {
   switch (check) {
+    case "machine_connected":
+      return "Machine Connected";
+    case "render_freshness":
+      return "Render Freshness";
     case "live_preview":
       return "Live Preview";
     default:
