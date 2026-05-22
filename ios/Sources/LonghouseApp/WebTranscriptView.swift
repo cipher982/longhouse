@@ -317,6 +317,7 @@ struct WebTranscriptView: UIViewRepresentable {
         fileprivate var isLoaded = false
         private var shouldStickToBottom = true
         private var userScrollInProgress = false
+        private var dragStartOffsetY: CGFloat?
         private var pendingPayload: WebTranscriptPreparedPayload?
         private var inFlightPayload: WebTranscriptPreparedPayload?
         private var lastPayload: String?
@@ -349,17 +350,28 @@ struct WebTranscriptView: UIViewRepresentable {
 
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
             userScrollInProgress = true
+            dragStartOffsetY = scrollView.contentOffset.y
             shouldStickToBottom = false
         }
 
         func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
             guard !decelerate else { return }
-            userScrollInProgress = false
-            updateStickiness(scrollView)
+            finishUserScroll(scrollView)
         }
 
         func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+            finishUserScroll(scrollView)
+        }
+
+        private func finishUserScroll(_ scrollView: UIScrollView) {
             userScrollInProgress = false
+            // 8pt absorbs tap jitter while preserving an intentional move into older messages.
+            let movedTowardOlderMessages = dragStartOffsetY.map { scrollView.contentOffset.y < $0 - 8 } ?? false
+            dragStartOffsetY = nil
+            guard !movedTowardOlderMessages else {
+                shouldStickToBottom = false
+                return
+            }
             updateStickiness(scrollView)
         }
 
