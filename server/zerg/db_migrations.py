@@ -8,6 +8,7 @@ drift. Expensive data rewrites live here and run explicitly via:
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Callable
 
@@ -355,6 +356,80 @@ def _apply_source_lines_rebuild(conn: Connection) -> str:
     return f"copied_rows={copied_rows}"
 
 
+_IDENTITY_CHILD_THREAD_TABLES: tuple[str, ...] = (
+    "events",
+    "source_lines",
+    "session_observations",
+    "session_turns",
+    "session_inputs",
+    "session_runtime_state",
+)
+
+
+def _has_null_value(conn: Connection, table_name: str, column_name: str) -> bool:
+    if not _table_exists(conn, table_name):
+        return False
+    if column_name not in _table_columns(conn, table_name):
+        return False
+    row = conn.execute(text(f"SELECT 1 FROM {table_name} WHERE {column_name} IS NULL LIMIT 1")).fetchone()
+    return row is not None
+
+
+def _needs_session_identity_kernel_backfill(conn: Connection) -> tuple[bool, str]:
+    if not _table_exists(conn, "sessions"):
+        return False, "sessions table missing"
+    for table_name in ("session_threads", "session_runs", "session_connections"):
+        if not _table_exists(conn, table_name):
+            return False, f"{table_name} table missing (run startup schema migration first)"
+
+    reasons: list[str] = []
+    if _has_null_value(conn, "sessions", "primary_thread_id"):
+        reasons.append("sessions.primary_thread_id has NULL rows")
+
+    for table_name in _IDENTITY_CHILD_THREAD_TABLES:
+        if _has_null_value(conn, table_name, "thread_id"):
+            reasons.append(f"{table_name}.thread_id has NULL rows")
+
+    if _has_null_value(conn, "session_runtime_state", "run_id"):
+        reasons.append("session_runtime_state.run_id has NULL rows")
+    if _has_null_value(conn, "session_turns", "run_id"):
+        reasons.append("session_turns.run_id has NULL rows")
+
+    threads_missing_run = conn.execute(
+        text(
+            """
+            SELECT 1
+            FROM session_threads t
+            LEFT JOIN session_runs r ON r.thread_id = t.id
+            WHERE t.is_primary = 1
+              AND r.id IS NULL
+            LIMIT 1
+            """
+        )
+    ).fetchone()
+    if threads_missing_run is not None:
+        reasons.append("primary session_threads missing session_runs")
+
+    if not reasons:
+        return False, "session identity kernel already backfilled"
+    return True, "; ".join(reasons)
+
+
+def _apply_session_identity_kernel_backfill(conn: Connection) -> str:
+    from sqlalchemy.orm import Session as OrmSession
+
+    from zerg.services.agents.kernel_backfill import backfill_session_identity_kernel
+
+    with OrmSession(
+        bind=conn,
+        expire_on_commit=False,
+        join_transaction_mode="create_savepoint",
+    ) as session:
+        report = backfill_session_identity_kernel(session)
+        session.commit()
+    return json.dumps(report, sort_keys=True)
+
+
 _HEAVY_MIGRATIONS: tuple[_HeavyMigration, ...] = (
     _HeavyMigration(
         name="20260304_events_branch_backfill",
@@ -367,5 +442,11 @@ _HEAVY_MIGRATIONS: tuple[_HeavyMigration, ...] = (
         description="Rebuild legacy source_lines schema for branch/revision-aware replay",
         needs=_needs_source_lines_rebuild,
         apply=_apply_source_lines_rebuild,
+    ),
+    _HeavyMigration(
+        name="20260521_session_identity_kernel_backfill",
+        description="Stamp legacy sessions/events/source lines/observations with identity-kernel thread/run ids",
+        needs=_needs_session_identity_kernel_backfill,
+        apply=_apply_session_identity_kernel_backfill,
     ),
 )
