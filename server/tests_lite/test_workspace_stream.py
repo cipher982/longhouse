@@ -624,3 +624,123 @@ def test_workspace_stream_skip_initial(tmp_path):
 
     assert "connected" in grouped
     assert len(grouped.get("workspace_changed", [])) >= 1
+
+
+def test_codex_live_preview_round_trip_post_to_sse(tmp_path):
+    """End-to-end: POST /agents/runtime/events/batch → SSE workspace_changed.
+
+    The earlier tests cover the two halves separately (handler→pubsub and
+    pubsub→SSE). This one exercises the seam: a real request hitting the route
+    publishes a preview that the SSE generator must surface with the same
+    cursor and text the bridge posted.
+    """
+    from types import SimpleNamespace
+
+    from fastapi.testclient import TestClient
+
+    from zerg.database import get_db
+    from zerg.dependencies.agents_auth import verify_agents_token
+    from zerg.services.session_pubsub import reset_pubsub_for_test
+
+    reset_pubsub_for_test()
+    sf = _make_db(tmp_path, name="workspace_stream_round_trip.db")
+    now = datetime.now(timezone.utc)
+
+    with sf() as db:
+        session = AgentSession(
+            provider="codex",
+            environment="production",
+            project="test",
+            started_at=now,
+            user_messages=1,
+            assistant_messages=0,
+        )
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+        session_id = session.id
+
+    from zerg.main import api_app
+
+    def override_db():
+        db = sf()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(
+        device_id="round-trip", id="token-1", owner_id=1
+    )
+
+    payload = {
+        "events": [
+            {
+                "runtime_key": f"codex:{session_id}",
+                "session_id": str(session_id),
+                "provider": "codex",
+                "device_id": "cinder",
+                "source": "codex_bridge_live",
+                "kind": "progress_signal",
+                "occurred_at": now.isoformat(),
+                "dedupe_key": f"bridge:live:{session_id}:thread-1:turn-1:7",
+                "payload": {
+                    "progress_kind": "bridge_live_transcript_delta",
+                    "managed_transport": "codex_app_server",
+                    "thread_id": "thread-1",
+                    "turn_id": "turn-1",
+                    "seq": 7,
+                    "method": "item/agentMessage/delta",
+                    "delta": "g",
+                    "live_text": "round trip working",
+                    "turn_completed": False,
+                },
+            }
+        ]
+    }
+
+    async def _run():
+        request = _DisconnectAfterNCycles(8)
+        events: list[dict] = []
+
+        async def fire_post():
+            await asyncio.sleep(0.01)
+            with TestClient(api_app) as client:
+                resp = await asyncio.to_thread(
+                    client.post,
+                    "/agents/runtime/events/batch",
+                    json=payload,
+                    headers={"X-Agents-Token": "dev"},
+                )
+            assert resp.status_code == 200, resp.text
+
+        post_task = asyncio.create_task(fire_post())
+        try:
+            async for event in timeline_mod._session_workspace_stream(
+                request,
+                session_factory=sf,
+                session_id=session_id,
+                skip_initial=True,
+            ):
+                events.append(event)
+                if event.get("event") == "workspace_changed":
+                    break
+        finally:
+            await post_task
+        return events
+
+    try:
+        events = asyncio.run(_run())
+    finally:
+        api_app.dependency_overrides.clear()
+
+    changed_events = [event for event in events if event["event"] == "workspace_changed"]
+    assert len(changed_events) == 1
+    changed = json.loads(changed_events[0]["data"])
+    preview = changed["transcript_preview"]
+    assert preview["text"] == "round trip working"
+    assert preview["event_origin"] == "live_provisional"
+    assert preview["is_provisional"] is True
+    assert preview["content_cursor"] == f"codex_bridge_live:{session_id}:thread-1:turn-1:7"
+    assert changed["latest_event_id"] == -7
