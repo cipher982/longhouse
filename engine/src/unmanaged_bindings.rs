@@ -3,7 +3,7 @@
 //! transcripts.
 //!
 //! The scanner answers one question per unmanaged session the user has open
-//! locally: *is a `claude` / `codex` / `gemini` process actually holding
+//! locally: *is a `claude` / `codex` / `antigravity` / legacy `gemini` process actually holding
 //! this transcript file right now?*
 //!
 //! That ground truth lets the Runtime Host mark a session's
@@ -16,8 +16,8 @@
 //!      roots via `discovery::discover_all_files`, filtered by mtime.
 //!   2. Enumerate candidate provider-CLI processes with
 //!      `ps -axo pid=,lstart=,command=`. Filter by command basename
-//!      (`claude`, `codex`, `gemini`, `opencode`) plus the stock Node-backed
-//!      launcher shapes (`node .../codex`, `node .../opencode`, etc.) — never
+//!      (`claude`, `codex`, `agy`, `gemini`, `opencode`) plus the stock Node-backed
+//!      launcher shapes (`node .../codex`, `node .../opencode`, etc.) - never
 //!      `longhouse-*` wrappers (those are managed sessions and get their
 //!      own lease surface).
 //!   3. For each candidate pid, ask `lsof -F n -p <pid>` which regular
@@ -270,10 +270,11 @@ fn is_provider_process(command: &str) -> Option<&'static str> {
     if script_basename.starts_with("longhouse-") {
         return None;
     }
-    // Claude and Gemini are not Node-launched on supported installs today.
+    // Claude and legacy Gemini are not Node-launched on supported installs today.
     match script_basename {
         "opencode" | "opencode.js" => Some("opencode"),
         "codex" | "codex.js" if matches!(basename, "node" | "nodejs") => Some("codex"),
+        "agy" | "agy.js" | "antigravity" | "antigravity.js" => Some("antigravity"),
         _ => None,
     }
 }
@@ -315,6 +316,7 @@ fn provider_from_argv0_basename(basename: &str) -> Option<&'static str> {
     match basename {
         "claude" => Some("claude"),
         "codex" => Some("codex"),
+        "agy" | "antigravity" => Some("antigravity"),
         "gemini" => Some("gemini"),
         "opencode" => Some("opencode"),
         _ => None,
@@ -323,6 +325,11 @@ fn provider_from_argv0_basename(basename: &str) -> Option<&'static str> {
 
 fn provider_session_id_from_path(path: &Path, provider: &str) -> Option<String> {
     let stem = path.file_stem()?.to_str()?.to_string();
+    if provider == "antigravity" && stem == "transcript" {
+        if let Some(id) = antigravity_conversation_id_from_path(path) {
+            return Some(id);
+        }
+    }
     // Claude/Gemini name transcripts after the session UUID. Codex
     // rollout files are named `rollout-YYYY-MM-DDTHH-MM-SS-<uuid>.jsonl`;
     // the runtime session stores only `<uuid>` as provider_session_id.
@@ -330,6 +337,19 @@ fn provider_session_id_from_path(path: &Path, provider: &str) -> Option<String> 
         return None;
     }
     Some(normalize_provider_session_id(provider, &stem))
+}
+
+fn antigravity_conversation_id_from_path(path: &Path) -> Option<String> {
+    let components: Vec<&str> = path
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect();
+    for window in components.windows(2) {
+        if window[0] == "brain" && is_uuidish(window[1]) {
+            return Some(window[1].to_string());
+        }
+    }
+    None
 }
 
 fn claude_task_session_id_from_path(path: &Path) -> Option<String> {
@@ -624,6 +644,14 @@ mod tests {
             Some("opencode")
         );
         assert_eq!(
+            is_provider_process("/Users/x/.local/bin/agy"),
+            Some("antigravity")
+        );
+        assert_eq!(
+            is_provider_process("node /opt/homebrew/bin/agy"),
+            Some("antigravity")
+        );
+        assert_eq!(
             is_provider_process("bun /opt/homebrew/bin/codex --tui"),
             None
         );
@@ -631,6 +659,7 @@ mod tests {
         assert_eq!(is_provider_process("gemini chat"), Some("gemini"));
         assert_eq!(is_provider_process("longhouse-codex --attach"), None);
         assert_eq!(is_provider_process("longhouse-opencode serve"), None);
+        assert_eq!(is_provider_process("longhouse-antigravity"), None);
         assert_eq!(is_provider_process("/usr/local/bin/longhouse-claude"), None);
         assert_eq!(
             is_provider_process("node /usr/local/bin/longhouse-codex --attach"),
@@ -638,6 +667,10 @@ mod tests {
         );
         assert_eq!(
             is_provider_process("node /usr/local/bin/longhouse-opencode serve"),
+            None
+        );
+        assert_eq!(
+            is_provider_process("node /usr/local/bin/longhouse-antigravity"),
             None
         );
         assert_eq!(is_provider_process("node server.js"), None);
@@ -662,6 +695,18 @@ mod tests {
         assert_eq!(
             provider_session_id_from_path(path, "codex").as_deref(),
             Some("manual-session"),
+        );
+    }
+
+    #[test]
+    fn antigravity_transcript_path_uses_brain_conversation_id() {
+        let path = Path::new(
+            "/Users/x/.gemini/antigravity/brain/53116f30-f150-458c-b36e-2e30f576dc74/.system_generated/logs/transcript.jsonl",
+        );
+
+        assert_eq!(
+            provider_session_id_from_path(path, "antigravity").as_deref(),
+            Some("53116f30-f150-458c-b36e-2e30f576dc74"),
         );
     }
 

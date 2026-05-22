@@ -443,7 +443,7 @@ export default function SessionsPage() {
           <EmptyState
             icon={demoLoading ? <Spinner size="lg" /> : undefined}
             title="Connect your first machine"
-            description="Run one command on the machine where you use Claude Code, Codex, or Gemini and your sessions will start appearing here."
+            description="Run one command on the machine where you use Claude Code, Codex, or Antigravity and your sessions will start appearing here."
             action={
               <div className="sessions-guided-actions">
                 <Button
@@ -498,7 +498,7 @@ export default function SessionsPage() {
               Works with{" "}
               <a href="https://docs.anthropic.com/en/docs/claude-code/overview" target="_blank" rel="noopener noreferrer">Claude Code</a>,{" "}
               <a href="https://github.com/openai/codex" target="_blank" rel="noopener noreferrer">Codex CLI</a>, and{" "}
-              <a href="https://github.com/google-gemini/gemini-cli" target="_blank" rel="noopener noreferrer">Gemini CLI</a>.
+              <a href="https://antigravity.google/product/antigravity-cli" target="_blank" rel="noopener noreferrer">Antigravity CLI</a>.
               {demoLoading && " Demo sessions are loading in the background."}
             </p>
           </div>

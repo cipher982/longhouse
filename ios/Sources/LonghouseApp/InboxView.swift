@@ -879,6 +879,7 @@ private func managementColor(_ session: SessionSummary) -> Color {
 private func providerColor(_ provider: String?) -> Color {
     switch provider?.lowercased() {
     case "codex": return .green
+    case "antigravity": return .orange
     case "gemini": return .blue
     case "claude": return .orange
     case "zai": return .purple
@@ -889,6 +890,7 @@ private func providerColor(_ provider: String?) -> Color {
 private func providerIcon(_ provider: String?) -> String {
     switch provider?.lowercased() {
     case "codex": return "terminal"
+    case "antigravity": return "sparkles"
     case "gemini": return "sparkles"
     case "claude": return "sparkle"
     default: return "chevron.left.forwardslash.chevron.right"

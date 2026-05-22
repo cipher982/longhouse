@@ -4,8 +4,8 @@ import os
 import shlex
 from types import SimpleNamespace
 
-from cryptography.fernet import Fernet
 import pytest
+from cryptography.fernet import Fernet
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
@@ -65,6 +65,15 @@ def test_build_managed_local_attach_command_is_empty_for_opencode_process():
     session = SimpleNamespace(
         id="session-123",
         managed_transport=ManagedSessionTransport.OPENCODE_PROCESS.value,
+    )
+
+    assert build_managed_local_attach_command(session=session) is None
+
+
+def test_build_managed_local_attach_command_is_empty_for_antigravity_process():
+    session = SimpleNamespace(
+        id="session-123",
+        managed_transport=ManagedSessionTransport.ANTIGRAVITY_PROCESS.value,
     )
 
     assert build_managed_local_attach_command(session=session) is None
@@ -138,6 +147,16 @@ def test_build_managed_local_send_text_command_rejects_opencode_process():
         build_managed_local_send_text_command(session=session, text="continue")
 
 
+def test_build_managed_local_send_text_command_rejects_antigravity_process():
+    session = SimpleNamespace(
+        id="session-123",
+        managed_transport=ManagedSessionTransport.ANTIGRAVITY_PROCESS.value,
+    )
+
+    with pytest.raises(ManagedLocalTransportError, match="does not support remote text sends yet"):
+        build_managed_local_send_text_command(session=session, text="continue")
+
+
 def test_build_managed_local_interrupt_command_rejects_opencode_process():
     session = SimpleNamespace(
         id="session-123",
@@ -148,7 +167,18 @@ def test_build_managed_local_interrupt_command_rejects_opencode_process():
         build_managed_local_interrupt_command(session=session)
 
 
+def test_build_managed_local_interrupt_command_rejects_antigravity_process():
+    session = SimpleNamespace(
+        id="session-123",
+        managed_transport=ManagedSessionTransport.ANTIGRAVITY_PROCESS.value,
+    )
+
+    with pytest.raises(ManagedLocalTransportError, match="does not support remote interrupts yet"):
+        build_managed_local_interrupt_command(session=session)
+
+
 def test_transport_for_provider():
     assert ManagedSessionTransport.for_provider("codex") == ManagedSessionTransport.CODEX_APP_SERVER
     assert ManagedSessionTransport.for_provider("claude") == ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE
     assert ManagedSessionTransport.for_provider("opencode") == ManagedSessionTransport.OPENCODE_PROCESS
+    assert ManagedSessionTransport.for_provider("antigravity") == ManagedSessionTransport.ANTIGRAVITY_PROCESS

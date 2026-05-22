@@ -1,6 +1,6 @@
 # Longhouse
 
-Mission control for CLI agent sessions running on machines you own. One searchable timeline for Claude Code, Codex, and Gemini sessions — plus a live control path when you launch them through Longhouse.
+Mission control for CLI agent sessions running on machines you own. One searchable timeline for Claude Code, Codex, and Antigravity sessions — plus a live control path when you launch them through Longhouse. Legacy Gemini sessions remain searchable.
 
 Works on your laptop. Shines on a machine that stays on.
 
@@ -103,7 +103,7 @@ Issues: <https://github.com/cipher982/longhouse/issues>
 
 ## Status
 
-Alpha. Actively developed. Claude Code, Codex, and Gemini sessions all sync today; managed launch is live for Claude and Codex, and the native iOS companion can page on `needs_user` / `blocked` once APNs is configured.
+Alpha. Actively developed. Claude Code, Codex, and Antigravity sessions sync today; legacy Gemini imports remain supported. Managed launch is live for Claude, Codex, and Antigravity, and the native iOS companion can page on `needs_user` / `blocked` once APNs is configured.
 
 Built by [David Rose](https://github.com/cipher982). Apache-2.0.
 

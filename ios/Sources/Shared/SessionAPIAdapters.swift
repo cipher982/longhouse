@@ -23,6 +23,7 @@ private func providerDisplayName(_ provider: String) -> String {
     switch provider.lowercased() {
     case "codex": return "Codex"
     case "claude": return "Claude"
+    case "antigravity": return "Antigravity"
     case "gemini": return "Gemini"
     default:
         return provider.prefix(1).uppercased() + String(provider.dropFirst())

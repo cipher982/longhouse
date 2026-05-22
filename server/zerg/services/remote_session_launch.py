@@ -297,6 +297,7 @@ async def launch_remote_session(
             control_plane=(
                 "codex_bridge" if provider == "codex"
                 else "opencode_process" if provider == "opencode"
+                else "antigravity_process" if provider == "antigravity"
                 else "claude_channel_bridge"
             ),
             acquisition_kind="spawned_control",
@@ -412,6 +413,7 @@ def reconcile_launch_from_command_result(db: Session, message: dict) -> bool:
             control_plane=(
                 "codex_bridge" if session.provider == "codex"
                 else "opencode_process" if session.provider == "opencode"
+                else "antigravity_process" if session.provider == "antigravity"
                 else "claude_channel_bridge"
             ),
             acquisition_kind="spawned_control",

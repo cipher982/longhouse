@@ -20,7 +20,7 @@ struct SessionEntry: TimelineEntry {
         date: .now,
         sessions: [
             SessionSummary(id: "1", title: "Debugging Codex Launch Path Bug", presenceState: "thinking", provider: "codex", project: "zerg", lastActivityAt: nil, status: "working"),
-            SessionSummary(id: "2", title: "Simple Arithmetic Calculation", presenceState: "idle", provider: "gemini", project: "gemini", lastActivityAt: nil, status: "completed"),
+            SessionSummary(id: "2", title: "Simple Arithmetic Calculation", presenceState: "idle", provider: "antigravity", project: "antigravity", lastActivityAt: nil, status: "completed"),
         ],
         totalActive: 2,
         isPlaceholder: true,

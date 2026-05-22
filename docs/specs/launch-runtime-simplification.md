@@ -294,12 +294,12 @@ The launch story only works if capability truth is blunt.
 ### What we can say confidently
 
 - Claude Code sessions are the strongest launch-ready continuation path.
-- Claude, Codex, and Gemini sessions can all be shipped/imported into the archive and inspected through the timeline plus machine surface.
+- Claude, Codex, Antigravity, and legacy Gemini sessions can all be shipped/imported into the archive and inspected through the timeline plus machine surface.
 - The machine surface for search, session inspection, wall/tail, messaging, and inbox state is real and should be shown early.
 
 ### What we should not overstate
 
-- Codex and Gemini continuation should not be sold as equal to Claude until parity and polish are actually there.
+- Codex and Antigravity continuation should not be sold as equal to Claude until parity and polish are actually there.
 - Transcript import alone should not be sold as if it grants full remote control.
 - Hosted should not be sold as the thing that makes the core loop possible; it is the convenience deployment of the same loop.
 
