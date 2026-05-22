@@ -432,7 +432,10 @@ def onboard(
             skip_local_server = False
 
     typer.echo("")
-    typer.echo("Install Longhouse, open it, and find one prior session. Start Longhouse sessions later when you want control.")
+    typer.echo(
+        "Install Longhouse, open it, and find one prior session. "
+        "Start Longhouse sessions later when you want control."
+    )
     typer.echo("")
 
     # Step 1: Check dependencies
@@ -549,12 +552,18 @@ def onboard(
                 installed_desktop_app = install_menubar and bool(getattr(install_result, "desktop_app_result", None))
                 typer.secho("  [OK] Machine agent installed for automatic imports", fg=typer.colors.GREEN)
                 if install_result.hooks.warning:
-                    typer.secho(f"  [WARN] CLI hook install had issues: {install_result.hooks.warning}", fg=typer.colors.YELLOW)
+                    typer.secho(
+                        f"  [WARN] CLI hook install had issues: {install_result.hooks.warning}",
+                        fg=typer.colors.YELLOW,
+                    )
             except Exception as e:
                 typer.secho(f"  [WARN] Could not install machine agent: {e}", fg=typer.colors.YELLOW)
                 typer.echo("         Run manually: longhouse connect --install")
         else:
-            typer.secho("  [--] Background machine-agent install is not available in this environment", fg=typer.colors.YELLOW)
+            typer.secho(
+                "  [--] Background machine-agent install is not available in this environment",
+                fg=typer.colors.YELLOW,
+            )
             typer.echo("       Use: longhouse connect")
             typer.echo("       Or import once with: longhouse ship")
 
@@ -623,13 +632,13 @@ def onboard(
     if installed_desktop_app:
         typer.echo("  3. Look for Longhouse.app in /Applications and your menu bar")
     typer.echo("")
-    typer.echo("Next, when you want control after launch:")
+    typer.echo("Next, when you want Longhouse-managed launch:")
     if has_claude:
         typer.echo("  longhouse claude   Start a Longhouse Claude session")
     if has_codex:
         typer.echo("  longhouse codex    Start a Longhouse Codex session")
     if has_antigravity:
-        typer.echo("  longhouse antigravity Start a Longhouse Antigravity session")
+        typer.echo("  longhouse antigravity Start an Antigravity archive + observe session")
     if not (has_claude or has_codex or has_antigravity):
         typer.echo("  Install Claude Code, Codex CLI, or Antigravity CLI, then start a Longhouse session")
     typer.echo("")
