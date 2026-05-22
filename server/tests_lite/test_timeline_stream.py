@@ -15,10 +15,10 @@ from fastapi import Response
 import zerg.dependencies.auth as _auth_deps  # noqa: F401
 import zerg.routers.timeline as timeline_router
 import zerg.services.timeline_session_stream as timeline_stream
+from zerg.database import Base
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
-from zerg.database import Base
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents_store import AgentsStore
@@ -431,6 +431,61 @@ def test_timeline_stream_wakes_on_topic_timeline_publish(tmp_path):
     reset_pubsub_for_test()
 
 
+def test_timeline_stream_skip_initial_replay_sends_targeted_update_only(tmp_path):
+    reset_pubsub_for_test()
+    session_local = _make_db(tmp_path, "timeline_stream_skip_initial_targeted.db")
+    now = datetime.now(timezone.utc)
+
+    with session_local() as db:
+        targeted = _seed_session(
+            db,
+            started_at=now - timedelta(minutes=4),
+            ended_at=None,
+            project="skip-initial-targeted",
+        )
+        _seed_session(
+            db,
+            started_at=now - timedelta(minutes=5),
+            ended_at=None,
+            project="skip-initial-other",
+        )
+
+    async def _collect_after_publish():
+        stream = timeline_stream.stream_timeline_sessions_for_browser(
+            _ConnectedRequest(),
+            session_factory=session_local,
+            params=_stream_params(limit=2),
+            skip_initial_replay=True,
+        )
+        try:
+            connected = await anext(stream)
+            next_event = asyncio.create_task(anext(stream))
+            await asyncio.sleep(0)
+            get_pubsub().publish(TOPIC_TIMELINE, {"kind": "test", "session_id": str(targeted.id)})
+            upsert = await asyncio.wait_for(next_event, timeout=0.5)
+
+            followup = asyncio.create_task(anext(stream))
+            done, pending = await asyncio.wait({followup}, timeout=0.05)
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            assert not done
+            return connected, upsert
+        finally:
+            await stream.aclose()
+
+    connected, upsert = asyncio.run(_collect_after_publish())
+    payload = json.loads(upsert["data"])
+
+    assert connected["event"] == "connected"
+    assert upsert["event"] == "session_upsert"
+    assert payload["session"]["thread_id"] == str(targeted.id)
+    assert "total" not in payload
+    assert "has_real_sessions" not in payload
+    reset_pubsub_for_test()
+
+
 def test_timeline_stream_upserts_on_bridge_transcript_preview_only_change(tmp_path):
     reset_pubsub_for_test()
     session_local = _make_db(tmp_path, "timeline_stream_live_overlay.db")
@@ -487,7 +542,7 @@ def test_timeline_stream_upserts_on_bridge_transcript_preview_only_change(tmp_pa
     reset_pubsub_for_test()
 
 
-def test_timeline_stream_known_session_update_skips_window_requery(tmp_path):
+def test_timeline_stream_known_session_update_uses_targeted_card(tmp_path):
     reset_pubsub_for_test()
     session_local = _make_db(tmp_path, "timeline_stream_targeted_update.db")
     now = datetime.now(timezone.utc)
