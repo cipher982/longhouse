@@ -214,6 +214,7 @@ def record_provider_event_observation(
     parent_event_uuid: str | None = None,
     received_at: datetime | None = None,
     thread_id: UUID | None = None,
+    load_observation: bool = True,
 ) -> ObservationWriteResult:
     identity = event_uuid or _hash_parts(
         str(session_id),
@@ -246,6 +247,7 @@ def record_provider_event_observation(
         ),
         observed_at=timestamp,
         received_at=received_at,
+        load_observation=load_observation,
         payload={
             "branch_id": branch_id,
             "role": role,
