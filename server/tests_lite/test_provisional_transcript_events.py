@@ -13,6 +13,7 @@ from zerg.database import make_engine
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionObservation
+from zerg.services import session_runtime as session_runtime_service
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
@@ -184,6 +185,41 @@ def test_live_bridge_snapshots_store_observations_not_events(tmp_path):
     assert preview.text == "hello"
     assert preview.provisional_cursor == f"codex_bridge_live:{session.id}:thread-1:turn-1:2"
     assert preview.provisional_complete is False
+
+
+def test_live_bridge_ingest_uses_observation_write_fast_path(monkeypatch, tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "live_overlay_fast_path.db")
+    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+    load_flags: list[bool] = []
+    original_record_runtime_observation = session_runtime_service.record_runtime_observation
+
+    def _record_runtime_observation_spy(db, event, **kwargs):
+        load_flags.append(bool(kwargs.get("load_observation", True)))
+        return original_record_runtime_observation(db, event, **kwargs)
+
+    monkeypatch.setattr(
+        session_runtime_service,
+        "record_runtime_observation",
+        _record_runtime_observation_spy,
+    )
+
+    with SessionLocal() as db:
+        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
+
+        result = ingest_runtime_events(
+            db,
+            [_bridge_transcript_event(session_id=session.id, occurred_at=now, seq=1, live_text="fast preview")],
+        )
+        db.commit()
+
+        observation = db.query(SessionObservation).filter(SessionObservation.session_id == session.id).one()
+        preview = load_active_provisional_preview_map(db, [session.id])[str(session.id)]
+
+    assert load_flags == [False]
+    assert result.accepted == 1
+    assert result.updated_runtime_keys == [f"codex:{session.id}"]
+    assert observation.kind == OBS_KIND_BRIDGE_TRANSCRIPT_DELTA
+    assert preview.text == "fast preview"
 
 
 def test_bridge_transcript_observation_rebuild_does_not_create_event(tmp_path):

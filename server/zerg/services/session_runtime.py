@@ -25,7 +25,6 @@ from zerg.metrics import managed_codex_runtime_observations_total
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
-from zerg.services.session_observation_reducers import reduce_bridge_transcript_observation
 from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
 from zerg.services.session_observations import record_runtime_observation
 from zerg.session_execution_home import ManagedSessionTransport
@@ -587,17 +586,20 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
 
     for event in events:
         received_at = datetime.now(timezone.utc)
-        observation_result = record_runtime_observation(db, event, received_at=received_at)
+        bridge_transcript_event = _is_bridge_transcript_event(event)
+        observation_result = record_runtime_observation(
+            db,
+            event,
+            received_at=received_at,
+            load_observation=not bridge_transcript_event,
+        )
         if not observation_result.inserted:
             duplicates += 1
             _record_managed_codex_runtime_observation(event, "duplicate")
             continue
 
         accepted += 1
-        if _is_bridge_transcript_event(event):
-            if observation_result.observation is None:
-                raise RuntimeError("accepted bridge transcript observation was not readable after insert")
-            reduce_bridge_transcript_observation(db, observation_result.observation)
+        if bridge_transcript_event:
             outcome = "stored_live_overlay"
             _record_managed_codex_runtime_observation(event, outcome)
             if event.runtime_key not in updated_runtime_keys:
