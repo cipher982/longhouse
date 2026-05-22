@@ -92,6 +92,46 @@ def _ingest_chunk_for_label(label: str) -> int:
     return _INGEST_CHUNK_BY_LABEL.get(label, 200)
 
 
+def _json_timestamp(value: datetime) -> str:
+    ts = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return ts.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _build_live_ingest_transcript_preview(data: SessionIngest, ship_trace: dict | None) -> dict | None:
+    """Return a pre-commit live preview for the newest assistant text event."""
+    if not ship_trace or ship_trace.get("work_context") != "live_transcript":
+        return None
+    if data.id is None or not data.events:
+        return None
+
+    event = data.events[-1]
+    if event.role != "assistant" or event.tool_name:
+        return None
+    text = str(event.content_text or "").strip()
+    if not text:
+        return None
+
+    raw_event_id = event.source_offset or ship_trace.get("new_offset") or _unix_ms()
+    try:
+        event_id = int(raw_event_id)
+    except (TypeError, ValueError):
+        event_id = _unix_ms()
+
+    trace_id = _ship_trace_id(ship_trace)
+    cursor = f"ingest-live:{trace_id or data.id}:{event_id}"
+    return {
+        "event_id": event_id,
+        "text": text,
+        "event_origin": "live_provisional",
+        "timestamp": _json_timestamp(event.timestamp),
+        "is_provisional": True,
+        "is_complete": True,
+        "content_cursor": cursor,
+        "is_stale": False,
+        "stale_reason": None,
+    }
+
+
 def _persist_ship_trace_event(
     db: Session,
     *,
@@ -502,6 +542,17 @@ async def ingest_session(
                         "longhouse.ingest.event_count": len(data.events),
                     },
                 )
+
+                transcript_preview = _build_live_ingest_transcript_preview(data, ship_trace)
+                if transcript_preview is not None:
+                    from zerg.services.session_pubsub import publish_session_transcript_preview_update
+
+                    publish_session_transcript_preview_update(
+                        session_id=str(data.id),
+                        provider=data.provider,
+                        source="agents_ingest_live",
+                        transcript_preview=transcript_preview,
+                    )
 
             from zerg.services.write_serializer import get_write_serializer
 
