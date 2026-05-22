@@ -713,7 +713,11 @@ export function connectSessionWorkspaceStream(
 
   eventSource.addEventListener("connected", (event: MessageEvent) => {
     const data = parseStreamEventData<SessionWorkspaceStreamConnected>(event);
-    dispatchTimelineStreamEvent("workspace_connected", { session_id: data?.session_id ?? sessionId });
+    dispatchTimelineStreamEvent("workspace_connected", {
+      session_id: data?.session_id ?? sessionId,
+      server_now_ms: data?.server_now_ms,
+      client_received_at_ms: Date.now(),
+    });
     handlers.onConnected?.(data ?? { session_id: sessionId });
   });
 
@@ -723,7 +727,15 @@ export function connectSessionWorkspaceStream(
       dispatchTimelineStreamEvent("workspace_changed", {
         session_id: data.session_id,
         latest_event_id: data.latest_event_id,
+        latest_event_emitted_at_ms: data.latest_event_emitted_at_ms ?? null,
+        server_fanout_at_ms: data.server_fanout_at_ms ?? null,
+        server_now_ms: data.server_now_ms,
+        pubsub_seq: data.pubsub_seq,
+        client_received_at_ms: Date.now(),
         has_transcript_preview: Object.prototype.hasOwnProperty.call(data, "transcript_preview"),
+        transcript_preview_event_id: data.transcript_preview?.event_id ?? null,
+        transcript_preview_origin: data.transcript_preview?.event_origin ?? null,
+        transcript_preview_text_length: data.transcript_preview?.text?.length ?? null,
       });
       handlers.onWorkspaceChanged?.(data);
     }

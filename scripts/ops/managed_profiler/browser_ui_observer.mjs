@@ -1,16 +1,17 @@
 import { chromium } from "playwright";
 import { promises as fs } from "fs";
 
-const [baseUrlArg, token, sid, project, nonce] = process.argv.slice(2);
+const [baseUrlArg, token, sid, project, nonce, providerArg] = process.argv.slice(2);
 
 if (!baseUrlArg || !token || !sid || !project || !nonce) {
   console.error(
-    "usage: browser_ui_observer.mjs <base-url> <session-cookie> <session-id> <project> <nonce>",
+    "usage: browser_ui_observer.mjs <base-url> <session-cookie> <session-id> <project> <nonce> [provider]",
   );
   process.exit(2);
 }
 
 const baseUrl = new URL(baseUrlArg);
+const provider = providerArg || "codex";
 let sessionId = sid;
 const sessionIdFile = process.env.LONGHOUSE_BROWSER_OBSERVER_SESSION_ID_FILE || "";
 const started = performance.now();
@@ -232,6 +233,25 @@ async function waitForSessionIdFile(timeoutMs) {
 try {
   browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  await context.exposeFunction("__longhouseProfilerTimelineStreamEvent", (detail) => {
+    if (!detail || typeof detail !== "object") {
+      return;
+    }
+    const kind = typeof detail.kind === "string" ? detail.kind : "unknown";
+    emit(`timeline_stream_${kind}`, { detail });
+    if (kind === "workspace_changed" && detail.has_transcript_preview) {
+      emit("timeline_stream_workspace_preview_changed", { detail });
+    }
+  });
+  await context.addInitScript(() => {
+    window.addEventListener("longhouse:timeline-stream", (event) => {
+      window.__longhouseProfilerTimelineStreamEvent?.({
+        ...(event.detail || {}),
+        page_url: window.location.href,
+        page_pathname: window.location.pathname,
+      });
+    });
+  });
   await context.addCookies([
     {
       name: "longhouse_session",
@@ -245,18 +265,6 @@ try {
   ]);
 
   page = await context.newPage();
-  await page.exposeFunction("__longhouseProfilerTimelineStreamEvent", (detail) => {
-    if (!detail || typeof detail !== "object") {
-      return;
-    }
-    const kind = typeof detail.kind === "string" ? detail.kind : "unknown";
-    emit(`timeline_stream_${kind}`, { detail });
-  });
-  await page.addInitScript(() => {
-    window.addEventListener("longhouse:timeline-stream", (event) => {
-      window.__longhouseProfilerTimelineStreamEvent?.(event.detail);
-    });
-  });
   page.on("console", (message) => {
     const type = message.type();
     if (type === "error" || type === "warning") {
@@ -269,7 +277,7 @@ try {
 
   const url = new URL("/timeline", baseUrl);
   url.searchParams.set("project", project);
-  url.searchParams.set("provider", "codex");
+  url.searchParams.set("provider", provider);
   url.searchParams.set("limit", "20");
   url.searchParams.set("hide_autonomous", "true");
   emit("navigation_started", { url: url.toString() });
