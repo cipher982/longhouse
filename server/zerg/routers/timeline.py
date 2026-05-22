@@ -734,6 +734,33 @@ def _load_workspace_transcript_preview_payload(
     return response.model_dump(mode="json")
 
 
+def _workspace_transcript_preview_from_payload(payload: dict | None) -> dict | None:
+    if not isinstance(payload, dict):
+        return None
+    preview = payload.get("transcript_preview")
+    if not isinstance(preview, dict):
+        return None
+    text = str(preview.get("text") or "").strip()
+    if not text or preview.get("is_stale"):
+        return None
+    return preview
+
+
+def _workspace_server_fanout_at_ms(payload: dict | None) -> int | None:
+    if not isinstance(payload, dict):
+        return None
+    candidate = payload.get("server_fanout_at_ms")
+    return candidate if isinstance(candidate, int) else None
+
+
+def _workspace_latest_event_ts_ms(signature: tuple) -> int | None:
+    latest_event_ts = signature[6] if len(signature) > 6 else None
+    if latest_event_ts is None:
+        return None
+    ts = latest_event_ts if latest_event_ts.tzinfo else latest_event_ts.replace(tzinfo=timezone.utc)
+    return int(ts.timestamp() * 1000)
+
+
 async def _session_workspace_stream(
     request: Request,
     *,
@@ -801,7 +828,37 @@ async def _session_workspace_stream(
                 }
                 break
 
+            consumed_preview_payload = _workspace_transcript_preview_from_payload(consumed_payload)
             if previous_sig is not None and current_sig == previous_sig:
+                if consumed_preview_payload is not None:
+                    now = datetime.now(timezone.utc)
+                    yield {
+                        "event": "workspace_changed",
+                        "id": str(consumed_seq) if consumed_seq else None,
+                        "data": json.dumps(
+                            {
+                                "session_id": str(session_id),
+                                "latest_event_id": current_sig[2],
+                                "thread_session_count": current_sig[5],
+                                "detect_ms": round((monotonic() - wait_start) * 1000, 1) if wait_start else 0,
+                                "latest_event_emitted_at_ms": _workspace_latest_event_ts_ms(current_sig),
+                                "server_fanout_at_ms": _workspace_server_fanout_at_ms(consumed_payload),
+                                "server_now_ms": int(now.timestamp() * 1000),
+                                "pubsub_seq": consumed_seq,
+                                "transcript_preview": consumed_preview_payload,
+                            }
+                        ),
+                    }
+                    last_heartbeat = monotonic()
+                    wait_start = monotonic()
+                    woke_msg = await _wait_for_session_change(subscription)
+                    if woke_msg:
+                        consumed_seq = woke_msg.seq
+                        consumed_payload = woke_msg.payload
+                    else:
+                        consumed_payload = None
+                    continue
+
                 now = monotonic()
                 if now - last_heartbeat >= WORKSPACE_STREAM_HEARTBEAT_SECONDS:
                     yield {
@@ -823,15 +880,16 @@ async def _session_workspace_stream(
 
             detect_ms = round((monotonic() - wait_start) * 1000, 1) if wait_start else 0
             latest_event_ts = current_sig[6] if len(current_sig) > 6 else None
-            latest_event_ts_ms: int | None = None
-            if latest_event_ts is not None:
-                ts = latest_event_ts if latest_event_ts.tzinfo else latest_event_ts.replace(tzinfo=timezone.utc)
-                latest_event_ts_ms = int(ts.timestamp() * 1000)
+            latest_event_ts_ms = _workspace_latest_event_ts_ms(current_sig)
             now = datetime.now(timezone.utc)
-            transcript_preview_payload = None
+            transcript_preview_payload = consumed_preview_payload
             bridge_transcript_head = current_sig[7] if len(current_sig) > 7 else 0
             previous_bridge_transcript_head = old_sig[7] if old_sig is not None and len(old_sig) > 7 else 0
-            if bridge_transcript_head and bridge_transcript_head != previous_bridge_transcript_head:
+            if (
+                transcript_preview_payload is None
+                and bridge_transcript_head
+                and bridge_transcript_head != previous_bridge_transcript_head
+            ):
                 with session_factory() as db:
                     transcript_preview_payload = _load_workspace_transcript_preview_payload(
                         db,
@@ -839,11 +897,7 @@ async def _session_workspace_stream(
                         latest_event_timestamp=latest_event_ts,
                         now=now,
                     )
-            server_fanout_at_ms = None
-            if consumed_payload is not None:
-                candidate_fanout_at = consumed_payload.get("server_fanout_at_ms")
-                if isinstance(candidate_fanout_at, int):
-                    server_fanout_at_ms = candidate_fanout_at
+            server_fanout_at_ms = _workspace_server_fanout_at_ms(consumed_payload)
             # consumed_seq is the seq of the publish that woke this cycle —
             # safer than peek_latest_seq which can race ahead of our DB read.
             # On first emit before any wake (initial snapshot), fall back to 0.

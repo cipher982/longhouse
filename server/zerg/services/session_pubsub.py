@@ -209,3 +209,26 @@ def publish_session_runtime_update(
     bus = get_pubsub()
     bus.publish(topic_session(session_id), payload)
     bus.publish(TOPIC_TIMELINE, payload)
+
+
+def publish_session_transcript_preview_update(
+    *,
+    session_id: str,
+    provider: str | None,
+    source: str | None,
+    transcript_preview: dict,
+) -> None:
+    """Wake the focused session workspace with a live transcript preview.
+
+    This is intentionally session-scoped. The durable runtime observation write
+    will publish the normal session/timeline update after SQLite catches up.
+    """
+    payload = {
+        "kind": "transcript_preview",
+        "session_id": session_id,
+        "provider": provider,
+        "source": source,
+        "server_fanout_at_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
+        "transcript_preview": transcript_preview,
+    }
+    get_pubsub().publish(topic_session(session_id), payload)
