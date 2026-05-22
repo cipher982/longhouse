@@ -19,6 +19,32 @@ actor SessionWorkspaceStream {
     }
 
     struct WorkspaceChanged: Decodable, Sendable {
+        struct TranscriptPreview: Decodable, Sendable {
+            let event_id: Int
+            let text: String
+            let event_origin: String
+            let timestamp: String
+            let is_provisional: Bool
+            let is_complete: Bool?
+            let content_cursor: String?
+            let is_stale: Bool?
+            let stale_reason: String?
+
+            var sessionTranscriptPreview: SessionTranscriptPreview {
+                SessionTranscriptPreview(
+                    eventId: event_id,
+                    text: text,
+                    eventOrigin: event_origin,
+                    timestamp: timestamp,
+                    isProvisional: is_provisional,
+                    isComplete: is_complete,
+                    contentCursor: content_cursor,
+                    isStale: is_stale,
+                    staleReason: stale_reason
+                )
+            }
+        }
+
         let session_id: String
         let latest_event_id: Int
         let thread_session_count: Int?
@@ -26,6 +52,7 @@ actor SessionWorkspaceStream {
         let server_fanout_at_ms: Int64?
         let server_now_ms: Int64?
         let pubsub_seq: Int?
+        let transcript_preview: TranscriptPreview?
     }
 
     enum Event: Sendable {

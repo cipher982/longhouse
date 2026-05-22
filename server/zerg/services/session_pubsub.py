@@ -26,6 +26,8 @@ from collections import defaultdict
 from collections import deque
 from dataclasses import dataclass
 from dataclasses import field
+from datetime import datetime
+from datetime import timezone
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -202,6 +204,7 @@ def publish_session_runtime_update(
         "session_id": session_id,
         "provider": provider,
         "source": source,
+        "server_fanout_at_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
     }
     bus = get_pubsub()
     bus.publish(topic_session(session_id), payload)

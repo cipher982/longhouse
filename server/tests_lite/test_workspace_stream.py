@@ -254,6 +254,9 @@ def test_workspace_stream_detects_live_bridge_preview_observation(tmp_path):
     grouped = _collect_stream_events(events)
 
     assert len(grouped.get("workspace_changed", [])) == 2
+    preview_changed = grouped["workspace_changed"][1]
+    assert preview_changed["transcript_preview"]["text"] == "hello live"
+    assert preview_changed["transcript_preview"]["event_origin"] == "live_provisional"
 
 
 @patch.object(timeline_mod, "_wait_for_session_change", lambda _sub: _noop_coro())

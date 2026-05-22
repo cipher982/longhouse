@@ -20,6 +20,8 @@ import {
   type AgentSession,
   type AgentSessionProjectionItem,
   type AgentSessionProjectionResponse,
+  type AgentSessionWorkspaceResponse,
+  type SessionTranscriptPreview,
 } from "../services/api/agents";
 
 const INITIAL_EVENTS_PAGE_SIZE = 200;
@@ -84,6 +86,16 @@ function shouldRefreshWorkspaceSession(
   return runtime.isLive || runtime.needsAttention;
 }
 
+function applyTranscriptPreviewToSession(
+  session: AgentSession,
+  transcriptPreview: SessionTranscriptPreview | null,
+): AgentSession {
+  return {
+    ...session,
+    transcript_preview: transcriptPreview,
+  };
+}
+
 export function useSessionWorkspace(
   sessionId: string | null,
   options: UseSessionWorkspaceOptions = {},
@@ -116,6 +128,25 @@ export function useSessionWorkspace(
         },
         onWorkspaceChanged: (data) => {
           recordServerClockSkew(data?.server_now_ms);
+          if (Object.prototype.hasOwnProperty.call(data, "transcript_preview")) {
+            const transcriptPreview = data.transcript_preview ?? null;
+            queryClient.setQueriesData<AgentSessionWorkspaceResponse>(
+              { queryKey: ["agent-session-workspace", sessionId] },
+              (current) => {
+                if (!current) return current;
+                return {
+                  ...current,
+                  session: applyTranscriptPreviewToSession(current.session, transcriptPreview),
+                  thread: {
+                    ...current.thread,
+                    sessions: current.thread.sessions.map((item) =>
+                      item.id === sessionId ? applyTranscriptPreviewToSession(item, transcriptPreview) : item,
+                    ),
+                  },
+                };
+              },
+            );
+          }
           void queryClient.invalidateQueries({ queryKey: ["agent-session-workspace", sessionId] });
           void queryClient.invalidateQueries({ queryKey: ["agent-session", sessionId] });
           void queryClient.invalidateQueries({ queryKey: ["agent-session-thread", sessionId] });
