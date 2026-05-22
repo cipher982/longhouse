@@ -1358,8 +1358,15 @@ class AgentsStore:
 
         Returns:
             IngestResult with counts of inserted/skipped events plus commit
-            telemetry (``commit_count`` / ``commit_ms_total``).
+        telemetry (``commit_count`` / ``commit_ms_total``).
         """
+        store_started = time.monotonic()
+        store_stage_ms: dict[str, float] = {}
+
+        def _record_stage(label: str, started: float) -> None:
+            store_stage_ms[label] = round((time.monotonic() - started) * 1000, 3)
+
+        stage_started = time.monotonic()
         session_id = data.id if data.id else uuid4()
         incoming_kind = _infer_continuation_kind_from_ingest(data)
         incoming_origin = _infer_origin_label_from_ingest(data)
@@ -1455,7 +1462,9 @@ class AgentsStore:
                 alias_value=str(existing.provider_session_id),
             )
         self.db.flush()
+        _record_stage("session_setup", stage_started)
 
+        stage_started = time.monotonic()
         source_lines = self._normalize_source_lines_for_ingest(data)
         ingest_branch, rewind_signal = self._resolve_ingest_branch(
             session_id,
@@ -1463,6 +1472,7 @@ class AgentsStore:
             data.events,
             data.rewind_hints,
         )
+        _record_stage("source_branch_resolution", stage_started)
 
         events_inserted = 0
         events_skipped = 0
@@ -1492,6 +1502,7 @@ class AgentsStore:
         needs_session_wide_fts_backfill = False
         provider_events_received_at = datetime.now(timezone.utc)
 
+        stage_started = time.monotonic()
         try:
             for event_data in data.events:
                 event_hash = self._compute_event_hash(event_data)
@@ -1563,24 +1574,30 @@ class AgentsStore:
                 except Exception:
                     logger.exception("Failed to restore FTS triggers after ingest error for session %s", session_id)
             raise
+        _record_stage("provider_event_observations", stage_started)
 
         if fts_triggers_dropped:
+            stage_started = time.monotonic()
             self._reenable_fts_triggers()
             if events_inserted > 0:
                 if not needs_session_wide_fts_backfill and inserted_event_ids:
                     self._backfill_fts_for_event_ids(inserted_event_ids)
                 else:
                     self._backfill_fts_for_session(session_id)
+            _record_stage("fts_maintenance", stage_started)
 
+        stage_started = time.monotonic()
         source_paths = {line.source_path for line in source_lines}
         latest_line_by_offset, _ = self._list_branch_source_lines(session_id, ingest_branch.id, source_paths)
         latest_state: dict[tuple[str, int], tuple[int, str]] = {
             key: (int(row.revision), row.line_hash) for key, row in latest_line_by_offset.items()
         }
+        _record_stage("source_line_lookup", stage_started)
 
         source_lines_inserted = 0
         source_lines_received_at = datetime.now(timezone.utc)
         _since_commit = 0
+        stage_started = time.monotonic()
         for line_data in source_lines:
             line_hash = self._compute_line_hash(line_data.raw_json)
             source_offset = int(line_data.source_offset)
@@ -1619,7 +1636,9 @@ class AgentsStore:
             if _since_commit >= _INGEST_CHUNK:
                 _commit_with_telemetry()
                 _since_commit = 0
+        _record_stage("source_line_observations", stage_started)
 
+        stage_started = time.monotonic()
         head_branch_for_counts = self._align_head_branch_from_leaf_uuid(session_id, ingest_branch.id, leaf_uuid_hint)
         self._sync_session_counts_to_head(session_id, head_branch_for_counts)
 
@@ -1639,7 +1658,9 @@ class AgentsStore:
                 current = _normalize_utc_naive(session_obj.last_activity_at)
                 if current is None or latest_inserted_timestamp > current:
                     session_obj.last_activity_at = latest_inserted_timestamp
+        _record_stage("session_projection", stage_started)
 
+        stage_started = time.monotonic()
         from zerg.services.session_runtime import RuntimeEventIngest
         from zerg.services.session_runtime import ingest_runtime_events
         from zerg.services.session_runtime import runtime_key_for_session
@@ -1674,16 +1695,23 @@ class AgentsStore:
                 )
             )
         ingest_runtime_events(self.db, runtime_events)
+        _record_stage("runtime_events", stage_started)
 
+        stage_started = time.monotonic()
         _commit_with_telemetry()
+        _record_stage("commit_after_runtime", stage_started)
 
         if events_inserted > 0 and transcript_changed:
             from zerg.services.session_turns import materialize_managed_transcript_turns
             from zerg.services.session_turns import maybe_mark_session_turn_durable
 
+            stage_started = time.monotonic()
             maybe_mark_session_turn_durable(self.db, session_id=session_id)
             materialize_managed_transcript_turns(self.db, session_id=session_id, incremental=True)
+            _record_stage("turn_materialization", stage_started)
+            stage_started = time.monotonic()
             _commit_with_telemetry()
+            _record_stage("commit_after_turns", stage_started)
 
         logger.info(
             "Ingested session %s branch=%s rewind=%s events inserted=%s skipped=%s source_lines_inserted=%s",
@@ -1703,6 +1731,11 @@ class AgentsStore:
             session_created=session_created,
             commit_count=commit_count,
             commit_ms_total=round(commit_ms_total, 3),
+            source_lines_inserted=source_lines_inserted,
+            store_stage_ms={
+                **store_stage_ms,
+                "total": round((time.monotonic() - store_started) * 1000, 3),
+            },
         )
 
     def get_session(self, session_id: UUID) -> Optional[AgentSession]:
