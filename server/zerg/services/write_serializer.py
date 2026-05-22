@@ -71,6 +71,9 @@ _LABEL_PRIORITIES: dict[str, int] = {
     # Transcript ingest is durable archive truth. It can trail runtime events,
     # but it should not sit behind high-volume presence retries.
     "runtime-observations": 5,
+    # APNs/widget/queued-message side effects derived from runtime state should
+    # not hold the hot runtime/transcript writer lane.
+    "runtime-push": 25,
     "ingest": 10,
     # Daemon archive repair is intentionally behind health/control signals. It
     # can be regenerated from local files and should not make the machine look
