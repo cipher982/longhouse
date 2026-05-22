@@ -32,7 +32,7 @@ use crate::state::spool::Spool;
 /// Live-transcript batch target. Each ship is one HTTP round trip; for live
 /// work this is a tail-latency knob, so we keep it small.
 const LIVE_TARGET_BATCH_BYTES: u64 = 512 * 1024;
-const BACKGROUND_REPAIR_TARGET_BATCH_BYTES: u64 = 512 * 1024;
+const BACKGROUND_REPAIR_TARGET_BATCH_BYTES: u64 = 128 * 1024;
 
 /// Archive / replay batch target. Per phase-4 review (codex), use two discrete
 /// bands rather than a log-shaped controller — a second controller layered on
@@ -109,7 +109,7 @@ mod target_batch_bytes_tests {
     }
 
     #[test]
-    fn background_repair_uses_small_target_like_live_work() {
+    fn background_repair_uses_small_target_below_live_work() {
         // Reconciliation scans are background repair. Keep each server write
         // short enough that hot runtime/live writes can interleave between POSTs.
         assert_eq!(
@@ -120,6 +120,7 @@ mod target_batch_bytes_tests {
             target_batch_bytes_for_band(BatchBand::BackgroundRepair, 50 * 1024 * 1024),
             BACKGROUND_REPAIR_TARGET_BATCH_BYTES
         );
+        assert!(BACKGROUND_REPAIR_TARGET_BATCH_BYTES < LIVE_TARGET_BATCH_BYTES);
     }
 
     #[test]
