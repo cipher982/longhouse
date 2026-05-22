@@ -242,6 +242,7 @@ def materialize_managed_transcript_turns(
     db: Session,
     *,
     session_id: UUID,
+    incremental: bool = False,
 ) -> int:
     session = db.query(AgentSession).filter(AgentSession.id == session_id).one_or_none()
     if session is None or not str(getattr(session, "managed_transport", "") or "").strip():
@@ -254,16 +255,6 @@ def materialize_managed_transcript_turns(
         has_existing_turn = db.query(SessionTurn.id).filter(SessionTurn.session_id == session_id).limit(1).one_or_none()
         if has_existing_turn is not None:
             return 0
-
-    events = (
-        db.query(AgentEvent)
-        .filter(AgentEvent.session_id == session_id)
-        .filter(durable_transcript_event_predicate())
-        .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
-        .all()
-    )
-    if not events:
-        return 0
 
     existing_turns = (
         db.query(SessionTurn)
@@ -279,6 +270,21 @@ def materialize_managed_transcript_turns(
     )
     if has_pending_request_turn:
         return 0
+
+    events_query = (
+        db.query(AgentEvent)
+        .filter(AgentEvent.session_id == session_id)
+        .filter(durable_transcript_event_predicate())
+    )
+    if incremental:
+        event_floor = _transcript_materialization_event_floor(existing_turns)
+        if event_floor is not None:
+            events_query = events_query.filter(AgentEvent.id > event_floor)
+
+    events = events_query.order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc()).all()
+    if not events:
+        return 0
+
     claimed_user_event_ids = {int(turn.user_event_id) for turn in existing_turns if getattr(turn, "user_event_id", None) is not None}
     claimed_assistant_event_ids = {
         int(turn.durable_assistant_event_id) for turn in existing_turns if getattr(turn, "durable_assistant_event_id", None) is not None
@@ -331,6 +337,17 @@ def materialize_managed_transcript_turns(
             created += 1
 
     return created
+
+
+def _transcript_materialization_event_floor(existing_turns: list[SessionTurn]) -> int | None:
+    assistant_event_ids = [
+        int(event_id)
+        for event_id in (getattr(turn, "durable_assistant_event_id", None) for turn in existing_turns)
+        if event_id is not None and int(event_id) > 0
+    ]
+    if not assistant_event_ids:
+        return None
+    return max(assistant_event_ids)
 
 
 def materialize_recent_managed_transcript_turns(
