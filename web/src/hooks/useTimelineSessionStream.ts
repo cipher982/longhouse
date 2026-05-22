@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   connectTimelineSessionsStream,
@@ -58,6 +58,8 @@ export function useTimelineSessionStream(
   const queryClient = useQueryClient();
   const enabled = options.enabled !== false;
   const skipInitialReplay = options.skipInitialReplay === true;
+  const skipInitialReplayRef = useRef(skipInitialReplay);
+  skipInitialReplayRef.current = skipInitialReplay;
 
   useEffect(() => {
     if (!enabled || typeof EventSource === "undefined") {
@@ -80,7 +82,7 @@ export function useTimelineSessionStream(
           );
         },
       },
-      { skipInitialReplay },
+      { skipInitialReplay: skipInitialReplayRef.current },
     );
-  }, [enabled, filters, queryClient, skipInitialReplay]);
+  }, [enabled, filters, queryClient]);
 }

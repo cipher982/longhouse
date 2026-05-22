@@ -67,8 +67,8 @@ async def stream_timeline_sessions_for_browser(
     previous_signatures: dict[str, str] = {}
     previous_session_threads: dict[str, str] = {}
     previous_window_signature: TimelineWindowSignature | None = None
-    previous_total = 0
-    previous_has_real_sessions = False
+    previous_total: int | None = None
+    previous_has_real_sessions: bool | None = None
     pending_timeline_message: PubsubMessage | None = None
     last_heartbeat = monotonic()
     preflight_enabled = _stream_supports_preflight(query=params.query, sort=params.sort, mode=params.mode)
@@ -89,7 +89,13 @@ async def stream_timeline_sessions_for_browser(
             if skip_initial_replay:
                 # The browser already has a fresh timeline snapshot from the initial
                 # HTTP query. Do not immediately rebuild the same window on stream
-                # connect; wait for the next write/heartbeat cycle instead.
+                # connect. Seed the cheap signature/index state so the first
+                # subsequent timeline publish can use a targeted card update
+                # instead of replaying the full window.
+                if preflight_enabled:
+                    with session_factory() as db:
+                        previous_window_signature = _load_timeline_stream_window_signature(db=db, params=params)
+                    previous_session_threads = _index_timeline_window_signature(previous_window_signature)
                 skip_initial_replay = False
                 pending_timeline_message = await _wait_for_timeline_change(timeline_subscription)
                 continue
@@ -110,18 +116,20 @@ async def stream_timeline_sessions_for_browser(
                         if previous_signatures.get(targeted_card.thread_id) != signature:
                             previous_signatures[targeted_card.thread_id] = signature
                             previous_session_threads.update(_index_timeline_session_threads([targeted_card]))
+                            event_data: dict[str, object] = {"session": payload}
+                            if previous_total is not None:
+                                event_data["total"] = previous_total
+                            if previous_has_real_sessions is not None:
+                                event_data["has_real_sessions"] = previous_has_real_sessions
                             yield {
                                 "event": "session_upsert",
-                                "data": json.dumps(
-                                    {
-                                        "session": payload,
-                                        "total": previous_total,
-                                        "has_real_sessions": previous_has_real_sessions,
-                                    }
-                                ),
+                                "data": json.dumps(event_data),
                             }
-                        pending_timeline_message = await _wait_for_timeline_change(timeline_subscription)
-                        continue
+                    with session_factory() as db:
+                        previous_window_signature = _load_timeline_stream_window_signature(db=db, params=params)
+                    previous_session_threads.update(_index_timeline_window_signature(previous_window_signature))
+                    pending_timeline_message = await _wait_for_timeline_change(timeline_subscription)
+                    continue
 
             if preflight_enabled:
                 with session_factory() as db:
@@ -234,6 +242,18 @@ def _index_timeline_session_threads(sessions: list[TimelineSessionCardResponse])
     return session_threads
 
 
+def _index_timeline_window_signature(signature: TimelineWindowSignature) -> dict[str, str]:
+    session_threads: dict[str, str] = {}
+    for row in signature:
+        thread_id = row[0]
+        session_id = row[1]
+        if thread_id:
+            session_threads[thread_id] = thread_id
+        if session_id:
+            session_threads[session_id] = thread_id
+    return session_threads
+
+
 def _load_timeline_stream_card(
     *,
     db: Session,
@@ -241,7 +261,11 @@ def _load_timeline_stream_card(
     session_id: str,
     owner_id: int | None = None,
 ) -> TimelineSessionCardResponse | None:
-    cards = build_timeline_cards_from_thread_rows(db=db, thread_rows=((thread_id, session_id, None),), owner_id=owner_id)
+    cards = build_timeline_cards_from_thread_rows(
+        db=db,
+        thread_rows=((thread_id, session_id, None),),
+        owner_id=owner_id,
+    )
     return cards[0] if cards else None
 
 
