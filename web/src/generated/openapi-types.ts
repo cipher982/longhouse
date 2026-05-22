@@ -5187,7 +5187,7 @@ export interface components {
              */
             execution_home: "unmanaged_local" | "managed_local" | "managed_hosted" | "cloud_takeover";
             /** Managed Transport */
-            managed_transport?: ("claude_channel_bridge" | "codex_app_server" | "opencode_process") | null;
+            managed_transport?: ("claude_channel_bridge" | "codex_app_server" | "opencode_process" | "antigravity_process") | null;
             /** Source Runner Id */
             source_runner_id?: number | null;
             /** Source Runner Name */
@@ -6570,7 +6570,7 @@ export interface components {
             cwd: string;
             /**
              * Provider
-             * @description AI provider CLI to launch (claude, codex, or opencode)
+             * @description AI provider CLI to launch (claude, codex, opencode, or antigravity)
              * @default claude
              */
             provider: string;
@@ -6655,7 +6655,7 @@ export interface components {
          *     Transport is auto-determined by launch context — not user-selectable.
          * @enum {string}
          */
-        ManagedSessionTransport: "claude_channel_bridge" | "codex_app_server" | "opencode_process";
+        ManagedSessionTransport: "claude_channel_bridge" | "codex_app_server" | "opencode_process" | "antigravity_process";
         /** ManagedTurnProviderSummaryResponse */
         ManagedTurnProviderSummaryResponse: {
             /** Completed Turns */
