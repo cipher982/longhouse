@@ -50,9 +50,10 @@ pub struct ConnectConfig {
 /// How long to coalesce a burst of filesystem events before scheduling work.
 /// Short enough to leave the bulk of the 500ms file-append → HTTP-send budget
 /// for actual shipping; long enough to coalesce the typical JSONL append
-/// burst (production observation_window p95 ≈ 250ms — most events arrive
-/// within 100ms of each other).
-const WATCHER_FLUSH_INTERVAL: Duration = Duration::from_millis(100);
+/// burst while keeping live transcript shipping responsive. Provider writes
+/// that need more coalescing are still protected by per-path in-flight work
+/// and the reconciliation scanner.
+const WATCHER_FLUSH_INTERVAL: Duration = Duration::from_millis(40);
 
 const INITIAL_SPOOL_PATH_LIMIT: usize = 100;
 const PERIODIC_SPOOL_PATH_LIMIT: usize = 50;
