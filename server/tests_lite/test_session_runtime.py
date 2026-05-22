@@ -791,6 +791,72 @@ def test_runtime_batch_endpoint_is_idempotent(tmp_path):
     engine.dispose()
 
 
+def test_runtime_batch_duplicate_skips_push_prep(tmp_path, monkeypatch):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_duplicate_fast_path.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=20))
+        runtime_key = runtime_key_for_session("claude", str(session.id))
+
+    from zerg.routers import runtime as runtime_router
+
+    call_counts = {
+        "targets": 0,
+        "widget": 0,
+        "runtime_map": 0,
+    }
+
+    def count(name):
+        def _inner(*args, **kwargs):
+            call_counts[name] += 1
+            if name == "runtime_map":
+                return {}
+            return None
+
+        return _inner
+
+    monkeypatch.setattr(runtime_router, "active_ios_targets_for_owner", count("targets"))
+    monkeypatch.setattr(runtime_router, "prepare_widget_timeline_push", count("widget"))
+    monkeypatch.setattr(runtime_router, "load_runtime_state_map", count("runtime_map"))
+
+    payload = {
+        "events": [
+            {
+                "runtime_key": runtime_key,
+                "session_id": str(session.id),
+                "provider": "claude",
+                "device_id": "cinder",
+                "source": "claude_hook",
+                "kind": "phase_signal",
+                "phase": "thinking",
+                "occurred_at": (now - timedelta(seconds=10)).isoformat(),
+                "freshness_ms": phase_freshness_ms("thinking"),
+                "dedupe_key": "duplicate-fast-path-1",
+                "payload": {},
+            }
+        ]
+    }
+
+    for client in _client(SessionLocal):
+        first = client.post("/agents/runtime/events/batch", json=payload, headers={"X-Agents-Token": "dev"})
+        assert first.status_code == 200, first.text
+        assert first.json()["updated_runtime_keys"] == [runtime_key]
+
+        call_counts.update({"targets": 0, "widget": 0, "runtime_map": 0})
+        second = client.post("/agents/runtime/events/batch", json=payload, headers={"X-Agents-Token": "dev"})
+        assert second.status_code == 200, second.text
+        assert second.json()["updated_runtime_keys"] == []
+
+    assert call_counts == {
+        "targets": 0,
+        "widget": 0,
+        "runtime_map": 0,
+    }
+
+    engine.dispose()
+
+
 def test_runtime_batch_endpoint_wakes_subscribers_for_applied_event(tmp_path):
     reset_pubsub_for_test()
     engine, SessionLocal = _make_db(tmp_path, "runtime_endpoint_pubsub.db")
