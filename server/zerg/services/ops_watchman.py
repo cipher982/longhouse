@@ -9,12 +9,10 @@ import time
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
-from pathlib import Path
 from typing import Any
 
 from openai import AsyncOpenAI
 from sqlalchemy import text
-from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
@@ -25,6 +23,7 @@ from zerg.models.work import OperationalIncident
 from zerg.models.work import OpsWatchObservation
 from zerg.models.work import OpsWatchRun
 from zerg.pricing import get_usd_prices_per_1k
+from zerg.services.db_diagnostics import collect_sqlite_db_stats
 from zerg.services.write_serializer import get_write_serializer
 from zerg.shared.email import send_alert_email
 
@@ -132,20 +131,6 @@ def _watchman_model_config() -> tuple[str, str, str, str | None, str | None]:
     return model_id, base_url, api_key_env, api_key, reasoning_effort
 
 
-def _db_file_paths() -> tuple[Path, Path] | None:
-    settings = get_settings()
-    try:
-        parsed = make_url(settings.database_url)
-    except Exception:
-        return None
-    db_raw = parsed.database or ""
-    if not db_raw:
-        return None
-    db_path = Path(db_raw).expanduser()
-    wal_path = Path(f"{db_path}-wal")
-    return db_path, wal_path
-
-
 def _make_observation(
     *,
     observed_at: datetime,
@@ -170,12 +155,9 @@ def _make_observation(
 
 
 def _collect_db_file_stats(db: Session, now: datetime, window_start: datetime) -> list[OpsWatchObservation]:
-    paths = _db_file_paths()
-    if paths is None:
+    payload = collect_sqlite_db_stats(get_settings().database_url, db=db)
+    if payload is None:
         return []
-
-    db_path, wal_path = paths
-    db_bytes = db_path.stat().st_size if db_path.exists() else None
 
     # Compute growth delta vs previous observation.
     prev = (
@@ -189,18 +171,9 @@ def _collect_db_file_stats(db: Session, now: datetime, window_start: datetime) -
         .first()
     )
     prev_bytes = prev.payload_json.get("db_bytes") if prev and prev.payload_json else None
+    db_bytes = payload.get("db_bytes")
     db_bytes_delta = (db_bytes - prev_bytes) if db_bytes is not None and prev_bytes is not None else None
-
-    payload = {
-        "database_url": get_settings().database_url,
-        "db_path": str(db_path),
-        "db_exists": db_path.exists(),
-        "db_bytes": db_bytes,
-        "db_bytes_delta": db_bytes_delta,
-        "wal_path": str(wal_path),
-        "wal_exists": wal_path.exists(),
-        "wal_bytes": wal_path.stat().st_size if wal_path.exists() else 0,
-    }
+    payload["db_bytes_delta"] = db_bytes_delta
     return [
         _make_observation(
             observed_at=now,

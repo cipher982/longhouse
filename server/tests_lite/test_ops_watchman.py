@@ -102,6 +102,18 @@ def test_collect_observations_includes_recent_session_activity(monkeypatch, tmp_
         "recent_session_activity",
     } <= sources
 
+    db_stats = next(row.payload_json for row in observations if row.source == "db_file_stats")
+    assert db_stats["db_path"] == str(db_path)
+    assert db_stats["db_exists"] is True
+    assert db_stats["db_bytes"] > 0
+    assert db_stats["wal_bytes"] >= 0
+    assert db_stats["disk_free_bytes"] > 0
+    assert db_stats["backup_dir"] == str(db_path.parent / "backups")
+    assert db_stats["backup_bytes"] == 0
+    assert db_stats["db_page_size"] > 0
+    assert db_stats["db_page_count"] > 0
+    assert db_stats["db_freelist_count"] >= 0
+
     session_rows = [
         row for row in observations if row.source == "recent_session_activity" and row.entity_id == str(session.id)
     ]
