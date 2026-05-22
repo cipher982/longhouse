@@ -255,6 +255,7 @@ def test_workspace_stream_detects_live_bridge_preview_observation(tmp_path):
 
     assert len(grouped.get("workspace_changed", [])) == 2
     preview_changed = grouped["workspace_changed"][1]
+    assert preview_changed["latest_event_id"] == -1
     assert preview_changed["transcript_preview"]["text"] == "hello live"
     assert preview_changed["transcript_preview"]["event_origin"] == "live_provisional"
 
@@ -513,6 +514,8 @@ def test_workspace_stream_can_emit_live_preview_before_db_signature_changes(tmp_
     assert len(changed_events) == 1
     changed = json.loads(changed_events[0]["data"])
     assert changed["pubsub_seq"] == 1
+    assert changed["latest_event_id"] == -3
+    assert changed["latest_event_emitted_at_ms"] == int(now.timestamp() * 1000)
     assert changed["transcript_preview"]["text"] == "hello before sqlite"
     assert changed["transcript_preview"]["event_origin"] == "live_provisional"
 

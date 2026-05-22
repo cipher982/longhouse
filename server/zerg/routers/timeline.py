@@ -761,6 +761,48 @@ def _workspace_latest_event_ts_ms(signature: tuple) -> int | None:
     return int(ts.timestamp() * 1000)
 
 
+def _workspace_render_event_id(signature: tuple, transcript_preview_payload: dict | None) -> int:
+    preview_id = _workspace_preview_event_id(transcript_preview_payload)
+    if preview_id is not None:
+        return -abs(preview_id)
+    return int(signature[2] or 0)
+
+
+def _workspace_render_event_ts_ms(signature: tuple, transcript_preview_payload: dict | None) -> int | None:
+    preview_ts = _workspace_preview_ts_ms(transcript_preview_payload)
+    if preview_ts is not None:
+        return preview_ts
+    return _workspace_latest_event_ts_ms(signature)
+
+
+def _workspace_preview_event_id(transcript_preview_payload: dict | None) -> int | None:
+    if not isinstance(transcript_preview_payload, dict):
+        return None
+    if transcript_preview_payload.get("event_origin") != "live_provisional":
+        return None
+    try:
+        return int(transcript_preview_payload.get("event_id"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _workspace_preview_ts_ms(transcript_preview_payload: dict | None) -> int | None:
+    if not isinstance(transcript_preview_payload, dict):
+        return None
+    if transcript_preview_payload.get("event_origin") != "live_provisional":
+        return None
+    raw = transcript_preview_payload.get("timestamp")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        ts = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return int(ts.timestamp() * 1000)
+
+
 async def _session_workspace_stream(
     request: Request,
     *,
@@ -838,10 +880,13 @@ async def _session_workspace_stream(
                         "data": json.dumps(
                             {
                                 "session_id": str(session_id),
-                                "latest_event_id": current_sig[2],
+                                "latest_event_id": _workspace_render_event_id(current_sig, consumed_preview_payload),
                                 "thread_session_count": current_sig[5],
                                 "detect_ms": round((monotonic() - wait_start) * 1000, 1) if wait_start else 0,
-                                "latest_event_emitted_at_ms": _workspace_latest_event_ts_ms(current_sig),
+                                "latest_event_emitted_at_ms": _workspace_render_event_ts_ms(
+                                    current_sig,
+                                    consumed_preview_payload,
+                                ),
                                 "server_fanout_at_ms": _workspace_server_fanout_at_ms(consumed_payload),
                                 "server_now_ms": int(now.timestamp() * 1000),
                                 "pubsub_seq": consumed_seq,
@@ -880,7 +925,6 @@ async def _session_workspace_stream(
 
             detect_ms = round((monotonic() - wait_start) * 1000, 1) if wait_start else 0
             latest_event_ts = current_sig[6] if len(current_sig) > 6 else None
-            latest_event_ts_ms = _workspace_latest_event_ts_ms(current_sig)
             now = datetime.now(timezone.utc)
             transcript_preview_payload = consumed_preview_payload
             bridge_transcript_head = current_sig[7] if len(current_sig) > 7 else 0
@@ -907,10 +951,13 @@ async def _session_workspace_stream(
                 "data": json.dumps(
                     {
                         "session_id": str(session_id),
-                        "latest_event_id": current_sig[2],
+                        "latest_event_id": _workspace_render_event_id(current_sig, transcript_preview_payload),
                         "thread_session_count": current_sig[5],
                         "detect_ms": detect_ms,
-                        "latest_event_emitted_at_ms": latest_event_ts_ms,
+                        "latest_event_emitted_at_ms": _workspace_render_event_ts_ms(
+                            current_sig,
+                            transcript_preview_payload,
+                        ),
                         "server_fanout_at_ms": server_fanout_at_ms,
                         "server_now_ms": int(now.timestamp() * 1000),
                         "pubsub_seq": consumed_seq,
