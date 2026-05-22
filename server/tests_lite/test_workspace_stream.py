@@ -448,6 +448,78 @@ def test_workspace_stream_wake_includes_fanout_metadata(tmp_path):
     assert changed["server_fanout_at_ms"] == 1_779_220_000_150
 
 
+def test_workspace_stream_can_emit_live_preview_before_db_signature_changes(tmp_path):
+    """Live preview wakes should paint even before the durable observation commit."""
+    from zerg.services.session_pubsub import publish_session_transcript_preview_update
+    from zerg.services.session_pubsub import reset_pubsub_for_test
+
+    reset_pubsub_for_test()
+    sf = _make_db(tmp_path, name="workspace_stream_precommit_preview.db")
+    now = datetime.now(timezone.utc)
+
+    with sf() as db:
+        session = AgentSession(
+            provider="codex",
+            environment="production",
+            project="test",
+            started_at=now,
+            user_messages=1,
+            assistant_messages=0,
+        )
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+        session_id = session.id
+
+    async def _run():
+        request = _DisconnectAfterNCycles(8)
+        events: list[dict] = []
+
+        async def publish_preview():
+            await asyncio.sleep(0.01)
+            publish_session_transcript_preview_update(
+                session_id=str(session_id),
+                provider="codex",
+                source="codex_bridge_live",
+                transcript_preview={
+                    "event_id": 3,
+                    "text": "hello before sqlite",
+                    "event_origin": "live_provisional",
+                    "timestamp": now.isoformat().replace("+00:00", "Z"),
+                    "is_provisional": True,
+                    "is_complete": False,
+                    "content_cursor": f"codex_bridge_live:{session_id}:thread-1:turn-1:3",
+                    "is_stale": False,
+                    "stale_reason": None,
+                },
+            )
+
+        publish_task = asyncio.create_task(publish_preview())
+        async for event in timeline_mod._session_workspace_stream(
+            request,
+            session_factory=sf,
+            session_id=session_id,
+            skip_initial=True,
+        ):
+            events.append(event)
+            if event.get("event") == "workspace_changed":
+                break
+        await publish_task
+        return events
+
+    events = asyncio.run(_run())
+    changed_events = [event for event in events if event["event"] == "workspace_changed"]
+
+    assert len(changed_events) == 1
+    changed = json.loads(changed_events[0]["data"])
+    assert changed["pubsub_seq"] == 1
+    assert changed["transcript_preview"]["text"] == "hello before sqlite"
+    assert changed["transcript_preview"]["event_origin"] == "live_provisional"
+
+    with sf() as db:
+        assert db.query(SessionObservation).filter(SessionObservation.session_id == session_id).count() == 0
+
+
 @patch.object(timeline_mod, "_wait_for_session_change", lambda _sub: _noop_coro())
 def test_workspace_stream_skip_initial(tmp_path):
     """skip_initial=True should delay first workspace_changed by one cycle."""

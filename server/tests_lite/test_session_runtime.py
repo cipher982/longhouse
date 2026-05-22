@@ -4252,6 +4252,14 @@ def test_runtime_batch_live_transcript_skips_apns_and_owner_work(tmp_path, monke
     with bus.subscribe(topic_session(str(session.id)), since_seq=0) as session_sub:
         msg = asyncio.run(session_sub.next_message(timeout=0.1))
         assert msg is not None
+        assert msg.payload["kind"] == "transcript_preview"
+        assert msg.payload["session_id"] == str(session.id)
+        assert msg.payload["provider"] == "codex"
+        assert msg.payload["source"] == "codex_bridge_live"
+        assert msg.payload["transcript_preview"]["text"] == "LH"
+        assert isinstance(msg.payload.get("server_fanout_at_ms"), int)
+        msg = asyncio.run(session_sub.next_message(timeout=0.1))
+        assert msg is not None
         assert msg.payload["kind"] == "runtime"
         assert msg.payload["session_id"] == str(session.id)
         assert msg.payload["provider"] == "codex"

@@ -80,6 +80,9 @@ async def ingest_runtime_observation_batch(
             if ev.session_id is not None and ev.tool_name:
                 tool_by_session.setdefault(ev.session_id, ev.tool_name)
 
+        if live_transcript_only:
+            _publish_live_transcript_previews(events, now=now_utc)
+
         def _do_runtime_state(wdb: Session):
             ingest_result = ingest_runtime_events(wdb, events)
 
@@ -301,6 +304,71 @@ def _is_bridge_live_transcript_event(event) -> bool:
         and event.kind == "progress_signal"
         and payload.get("progress_kind") == "bridge_live_transcript_delta"
     )
+
+
+def _publish_live_transcript_previews(events, *, now: datetime) -> None:
+    from zerg.services.session_pubsub import publish_session_transcript_preview_update
+
+    latest_by_session: dict[str, tuple[object, dict]] = {}
+    for event in events:
+        preview = _live_transcript_preview_payload(event, now=now)
+        if preview is None or event.session_id is None:
+            continue
+        sid = str(event.session_id)
+        existing = latest_by_session.get(sid)
+        if existing is not None and _preview_seq(preview) < _preview_seq(existing[1]):
+            continue
+        latest_by_session[sid] = (event, preview)
+
+    for sid, (event, preview) in latest_by_session.items():
+        publish_session_transcript_preview_update(
+            session_id=sid,
+            provider=event.provider,
+            source=event.source,
+            transcript_preview=preview,
+        )
+
+
+def _live_transcript_preview_payload(event, *, now: datetime) -> dict | None:
+    payload = event.payload or {}
+    text = str(payload.get("live_text") or "").strip()
+    if not text or event.session_id is None:
+        return None
+
+    seq = _coerce_nonnegative_int(payload.get("seq"))
+    observed_at = event.occurred_at or now
+    if observed_at.tzinfo is None:
+        observed_at = observed_at.replace(tzinfo=timezone.utc)
+    else:
+        observed_at = observed_at.astimezone(timezone.utc)
+
+    thread_id = str(payload.get("thread_id") or "unknown-thread").strip() or "unknown-thread"
+    turn_id = str(payload.get("turn_id") or "unknown-turn").strip() or "unknown-turn"
+    cursor_seq = str(seq) if seq is not None else "unknown-seq"
+    return {
+        "event_id": seq or 0,
+        "text": text,
+        "event_origin": "live_provisional",
+        "timestamp": observed_at.isoformat().replace("+00:00", "Z"),
+        "is_provisional": True,
+        "is_complete": bool(payload.get("turn_completed")),
+        "content_cursor": f"codex_bridge_live:{event.session_id}:{thread_id}:{turn_id}:{cursor_seq}",
+        "is_stale": False,
+        "stale_reason": None,
+    }
+
+
+def _coerce_nonnegative_int(value) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _preview_seq(preview: dict) -> int:
+    value = _coerce_nonnegative_int(preview.get("event_id"))
+    return value if value is not None else -1
 
 
 def _previous_attention_state_from_session(session: AgentSession) -> str | None:
