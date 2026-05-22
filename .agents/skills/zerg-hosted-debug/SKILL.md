@@ -7,6 +7,11 @@ description: Debug hosted Longhouse instances on zerg. Use when investigating da
 
 Use this when the question is about a live hosted tenant, not local `make dev`.
 
+For hosted 502s, slow Runtime Host startup, large tenant SQLite files, WAL
+growth, or disk pressure, read `docs/runbooks/hosted-sqlite-operations.md`
+before touching the database. Longhouse history is the product value; do not
+prune archived session logs as a recovery shortcut.
+
 ## Default Path
 
 Start with the repo helper:
@@ -49,6 +54,18 @@ It uses the existing repo helper in `scripts/lib/hosted-instance.sh`, which alre
 3. Check recent `events` and runtime `session_observations` to see what ingested and when.
 4. Check WriteSerializer/request-count summaries to distinguish hosted ingest lag from provider-loop latency.
 5. Only then tail full logs.
+
+For tenant SQLite health, use the runtime CLI before ad hoc SQL:
+
+```bash
+python -m zerg.cli.main db doctor --json
+python -m zerg.cli.main db doctor --json --deep
+python -m zerg.cli.main db optimize --json
+python -m zerg.cli.main migrate --no-schema-converge --json
+```
+
+`--deep --identity-counts` may scan archive tables and should be used only when
+the row-count cost is acceptable.
 
 ## Host Notes
 
