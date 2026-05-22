@@ -190,7 +190,12 @@ class AgentsStore:
 
         head_branch_id = self.get_head_branch_id(session.id)
         source_paths = {line.source_path for line in source_lines}
-        latest_by_offset, max_offset_by_path = self._list_branch_source_lines(session.id, head_branch_id, source_paths)
+        latest_by_offset, max_offset_by_path = self._list_branch_source_lines(
+            session.id,
+            head_branch_id,
+            source_paths,
+            source_offsets_by_path=self._source_offsets_by_path(source_lines),
+        )
 
         for line in source_lines:
             source_offset = int(line.source_offset)
@@ -966,8 +971,11 @@ class AgentsStore:
     def _list_branch_source_lines(
         self,
         session_id: UUID,
-        branch_id: int,
+        branch_id: int | None,
         source_paths: set[str],
+        *,
+        source_offsets_by_path: dict[str, set[int]] | None = None,
+        include_max_offsets: bool = True,
     ) -> tuple[dict[tuple[str, int], AgentSourceLine], dict[str, int]]:
         """Return latest line per (path, offset) and max offset per path for a branch."""
         latest: dict[tuple[str, int], AgentSourceLine] = {}
@@ -975,23 +983,58 @@ class AgentsStore:
         if not source_paths:
             return latest, max_offset_by_path
 
-        rows = (
+        query = (
             self.db.query(AgentSourceLine)
             .filter(AgentSourceLine.session_id == session_id)
             .filter(AgentSourceLine.branch_id == branch_id)
-            .filter(AgentSourceLine.source_path.in_(sorted(source_paths)))
-            .all()
         )
+        if source_offsets_by_path is None:
+            rows = query.filter(AgentSourceLine.source_path.in_(sorted(source_paths))).all()
+        else:
+            clauses = []
+            for source_path in sorted(source_paths):
+                offsets = sorted(source_offsets_by_path.get(source_path, set()))
+                if offsets:
+                    clauses.append(
+                        and_(
+                            AgentSourceLine.source_path == source_path,
+                            AgentSourceLine.source_offset.in_(offsets),
+                        )
+                    )
+            if not clauses:
+                return latest, max_offset_by_path
+            rows = query.filter(or_(*clauses)).all()
+            if include_max_offsets:
+                max_rows = (
+                    self.db.query(AgentSourceLine.source_path, func.max(AgentSourceLine.source_offset))
+                    .filter(AgentSourceLine.session_id == session_id)
+                    .filter(AgentSourceLine.branch_id == branch_id)
+                    .filter(AgentSourceLine.source_path.in_(sorted(source_paths)))
+                    .group_by(AgentSourceLine.source_path)
+                    .all()
+                )
+                max_offset_by_path = {
+                    str(source_path): int(max_offset)
+                    for source_path, max_offset in max_rows
+                    if source_path is not None and max_offset is not None
+                }
         for row in rows:
             key = (row.source_path, int(row.source_offset))
             prev = latest.get(key)
             if prev is None or int(row.revision) > int(prev.revision):
                 latest[key] = row
-            max_offset_by_path[row.source_path] = max(
-                max_offset_by_path.get(row.source_path, int(row.source_offset)),
-                int(row.source_offset),
-            )
+            if source_offsets_by_path is None and include_max_offsets:
+                max_offset_by_path[row.source_path] = max(
+                    max_offset_by_path.get(row.source_path, int(row.source_offset)),
+                    int(row.source_offset),
+                )
         return latest, max_offset_by_path
+
+    def _source_offsets_by_path(self, source_lines: list[SourceLineIngest]) -> dict[str, set[int]]:
+        offsets_by_path: dict[str, set[int]] = {}
+        for line in source_lines:
+            offsets_by_path.setdefault(line.source_path, set()).add(int(line.source_offset))
+        return offsets_by_path
 
     def _detect_source_rewind_signal(
         self,
@@ -1010,7 +1053,13 @@ class AgentsStore:
             return None
 
         source_paths = {line.source_path for line in source_lines}
-        latest_by_offset, _ = self._list_branch_source_lines(session_id, head_branch_id, source_paths)
+        latest_by_offset, _ = self._list_branch_source_lines(
+            session_id,
+            head_branch_id,
+            source_paths,
+            source_offsets_by_path=self._source_offsets_by_path(source_lines),
+            include_max_offsets=False,
+        )
         if not latest_by_offset:
             return None
 
@@ -1588,7 +1637,13 @@ class AgentsStore:
 
         stage_started = time.monotonic()
         source_paths = {line.source_path for line in source_lines}
-        latest_line_by_offset, _ = self._list_branch_source_lines(session_id, ingest_branch.id, source_paths)
+        latest_line_by_offset, _ = self._list_branch_source_lines(
+            session_id,
+            ingest_branch.id,
+            source_paths,
+            source_offsets_by_path=self._source_offsets_by_path(source_lines),
+            include_max_offsets=False,
+        )
         latest_state: dict[tuple[str, int], tuple[int, str]] = {
             key: (int(row.revision), row.line_hash) for key, row in latest_line_by_offset.items()
         }
