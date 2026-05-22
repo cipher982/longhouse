@@ -52,7 +52,7 @@ export default function QuickStartPage() {
       <h2>3. Find one prior session</h2>
       <p>
         Use the timeline or search to find one real past session. If you have
-        used Claude Code, Codex, or Gemini CLI on this machine, Longhouse will
+        used Claude Code, Codex, Antigravity, or legacy Gemini CLI on this machine, Longhouse will
         import your sessions during setup.
       </p>
       <div className="docs-callout">
@@ -80,20 +80,24 @@ export default function QuickStartPage() {
       </p>
       <CodeBlock title="terminal">
         {`longhouse claude    # Claude Code with control channel
-longhouse codex     # Codex CLI with control channel`}
+longhouse codex     # Codex CLI with control channel
+longhouse antigravity # Antigravity CLI with archive + phase hooks`}
       </CodeBlock>
       <p>
-        When Longhouse launches the session, it owns the control path so you
-        can message or reattach later from the browser, CLI, or API. Claude is
-        the strongest managed path today, but <code>longhouse codex</code> also keeps a
-        Codex session steerable.
+        When Longhouse launches the session, it owns the session record and
+        local observation path. Claude is the strongest managed path today, and{" "}
+        <code>longhouse codex</code> also keeps a Codex session steerable.
+        Antigravity is the new Google path and starts as managed observe-only:
+        archive, transcript, and phase signals without remote send controls.
       </p>
       <div className="docs-callout">
         <p>
           <strong>Managed vs unmanaged.</strong> Both show up in the timeline,
-          but only managed sessions keep a live control channel. Use{" "}
-          <code>longhouse claude</code> or <code>longhouse codex</code> as the
-          normal launch path whenever you want to keep a session steerable.
+          but managed sessions keep Longhouse ownership of the launch and
+          observation path. Use <code>longhouse claude</code> or{" "}
+          <code>longhouse codex</code> for steerable sessions, and{" "}
+          <code>longhouse antigravity</code> for managed Google CLI archive
+          and phase signals.
         </p>
       </div>
 

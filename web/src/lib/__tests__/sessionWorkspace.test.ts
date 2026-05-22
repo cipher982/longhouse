@@ -315,6 +315,49 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.composerDisabledReason).toMatch(/managed Codex session is read-only/i);
   });
 
+  it("keeps managed Antigravity sessions observe-only when agy exposes no send lane", () => {
+    const capabilities = getSessionInteractionCapabilities({
+      session: makeSession({
+        provider: "antigravity",
+        runtime_display: {
+          truth_tier: "fresh",
+          state: "idle",
+          tone: "idle",
+          headline: "Idle",
+          detail: "Waiting",
+          phase_label: "Idle",
+          compact_tool_label: null,
+          is_live: false,
+          is_executing: false,
+          needs_attention: false,
+          is_idle: true,
+          is_managed_local_truth: true,
+          has_signal: true,
+          control_path: "managed",
+          lifecycle: "open",
+          activity_recency: "recent",
+          host_state: "online",
+          terminal_reason: null,
+        },
+        capabilities: makeCapabilities({
+          input_mode: "read_only",
+          composer_enabled: false,
+          can_send_input: false,
+          can_interrupt: false,
+          can_resume: false,
+        }),
+      }),
+    });
+
+    expect(capabilities.mode).toBe("unsupported");
+    expect(capabilities.canChatFromBrowser).toBe(false);
+    expect(capabilities.managementLabel).toBe("Managed");
+    expect(capabilities.managedLaunchSuggestion).toBeNull();
+    expect(capabilities.capabilityLabel).toBe("Read only");
+    expect(capabilities.composerDisabledReason).toMatch(/managed Antigravity session is read-only/i);
+    expect(capabilities.primaryActionLabel).toBe("Unavailable");
+  });
+
   it("surfaces managed-local sessions without runner metadata as host-reattach only", () => {
     const capabilities = getSessionInteractionCapabilities({
       session: makeSession({
@@ -405,7 +448,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.managedLaunchSuggestion?.command).toBe("longhouse claude");
   });
 
-  it("treats unsupported providers as searchable context only", () => {
+  it("points legacy Gemini sessions at Antigravity for new Google CLI work", () => {
     const capabilities = getSessionInteractionCapabilities({
       session: makeSession({
         provider: "gemini",
@@ -417,9 +460,13 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.canChatFromBrowser).toBe(false);
     expect(capabilities.managementLabel).toBe("Unmanaged");
     expect(capabilities.capabilityLabel).toBe("Read only");
-    expect(capabilities.composerDisabledReason).toMatch(/cannot steer it/i);
-    expect(capabilities.composerDisabledReason).toMatch(/steer them from Longhouse/i);
-    expect(capabilities.managedLaunchSuggestion).toBeNull();
+    expect(capabilities.composerDisabledReason).toBe(
+      "This unmanaged Gemini session is read-only in Longhouse.",
+    );
+    expect(capabilities.managedLaunchSuggestion?.command).toBe("longhouse antigravity");
+    expect(capabilities.managedLaunchSuggestion?.title).toBe(
+      "Start the next Google CLI session with Antigravity",
+    );
     expect(capabilities.primaryActionLabel).toBe("Unavailable");
   });
 });

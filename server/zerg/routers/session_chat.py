@@ -124,7 +124,10 @@ class ManagedLocalThisDeviceLaunchRequest(BaseModel):
     """Request to start a managed local AI agent session on the calling device."""
 
     cwd: str = Field(..., min_length=1, description="Working directory on this device")
-    provider: str = Field("claude", description="AI provider CLI to launch (claude, codex, or opencode)")
+    provider: str = Field(
+        "claude",
+        description="AI provider CLI to launch (claude, codex, opencode, or antigravity)",
+    )
     project: str | None = Field(None, description="Optional project label")
     git_repo: str | None = Field(None, description="Optional git repository path")
     git_branch: str | None = Field(None, description="Optional git branch name")
@@ -475,12 +478,16 @@ async def launch_managed_local_this_device(
 ):
     """Start a managed local AI agent session on the calling machine's connected runner."""
 
+    settings = get_settings()
     owner_id = _resolve_agents_owner_id(db, device_token)
     token_device_id = str(getattr(device_token, "device_id", "") or "").strip()
+    machine_name = (body.machine_name or "").strip() or token_device_id
+    if not token_device_id and settings.auth_disabled:
+        token_device_id = machine_name
     if not token_device_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Device token is missing device_id")
     # machine_name is a display label; routing is always by device_id.
-    machine_name = (body.machine_name or "").strip() or token_device_id
+    machine_name = machine_name or token_device_id
     runner_target = token_device_id
 
     try:

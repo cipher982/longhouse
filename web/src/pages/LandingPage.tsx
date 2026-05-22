@@ -90,7 +90,7 @@ export default function LandingPage() {
   usePageMeta({
     title: "Longhouse - Mission control for your AI coding sessions",
     description:
-      "Bring Claude Code, Codex CLI, and Gemini CLI sessions into one timeline, find past work fast, and steer live sessions later.",
+      "Bring Claude Code, Codex CLI, and Antigravity CLI sessions into one timeline, find past work fast, and steer live sessions later.",
   });
 
   // Show loading while checking auth or accepting token

@@ -9,6 +9,7 @@ import typer
 import zerg.bootstrap_sqlite  # noqa: F401
 from zerg.build_info import BuildIdentityMissing
 from zerg.build_info import load as load_build_identity
+from zerg.cli.antigravity import antigravity
 from zerg.cli.claude import claude
 from zerg.cli.claude_channel import app as claude_channel_app
 from zerg.cli.codex import app as codex_app
@@ -249,6 +250,7 @@ for command in (serve, status, claude, wall, peers, message, tail, auth, ship, r
     app.command()(command)
 
 app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})(opencode)
+app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})(antigravity)
 app.command(name="continue")(continue_session)
 app.command(name="connect")(connect_command)
 app.command(name="version")(version_command)

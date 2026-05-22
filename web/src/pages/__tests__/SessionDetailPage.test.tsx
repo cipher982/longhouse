@@ -868,18 +868,21 @@ describe("SessionDetailPage", () => {
     expect(screen.getByTestId("session-chat")).toBeInTheDocument();
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
       "data-disabled-reason",
-      "Longhouse can search this unmanaged Gemini session here, but it cannot steer it. Launch new Gemini sessions through Longhouse when you want to steer them from Longhouse.",
+      "This unmanaged Gemini session is read-only in Longhouse.",
     );
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
       "data-launch-command",
       "",
     );
+    expect(screen.getByTestId("session-managed-launch-hint")).toHaveTextContent(
+      "Start the next Google CLI session with Antigravity",
+    );
     expect(
-      screen.queryByTestId("session-managed-launch-hint"),
+      screen.getByTestId("session-managed-launch-hint-command"),
+    ).toHaveTextContent("longhouse antigravity");
+    expect(
+      screen.queryByTestId("session-continuation-unavailable"),
     ).not.toBeInTheDocument();
-    expect(
-      screen.getByTestId("session-continuation-unavailable"),
-    ).toHaveTextContent("Gemini session — unmanaged");
     expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
       "Read only",
     );

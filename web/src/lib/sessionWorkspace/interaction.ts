@@ -18,10 +18,30 @@ function getManagedLaunchSuggestion(provider: string, providerLabel: string): Ma
       command: "longhouse codex",
     };
   }
+  if (provider === "antigravity") {
+    return {
+      title: "Start the next Antigravity session through Longhouse",
+      body: "This session stays searchable here. Use this command when you want the next Antigravity session to have Longhouse ownership and phase signals.",
+      command: "longhouse antigravity",
+    };
+  }
+  if (provider === "gemini") {
+    return {
+      title: "Start the next Google CLI session with Antigravity",
+      body: "Legacy Gemini sessions stay searchable here. Use Antigravity for new Google CLI sessions so Longhouse can archive them with managed ownership and phase signals.",
+      command: "longhouse antigravity",
+    };
+  }
   return null;
 }
 
-function getManagedLaunchHint(providerLabel: string): string {
+function getManagedLaunchHint(provider: string, providerLabel: string): string {
+  if (provider === "gemini") {
+    return "Use Antigravity for new Google CLI sessions when you want Longhouse ownership and phase signals.";
+  }
+  if (provider === "antigravity") {
+    return "Launch new Antigravity sessions through Longhouse when you want Longhouse ownership and phase signals.";
+  }
   return `Launch new ${providerLabel} sessions through Longhouse when you want to steer them from Longhouse.`;
 }
 
@@ -54,7 +74,7 @@ export function getSessionInteractionCapabilities({
   const isManagedLocalCodex = session.provider === "codex" && isManagedLocalSession;
   const sourceOriginLabel = getSessionOriginLabel(session);
   const headOriginLabel = headThreadSession ? getSessionOriginLabel(headThreadSession) : null;
-  const genericLaunchHint = getManagedLaunchHint(providerLabel);
+  const genericLaunchHint = getManagedLaunchHint(session.provider, providerLabel);
 
   const serverInputMode = session.capabilities.input_mode;
   const mode: SessionInteractionMode =

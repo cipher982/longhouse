@@ -201,7 +201,7 @@ enum Commands {
         #[arg(long)]
         file: Option<PathBuf>,
 
-        /// Provider name override when using --file (claude, codex, gemini)
+        /// Provider name override when using --file (claude, codex, antigravity, gemini)
         #[arg(long)]
         provider: Option<String>,
 
@@ -383,7 +383,7 @@ enum Commands {
         #[arg(long)]
         session_id: String,
 
-        /// Provider name (claude, codex, gemini)
+        /// Provider name (claude, codex, antigravity, gemini)
         #[arg(long, default_value = "claude")]
         provider: String,
 

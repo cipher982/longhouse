@@ -1,7 +1,7 @@
 """Agents store service for session and event CRUD operations.
 
 Provides a clean interface for ingesting and querying AI coding sessions
-from any provider (Claude Code, Codex, Gemini, Cursor).
+from any provider (Claude Code, Codex, Antigravity, legacy Gemini, Cursor).
 """
 
 import hashlib
@@ -33,14 +33,14 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionRuntimeState
+from zerg.services.agents.kernel_writes import ensure_primary_thread
+from zerg.services.agents.kernel_writes import record_thread_alias
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.provisional_events import visible_transcript_event_predicate
 from zerg.services.raw_json_compression import CODEC_PLAIN
 from zerg.services.raw_json_compression import CODEC_ZSTD
 from zerg.services.raw_json_compression import compress_raw_json
 from zerg.services.raw_json_compression import decode_raw_json
-from zerg.services.agents.kernel_writes import ensure_primary_thread
-from zerg.services.agents.kernel_writes import record_thread_alias
 from zerg.services.session_observation_reducers import ProviderEventReduction
 from zerg.services.session_observation_reducers import reduce_provider_event_observation
 from zerg.services.session_observations import record_provider_event_observation
@@ -58,7 +58,7 @@ from .helpers import _infer_execution_home_from_session
 from .helpers import _infer_origin_label_from_ingest
 from .helpers import _infer_origin_label_from_session
 from .helpers import _normalize_utc_naive
-from .helpers import _should_replace_managed_local_codex_provider_session_id
+from .helpers import _should_replace_managed_local_placeholder_provider_session_id
 from .models import CompactionBoundary
 from .models import EventIngest
 from .models import IngestResult
@@ -498,7 +498,7 @@ class AgentsStore:
         incoming_provider_session_id = str(data.provider_session_id or "").strip()
         if incoming_provider_session_id and (
             not session.provider_session_id
-            or _should_replace_managed_local_codex_provider_session_id(session, incoming_provider_session_id)
+            or _should_replace_managed_local_placeholder_provider_session_id(session, incoming_provider_session_id)
         ):
             session.provider_session_id = data.provider_session_id
         if data.thread_root_session_id and not session.thread_root_session_id:

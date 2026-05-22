@@ -17,7 +17,7 @@ Make the landing page sell the prelaunch wedge clearly:
 ## Audience
 
 Primary:
-- solo developers already using Claude Code, Codex CLI, or Gemini CLI
+- solo developers already using Claude Code, Codex CLI, or Antigravity CLI
 - technical early adopters who are comfortable with terminals and APIs
 - users who already feel the pain of losing context across agent sessions
 - users who already have a pile of existing Claude/Codex work and want value without changing workflow first
@@ -162,8 +162,8 @@ See `docs/specs/launch-runtime-simplification.md` for the current launch framing
 Say this bluntly in docs and on the page:
 
 - Claude Code is the strongest launch-ready continuation path.
-- Claude, Codex, and Gemini can all be imported/shipped into the archive and inspected.
-- Codex and Gemini continuation should not be sold as parity features until they are actually polished.
+- Claude, Codex, Antigravity, and legacy Gemini can all be imported/shipped into the archive and inspected.
+- Codex and Antigravity continuation should not be sold as parity features until they are actually polished.
 
 ## Launch Feature Triage
 

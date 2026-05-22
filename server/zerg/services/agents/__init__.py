@@ -7,7 +7,7 @@ from .helpers import _infer_execution_home_from_session
 from .helpers import _infer_origin_label_from_ingest
 from .helpers import _infer_origin_label_from_session
 from .helpers import _normalize_utc_naive
-from .helpers import _should_replace_managed_local_codex_provider_session_id
+from .helpers import _should_replace_managed_local_placeholder_provider_session_id
 from .models import CompactionBoundary
 from .models import EventIngest
 from .models import IngestResult
@@ -35,7 +35,7 @@ __all__ = [
     "_normalize_utc_naive",
     "_infer_execution_home_from_ingest",
     "_infer_execution_home_from_session",
-    "_should_replace_managed_local_codex_provider_session_id",
+    "_should_replace_managed_local_placeholder_provider_session_id",
     "_infer_continuation_kind_from_ingest",
     "_infer_origin_label_from_ingest",
     "_infer_continuation_kind_from_session",

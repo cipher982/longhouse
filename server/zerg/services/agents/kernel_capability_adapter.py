@@ -32,6 +32,7 @@ _CONTROL_PLANE_TO_TRANSPORT: dict[str, ManagedSessionTransport] = {
     "codex_bridge": ManagedSessionTransport.CODEX_APP_SERVER,
     "claude_channel_bridge": ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE,
     "opencode_process": ManagedSessionTransport.OPENCODE_PROCESS,
+    "antigravity_process": ManagedSessionTransport.ANTIGRAVITY_PROCESS,
 }
 
 

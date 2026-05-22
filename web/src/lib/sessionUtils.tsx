@@ -175,6 +175,7 @@ function formatProviderName(provider: string | null | undefined): string {
   if (!value) return "agent";
   if (value.toLowerCase() === "codex") return "Codex";
   if (value.toLowerCase() === "claude") return "Claude";
+  if (value.toLowerCase() === "antigravity") return "Antigravity";
   if (value.toLowerCase() === "gemini") return "Gemini";
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
@@ -261,6 +262,7 @@ export function compactRuntimeToolLabel(toolName: string | null): string | null 
   const lower = normalized.toLowerCase();
   if (lower === "codex") return "Codex";
   if (lower === "claude") return "Claude";
+  if (lower === "antigravity") return "Antigravity";
   if (lower === "gemini") return "Gemini";
   if (lower === "default") return "Z.ai";
   if (lower === "shell" || lower === "bash" || lower === "terminal") return "Shell";
