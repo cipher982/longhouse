@@ -14,12 +14,12 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
+from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentHeartbeat
-from zerg.database import Base
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import UnmanagedSessionBinding
@@ -1095,6 +1095,184 @@ def test_sessions_list_marks_recent_managed_idle_with_missing_assistant_as_synci
         assert row["runtime_display"]["is_idle"] is False
         assert row["timeline_card"]["status"]["label"] == "Syncing"
         assert row["timeline_card"]["status"]["tone"] == "active"
+
+
+def test_sessions_list_marks_managed_idle_after_unanswered_latest_user_as_syncing(tmp_path):
+    factory = _make_db(tmp_path, "materialized_runtime_syncing_unanswered_user.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            started_at=now - timedelta(minutes=5),
+            ended_at=None,
+            project="runtime-syncing-unanswered",
+            user_messages=45,
+            assistant_messages=113,
+            execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
+            managed_transport="claude_channel_bridge",
+            source_runner_id=1,
+            managed_session_name="claude",
+        )
+        AgentsStore(db).ingest_session(
+            SessionIngest(
+                id=session.id,
+                provider="claude",
+                environment="production",
+                project="runtime-syncing-unanswered",
+                started_at=session.started_at,
+                execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
+                events=[
+                    EventIngest(
+                        role="assistant",
+                        content_text="previous response",
+                        timestamp=now - timedelta(seconds=30),
+                        source_path="/tmp/claude-syncing.jsonl",
+                        source_offset=1,
+                        raw_json='{"type":"assistant"}',
+                    ),
+                    EventIngest(
+                        role="user",
+                        content_text="latest prompt with no response yet",
+                        timestamp=now - timedelta(seconds=20),
+                        source_path="/tmp/claude-syncing.jsonl",
+                        source_offset=2,
+                        raw_json='{"type":"user"}',
+                    ),
+                    EventIngest(
+                        role="system",
+                        content_text="File history snapshot",
+                        timestamp=now - timedelta(seconds=19),
+                        source_path="/tmp/claude-syncing.jsonl",
+                        source_offset=3,
+                        raw_json='{"type":"system"}',
+                    ),
+                ],
+            )
+        )
+        session.user_messages = 45
+        session.assistant_messages = 113
+        session.last_activity_at = now - timedelta(seconds=19)
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=f"claude:{session.id}",
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="phase_signal",
+                    phase="thinking",
+                    occurred_at=now - timedelta(seconds=18),
+                    freshness_ms=90_000,
+                    dedupe_key=f"{session.id}:thinking",
+                ),
+                RuntimeEventIngest(
+                    runtime_key=f"claude:{session.id}",
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="phase_signal",
+                    phase="idle",
+                    occurred_at=now,
+                    freshness_ms=600_000,
+                    dedupe_key=f"{session.id}:idle",
+                ),
+            ],
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    for client in _client(factory):
+        resp = client.get(
+            "/agents/sessions?project=runtime-syncing-unanswered&provider=claude&limit=5",
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert resp.status_code == 200, resp.text
+        row = resp.json()["sessions"][0]
+        assert row["assistant_messages"] == 113
+        assert row["user_messages"] == 45
+        assert row["presence_state"] == "idle"
+        assert row["runtime_display"]["state"] == "syncing_transcript"
+        assert row["runtime_display"]["phase_label"] == "Syncing transcript"
+        assert row["runtime_display"]["is_idle"] is False
+
+
+def test_sessions_list_does_not_infer_syncing_without_post_prompt_active_phase(tmp_path):
+    factory = _make_db(tmp_path, "materialized_runtime_no_syncing_without_active.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            started_at=now - timedelta(minutes=5),
+            ended_at=None,
+            project="runtime-not-syncing-unanswered",
+            user_messages=45,
+            assistant_messages=113,
+            execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
+            managed_transport="claude_channel_bridge",
+            source_runner_id=1,
+            managed_session_name="claude",
+        )
+        AgentsStore(db).ingest_session(
+            SessionIngest(
+                id=session.id,
+                provider="claude",
+                environment="production",
+                project="runtime-not-syncing-unanswered",
+                started_at=session.started_at,
+                execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
+                events=[
+                    EventIngest(
+                        role="assistant",
+                        content_text="previous response",
+                        timestamp=now - timedelta(seconds=30),
+                        source_path="/tmp/claude-no-syncing.jsonl",
+                        source_offset=1,
+                        raw_json='{"type":"assistant"}',
+                    ),
+                    EventIngest(
+                        role="user",
+                        content_text="latest prompt with no active phase",
+                        timestamp=now - timedelta(seconds=20),
+                        source_path="/tmp/claude-no-syncing.jsonl",
+                        source_offset=2,
+                        raw_json='{"type":"user"}',
+                    ),
+                ],
+            )
+        )
+        session.user_messages = 45
+        session.assistant_messages = 113
+        session.last_activity_at = now - timedelta(seconds=20)
+        _upsert_runtime_state(
+            db,
+            session_id=str(session.id),
+            phase="idle",
+            updated_at=now,
+            freshness_window=timedelta(minutes=10),
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    for client in _client(factory):
+        resp = client.get(
+            "/agents/sessions?project=runtime-not-syncing-unanswered&provider=claude&limit=5",
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert resp.status_code == 200, resp.text
+        row = resp.json()["sessions"][0]
+        assert row["presence_state"] == "idle"
+        assert row["runtime_display"]["state"] == "idle"
+        assert row["runtime_display"]["phase_label"] == "Idle"
+        assert row["runtime_display"]["is_idle"] is True
 
 
 def test_active_sessions_online_process_binding_keeps_needs_user_idle(tmp_path):
