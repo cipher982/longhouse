@@ -58,6 +58,7 @@ def record_session_observation(
     source_offset: int | None = None,
     source_cursor: str | None = None,
     thread_id: UUID | None = None,
+    load_observation: bool = True,
 ) -> ObservationWriteResult:
     # Phase 2 dual-write: ensure thread_id stamping never silently drops to NULL.
     # Callers may pass an explicit thread_id; when absent and a session_id is
@@ -94,6 +95,8 @@ def record_session_observation(
     )
     result = db.execute(stmt)
     if result.rowcount:
+        if not load_observation:
+            return ObservationWriteResult(observation=None, inserted=True)
         db.flush()
         observation = db.query(SessionObservation).filter(SessionObservation.observation_id == observation_id).first()
         return ObservationWriteResult(observation=observation, inserted=True)
@@ -106,6 +109,7 @@ def record_runtime_observation(
     *,
     received_at: datetime | None = None,
     thread_id: UUID | None = None,
+    load_observation: bool = True,
 ) -> ObservationWriteResult:
     payload = event.payload or {}
     dedupe_key = _runtime_dedupe_key(event)
@@ -124,6 +128,7 @@ def record_runtime_observation(
         source_cursor=f"{event.kind}:{dedupe_key}",
         observed_at=event.occurred_at,
         received_at=received_at,
+        load_observation=load_observation,
         payload={
             "kind": event.kind,
             "phase": event.phase,
