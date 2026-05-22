@@ -1,5 +1,6 @@
-from sqlalchemy import inspect
 from unittest.mock import patch
+
+from sqlalchemy import inspect
 
 from zerg.database import _ensure_agents_fts
 from zerg.database import initialize_database
@@ -24,6 +25,23 @@ def test_initialize_database_sqlite_creates_tables(tmp_path):
     assert "sessions" in tables
     assert "events" in tables
     assert "events_fts" in tables
+
+
+def test_initialize_database_sqlite_does_not_plan_heavy_migrations(monkeypatch, tmp_path):
+    import zerg.db_migrations as db_migrations
+
+    db_path = tmp_path / "zerg.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+
+    def fail_if_called(_engine):
+        raise AssertionError("startup must not scan heavy migration state")
+
+    monkeypatch.setattr(db_migrations, "pending_heavy_migration_names", fail_if_called)
+
+    initialize_database(engine)
+
+    inspector = inspect(engine)
+    assert "migration_runs" in set(inspector.get_table_names())
 
 
 def test_ensure_agents_fts_skips_write_path_when_objects_already_exist(tmp_path):
