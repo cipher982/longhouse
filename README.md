@@ -1,6 +1,6 @@
 # Longhouse
 
-Mission control for CLI agent sessions running on machines you own. One searchable timeline for Claude Code, Codex, and Antigravity sessions — plus a live control path when you launch them through Longhouse. Legacy Gemini sessions remain searchable.
+Mission control for CLI agent sessions running on machines you own. One searchable timeline for Claude Code, Codex, and Antigravity sessions, with live control where the provider CLI supports it. Legacy Gemini sessions remain searchable.
 
 Works on your laptop. Shines on a machine that stays on.
 
