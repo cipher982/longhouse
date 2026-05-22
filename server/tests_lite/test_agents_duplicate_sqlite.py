@@ -8,6 +8,7 @@ from datetime import datetime
 from datetime import timezone
 from uuid import uuid4
 
+import pytest
 from sqlalchemy.orm import sessionmaker
 
 from zerg.database import Base
@@ -268,8 +269,19 @@ def test_duplicate_ingest_upgrades_generic_environment_to_machine_label(tmp_path
         assert stored.last_activity_at == later_time.replace(tzinfo=None)
 
 
-def test_duplicate_ingest_replaces_managed_local_codex_placeholder_provider_session_id(tmp_path):
-    db_path = tmp_path / "duplicate_codex_placeholder_upgrade.db"
+@pytest.mark.parametrize(
+    ("provider", "managed_transport"),
+    [
+        ("codex", "codex_app_server"),
+        ("antigravity", "antigravity_process"),
+    ],
+)
+def test_duplicate_ingest_replaces_managed_local_placeholder_provider_session_id(
+    tmp_path,
+    provider,
+    managed_transport,
+):
+    db_path = tmp_path / f"duplicate_{provider}_placeholder_upgrade.db"
     engine = make_engine(f"sqlite:///{db_path}")
     engine = engine.execution_options(schema_translate_map={"agents": None})
     Base.metadata.create_all(bind=engine)
@@ -280,13 +292,13 @@ def test_duplicate_ingest_replaces_managed_local_codex_placeholder_provider_sess
 
         base_time = datetime(2026, 3, 22, 12, 0, 0, tzinfo=timezone.utc)
         session_id = uuid4()
-        native_provider_session_id = "019c638d-0000-0000-0000-000000000999"
+        native_provider_session_id = f"{provider}-native-session"
 
         launched = AgentSession(
             id=session_id,
-            provider="codex",
+            provider=provider,
             environment="development",
-            project="managed-local-codex",
+            project=f"managed-local-{provider}",
             device_id="cinder",
             cwd="/tmp/zerg",
             started_at=base_time,
@@ -296,7 +308,7 @@ def test_duplicate_ingest_replaces_managed_local_codex_placeholder_provider_sess
             continuation_kind="local",
             origin_label="cinder",
             execution_home="managed_local",
-            managed_transport="codex_app_server",
+            managed_transport=managed_transport,
             user_messages=0,
             assistant_messages=0,
             tool_calls=0,
@@ -309,9 +321,9 @@ def test_duplicate_ingest_replaces_managed_local_codex_placeholder_provider_sess
         first = store.ingest_session(
             SessionIngest(
                 id=session_id,
-                provider="codex",
+                provider=provider,
                 environment="development",
-                project="managed-local-codex",
+                project=f"managed-local-{provider}",
                 device_id="cinder",
                 cwd="/tmp/zerg",
                 started_at=base_time,
@@ -333,9 +345,9 @@ def test_duplicate_ingest_replaces_managed_local_codex_placeholder_provider_sess
         second = store.ingest_session(
             SessionIngest(
                 id=session_id,
-                provider="codex",
+                provider=provider,
                 environment="development",
-                project="managed-local-codex",
+                project=f"managed-local-{provider}",
                 device_id="cinder",
                 cwd="/tmp/zerg",
                 started_at=base_time,

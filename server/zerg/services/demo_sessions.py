@@ -352,7 +352,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
     ]
 
     # -------------------------------------------------------------------------
-    # Session 3: Gemini — Sauron job failing silently (sauron)
+    # Session 3: Antigravity - Sauron job failing silently (sauron)
     # Medium ops/debug session, 18 events
     # -------------------------------------------------------------------------
     t3 = anchor - timedelta(days=3, hours=1)
@@ -828,7 +828,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
     ]
 
     # -------------------------------------------------------------------------
-    # Session 7: Gemini — Add Recall panel to sessions page (longhouse)
+    # Session 7: Antigravity - Add Recall panel to sessions page (longhouse)
     # Medium feature session, 15 events
     # -------------------------------------------------------------------------
     t7 = anchor - timedelta(days=1, hours=3)
@@ -1166,7 +1166,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             events=s2,
         ),
         SessionIngest(
-            provider="gemini",
+            provider="antigravity",
             environment="production",
             project="sauron",
             device_id="shipper-laptop",
@@ -1175,7 +1175,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             git_branch="fix/digest-timezone",
             started_at=t3,
             ended_at=t3 + timedelta(minutes=12),
-            provider_session_id="demo-gemini-01",
+            provider_session_id="demo-antigravity-01",
             events=s3,
         ),
         SessionIngest(
@@ -1218,7 +1218,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             events=s6,
         ),
         SessionIngest(
-            provider="gemini",
+            provider="antigravity",
             environment="production",
             project="longhouse",
             device_id="shipper-laptop",
@@ -1227,7 +1227,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             git_branch="feat/recall-panel",
             started_at=t7,
             ended_at=t7 + timedelta(minutes=12),
-            provider_session_id="demo-gemini-02",
+            provider_session_id="demo-antigravity-02",
             events=s7,
         ),
         SessionIngest(

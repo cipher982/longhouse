@@ -41,7 +41,13 @@ def _infer_execution_home_from_session(session: AgentSession) -> SessionExecutio
     )
 
 
-def _should_replace_managed_local_codex_provider_session_id(session: AgentSession, incoming_provider_session_id: str) -> bool:
+_MANAGED_NATIVE_PROVIDER_SESSION_ID_PROVIDERS = {"codex", "antigravity"}
+
+
+def _should_replace_managed_local_placeholder_provider_session_id(
+    session: AgentSession,
+    incoming_provider_session_id: str,
+) -> bool:
     current_provider_session_id = str(session.provider_session_id or "").strip()
     if not current_provider_session_id:
         return False
@@ -49,9 +55,11 @@ def _should_replace_managed_local_codex_provider_session_id(session: AgentSessio
         return False
     if incoming_provider_session_id == current_provider_session_id:
         return False
-    if str(session.provider or "").strip().lower() != "codex":
+    provider = str(session.provider or "").strip().lower()
+    if provider not in _MANAGED_NATIVE_PROVIDER_SESSION_ID_PROVIDERS:
         return False
-    return str(getattr(session, "execution_home", "") or "").strip() == SessionExecutionHome.MANAGED_LOCAL.value
+    execution_home = str(getattr(session, "execution_home", "") or "").strip()
+    return execution_home == SessionExecutionHome.MANAGED_LOCAL.value
 
 
 def _infer_continuation_kind_from_ingest(data: "SessionIngest") -> str:

@@ -1,6 +1,6 @@
 //! Multi-provider session file discovery.
 //!
-//! Discovers session files across Claude, Codex, and Gemini providers.
+//! Discovers session files across Claude, Codex, Antigravity, and legacy Gemini providers.
 //! Replaces the Claude-only `bench::discover_session_files()`.
 
 use std::path::{Path, PathBuf};
@@ -48,6 +48,16 @@ fn provider_candidates(home: &Path, claude_root: &Path) -> Vec<ProviderConfig> {
             extension: "jsonl",
         },
         ProviderConfig {
+            name: "antigravity",
+            root: home.join(".gemini").join("antigravity-cli").join("brain"),
+            extension: "jsonl",
+        },
+        ProviderConfig {
+            name: "antigravity",
+            root: home.join(".gemini").join("antigravity").join("brain"),
+            extension: "jsonl",
+        },
+        ProviderConfig {
             name: "gemini",
             root: home.join(".gemini").join("tmp"),
             extension: "json",
@@ -71,10 +81,7 @@ pub fn discover_all_files(providers: &[ProviderConfig]) -> Vec<(PathBuf, &'stati
             .filter_map(|e| e.ok())
         {
             let path = entry.path();
-            if path
-                .extension()
-                .map_or(false, |ext| ext == provider.extension)
-            {
+            if is_provider_session_file(provider, path) {
                 if let Ok(meta) = path.metadata() {
                     if meta.len() > 0 {
                         let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
@@ -101,11 +108,24 @@ pub fn provider_for_path(
     providers: &[ProviderConfig],
 ) -> Option<&'static str> {
     for provider in providers {
-        if path.starts_with(&provider.root) {
+        if path.starts_with(&provider.root) && is_provider_session_file(provider, path) {
             return Some(provider.name);
         }
     }
     None
+}
+
+fn is_provider_session_file(provider: &ProviderConfig, path: &Path) -> bool {
+    let extension_matches = path
+        .extension()
+        .map_or(false, |ext| ext == provider.extension);
+    if !extension_matches {
+        return false;
+    }
+    if provider.name == "antigravity" {
+        return path.file_name().and_then(|name| name.to_str()) == Some("transcript.jsonl");
+    }
+    true
 }
 
 #[cfg(test)]
@@ -122,6 +142,36 @@ mod tests {
         assert_eq!(providers[0].name, "claude");
         assert_eq!(providers[0].root, claude_root.join("projects"));
         assert_eq!(providers[1].root, home.join(".codex").join("sessions"));
-        assert_eq!(providers[2].root, home.join(".gemini").join("tmp"));
+        assert_eq!(
+            providers[2].root,
+            home.join(".gemini").join("antigravity-cli").join("brain")
+        );
+        assert_eq!(
+            providers[3].root,
+            home.join(".gemini").join("antigravity").join("brain")
+        );
+        assert_eq!(providers[4].root, home.join(".gemini").join("tmp"));
+    }
+
+    #[test]
+    fn antigravity_provider_ignores_full_transcript_mirror() {
+        let home = PathBuf::from("/tmp/home");
+        let claude_root = PathBuf::from("/tmp/custom-claude");
+        let providers = provider_candidates(&home, &claude_root);
+        let transcript = home
+            .join(".gemini")
+            .join("antigravity-cli")
+            .join("brain")
+            .join("conversation")
+            .join(".system_generated")
+            .join("logs")
+            .join("transcript.jsonl");
+        let full_transcript = transcript.with_file_name("transcript_full.jsonl");
+
+        assert_eq!(
+            provider_for_path(&transcript, &providers),
+            Some("antigravity")
+        );
+        assert_eq!(provider_for_path(&full_transcript, &providers), None);
     }
 }

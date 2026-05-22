@@ -6,7 +6,7 @@
  * Add new providers here when onboarding them.
  */
 
-export type LaunchProviderId = "claude" | "codex" | "gemini";
+export type LaunchProviderId = "claude" | "codex" | "antigravity";
 
 export type LaunchProviderSupport = {
   id: LaunchProviderId;
@@ -40,15 +40,15 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
     hooksSupport: "none",
     telemetryQuality: "structured",
   },
-  gemini: {
-    id: "gemini",
-    marketingName: "Gemini CLI",
-    cardDescription: "Archive and search today",
-    statusLabel: "Archive first",
+  antigravity: {
+    id: "antigravity",
+    marketingName: "Antigravity CLI",
+    cardDescription: "Archive, launch, and hook-backed phase signals",
+    statusLabel: "New path",
     archiveVisibility: "live",
     cloudSessionStart: "live",
-    hooksSupport: "none",
-    telemetryQuality: "basic",
+    hooksSupport: "live",
+    telemetryQuality: "structured",
   },
 };
 
@@ -61,6 +61,8 @@ export function getProviderColor(provider: string): string {
       return "var(--color-provider-codex)";
     case "gemini":
       return "var(--color-provider-gemini)";
+    case "antigravity":
+      return "var(--color-provider-antigravity)";
     case "zai":
       return "var(--color-provider-zai)";
     default:
@@ -77,6 +79,8 @@ export function getProviderIcon(provider: string): string {
       return "X";
     case "gemini":
       return "G";
+    case "antigravity":
+      return "A";
     case "zai":
       return "Z";
     default:
@@ -100,6 +104,6 @@ export function getLaunchProviderSupportList(): LaunchProviderSupport[] {
   return [
     LAUNCH_PROVIDER_SUPPORT.claude,
     LAUNCH_PROVIDER_SUPPORT.codex,
-    LAUNCH_PROVIDER_SUPPORT.gemini,
+    LAUNCH_PROVIDER_SUPPORT.antigravity,
   ];
 }

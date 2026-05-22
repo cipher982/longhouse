@@ -68,6 +68,7 @@ enum RuntimeDisplayText {
         switch normalized.lowercased() {
         case "codex": return "Codex"
         case "claude": return "Claude"
+        case "antigravity": return "Antigravity"
         case "gemini": return "Gemini"
         case "default": return "Z.ai"
         case "shell", "bash", "terminal": return "Shell"

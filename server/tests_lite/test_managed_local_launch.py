@@ -128,6 +128,73 @@ def test_this_device_launch_allows_offline_runner_for_local_provider_start(monke
     assert session.device_id == "cinder"
 
 
+def test_this_device_launch_uses_machine_name_as_dev_device_id(monkeypatch, tmp_path):
+    from zerg.services import managed_local_launcher
+
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        _user, runner = _seed_user_and_runner(db)
+        client, api_app = _make_device_client(db, None)
+        monkeypatch.setattr(
+            managed_local_launcher,
+            "get_runner_connection_manager",
+            lambda: SimpleNamespace(is_online=lambda *_args: True),
+        )
+
+        try:
+            response = client.post(
+                "/api/sessions/managed-local/this-device",
+                json={
+                    "cwd": "/tmp/demo",
+                    "provider": "antigravity",
+                    "project": "demo",
+                    "machine_name": "cinder",
+                },
+            )
+        finally:
+            api_app.dependency_overrides = {}
+
+        payload = response.json()
+        session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
+
+    assert response.status_code == 200, response.text
+    assert payload["source_runner_id"] == runner.id
+    assert payload["source_runner_name"] == "cinder"
+    assert session.device_id == "cinder"
+    assert session.provider == "antigravity"
+
+
+def test_this_device_launch_rejects_missing_device_id(monkeypatch, tmp_path):
+    from zerg.services import managed_local_launcher
+
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        _user, _runner = _seed_user_and_runner(db)
+        client, api_app = _make_device_client(db, None)
+        monkeypatch.setattr(
+            managed_local_launcher,
+            "get_runner_connection_manager",
+            lambda: SimpleNamespace(is_online=lambda *_args: True),
+        )
+
+        try:
+            response = client.post(
+                "/api/sessions/managed-local/this-device",
+                json={
+                    "cwd": "/tmp/demo",
+                    "provider": "antigravity",
+                    "project": "demo",
+                },
+            )
+        finally:
+            api_app.dependency_overrides = {}
+
+    assert response.status_code == 400, response.text
+    assert "device_id" in response.json()["detail"]
+
+
 def test_this_device_launch_does_not_require_runner_record(monkeypatch, tmp_path):
     from zerg.services import managed_local_launcher
 
@@ -335,4 +402,54 @@ def test_this_device_launch_creates_native_codex_session(monkeypatch, tmp_path):
     assert timeline_message.payload["session_id"] == payload["session_id"]
     assert timeline_message.payload["kind"] == "runtime"
     assert timeline_message.payload["source"] == "managed_local_launch"
+    reset_pubsub_for_test()
+
+
+def test_this_device_launch_creates_native_antigravity_session(monkeypatch, tmp_path):
+    from zerg.models.agents import SessionConnection
+    from zerg.services import managed_local_launcher
+
+    reset_pubsub_for_test()
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        user, runner = _seed_user_and_runner(db)
+        device_token = SimpleNamespace(owner_id=user.id, device_id="cinder")
+        client, api_app = _make_device_client(db, device_token)
+        monkeypatch.setattr(
+            managed_local_launcher,
+            "get_runner_connection_manager",
+            lambda: SimpleNamespace(is_online=lambda *_args: True),
+        )
+
+        try:
+            response = client.post(
+                "/api/sessions/managed-local/this-device",
+                json={
+                    "cwd": "/tmp/demo",
+                    "provider": "antigravity",
+                    "project": "demo",
+                },
+            )
+        finally:
+            api_app.dependency_overrides = {}
+
+        payload = response.json()
+        session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
+        runtime_state = (
+            db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == payload["session_id"]).one()
+        )
+        connection = db.query(SessionConnection).one()
+
+    assert response.status_code == 200, response.text
+    assert payload["managed_transport"] == "antigravity_process"
+    assert payload["source_runner_id"] == runner.id
+    assert payload["attach_command"] == ""
+    assert session.provider == "antigravity"
+    assert session.managed_transport == "antigravity_process"
+    assert runtime_state.phase == "idle"
+    assert connection.control_plane == "antigravity_process"
+    assert connection.can_tail_output == 1
+    assert connection.can_send_input == 0
+    assert connection.can_interrupt == 0
     reset_pubsub_for_test()

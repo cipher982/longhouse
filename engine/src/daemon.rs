@@ -1867,6 +1867,7 @@ fn provider_name_to_static(provider: &str) -> Option<&'static str> {
     match provider {
         "claude" => Some("claude"),
         "codex" => Some("codex"),
+        "antigravity" => Some("antigravity"),
         "gemini" => Some("gemini"),
         _ => None,
     }

@@ -5,7 +5,7 @@ import { CodeBlock } from "./CodeBlock";
 export default function IntegrationsPage() {
   usePageMeta({
     title: "Integrations - Longhouse Docs",
-    description: "Supported CLI agents: Claude Code, Codex CLI, Gemini CLI, and more.",
+    description: "Supported CLI agents: Claude Code, Codex CLI, Antigravity CLI, and more.",
   });
 
   return (
@@ -76,12 +76,16 @@ export default function IntegrationsPage() {
         </tbody>
       </table>
 
-      <h2>Gemini CLI</h2>
+      <h2>Antigravity CLI</h2>
       <p>
-        Treat Gemini as archive and search first today. Longhouse ingests the
-        sessions cleanly, but live control and continuation are not the reason
-        to buy on Gemini yet, even when the session is managed.
+        Antigravity is Google's new CLI path. Longhouse launches it with{" "}
+        <code>longhouse antigravity</code>, installs a small Antigravity plugin
+        for hook-backed phase signals, and binds its transcript to the managed
+        Longhouse session when hooks expose the transcript path.
       </p>
+      <CodeBlock title="terminal">
+        {`longhouse antigravity          # start Antigravity CLI with Longhouse session ownership`}
+      </CodeBlock>
       <table>
         <thead>
           <tr>
@@ -92,11 +96,19 @@ export default function IntegrationsPage() {
         <tbody>
           <tr><td>Session import</td><td>Full</td></tr>
           <tr><td>Search & detail</td><td>Full</td></tr>
-          <tr><td>Launch through Longhouse</td><td>Early</td></tr>
-          <tr><td>Live control</td><td>Not yet</td></tr>
+          <tr><td>Launch through Longhouse</td><td>Supported</td></tr>
+          <tr><td>Phase hooks</td><td>Supported</td></tr>
+          <tr><td>Live control</td><td>Observe-only today</td></tr>
           <tr><td>Continue / branch</td><td>Not yet</td></tr>
         </tbody>
       </table>
+
+      <h2>Legacy Gemini CLI</h2>
+      <p>
+        Gemini CLI remains a legacy archive path. Longhouse keeps the parser
+        and import behavior so existing sessions stay searchable, but new Google
+        CLI work should move to Antigravity.
+      </p>
 
       <h2>Coming Soon</h2>
       <ul>

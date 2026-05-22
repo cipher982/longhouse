@@ -25,6 +25,7 @@ class ManagedSessionTransport(str, Enum):
     CLAUDE_CHANNEL_BRIDGE = "claude_channel_bridge"
     CODEX_APP_SERVER = "codex_app_server"
     OPENCODE_PROCESS = "opencode_process"
+    ANTIGRAVITY_PROCESS = "antigravity_process"
 
     @staticmethod
     def for_provider(
@@ -37,6 +38,8 @@ class ManagedSessionTransport(str, Enum):
             return ManagedSessionTransport.CODEX_APP_SERVER
         if provider == "opencode":
             return ManagedSessionTransport.OPENCODE_PROCESS
+        if provider == "antigravity":
+            return ManagedSessionTransport.ANTIGRAVITY_PROCESS
         if provider == "claude":
             return ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE
         raise ValueError(f"Unsupported managed-local provider: {provider}")

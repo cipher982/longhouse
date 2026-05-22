@@ -202,6 +202,7 @@ function compactFactToolLabel(toolName: string | null | undefined): string | nul
   const lower = normalized.toLowerCase();
   if (lower === "codex") return "Codex";
   if (lower === "claude") return "Claude";
+  if (lower === "antigravity") return "Antigravity";
   if (lower === "gemini") return "Gemini";
   if (lower === "default") return "Z.ai";
   if (lower === "shell" || lower === "bash" || lower === "terminal") return "Shell";

@@ -26,6 +26,7 @@ from typing import Any
 
 from zerg.managed_phase_contract import display_label_for_phase
 from zerg.managed_phase_contract import is_known_raw_phase
+from zerg.provider_cli_contract import ANTIGRAVITY_BIN_ENV
 from zerg.provider_cli_contract import CODEX_BIN_ENV
 from zerg.provider_cli_contract import OPENCODE_BIN_ENV
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_BRIDGE_STATE
@@ -240,6 +241,17 @@ def _collect_provider_clis() -> dict[str, Any]:
         opencode_path = shutil.which("opencode")
         opencode_source = PROVIDER_CLI_SOURCE_PATH if opencode_path else PROVIDER_CLI_SOURCE_MISSING
         opencode_resolution_error = None if opencode_path else "`opencode` not found on PATH"
+    antigravity_env_candidate = _normalize_optional_string(os.environ.get(ANTIGRAVITY_BIN_ENV))
+    if antigravity_env_candidate:
+        antigravity_path = _resolve_provider_cli_candidate(antigravity_env_candidate)
+        antigravity_source = ANTIGRAVITY_BIN_ENV
+        antigravity_resolution_error = (
+            None if antigravity_path else f"{ANTIGRAVITY_BIN_ENV} did not resolve to an executable"
+        )
+    else:
+        antigravity_path = shutil.which("agy")
+        antigravity_source = PROVIDER_CLI_SOURCE_PATH if antigravity_path else PROVIDER_CLI_SOURCE_MISSING
+        antigravity_resolution_error = None if antigravity_path else "`agy` not found on PATH"
     return {
         "codex": {
             "path": codex_path,
@@ -252,6 +264,12 @@ def _collect_provider_clis() -> dict[str, Any]:
             "source": opencode_source,
             "resolution_error": opencode_resolution_error,
             "env_override": opencode_env_candidate,
+        },
+        "antigravity": {
+            "path": antigravity_path,
+            "source": antigravity_source,
+            "resolution_error": antigravity_resolution_error,
+            "env_override": antigravity_env_candidate,
         },
     }
 
@@ -1870,6 +1888,22 @@ def _is_opencode_cmdline(cmdline: list[str]) -> bool:
     return script in {"opencode", "opencode.js"}
 
 
+def _is_antigravity_cmdline(cmdline: list[str]) -> bool:
+    if not cmdline:
+        return False
+    exe = cmdline[0].rsplit("/", 1)[-1]
+    if exe in {"agy", "antigravity"}:
+        return True
+    if exe.startswith("longhouse-"):
+        return False
+    if exe not in {"node", "nodejs", "bun"}:
+        return False
+    script = cmdline[1].rsplit("/", 1)[-1] if len(cmdline) > 1 else ""
+    if script.startswith("longhouse-"):
+        return False
+    return script in {"agy", "agy.js", "antigravity", "antigravity.js"}
+
+
 def _provider_for_cmdline(cmdline: list[str]) -> str | None:
     if _is_claude_cmdline(cmdline):
         return "claude"
@@ -1877,6 +1911,8 @@ def _provider_for_cmdline(cmdline: list[str]) -> str | None:
         return "codex"
     if _is_opencode_cmdline(cmdline):
         return "opencode"
+    if _is_antigravity_cmdline(cmdline):
+        return "antigravity"
     return None
 
 
@@ -1947,7 +1983,7 @@ def _collect_managed_sessions_by_process(
     phase_overlay: dict[str, dict[str, str | None]] | None = None,
     scanned_processes: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Detect live managed provider processes (Claude/Codex) via same-uid scan.
+    """Detect live managed provider processes via same-uid scan.
 
     Uses psutil to enumerate provider processes the current user owns, then
     tags them as managed by either env (`LONGHOUSE_MANAGED_SESSION_ID`) or, as

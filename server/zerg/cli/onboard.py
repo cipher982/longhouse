@@ -432,7 +432,10 @@ def onboard(
             skip_local_server = False
 
     typer.echo("")
-    typer.echo("Install Longhouse, open it, and find one prior session. Start Longhouse sessions later when you want control.")
+    typer.echo(
+        "Install Longhouse, open it, and find one prior session. "
+        "Start Longhouse sessions later when you want control."
+    )
     typer.echo("")
 
     # Step 1: Check dependencies
@@ -442,15 +445,18 @@ def onboard(
     # Check supported AI CLIs
     has_claude = _has_command("claude")
     has_codex = _has_command("codex")
+    has_antigravity = _has_command("agy")
     has_gemini = _has_command("gemini")
-    has_any_cli = has_claude or has_codex or has_gemini
+    has_any_cli = has_claude or has_codex or has_antigravity or has_gemini
 
     if has_claude:
         typer.secho("  [OK] Claude Code found", fg=typer.colors.GREEN)
     if has_codex:
         typer.secho("  [OK] Codex CLI found", fg=typer.colors.GREEN)
+    if has_antigravity:
+        typer.secho("  [OK] Antigravity CLI found", fg=typer.colors.GREEN)
     if has_gemini:
-        typer.secho("  [OK] Gemini CLI found", fg=typer.colors.GREEN)
+        typer.secho("  [OK] Legacy Gemini CLI found", fg=typer.colors.GREEN)
 
     if not has_any_cli:
         typer.secho("  [--] No supported AI CLI found", fg=typer.colors.YELLOW)
@@ -458,7 +464,7 @@ def onboard(
         typer.echo("  Longhouse works with any of these CLI tools:")
         typer.echo("    - Claude Code  https://docs.anthropic.com/en/docs/claude-code/overview")
         typer.echo("    - Codex CLI    https://github.com/openai/codex")
-        typer.echo("    - Gemini CLI   https://github.com/google-gemini/gemini-cli")
+        typer.echo("    - Antigravity  https://antigravity.google/product/antigravity-cli")
         typer.echo("")
         typer.echo("  You can still set up the local runtime now and connect a CLI later.")
         typer.echo("  You can also import sessions manually via JSONL upload.")
@@ -546,12 +552,18 @@ def onboard(
                 installed_desktop_app = install_menubar and bool(getattr(install_result, "desktop_app_result", None))
                 typer.secho("  [OK] Machine agent installed for automatic imports", fg=typer.colors.GREEN)
                 if install_result.hooks.warning:
-                    typer.secho(f"  [WARN] CLI hook install had issues: {install_result.hooks.warning}", fg=typer.colors.YELLOW)
+                    typer.secho(
+                        f"  [WARN] CLI hook install had issues: {install_result.hooks.warning}",
+                        fg=typer.colors.YELLOW,
+                    )
             except Exception as e:
                 typer.secho(f"  [WARN] Could not install machine agent: {e}", fg=typer.colors.YELLOW)
                 typer.echo("         Run manually: longhouse connect --install")
         else:
-            typer.secho("  [--] Background machine-agent install is not available in this environment", fg=typer.colors.YELLOW)
+            typer.secho(
+                "  [--] Background machine-agent install is not available in this environment",
+                fg=typer.colors.YELLOW,
+            )
             typer.echo("       Use: longhouse connect")
             typer.echo("       Or import once with: longhouse ship")
 
@@ -567,7 +579,7 @@ def onboard(
                 typer.echo("         Retry with: longhouse ship")
         elif not has_any_cli:
             typer.echo("  No supported CLI found yet, so Longhouse skipped the initial import.")
-            typer.echo("  Install Claude Code, Codex CLI, or Gemini CLI later, then run: longhouse ship")
+            typer.echo("  Install Claude Code, Codex CLI, or Antigravity CLI later, then run: longhouse ship")
         else:
             typer.echo("  Skipping initial import (local runtime not running)")
 
@@ -616,17 +628,19 @@ def onboard(
         typer.echo("  2. Find one prior session in the timeline")
     else:
         typer.echo("  1. Open Longhouse")
-        typer.echo("  2. Install Claude Code, Codex CLI, or Gemini CLI when you want real imports")
+        typer.echo("  2. Install Claude Code, Codex CLI, or Antigravity CLI when you want real imports")
     if installed_desktop_app:
         typer.echo("  3. Look for Longhouse.app in /Applications and your menu bar")
     typer.echo("")
-    typer.echo("Next, when you want control after launch:")
+    typer.echo("Next, when you want Longhouse-managed launch:")
     if has_claude:
         typer.echo("  longhouse claude   Start a Longhouse Claude session")
     if has_codex:
         typer.echo("  longhouse codex    Start a Longhouse Codex session")
-    if not (has_claude or has_codex):
-        typer.echo("  Install Claude Code or Codex CLI, then start a Longhouse session")
+    if has_antigravity:
+        typer.echo("  longhouse antigravity Start an Antigravity archive + observe session")
+    if not (has_claude or has_codex or has_antigravity):
+        typer.echo("  Install Claude Code, Codex CLI, or Antigravity CLI, then start a Longhouse session")
     typer.echo("")
     typer.echo("Repair tools (only if you need them later):")
     typer.echo("  longhouse doctor            Diagnose local setup issues")
