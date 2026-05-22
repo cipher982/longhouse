@@ -214,6 +214,13 @@ struct DiscoveryTaskResult {
     reason: &'static str,
 }
 
+struct ManagedObservationScanResult {
+    reason: &'static str,
+    codex_observations: Vec<managed_bridge_scan::CodexBridgeObservation>,
+    claude_observations: Vec<managed_claude_scan::ClaudeChannelObservation>,
+    elapsed_ms: u64,
+}
+
 /// Run the connect daemon. This function blocks until shutdown signal.
 pub async fn run(config: ConnectConfig) -> Result<()> {
     // 1. Open state DB
@@ -299,10 +306,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         PathScheduler::with_limiter(max_in_flight, std::sync::Arc::clone(&adaptive_limiter));
     let mut in_flight = JoinSet::new();
     let mut discovery_tasks: JoinSet<DiscoveryTaskResult> = JoinSet::new();
+    let mut managed_observation_scan_tasks: JoinSet<ManagedObservationScanResult> = JoinSet::new();
     let mut deferred_retries = HashMap::new();
 
     let initial_retry_paths =
         queue_pending_spool_paths(&mut scheduler, &conn, INITIAL_SPOOL_PATH_LIMIT)?;
+    maybe_start_managed_observation_scan(&mut managed_observation_scan_tasks, "startup");
     tracing::info!(
         "Queued startup catch-up: {} retry paths; startup reconciliation deferred by {:?} (max {} concurrent)",
         initial_retry_paths,
@@ -801,6 +810,107 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
+            managed_observation_scan_result = managed_observation_scan_tasks.join_next(), if !managed_observation_scan_tasks.is_empty() => {
+                match managed_observation_scan_result {
+                    Some(Ok(result)) => {
+                        if result.elapsed_ms > 250 {
+                            tracing::warn!(
+                                reason = result.reason,
+                                codex_count = result.codex_observations.len(),
+                                claude_count = result.claude_observations.len(),
+                                elapsed_ms = result.elapsed_ms,
+                                "Managed observation scan was slow"
+                            );
+                        } else {
+                            tracing::debug!(
+                                reason = result.reason,
+                                codex_count = result.codex_observations.len(),
+                                claude_count = result.claude_observations.len(),
+                                elapsed_ms = result.elapsed_ms,
+                                "Managed observation scan completed"
+                            );
+                        }
+                        refresh_managed_codex_transcript_paths(
+                            &mut managed_codex_transcript_paths,
+                            &result.codex_observations,
+                        );
+                        reconcile_claude_terminal_signals(
+                            &mut live_claude_channels,
+                            &mut pending_claude_terminal_signals,
+                            &config.shipper_config.machine_name,
+                            &result.claude_observations,
+                            chrono::Utc::now(),
+                        );
+                        maybe_spawn_claude_terminal_post(
+                            &mut claude_terminal_post_tasks,
+                            client.clone(),
+                            &pending_claude_terminal_signals,
+                            offline.is_offline,
+                        );
+                        pump_ready_local_work(
+                            &mut scheduler,
+                            &mut in_flight,
+                            &task_context,
+                            &mut deferred_retries,
+                            offline.is_offline,
+                        );
+                        maybe_start_unmanaged_binding_refresh(
+                            &mut unmanaged_binding_refresh_tasks,
+                            config.shipper_config.db_path.clone(),
+                            config.shipper_config.machine_name.clone(),
+                            last_unmanaged_session_bindings_refreshed_at,
+                            Instant::now(),
+                            result.reason,
+                        );
+                        let empty_unmanaged_bindings: &[heartbeat::UnmanagedSessionBinding] = &[];
+                        let unmanaged_binding_override =
+                            last_unmanaged_session_bindings.as_deref().unwrap_or(empty_unmanaged_bindings);
+                        let payload = write_local_status_snapshot(
+                            &conn,
+                            &tracker,
+                            &parse_tracker,
+                            &ship_stats,
+                            offline.is_offline,
+                            &last_ship_at,
+                            &config.shipper_config.machine_name,
+                            &status_path,
+                            &result.codex_observations,
+                            &result.claude_observations,
+                            serde_json::to_value(control_channel_status.snapshot()).ok(),
+                            Some(unmanaged_binding_override),
+                            Some(adaptive_limiter.as_ref()),
+                        );
+                        bridge_reaper.tick(&result.codex_observations);
+                        let signature = runtime_truth_signature(&payload);
+                        if !runtime_truth_bootstrapped {
+                            last_runtime_truth_signature = Some(signature);
+                            runtime_truth_bootstrapped = true;
+                            continue;
+                        }
+                        if !offline.is_offline && last_runtime_truth_signature.as_deref() != Some(signature.as_str()) {
+                            if heartbeat_post_tasks.is_empty() {
+                                spawn_heartbeat_post(
+                                    &mut heartbeat_post_tasks,
+                                    client.clone(),
+                                    payload,
+                                    signature,
+                                    "runtime_truth_change",
+                                );
+                            } else {
+                                last_runtime_truth_signature = None;
+                                tracing::debug!(
+                                    "Runtime truth snapshot changed while a heartbeat POST is still in flight"
+                                );
+                            }
+                        }
+                    }
+                    Some(Err(err)) => {
+                        tracing::warn!("Managed observation scan task failed: {}", err);
+                    }
+                    None => {}
+                }
+            }
+
             _ = &mut startup_reconciliation_timer, if startup_reconciliation_pending && !offline.is_offline => {
                 startup_reconciliation_pending = false;
                 maybe_start_reconciliation_scan(
@@ -1008,81 +1118,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
             // Frequent local status file refresh for ambient UX and debugging
             _ = local_status_timer.tick() => {
-                let observations = managed_bridge_scan::collect_observations();
-                refresh_managed_codex_transcript_paths(
-                    &mut managed_codex_transcript_paths,
-                    &observations,
-                );
-                let claude_observations = managed_claude_scan::collect_observations();
-                reconcile_claude_terminal_signals(
-                    &mut live_claude_channels,
-                    &mut pending_claude_terminal_signals,
-                    &config.shipper_config.machine_name,
-                    &claude_observations,
-                    chrono::Utc::now(),
-                );
-                maybe_spawn_claude_terminal_post(
-                    &mut claude_terminal_post_tasks,
-                    client.clone(),
-                    &pending_claude_terminal_signals,
-                    offline.is_offline,
-                );
-                pump_ready_local_work(
-                    &mut scheduler,
-                    &mut in_flight,
-                    &task_context,
-                    &mut deferred_retries,
-                    offline.is_offline,
-                );
-                maybe_start_unmanaged_binding_refresh(
-                    &mut unmanaged_binding_refresh_tasks,
-                    config.shipper_config.db_path.clone(),
-                    config.shipper_config.machine_name.clone(),
-                    last_unmanaged_session_bindings_refreshed_at,
-                    Instant::now(),
-                    "local_status",
-                );
-                let empty_unmanaged_bindings: &[heartbeat::UnmanagedSessionBinding] = &[];
-                let unmanaged_binding_override =
-                    last_unmanaged_session_bindings.as_deref().unwrap_or(empty_unmanaged_bindings);
-                let payload = write_local_status_snapshot(
-                    &conn,
-                    &tracker,
-                    &parse_tracker,
-                    &ship_stats,
-                    offline.is_offline,
-                    &last_ship_at,
-                    &config.shipper_config.machine_name,
-                    &status_path,
-                    &observations,
-                    &claude_observations,
-                    serde_json::to_value(control_channel_status.snapshot()).ok(),
-                    Some(unmanaged_binding_override),
-                    Some(adaptive_limiter.as_ref()),
-                );
-                bridge_reaper.tick(&observations);
-                let signature = runtime_truth_signature(&payload);
-                if !runtime_truth_bootstrapped {
-                    last_runtime_truth_signature = Some(signature);
-                    runtime_truth_bootstrapped = true;
-                    continue;
-                }
-                if !offline.is_offline && last_runtime_truth_signature.as_deref() != Some(signature.as_str()) {
-                    if heartbeat_post_tasks.is_empty() {
-                        spawn_heartbeat_post(
-                            &mut heartbeat_post_tasks,
-                            client.clone(),
-                            payload,
-                            signature,
-                            "runtime_truth_change",
-                        );
-                    } else {
-                        last_runtime_truth_signature = None;
-                        tracing::debug!(
-                            "Runtime truth snapshot changed while a heartbeat POST is still in flight"
-                        );
-                    }
-                }
+                maybe_start_managed_observation_scan(&mut managed_observation_scan_tasks, "local_status");
             }
 
             // Periodic server heartbeat
@@ -1447,6 +1483,27 @@ fn maybe_start_unmanaged_binding_refresh(
         UnmanagedBindingRefreshResult {
             reason,
             result,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        }
+    });
+}
+
+fn maybe_start_managed_observation_scan(
+    scan_tasks: &mut JoinSet<ManagedObservationScanResult>,
+    reason: &'static str,
+) {
+    if !scan_tasks.is_empty() {
+        return;
+    }
+
+    scan_tasks.spawn_blocking(move || {
+        let started = Instant::now();
+        let codex_observations = managed_bridge_scan::collect_observations();
+        let claude_observations = managed_claude_scan::collect_observations();
+        ManagedObservationScanResult {
+            reason,
+            codex_observations,
+            claude_observations,
             elapsed_ms: started.elapsed().as_millis() as u64,
         }
     });
