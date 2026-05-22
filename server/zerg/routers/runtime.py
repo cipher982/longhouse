@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from datetime import timezone
 
@@ -320,12 +321,28 @@ def _publish_live_transcript_previews(events, *, now: datetime) -> None:
             continue
         latest_by_session[sid] = (event, preview)
 
+    logger = logging.getLogger("longhouse.live_transcript")
     for sid, (event, preview) in latest_by_session.items():
         publish_session_transcript_preview_update(
             session_id=sid,
             provider=event.provider,
             source=event.source,
             transcript_preview=preview,
+        )
+        observed_at = event.occurred_at
+        if observed_at is not None:
+            if observed_at.tzinfo is None:
+                observed_at = observed_at.replace(tzinfo=timezone.utc)
+            age_ms = max(0.0, (now - observed_at).total_seconds() * 1000.0)
+        else:
+            age_ms = 0.0
+        logger.info(
+            "live_transcript publish session=%s seq=%s age_ms=%.1f text_len=%d complete=%s",
+            sid,
+            _preview_seq(preview),
+            age_ms,
+            len(preview.get("text") or ""),
+            preview.get("is_complete"),
         )
 
 

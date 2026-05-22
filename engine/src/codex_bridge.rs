@@ -15,7 +15,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
-use tracing::warn;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::codex_source::{codex_rollout_file_is_subagent, codex_thread_value_is_subagent};
@@ -3143,6 +3143,15 @@ impl BridgeRuntimeSink {
         seq: u64,
         live_text: &str,
     ) {
+        info!(
+            target: "codex_bridge::live_transcript",
+            session_id = %self.session_id,
+            seq,
+            method,
+            delta_len = delta.len(),
+            text_len = live_text.len(),
+            "live_transcript flush"
+        );
         self.post_live_runtime_events_background(vec![self.live_transcript_delta_event(
             method,
             delta,
@@ -3160,6 +3169,13 @@ impl BridgeRuntimeSink {
         seq: u64,
         live_text: &str,
     ) {
+        info!(
+            target: "codex_bridge::live_transcript",
+            session_id = %self.session_id,
+            seq,
+            text_len = live_text.len(),
+            "live_transcript completed"
+        );
         self.post_live_runtime_events_background(vec![self.live_transcript_delta_event(
             "turn/completed",
             "",
