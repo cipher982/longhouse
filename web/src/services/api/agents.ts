@@ -681,6 +681,7 @@ export interface SessionWorkspaceStreamChange {
   server_fanout_at_ms?: number | null;
   server_now_ms?: number;
   pubsub_seq?: number;
+  transcript_preview?: SessionTranscriptPreview | null;
 }
 
 export interface SessionWorkspaceStreamHandlers {

@@ -955,6 +955,9 @@ final class SessionViewModel: ObservableObject {
                 clockSkewMs: clockSkewMs,
                 pubsubSeq: change.pubsub_seq
             )
+            if let transcriptPreview = change.transcript_preview?.sessionTranscriptPreview {
+                applyRealtimeTranscriptPreview(transcriptPreview, sessionId: sessionId)
+            }
             guard let api = apiFactory(appState.serverURL) else { return }
             try? await refreshTail(api: api, sessionId: sessionId, allowFailure: true)
         }
@@ -963,6 +966,15 @@ final class SessionViewModel: ObservableObject {
     private func pollTick(sessionId: String, appState: AppState) async {
         guard let api = apiFactory(appState.serverURL) else { return }
         try? await refreshTail(api: api, sessionId: sessionId, allowFailure: true)
+    }
+
+    private func applyRealtimeTranscriptPreview(_ preview: SessionTranscriptPreview, sessionId: String) {
+        guard activeSessionId == sessionId else { return }
+        let currentDetail = detail?.replacingTranscriptPreview(preview)
+        detail = currentDetail
+        items = TimelineBuilder.build(
+            events: visibleTranscriptEvents(durableEvents: lastWorkspaceEvents, preview: currentDetail?.transcriptPreview)
+        )
     }
 
     func loadOlder(sessionId: String, appState: AppState) async {

@@ -712,6 +712,28 @@ def _load_workspace_signature(
     )
 
 
+def _load_workspace_transcript_preview_payload(
+    db: Session,
+    *,
+    session_id: UUID,
+    latest_event_timestamp: datetime | None,
+    now: datetime,
+) -> dict | None:
+    """Return a hot-path transcript preview payload for the focused session."""
+    from zerg.services.provisional_events import load_active_provisional_preview_map
+    from zerg.services.session_views import build_session_transcript_preview_response
+
+    preview = load_active_provisional_preview_map(db, [session_id]).get(str(session_id))
+    response = build_session_transcript_preview_response(
+        preview,
+        last_activity_at=latest_event_timestamp,
+        now=now,
+    )
+    if response is None or response.is_stale or not response.text.strip():
+        return None
+    return response.model_dump(mode="json")
+
+
 async def _session_workspace_stream(
     request: Request,
     *,
@@ -796,6 +818,7 @@ async def _session_workspace_stream(
                     consumed_payload = None
                 continue
 
+            old_sig = previous_sig
             previous_sig = current_sig
 
             detect_ms = round((monotonic() - wait_start) * 1000, 1) if wait_start else 0
@@ -804,6 +827,18 @@ async def _session_workspace_stream(
             if latest_event_ts is not None:
                 ts = latest_event_ts if latest_event_ts.tzinfo else latest_event_ts.replace(tzinfo=timezone.utc)
                 latest_event_ts_ms = int(ts.timestamp() * 1000)
+            now = datetime.now(timezone.utc)
+            transcript_preview_payload = None
+            bridge_transcript_head = current_sig[7] if len(current_sig) > 7 else 0
+            previous_bridge_transcript_head = old_sig[7] if old_sig is not None and len(old_sig) > 7 else 0
+            if bridge_transcript_head and bridge_transcript_head != previous_bridge_transcript_head:
+                with session_factory() as db:
+                    transcript_preview_payload = _load_workspace_transcript_preview_payload(
+                        db,
+                        session_id=session_id,
+                        latest_event_timestamp=latest_event_ts,
+                        now=now,
+                    )
             server_fanout_at_ms = None
             if consumed_payload is not None:
                 candidate_fanout_at = consumed_payload.get("server_fanout_at_ms")
@@ -823,8 +858,9 @@ async def _session_workspace_stream(
                         "detect_ms": detect_ms,
                         "latest_event_emitted_at_ms": latest_event_ts_ms,
                         "server_fanout_at_ms": server_fanout_at_ms,
-                        "server_now_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
+                        "server_now_ms": int(now.timestamp() * 1000),
                         "pubsub_seq": consumed_seq,
+                        "transcript_preview": transcript_preview_payload,
                     }
                 ),
             }

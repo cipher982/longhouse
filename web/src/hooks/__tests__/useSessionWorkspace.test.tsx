@@ -15,6 +15,7 @@ const streamMocks = vi.hoisted(() => ({
 }));
 const queryClientMocks = vi.hoisted(() => ({
   invalidateQueries: vi.fn(),
+  setQueriesData: vi.fn(),
   getQueryData: vi.fn(() => undefined),
 }));
 const renderBeaconMocks = vi.hoisted(() => ({
@@ -276,6 +277,76 @@ describe("useSessionWorkspace", () => {
     });
     expect(queryClientMocks.invalidateQueries).toHaveBeenCalledWith({
       queryKey: ["agent-session-turns", baseSession.id],
+    });
+  });
+
+  it("applies SSE transcript previews to the workspace cache before refetch", () => {
+    let handlers:
+      | {
+          onConnected?: (data?: { session_id: string; server_now_ms?: number }) => void;
+          onWorkspaceChanged?: (data: {
+            session_id: string;
+            latest_event_id: number;
+            thread_session_count: number;
+            latest_event_emitted_at_ms?: number | null;
+            server_fanout_at_ms?: number | null;
+            server_now_ms?: number;
+            pubsub_seq?: number;
+            transcript_preview?: {
+              event_id: number;
+              text: string;
+              event_origin: string;
+              timestamp: string;
+              is_provisional: boolean;
+              is_complete: boolean;
+              content_cursor?: string | null;
+              is_stale: boolean;
+              stale_reason?: null;
+            } | null;
+          }) => void;
+          onError?: () => void;
+        }
+      | undefined;
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    renderHook(() => useSessionWorkspace(baseSession.id));
+
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        latest_event_id: 80,
+        thread_session_count: 1,
+        transcript_preview: {
+          event_id: 321,
+          text: "Immediate live preview",
+          event_origin: "live_provisional",
+          timestamp: "2026-03-14T12:01:21.000Z",
+          is_provisional: true,
+          is_complete: false,
+          content_cursor: "cursor-321",
+          is_stale: false,
+          stale_reason: null,
+        },
+      });
+    });
+
+    expect(queryClientMocks.setQueriesData).toHaveBeenCalledWith(
+      { queryKey: ["agent-session-workspace", baseSession.id] },
+      expect.any(Function),
+    );
+
+    const updater = queryClientMocks.setQueriesData.mock.calls[0]?.[1];
+    const current = agentSessionMocks.useAgentSessionWorkspace.mock.results[0]?.value.data;
+    const updated = updater(current);
+    expect(updated.session.transcript_preview).toMatchObject({
+      text: "Immediate live preview",
+      event_id: 321,
+    });
+    expect(updated.thread.sessions[0].transcript_preview).toMatchObject({
+      text: "Immediate live preview",
     });
   });
 
