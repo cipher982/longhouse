@@ -26,7 +26,7 @@ interface BeaconPayload {
 }
 
 let _skewMs = 0;
-let _lastBeaconedEventId: number | null = null;
+let _lastBeaconedEventKey: string | null = null;
 
 export function recordServerClockSkew(serverNowMs: number | undefined): void {
   if (typeof serverNowMs !== "number" || !Number.isFinite(serverNowMs)) return;
@@ -55,8 +55,9 @@ export function emitRenderBeacon(params: {
 }): void {
   if (typeof window === "undefined") return;
   if (!params.latestEventEmittedAtMs) return;
-  if (params.latestEventId === _lastBeaconedEventId) return;
-  _lastBeaconedEventId = params.latestEventId;
+  const beaconKey = `${params.sessionId}:${params.latestEventId}`;
+  if (beaconKey === _lastBeaconedEventKey) return;
+  _lastBeaconedEventKey = beaconKey;
 
   const send = () => {
     const payload: BeaconPayload = {
