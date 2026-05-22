@@ -5,7 +5,9 @@ Extracted from main.py — keeps the app factory lean.
 
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
+from contextlib import contextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -19,6 +21,17 @@ from zerg.services.scheduler_service import scheduler_service
 
 _settings = get_settings()
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _timed_startup_step(name: str):
+    started = time.monotonic()
+    logger.info("Startup step starting: %s", name)
+    try:
+        yield
+    finally:
+        elapsed_ms = (time.monotonic() - started) * 1000
+        logger.info("Startup step complete: %s elapsed_ms=%.1f", name, elapsed_ms)
 
 
 def _enforce_single_tenant_startup(app: FastAPI) -> None:
@@ -75,13 +88,17 @@ def _validate_models_config_startup() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle application startup and shutdown lifecycle."""
+    startup_started = time.monotonic()
     try:
-        configure_observability()
-        initialize_database()
+        with _timed_startup_step("configure_observability"):
+            configure_observability()
+        with _timed_startup_step("initialize_database"):
+            initialize_database()
 
         from zerg.database import configure_write_serializer
 
-        configure_write_serializer()
+        with _timed_startup_step("configure_write_serializer"):
+            configure_write_serializer()
 
         try:
             from zerg.database import default_engine
@@ -102,25 +119,26 @@ async def lifespan(app: FastAPI):
         # indefinitely waiting for the next terminal release.
         if not _settings.testing:
             try:
-                from zerg.database import get_session_factory
-                from zerg.services.session_inputs import INPUT_STATUS_QUEUED
-                from zerg.services.session_inputs import requeue_stuck_delivering
+                with _timed_startup_step("session_input_reconciliation"):
+                    from zerg.database import get_session_factory
+                    from zerg.services.session_inputs import INPUT_STATUS_QUEUED
+                    from zerg.services.session_inputs import requeue_stuck_delivering
 
-                session_factory = get_session_factory()
-                with session_factory() as db:
-                    requeue_stuck_delivering(db)
+                    session_factory = get_session_factory()
+                    with session_factory() as db:
+                        requeue_stuck_delivering(db)
 
-                    from zerg.models.agents import SessionInput
+                        from zerg.models.agents import SessionInput
 
-                    queued_session_ids = [
-                        row[0]
-                        for row in (
-                            db.query(SessionInput.session_id)
-                            .filter(SessionInput.status == INPUT_STATUS_QUEUED)
-                            .distinct()
-                            .all()
-                        )
-                    ]
+                        queued_session_ids = [
+                            row[0]
+                            for row in (
+                                db.query(SessionInput.session_id)
+                                .filter(SessionInput.status == INPUT_STATUS_QUEUED)
+                                .distinct()
+                                .all()
+                            )
+                        ]
 
                 if queued_session_ids:
                     from zerg.database import default_engine
@@ -152,39 +170,44 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
 
-        # FTS5 check
-        try:
-            from sqlalchemy import text
+        with _timed_startup_step("fts5_readiness_check"):
+            try:
+                from sqlalchemy import text
 
-            from zerg.database import default_engine
+                from zerg.database import default_engine
 
-            if default_engine is not None and default_engine.dialect.name == "sqlite":
-                with default_engine.connect() as conn:
-                    fts_row = conn.execute(
-                        text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1")
-                    ).fetchone()
-                    if not fts_row:
-                        raise RuntimeError("events_fts table is missing (FTS5 required).")
-                    conn.execute(text("SELECT rowid FROM events_fts WHERE events_fts MATCH 'fts5' LIMIT 1")).fetchone()
-        except Exception as fts_error:
-            app.state.fts_violation = str(fts_error)
-            logger.error(f"FTS5 readiness check failed: {fts_error}")
-            raise
+                if default_engine is not None and default_engine.dialect.name == "sqlite":
+                    with default_engine.connect() as conn:
+                        fts_row = conn.execute(
+                            text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1")
+                        ).fetchone()
+                        if not fts_row:
+                            raise RuntimeError("events_fts table is missing (FTS5 required).")
+                        conn.execute(
+                            text("SELECT rowid FROM events_fts WHERE events_fts MATCH 'fts5' LIMIT 1")
+                        ).fetchone()
+            except Exception as fts_error:
+                app.state.fts_violation = str(fts_error)
+                logger.error(f"FTS5 readiness check failed: {fts_error}")
+                raise
 
-        _enforce_single_tenant_startup(app)
+        with _timed_startup_step("single_tenant_startup"):
+            _enforce_single_tenant_startup(app)
 
         # Prefetch SSO signing keys
         if not _settings.testing:
             from zerg.services.sso_keys import prefetch_sso_keys
 
-            prefetch_sso_keys()
+            with _timed_startup_step("prefetch_sso_keys"):
+                prefetch_sso_keys()
 
         # Auto-seed
         if not _settings.testing:
             try:
                 from zerg.services.auto_seed import run_auto_seed
 
-                seed_results = run_auto_seed()
+                with _timed_startup_step("auto_seed"):
+                    seed_results = run_auto_seed()
                 logger.info(f"Auto-seed complete: {seed_results}")
             except Exception as e:
                 logger.warning(f"Auto-seed failed (non-fatal): {e}")
@@ -195,9 +218,10 @@ async def lifespan(app: FastAPI):
                 from zerg.database import get_session_factory
                 from zerg.services.demo_seed import seed_missing_demo_sessions
 
-                session_factory = get_session_factory()
-                with session_factory() as db:
-                    seeded_count, failed_count = seed_missing_demo_sessions(db)
+                with _timed_startup_step("demo_seed"):
+                    session_factory = get_session_factory()
+                    with session_factory() as db:
+                        seeded_count, failed_count = seed_missing_demo_sessions(db)
                     if seeded_count > 0:
                         logger.info("Demo mode: seeded %d demo sessions", seeded_count)
                     elif failed_count > 0:
@@ -219,13 +243,15 @@ async def lifespan(app: FastAPI):
                     from zerg.services.jobs_repo import bootstrap_jobs_repo
                     from zerg.services.jobs_repo import install_jobs_deps
 
-                    jobs_result = bootstrap_jobs_repo(_settings.data_dir)
+                    with _timed_startup_step("jobs_repo_bootstrap"):
+                        jobs_result = bootstrap_jobs_repo(_settings.data_dir)
                     if jobs_result["errors"]:
                         logger.warning(f"Jobs repo bootstrap had errors: {jobs_result['errors']}")
                     elif jobs_result["created"] or jobs_result["initialized_git"]:
                         logger.info(f"Jobs repo bootstrapped: {jobs_result['jobs_dir']}")
 
-                    deps_result = install_jobs_deps(_settings.data_dir)
+                    with _timed_startup_step("jobs_deps_install"):
+                        deps_result = install_jobs_deps(_settings.data_dir)
                     if deps_result.get("error"):
                         logger.warning(f"Job deps install failed (non-fatal): {deps_result['error']}")
                     elif deps_result.get("installed"):
@@ -239,9 +265,11 @@ async def lifespan(app: FastAPI):
         if not _settings.testing:
             from zerg.services.fiche_state_recovery import initialize_fiche_state_system
 
-            await initialize_fiche_state_system()
+            with _timed_startup_step("fiche_state_recovery"):
+                await initialize_fiche_state_system()
 
-        _validate_models_config_startup()
+        with _timed_startup_step("models_config_validation"):
+            _validate_models_config_startup()
 
         # Shared async runner
         from zerg.utils.async_runner import get_shared_runner
@@ -254,14 +282,16 @@ async def lifespan(app: FastAPI):
             failed: list[str] = []
 
             try:
-                await scheduler_service.start()
+                with _timed_startup_step("scheduler_service_start"):
+                    await scheduler_service.start()
                 started.append("scheduler")
             except Exception as e:  # noqa: BLE001
                 failed.append(f"scheduler ({e})")
                 logger.exception("Failed to start scheduler_service")
 
             try:
-                ops_events_bridge.start()
+                with _timed_startup_step("ops_events_bridge_start"):
+                    ops_events_bridge.start()
                 started.append("ops_events_bridge")
             except Exception as e:  # noqa: BLE001
                 failed.append(f"ops_events_bridge ({e})")
@@ -270,7 +300,8 @@ async def lifespan(app: FastAPI):
             try:
                 from zerg.services.watch_renewal_service import watch_renewal_service
 
-                await watch_renewal_service.start()
+                with _timed_startup_step("watch_renewal_start"):
+                    await watch_renewal_service.start()
                 started.append("watch_renewal")
             except Exception as e:  # noqa: BLE001
                 failed.append(f"watch_renewal ({e})")
@@ -505,7 +536,8 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("Startup: WAL checkpoint loop failed (non-fatal): %s", e)
 
-        logger.info("Application startup complete")
+        elapsed_ms = (time.monotonic() - startup_started) * 1000
+        logger.info("Application startup complete elapsed_ms=%.1f", elapsed_ms)
     except Exception as e:
         logger.error(f"Error during startup: {e}")
         raise

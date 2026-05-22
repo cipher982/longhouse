@@ -6,6 +6,7 @@ The codebase is SQLite-only for OSS deployment simplicity.
 
 import logging
 import os
+import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
@@ -39,6 +40,17 @@ _settings = get_settings()
 _test_commis_id: ContextVar[str | None] = ContextVar("test_commis_id", default=None)
 _commis_session_factories: dict[str, sessionmaker] = {}
 _commis_factories_lock = Lock()
+
+
+@contextmanager
+def _timed_database_step(name: str) -> Iterator[None]:
+    started = time.monotonic()
+    logger.info("Database initialization step starting: %s", name)
+    try:
+        yield
+    finally:
+        elapsed_ms = (time.monotonic() - started) * 1000
+        logger.info("Database initialization step complete: %s elapsed_ms=%.1f", name, elapsed_ms)
 
 
 def set_test_commis_id(commis_id: str | None):
@@ -485,6 +497,8 @@ def initialize_database(engine: Engine = None) -> None:
     Args:
         engine: Optional engine to use, defaults to default_engine
     """
+    init_started = time.monotonic()
+
     # Import all models to ensure they are registered with Base
     from zerg.models.agents import SessionEmbedding  # noqa: F401
     from zerg.models.apns_device_registration import APNSDeviceRegistration  # noqa: F401
@@ -512,12 +526,14 @@ def initialize_database(engine: Engine = None) -> None:
     if target_engine is None:
         raise ValueError("No engine provided and default_engine is None")
 
-    # Check SQLite version for required features
-    is_compatible, version_str = check_sqlite_version(target_engine)
-    if not is_compatible:
-        min_ver = ".".join(str(x) for x in SQLITE_MIN_VERSION)
-        raise RuntimeError(f"SQLite version {version_str} is below minimum {min_ver}. Upgrade SQLite to use this application.")
-    logger.debug(f"SQLite version {version_str} meets requirements")
+    with _timed_database_step("sqlite_version_check"):
+        is_compatible, version_str = check_sqlite_version(target_engine)
+        if not is_compatible:
+            min_ver = ".".join(str(x) for x in SQLITE_MIN_VERSION)
+            raise RuntimeError(
+                f"SQLite version {version_str} is below minimum {min_ver}. Upgrade SQLite to use this application."
+            )
+        logger.debug(f"SQLite version {version_str} meets requirements")
 
     # Strip any schema references for SQLite (which doesn't support schemas)
     target_engine = target_engine.execution_options(schema_translate_map={"zerg": None, "agents": None})
@@ -527,8 +543,8 @@ def initialize_database(engine: Engine = None) -> None:
         table_names = [table.name for table in Base.metadata.tables.values()]
         logger.debug("Creating tables: %s", sorted(table_names))
 
-    # Create all tables (single declarative base — see models/agents.py)
-    Base.metadata.create_all(bind=target_engine)
+    with _timed_database_step("metadata_create_all"):
+        Base.metadata.create_all(bind=target_engine)
 
     # Phase 2 (Option D): auto-derive missing columns from SQLAlchemy metadata
     # is now the authority for additive schema drift. Runs BEFORE
@@ -539,23 +555,29 @@ def initialize_database(engine: Engine = None) -> None:
     # paths converge to the same end state. New additive columns should be
     # added to the SQLAlchemy model with appropriate ``server_default`` and rely
     # on this path — NOT on `_migrate_agents_columns`.
-    _pre_migrate_session_inputs_identity_columns(target_engine)
-    _auto_add_missing_columns(target_engine, Base.metadata, apply=True)
+    with _timed_database_step("pre_migrate_session_inputs_identity_columns"):
+        _pre_migrate_session_inputs_identity_columns(target_engine)
+    with _timed_database_step("auto_add_missing_columns"):
+        _auto_add_missing_columns(target_engine, Base.metadata, apply=True)
 
     # Residual imperative migrations: index/table adjustments, data
     # normalization, and non-trivial backfills.
-    _migrate_agents_columns(target_engine)
-    _cleanup_legacy_agents_tables(target_engine)
+    with _timed_database_step("residual_agents_migrations"):
+        _migrate_agents_columns(target_engine)
+    with _timed_database_step("cleanup_legacy_agents_tables"):
+        _cleanup_legacy_agents_tables(target_engine)
 
     if target_engine.dialect.name == "sqlite":
         # Keep a ledger table ready for explicit heavy migrations.
         from zerg.db_migrations import ensure_migration_ledger
 
-        ensure_migration_ledger(target_engine)
+        with _timed_database_step("heavy_migration_ledger"):
+            ensure_migration_ledger(target_engine)
 
     # SQLite-only: ensure FTS5 index for agent events
     if target_engine.dialect.name == "sqlite":
-        _ensure_agents_fts(target_engine)
+        with _timed_database_step("agents_fts"):
+            _ensure_agents_fts(target_engine)
 
     # Debug: Verify tables were created
     if os.getenv("NODE_ENV") == "test":
@@ -564,6 +586,9 @@ def initialize_database(engine: Engine = None) -> None:
         inspector = inspect(target_engine)
         tables = inspector.get_table_names()
         logger.debug("Tables created in database: %s", sorted(tables))
+
+    elapsed_ms = (time.monotonic() - init_started) * 1000
+    logger.info("Database initialization complete elapsed_ms=%.1f", elapsed_ms)
 
 
 def _migrate_agents_columns(engine: Engine) -> None:
