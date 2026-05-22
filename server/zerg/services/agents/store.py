@@ -25,6 +25,7 @@ from sqlalchemy import func
 from sqlalchemy import or_
 from sqlalchemy import select
 from sqlalchemy import text
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentEvent
@@ -34,11 +35,12 @@ from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.provisional_events import visible_transcript_event_predicate
+from zerg.services.raw_json_compression import CODEC_ZSTD
+from zerg.services.raw_json_compression import compress_raw_json
 from zerg.services.raw_json_compression import decode_raw_json
 from zerg.services.agents.kernel_writes import ensure_primary_thread
 from zerg.services.agents.kernel_writes import record_thread_alias
 from zerg.services.session_observation_reducers import reduce_provider_event_observation
-from zerg.services.session_observation_reducers import reduce_source_line_observation
 from zerg.services.session_observations import record_provider_event_observation
 from zerg.services.session_observations import record_source_line_observation
 from zerg.session_execution_home import SessionExecutionHome
@@ -1677,13 +1679,38 @@ class AgentsStore:
                 raw_json=line_data.raw_json,
                 observed_at=source_lines_received_at,
                 received_at=source_lines_received_at,
+                load_observation=False,
             )
-            row = (
-                reduce_source_line_observation(self.db, observation_result.observation)
-                if observation_result.observation is not None
-                else None
-            )
-            if row is not None:
+            row_inserted = False
+            if observation_result.inserted:
+                source_line_stmt = (
+                    sqlite_insert(AgentSourceLine)
+                    .values(
+                        session_id=session_id,
+                        thread_id=thread_id,
+                        source_path=line_data.source_path,
+                        source_offset=source_offset,
+                        branch_id=ingest_branch.id,
+                        revision=revision,
+                        is_branch_copy=0,
+                        raw_json="",
+                        raw_json_z=compress_raw_json(line_data.raw_json),
+                        raw_json_codec=CODEC_ZSTD,
+                        line_hash=line_hash,
+                    )
+                    .on_conflict_do_nothing(
+                        index_elements=[
+                            "session_id",
+                            "branch_id",
+                            "source_path",
+                            "source_offset",
+                            "line_hash",
+                        ],
+                    )
+                )
+                insert_result = self.db.execute(source_line_stmt)
+                row_inserted = bool(insert_result.rowcount and insert_result.rowcount > 0)
+            if row_inserted:
                 latest_state[key] = (revision, line_hash)
                 source_lines_inserted += 1
                 _since_commit += 1

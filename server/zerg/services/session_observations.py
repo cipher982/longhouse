@@ -156,6 +156,7 @@ def record_source_line_observation(
     observed_at: datetime,
     received_at: datetime | None = None,
     thread_id: UUID | None = None,
+    load_observation: bool = True,
 ) -> ObservationWriteResult:
     observation_id = "source_line:" + _hash_parts(
         str(session_id),
@@ -180,6 +181,7 @@ def record_source_line_observation(
         source_cursor=f"{source_path}:{source_offset}:{revision}",
         observed_at=observed_at,
         received_at=received_at,
+        load_observation=load_observation,
         payload={
             "branch_id": branch_id,
             "revision": revision,
