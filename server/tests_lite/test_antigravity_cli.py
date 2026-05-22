@@ -400,3 +400,144 @@ def test_launch_script_closes_session_without_printing_token(monkeypatch, tmp_pa
     assert "terminal_signal" in launch_script.read_text(encoding="utf-8")
     assert str(launch_script) in command
     assert "zdt_test_token" not in command
+
+
+def test_run_native_antigravity_marks_launch_failure_terminal_state(monkeypatch, tmp_path):
+    runtime_events: list[dict] = []
+
+    def raise_file_not_found(cmd, *, check, cwd, env):
+        raise FileNotFoundError(2, "No such file or directory", cmd[0])
+
+    monkeypatch.setattr(antigravity_cli, "_ensure_antigravity_runtime_plugin", lambda **_kwargs: tmp_path / "plugin")
+    monkeypatch.setattr(
+        antigravity_cli,
+        "_post_antigravity_runtime_event",
+        lambda **kwargs: runtime_events.append(kwargs),
+    )
+    monkeypatch.setattr(antigravity_cli.subprocess, "run", raise_file_not_found)
+
+    with pytest.raises(FileNotFoundError):
+        antigravity_cli._run_native_antigravity(
+            session_id="session-123",
+            machine_name="work-laptop",
+            antigravity_bin="/does/not/exist/agy",
+            cwd=tmp_path,
+            antigravity_args=(),
+            url="https://longhouse.test",
+            token="zdt_test_token",
+            config_dir=tmp_path / "config",
+        )
+
+    assert len(runtime_events) == 1
+    event = runtime_events[0]["event"]
+    assert event["kind"] == "terminal_signal"
+    assert event["phase"] == "finished"
+    assert event["payload"]["terminal_state"] == "launch_failed"
+    assert event["payload"]["exit_code"] == 1
+    assert "launch_failed" in event["dedupe_key"]
+
+
+def test_run_native_antigravity_records_session_ended_when_subprocess_returns_nonzero(monkeypatch, tmp_path):
+    runtime_events: list[dict] = []
+
+    class Completed:
+        returncode = 17
+
+    monkeypatch.setattr(antigravity_cli, "_ensure_antigravity_runtime_plugin", lambda **_kwargs: tmp_path / "plugin")
+    monkeypatch.setattr(
+        antigravity_cli,
+        "_post_antigravity_runtime_event",
+        lambda **kwargs: runtime_events.append(kwargs),
+    )
+    monkeypatch.setattr(antigravity_cli.subprocess, "run", lambda cmd, *, check, cwd, env: Completed())
+
+    exit_code = antigravity_cli._run_native_antigravity(
+        session_id="session-123",
+        machine_name="work-laptop",
+        antigravity_bin="/Users/test/.local/bin/agy",
+        cwd=tmp_path,
+        antigravity_args=(),
+        url="https://longhouse.test",
+        token="zdt_test_token",
+        config_dir=tmp_path / "config",
+    )
+
+    assert exit_code == 17
+    event = runtime_events[0]["event"]
+    assert event["payload"] == {"terminal_state": "session_ended", "exit_code": 17}
+    assert "session_ended" in event["dedupe_key"]
+
+
+def test_run_native_antigravity_swallows_runtime_event_failure(monkeypatch, tmp_path):
+    class Completed:
+        returncode = 0
+
+    def raising_post(**_kwargs):
+        raise antigravity_cli._AntigravityLaunchError("network down")
+
+    monkeypatch.setattr(antigravity_cli, "_ensure_antigravity_runtime_plugin", lambda **_kwargs: tmp_path / "plugin")
+    monkeypatch.setattr(antigravity_cli, "_post_antigravity_runtime_event", raising_post)
+    monkeypatch.setattr(antigravity_cli.subprocess, "run", lambda cmd, *, check, cwd, env: Completed())
+
+    exit_code = antigravity_cli._run_native_antigravity(
+        session_id="session-123",
+        machine_name="work-laptop",
+        antigravity_bin="/Users/test/.local/bin/agy",
+        cwd=tmp_path,
+        antigravity_args=(),
+        url="https://longhouse.test",
+        token="zdt_test_token",
+        config_dir=tmp_path / "config",
+    )
+
+    assert exit_code == 0
+
+
+def test_antigravity_hook_script_quotes_paths_with_special_chars(tmp_path):
+    weird_engine = tmp_path / "engines" / "longhouse engine $with' quirks"
+    weird_engine.parent.mkdir(parents=True, exist_ok=True)
+    weird_engine.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    weird_engine.chmod(0o755)
+    weird_config = tmp_path / "weird config $dir"
+    weird_cli_root = tmp_path / "weird gemini" / "antigravity-cli"
+
+    plugin_root = antigravity_cli._ensure_antigravity_runtime_plugin(
+        config_dir=weird_config,
+        antigravity_cli_root=weird_cli_root,
+        engine_path=str(weird_engine),
+        global_hooks_path=tmp_path / "gemini config" / "hooks.json",
+    )
+    script = plugin_root / "longhouse-antigravity-hook.sh"
+
+    syntax_check = subprocess.run(
+        ["bash", "-n", str(script)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert syntax_check.returncode == 0, syntax_check.stderr
+
+    result = subprocess.run(
+        [str(script), "PreToolUse"],
+        input=json.dumps(
+            {
+                "conversationId": "ag-1",
+                "toolCall": {"name": "shell"},
+                "workspacePaths": [str(tmp_path)],
+                "stepIdx": 1,
+            }
+        ),
+        text=True,
+        capture_output=True,
+        check=False,
+        env={
+            "LONGHOUSE_HOOK_PYTHON": sys.executable,
+            "LONGHOUSE_MANAGED_SESSION_ID": "session-weird",
+            "PATH": os.defpath,
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"decision": "allow", "reason": ""}
+
+
