@@ -12,6 +12,8 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import Session
 
+_WATCHED_TABLES = ("sessions", "events", "source_lines", "session_observations")
+
 
 def sqlite_db_paths(database_url: str) -> tuple[Path, Path] | None:
     try:
@@ -84,6 +86,118 @@ def _pragma_int(db: Session | Connection, name: str) -> int | None:
     if row is None or row[0] is None:
         return None
     return int(row[0])
+
+
+def _table_exists(db: Session | Connection, table_name: str) -> bool:
+    row = db.execute(
+        text(
+            """
+            SELECT 1
+            FROM sqlite_master
+            WHERE type = 'table' AND name = :table_name
+            LIMIT 1
+            """
+        ),
+        {"table_name": table_name},
+    ).fetchone()
+    return row is not None
+
+
+def _index_exists(db: Session | Connection, index_name: str) -> bool:
+    row = db.execute(
+        text(
+            """
+            SELECT 1
+            FROM sqlite_master
+            WHERE type = 'index' AND name = :index_name
+            LIMIT 1
+            """
+        ),
+        {"index_name": index_name},
+    ).fetchone()
+    return row is not None
+
+
+def _table_columns(db: Session | Connection, table_name: str) -> set[str]:
+    if not _table_exists(db, table_name):
+        return set()
+    rows = db.execute(text(f"PRAGMA table_info({table_name})")).fetchall()
+    return {str(row[1]) for row in rows}
+
+
+def _sqlite_stat1_estimates(db: Session | Connection) -> dict[str, int]:
+    if not _table_exists(db, "sqlite_stat1"):
+        return {}
+    rows = db.execute(
+        text(
+            """
+            SELECT tbl, stat
+            FROM sqlite_stat1
+            WHERE tbl IN ('sessions', 'events', 'source_lines', 'session_observations')
+            """
+        )
+    ).fetchall()
+    estimates: dict[str, int] = {}
+    for table_name, stat in rows:
+        first_token = str(stat or "").split(" ", 1)[0]
+        try:
+            estimates[str(table_name)] = int(first_token)
+        except ValueError:
+            continue
+    return estimates
+
+
+def collect_sqlite_schema_stats(db: Session | Connection) -> dict[str, Any]:
+    tables = {
+        table_name: {
+            "exists": _table_exists(db, table_name),
+            "columns": sorted(_table_columns(db, table_name)),
+        }
+        for table_name in _WATCHED_TABLES
+    }
+    return {
+        "schema_version": _pragma_int(db, "schema_version"),
+        "user_version": _pragma_int(db, "user_version"),
+        "sqlite_stat1_exists": _table_exists(db, "sqlite_stat1"),
+        "sqlite_stat1_estimated_rows": _sqlite_stat1_estimates(db),
+        "raw_json_pending_indexes": {
+            "events": _index_exists(db, "ix_events_raw_json_pending"),
+            "source_lines": _index_exists(db, "ix_source_lines_raw_json_pending"),
+        },
+        "tables": tables,
+    }
+
+
+def _count_where(db: Session | Connection, table_name: str, predicate: str) -> int | None:
+    if not _table_exists(db, table_name):
+        return None
+    value = db.execute(text(f"SELECT COUNT(*) FROM {table_name} WHERE {predicate}")).scalar()
+    return int(value or 0)
+
+
+def collect_sqlite_deep_counts(db: Session | Connection) -> dict[str, int | None]:
+    """Return explicit potentially expensive counts for operator-invoked diagnostics."""
+    events_columns = _table_columns(db, "events")
+    source_columns = _table_columns(db, "source_lines")
+    observation_columns = _table_columns(db, "session_observations")
+
+    return {
+        "events_raw_json_pending": _count_where(db, "events", "raw_json_codec = 0 AND raw_json IS NOT NULL")
+        if {"raw_json", "raw_json_codec"} <= events_columns
+        else None,
+        "source_lines_raw_json_pending": _count_where(db, "source_lines", "raw_json_codec = 0")
+        if "raw_json_codec" in source_columns
+        else None,
+        "events_thread_id_null": _count_where(db, "events", "thread_id IS NULL")
+        if "thread_id" in events_columns
+        else None,
+        "source_lines_thread_id_null": _count_where(db, "source_lines", "thread_id IS NULL")
+        if "thread_id" in source_columns
+        else None,
+        "session_observations_thread_id_null": _count_where(db, "session_observations", "thread_id IS NULL")
+        if "thread_id" in observation_columns
+        else None,
+    }
 
 
 def collect_sqlite_db_stats(
