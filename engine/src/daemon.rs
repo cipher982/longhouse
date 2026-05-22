@@ -34,6 +34,7 @@ use crate::shipper;
 use crate::shipping::client::ShipperClient;
 use crate::shipping_stats::RecentShipStatsTracker;
 use crate::state::db::open_db;
+use crate::state::db_pool::ConnectionPool;
 use crate::state::file_state::FileState;
 use crate::state::spool::Spool;
 use crate::watcher::{SessionWatcher, WatcherEvent};
@@ -128,6 +129,9 @@ struct PathTaskContext {
     ship_stats: RecentShipStatsTracker,
     flight_recorder: Option<FlightRecorder>,
     limiter: std::sync::Arc<crate::scheduler::AdaptiveLimiter>,
+    /// Reusable shipper-DB connections. Schema bootstrap has already run
+    /// during `run()`; per-job code uses leases instead of `open_db`.
+    db_pool: ConnectionPool,
 }
 
 struct PathTaskResult {
@@ -280,6 +284,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         );
     }
     let adaptive_limiter = crate::scheduler::AdaptiveLimiter::new();
+    // Pool sized for the live cap + headroom for retry/scan tasks. Idle pool
+    // is bounded; spillover connections are dropped on return.
+    let db_pool = ConnectionPool::new(
+        config.shipper_config.db_path.as_deref(),
+        config.shipper_config.workers.max(1) + 4,
+    )?;
     let task_context = PathTaskContext {
         shipper_config: config.shipper_config.clone(),
         client: client.clone(),
@@ -289,6 +299,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         ship_stats: ship_stats.clone(),
         flight_recorder: flight_recorder.clone(),
         limiter: std::sync::Arc::clone(&adaptive_limiter),
+        db_pool: db_pool.clone(),
     };
 
     // 6. Start file watcher before catch-up work so live changes queue immediately.
@@ -2213,10 +2224,10 @@ async fn prepare_file_for_job(
     let provider = job.provider;
     let work_context_label = work_context(job.priority);
     let algo = task_context.algo;
-    let db_path = task_context.shipper_config.db_path.clone();
     let max_batch_bytes = task_context.shipper_config.max_batch_bytes;
     let parse_tracker = task_context.parse_tracker.clone();
     let session_id_hint = job.observation.session_id.clone();
+    let db_pool = task_context.db_pool.clone();
     let source_line_mode = if job.priority == WorkPriority::Live && provider == "codex" {
         shipper::SourceLineMode::EventOnly
     } else {
@@ -2239,7 +2250,7 @@ async fn prepare_file_for_job(
         trace_timings.blocking_queue_wait_ms =
             Some(blocking_queued_at.elapsed().as_millis() as u64);
         let open_db_started = Instant::now();
-        let conn = open_db(db_path.as_deref())?;
+        let conn = db_pool.get()?;
         trace_timings.open_db_ms = Some(open_db_started.elapsed().as_millis() as u64);
         let identity_started = Instant::now();
         let canonical = std::fs::canonicalize(&path)
@@ -2328,7 +2339,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         processing_elapsed: Duration::ZERO,
     };
 
-    let conn = match open_db(task_context.shipper_config.db_path.as_deref()) {
+    let conn = match task_context.db_pool.get() {
         Ok(conn) => conn,
         Err(e) => {
             if task_context.tracker.record_error() {
