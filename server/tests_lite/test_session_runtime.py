@@ -4187,7 +4187,6 @@ def test_runtime_batch_live_transcript_skips_apns_and_owner_work(tmp_path, monke
         "widget": 0,
         "runtime_map": 0,
         "owner": 0,
-        "current_presence": 0,
     }
 
     def count(name):
@@ -4205,7 +4204,6 @@ def test_runtime_batch_live_transcript_skips_apns_and_owner_work(tmp_path, monke
     monkeypatch.setattr(runtime_router, "prepare_widget_timeline_push", count("widget"))
     monkeypatch.setattr(runtime_router, "load_runtime_state_map", count("runtime_map"))
     monkeypatch.setattr(runtime_router, "resolve_session_message_owner_id", count("owner"))
-    monkeypatch.setattr(runtime_router, "current_presence_state_for_session", count("current_presence"))
 
     for client in _client(SessionLocal):
         resp = client.post(
@@ -4248,7 +4246,6 @@ def test_runtime_batch_live_transcript_skips_apns_and_owner_work(tmp_path, monke
         "widget": 0,
         "runtime_map": 0,
         "owner": 0,
-        "current_presence": 0,
     }
 
     bus = get_pubsub()
