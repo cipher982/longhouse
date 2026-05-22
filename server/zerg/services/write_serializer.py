@@ -101,7 +101,7 @@ _LABEL_PRIORITIES: dict[str, int] = {
     # cannot pin the cold worker in "running" after a timeout.
     "summary": 7,
     "summary-title": 7,
-    "server-fanout": 8,
+    "server-fanout": 65,
     # Render beacons are forensic telemetry. Keep the persistence useful when
     # the system is healthy, but never let it outrank live transcript/runtime
     # writes when SQLite is under pressure.

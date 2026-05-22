@@ -1,9 +1,11 @@
 """Agents API — session ingest endpoint."""
 
+import asyncio
 import gzip
 import io
 import json
 import logging
+import os
 import time
 from datetime import datetime
 from datetime import timezone
@@ -39,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 SHIP_TRACE_HEADER = "X-Longhouse-Ship-Trace"
+_TRUTHY_ENV = {"1", "true", "yes", "on"}
 
 
 def _unix_ms() -> int:
@@ -178,7 +181,7 @@ def _record_server_fanout_observation(
 
 
 async def _persist_server_fanout_observation(
-    db: Session,
+    db: Session | None,
     *,
     session_id: UUID,
     provider: str,
@@ -201,9 +204,41 @@ async def _persist_server_fanout_observation(
                 ship_trace=ship_trace,
             )
 
-        await ws.execute_or_direct(_do, db, label="server-fanout")
+        if db is None:
+            await ws.execute(_do, label="server-fanout")
+        else:
+            await ws.execute_or_direct(_do, db, label="server-fanout")
     except Exception:
         logger.warning("Failed to persist server fanout observation", exc_info=True)
+
+
+def _is_testing_env() -> bool:
+    return os.getenv("TESTING", "").strip().lower() in _TRUTHY_ENV
+
+
+def _background_server_fanout_observation(
+    *,
+    session_id: UUID,
+    provider: str,
+    device_id: str | None,
+    payload: dict,
+    ship_trace: dict | None,
+) -> None:
+    from zerg.services.write_serializer import get_write_serializer
+
+    ws = get_write_serializer()
+    if not ws.is_configured or _is_testing_env():
+        return
+    asyncio.create_task(
+        _persist_server_fanout_observation(
+            None,
+            session_id=session_id,
+            provider=provider,
+            device_id=device_id,
+            payload=payload,
+            ship_trace=ship_trace,
+        )
+    )
 
 
 # Hard cap on decompressed ingest bodies. Engine splits batches at
@@ -563,18 +598,27 @@ async def ingest_session(
                 }
                 session_pubsub_seq = bus.publish(topic_session(session_id_str), payload)
                 timeline_pubsub_seq = bus.publish(TOPIC_TIMELINE, payload)
-                await _persist_server_fanout_observation(
-                    db,
+                fanout_payload = {
+                    **payload,
+                    "session_pubsub_seq": session_pubsub_seq,
+                    "timeline_pubsub_seq": timeline_pubsub_seq,
+                }
+                _background_server_fanout_observation(
                     session_id=result.session_id,
                     provider=provider_label,
                     device_id=data.device_id,
-                    payload={
-                        **payload,
-                        "session_pubsub_seq": session_pubsub_seq,
-                        "timeline_pubsub_seq": timeline_pubsub_seq,
-                    },
+                    payload=fanout_payload,
                     ship_trace=ship_trace,
                 )
+                if _is_testing_env():
+                    await _persist_server_fanout_observation(
+                        db,
+                        session_id=result.session_id,
+                        provider=provider_label,
+                        device_id=data.device_id,
+                        payload=fanout_payload,
+                        ship_trace=ship_trace,
+                    )
 
             set_span_attributes(
                 span,
