@@ -13,19 +13,23 @@ from typing import Callable
 from typing import TypeVar
 from uuid import UUID
 
+from sqlalchemy import and_
 from sqlalchemy import func
+from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionTurn
 from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS
 from zerg.services.agent_heartbeat_health import MachineTransportHealthSummary
 from zerg.services.agent_heartbeat_health import load_machine_transport_health_map
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.provisional_events import durable_transcript_event_predicate
+from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
 from zerg.services.write_serializer import get_write_serializer
 from zerg.utils.time import normalize_utc
 from zerg.utils.time import utc_now
@@ -412,7 +416,16 @@ def get_session_turn(
 
 
 def load_pending_response_turn_map(db: Session, session_ids: list[UUID]) -> dict[UUID, bool]:
-    """Return sessions with an accepted managed turn that lacks durable output."""
+    """Return sessions whose latest user prompt has no visible response yet.
+
+    Managed sends create exact ``SessionTurn`` rows, but imported/native
+    provider transcripts can still produce a user prompt plus runtime phase
+    signals before the matching assistant output lands. In those cases total
+    user/assistant counts are not useful: real Claude transcripts often have
+    many assistant/tool events per user turn. Fall back to event order plus a
+    post-prompt active phase so clients can honestly show transcript syncing
+    while the archive catches up.
+    """
     if not session_ids:
         return {}
     rows = (
@@ -420,6 +433,89 @@ def load_pending_response_turn_map(db: Session, session_ids: list[UUID]) -> dict
         .filter(SessionTurn.session_id.in_(session_ids))
         .filter(SessionTurn.durable_at.is_(None))
         .filter(SessionTurn.state.in_(tuple(PENDING_RESPONSE_TURN_STATES)))
+        .all()
+    )
+    pending = {row[0]: True for row in rows if row[0] is not None}
+    remaining_session_ids = [session_id for session_id in session_ids if session_id not in pending]
+    pending.update(_load_unanswered_user_prompt_map(db, remaining_session_ids))
+    return pending
+
+
+def _load_unanswered_user_prompt_map(db: Session, session_ids: list[UUID]) -> dict[UUID, bool]:
+    if not session_ids:
+        return {}
+
+    latest_user_rows = (
+        db.query(AgentEvent.session_id, func.max(AgentEvent.id))
+        .filter(AgentEvent.session_id.in_(session_ids))
+        .filter(durable_transcript_event_predicate())
+        .filter(AgentEvent.role == "user")
+        .group_by(AgentEvent.session_id)
+        .all()
+    )
+    latest_user_id_by_session = {
+        session_id: int(event_id)
+        for session_id, event_id in latest_user_rows
+        if session_id is not None and event_id is not None
+    }
+    if not latest_user_id_by_session:
+        return {}
+
+    latest_response_rows = (
+        db.query(AgentEvent.session_id, func.max(AgentEvent.id))
+        .filter(AgentEvent.session_id.in_(latest_user_id_by_session.keys()))
+        .filter(durable_transcript_event_predicate())
+        .filter(AgentEvent.role.in_(("assistant", "tool")))
+        .group_by(AgentEvent.session_id)
+        .all()
+    )
+    latest_response_id_by_session = {
+        session_id: int(event_id)
+        for session_id, event_id in latest_response_rows
+        if session_id is not None and event_id is not None
+    }
+
+    candidate_user_ids = [
+        user_event_id
+        for session_id, user_event_id in latest_user_id_by_session.items()
+        if user_event_id > int(latest_response_id_by_session.get(session_id, 0) or 0)
+    ]
+    if not candidate_user_ids:
+        return {}
+
+    latest_user_events = (
+        db.query(AgentEvent.session_id, AgentEvent.timestamp)
+        .filter(AgentEvent.id.in_(candidate_user_ids))
+        .all()
+    )
+    active_phase_conditions = []
+    for session_id, timestamp in latest_user_events:
+        observed_after = normalize_utc(timestamp)
+        if session_id is None or observed_after is None:
+            continue
+        active_phase_conditions.append(
+            and_(
+                SessionObservation.session_id == session_id,
+                SessionObservation.observed_at >= observed_after,
+            )
+        )
+    if not active_phase_conditions:
+        return {}
+
+    rows = (
+        db.query(SessionObservation.session_id)
+        .filter(SessionObservation.session_id.in_(latest_user_id_by_session.keys()))
+        .filter(SessionObservation.kind == OBS_KIND_RUNTIME_SIGNAL)
+        .filter(or_(*active_phase_conditions))
+        .filter(SessionObservation.payload_json.like('%"kind":"phase_signal"%'))
+        .filter(
+            or_(
+                SessionObservation.payload_json.like('%"phase":"thinking"%'),
+                SessionObservation.payload_json.like('%"phase":"running"%'),
+                SessionObservation.payload_json.like('%"phase":"blocked"%'),
+            )
+        )
+        .group_by(SessionObservation.session_id)
         .all()
     )
     return {row[0]: True for row in rows if row[0] is not None}
