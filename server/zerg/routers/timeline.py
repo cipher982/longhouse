@@ -716,14 +716,39 @@ def _load_workspace_transcript_preview_payload(
     db: Session,
     *,
     session_id: UUID,
+    latest_event_id: int | None,
     latest_event_timestamp: datetime | None,
     now: datetime,
 ) -> dict | None:
     """Return a hot-path transcript preview payload for the focused session."""
+    from zerg.models.agents import AgentEvent
+    from zerg.services.provisional_events import EVENT_ORIGIN_DURABLE
+    from zerg.services.provisional_events import TranscriptPreview
+    from zerg.services.provisional_events import durable_transcript_event_predicate
     from zerg.services.provisional_events import load_active_provisional_preview_map
     from zerg.services.session_views import build_session_transcript_preview_response
 
     preview = load_active_provisional_preview_map(db, [session_id]).get(str(session_id))
+    if preview is None and latest_event_id:
+        event = (
+            db.query(AgentEvent)
+            .filter(AgentEvent.id == latest_event_id)
+            .filter(durable_transcript_event_predicate())
+            .filter(AgentEvent.role == "assistant")
+            .filter(AgentEvent.tool_name.is_(None))
+            .first()
+        )
+        if event is not None:
+            text = str(event.content_text or "").strip()
+            if text:
+                preview = TranscriptPreview(
+                    event_id=int(event.id),
+                    text=text,
+                    event_origin=EVENT_ORIGIN_DURABLE,
+                    timestamp=event.timestamp,
+                    provisional_cursor=None,
+                    provisional_complete=True,
+                )
     response = build_session_transcript_preview_response(
         preview,
         last_activity_at=latest_event_timestamp,
@@ -925,19 +950,32 @@ async def _session_workspace_stream(
 
             detect_ms = round((monotonic() - wait_start) * 1000, 1) if wait_start else 0
             latest_event_ts = current_sig[6] if len(current_sig) > 6 else None
+            latest_event_id = int(current_sig[2] or 0)
+            previous_latest_event_id = int(old_sig[2] or 0) if old_sig is not None else latest_event_id
             now = datetime.now(timezone.utc)
             transcript_preview_payload = consumed_preview_payload
             bridge_transcript_head = current_sig[7] if len(current_sig) > 7 else 0
             previous_bridge_transcript_head = old_sig[7] if old_sig is not None and len(old_sig) > 7 else 0
+            durable_event_changed = bool(
+                latest_event_id
+                and (
+                    (old_sig is not None and latest_event_id != previous_latest_event_id)
+                    or (old_sig is None and consumed_seq)
+                )
+            )
+            live_preview_changed = bool(
+                bridge_transcript_head
+                and bridge_transcript_head != previous_bridge_transcript_head
+            )
             if (
                 transcript_preview_payload is None
-                and bridge_transcript_head
-                and bridge_transcript_head != previous_bridge_transcript_head
+                and (live_preview_changed or durable_event_changed)
             ):
                 with session_factory() as db:
                     transcript_preview_payload = _load_workspace_transcript_preview_payload(
                         db,
                         session_id=session_id,
+                        latest_event_id=latest_event_id,
                         latest_event_timestamp=latest_event_ts,
                         now=now,
                     )

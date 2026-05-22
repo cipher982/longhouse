@@ -447,6 +447,82 @@ def test_workspace_stream_wake_includes_fanout_metadata(tmp_path):
     assert changed["latest_event_id"] > 0
     assert changed["pubsub_seq"] == 1
     assert changed["server_fanout_at_ms"] == 1_779_220_000_150
+    assert changed["transcript_preview"]["text"] == "Hello from the shared downlink"
+    assert changed["transcript_preview"]["event_origin"] == "durable"
+    assert changed["transcript_preview"]["is_provisional"] is False
+
+
+def test_workspace_stream_does_not_preview_durable_tool_call(tmp_path):
+    """Tool-call ledger updates should wake clients without masquerading as answer text."""
+    from zerg.services.session_pubsub import get_pubsub
+    from zerg.services.session_pubsub import reset_pubsub_for_test
+    from zerg.services.session_pubsub import topic_session
+
+    reset_pubsub_for_test()
+    sf = _make_db(tmp_path, name="workspace_stream_tool_call_preview.db")
+    now = datetime.now(timezone.utc)
+
+    with sf() as db:
+        session = AgentSession(
+            provider="claude",
+            environment="production",
+            project="test",
+            started_at=now,
+            user_messages=1,
+            assistant_messages=0,
+        )
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+        session_id = session.id
+
+    async def _run():
+        request = _DisconnectAfterNCycles(4)
+        events: list[dict] = []
+
+        async def mutate_and_publish():
+            await asyncio.sleep(0.01)
+            with sf() as db:
+                event = AgentEvent(
+                    session_id=str(session_id),
+                    role="assistant",
+                    tool_name="Bash",
+                    content_text="tool preamble",
+                    timestamp=now,
+                )
+                db.add(event)
+                db.commit()
+                db.refresh(event)
+
+                get_pubsub().publish(
+                    topic_session(str(session_id)),
+                    {
+                        "kind": "ingest",
+                        "session_id": str(session_id),
+                        "latest_event_id": event.id,
+                    },
+                )
+
+        publish_task = asyncio.create_task(mutate_and_publish())
+        async for event in timeline_mod._session_workspace_stream(
+            request,
+            session_factory=sf,
+            session_id=session_id,
+            skip_initial=True,
+        ):
+            events.append(event)
+            if event.get("event") == "workspace_changed":
+                break
+        await publish_task
+        return events
+
+    events = asyncio.run(_run())
+    changed_events = [event for event in events if event["event"] == "workspace_changed"]
+
+    assert len(changed_events) == 1
+    changed = json.loads(changed_events[0]["data"])
+    assert changed["latest_event_id"] > 0
+    assert changed["transcript_preview"] is None
 
 
 def test_workspace_stream_can_emit_live_preview_before_db_signature_changes(tmp_path):
