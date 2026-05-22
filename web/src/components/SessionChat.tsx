@@ -477,10 +477,11 @@ export function SessionChat({
 
   const canSteerNow = isSendLocked && canSteerActiveTurn;
   const canQueueNow = isSendLocked && canQueueNextInput && !queueFull;
+  const canInterruptTurn = isManagedLocal && isSendLocked;
   // Inline interrupt is offered for any locked managed-local turn. When the
   // stall-recovery card is showing it already exposes the same action, so we
   // hide the composer copy to avoid two buttons doing the identical thing.
-  const showInlineInterrupt = isManagedLocal && isSendLocked && !isStalled;
+  const showInlineInterrupt = canInterruptTurn && !isStalled;
   // When steer is available, the primary action is steer. Queue-next becomes
   // a secondary escape hatch. If only queue is available, primary = queue.
   const primaryIntent: "auto" | "queue" | "steer" = !isSendLocked
@@ -621,6 +622,34 @@ export function SessionChat({
     : queueFull
     ? "Queue full"
     : "Waiting";
+  let turnNoticeText =
+    "Agent is working. You can draft the next message; sending will be available when it is ready.";
+  if (canSteerNow) {
+    if (canQueueNow && canInterruptTurn) {
+      turnNoticeText =
+        "Agent is working. Send update injects mid-turn, Queue next waits, Stop interrupts - Enter will not send while working.";
+    } else if (canInterruptTurn) {
+      turnNoticeText =
+        "Agent is working. Send update injects mid-turn, Stop interrupts - Enter will not send while working.";
+    } else if (canQueueNow) {
+      turnNoticeText =
+        "Agent is working. Send update injects mid-turn, or Queue next waits - Enter will not send while working.";
+    } else {
+      turnNoticeText =
+        "Agent is working. Send update injects mid-turn - Enter will not send while working.";
+    }
+  } else if (canQueueNow) {
+    turnNoticeText = canInterruptTurn
+      ? "Agent is working. Queue next auto-sends at the next turn boundary, Stop interrupts - Enter will not queue."
+      : "Agent is working. Queue next auto-sends at the next turn boundary - Enter will not queue.";
+  } else if (canQueueNextInput && queueFull) {
+    turnNoticeText = canInterruptTurn
+      ? "Agent is working. The queue is full, but Stop can interrupt the current turn."
+      : "Agent is working. The queue is full; sending will be available when space opens.";
+  } else if (canInterruptTurn) {
+    turnNoticeText =
+      "Agent is working. Draft a message or Stop to interrupt; sending will be available when it is ready.";
+  }
 
   const renderMessages = () =>
     messages.map((msg) => (
@@ -740,13 +769,7 @@ export function SessionChat({
 
       {isSendLocked && !isStreaming && !isStalled && (
         <div className="session-chat-turn-notice">
-          <span>
-            {canSteerNow
-              ? "Agent is working. Send update injects mid-turn, Queue next waits, Stop interrupts — Enter will not send while working."
-              : canQueueNextInput
-              ? "Agent is working. Queue next auto-sends at the next turn boundary, Stop interrupts — Enter will not queue."
-              : "Agent is working. Draft a message or Stop to interrupt; sending will be available when it is ready."}
-          </span>
+          <span>{turnNoticeText}</span>
         </div>
       )}
 
