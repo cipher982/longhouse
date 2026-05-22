@@ -137,6 +137,7 @@ struct PathTaskResult {
     had_connect_error: bool,
     rerun_priority: Option<WorkPriority>,
     local_retry_after: Option<Duration>,
+    local_retry_priority: Option<WorkPriority>,
     processing_elapsed: Duration,
 }
 
@@ -434,10 +435,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         let retry_provider = result.job.provider;
                         scheduler.complete(&retry_path, result.rerun_priority);
                         if let Some(delay) = result.local_retry_after {
+                            let priority = result.local_retry_priority.unwrap_or(result.job.priority);
                             deferred_retries.insert(retry_path, DeferredRetry {
                                 due_at: Instant::now() + delay,
                                 provider: retry_provider,
-                                priority: result.job.priority,
+                                priority,
                                 observation: result.job.observation.clone(),
                             });
                         }
@@ -1332,6 +1334,24 @@ fn local_retry_delay(priority: WorkPriority) -> Duration {
         LIVE_LOCAL_RETRY_DELAY
     } else {
         Duration::from_secs(LOCAL_RETRY_DELAY_SECS)
+    }
+}
+
+fn spool_retry_delay_for_path(conn: &rusqlite::Connection, path: &Path) -> Option<Duration> {
+    let retry_at = match Spool::new(conn).next_retry_at_for_path(&path.to_string_lossy()) {
+        Ok(retry_at) => retry_at?,
+        Err(err) => {
+            tracing::warn!(
+                path = %path.display(),
+                "Could not read next spool retry time: {}",
+                err
+            );
+            return None;
+        }
+    };
+    match (retry_at - chrono::Utc::now()).to_std() {
+        Ok(delay) => Some(delay),
+        Err(_) => Some(Duration::ZERO),
     }
 }
 
@@ -2242,6 +2262,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         had_connect_error: false,
         rerun_priority: None,
         local_retry_after: None,
+        local_retry_priority: None,
         processing_elapsed: Duration::ZERO,
     };
 
@@ -2327,6 +2348,9 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
             .unwrap_or(false);
         if ready_spool_remaining {
             result.rerun_priority = Some(WorkPriority::Retry);
+        } else if result.failed_spool > 0 {
+            result.local_retry_after = spool_retry_delay_for_path(&conn, &result.job.path);
+            result.local_retry_priority = Some(WorkPriority::Retry);
         }
     }
 
@@ -2406,6 +2430,10 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                     result.events_shipped = outcome.events_shipped;
                     if outcome.had_connect_error {
                         result.had_connect_error = true;
+                    }
+                    if !outcome.fully_processed && result.job.priority == WorkPriority::Live {
+                        result.local_retry_after = Some(LIVE_LOCAL_RETRY_DELAY);
+                        result.local_retry_priority = Some(WorkPriority::Retry);
                     }
                 }
                 Err(e) => {
