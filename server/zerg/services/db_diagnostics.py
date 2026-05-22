@@ -13,6 +13,7 @@ from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import Session
 
 _WATCHED_TABLES = ("sessions", "events", "source_lines", "session_observations")
+_MAX_BACKUP_SCAN_ENTRIES = 5000
 
 
 def sqlite_db_paths(database_url: str) -> tuple[Path, Path] | None:
@@ -29,27 +30,33 @@ def sqlite_db_paths(database_url: str) -> tuple[Path, Path] | None:
     return db_path, Path(f"{db_path}-wal")
 
 
-def _directory_file_bytes(path: Path) -> int:
+def _directory_file_stats(path: Path, *, max_entries: int = _MAX_BACKUP_SCAN_ENTRIES) -> dict[str, int | bool]:
     if not path.exists():
-        return 0
+        return {"bytes": 0, "file_count": 0, "truncated": False}
 
     total = 0
+    file_count = 0
+    entries_seen = 0
     stack = [path]
     while stack:
         current = stack.pop()
         try:
             with os.scandir(current) as entries:
                 for entry in entries:
+                    entries_seen += 1
+                    if entries_seen > max_entries:
+                        return {"bytes": total, "file_count": file_count, "truncated": True}
                     try:
                         if entry.is_file(follow_symlinks=False):
                             total += entry.stat(follow_symlinks=False).st_size
+                            file_count += 1
                         elif entry.is_dir(follow_symlinks=False):
                             stack.append(Path(entry.path))
                     except OSError:
                         continue
         except OSError:
             continue
-    return total
+    return {"bytes": total, "file_count": file_count, "truncated": False}
 
 
 def _existing_disk_anchor(path: Path) -> Path:
@@ -175,29 +182,43 @@ def _count_where(db: Session | Connection, table_name: str, predicate: str) -> i
     return int(value or 0)
 
 
-def collect_sqlite_deep_counts(db: Session | Connection) -> dict[str, int | None]:
+def collect_sqlite_deep_counts(
+    db: Session | Connection,
+    *,
+    include_identity_counts: bool = False,
+) -> dict[str, int | bool | None]:
     """Return explicit potentially expensive counts for operator-invoked diagnostics."""
     events_columns = _table_columns(db, "events")
     source_columns = _table_columns(db, "source_lines")
     observation_columns = _table_columns(db, "session_observations")
 
-    return {
+    counts: dict[str, int | bool | None] = {
         "events_raw_json_pending": _count_where(db, "events", "raw_json_codec = 0 AND raw_json IS NOT NULL")
-        if {"raw_json", "raw_json_codec"} <= events_columns
+        if {"raw_json", "raw_json_codec"} <= events_columns and _index_exists(db, "ix_events_raw_json_pending")
         else None,
         "source_lines_raw_json_pending": _count_where(db, "source_lines", "raw_json_codec = 0")
-        if "raw_json_codec" in source_columns
+        if "raw_json_codec" in source_columns and _index_exists(db, "ix_source_lines_raw_json_pending")
         else None,
-        "events_thread_id_null": _count_where(db, "events", "thread_id IS NULL")
-        if "thread_id" in events_columns
-        else None,
-        "source_lines_thread_id_null": _count_where(db, "source_lines", "thread_id IS NULL")
-        if "thread_id" in source_columns
-        else None,
-        "session_observations_thread_id_null": _count_where(db, "session_observations", "thread_id IS NULL")
-        if "thread_id" in observation_columns
-        else None,
+        "identity_counts_skipped": not include_identity_counts,
+        "events_thread_id_null": None,
+        "source_lines_thread_id_null": None,
+        "session_observations_thread_id_null": None,
     }
+    if include_identity_counts:
+        counts.update(
+            {
+                "events_thread_id_null": _count_where(db, "events", "thread_id IS NULL")
+                if "thread_id" in events_columns
+                else None,
+                "source_lines_thread_id_null": _count_where(db, "source_lines", "thread_id IS NULL")
+                if "thread_id" in source_columns
+                else None,
+                "session_observations_thread_id_null": _count_where(db, "session_observations", "thread_id IS NULL")
+                if "thread_id" in observation_columns
+                else None,
+            }
+        )
+    return counts
 
 
 def collect_sqlite_db_stats(
@@ -213,6 +234,7 @@ def collect_sqlite_db_stats(
     db_exists = db_path.exists()
     db_bytes = db_path.stat().st_size if db_exists else None
     backup_dir = db_path.parent / "backups"
+    backup_stats = _directory_file_stats(backup_dir)
     payload: dict[str, Any] = {
         "database_url": database_url,
         "db_path": str(db_path),
@@ -223,7 +245,10 @@ def collect_sqlite_db_stats(
         "wal_bytes": wal_path.stat().st_size if wal_path.exists() else 0,
         "backup_dir": str(backup_dir),
         "backup_dir_exists": backup_dir.exists(),
-        "backup_bytes": _directory_file_bytes(backup_dir),
+        "backup_bytes": backup_stats["bytes"],
+        "backup_file_count": backup_stats["file_count"],
+        "backup_scan_truncated": backup_stats["truncated"],
+        "backup_scan_max_entries": _MAX_BACKUP_SCAN_ENTRIES,
     }
     payload.update(_disk_usage_payload(db_path))
 
