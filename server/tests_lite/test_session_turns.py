@@ -502,6 +502,59 @@ def test_materialize_managed_transcript_turns_incremental_scans_after_last_mater
         assert db.query(SessionTurn).filter(SessionTurn.session_id == session.id).count() == 2
 
 
+def test_materialize_managed_transcript_turns_incremental_skips_stream_without_new_user(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        session = _seed_session(db)
+        db.add_all(
+            [
+                AgentEvent(
+                    session_id=session.id,
+                    role="user",
+                    content_text="old prompt",
+                    timestamp=datetime(2026, 4, 23, 20, 0, 0, tzinfo=timezone.utc),
+                ),
+                AgentEvent(
+                    session_id=session.id,
+                    role="assistant",
+                    content_text="old answer",
+                    timestamp=datetime(2026, 4, 23, 20, 0, 5, tzinfo=timezone.utc),
+                ),
+            ]
+        )
+        db.commit()
+
+        assert materialize_managed_transcript_turns(db, session_id=session.id) == 1
+        db.commit()
+
+        db.add_all(
+            [
+                AgentEvent(
+                    session_id=session.id,
+                    role="assistant",
+                    content_text="still working",
+                    timestamp=datetime(2026, 4, 23, 20, 1, 0, tzinfo=timezone.utc),
+                ),
+                AgentEvent(
+                    session_id=session.id,
+                    role="tool",
+                    tool_output_text="tool result",
+                    timestamp=datetime(2026, 4, 23, 20, 1, 5, tzinfo=timezone.utc),
+                ),
+            ]
+        )
+        db.commit()
+
+        def fail_iter(_events):
+            raise AssertionError("incremental materialization loaded the event stream without a new user event")
+
+        monkeypatch.setattr(session_turns_service, "_iter_completed_transcript_turn_pairs", fail_iter)
+
+        assert materialize_managed_transcript_turns(db, session_id=session.id, incremental=True) == 0
+        assert db.query(SessionTurn).filter(SessionTurn.session_id == session.id).count() == 1
+
+
 def test_materialize_managed_transcript_turns_skips_session_with_pending_request_turn(tmp_path):
     SessionLocal = _make_db(tmp_path)
 
