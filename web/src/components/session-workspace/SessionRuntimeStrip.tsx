@@ -24,7 +24,7 @@ interface SessionRuntimeStripProps {
   hostLabel?: string | null;
   elapsedLabel?: string | null;
   detailOverride?: string | null;
-  variant?: "inline" | "block" | "dock";
+  variant?: "inline" | "block" | "dock" | "bar";
   testId?: string;
 }
 

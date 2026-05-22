@@ -1,10 +1,12 @@
 /**
- * SessionDetailPage - IDE-style session workspace for one synced transcript.
+ * SessionDetailPage - Single-column session workspace.
  *
  * Layout:
- * - Left: session context and branch lineage
- * - Center: event timeline transcript (tool detail expands inline)
- * - Bottom dock: inline live-session composer and session control
+ * - Header: title, live status, info button, archive
+ * - Body: transcript fills viewport
+ * - Dock: slim runtime strip + composer (Loop Mode picker inline) sticky at bottom
+ * - Drawer (overlay): session context (metadata, branches, summary, attach debug)
+ * - Telemetry panel only renders with ?debug=telemetry
  */
 
 import { useCallback, useMemo, useState } from "react";
@@ -21,11 +23,12 @@ import { Button, EmptyState, Spinner } from "../components/ui";
 import { TrashIcon } from "../components/icons";
 import { SessionChat, type SessionChatTarget } from "../components/SessionChat";
 import { SessionContextPane } from "../components/session-workspace/SessionContextPane";
+import { SessionInfoDrawer } from "../components/session-workspace/SessionInfoDrawer";
+import { LoopModePill } from "../components/session-workspace/LoopModePill";
 import { RenderTelemetryPanel } from "../components/session-workspace/RenderTelemetryPanel";
 import { SessionRuntimeStrip } from "../components/session-workspace/SessionRuntimeStrip";
 import { isSessionClosed, resolveSessionRuntimeState } from "../lib/sessionRuntime";
 import { TimelinePane } from "../components/session-workspace/TimelinePane";
-import { WorkspaceShell } from "../components/workspace/WorkspaceShell";
 import { useLoopModeChange } from "../hooks/useLoopModeChange";
 import { useSecondClock } from "../hooks/useSecondClock";
 import { useSessionWorkspace } from "../hooks/useSessionWorkspace";
@@ -68,10 +71,12 @@ function SessionDetailWorkspaceRoute({
   highlightEventId,
   returnTo,
   sessionId,
+  debugTelemetry,
 }: {
   highlightEventId: number | null;
   returnTo: string;
   sessionId: string | null;
+  debugTelemetry: boolean;
 }) {
   const navigate = useNavigate();
   const workspace = useSessionWorkspace(sessionId, { highlightEventId });
@@ -101,14 +106,14 @@ function SessionDetailWorkspaceRoute({
     handleVisibleSelectionChange,
     registerTimelineList,
   } = workspace;
-  // Phase 3 of session-liveness-honesty: close the clock on lifecycle==='closed'
-  // when the axis is present; fall back to terminal_state for older payloads.
   const nowMs = useSecondClock(Boolean(session && !isSessionClosed(session)));
   const runtimeElapsedLabel = useMemo(
     () => getRuntimeElapsedLabel(session, turns, nowMs),
     [session, turns, nowMs],
   );
   const activeToolDetail = useMemo(() => getActiveToolDetail(items), [items]);
+
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   const navigateToSession = (nextSessionId: string) => {
     navigate(`/timeline/${nextSessionId}`, {
@@ -211,8 +216,10 @@ function SessionDetailWorkspaceRoute({
     displaySession.home_label ||
     "host";
   const runtime = resolveSessionRuntimeState(displaySession);
+  const sessionEnded = Boolean(session && isSessionClosed(session));
   const workspaceClassName = [
     "session-workspace-route",
+    "session-workspace-route--single-column",
     `session-workspace-route--tone-${runtime.tone}`,
     interaction.isManagedLocalSession
       ? "session-workspace-route--managed"
@@ -246,6 +253,78 @@ function SessionDetailWorkspaceRoute({
     return null;
   })();
 
+  const headerLeft = (
+    <div className="session-workspace-header__left">
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={handleBack}
+        title="Back to timeline"
+        aria-label="Back to timeline"
+      >
+        &larr;
+      </Button>
+      <div className="session-workspace-header__title-stack">
+        <span className="session-workspace-header__name" title={title}>
+          {title}
+        </span>
+      </div>
+    </div>
+  );
+
+  const headerRight = (
+    <div className="session-workspace-header__actions">
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => setDrawerOpen(true)}
+        title="Session details"
+        aria-label="Session details"
+        data-testid="session-info-button"
+      >
+        Info
+      </Button>
+      {confirmingArchive ? (
+        <div className="session-detail-archive-confirm">
+          <span className="session-detail-archive-confirm-label">Archive?</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setConfirmingArchive(false)}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="danger"
+            size="sm"
+            onClick={() => void handleArchiveConfirm()}
+          >
+            Archive
+          </Button>
+        </div>
+      ) : (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            if (config.demoMode) {
+              toast(DEMO_READ_ONLY_MESSAGE);
+              return;
+            }
+            setConfirmingArchive(true);
+          }}
+          title="Archive session"
+          aria-label="Archive session"
+        >
+          <TrashIcon width={13} height={13} />
+        </Button>
+      )}
+    </div>
+  );
+
+  const showLoopModePill =
+    interaction.isManagedLocalSession && !sessionEnded && !config.demoMode;
+
   return (
     <div
       className={workspaceClassName}
@@ -253,109 +332,43 @@ function SessionDetailWorkspaceRoute({
       data-runtime-tone={runtime.tone}
     >
       {launchPendingBanner}
-      <WorkspaceShell
-        sidebar={
-          <SessionContextPane
-            session={displaySession}
-            title={title}
-            headThreadSession={headThreadSession}
-            threadSessions={threadSessions}
-            isViewingHead={isViewingHead}
-            onOpenSession={navigateToSession}
-            onOpenLatest={() =>
-              headThreadSession && navigateToSession(headThreadSession.id)
-            }
-            continuationNotice={interaction.notice}
-            loopModePending={loopModePending}
-            onLoopModeChange={handleLoopModeChange}
-          />
-        }
-        main={
-          <TimelinePane
-            items={items}
-            totalEntries={totalEntries}
-            loadedEntries={loadedEntryCount}
-            abandonedEvents={abandonedEvents}
-            showAbandonedBranches={showAbandonedBranches}
-            onShowAbandonedBranchesChange={setShowAbandonedBranches}
-            hasPreviousPage={hasPreviousPage ?? false}
-            isFetchingPreviousPage={isFetchingPreviousPage}
-            onFetchPreviousPage={() => void fetchPreviousPage()}
-            loading={eventsLoading}
-            error={eventsError}
-            selectedKey={selectedKey}
-            onSelectKey={selectKey}
-            onVisibleSelectionChange={handleVisibleSelectionChange}
-            sessionEnded={Boolean(session && isSessionClosed(session))}
-            headerLeft={
-              <div className="session-workspace-header__left">
-                <Button variant="ghost" size="sm" onClick={handleBack}>
-                  &larr;
-                </Button>
-                <div className="session-workspace-header__title-stack">
-                  <span className="session-workspace-header__name">
-                    {title}
-                  </span>
-                </div>
-              </div>
-            }
-            headerRight={
-              confirmingArchive ? (
-                <div className="session-detail-archive-confirm">
-                  <span className="session-detail-archive-confirm-label">
-                    Archive this session?
-                  </span>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setConfirmingArchive(false)}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    variant="danger"
-                    size="sm"
-                    onClick={() => void handleArchiveConfirm()}
-                  >
-                    Archive
-                  </Button>
-                </div>
-              ) : (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    if (config.demoMode) {
-                      toast(DEMO_READ_ONLY_MESSAGE);
-                      return;
-                    }
-                    setConfirmingArchive(true);
-                  }}
-                  title="Archive session"
-                  aria-label="Archive session"
-                >
-                  <TrashIcon width={13} height={13} />
-                  Archive
-                </Button>
-              )
-            }
-            listRef={registerTimelineList}
-            dock={
-              <div
-                className="session-control-dock"
-                data-testid="session-control-dock"
-              >
-                <SessionRuntimeStrip
-                  session={displaySession}
-                  interaction={interaction}
-                  hostLabel={runtimeHostLabel}
-                  elapsedLabel={runtimeElapsedLabel}
-                  detailOverride={
-                    interaction.isManagedLocalSession ? activeToolDetail : null
-                  }
-                  variant="dock"
-                  testId="session-control-strip"
-                />
+      <div className="session-workspace-shell">
+        <TimelinePane
+          items={items}
+          totalEntries={totalEntries}
+          loadedEntries={loadedEntryCount}
+          abandonedEvents={abandonedEvents}
+          showAbandonedBranches={showAbandonedBranches}
+          onShowAbandonedBranchesChange={setShowAbandonedBranches}
+          hasPreviousPage={hasPreviousPage ?? false}
+          isFetchingPreviousPage={isFetchingPreviousPage}
+          onFetchPreviousPage={() => void fetchPreviousPage()}
+          loading={eventsLoading}
+          error={eventsError}
+          selectedKey={selectedKey}
+          onSelectKey={selectKey}
+          onVisibleSelectionChange={handleVisibleSelectionChange}
+          sessionEnded={sessionEnded}
+          headerLeft={headerLeft}
+          headerRight={headerRight}
+          listRef={registerTimelineList}
+          dock={
+            <div
+              className="session-control-dock session-control-dock--bar"
+              data-testid="session-control-dock"
+            >
+              <SessionRuntimeStrip
+                session={displaySession}
+                interaction={interaction}
+                hostLabel={runtimeHostLabel}
+                elapsedLabel={runtimeElapsedLabel}
+                detailOverride={
+                  interaction.isManagedLocalSession ? activeToolDetail : null
+                }
+                variant="bar"
+                testId="session-control-strip"
+              />
+              <div className="session-control-dock__composer">
                 <SessionChat
                   key={`${sessionChatTarget.id}:${interaction.mode}`}
                   session={sessionChatTarget}
@@ -376,7 +389,10 @@ function SessionDetailWorkspaceRoute({
                   canSteerActiveTurn={Boolean(
                     displaySession.capabilities?.can_steer_active_turn,
                   )}
-                  isStalled={Boolean(!displaySession.runtime_facts && displaySession.runtime_display?.is_stalled)}
+                  isStalled={Boolean(
+                    !displaySession.runtime_facts &&
+                      displaySession.runtime_display?.is_stalled,
+                  )}
                   onSessionChanged={(nextSessionId) => {
                     if (!nextSessionId || nextSessionId === session.id) return;
                     navigate(`/timeline/${nextSessionId}`, {
@@ -385,12 +401,47 @@ function SessionDetailWorkspaceRoute({
                     });
                   }}
                 />
+                {showLoopModePill ? (
+                  <LoopModePill
+                    currentMode={effectiveLoopMode}
+                    pending={loopModePending}
+                    onChange={handleLoopModeChange}
+                  />
+                ) : null}
               </div>
-            }
-          />
-        }
-        inspector={<RenderTelemetryPanel sessionId={session.id} />}
-      />
+            </div>
+          }
+        />
+        {debugTelemetry ? (
+          <div className="session-workspace-debug">
+            <RenderTelemetryPanel sessionId={session.id} />
+          </div>
+        ) : null}
+      </div>
+      <SessionInfoDrawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        title={title}
+      >
+        <SessionContextPane
+          session={displaySession}
+          title={title}
+          headThreadSession={headThreadSession}
+          threadSessions={threadSessions}
+          isViewingHead={isViewingHead}
+          onOpenSession={(nextId) => {
+            setDrawerOpen(false);
+            navigateToSession(nextId);
+          }}
+          onOpenLatest={() => {
+            if (!headThreadSession) return;
+            setDrawerOpen(false);
+            navigateToSession(headThreadSession.id);
+          }}
+          continuationNotice={interaction.notice}
+          hideHero
+        />
+      </SessionInfoDrawer>
     </div>
   );
 }
@@ -407,6 +458,7 @@ export default function SessionDetailPage() {
     return Number.isFinite(parsed) ? parsed : null;
   }, [searchParams]);
 
+  const debugTelemetry = searchParams.get("debug") === "telemetry";
   const shouldAutoResume = searchParams.get("resume") === "1";
   const returnTo =
     (location.state as { from?: string } | null)?.from ?? "/timeline";
@@ -434,6 +486,7 @@ export default function SessionDetailPage() {
       sessionId={sessionId ?? null}
       highlightEventId={highlightEventId}
       returnTo={returnTo}
+      debugTelemetry={debugTelemetry}
     />
   );
 }

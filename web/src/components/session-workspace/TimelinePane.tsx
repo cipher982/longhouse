@@ -669,6 +669,10 @@ export function TimelinePane({
     prevScrollHeightRef.current = newScrollHeight;
   }, [loadedEntries]);
 
+  // Unread counter — increments while user is scrolled up and new items append.
+  // Resets to 0 when the user is back at the bottom.
+  const [unreadCount, setUnreadCount] = useState(0);
+
   // Case 2: items appended at the bottom (live events in an open session).
   // Stick to bottom only if the user was already at the bottom before the
   // append. Otherwise the viewport stays anchored to whatever they were
@@ -685,8 +689,12 @@ export function TimelinePane({
       wasAtBottomRef.current = true;
       return;
     }
-    if (items.length > prevCount && wasAtBottomRef.current) {
-      container.scrollTop = container.scrollHeight;
+    if (items.length > prevCount) {
+      if (wasAtBottomRef.current) {
+        container.scrollTop = container.scrollHeight;
+      } else {
+        setUnreadCount((prev) => prev + (items.length - prevCount));
+      }
     }
   }, [items]);
 
@@ -698,7 +706,11 @@ export function TimelinePane({
     if (!container) return;
     const onScroll = () => {
       const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
-      wasAtBottomRef.current = distance < STICK_THRESHOLD;
+      const atBottom = distance < STICK_THRESHOLD;
+      wasAtBottomRef.current = atBottom;
+      if (atBottom) {
+        setUnreadCount((prev) => (prev === 0 ? prev : 0));
+      }
     };
     container.addEventListener("scroll", onScroll, { passive: true });
     return () => container.removeEventListener("scroll", onScroll);
@@ -964,6 +976,26 @@ export function TimelinePane({
           })
         )}
       </div>
+
+      {unreadCount > 0 ? (
+        <button
+          type="button"
+          className="timeline-pane__unread-pill"
+          data-testid="timeline-unread-pill"
+          onClick={() => {
+            const container = scrollContainerRef.current;
+            if (!container) return;
+            container.scrollTo({
+              top: container.scrollHeight,
+              behavior: "smooth",
+            });
+            wasAtBottomRef.current = true;
+            setUnreadCount(0);
+          }}
+        >
+          ↓ {unreadCount} new
+        </button>
+      ) : null}
 
       {dock ? <div className="timeline-pane__dock">{dock}</div> : null}
     </div>
