@@ -220,8 +220,8 @@ async def test_summary_task_bookkeeping_jumps_ahead_of_archive_ingest(tmp_path):
     assert run_order == [
         "first",
         "managed-launch",
-        "runtime",
         "live",
+        "runtime",
         "task-timeout",
         "summary",
         "task-done",

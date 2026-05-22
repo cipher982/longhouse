@@ -96,81 +96,95 @@ async def ingest_runtime_observation_batch(
             if live_transcript_only:
                 return ingest_result, [], None
 
+            updated_runtime_keys = set(ingest_result.updated_runtime_keys)
+            if not updated_runtime_keys:
+                return ingest_result, [], None
+
+            updated_session_ids = sorted(
+                {
+                    ev.session_id
+                    for ev in events
+                    if ev.session_id is not None and ev.runtime_key in updated_runtime_keys
+                },
+                key=str,
+            )
+            if not updated_session_ids:
+                return ingest_result, [], None
+
             # Prepare per-session pushes on the post-ingest state.
             prepared: list[dict] = []
             widget_push = None
-            if session_ids_in_batch:
-                # Pre-fetch APNs target sets ONCE per (owner, platform) for the batch
-                # rather than per-session × per-prep-fn. The widget timeline push is
-                # owner-scoped (not session-scoped), so prepare it ONCE per batch.
-                ios_targets = (
-                    active_ios_targets_for_owner(wdb, owner_id=owner_id, log_context="runtime batch")
-                    if owner_id is not None
-                    else None
-                )
-                widget_targets = (
-                    active_ios_targets_for_owner(
-                        wdb,
-                        owner_id=owner_id,
-                        platform=WIDGET_PUSH_PLATFORM,
-                        log_context="runtime batch widget",
-                    )
-                    if owner_id is not None
-                    else None
-                )
-                widget_push = prepare_widget_timeline_push(
+            # Pre-fetch APNs target sets ONCE per (owner, platform) for the batch
+            # rather than per-session × per-prep-fn. The widget timeline push is
+            # owner-scoped (not session-scoped), so prepare it ONCE per changed batch.
+            ios_targets = (
+                active_ios_targets_for_owner(wdb, owner_id=owner_id, log_context="runtime batch")
+                if owner_id is not None
+                else None
+            )
+            widget_targets = (
+                active_ios_targets_for_owner(
                     wdb,
                     owner_id=owner_id,
-                    occurred_at=now_utc,
-                    targets=widget_targets,
+                    platform=WIDGET_PUSH_PLATFORM,
+                    log_context="runtime batch widget",
                 )
+                if owner_id is not None
+                else None
+            )
+            widget_push = prepare_widget_timeline_push(
+                wdb,
+                owner_id=owner_id,
+                occurred_at=now_utc,
+                targets=widget_targets,
+            )
 
-                session_rows = wdb.query(AgentSession).filter(AgentSession.id.in_(session_ids_in_batch)).all()
-                runtime_state_map = load_runtime_state_map(wdb, session_ids_in_batch)
-                for session_row in session_rows:
-                    canonical_state = resolve_runtime_overlay(
-                        session_row,
-                        last_activity_at=session_row.last_activity_at,
-                        runtime_state_map=runtime_state_map,
-                        now=now_utc,
-                    ).presence_state
-                    sid = session_row.id
-                    tool = tool_by_session.get(sid)
-                    prev = previous_by_session.get(sid)
-                    prepared.append(
-                        {
-                            "session_id": sid,
-                            "canonical_state": canonical_state,
-                            "attention_push": prepare_session_attention_push(
-                                wdb,
-                                owner_id=owner_id,
-                                session_id=sid,
-                                previous_state=prev,
-                                current_state=canonical_state,
-                                occurred_at=now_utc,
-                                current_tool_name=tool,
-                                targets=ios_targets,
-                            ),
-                            "attention_resolution_push": prepare_session_attention_resolution_push(
-                                wdb,
-                                owner_id=owner_id,
-                                session_id=sid,
-                                previous_state=prev,
-                                current_state=canonical_state,
-                                occurred_at=now_utc,
-                                targets=ios_targets,
-                            ),
-                            "live_activity_pushes": prepare_session_live_activity_pushes(
-                                wdb,
-                                owner_id=owner_id,
-                                session_id=sid,
-                                current_state=canonical_state,
-                                current_tool_name=tool,
-                                occurred_at=now_utc,
-                                runtime_state_map=runtime_state_map,
-                            ),
-                        }
-                    )
+            session_rows = wdb.query(AgentSession).filter(AgentSession.id.in_(updated_session_ids)).all()
+            runtime_state_map = load_runtime_state_map(wdb, updated_session_ids)
+            for session_row in session_rows:
+                canonical_state = resolve_runtime_overlay(
+                    session_row,
+                    last_activity_at=session_row.last_activity_at,
+                    runtime_state_map=runtime_state_map,
+                    now=now_utc,
+                ).presence_state
+                sid = session_row.id
+                tool = tool_by_session.get(sid)
+                prev = previous_by_session.get(sid)
+                prepared.append(
+                    {
+                        "session_id": sid,
+                        "canonical_state": canonical_state,
+                        "attention_push": prepare_session_attention_push(
+                            wdb,
+                            owner_id=owner_id,
+                            session_id=sid,
+                            previous_state=prev,
+                            current_state=canonical_state,
+                            occurred_at=now_utc,
+                            current_tool_name=tool,
+                            targets=ios_targets,
+                        ),
+                        "attention_resolution_push": prepare_session_attention_resolution_push(
+                            wdb,
+                            owner_id=owner_id,
+                            session_id=sid,
+                            previous_state=prev,
+                            current_state=canonical_state,
+                            occurred_at=now_utc,
+                            targets=ios_targets,
+                        ),
+                        "live_activity_pushes": prepare_session_live_activity_pushes(
+                            wdb,
+                            owner_id=owner_id,
+                            session_id=sid,
+                            current_state=canonical_state,
+                            current_tool_name=tool,
+                            occurred_at=now_utc,
+                            runtime_state_map=runtime_state_map,
+                        ),
+                    }
+                )
             return ingest_result, prepared, widget_push
 
         result, prepared_per_session, widget_push = await ws.execute_or_direct(
