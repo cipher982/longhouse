@@ -1365,14 +1365,6 @@ def _migrate_agents_columns(engine: Engine) -> None:
                     """
                 )
             )
-            conn.execute(
-                text(
-                    """
-                    CREATE INDEX IF NOT EXISTS ix_session_observations_runtime_source_kind_observed
-                    ON session_observations(runtime_key, source, kind, observed_at, id)
-                    """
-                )
-            )
             conn.commit()
     except Exception as exc:
         raise RuntimeError("Failed to initialize session_observations table") from exc
