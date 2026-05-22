@@ -89,6 +89,8 @@ class IngestResult(BaseModel):
     session_created: bool
     commit_count: int = 0
     commit_ms_total: float = 0.0
+    source_lines_inserted: int = 0
+    store_stage_ms: Dict[str, float] = Field(default_factory=dict)
 
 
 @dataclass(frozen=True)

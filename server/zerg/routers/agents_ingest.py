@@ -492,6 +492,14 @@ async def ingest_session(
                         "write_started_at_ms": write_started_at_ms,
                         "store_returned_at_ms": store_returned_at_ms,
                         "store_write_ms": store_returned_at_ms - write_started_at_ms,
+                        "store_stage_ms": result.store_stage_ms,
+                        "store_counts": {
+                            "events_inserted": result.events_inserted,
+                            "events_skipped": result.events_skipped,
+                            "source_lines_inserted": result.source_lines_inserted,
+                            "commit_count": result.commit_count,
+                            "commit_ms_total": result.commit_ms_total,
+                        },
                     },
                 )
                 return result
