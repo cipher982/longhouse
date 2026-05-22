@@ -274,7 +274,7 @@ def _is_synthetic_missing_managed_lease_payload(payload: dict) -> bool:
     return isinstance(event_payload, dict) and event_payload.get("state") == "missing"
 
 
-def _latest_real_managed_lease_at_by_key(db: Session, runtime_keys: list[str]) -> dict[str, datetime]:
+def _latest_real_managed_lease_at_by_key(db: Session, runtime_keys: list[str]) -> dict[str, datetime | None]:
     if not runtime_keys:
         return {}
     rows = (
@@ -293,14 +293,15 @@ def _latest_real_managed_lease_at_by_key(db: Session, runtime_keys: list[str]) -
         )
         .all()
     )
-    latest: dict[str, datetime] = {}
+    latest: dict[str, datetime | None] = {}
     for runtime_key, observed_at, payload_json in rows:
         # Rows are ordered newest-first per runtime_key, so the first
         # non-synthetic row we keep is the latest real managed lease signal.
-        if runtime_key in latest:
+        if runtime_key in latest and latest[runtime_key] is not None:
             continue
         payload = _runtime_observation_payload_from_raw(payload_json)
         if _is_synthetic_missing_managed_lease_payload(payload):
+            latest.setdefault(runtime_key, None)
             continue
         occurred_at = normalize_utc(observed_at)
         if occurred_at is not None:
@@ -340,7 +341,7 @@ def _runtime_events_for_missing_managed_leases(
         if not provider or session_id is None or (provider, session_id) in observed:
             continue
         latest_real_lease_at_for_key = latest_real_lease_at.get(state.runtime_key)
-        if latest_real_lease_at_for_key is None:
+        if state.runtime_key not in latest_real_lease_at:
             continue
 
         timeline_anchor_at = (
