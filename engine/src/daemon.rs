@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
@@ -153,6 +153,12 @@ struct HeartbeatPostResult {
     result: Result<(), String>,
     join_elapsed_ms: u64,
     task_elapsed_ms: u64,
+}
+
+struct OutboxCollectResult {
+    presence: outbox::OutboxLocalDrainResult,
+    runtime_posts: Vec<outbox::PendingRuntimeEventPost>,
+    elapsed_ms: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -350,6 +356,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut latest_transcript_wake_observed: HashMap<PathBuf, i64> = HashMap::new();
     let mut managed_codex_transcript_paths: HashSet<PathBuf> = HashSet::new();
     let mut bridge_reaper = ManagedBridgeReaper::from_env();
+    let mut outbox_collect_tasks: JoinSet<OutboxCollectResult> = JoinSet::new();
     let mut outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
     let mut runtime_outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
     let mut heartbeat_post_tasks: JoinSet<HeartbeatPostResult> = JoinSet::new();
@@ -487,6 +494,116 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     }
                     Some(Err(e)) => {
                         tracing::warn!("Background discovery task failed: {}", e);
+                    }
+                    None => {}
+                }
+            }
+
+            outbox_collect_result = outbox_collect_tasks.join_next(), if !outbox_collect_tasks.is_empty() => {
+                match outbox_collect_result {
+                    Some(Ok(result)) => {
+                        if result.elapsed_ms > 100 {
+                            tracing::warn!(
+                                elapsed_ms = result.elapsed_ms,
+                                presence_posts = result.presence.posts.len(),
+                                runtime_posts = result.runtime_posts.len(),
+                                "Outbox collection was slow"
+                            );
+                        }
+                        if !result.presence.signals.is_empty() {
+                            tracing::debug!(
+                                signal_count = result.presence.signals.len(),
+                                "Ignoring hook outbox transcript catch-up signals"
+                            );
+                        }
+                        if !result.presence.posts.is_empty() {
+                            if outbox_post_tasks.is_empty() {
+                                let client = client.clone();
+                                let posts = result.presence.posts;
+                                let post_count = posts.len();
+                                outbox_post_tasks.spawn_local(async move {
+                                    let join_started = Instant::now();
+                                    let post_task = tokio::spawn(async move {
+                                        let task_started = Instant::now();
+                                        let (sent, kept) =
+                                            outbox::post_pending_presence_files(&client, posts).await;
+                                        (sent, kept, task_started.elapsed().as_millis() as u64)
+                                    });
+                                    match post_task.await {
+                                        Ok((sent, kept, task_elapsed_ms)) => (
+                                            sent,
+                                            kept,
+                                            join_started.elapsed().as_millis() as u64,
+                                            task_elapsed_ms,
+                                        ),
+                                        Err(err) => {
+                                            tracing::warn!(
+                                                post_count,
+                                                "Outbox presence POST worker task failed: {}",
+                                                err
+                                            );
+                                            (
+                                                0,
+                                                post_count,
+                                                join_started.elapsed().as_millis() as u64,
+                                                join_started.elapsed().as_millis() as u64,
+                                            )
+                                        }
+                                    }
+                                });
+                            } else {
+                                tracing::debug!(
+                                    pending_posts = result.presence.posts.len(),
+                                    "Skipping outbox presence POST while previous POST is still in flight"
+                                );
+                            }
+                        }
+                        if !result.runtime_posts.is_empty() {
+                            if runtime_outbox_post_tasks.is_empty() {
+                                let client = client.clone();
+                                let runtime_posts = result.runtime_posts;
+                                let post_count = runtime_posts.len();
+                                runtime_outbox_post_tasks.spawn_local(async move {
+                                    let join_started = Instant::now();
+                                    let post_task = tokio::spawn(async move {
+                                        let task_started = Instant::now();
+                                        let (sent, kept) =
+                                            outbox::post_pending_runtime_event_files(&client, runtime_posts)
+                                                .await;
+                                        (sent, kept, task_started.elapsed().as_millis() as u64)
+                                    });
+                                    match post_task.await {
+                                        Ok((sent, kept, task_elapsed_ms)) => (
+                                            sent,
+                                            kept,
+                                            join_started.elapsed().as_millis() as u64,
+                                            task_elapsed_ms,
+                                        ),
+                                        Err(err) => {
+                                            tracing::warn!(
+                                                post_count,
+                                                "Outbox runtime-event POST worker task failed: {}",
+                                                err
+                                            );
+                                            (
+                                                0,
+                                                post_count,
+                                                join_started.elapsed().as_millis() as u64,
+                                                join_started.elapsed().as_millis() as u64,
+                                            )
+                                        }
+                                    }
+                                });
+                            } else {
+                                tracing::debug!(
+                                    pending_posts = result.runtime_posts.len(),
+                                    "Skipping outbox runtime-event POST while previous POST is still in flight"
+                                );
+                            }
+                        }
+                    }
+                    Some(Err(err)) => {
+                        tracing::warn!("Outbox collection task failed: {}", err);
                     }
                     None => {}
                 }
@@ -830,105 +947,24 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // overlay signals only; transcript shipping is owned by filesystem
             // events plus reconciliation scans.
             _ = outbox_timer.tick() => {
-                let outbox_result = outbox::collect_outbox_with_local_state_result(
-                    &outbox_dir,
-                    config.shipper_config.db_path.as_deref(),
-                );
-                if !outbox_result.signals.is_empty() {
-                    tracing::debug!(
-                        signal_count = outbox_result.signals.len(),
-                        "Ignoring hook outbox transcript catch-up signals"
-                    );
-                }
-                if !outbox_result.posts.is_empty() {
-                    if outbox_post_tasks.is_empty() {
-                        let client = client.clone();
-                        let post_count = outbox_result.posts.len();
-                        outbox_post_tasks.spawn_local(async move {
-                            let join_started = Instant::now();
-                            let post_task = tokio::spawn(async move {
-                                let task_started = Instant::now();
-                                let (sent, kept) = outbox::post_pending_presence_files(
-                                    &client,
-                                    outbox_result.posts,
-                                )
-                                .await;
-                                (sent, kept, task_started.elapsed().as_millis() as u64)
-                            });
-                            match post_task.await {
-                                Ok((sent, kept, task_elapsed_ms)) => (
-                                    sent,
-                                    kept,
-                                    join_started.elapsed().as_millis() as u64,
-                                    task_elapsed_ms,
-                                ),
-                                Err(err) => {
-                                    tracing::warn!(
-                                        post_count,
-                                        "Outbox presence POST worker task failed: {}",
-                                        err
-                                    );
-                                    (
-                                        0,
-                                        post_count,
-                                        join_started.elapsed().as_millis() as u64,
-                                        join_started.elapsed().as_millis() as u64,
-                                    )
-                                }
-                            }
-                        });
-                    } else {
-                        tracing::debug!(
-                            pending_posts = outbox_result.posts.len(),
-                            "Skipping outbox presence POST while previous POST is still in flight"
+                if outbox_collect_tasks.is_empty() {
+                    let outbox_dir = outbox_dir.clone();
+                    let runtime_events_outbox_dir = runtime_events_outbox_dir.clone();
+                    let db_path = config.shipper_config.db_path.clone();
+                    outbox_collect_tasks.spawn_blocking(move || {
+                        let started = Instant::now();
+                        let presence = outbox::collect_outbox_with_local_state_result(
+                            &outbox_dir,
+                            db_path.as_deref(),
                         );
-                    }
-                }
-
-                let runtime_posts = outbox::collect_runtime_event_outbox(&runtime_events_outbox_dir);
-                if !runtime_posts.is_empty() {
-                    if runtime_outbox_post_tasks.is_empty() {
-                        let client = client.clone();
-                        let post_count = runtime_posts.len();
-                        runtime_outbox_post_tasks.spawn_local(async move {
-                            let join_started = Instant::now();
-                            let post_task = tokio::spawn(async move {
-                                let task_started = Instant::now();
-                                let (sent, kept) = outbox::post_pending_runtime_event_files(
-                                    &client,
-                                    runtime_posts,
-                                )
-                                .await;
-                                (sent, kept, task_started.elapsed().as_millis() as u64)
-                            });
-                            match post_task.await {
-                                Ok((sent, kept, task_elapsed_ms)) => (
-                                    sent,
-                                    kept,
-                                    join_started.elapsed().as_millis() as u64,
-                                    task_elapsed_ms,
-                                ),
-                                Err(err) => {
-                                    tracing::warn!(
-                                        post_count,
-                                        "Outbox runtime-event POST worker task failed: {}",
-                                        err
-                                    );
-                                    (
-                                        0,
-                                        post_count,
-                                        join_started.elapsed().as_millis() as u64,
-                                        join_started.elapsed().as_millis() as u64,
-                                    )
-                                }
-                            }
-                        });
-                    } else {
-                        tracing::debug!(
-                            pending_posts = runtime_posts.len(),
-                            "Skipping outbox runtime-event POST while previous POST is still in flight"
-                        );
-                    }
+                        let runtime_posts =
+                            outbox::collect_runtime_event_outbox(&runtime_events_outbox_dir);
+                        OutboxCollectResult {
+                            presence,
+                            runtime_posts,
+                            elapsed_ms: started.elapsed().as_millis() as u64,
+                        }
+                    });
                 }
             }
 
@@ -2399,7 +2435,7 @@ fn finish_path_task(mut result: PathTaskResult, started: Instant) -> PathTaskRes
 
 /// Wait for SIGINT (Ctrl-C) or SIGTERM.
 async fn shutdown_signal() {
-    use tokio::signal::unix::{signal, SignalKind};
+    use tokio::signal::unix::{SignalKind, signal};
 
     let ctrl_c = tokio::signal::ctrl_c();
     let mut sigterm = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
@@ -3061,22 +3097,24 @@ mod tests {
         let mut latest_wakes = HashMap::new();
         let mut scheduler = PathScheduler::new(4);
 
-        assert!(enqueue_transcript_wake_signal(
-            &mut scheduler,
-            &mut latest_wakes,
-            TranscriptWakeSignal {
-                provider: "codex".to_string(),
-                path: transcript.path().to_path_buf(),
-                phase: "idle".to_string(),
-                observed_at_ms: 123,
-                session_id: Some("session-123".to_string()),
-                turn_id: Some("turn-123".to_string()),
-                wake_reason: Some("turn_completed".to_string()),
-                file_len_hint: Some(456),
-                received_at_ms: Some(124),
-            },
-        )
-        .is_some());
+        assert!(
+            enqueue_transcript_wake_signal(
+                &mut scheduler,
+                &mut latest_wakes,
+                TranscriptWakeSignal {
+                    provider: "codex".to_string(),
+                    path: transcript.path().to_path_buf(),
+                    phase: "idle".to_string(),
+                    observed_at_ms: 123,
+                    session_id: Some("session-123".to_string()),
+                    turn_id: Some("turn-123".to_string()),
+                    wake_reason: Some("turn_completed".to_string()),
+                    file_len_hint: Some(456),
+                    received_at_ms: Some(124),
+                },
+            )
+            .is_some()
+        );
 
         let launched = scheduler.pop_launchable().unwrap();
         assert_eq!(launched.path, transcript.path());
