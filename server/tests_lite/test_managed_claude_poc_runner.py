@@ -37,11 +37,12 @@ def test_assistant_transcript_match_ignores_injected_user_prompt(tmp_path, monke
     )
     monkeypatch.setenv("HOME", str(tmp_path))
 
-    matched, path, line = runner.assistant_transcript_contains(session_id, expected)
+    matched, path, line, timestamp = runner.assistant_transcript_contains(session_id, expected)
 
     assert matched is False
     assert path is None
     assert line is None
+    assert timestamp is None
 
 
 def test_assistant_transcript_match_finds_assistant_response(tmp_path, monkeypatch):
@@ -55,7 +56,13 @@ def test_assistant_transcript_match_finds_assistant_response(tmp_path, monkeypat
         "\n".join(
             [
                 json.dumps({"type": "user", "message": {"role": "user", "content": f"Please reply with exactly: {expected}"}}),
-                json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": expected}]}}),
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "timestamp": "2026-05-22T11:31:00.000Z",
+                        "message": {"role": "assistant", "content": [{"type": "text", "text": expected}]},
+                    }
+                ),
             ]
         )
         + "\n",
@@ -63,11 +70,12 @@ def test_assistant_transcript_match_finds_assistant_response(tmp_path, monkeypat
     )
     monkeypatch.setenv("HOME", str(tmp_path))
 
-    matched, path, line = runner.assistant_transcript_contains(session_id, expected)
+    matched, path, line, timestamp = runner.assistant_transcript_contains(session_id, expected)
 
     assert matched is True
     assert path == str(transcript)
     assert line == 2
+    assert timestamp == "2026-05-22T11:31:00.000Z"
 
 
 def test_read_json_file_returns_dict_only(tmp_path):
