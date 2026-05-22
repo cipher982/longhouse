@@ -161,6 +161,7 @@ def build_session_runtime_display_response(
     user_messages: int | None = None,
     assistant_messages: int | None = None,
     has_visible_transcript_preview: bool = False,
+    has_pending_response_turn: bool = False,
     now: datetime | None = None,
 ) -> SessionRuntimeDisplayResponse | None:
     if runtime_overlay is None:
@@ -175,6 +176,7 @@ def build_session_runtime_display_response(
         user_messages=user_messages,
         assistant_messages=assistant_messages,
         has_visible_transcript_preview=has_visible_transcript_preview,
+        has_pending_response_turn=has_pending_response_turn,
         now=now,
     )
     return SessionRuntimeDisplayResponse(
@@ -1220,6 +1222,7 @@ def build_session_response(
     summary_status: str | None = None,
     control_overlay=None,
     kernel_capabilities=None,
+    has_pending_response_turn: bool = False,
 ) -> SessionResponse:
     cache = thread_cache if thread_cache is not None else {}
     thread_head_session_id, thread_continuation_count = get_thread_meta(store, session, cache)
@@ -1274,6 +1277,7 @@ def build_session_response(
             user_messages=session.user_messages or 0,
             assistant_messages=session.assistant_messages or 0,
             has_visible_transcript_preview=has_visible_transcript_preview,
+            has_pending_response_turn=has_pending_response_turn,
             now=current_now,
         )
         if include_runtime

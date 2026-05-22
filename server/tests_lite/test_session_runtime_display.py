@@ -395,6 +395,36 @@ def test_managed_idle_after_user_prompt_displays_transcript_sync():
     assert display.is_idle is False
 
 
+def test_managed_idle_after_pending_turn_displays_transcript_sync_without_archive_counts():
+    now = datetime(2026, 4, 26, 12, 0, tzinfo=timezone.utc)
+    display = build_session_runtime_display(
+        runtime_view=_runtime_view(
+            signal_tier="phase_signal",
+            runtime_phase="idle",
+            runtime_source="managed_local_transport",
+            status="idle",
+            presence_state="idle",
+            presence_updated_at=now,
+            last_live_at=now,
+            confidence="live",
+            display_phase="Idle",
+        ),
+        capabilities=_capabilities(managed=True),
+        ended_at=None,
+        last_activity_at=now - timedelta(seconds=20),
+        user_messages=1,
+        assistant_messages=1,
+        has_visible_transcript_preview=False,
+        has_pending_response_turn=True,
+        now=now,
+    )
+
+    assert display.state == "syncing_transcript"
+    assert display.headline == "Syncing"
+    assert display.detail == "Waiting for transcript"
+    assert display.is_idle is False
+
+
 def test_managed_idle_after_user_prompt_keeps_idle_when_preview_is_visible():
     now = datetime(2026, 4, 26, 12, 0, tzinfo=timezone.utc)
     display = build_session_runtime_display(

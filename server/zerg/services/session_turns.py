@@ -52,6 +52,13 @@ SESSION_TURN_STATE_ACTIVE = "active"
 SESSION_TURN_STATE_TERMINAL = "terminal"
 SESSION_TURN_STATE_DURABLE = "durable"
 SESSION_TURN_STATE_FAILED = "failed"
+PENDING_RESPONSE_TURN_STATES = frozenset(
+    {
+        SESSION_TURN_STATE_SEND_ACCEPTED,
+        SESSION_TURN_STATE_ACTIVE,
+        SESSION_TURN_STATE_TERMINAL,
+    }
+)
 
 SESSION_TURN_ERROR_SEND_FAILED = "send_failed"
 SESSION_TURN_ERROR_VERIFICATION_TIMEOUT = "verification_timeout"
@@ -372,6 +379,20 @@ def get_session_turn(
         )
         .one_or_none()
     )
+
+
+def load_pending_response_turn_map(db: Session, session_ids: list[UUID]) -> dict[UUID, bool]:
+    """Return sessions with an accepted managed turn that lacks durable output."""
+    if not session_ids:
+        return {}
+    rows = (
+        db.query(SessionTurn.session_id)
+        .filter(SessionTurn.session_id.in_(session_ids))
+        .filter(SessionTurn.durable_at.is_(None))
+        .filter(SessionTurn.state.in_(tuple(PENDING_RESPONSE_TURN_STATES)))
+        .all()
+    )
+    return {row[0]: True for row in rows if row[0] is not None}
 
 
 def get_session_turn_by_id(
