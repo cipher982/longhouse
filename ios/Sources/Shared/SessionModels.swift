@@ -1,5 +1,7 @@
 import Foundation
 
+let transcriptSyncState = "syncing_transcript"
+
 enum RuntimeDisplayText {
     private static let shellAliases: Set<String> = ["bash", "shell", "terminal"]
 
@@ -320,6 +322,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     }
 
     private var effectiveRuntimeState: String? {
+        if runtimeDisplay?.state == transcriptSyncState { return transcriptSyncState }
         if runtimeFacts != nil { return nil }
         if let runtimeDisplay { return runtimeDisplay.state }
         return presenceState
@@ -345,6 +348,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         return presenceState == "idle" || status == "idle"
     }
     var runtimeTone: String {
+        if runtimeDisplay?.state == transcriptSyncState { return runtimeDisplay?.tone ?? "active" }
         if let factStatus = sessionFactStatus(runtimeFacts) { return factStatus.tone }
         if isClosed { return "idle" }
         if let tone = runtimeDisplay?.tone { return tone }
@@ -401,6 +405,11 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     }
 
     var displayPhaseLabel: String {
+        if runtimeDisplay?.state == transcriptSyncState,
+           let phaseLabel = runtimeDisplay?.phaseLabel.trimmingCharacters(in: .whitespacesAndNewlines),
+           !phaseLabel.isEmpty {
+            return RuntimeDisplayText.canonicalDisplayText(phaseLabel)
+        }
         if let factStatus = sessionFactStatus(runtimeFacts) {
             return factStatus.label
         }
@@ -436,6 +445,9 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     var timelineStatusLabel: String {
         if let label = timelineCard?.status?.label.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
             return label
+        }
+        if runtimeDisplay?.state == transcriptSyncState {
+            return "Syncing"
         }
         if let factStatus = sessionFactStatus(runtimeFacts) {
             return factStatus.label
@@ -508,6 +520,9 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     var timelineStatusTone: String {
         if let tone = timelineCard?.status?.tone.trimmingCharacters(in: .whitespacesAndNewlines), !tone.isEmpty {
             return tone
+        }
+        if runtimeDisplay?.state == transcriptSyncState {
+            return runtimeDisplay?.tone ?? "active"
         }
         if let factStatus = sessionFactStatus(runtimeFacts) {
             return factStatus.tone
@@ -758,6 +773,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     }
 
     var runtimePhaseState: String {
+        if runtimeDisplay?.state == transcriptSyncState { return transcriptSyncState }
         if let runtimeFacts {
             let kind = runtimeFacts.phase.kind?.trimmingCharacters(in: .whitespacesAndNewlines)
             return kind?.isEmpty == false ? kind! : "unknown"
@@ -767,6 +783,11 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     }
 
     var runtimePhaseLabel: String {
+        if runtimeDisplay?.state == transcriptSyncState,
+           let phaseLabel = runtimeDisplay?.phaseLabel.trimmingCharacters(in: .whitespacesAndNewlines),
+           !phaseLabel.isEmpty {
+            return RuntimeDisplayText.canonicalDisplayText(phaseLabel)
+        }
         if let factStatus = sessionFactStatus(runtimeFacts) {
             return factStatus.label
         }
@@ -848,6 +869,11 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     }
 
     var runtimeHeadline: String {
+        if runtimeDisplay?.state == transcriptSyncState,
+           let headline = runtimeDisplay?.headline.trimmingCharacters(in: .whitespacesAndNewlines),
+           !headline.isEmpty {
+            return RuntimeDisplayText.canonicalDisplayText(headline)
+        }
         if let factStatus = sessionFactStatus(runtimeFacts) {
             return factStatus.label
         }
@@ -861,6 +887,11 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     }
 
     var runtimeDetail: String? {
+        if runtimeDisplay?.state == transcriptSyncState,
+           let detail = runtimeDisplay?.detail?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !detail.isEmpty {
+            return RuntimeDisplayText.canonicalDisplayText(detail)
+        }
         if runtimeFacts != nil {
             return nil
         }
@@ -880,6 +911,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     }
 
     var runtimeTone: String {
+        if runtimeDisplay?.state == transcriptSyncState { return runtimeDisplay?.tone ?? "active" }
         if let factStatus = sessionFactStatus(runtimeFacts) { return factStatus.tone }
         if let tone = runtimeDisplay?.tone { return tone }
         switch runtimePhaseState {

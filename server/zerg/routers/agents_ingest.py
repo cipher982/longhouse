@@ -134,7 +134,7 @@ def _persist_ship_trace_event(
         logger.debug("Failed to persist ship trace event", exc_info=True)
 
 
-def _persist_server_fanout_observation(
+def _record_server_fanout_observation(
     db: Session,
     *,
     session_id: UUID,
@@ -173,7 +173,35 @@ def _persist_server_fanout_observation(
             source_cursor=cursor,
             payload=payload,
         )
-        db.commit()
+    except Exception:
+        logger.warning("Failed to persist server fanout observation", exc_info=True)
+
+
+async def _persist_server_fanout_observation(
+    db: Session,
+    *,
+    session_id: UUID,
+    provider: str,
+    device_id: str | None,
+    payload: dict,
+    ship_trace: dict | None,
+) -> None:
+    try:
+        from zerg.services.write_serializer import get_write_serializer
+
+        ws = get_write_serializer()
+
+        def _do(write_db: Session) -> None:
+            _record_server_fanout_observation(
+                write_db,
+                session_id=session_id,
+                provider=provider,
+                device_id=device_id,
+                payload=payload,
+                ship_trace=ship_trace,
+            )
+
+        await ws.execute_or_direct(_do, db, label="server-fanout")
     except Exception:
         logger.warning("Failed to persist server fanout observation", exc_info=True)
 
@@ -527,7 +555,7 @@ async def ingest_session(
                 }
                 session_pubsub_seq = bus.publish(topic_session(session_id_str), payload)
                 timeline_pubsub_seq = bus.publish(TOPIC_TIMELINE, payload)
-                _persist_server_fanout_observation(
+                await _persist_server_fanout_observation(
                     db,
                     session_id=result.session_id,
                     provider=provider_label,

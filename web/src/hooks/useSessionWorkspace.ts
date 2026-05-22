@@ -12,6 +12,7 @@ import { isSessionClosed, resolveSessionRuntimeState } from "../lib/sessionRunti
 import {
   buildTimelineModel,
   getPreferredSelectionKey,
+  projectionItemsWithTranscriptPreview,
   timelineItemContainsSelection,
 } from "../lib/sessionWorkspace";
 import {
@@ -268,7 +269,11 @@ export function useSessionWorkspace(
     [projectionPagesData],
   );
 
-  const model = useMemo(() => buildTimelineModel(projectionItems), [projectionItems]);
+  const visibleProjectionItems = useMemo(
+    () => projectionItemsWithTranscriptPreview(projectionItems, workspaceData?.session ?? null),
+    [projectionItems, workspaceData?.session],
+  );
+  const model = useMemo(() => buildTimelineModel(visibleProjectionItems), [visibleProjectionItems]);
   const events = model.events;
 
   const threadSessions = useMemo(

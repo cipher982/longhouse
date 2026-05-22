@@ -1038,6 +1038,65 @@ def test_sessions_list_marks_materialized_needs_user_as_idle(tmp_path):
         assert row["runtime_display"]["needs_attention"] is False
 
 
+def test_sessions_list_marks_recent_managed_idle_with_missing_assistant_as_syncing(tmp_path):
+    factory = _make_db(tmp_path, "materialized_runtime_syncing.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            started_at=now - timedelta(minutes=5),
+            ended_at=None,
+            project="runtime-syncing",
+            user_messages=2,
+            assistant_messages=1,
+            execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
+            managed_transport="claude_channel_bridge",
+            source_runner_id=1,
+            managed_session_name="claude",
+        )
+        session.last_activity_at = now - timedelta(milliseconds=500)
+        db.add(
+            SessionRuntimeState(
+                runtime_key=f"claude:{session.id}",
+                session_id=session.id,
+                provider="claude",
+                device_id="cinder",
+                phase="idle",
+                phase_source="managed_local_transport",
+                active_tool=None,
+                phase_started_at=now,
+                last_runtime_signal_at=now,
+                last_progress_at=now,
+                last_live_at=now,
+                timeline_anchor_at=now,
+                freshness_expires_at=now + timedelta(minutes=10),
+                terminal_state=None,
+                terminal_at=None,
+                runtime_version=4,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    for client in _client(factory):
+        resp = client.get("/agents/sessions?days_back=14&limit=1", headers={"X-Agents-Token": "dev"})
+        assert resp.status_code == 200, resp.text
+        row = resp.json()["sessions"][0]
+        assert row["id"] == str(session.id)
+        assert row["presence_state"] == "idle"
+        assert row["runtime_facts"]["phase"]["kind"] == "idle"
+        assert row["runtime_display"]["state"] == "syncing_transcript"
+        assert row["runtime_display"]["headline"] == "Syncing"
+        assert row["runtime_display"]["phase_label"] == "Syncing transcript"
+        assert row["runtime_display"]["tone"] == "active"
+        assert row["runtime_display"]["is_idle"] is False
+        assert row["timeline_card"]["status"]["label"] == "Syncing"
+        assert row["timeline_card"]["status"]["tone"] == "active"
+
+
 def test_active_sessions_online_process_binding_keeps_needs_user_idle(tmp_path):
     factory = _make_db(tmp_path, "active_process_binding_attention.db")
     now = datetime.now(timezone.utc)

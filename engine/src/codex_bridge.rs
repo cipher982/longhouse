@@ -25,6 +25,7 @@ const BRIDGE_RUNTIME_SOURCE: &str =
     crate::state::session_phase::PhaseSource::CodexBridgeWs.as_str();
 const DEFAULT_PROGRESS_THROTTLE_MS: u64 = 1500;
 const LIVE_RUNTIME_EVENT_TIMEOUT: Duration = Duration::from_millis(1500);
+const LIVE_RUNTIME_EVENT_SLOW_LOG_MS: u128 = 500;
 const ACTIVE_PHASE_KEEPALIVE_MS: u64 = 30_000;
 const THREAD_SUBSCRIBE_BACKGROUND_RETRY_MS: u64 = 500;
 const THREAD_SUBSCRIBE_RETRY_ATTEMPTS: usize = 8;
@@ -3290,6 +3291,7 @@ impl BridgeRuntimeSink {
             "{}/api/agents/runtime/events/batch",
             self.api_url.trim_end_matches('/')
         );
+        let started = Instant::now();
         match self
             .http
             .post(&url)
@@ -3299,7 +3301,21 @@ impl BridgeRuntimeSink {
             .send()
             .await
         {
-            Ok(response) if response.status().is_success() => {}
+            Ok(response) if response.status().is_success() => {
+                let elapsed_ms = started.elapsed().as_millis();
+                let queue_wait_ms =
+                    parse_runtime_timing_header(response.headers(), "X-Runtime-Queue-Wait-Ms");
+                let exec_ms = parse_runtime_timing_header(response.headers(), "X-Runtime-Exec-Ms");
+                if elapsed_ms > LIVE_RUNTIME_EVENT_SLOW_LOG_MS
+                    || queue_wait_ms.is_some_and(|value| value > 100.0)
+                    || exec_ms.is_some_and(|value| value > 250.0)
+                {
+                    eprintln!(
+                        "[codex-bridge] live runtime ingest slow elapsed_ms={elapsed_ms} queue_wait_ms={queue_wait_ms:?} exec_ms={exec_ms:?} event_count={}",
+                        events.len()
+                    );
+                }
+            }
             Ok(response) => {
                 let status = response.status();
                 let retryable = status.is_server_error() || status.as_u16() == 429;
@@ -3390,6 +3406,14 @@ fn extract_string(value: &Value, path: &[&str]) -> Option<String> {
         current = current.get(*key)?;
     }
     current.as_str().map(ToString::to_string)
+}
+
+fn parse_runtime_timing_header(headers: &HeaderMap, name: &'static str) -> Option<f64> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<f64>().ok())
+        .filter(|value| value.is_finite())
 }
 
 fn extract_websocket_listen_url(line: &str) -> Option<String> {
@@ -4038,6 +4062,26 @@ mod tests {
     fn should_emit_progress_respects_throttle() {
         assert!(should_emit_progress(None, 1000));
         assert!(!should_emit_progress(Some(Instant::now()), 10_000));
+    }
+
+    #[test]
+    fn parse_runtime_timing_header_ignores_invalid_values() {
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Runtime-Queue-Wait-Ms", HeaderValue::from_static("12.5"));
+        headers.insert("X-Runtime-Exec-Ms", HeaderValue::from_static("inf"));
+
+        assert_eq!(
+            parse_runtime_timing_header(&headers, "X-Runtime-Queue-Wait-Ms"),
+            Some(12.5)
+        );
+        assert_eq!(
+            parse_runtime_timing_header(&headers, "X-Runtime-Exec-Ms"),
+            None
+        );
+        assert_eq!(
+            parse_runtime_timing_header(&headers, "X-Runtime-Missing"),
+            None
+        );
     }
 
     #[test]

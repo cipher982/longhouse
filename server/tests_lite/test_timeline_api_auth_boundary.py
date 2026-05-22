@@ -449,7 +449,7 @@ def test_timeline_session_workspace_bootstraps_session_thread_and_projection(tmp
 
         assert response.status_code == 200
         payload = response.json()
-        assert response.headers["cache-control"] == "private, max-age=5"
+        assert response.headers["cache-control"] == "no-store"
         assert payload["session"]["id"] == session_id
         assert payload["thread"]["head_session_id"] == session_id
         assert payload["thread"]["sessions"][0]["id"] == session_id
@@ -561,7 +561,7 @@ def test_timeline_session_mobile_tail_returns_compact_tail_and_detects_drift(tmp
 
         assert response.status_code == 200
         payload = response.json()
-        assert response.headers["cache-control"] == "private, max-age=5"
+        assert response.headers["cache-control"] == "no-store"
         assert "load_runtime;dur=" in response.headers["server-timing"]
         assert "runtime_state;dur=" in response.headers["server-timing"]
         assert "provisional_preview;dur=" in response.headers["server-timing"]
@@ -795,8 +795,8 @@ def test_timeline_and_agents_session_workspace_return_same_body(tmp_path):
         assert timeline_response.status_code == 200
         assert agents_response.status_code == 200
         assert timeline_response.json() == agents_response.json()
-        assert timeline_response.headers["cache-control"] == "private, max-age=5"
-        assert agents_response.headers["cache-control"] == "private, max-age=5"
+        assert timeline_response.headers["cache-control"] == "no-store"
+        assert agents_response.headers["cache-control"] == "no-store"
         assert "load_projection;dur=" in timeline_response.headers["server-timing"]
         assert "load_projection;dur=" in agents_response.headers["server-timing"]
         assert "build_projection;dur=" in timeline_response.headers["server-timing"]

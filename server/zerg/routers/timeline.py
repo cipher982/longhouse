@@ -568,7 +568,7 @@ async def get_timeline_session_workspace(
     current_user=Depends(get_current_browser_user),
 ):
     timing = ServerTimingRecorder()
-    response.headers["Cache-Control"] = "private, max-age=5"
+    response.headers["Cache-Control"] = "no-store"
     result = build_session_workspace(
         db=db,
         session_id=session_id,
@@ -595,7 +595,7 @@ async def get_timeline_session_mobile_tail(
     current_user=Depends(get_current_browser_user),
 ):
     timing = ServerTimingRecorder()
-    response.headers["Cache-Control"] = "private, max-age=5"
+    response.headers["Cache-Control"] = "no-store"
     result = build_session_mobile_tail(
         db=db,
         session_id=session_id,
@@ -649,7 +649,9 @@ def _load_workspace_signature(
     """
     from zerg.models.agents import AgentEvent
     from zerg.models.agents import AgentSession
+    from zerg.models.agents import SessionObservation
     from zerg.models.agents import SessionRuntimeState
+    from zerg.services.session_observations import OBS_KIND_BRIDGE_TRANSCRIPT_DELTA
 
     session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
     if session is None:
@@ -685,6 +687,19 @@ def _load_workspace_signature(
         db.query(func.sum(SessionRuntimeState.runtime_version)).filter(SessionRuntimeState.session_id.in_(thread_session_ids)).scalar()
     ) or 0
 
+    # Live Codex preview text is stored as runtime observations, not durable
+    # transcript events. Include the observation head so a pure provisional
+    # text delta wakes the detail workspace stream instead of waiting for a
+    # neighboring phase/session update.
+    bridge_transcript_head = (
+        db.query(func.max(SessionObservation.id))
+        .filter(SessionObservation.session_id.in_(thread_session_ids))
+        .filter(SessionObservation.source == "codex_bridge_live")
+        .filter(SessionObservation.kind == OBS_KIND_BRIDGE_TRANSCRIPT_DELTA)
+        .scalar()
+        or 0
+    )
+
     return (
         str(thread_root_id),
         latest_session_updated,
@@ -693,6 +708,7 @@ def _load_workspace_signature(
         runtime_version_sum,
         len(thread_session_ids),
         latest_event_timestamp,
+        bridge_transcript_head,
     )
 
 

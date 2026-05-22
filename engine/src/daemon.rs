@@ -65,6 +65,7 @@ const SERVER_HEARTBEAT_INTERVAL_SECS: u64 = 5 * 60;
 const FLIGHT_SAMPLE_INTERVAL_SECS: u64 = 5;
 const LOCAL_WORK_TICK_INTERVAL: Duration = Duration::from_millis(250);
 const OUTBOX_DRAIN_INTERVAL: Duration = Duration::from_millis(100);
+const UNMANAGED_BINDING_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const MAX_TRANSCRIPT_WAKE_TRACKED_PATHS: usize = 4096;
 const OFFLINE_CONNECT_FAILURE_THRESHOLD: u32 = 3;
 const CLAUDE_TERMINAL_EVENT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -171,6 +172,12 @@ struct ClaudeTerminalPostResult {
     result: Result<(), String>,
     join_elapsed_ms: u64,
     task_elapsed_ms: u64,
+}
+
+struct UnmanagedBindingRefreshResult {
+    reason: &'static str,
+    result: Result<Vec<heartbeat::UnmanagedSessionBinding>, String>,
+    elapsed_ms: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -337,12 +344,15 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut last_runtime_truth_signature: Option<String> = None;
     let mut runtime_truth_bootstrapped = false;
     let mut last_unmanaged_session_bindings: Option<Vec<heartbeat::UnmanagedSessionBinding>> = None;
+    let mut last_unmanaged_session_bindings_refreshed_at: Option<Instant> = None;
     let mut latest_transcript_wake_observed: HashMap<PathBuf, i64> = HashMap::new();
     let mut bridge_reaper = ManagedBridgeReaper::from_env();
     let mut outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
     let mut runtime_outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
     let mut heartbeat_post_tasks: JoinSet<HeartbeatPostResult> = JoinSet::new();
     let mut claude_terminal_post_tasks: JoinSet<ClaudeTerminalPostResult> = JoinSet::new();
+    let mut unmanaged_binding_refresh_tasks: JoinSet<UnmanagedBindingRefreshResult> =
+        JoinSet::new();
     let mut live_claude_channels: HashMap<String, ClaudeLiveChannelSession> = HashMap::new();
     let mut pending_claude_terminal_signals: HashMap<String, ClaudeTerminalSignal> = HashMap::new();
 
@@ -359,6 +369,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     );
     let (transcript_wake_tx, mut transcript_wake_rx) = mpsc::unbounded_channel();
     let transcript_wake_task = spawn_transcript_wake_listener(transcript_wake_tx)?;
+    maybe_start_unmanaged_binding_refresh(
+        &mut unmanaged_binding_refresh_tasks,
+        config.shipper_config.db_path.clone(),
+        config.shipper_config.machine_name.clone(),
+        last_unmanaged_session_bindings_refreshed_at,
+        Instant::now(),
+        "startup",
+    );
 
     loop {
         pump_ready_local_work(
@@ -614,6 +632,46 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
+            unmanaged_binding_refresh_result = unmanaged_binding_refresh_tasks.join_next(), if !unmanaged_binding_refresh_tasks.is_empty() => {
+                match unmanaged_binding_refresh_result {
+                    Some(Ok(result)) => {
+                        match result.result {
+                            Ok(bindings) => {
+                                if result.elapsed_ms > 1_000 {
+                                    tracing::warn!(
+                                        reason = result.reason,
+                                        binding_count = bindings.len(),
+                                        elapsed_ms = result.elapsed_ms,
+                                        "Unmanaged binding refresh was slow"
+                                    );
+                                } else {
+                                    tracing::debug!(
+                                        reason = result.reason,
+                                        binding_count = bindings.len(),
+                                        elapsed_ms = result.elapsed_ms,
+                                        "Unmanaged binding refresh completed"
+                                    );
+                                }
+                                last_unmanaged_session_bindings = Some(bindings);
+                                last_unmanaged_session_bindings_refreshed_at = Some(Instant::now());
+                            }
+                            Err(err) => {
+                                tracing::warn!(
+                                    reason = result.reason,
+                                    elapsed_ms = result.elapsed_ms,
+                                    "Unmanaged binding refresh failed: {}",
+                                    err
+                                );
+                            }
+                        }
+                    }
+                    Some(Err(err)) => {
+                        tracing::warn!("Unmanaged binding refresh task failed: {}", err);
+                    }
+                    None => {}
+                }
+            }
+
             _ = &mut startup_reconciliation_timer, if startup_reconciliation_pending && !offline.is_offline => {
                 startup_reconciliation_pending = false;
                 maybe_start_reconciliation_scan(
@@ -857,12 +915,17 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &mut deferred_retries,
                     offline.is_offline,
                 );
-                let live_local_work_waiting = live_local_work_pending(
-                    &scheduler,
-                    &deferred_retries,
+                maybe_start_unmanaged_binding_refresh(
+                    &mut unmanaged_binding_refresh_tasks,
+                    config.shipper_config.db_path.clone(),
+                    config.shipper_config.machine_name.clone(),
+                    last_unmanaged_session_bindings_refreshed_at,
+                    Instant::now(),
+                    "local_status",
                 );
-                let reused_unmanaged_bindings =
-                    live_local_work_waiting && last_unmanaged_session_bindings.is_some();
+                let empty_unmanaged_bindings: &[heartbeat::UnmanagedSessionBinding] = &[];
+                let unmanaged_binding_override =
+                    last_unmanaged_session_bindings.as_deref().unwrap_or(empty_unmanaged_bindings);
                 let payload = write_local_status_snapshot(
                     &conn,
                     &tracker,
@@ -875,17 +938,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &observations,
                     &claude_observations,
                     serde_json::to_value(control_channel_status.snapshot()).ok(),
-                    if reused_unmanaged_bindings {
-                        last_unmanaged_session_bindings.as_deref()
-                    } else {
-                        None
-                    },
+                    Some(unmanaged_binding_override),
                     Some(adaptive_limiter.as_ref()),
                 );
-                if !reused_unmanaged_bindings {
-                    last_unmanaged_session_bindings =
-                        Some(payload.unmanaged_session_bindings.clone());
-                }
                 bridge_reaper.tick(&observations);
                 let signature = runtime_truth_signature(&payload);
                 if !runtime_truth_bootstrapped {
@@ -935,12 +990,17 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &mut deferred_retries,
                     offline.is_offline,
                 );
-                let live_local_work_waiting = live_local_work_pending(
-                    &scheduler,
-                    &deferred_retries,
+                maybe_start_unmanaged_binding_refresh(
+                    &mut unmanaged_binding_refresh_tasks,
+                    config.shipper_config.db_path.clone(),
+                    config.shipper_config.machine_name.clone(),
+                    last_unmanaged_session_bindings_refreshed_at,
+                    Instant::now(),
+                    "heartbeat",
                 );
-                let reused_unmanaged_bindings =
-                    live_local_work_waiting && last_unmanaged_session_bindings.is_some();
+                let empty_unmanaged_bindings: &[heartbeat::UnmanagedSessionBinding] = &[];
+                let unmanaged_binding_override =
+                    last_unmanaged_session_bindings.as_deref().unwrap_or(empty_unmanaged_bindings);
                 let payload = write_local_status_snapshot(
                     &conn,
                     &tracker,
@@ -953,17 +1013,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &observations,
                     &claude_observations,
                     serde_json::to_value(control_channel_status.snapshot()).ok(),
-                    if reused_unmanaged_bindings {
-                        last_unmanaged_session_bindings.as_deref()
-                    } else {
-                        None
-                    },
+                    Some(unmanaged_binding_override),
                     Some(adaptive_limiter.as_ref()),
                 );
-                if !reused_unmanaged_bindings {
-                    last_unmanaged_session_bindings =
-                        Some(payload.unmanaged_session_bindings.clone());
-                }
                 if !offline.is_offline {
                     runtime_truth_bootstrapped = true;
                     if heartbeat_post_tasks.is_empty() {
@@ -1077,13 +1129,6 @@ fn write_local_status_snapshot(
         status_path,
     );
     payload
-}
-
-fn live_local_work_pending(
-    scheduler: &PathScheduler,
-    deferred_retries: &HashMap<PathBuf, DeferredRetry>,
-) -> bool {
-    scheduler.has_pending_work() || !deferred_retries.is_empty()
 }
 
 fn record_flight_sample(
@@ -1228,6 +1273,42 @@ fn maybe_start_reconciliation_scan(
 
     tracing::debug!(reason, "Starting reconciliation scan in background");
     start_discovery_task(discovery_tasks, providers, WorkPriority::Scan, reason);
+}
+
+fn maybe_start_unmanaged_binding_refresh(
+    refresh_tasks: &mut JoinSet<UnmanagedBindingRefreshResult>,
+    db_path: Option<PathBuf>,
+    machine_id: String,
+    last_refreshed_at: Option<Instant>,
+    now: Instant,
+    reason: &'static str,
+) {
+    if !refresh_tasks.is_empty() {
+        return;
+    }
+    if last_refreshed_at.is_some_and(|refreshed_at| {
+        now.duration_since(refreshed_at) < UNMANAGED_BINDING_REFRESH_INTERVAL
+    }) {
+        return;
+    }
+
+    refresh_tasks.spawn_blocking(move || {
+        let started = Instant::now();
+        let result = open_db(db_path.as_deref())
+            .map_err(|err| err.to_string())
+            .map(|conn| {
+                heartbeat::collect_unmanaged_session_bindings_with_store(
+                    &conn,
+                    &machine_id,
+                    chrono::Utc::now(),
+                )
+            });
+        UnmanagedBindingRefreshResult {
+            reason,
+            result,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        }
+    });
 }
 
 #[cfg(unix)]

@@ -114,6 +114,16 @@ def test_agents_ingest_persists_ship_trace_runtime_event(tmp_path):
             assert runtime_payload["ship_trace"]["prepare_open_db_ms"] == 12
             assert runtime_payload["ship_trace"]["prepare_parse_ms"] == 45
             assert runtime_payload["server_trace"]["store_write_ms"] >= 0
+            fanout = (
+                db.query(SessionObservation)
+                .filter(SessionObservation.session_id == session_id)
+                .filter(SessionObservation.source == "session_pubsub")
+                .one()
+            )
+            stored_fanout = json.loads(fanout.payload_json)
+            assert stored_fanout["ship_trace_id"] == trace["trace_id"]
+            assert stored_fanout["latest_event_id"] is not None
+            assert stored_fanout["server_fanout_at_ms"] is not None
     finally:
         api_app.dependency_overrides.clear()
 

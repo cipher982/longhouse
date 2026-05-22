@@ -38,6 +38,7 @@ export {
   isOutsideActiveContext,
   isToolInteractionDropped,
   parseLonghouseOutput,
+  projectionItemsWithTranscriptPreview,
   timelineItemContainsSelection,
 } from "./timelineModel";
 

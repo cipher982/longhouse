@@ -8,6 +8,7 @@ from datetime import timezone
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
+from fastapi import Response
 from fastapi import status
 from sqlalchemy.orm import Session
 
@@ -40,6 +41,7 @@ router = APIRouter(prefix="/agents/runtime", tags=["agents"])
 @router.post("/events/batch", response_model=RuntimeEventBatchResult)
 async def ingest_runtime_observation_batch(
     payload: RuntimeEventBatchIngest,
+    response: Response,
     db: Session = Depends(get_db),
     _token: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
@@ -73,18 +75,26 @@ async def ingest_runtime_observation_batch(
         # write-serializer closure so the debounce stamps observed by prepare_*
         # match the state the ingest just committed. Mirrors presence.py.
         session_ids_in_batch = sorted({ev.session_id for ev in events if ev.session_id is not None}, key=str)
+        live_transcript_only = bool(events) and all(_is_bridge_live_transcript_event(ev) for ev in events)
         # Pick first non-empty tool_name per session for attention push context.
         tool_by_session: dict = {}
         for ev in events:
             if ev.session_id is not None and ev.tool_name:
                 tool_by_session.setdefault(ev.session_id, ev.tool_name)
-        owner_id = resolve_session_message_owner_id(db, _token)
+        owner_id = None if live_transcript_only else resolve_session_message_owner_id(db, _token)
 
         def _do(wdb: Session):
             previous_by_session: dict = {}
-            for sid in session_ids_in_batch:
-                previous_by_session[sid] = current_presence_state_for_session(wdb, sid, now=now_utc)
+            if not live_transcript_only:
+                for sid in session_ids_in_batch:
+                    previous_by_session[sid] = current_presence_state_for_session(wdb, sid, now=now_utc)
             ingest_result = ingest_runtime_events(wdb, events)
+
+            # Bridge live transcript deltas are already a user-visible overlay
+            # with per-session SSE fanout. They must not pay the APNs/widget/
+            # queued-message cost reserved for phase and attention changes.
+            if live_transcript_only:
+                return ingest_result, [], None
 
             # Prepare per-session pushes on the post-ingest state.
             prepared: list[dict] = []
@@ -164,8 +174,18 @@ async def ingest_runtime_observation_batch(
             return ingest_result, prepared, widget_push
 
         result, prepared_per_session, widget_push = await ws.execute_or_direct(
-            _do, db, label="runtime-observations"
+            _do,
+            db,
+            label="runtime-live" if live_transcript_only else "runtime-observations",
         )
+        from zerg.services.write_serializer import last_write_timing
+
+        timing = last_write_timing()
+        if timing is not None:
+            response.headers["X-Runtime-Queue-Wait-Ms"] = f"{timing.queue_wait_ms:.1f}"
+            response.headers["X-Runtime-Exec-Ms"] = f"{timing.exec_ms:.1f}"
+            if timing.label:
+                response.headers["X-Runtime-Label"] = timing.label
 
         # Publish per-session after a successful write; SSE subscribers wake directly.
         updated_runtime_keys = set(result.updated_runtime_keys)
@@ -241,3 +261,13 @@ async def ingest_runtime_observation_batch(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to ingest runtime observations",
         ) from exc
+
+
+def _is_bridge_live_transcript_event(event) -> bool:
+    payload = event.payload or {}
+    return (
+        (event.provider or "").strip().lower() == "codex"
+        and (event.source or "").strip().lower() == "codex_bridge_live"
+        and event.kind == "progress_signal"
+        and payload.get("progress_kind") == "bridge_live_transcript_delta"
+    )

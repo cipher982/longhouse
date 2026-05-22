@@ -207,15 +207,27 @@ async def test_summary_task_bookkeeping_jumps_ahead_of_archive_ingest(tmp_path):
     await asyncio.to_thread(started.wait, 1.0)
 
     archive = asyncio.create_task(serializer.execute(_make_write("archive"), label="ingest"))
+    managed_launch = asyncio.create_task(serializer.execute(_make_write("managed-launch"), label="managed-launch"))
     task_timeout = asyncio.create_task(serializer.execute(_make_write("task-timeout"), label="task-timeout"))
     summary = asyncio.create_task(serializer.execute(_make_write("summary"), label="summary"))
     task_done = asyncio.create_task(serializer.execute(_make_write("task-done"), label="task-done"))
     runtime = asyncio.create_task(serializer.execute(_make_write("runtime"), label="runtime-observations"))
     live = asyncio.create_task(serializer.execute(_make_write("live"), label="ingest-live"))
+    fanout = asyncio.create_task(serializer.execute(_make_write("server-fanout"), label="server-fanout"))
 
-    await asyncio.gather(first, archive, task_timeout, summary, task_done, runtime, live)
+    await asyncio.gather(first, archive, managed_launch, task_timeout, summary, task_done, runtime, live, fanout)
 
-    assert run_order == ["first", "runtime", "live", "task-timeout", "summary", "task-done", "archive"]
+    assert run_order == [
+        "first",
+        "managed-launch",
+        "runtime",
+        "live",
+        "task-timeout",
+        "summary",
+        "task-done",
+        "server-fanout",
+        "archive",
+    ]
 
 
 @pytest.mark.asyncio

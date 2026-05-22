@@ -22,10 +22,16 @@ const onceKinds = new Set([
   "preview_word_painted",
   "preview_nonce_painted",
   "close_painted",
+  "detail_loaded",
+  "detail_navigation_started",
+  "timeline_page_closed_after_card",
 ]);
 const emitted = new Set();
+const exitAfterDetailTranscript =
+  process.env.LONGHOUSE_BROWSER_OBSERVER_EXIT_AFTER_DETAIL_TRANSCRIPT === "1";
 let browser;
 let page;
+let detailPage;
 let closeObserved = false;
 
 function elapsedMs() {
@@ -49,11 +55,11 @@ function emit(kind, payload = {}) {
   );
 }
 
-async function afterPaint() {
-  if (!page) {
+async function afterPaintOn(targetPage) {
+  if (!targetPage) {
     return;
   }
-  await page.evaluate(
+  await targetPage.evaluate(
     () =>
       new Promise((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(resolve));
@@ -61,7 +67,15 @@ async function afterPaint() {
   );
 }
 
+async function afterPaint() {
+  await afterPaintOn(page);
+}
+
 async function waitForCard(kind, timeoutMs) {
+  if (!page || page.isClosed()) {
+    emit(`${kind}_timeout`, { error: "timeline page is closed" });
+    return false;
+  }
   try {
     const handle = await page.waitForFunction(
       ({ sessionId, targetKind, targetNonce }) => {
@@ -125,11 +139,78 @@ async function waitForCard(kind, timeoutMs) {
       page_painted_performance_now_ms: performance.now(),
     }));
     emit(kind, { dom_matched_elapsed_ms: domMatchedElapsedMs, card: { ...card, ...paintStamp } });
+    return true;
   } catch (error) {
     if (!closeObserved) {
       emit(`${kind}_timeout`, { error: String(error).slice(0, 500) });
     }
+    return false;
   }
+}
+
+async function waitForDetailTranscript(kind, timeoutMs) {
+  try {
+    const handle = await detailPage.waitForFunction(
+      ({ targetKind, targetNonce }) => {
+        const rows = Array.from(
+          document.querySelectorAll(
+            '[data-testid="session-timeline-row"][data-row-kind="message"][data-message-role="assistant"]',
+          ),
+        );
+        const snapshots = rows.map((row) => {
+          const body = row.querySelector(".tl-msg__body");
+          return {
+            row_id: row.getAttribute("id"),
+            page_observed_at_wall: new Date().toISOString(),
+            page_performance_now_ms: performance.now(),
+            text: body?.textContent?.trim() ?? row.textContent?.trim() ?? "",
+          };
+        });
+        const match = snapshots.find((snapshot) =>
+          targetKind === "live_transcript_nonce_painted"
+            ? snapshot.text.includes(targetNonce)
+            : /\b\S+\b/.test(snapshot.text),
+        );
+        return match || false;
+      },
+      { targetKind: kind, targetNonce: nonce },
+      { timeout: timeoutMs, polling: "raf" },
+    );
+    const domMatchedElapsedMs = elapsedMs();
+    const transcript = await handle.jsonValue();
+    await handle.dispose();
+    await afterPaintOn(detailPage);
+    const paintStamp = await detailPage.evaluate(() => ({
+      page_painted_at_wall: new Date().toISOString(),
+      page_painted_performance_now_ms: performance.now(),
+    }));
+    emit(kind, { dom_matched_elapsed_ms: domMatchedElapsedMs, transcript: { ...transcript, ...paintStamp } });
+    return true;
+  } catch (error) {
+    if (!closeObserved) {
+      emit(`${kind}_timeout`, { error: String(error).slice(0, 500) });
+    }
+    return false;
+  }
+}
+
+async function openDetailObserver(context) {
+  detailPage = await context.newPage();
+  detailPage.on("console", (message) => {
+    const type = message.type();
+    if (type === "error" || type === "warning") {
+      emit("detail_console", { level: type, text: message.text().slice(0, 500) });
+    }
+  });
+  detailPage.on("pageerror", (error) => {
+    emit("detail_page_error", { error: String(error).slice(0, 1000) });
+  });
+
+  const url = new URL(`/timeline/${sessionId}`, baseUrl);
+  emit("detail_navigation_started", { url: url.toString() });
+  await detailPage.goto(url.toString(), { waitUntil: "domcontentloaded", timeout: 30000 });
+  await afterPaintOn(detailPage);
+  emit("detail_loaded", { url: detailPage.url() });
 }
 
 async function waitForSessionIdFile(timeoutMs) {
@@ -205,11 +286,23 @@ try {
     emit("session_id_received", { session_id: sessionId });
   }
 
-  void waitForCard("card_painted", 30000);
-  void waitForCard("preview_first_painted", 95000);
-  void waitForCard("preview_word_painted", 95000);
-  void waitForCard("preview_nonce_painted", 95000);
-  await waitForCard("close_painted", 420000);
+  const cardPainted = await waitForCard("card_painted", 30000);
+  if (exitAfterDetailTranscript && page && !page.isClosed()) {
+    await page.close();
+    page = undefined;
+    emit("timeline_page_closed_after_card", { card_painted: cardPainted });
+  }
+
+  await openDetailObserver(context);
+  const detailFirstPainted = waitForDetailTranscript("live_transcript_first_painted", 95000);
+  const detailNoncePainted = waitForDetailTranscript("live_transcript_nonce_painted", 95000);
+  if (exitAfterDetailTranscript) {
+    await Promise.all([detailFirstPainted, detailNoncePainted]);
+  } else {
+    void detailFirstPainted;
+    void detailNoncePainted;
+    await waitForCard("close_painted", 420000);
+  }
 } catch (error) {
   emit("error", { error: String(error).slice(0, 1000) });
 } finally {

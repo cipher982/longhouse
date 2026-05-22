@@ -664,6 +664,66 @@ struct SessionModelsTests {
     }
 
     @Test
+    func sessionDetailUsesTranscriptSyncDisplayOverIdleFacts() throws {
+        let json = """
+        {
+          "id": "session-syncing",
+          "provider": "claude",
+          "project": "zerg",
+          "presence_state": "idle",
+          "user_state": "active",
+          "status": "idle",
+          "last_activity_at": "2026-04-25T20:00:00Z",
+          "display_phase": "Idle",
+          "capabilities": {
+            "live_control_available": true,
+            "host_reattach_available": true,
+            "reply_to_live_session_available": true
+          },
+          "runtime_display": {
+            "truth_tier": "managed-local",
+            "signal_tier": "phase_signal",
+            "state": "syncing_transcript",
+            "tone": "active",
+            "headline": "Syncing",
+            "detail": "Waiting for transcript",
+            "phase_label": "Syncing transcript",
+            "compact_tool_label": null,
+            "is_live": false,
+            "is_executing": false,
+            "needs_attention": false,
+            "is_idle": false,
+            "is_managed_local_truth": true,
+            "has_signal": true,
+            "control_path": "managed",
+            "activity_recency": "live",
+            "lifecycle": "open",
+            "host_state": "online",
+            "terminal_reason": null
+          },
+          "runtime_facts": {
+            "control_path": "managed",
+            "host": {"state": "online", "last_seen_at": "2026-04-25T20:00:00Z", "source": "machine_heartbeat"},
+            "process": {"status": "unknown", "pid": null, "process_start_time": null, "observed_at": null, "last_seen_at": null, "source_mtime": null, "source_path": null, "reason": null, "source": null},
+            "phase": {"kind": "idle", "tool": null, "source": "claude_hook", "observed_at": "2026-04-25T20:00:01Z", "expires_at": "2026-04-25T20:10:01Z"},
+            "activity": {"last_transcript_at": "2026-04-25T20:00:00Z", "last_runtime_signal_at": "2026-04-25T20:00:01Z", "last_progress_at": null},
+            "lifecycle": {"state": "open", "reason": "phase_observed", "observed_at": "2026-04-25T20:00:01Z"}
+          },
+          "loop_mode": "assist"
+        }
+        """.data(using: .utf8)!
+
+        let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
+
+        #expect(detail.runtimePhaseState == "syncing_transcript")
+        #expect(detail.runtimePhaseLabel == "Syncing transcript")
+        #expect(detail.runtimeHeadline == "Syncing")
+        #expect(detail.runtimeDetail == "Waiting for transcript")
+        #expect(detail.runtimeTone == "active")
+        #expect(!detail.isSessionExecuting)
+    }
+
+    @Test
     func sessionDetailRuntimeDisplayNilStateSuppressesStalePresenceState() throws {
         let json = """
         {
