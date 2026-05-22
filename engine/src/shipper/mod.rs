@@ -32,6 +32,7 @@ use crate::state::spool::Spool;
 /// Live-transcript batch target. Each ship is one HTTP round trip; for live
 /// work this is a tail-latency knob, so we keep it small.
 const LIVE_TARGET_BATCH_BYTES: u64 = 512 * 1024;
+const BACKGROUND_REPAIR_TARGET_BATCH_BYTES: u64 = 512 * 1024;
 
 /// Archive / replay batch target. Per phase-4 review (codex), use two discrete
 /// bands rather than a log-shaped controller — a second controller layered on
@@ -56,6 +57,7 @@ const LIVE_TRANSCRIPT_INGEST_TIMEOUT: Duration = Duration::from_secs(20);
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) enum BatchBand {
     Live,
+    BackgroundRepair,
     Archive,
 }
 
@@ -65,6 +67,7 @@ pub(crate) enum BatchBand {
 fn target_batch_bytes_for_band(band: BatchBand, max_batch_bytes: u64) -> u64 {
     let target = match band {
         BatchBand::Live => LIVE_TARGET_BATCH_BYTES,
+        BatchBand::BackgroundRepair => BACKGROUND_REPAIR_TARGET_BATCH_BYTES,
         BatchBand::Archive => ARCHIVE_TARGET_BATCH_BYTES,
     };
     max_batch_bytes.min(target).max(1)
@@ -106,11 +109,26 @@ mod target_batch_bytes_tests {
     }
 
     #[test]
+    fn background_repair_uses_small_target_like_live_work() {
+        // Reconciliation scans are background repair. Keep each server write
+        // short enough that hot runtime/live writes can interleave between POSTs.
+        assert_eq!(
+            target_batch_bytes_for_band(BatchBand::BackgroundRepair, u64::MAX),
+            BACKGROUND_REPAIR_TARGET_BATCH_BYTES
+        );
+        assert_eq!(
+            target_batch_bytes_for_band(BatchBand::BackgroundRepair, 50 * 1024 * 1024),
+            BACKGROUND_REPAIR_TARGET_BATCH_BYTES
+        );
+    }
+
+    #[test]
     fn max_batch_bytes_clamps_both_bands() {
         // A tight max_batch_bytes ceiling must still win, on both bands.
         let tight: u64 = 64 * 1024;
+        assert_eq!(target_batch_bytes_for_band(BatchBand::Live, tight), tight);
         assert_eq!(
-            target_batch_bytes_for_band(BatchBand::Live, tight),
+            target_batch_bytes_for_band(BatchBand::BackgroundRepair, tight),
             tight
         );
         assert_eq!(
@@ -123,6 +141,10 @@ mod target_batch_bytes_tests {
     fn zero_max_batch_bytes_floors_to_one() {
         // Defensive: never return zero so the batcher's > 0 invariant holds.
         assert_eq!(target_batch_bytes_for_band(BatchBand::Live, 0), 1);
+        assert_eq!(
+            target_batch_bytes_for_band(BatchBand::BackgroundRepair, 0),
+            1
+        );
         assert_eq!(target_batch_bytes_for_band(BatchBand::Archive, 0), 1);
     }
 }
@@ -2462,7 +2484,7 @@ pub(crate) async fn full_scan_with_batch_bytes_and_parse_tracker(
 
     for (path, provider_name) in &all_files {
         let file_start = std::time::Instant::now();
-        match prepare_file_batches_with_parse_tracker(
+        match prepare_file_batches_with_source_line_mode_and_parse_tracker(
             path,
             provider_name,
             algo,
@@ -2470,6 +2492,8 @@ pub(crate) async fn full_scan_with_batch_bytes_and_parse_tracker(
             max_batch_bytes,
             None,
             parse_tracker,
+            SourceLineMode::Full,
+            BatchBand::BackgroundRepair,
         ) {
             Ok(Some(prepared)) => {
                 let event_count = prepared.total_event_count();
@@ -3646,6 +3670,56 @@ mod tests {
         let bodies = captured.lock().unwrap().clone();
         assert_eq!(bodies.len(), 1);
         assert_eq!(decode_payload_source_offsets(&bodies[0]), vec![first_end]);
+    }
+
+    #[tokio::test]
+    async fn test_reconciliation_scan_uses_background_repair_batch_size() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let provider_root = dir.path().join("projects");
+        std::fs::create_dir_all(&provider_root).unwrap();
+        let path = provider_root.join("reconcile-batch-1111-2222-3333-444455556666.jsonl");
+
+        let large_text = "x".repeat(280 * 1024);
+        let lines = [
+            make_line("reconcile-batch-1", &large_text),
+            make_line("reconcile-batch-2", &large_text),
+            make_line("reconcile-batch-3", &large_text),
+        ];
+        let mut offsets = Vec::new();
+        let mut cursor = 0_u64;
+        for line in &lines {
+            offsets.push(cursor);
+            cursor += (line.len() + 1) as u64;
+        }
+        std::fs::write(&path, format!("{}\n{}\n{}\n", lines[0], lines[1], lines[2])).unwrap();
+
+        let (url, captured, handle) =
+            spawn_http_sequence_server(&[("200 OK", "{}"), ("200 OK", "{}"), ("200 OK", "{}")]);
+        let client = make_test_client(&url);
+        let providers = vec![ProviderConfig {
+            name: "claude",
+            root: provider_root,
+            extension: "jsonl",
+        }];
+
+        let (files_shipped, events_shipped) =
+            full_scan(&providers, &conn, &client, CompressionAlgo::Gzip, None)
+                .await
+                .unwrap();
+        handle.join().unwrap();
+
+        assert_eq!(files_shipped, 1);
+        assert_eq!(events_shipped, 3);
+        let bodies = captured.lock().unwrap().clone();
+        assert_eq!(
+            bodies.len(),
+            3,
+            "background reconciliation scans should split large repairs into small POSTs"
+        );
+        assert_eq!(decode_payload_source_offsets(&bodies[0]), vec![offsets[0]]);
+        assert_eq!(decode_payload_source_offsets(&bodies[1]), vec![offsets[1]]);
+        assert_eq!(decode_payload_source_offsets(&bodies[2]), vec![offsets[2]]);
     }
 
     #[test]
