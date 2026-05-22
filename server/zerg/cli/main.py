@@ -142,7 +142,12 @@ def db_doctor(
     deep: bool = typer.Option(
         False,
         "--deep",
-        help="Run explicit COUNT diagnostics that may scan large archive tables.",
+        help="Run explicit indexed COUNT diagnostics for known maintenance backlogs.",
+    ),
+    identity_counts: bool = typer.Option(
+        False,
+        "--identity-counts",
+        help="With --deep, include thread_id NULL counts that may scan large archive tables.",
     ),
 ) -> None:
     """Inspect SQLite file, disk, planner, and optional backlog diagnostics."""
@@ -158,7 +163,7 @@ def db_doctor(
             raise typer.Exit(code=2)
         payload["schema"] = collect_sqlite_schema_stats(conn)
         if deep:
-            payload["deep_counts"] = collect_sqlite_deep_counts(conn)
+            payload["deep_counts"] = collect_sqlite_deep_counts(conn, include_identity_counts=identity_counts)
             payload["deep_counts_skipped"] = False
         else:
             payload["deep_counts"] = None
@@ -193,14 +198,28 @@ def db_optimize(
 
     engine, resolved_database_url = _resolve_db_engine(database_url)
     started = time.monotonic()
-    with engine.begin() as conn:
-        before = collect_sqlite_schema_stats(conn)
-        result = conn.exec_driver_sql("PRAGMA optimize")
-        try:
-            result_rows = [list(row) for row in result.fetchall()]
-        except Exception:
-            result_rows = []
-        after = collect_sqlite_schema_stats(conn)
+    try:
+        with engine.begin() as conn:
+            before = collect_sqlite_schema_stats(conn)
+            result = conn.exec_driver_sql("PRAGMA optimize")
+            try:
+                result_rows = [list(row) for row in result.fetchall()]
+            except Exception:
+                result_rows = []
+            after = collect_sqlite_schema_stats(conn)
+    except Exception as exc:
+        payload = {
+            "status": "error",
+            "database_url": resolved_database_url,
+            "pragma": "PRAGMA optimize",
+            "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
+            "error": str(exc),
+        }
+        if json_output:
+            typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            typer.echo(f"SQLite optimize failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
 
     payload = {
         "status": "ok",
@@ -258,6 +277,7 @@ def migrate(
     from zerg.database import initialize_database
     from zerg.database import make_engine
     from zerg.db_migrations import apply_heavy_migrations
+    from zerg.db_migrations import ensure_migration_ledger
     from zerg.db_migrations import plan_heavy_migrations
 
     engine = make_engine(database_url) if database_url else None
@@ -274,6 +294,7 @@ def migrate(
     if target_engine is None:
         raise typer.Exit(code=2)
 
+    ensure_migration_ledger(target_engine)
     plan_before = plan_heavy_migrations(target_engine)
     pending_before = [item.name for item in plan_before if item.pending]
 

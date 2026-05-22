@@ -159,13 +159,43 @@ def test_db_doctor_json_reports_file_schema_and_deep_counts(tmp_path):
     assert payload["db_exists"] is True
     assert payload["db_bytes"] > 0
     assert payload["disk_free_bytes"] > 0
+    assert payload["backup_file_count"] == 0
+    assert payload["backup_scan_truncated"] is False
     assert payload["schema"]["sqlite_stat1_exists"] is True
     assert payload["schema"]["raw_json_pending_indexes"]["events"] is True
     assert payload["schema"]["raw_json_pending_indexes"]["source_lines"] is True
     assert payload["deep_counts_skipped"] is False
     assert payload["deep_counts"]["events_raw_json_pending"] == 1
     assert payload["deep_counts"]["source_lines_raw_json_pending"] == 1
+    assert payload["deep_counts"]["identity_counts_skipped"] is True
+    assert payload["deep_counts"]["events_thread_id_null"] is None
+
+
+def test_db_doctor_identity_counts_are_separately_opted_in(tmp_path):
+    _db_path, db_url = _make_db_diagnostics_fixture(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        ["db", "doctor", "--database-url", db_url, "--json", "--deep", "--identity-counts"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["deep_counts"]["identity_counts_skipped"] is False
     assert payload["deep_counts"]["events_thread_id_null"] == 1
+    assert payload["deep_counts"]["source_lines_thread_id_null"] == 1
+    assert payload["deep_counts"]["session_observations_thread_id_null"] == 1
+
+
+def test_db_doctor_without_deep_skips_counts(tmp_path):
+    _db_path, db_url = _make_db_diagnostics_fixture(tmp_path)
+
+    result = CliRunner().invoke(app, ["db", "doctor", "--database-url", db_url, "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["deep_counts_skipped"] is True
+    assert payload["deep_counts"] is None
 
 
 def test_db_optimize_json_runs_pragma(tmp_path):
@@ -178,6 +208,31 @@ def test_db_optimize_json_runs_pragma(tmp_path):
     assert payload["status"] == "ok"
     assert payload["pragma"] == "PRAGMA optimize"
     assert payload["elapsed_ms"] >= 0
+
+
+def test_db_optimize_json_reports_failures(monkeypatch):
+    import zerg.cli.main as main_cli
+
+    class BadBegin:
+        def __enter__(self):
+            raise OSError("disk I/O error")
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class BadEngine:
+        def begin(self):
+            return BadBegin()
+
+    monkeypatch.setattr(main_cli, "_resolve_db_engine", lambda _database_url: (BadEngine(), "sqlite:///bad.db"))
+
+    result = CliRunner().invoke(app, ["db", "optimize", "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["status"] == "error"
+    assert payload["pragma"] == "PRAGMA optimize"
+    assert "disk I/O error" in payload["error"]
 
 
 def test_migrate_can_skip_schema_convergence(tmp_path):
