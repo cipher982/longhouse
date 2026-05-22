@@ -827,12 +827,11 @@ def test_runtime_batch_endpoint_wakes_subscribers_for_applied_event(tmp_path):
         with bus.subscribe(topic_session(str(session.id)), since_seq=0) as session_sub:
             msg = asyncio.run(session_sub.next_message(timeout=0.1))
             assert msg is not None
-            assert msg.payload == {
-                "kind": "runtime",
-                "session_id": str(session.id),
-                "provider": "claude",
-                "source": "claude_hook",
-            }
+            assert msg.payload["kind"] == "runtime"
+            assert msg.payload["session_id"] == str(session.id)
+            assert msg.payload["provider"] == "claude"
+            assert msg.payload["source"] == "claude_hook"
+            assert isinstance(msg.payload.get("server_fanout_at_ms"), int)
         timeline_seq = bus.peek_latest_seq(TOPIC_TIMELINE)
         assert timeline_seq == 1
 
@@ -974,12 +973,11 @@ def test_presence_endpoint_uses_provider_source_and_wakes_subscribers(tmp_path):
     with bus.subscribe(topic_session(str(session_id)), since_seq=0) as session_sub:
         msg = asyncio.run(session_sub.next_message(timeout=0.1))
         assert msg is not None
-        assert msg.payload == {
-            "kind": "runtime",
-            "session_id": str(session_id),
-            "provider": "codex",
-            "source": "codex_hook",
-        }
+        assert msg.payload["kind"] == "runtime"
+        assert msg.payload["session_id"] == str(session_id)
+        assert msg.payload["provider"] == "codex"
+        assert msg.payload["source"] == "codex_hook"
+        assert isinstance(msg.payload.get("server_fanout_at_ms"), int)
     with bus.subscribe(TOPIC_TIMELINE, since_seq=0) as timeline_sub:
         msg = asyncio.run(timeline_sub.next_message(timeout=0.1))
         assert msg is not None
@@ -4191,12 +4189,11 @@ def test_runtime_batch_live_transcript_skips_apns_and_owner_work(tmp_path, monke
     with bus.subscribe(topic_session(str(session.id)), since_seq=0) as session_sub:
         msg = asyncio.run(session_sub.next_message(timeout=0.1))
         assert msg is not None
-        assert msg.payload == {
-            "kind": "runtime",
-            "session_id": str(session.id),
-            "provider": "codex",
-            "source": "codex_bridge_live",
-        }
+        assert msg.payload["kind"] == "runtime"
+        assert msg.payload["session_id"] == str(session.id)
+        assert msg.payload["provider"] == "codex"
+        assert msg.payload["source"] == "codex_bridge_live"
+        assert isinstance(msg.payload.get("server_fanout_at_ms"), int)
     assert bus.peek_latest_seq(TOPIC_TIMELINE) == 1
 
     reset_pubsub_for_test()
