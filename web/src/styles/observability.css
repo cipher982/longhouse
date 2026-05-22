@@ -163,6 +163,12 @@
       var(--color-surface-card);
   }
 
+  .observability-panel--product-checks {
+    background:
+      linear-gradient(110deg, color-mix(in srgb, var(--color-intent-success) 8%, transparent), transparent 50%),
+      var(--color-surface-card);
+  }
+
   .observability-diagnosis-list {
     display: grid;
     gap: var(--space-3);
@@ -214,6 +220,64 @@
     color: var(--color-text-muted);
     font-size: 0.84rem;
     line-height: 1.55;
+  }
+
+  .observability-product-check-list {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .observability-product-check {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--space-4);
+    align-items: center;
+    padding: var(--space-4);
+    border: 1px solid var(--color-border-primary);
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--color-surface-elevated) 78%, transparent);
+  }
+
+  .observability-product-check--ok {
+    border-color: color-mix(in srgb, var(--color-intent-success) 34%, var(--color-border-primary));
+  }
+
+  .observability-product-check--degraded {
+    border-color: color-mix(in srgb, var(--color-intent-warning) 42%, var(--color-border-primary));
+  }
+
+  .observability-product-check--failing {
+    border-color: color-mix(in srgb, var(--color-intent-error) 44%, var(--color-border-primary));
+  }
+
+  .observability-product-check__main {
+    min-width: 0;
+  }
+
+  .observability-product-check__title-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  .observability-product-check__title {
+    margin: 0;
+    font-size: 0.94rem;
+  }
+
+  .observability-product-check__headline {
+    margin: var(--space-1) 0 0;
+    color: var(--color-text-muted);
+    font-size: 0.84rem;
+    line-height: 1.45;
+  }
+
+  .observability-product-check__meta {
+    color: var(--color-text-muted);
+    font-family: var(--font-family-mono, "SFMono-Regular", Menlo, Monaco, monospace);
+    font-size: 0.78rem;
+    white-space: nowrap;
   }
 
   .observability-provider-list {
@@ -429,6 +493,14 @@
     .observability-provider-row__right {
       align-items: start;
       text-align: left;
+    }
+
+    .observability-product-check {
+      grid-template-columns: 1fr;
+    }
+
+    .observability-product-check__meta {
+      white-space: normal;
     }
   }
 

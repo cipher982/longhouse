@@ -192,6 +192,21 @@ function cloneOverview(hoursBack: number) {
   return JSON.parse(JSON.stringify(buildOverview(hoursBack)));
 }
 
+function buildProductChecks() {
+  return {
+    checks: [
+      {
+        check: "live_preview",
+        verdict: "ok",
+        coverage: "full",
+        window: "15m",
+        generated_at: "2026-04-23T21:00:00Z",
+        headline: "Live preview latency is within threshold.",
+      },
+    ],
+  };
+}
+
 describe("ObservabilityPage", () => {
   const originalSingleTenant = config.singleTenant;
 
@@ -206,6 +221,12 @@ describe("ObservabilityPage", () => {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve(buildOverview(hoursBack)),
+        });
+      }
+      if (url.includes(`${config.apiBaseUrl}/observability/checks`)) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(buildProductChecks()),
         });
       }
       return Promise.resolve({
@@ -240,6 +261,10 @@ describe("ObservabilityPage", () => {
     expect(within(unhealthyCard as Element).getByText("1/2")).toBeInTheDocument();
 
     expect(screen.getByText("What the current window says")).toBeInTheDocument();
+    expect(screen.getByText("Can users work right now")).toBeInTheDocument();
+    expect(screen.getByText("Live Preview")).toBeInTheDocument();
+    expect(screen.getByText("Live preview latency is within threshold.")).toBeInTheDocument();
+    expect(screen.getByText("15m · full coverage")).toBeInTheDocument();
     expect(screen.getByText("Which providers are contributing to the pain")).toBeInTheDocument();
     expect(screen.getByText("Shipping truth from the latest heartbeats")).toBeInTheDocument();
     expect(screen.getByText("The slowest managed turns in this window")).toBeInTheDocument();

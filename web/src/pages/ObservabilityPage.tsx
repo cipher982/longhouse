@@ -19,12 +19,15 @@ import type {
   MachineHealthItemResponse,
   ManagedTurnProviderSummaryResponse,
   ObservabilityOverviewResponse,
+  ProductHealthCheckListResponse,
+  ProductHealthCheckSummaryResponse,
   SlowTurnItemResponse,
 } from "../services/api/types";
 
 const OVERVIEW_MACHINE_LIMIT = 8;
 const OVERVIEW_SLOW_TURN_LIMIT = 8;
 const DEFAULT_SLOW_THRESHOLD_MS = 30_000;
+const PRODUCT_HEALTH_WINDOW = "15m";
 
 type DiagnosisTone = "success" | "warning" | "error" | "neutral";
 type StatusBadgeVariant = "success" | "warning" | "error" | "neutral";
@@ -69,6 +72,22 @@ async function fetchObservabilityOverview(hoursBack: number): Promise<Observabil
     }
     const detail = await response.text();
     throw new Error(detail || "Failed to fetch the current health snapshot.");
+  }
+
+  return response.json();
+}
+
+async function fetchProductHealthChecks(): Promise<ProductHealthCheckListResponse> {
+  const params = new URLSearchParams({
+    window: PRODUCT_HEALTH_WINDOW,
+  });
+  const response = await fetch(`${config.apiBaseUrl}/observability/checks?${params.toString()}`, {
+    credentials: "include",
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || "Failed to fetch product health checks.");
   }
 
   return response.json();
@@ -147,6 +166,33 @@ function diagnosisToneBadgeVariant(tone: DiagnosisTone): StatusBadgeVariant {
     default:
       return "neutral";
   }
+}
+
+function productCheckBadgeVariant(verdict: string): StatusBadgeVariant {
+  switch (verdict) {
+    case "ok":
+      return "success";
+    case "degraded":
+      return "warning";
+    case "failing":
+      return "error";
+    default:
+      return "neutral";
+  }
+}
+
+function productCheckTitle(check: string): string {
+  switch (check) {
+    case "live_preview":
+      return "Live Preview";
+    default:
+      return toTitleCaseWords(check.replace(/_/g, " "));
+  }
+}
+
+function productCheckMeta(check: ProductHealthCheckSummaryResponse): string {
+  const coverage = check.coverage === "full" ? "full coverage" : check.coverage === "partial" ? "partial coverage" : "no coverage";
+  return `${check.window} · ${coverage}`;
 }
 
 function buildDiagnosisCards(
@@ -353,6 +399,65 @@ function DiagnosisPanel({ cards }: { cards: DiagnosisCardData[] }) {
   );
 }
 
+function ProductHealthChecksPanel({
+  checks,
+  isLoading,
+  error,
+}: {
+  checks: ProductHealthCheckSummaryResponse[];
+  isLoading: boolean;
+  error: Error | null;
+}) {
+  return (
+    <Card className="observability-panel observability-panel--product-checks">
+      <Card.Header className="observability-panel__header">
+        <div>
+          <div className="observability-panel__eyebrow">Product checks</div>
+          <h3 className="observability-panel__title">Can users work right now</h3>
+          <p className="observability-panel__description">
+            Product-level verdicts derived from persisted runtime observations.
+          </p>
+        </div>
+      </Card.Header>
+      <Card.Body>
+        {isLoading ? (
+          <EmptyState
+            icon={<Spinner size="sm" />}
+            title="Loading product checks..."
+            description="Reading persisted observation evidence."
+          />
+        ) : error ? (
+          <EmptyState
+            variant="error"
+            title="Product checks unavailable"
+            description={error.message}
+          />
+        ) : checks.length === 0 ? (
+          <EmptyState
+            title="No product checks available"
+            description="Checks appear here once this runtime exposes product health verdicts."
+          />
+        ) : (
+          <div className="observability-product-check-list">
+            {checks.map((check) => (
+              <div key={check.check} className={`observability-product-check observability-product-check--${check.verdict}`}>
+                <div className="observability-product-check__main">
+                  <div className="observability-product-check__title-row">
+                    <h4 className="observability-product-check__title">{productCheckTitle(check.check)}</h4>
+                    <Badge variant={productCheckBadgeVariant(check.verdict)}>{check.verdict}</Badge>
+                  </div>
+                  <p className="observability-product-check__headline">{check.headline}</p>
+                </div>
+                <div className="observability-product-check__meta">{productCheckMeta(check)}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card.Body>
+    </Card>
+  );
+}
+
 function ProviderFocusPanel({ providers }: { providers: ManagedTurnProviderSummaryResponse[] }) {
   if (providers.length === 0) {
     return (
@@ -518,6 +623,17 @@ export default function ObservabilityPage() {
     refetchInterval: 15_000,
     retry: false,
   });
+  const {
+    data: productHealthData,
+    isLoading: productHealthLoading,
+    error: productHealthError,
+  } = useQuery({
+    queryKey: ["observability-product-checks"],
+    queryFn: () => fetchProductHealthChecks(),
+    enabled: config.singleTenant,
+    refetchInterval: 15_000,
+    retry: false,
+  });
 
   useReadinessFlag({ ready: !config.singleTenant || !isLoading });
 
@@ -603,6 +719,12 @@ export default function ObservabilityPage() {
               Slow turns currently mean total turn time of at least {formatLatencyMs(data.slow_threshold_ms)}. This page stays diagnosis-first and links back into real sessions instead of exposing a separate telemetry tool.
             </span>
           </div>
+
+          <ProductHealthChecksPanel
+            checks={productHealthData?.checks ?? []}
+            isLoading={productHealthLoading}
+            error={productHealthError instanceof Error ? productHealthError : null}
+          />
 
           <div className="observability-hero">
             <DiagnosisPanel cards={diagnosisCards} />

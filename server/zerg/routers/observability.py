@@ -17,6 +17,8 @@ from zerg.schemas.observability import MachineHealthListResponse
 from zerg.schemas.observability import MachineHealthStatus
 from zerg.schemas.observability import ManagedTurnsSummaryEnvelopeResponse
 from zerg.schemas.observability import ObservabilityOverviewResponse
+from zerg.schemas.observability import ProductHealthCheckListResponse
+from zerg.schemas.observability import ProductHealthCheckLivePreviewResponse
 from zerg.schemas.observability import RealtimePropagationSessionReportResponse
 from zerg.schemas.observability import SlowTurnsListResponse
 from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEALTH_RECENT_WITHIN_SECONDS
@@ -26,6 +28,8 @@ from zerg.services.observability_views import build_machine_health_list_response
 from zerg.services.observability_views import build_managed_turns_summary_envelope_response
 from zerg.services.observability_views import build_observability_overview_response
 from zerg.services.observability_views import build_slow_turns_list_response
+from zerg.services.product_health import build_live_preview_check
+from zerg.services.product_health import build_product_health_checks
 from zerg.services.realtime_propagation import build_realtime_propagation_session_report
 from zerg.services.session_turns import list_managed_completed_turns
 from zerg.services.session_turns import list_slow_session_turns
@@ -40,6 +44,46 @@ router = APIRouter(
 
 def _resolve_recent_machine_window_seconds(*, recent_within_hours: int) -> int:
     return max(1, recent_within_hours) * 60 * 60
+
+
+@router.get("/checks", response_model=ProductHealthCheckListResponse)
+async def list_product_health_checks(
+    window: str = Query("15m", description="Recent observation window such as 15m, 1h, or 7d"),
+    provider: str | None = Query(None, description="Filter live-preview observations by provider"),
+    surface: str | None = Query(None, description="Filter live-preview observations by client surface"),
+    managed: bool | None = Query(None, description="Filter live-preview observations by managed-session flag"),
+    db: Session = Depends(get_db),
+) -> ProductHealthCheckListResponse:
+    try:
+        return build_product_health_checks(
+            db,
+            window=window,
+            provider=provider,
+            surface=surface,
+            managed=managed,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/checks/live_preview", response_model=ProductHealthCheckLivePreviewResponse)
+async def read_live_preview_health_check(
+    window: str = Query("15m", description="Recent observation window such as 15m, 1h, or 7d"),
+    provider: str | None = Query(None, description="Filter observations by provider"),
+    surface: str | None = Query(None, description="Filter observations by client surface"),
+    managed: bool | None = Query(None, description="Filter observations by managed-session flag"),
+    db: Session = Depends(get_db),
+) -> ProductHealthCheckLivePreviewResponse:
+    try:
+        return build_live_preview_check(
+            db,
+            window=window,
+            provider=provider,
+            surface=surface,
+            managed=managed,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/sessions/{session_id}/latency", response_model=RealtimePropagationSessionReportResponse)

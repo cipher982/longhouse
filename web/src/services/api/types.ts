@@ -33,6 +33,9 @@ export type ManagedTurnProviderSummaryResponse = Schemas["ManagedTurnProviderSum
 export type ManagedTurnSummaryResponse = Schemas["ManagedTurnSummaryResponse"];
 export type ManagedTurnsSummaryEnvelopeResponse = Schemas["ManagedTurnsSummaryEnvelopeResponse"];
 export type ObservabilityOverviewResponse = Schemas["ObservabilityOverviewResponse"];
+export type ProductHealthCheckListResponse = Schemas["ProductHealthCheckListResponse"];
+export type ProductHealthCheckLivePreviewResponse = Schemas["ProductHealthCheckLivePreviewResponse"];
+export type ProductHealthCheckSummaryResponse = Schemas["ProductHealthCheckSummaryResponse"];
 export type SlowTurnItemResponse = Schemas["SlowTurnItemResponse"];
 export type SlowTurnsListResponse = Schemas["SlowTurnsListResponse"];
 
