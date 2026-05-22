@@ -29,7 +29,6 @@ from zerg.services.session_messages import is_session_message_deliverable_state
 from zerg.services.session_messages import resolve_session_message_owner_id
 from zerg.services.session_runtime import RuntimeEventBatchIngest
 from zerg.services.session_runtime import RuntimeEventBatchResult
-from zerg.services.session_runtime import current_presence_state_for_session
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
@@ -74,7 +73,6 @@ async def ingest_runtime_observation_batch(
         # Commit runtime state first, then run APNs/widget/queued-message prep
         # in a lower-priority follow-up write so SSE-visible state changes do
         # not sit behind notification bookkeeping.
-        session_ids_in_batch = sorted({ev.session_id for ev in events if ev.session_id is not None}, key=str)
         live_transcript_only = bool(events) and all(_is_bridge_live_transcript_event(ev) for ev in events)
         # Pick first non-empty tool_name per session for attention push context.
         tool_by_session: dict = {}
@@ -83,10 +81,6 @@ async def ingest_runtime_observation_batch(
                 tool_by_session.setdefault(ev.session_id, ev.tool_name)
 
         def _do_runtime_state(wdb: Session):
-            previous_by_session: dict = {}
-            if not live_transcript_only:
-                for sid in session_ids_in_batch:
-                    previous_by_session[sid] = current_presence_state_for_session(wdb, sid, now=now_utc)
             ingest_result = ingest_runtime_events(wdb, events)
 
             # Bridge live transcript deltas are already a user-visible overlay
@@ -113,7 +107,6 @@ async def ingest_runtime_observation_batch(
             push_contexts = [
                 {
                     "session_id": sid,
-                    "previous_state": previous_by_session.get(sid),
                     "tool": tool_by_session.get(sid),
                 }
                 for sid in updated_session_ids
@@ -200,6 +193,7 @@ async def ingest_runtime_observation_batch(
                     ).presence_state
                     sid = session_row.id
                     context = push_context_by_session.get(sid, {})
+                    previous_attention_state = _previous_attention_state_from_session(session_row)
                     prepared.append(
                         {
                             "session_id": sid,
@@ -208,7 +202,7 @@ async def ingest_runtime_observation_batch(
                                 wdb,
                                 owner_id=owner_id,
                                 session_id=sid,
-                                previous_state=context.get("previous_state"),
+                                previous_state=previous_attention_state,
                                 current_state=canonical_state,
                                 occurred_at=now_utc,
                                 current_tool_name=context.get("tool"),
@@ -218,7 +212,7 @@ async def ingest_runtime_observation_batch(
                                 wdb,
                                 owner_id=owner_id,
                                 session_id=sid,
-                                previous_state=context.get("previous_state"),
+                                previous_state=previous_attention_state,
                                 current_state=canonical_state,
                                 occurred_at=now_utc,
                                 targets=ios_targets,
@@ -307,3 +301,10 @@ def _is_bridge_live_transcript_event(event) -> bool:
         and event.kind == "progress_signal"
         and payload.get("progress_kind") == "bridge_live_transcript_delta"
     )
+
+
+def _previous_attention_state_from_session(session: AgentSession) -> str | None:
+    value = str(session.last_attention_push_state or "").strip()
+    if value in {"blocked", "needs_user"}:
+        return value
+    return None
