@@ -455,8 +455,8 @@ export function SessionChat({
     [queryClient, queuedInputsQuery, session.id],
   );
 
-  const handleInterruptStalledTurn = useCallback(async () => {
-    if (!isManagedLocal || !isStalled || isInterrupting) return;
+  const handleInterrupt = useCallback(async () => {
+    if (!isManagedLocal || isInterrupting) return;
     setIsInterrupting(true);
     setError(null);
     try {
@@ -469,14 +469,18 @@ export function SessionChat({
       });
       await refreshCurrentSessionWorkspace();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not interrupt stalled turn");
+      setError(e instanceof Error ? e.message : "Could not interrupt running turn");
     } finally {
       setIsInterrupting(false);
     }
-  }, [isInterrupting, isManagedLocal, isStalled, queryClient, refreshCurrentSessionWorkspace, session.id]);
+  }, [isInterrupting, isManagedLocal, queryClient, refreshCurrentSessionWorkspace, session.id]);
 
   const canSteerNow = isSendLocked && canSteerActiveTurn;
   const canQueueNow = isSendLocked && canQueueNextInput && !queueFull;
+  // Inline interrupt is offered for any locked managed-local turn. When the
+  // stall-recovery card is showing it already exposes the same action, so we
+  // hide the composer copy to avoid two buttons doing the identical thing.
+  const showInlineInterrupt = isManagedLocal && isSendLocked && !isStalled;
   // When steer is available, the primary action is steer. Queue-next becomes
   // a secondary escape hatch. If only queue is available, primary = queue.
   const primaryIntent: "auto" | "queue" | "steer" = !isSendLocked
@@ -726,7 +730,7 @@ export function SessionChat({
             type="button"
             variant="secondary"
             size="sm"
-            onClick={() => void handleInterruptStalledTurn()}
+            onClick={() => void handleInterrupt()}
             disabled={isInterrupting}
           >
             {isInterrupting ? "Interrupting" : "Interrupt"}
@@ -738,10 +742,10 @@ export function SessionChat({
         <div className="session-chat-turn-notice">
           <span>
             {canSteerNow
-              ? "Agent is working. Click Send update to inject mid-turn, or Queue next to wait — Enter will not send while working."
+              ? "Agent is working. Send update injects mid-turn, Queue next waits, Stop interrupts — Enter will not send while working."
               : canQueueNextInput
-              ? "Agent is working. Click Queue next to auto-send at the next turn boundary — Enter will not queue."
-              : "Agent is working. You can draft the next message; sending will be available when it is ready."}
+              ? "Agent is working. Queue next auto-sends at the next turn boundary, Stop interrupts — Enter will not queue."
+              : "Agent is working. Draft a message or Stop to interrupt; sending will be available when it is ready."}
           </span>
         </div>
       )}
@@ -926,6 +930,18 @@ export function SessionChat({
                   </Button>
                 ) : (
                   <>
+                    {showInlineInterrupt ? (
+                      <Button
+                        type="button"
+                        variant="danger"
+                        size="sm"
+                        onClick={() => void handleInterrupt()}
+                        disabled={isInterrupting}
+                        data-testid="session-chat-interrupt"
+                      >
+                        {isInterrupting ? "Stopping" : "Stop"}
+                      </Button>
+                    ) : null}
                     {canSteerNow && canQueueNow ? (
                       <Button
                         type="button"
@@ -967,6 +983,18 @@ export function SessionChat({
                     </Button>
                   ) : (
                     <>
+                      {showInlineInterrupt ? (
+                        <Button
+                          type="button"
+                          variant="danger"
+                          size="sm"
+                          onClick={() => void handleInterrupt()}
+                          disabled={isInterrupting}
+                          data-testid="session-chat-interrupt"
+                        >
+                          {isInterrupting ? "Stopping" : "Stop"}
+                        </Button>
+                      ) : null}
                       {canSteerNow && canQueueNow ? (
                         <Button
                           type="button"
