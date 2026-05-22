@@ -487,7 +487,6 @@ async def launch_managed_local_this_device(
     if not token_device_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Device token is missing device_id")
     # machine_name is a display label; routing is always by device_id.
-    machine_name = machine_name or token_device_id
     runner_target = token_device_id
 
     try:

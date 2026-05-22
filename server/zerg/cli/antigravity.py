@@ -52,8 +52,14 @@ _ANTIGRAVITY_HOOK_SCRIPT = """\
 # Longhouse Antigravity hook - local presence outbox + managed transcript binding.
 INPUT=$(/bin/cat)
 EVENT="${1:-}"
-LONGHOUSE_HOME="${LONGHOUSE_HOME:-__LONGHOUSE_HOME__}"
-ENGINE="${LONGHOUSE_ENGINE:-__ENGINE_PATH__}"
+LONGHOUSE_HOME="${LONGHOUSE_HOME:-}"
+if [ -z "$LONGHOUSE_HOME" ]; then
+  LONGHOUSE_HOME=__LONGHOUSE_HOME__
+fi
+ENGINE="${LONGHOUSE_ENGINE:-}"
+if [ -z "$ENGINE" ]; then
+  ENGINE=__ENGINE_PATH__
+fi
 PYTHON="${LONGHOUSE_HOOK_PYTHON:-python3}"
 
 emit_default_response() {
@@ -339,9 +345,12 @@ def _ensure_antigravity_runtime_plugin(
     plugin_root = _antigravity_plugin_source_root(config_dir) if antigravity_bin else staged_root
     hook_script = plugin_root / _ANTIGRAVITY_HOOK_SCRIPT_NAME
     longhouse_home = resolve_longhouse_home_from_provider_home(config_dir or (Path.home() / ".claude"))
-    hook_content = _ANTIGRAVITY_HOOK_SCRIPT.replace("__LONGHOUSE_HOME__", str(longhouse_home)).replace(
+    hook_content = _ANTIGRAVITY_HOOK_SCRIPT.replace(
+        "__LONGHOUSE_HOME__",
+        shlex.quote(str(longhouse_home)),
+    ).replace(
         "__ENGINE_PATH__",
-        engine_path or _default_engine_path(),
+        shlex.quote(engine_path or _default_engine_path()),
     )
     _write_text_if_changed(
         plugin_root / "plugin.json",
@@ -526,12 +535,18 @@ def _run_native_antigravity(
     env["LONGHOUSE_RUNTIME_EVENTS_URL"] = _managed_runtime_events_url(url)
     env["LONGHOUSE_RUNTIME_TOKEN"] = token
     env["LONGHOUSE_HOOK_PYTHON"] = sys.executable
+    launched = False
     returncode = 1
     try:
         completed = subprocess.run(cmd, check=False, cwd=str(cwd), env=env)
+        launched = True
         returncode = int(completed.returncode)
         return returncode
     finally:
+        if launched:
+            terminal_state = "session_ended"
+        else:
+            terminal_state = "launch_failed"
         try:
             _post_antigravity_runtime_event(
                 url=url,
@@ -541,8 +556,8 @@ def _run_native_antigravity(
                     device_id=machine_name,
                     kind="terminal_signal",
                     phase="finished",
-                    dedupe_key=f"{session_id}:{_ANTIGRAVITY_RUNTIME_SOURCE}:terminal:{returncode}",
-                    payload={"terminal_state": "session_ended", "exit_code": returncode},
+                    dedupe_key=f"{session_id}:{_ANTIGRAVITY_RUNTIME_SOURCE}:terminal:{terminal_state}:{returncode}",
+                    payload={"terminal_state": terminal_state, "exit_code": returncode},
                 ),
             )
         except _AntigravityLaunchError as exc:
