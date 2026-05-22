@@ -418,6 +418,77 @@ def test_heavy_migration_plan_detects_legacy_pending(tmp_path):
     assert "20260304_source_lines_branch_revision_rebuild" in pending_names
 
 
+def test_session_identity_kernel_backfill_is_explicit_heavy_migration(tmp_path):
+    db_path = tmp_path / "identity_kernel.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    initialize_database(engine)
+
+    session_id = "00000000-0000-0000-0000-000000000111"
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO sessions (
+                    id, provider, environment, started_at, user_messages, assistant_messages, tool_calls
+                ) VALUES (
+                    :session_id, 'claude', 'test', CURRENT_TIMESTAMP, 1, 0, 0
+                )
+                """
+            ),
+            {"session_id": session_id},
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO events (
+                    session_id, role, content_text, timestamp, source_path, source_offset, event_hash
+                ) VALUES (
+                    :session_id, 'user', 'hello', CURRENT_TIMESTAMP, '/tmp/session.jsonl', 1, 'event-hash'
+                )
+                """
+            ),
+            {"session_id": session_id},
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO source_lines (
+                    session_id, source_path, source_offset, branch_id, raw_json, line_hash
+                ) VALUES (
+                    :session_id, '/tmp/session.jsonl', 1, 1, '{"type":"user"}', 'line-hash'
+                )
+                """
+            ),
+            {"session_id": session_id},
+        )
+
+    # A second startup pass may do lightweight schema/index convergence, but it
+    # must not stamp historical child rows.
+    initialize_database(engine)
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT thread_id FROM events")).scalar() is None
+        assert conn.execute(text("SELECT thread_id FROM source_lines")).scalar() is None
+
+    plan = plan_heavy_migrations(engine)
+    pending_names = {item.name for item in plan if item.pending}
+    assert "20260521_session_identity_kernel_backfill" in pending_names
+
+    run_items = apply_heavy_migrations(engine)
+    assert any(
+        item.name == "20260521_session_identity_kernel_backfill" and item.status == "applied"
+        for item in run_items
+    )
+
+    with engine.connect() as conn:
+        assert conn.execute(
+            text("SELECT primary_thread_id FROM sessions WHERE id = :session_id"),
+            {"session_id": session_id},
+        ).scalar()
+        assert conn.execute(text("SELECT thread_id FROM events")).scalar()
+        assert conn.execute(text("SELECT thread_id FROM source_lines")).scalar()
+        assert int(conn.execute(text("SELECT COUNT(*) FROM session_runs")).scalar() or 0) == 1
+
+
 def test_apply_heavy_migrations_is_idempotent_and_records_ledger(tmp_path):
     db_path = tmp_path / "legacy_apply.db"
     engine = make_engine(f"sqlite:///{db_path}")

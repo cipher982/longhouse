@@ -1440,19 +1440,9 @@ def _migrate_agents_columns(engine: Engine) -> None:
     except Exception:
         logger.debug("session identity kernel index migration skipped", exc_info=True)
 
-    # Phase 3: backfill kernel rows for legacy sessions. Idempotent — a fully
-    # backfilled DB sees zero writes. Cheap for new DBs; bounded by the count
-    # of pre-existing sessions on dogfood/dev.
-    try:
-        from sqlalchemy.orm import Session as _OrmSession
-
-        from zerg.services.agents.kernel_backfill import backfill_session_identity_kernel
-
-        with _OrmSession(engine, expire_on_commit=False) as session:
-            backfill_session_identity_kernel(session)
-            session.commit()
-    except Exception:
-        logger.warning("session identity kernel backfill skipped", exc_info=True)
+    # Historical session identity stamping rewrites large archive tables
+    # (events/source_lines/observations). Keep it out of startup; explicit
+    # heavy migrations own that work.
 
 
 def _auto_add_missing_columns(
