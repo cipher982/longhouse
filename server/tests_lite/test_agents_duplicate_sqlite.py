@@ -518,3 +518,57 @@ def test_duplicate_replay_without_source_line_delta_does_not_requeue_post_ingest
         assert stored.tool_calls == 0
         assert store.count_session_events(session_id, branch_mode="head") == 1
         assert db.query(SessionTask).filter(SessionTask.session_id == str(session_id)).count() == 0
+
+
+def test_branch_source_line_lookup_can_limit_to_incoming_offsets(tmp_path):
+    db_path = tmp_path / "source_line_lookup_offsets.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    engine = engine.execution_options(schema_translate_map={"agents": None})
+    Base.metadata.create_all(bind=engine)
+
+    SessionLocal = sessionmaker(bind=engine)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        started_at = datetime(2026, 4, 14, 21, 46, 0, tzinfo=timezone.utc)
+        source_path = "/tmp/codex-session.jsonl"
+
+        result = store.ingest_session(
+            SessionIngest(
+                provider="codex",
+                environment="test",
+                project="source-line-lookup",
+                device_id="dev-machine",
+                cwd="/tmp",
+                started_at=started_at,
+                source_lines=[
+                    SourceLineIngest(
+                        source_path=source_path,
+                        source_offset=offset,
+                        raw_json=f'{{"offset":{offset}}}',
+                    )
+                    for offset in range(100)
+                ],
+            )
+        )
+
+        head_branch_id = store.get_head_branch_id(result.session_id)
+        latest_by_offset, max_offset_by_path = store._list_branch_source_lines(
+            result.session_id,
+            head_branch_id,
+            {source_path},
+            source_offsets_by_path={source_path: {10, 90}},
+        )
+
+        assert set(latest_by_offset) == {(source_path, 10), (source_path, 90)}
+        assert max_offset_by_path == {source_path: 99}
+
+        latest_without_max, max_without_max = store._list_branch_source_lines(
+            result.session_id,
+            head_branch_id,
+            {source_path},
+            source_offsets_by_path={source_path: {10, 90}},
+            include_max_offsets=False,
+        )
+
+        assert set(latest_without_max) == {(source_path, 10), (source_path, 90)}
+        assert max_without_max == {}
