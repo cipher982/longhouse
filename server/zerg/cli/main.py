@@ -2,6 +2,7 @@
 
 import json
 import sys
+import time
 
 import typer
 
@@ -85,6 +86,7 @@ def app_callback(
 
 
 config_app = typer.Typer(help="Configuration management")
+db_app = typer.Typer(help="SQLite database diagnostics and maintenance")
 
 
 @config_app.command(name="show")
@@ -117,9 +119,108 @@ def config_show() -> None:
         typer.echo(f"  {key}: {value} {source_indicator}")
 
 
+def _resolve_db_engine(database_url: str | None):
+    from zerg.database import default_engine
+    from zerg.database import make_engine
+
+    if database_url:
+        engine = make_engine(database_url)
+        return engine, database_url
+    if default_engine is None:
+        raise typer.Exit(code=2)
+    return default_engine, str(default_engine.url)
+
+
+@db_app.command(name="doctor")
+def db_doctor(
+    database_url: str | None = typer.Option(
+        None,
+        "--database-url",
+        help="SQLite DATABASE_URL override (defaults to env).",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+    deep: bool = typer.Option(
+        False,
+        "--deep",
+        help="Run explicit COUNT diagnostics that may scan large archive tables.",
+    ),
+) -> None:
+    """Inspect SQLite file, disk, planner, and optional backlog diagnostics."""
+    from zerg.services.db_diagnostics import collect_sqlite_db_stats
+    from zerg.services.db_diagnostics import collect_sqlite_deep_counts
+    from zerg.services.db_diagnostics import collect_sqlite_schema_stats
+
+    engine, resolved_database_url = _resolve_db_engine(database_url)
+    with engine.connect() as conn:
+        payload = collect_sqlite_db_stats(resolved_database_url, db=conn)
+        if payload is None:
+            typer.echo("Database doctor only supports file-backed SQLite databases.", err=True)
+            raise typer.Exit(code=2)
+        payload["schema"] = collect_sqlite_schema_stats(conn)
+        if deep:
+            payload["deep_counts"] = collect_sqlite_deep_counts(conn)
+            payload["deep_counts_skipped"] = False
+        else:
+            payload["deep_counts"] = None
+            payload["deep_counts_skipped"] = True
+
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    typer.echo(f"Database: {payload['db_path']}")
+    typer.echo(f"  db_bytes: {payload['db_bytes']}")
+    typer.echo(f"  wal_bytes: {payload['wal_bytes']}")
+    typer.echo(f"  disk_free_bytes: {payload['disk_free_bytes']}")
+    typer.echo(f"  backup_bytes: {payload['backup_bytes']}")
+    typer.echo(f"  page_count: {payload.get('db_page_count')}")
+    typer.echo(f"  freelist_count: {payload.get('db_freelist_count')}")
+    if payload["deep_counts_skipped"]:
+        typer.echo("  deep_counts: skipped (use --deep for explicit COUNT diagnostics)")
+
+
+@db_app.command(name="optimize")
+def db_optimize(
+    database_url: str | None = typer.Option(
+        None,
+        "--database-url",
+        help="SQLite DATABASE_URL override (defaults to env).",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Run explicit SQLite PRAGMA optimize maintenance."""
+    from zerg.services.db_diagnostics import collect_sqlite_schema_stats
+
+    engine, resolved_database_url = _resolve_db_engine(database_url)
+    started = time.monotonic()
+    with engine.begin() as conn:
+        before = collect_sqlite_schema_stats(conn)
+        result = conn.exec_driver_sql("PRAGMA optimize")
+        try:
+            result_rows = [list(row) for row in result.fetchall()]
+        except Exception:
+            result_rows = []
+        after = collect_sqlite_schema_stats(conn)
+
+    payload = {
+        "status": "ok",
+        "database_url": resolved_database_url,
+        "pragma": "PRAGMA optimize",
+        "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
+        "result_rows": result_rows,
+        "before": before,
+        "after": after,
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        typer.echo(f"SQLite optimize complete elapsed_ms={payload['elapsed_ms']}")
+
+
 app.add_typer(messages_app, name="messages", help="Durable session inbox commands")
 app.add_typer(sessions_app, name="sessions", help="Session inspection commands")
 app.add_typer(config_app, name="config", help="Configuration management")
+app.add_typer(db_app, name="db", help="SQLite database diagnostics and maintenance")
 app.add_typer(claude_channel_app, name="claude-channel", help="Claude channel bridge commands", hidden=True)
 app.add_typer(codex_app, name="codex")
 app.add_typer(local_health_app, name="local-health")
@@ -147,6 +248,11 @@ def migrate(
     ),
     apply: bool = typer.Option(False, "--apply", help="Apply pending heavy migrations."),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+    schema_converge: bool = typer.Option(
+        True,
+        "--schema-converge/--no-schema-converge",
+        help="Run lightweight startup schema convergence before planning heavy migrations.",
+    ),
 ) -> None:
     """Plan or apply explicit heavy SQLite migrations."""
     from zerg.database import initialize_database
@@ -155,7 +261,10 @@ def migrate(
     from zerg.db_migrations import plan_heavy_migrations
 
     engine = make_engine(database_url) if database_url else None
-    initialize_database(engine)
+    if schema_converge:
+        if not json_output:
+            typer.echo("Running lightweight schema convergence before heavy migration plan...")
+        initialize_database(engine)
     target_engine = engine
 
     if target_engine is None:
@@ -176,6 +285,7 @@ def migrate(
     pending_after = [item.name for item in plan_after if item.pending]
 
     payload = {
+        "schema_converged": schema_converge,
         "pending_before": pending_before,
         "pending_after": pending_after,
         "plan": [
@@ -212,7 +322,11 @@ def migrate(
 @app.command(hidden=True, name="rebuild-session")
 def rebuild_session(
     session_id: str = typer.Argument(..., help="Session UUID to rebuild from SessionObservation."),
-    runtime_key: str | None = typer.Option(None, "--runtime-key", help="Optional runtime key to include in the rebuild scope."),
+    runtime_key: str | None = typer.Option(
+        None,
+        "--runtime-key",
+        help="Optional runtime key to include in the rebuild scope.",
+    ),
     database_url: str | None = typer.Option(
         None,
         "--database-url",
