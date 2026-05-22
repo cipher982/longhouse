@@ -17,6 +17,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=")
 
+import zerg.services.agent_heartbeat_health as heartbeat_health
 import zerg.services.product_health as product_health
 from zerg.database import Base
 from zerg.database import get_db
@@ -24,8 +25,10 @@ from zerg.database import make_engine
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.auth import get_current_user
 from zerg.main import api_app
+from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
 from zerg.services.product_health import build_live_preview_check
+from zerg.services.product_health import build_product_health_checks
 from zerg.services.session_observations import OBS_KIND_CLIENT_RENDER
 from zerg.services.session_observations import SOURCE_DOMAIN_CLIENT
 from zerg.services.session_observations import record_session_observation
@@ -76,6 +79,27 @@ def _seed_session(db, *, provider: str = "codex", device_id: str = "cinder") -> 
     return session
 
 
+def _seed_heartbeat(
+    db,
+    *,
+    device_id: str = "cinder",
+    received_delta_seconds: int = 60,
+    **kwargs,
+) -> None:
+    values = {
+        "device_id": device_id,
+        "received_at": PINNED_NOW - timedelta(seconds=received_delta_seconds),
+        "version": "0.1.16-test",
+        "last_ship_result": "ok",
+        "ship_attempts_1h": 1,
+        "ship_successes_1h": 1,
+        "raw_json": '{"ship_attempts_10m":1,"ship_successes_10m":1}',
+    }
+    values.update(kwargs)
+    db.add(AgentHeartbeat(**values))
+    db.commit()
+
+
 def _record_render(
     db,
     *,
@@ -119,6 +143,13 @@ def _record_render(
     db.commit()
 
 
+def _check(payload, check_id: str):
+    for check in payload.checks:
+        if check.check == check_id:
+            return check
+    raise AssertionError(f"missing check {check_id}")
+
+
 def test_live_preview_no_observations_returns_unknown_with_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(product_health, "utc_now", lambda: PINNED_NOW)
     SessionLocal = _make_db(tmp_path)
@@ -133,6 +164,90 @@ def test_live_preview_no_observations_returns_unknown_with_missing(tmp_path, mon
     assert cell.coverage == "none"
     assert cell.missing == ["client_render_observations"]
     assert cell.thresholds.render_p95_ms_ok == 500
+
+
+def test_product_health_summary_orders_launch_loop_checks(tmp_path, monkeypatch):
+    monkeypatch.setattr(product_health, "utc_now", lambda: PINNED_NOW)
+    monkeypatch.setattr(heartbeat_health, "utc_now", lambda: PINNED_NOW)
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, provider="codex")
+        _seed_heartbeat(db)
+        _record_render(db, session_id=session.id, latency_ms=100, event_id="a")
+        payload = build_product_health_checks(db, window="15m")
+
+    assert [check.check for check in payload.checks] == [
+        "machine_connected",
+        "render_freshness",
+        "live_preview",
+    ]
+    assert _check(payload, "machine_connected").verdict == "ok"
+    assert _check(payload, "render_freshness").verdict == "ok"
+    assert _check(payload, "live_preview").verdict == "ok"
+
+
+def test_machine_connected_unknown_without_recent_heartbeats(tmp_path, monkeypatch):
+    monkeypatch.setattr(product_health, "utc_now", lambda: PINNED_NOW)
+    monkeypatch.setattr(heartbeat_health, "utc_now", lambda: PINNED_NOW)
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        _seed_heartbeat(db, received_delta_seconds=60 * 60)
+        payload = build_product_health_checks(db, window="15m")
+
+    check = _check(payload, "machine_connected")
+    assert check.verdict == "unknown"
+    assert check.coverage == "none"
+    assert check.headline == "No machine heartbeats in the last 15m."
+
+
+def test_machine_connected_degraded_when_recent_machine_needs_attention(tmp_path, monkeypatch):
+    monkeypatch.setattr(product_health, "utc_now", lambda: PINNED_NOW)
+    monkeypatch.setattr(heartbeat_health, "utc_now", lambda: PINNED_NOW)
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        _seed_heartbeat(db, device_id="healthy", received_delta_seconds=30)
+        _seed_heartbeat(db, device_id="blocked", received_delta_seconds=30, spool_dead=1)
+        payload = build_product_health_checks(db, window="15m")
+
+    check = _check(payload, "machine_connected")
+    assert check.verdict == "degraded"
+    assert check.coverage == "full"
+    assert check.headline == "1 of 2 recent machines healthy; 1 needs attention."
+
+
+def test_machine_connected_fails_when_all_recent_machines_are_broken(tmp_path, monkeypatch):
+    monkeypatch.setattr(product_health, "utc_now", lambda: PINNED_NOW)
+    monkeypatch.setattr(heartbeat_health, "utc_now", lambda: PINNED_NOW)
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        _seed_heartbeat(db, device_id="blocked-a", received_delta_seconds=30, spool_dead=1)
+        _seed_heartbeat(db, device_id="blocked-b", received_delta_seconds=30, spool_dead=1)
+        payload = build_product_health_checks(db, window="15m")
+
+    check = _check(payload, "machine_connected")
+    assert check.verdict == "failing"
+    assert check.coverage == "full"
+    assert check.headline == "All 2 recent machine connections are broken."
+
+
+def test_render_freshness_degrades_when_latest_beacon_is_old(tmp_path, monkeypatch):
+    monkeypatch.setattr(product_health, "utc_now", lambda: PINNED_NOW)
+    monkeypatch.setattr(heartbeat_health, "utc_now", lambda: PINNED_NOW)
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, provider="codex")
+        _record_render(db, session_id=session.id, latency_ms=100, observed_delta_seconds=10 * 60)
+        payload = build_product_health_checks(db, window="15m")
+
+    check = _check(payload, "render_freshness")
+    assert check.verdict == "degraded"
+    assert check.coverage == "full"
+    assert check.headline == "Render beacons are stale; latest arrived 10m ago."
 
 
 def test_live_preview_healthy_web_stream_is_ok(tmp_path, monkeypatch):
@@ -251,10 +366,10 @@ def test_product_health_check_routes_expose_summary_and_detail(tmp_path, monkeyp
         summary = client.get("/observability/checks?window=15m&provider=codex")
         assert summary.status_code == 200
         summary_payload = summary.json()
-        assert summary_payload["checks"][0]["check"] == "live_preview"
-        assert summary_payload["checks"][0]["verdict"] == "ok"
-        assert summary_payload["checks"][0]["coverage"] == "full"
-        assert "within threshold" in summary_payload["checks"][0]["headline"]
+        checks = {item["check"]: item for item in summary_payload["checks"]}
+        assert checks["live_preview"]["verdict"] == "ok"
+        assert checks["live_preview"]["coverage"] == "full"
+        assert "within threshold" in checks["live_preview"]["headline"]
 
         detail = client.get("/observability/checks/live_preview?window=15m&provider=codex")
         assert detail.status_code == 200
