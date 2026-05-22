@@ -16,14 +16,12 @@ import os
 import pty
 import re
 import selectors
-import shlex
 import subprocess
 import time
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
 from typing import Any
-
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT_ROOT = ROOT / "artifacts" / "managed-claude-poc"
@@ -116,7 +114,10 @@ def text_fragments(value: Any) -> list[str]:
     return []
 
 
-def assistant_transcript_contains(session_id: str, expected: str) -> tuple[bool, str | None, int | None]:
+def assistant_transcript_contains(
+    session_id: str,
+    expected: str,
+) -> tuple[bool, str | None, int | None, str | None]:
     for path in transcript_paths(session_id):
         try:
             lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -131,8 +132,8 @@ def assistant_transcript_contains(session_id: str, expected: str) -> tuple[bool,
                 continue
             fragments = text_fragments(row.get("message"))
             if any(expected in fragment for fragment in fragments):
-                return True, str(path), index
-    return False, None, None
+                return True, str(path), index, row.get("timestamp") if isinstance(row.get("timestamp"), str) else None
+    return False, None, None, None
 
 
 def read_json_file(path: Path | None) -> dict[str, Any] | None:
@@ -193,6 +194,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--launch-timeout-secs", type=float, default=45.0)
     parser.add_argument("--response-timeout-secs", type=float, default=60.0)
     parser.add_argument("--post-close-probe-secs", type=float, default=0.0)
+    parser.add_argument(
+        "--skip-post-close-probe",
+        action="store_true",
+        help="Do not run the post-close truth probe before returning.",
+    )
+    parser.add_argument(
+        "--skip-live-probe",
+        action="store_true",
+        help="Do not run the concurrent truth probe while waiting for the managed response.",
+    )
+    parser.add_argument(
+        "--session-id-file",
+        type=Path,
+        help="Optional path to write the managed session id as soon as Claude prints it.",
+    )
     return parser.parse_args()
 
 
@@ -260,6 +276,9 @@ def main() -> int:
                     if match:
                         session_id = match.group(1)
                         recorder.write("session_id_observed", session_id=session_id)
+                        if args.session_id_file:
+                            args.session_id_file.parent.mkdir(parents=True, exist_ok=True)
+                            args.session_id_file.write_text(session_id + "\n", encoding="utf-8")
 
                 if not confirmed_workspace_trust and "Yes,Itrustthisfolder" in compact_buffer:
                     os.write(master_fd, b"\r")
@@ -273,32 +292,44 @@ def main() -> int:
 
                 if session_id and confirmed_warning and not sent_prompt:
                     if wait_for_channel_ready(session_id, timeout_secs=0.2):
-                        probe_output_dir = output_dir / "live_probe"
-                        probe_proc = subprocess.Popen(
-                            [
-                                str(ROOT / "scripts" / "ops" / "probe-managed-claude-truth.py"),
-                                "--session-id",
-                                session_id,
-                                "--duration-secs",
-                                str(max(5.0, args.response_timeout_secs - 5.0)),
-                                "--interval-secs",
-                                "1",
-                                "--output-dir",
-                                str(probe_output_dir),
-                                "--run-id",
-                                f"{args.run_id}-live",
-                            ],
-                            cwd=str(ROOT),
-                            text=True,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,
-                        )
+                        if not args.skip_live_probe:
+                            probe_output_dir = output_dir / "live_probe"
+                            probe_proc = subprocess.Popen(
+                                [
+                                    str(ROOT / "scripts" / "ops" / "probe-managed-claude-truth.py"),
+                                    "--session-id",
+                                    session_id,
+                                    "--duration-secs",
+                                    str(max(5.0, args.response_timeout_secs - 5.0)),
+                                    "--interval-secs",
+                                    "1",
+                                    "--output-dir",
+                                    str(probe_output_dir),
+                                    "--run-id",
+                                    f"{args.run_id}-live",
+                                ],
+                                cwd=str(ROOT),
+                                text=True,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                            )
                         send = channel_send(session_id, args.prompt)
-                        recorder.write("prompt_sent", session_id=session_id, returncode=send.returncode, stdout=send.stdout[-1000:], stderr=send.stderr[-1000:])
+                        recorder.write(
+                            "prompt_sent",
+                            session_id=session_id,
+                            returncode=send.returncode,
+                            stdout=send.stdout[-1000:],
+                            stderr=send.stderr[-1000:],
+                        )
                         sent_prompt = True
 
             if session_id and sent_prompt and not observed_expected:
-                observed_expected, transcript_path, transcript_line = assistant_transcript_contains(session_id, args.expected)
+                (
+                    observed_expected,
+                    transcript_path,
+                    transcript_line,
+                    transcript_timestamp,
+                ) = assistant_transcript_contains(session_id, args.expected)
                 if observed_expected:
                     recorder.write(
                         "assistant_transcript_observed",
@@ -306,6 +337,7 @@ def main() -> int:
                         expected=args.expected,
                         transcript_path=transcript_path,
                         transcript_line=transcript_line,
+                        transcript_timestamp=transcript_timestamp,
                     )
                     os.write(master_fd, b"/exit\r")
                     exit_sent = True
@@ -337,7 +369,7 @@ def main() -> int:
         recorder.write("live_probe_finished", session_id=session_id, returncode=probe_proc.returncode, stdout=(stdout or "")[-1000:], stderr=(stderr or "")[-1000:])
 
     post_close_summary = None
-    if session_id:
+    if session_id and not args.skip_post_close_probe:
         post_close_dir = output_dir / "post_close_probe"
         post = run_probe(session_id, output_dir=post_close_dir, run_id=f"{args.run_id}-post-close", duration_secs=args.post_close_probe_secs)
         post_close_summary = post_close_dir / "summary.json"
@@ -363,7 +395,12 @@ def main() -> int:
         "hosted_write_serializer_avg_wait_ms": (post_close_data or {}).get("hosted_write_serializer_avg_wait_ms"),
         "hosted_write_serializer_max_wait_ms": (post_close_data or {}).get("hosted_write_serializer_max_wait_ms"),
     }
-    summary["expected_terminal_source_ok"] = summary.get("hosted_terminal_source") == "claude_channel_wrapper"
+    summary["post_close_skipped"] = args.skip_post_close_probe
+    summary["expected_terminal_source_ok"] = (
+        True
+        if args.skip_post_close_probe
+        else summary.get("hosted_terminal_source") == "claude_channel_wrapper"
+    )
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     lines = [
         "# Managed Claude POC",

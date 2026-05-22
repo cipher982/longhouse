@@ -134,8 +134,10 @@ export function useSessionWorkspace(
         },
         onWorkspaceChanged: (data) => {
           recordServerClockSkew(data?.server_now_ms);
+          let shouldDeferRefetchForPreview = false;
           if (Object.prototype.hasOwnProperty.call(data, "transcript_preview")) {
             const transcriptPreview = data.transcript_preview ?? null;
+            shouldDeferRefetchForPreview = Boolean(transcriptPreview?.text?.trim());
             setStreamTranscriptPreview(transcriptPreview);
             queryClient.setQueriesData<AgentSessionWorkspaceResponse>(
               { queryKey: ["agent-session-workspace", sessionId] },
@@ -154,14 +156,6 @@ export function useSessionWorkspace(
               },
             );
           }
-          void queryClient.invalidateQueries({ queryKey: ["agent-session-workspace", sessionId] });
-          void queryClient.invalidateQueries({ queryKey: ["agent-session", sessionId] });
-          void queryClient.invalidateQueries({ queryKey: ["agent-session-thread", sessionId] });
-          void queryClient.invalidateQueries({ queryKey: ["agent-session-turns", sessionId] });
-          void queryClient.invalidateQueries({ queryKey: ["agent-session-projection-infinite", sessionId] });
-          void queryClient.invalidateQueries({ queryKey: ["agent-session-events", sessionId] });
-          void queryClient.invalidateQueries({ queryKey: ["agent-session-events-infinite", sessionId] });
-          void queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
 
           pendingRenderBeaconRef.current = {
             sessionId,
@@ -172,6 +166,25 @@ export function useSessionWorkspace(
             pubsubSeq: data.pubsub_seq ?? null,
           };
           setPendingRenderBeaconVersion((version) => version + 1);
+
+          const refreshWorkspaceQueries = () => {
+            void queryClient.invalidateQueries({ queryKey: ["agent-session-workspace", sessionId] });
+            void queryClient.invalidateQueries({ queryKey: ["agent-session", sessionId] });
+            void queryClient.invalidateQueries({ queryKey: ["agent-session-thread", sessionId] });
+            void queryClient.invalidateQueries({ queryKey: ["agent-session-turns", sessionId] });
+            void queryClient.invalidateQueries({ queryKey: ["agent-session-projection-infinite", sessionId] });
+            void queryClient.invalidateQueries({ queryKey: ["agent-session-events", sessionId] });
+            void queryClient.invalidateQueries({ queryKey: ["agent-session-events-infinite", sessionId] });
+            void queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
+          };
+
+          if (shouldDeferRefetchForPreview && typeof window !== "undefined" && window.requestAnimationFrame) {
+            window.requestAnimationFrame(() => {
+              window.setTimeout(refreshWorkspaceQueries, 0);
+            });
+          } else {
+            refreshWorkspaceQueries();
+          }
         },
         onError: () => setStreamConnected(false),
       },

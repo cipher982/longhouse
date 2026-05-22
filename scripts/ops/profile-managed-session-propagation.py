@@ -17,7 +17,6 @@ import os
 import re
 import select
 import shlex
-import signal
 import subprocess
 import sys
 import threading
@@ -36,7 +35,6 @@ from managed_profiler.sla_manifest import load_manifest
 from managed_profiler.sla_manifest import manifest_summary
 from managed_profiler.sla_manifest import metric_is_diagnostic
 from managed_profiler.sla_manifest import metric_target_ms
-
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT_ROOT = ROOT / "artifacts" / "managed-session-propagation"
@@ -62,6 +60,9 @@ BATCH_METRIC_KEYS = (
     "durable_archive_local_to_hosted_ms",
     "live_first_from_local_ms",
     "live_tail_non_slo_from_local_ms",
+    "browser_workspace_stream_to_first_paint_ms",
+    "browser_workspace_stream_to_tail_paint_ms",
+    "browser_workspace_stream_after_sse_ms",
     "close_observed_ms",
     "bridge_live_ingest_lag_ms",
     "browser_timeline_card_from_session_id_ms",
@@ -147,14 +148,19 @@ def cold_timeline_close_target_ms() -> int:
     return metric_target_ms(sla_manifest(), "cold_timeline_navigation_to_close_paint_ms", 2_000) or 2_000
 
 
-DEFAULT_SLA_CASE_BY_PROFILE = {
-    "cold-timeline": "managed_codex_cold_timeline_closed",
-    "warm-live": "managed_codex_warm_live_graceful_close",
+DEFAULT_SLA_CASE_BY_PROFILE_PROVIDER = {
+    ("cold-timeline", "codex"): "managed_codex_cold_timeline_closed",
+    ("warm-live", "codex"): "managed_codex_warm_live_graceful_close",
+    ("warm-live", "claude"): "managed_claude_warm_live_graceful_close",
 }
 
 
+def default_sla_case_id(profile: str, provider: str) -> str | None:
+    return DEFAULT_SLA_CASE_BY_PROFILE_PROVIDER.get((profile, provider))
+
+
 def resolve_sla_case(args: argparse.Namespace) -> dict[str, Any] | None:
-    case_id = args.sla_case or DEFAULT_SLA_CASE_BY_PROFILE.get(args.profile)
+    case_id = args.sla_case or default_sla_case_id(args.profile, args.provider)
     if not case_id:
         return None
     case = case_by_id(sla_manifest(), case_id)
@@ -291,7 +297,7 @@ class Profiler:
     ) -> CommandResult:
         self.observe(
             case_id=case_id,
-            provider="codex",
+            provider=self.args.provider,
             ownership=ownership,
             source="harness",
             event=f"{event_prefix}_started",
@@ -308,7 +314,7 @@ class Profiler:
         )
         self.observe(
             case_id=case_id,
-            provider="codex",
+            provider=self.args.provider,
             ownership=ownership,
             source="harness",
             event=f"{event_prefix}_completed",
@@ -501,7 +507,7 @@ detail_status, detail_ms, detail_body, detail_text = get(f"/timeline/sessions/{s
 listing_status, listing_ms, listing_body, listing_text = get(
     "/timeline/sessions",
     project=project,
-    provider="codex",
+    provider=sys.argv[4],
     limit=20,
     hide_autonomous="true",
 )
@@ -544,6 +550,7 @@ print(json.dumps(payload, default=str))
                 token,
                 session_id,
                 self.project,
+                self.args.provider,
             ],
             input=script,
             text=True,
@@ -567,9 +574,9 @@ print(json.dumps(payload, default=str))
 import json, sys, time
 import httpx
 
-token, sid, project = sys.argv[1], sys.argv[2], sys.argv[3]
+token, sid, project, provider = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 headers = {"Cookie": f"longhouse_session={token}"}
-params = {"project": project, "provider": "codex", "limit": "20", "hide_autonomous": "true"}
+params = {"project": project, "provider": provider, "limit": "20", "hide_autonomous": "true"}
 seen = []
 events = []
 event_name = None
@@ -635,6 +642,7 @@ print(json.dumps(payload))
                 token,
                 session_id,
                 self.project,
+                self.args.provider,
             ],
             input=script,
             text=True,
@@ -666,7 +674,7 @@ print(json.dumps(payload))
             if last is not None and predicate(last):
                 self.observe(
                     case_id=case_id,
-                    provider="codex",
+                    provider=self.args.provider,
                     ownership=ownership,
                     source="hosted_db",
                     event=event,
@@ -677,7 +685,7 @@ print(json.dumps(payload))
             time.sleep(interval)
         self.observe(
             case_id=case_id,
-            provider="codex",
+            provider=self.args.provider,
             ownership=ownership,
             source="hosted_db",
             event=f"{event}_timeout",
@@ -705,7 +713,7 @@ print(json.dumps(payload))
             if last is not None and predicate(last):
                 self.observe(
                     case_id=case_id,
-                    provider="codex",
+                    provider=self.args.provider,
                     ownership=ownership,
                     source="hosted_http",
                     event=event,
@@ -716,7 +724,7 @@ print(json.dumps(payload))
             time.sleep(interval)
         self.observe(
             case_id=case_id,
-            provider="codex",
+            provider=self.args.provider,
             ownership=ownership,
             source="hosted_http",
             event=f"{event}_timeout",
@@ -747,7 +755,7 @@ print(json.dumps(payload))
                 first_observed = True
                 self.observe(
                     case_id=case_id,
-                    provider="codex",
+                    provider=self.args.provider,
                     ownership=ownership,
                     source="hosted_http",
                     event="timeline_transcript_preview_first_visible",
@@ -757,7 +765,7 @@ print(json.dumps(payload))
             if last is not None and timeline_transcript_preview_contains(last, nonce):
                 self.observe(
                     case_id=case_id,
-                    provider="codex",
+                    provider=self.args.provider,
                     ownership=ownership,
                     source="hosted_http",
                     event="timeline_transcript_preview_visible",
@@ -770,7 +778,7 @@ print(json.dumps(payload))
         if not first_observed:
             self.observe(
                 case_id=case_id,
-                provider="codex",
+                provider=self.args.provider,
                 ownership=ownership,
                 source="hosted_http",
                 event="timeline_transcript_preview_first_visible_timeout",
@@ -779,7 +787,7 @@ print(json.dumps(payload))
             )
         self.observe(
             case_id=case_id,
-            provider="codex",
+            provider=self.args.provider,
             ownership=ownership,
             source="hosted_http",
             event="timeline_transcript_preview_visible_timeout",
@@ -800,7 +808,7 @@ print(json.dumps(payload))
         if not token:
             self.observe(
                 case_id=case_id,
-                provider="codex",
+                provider=self.args.provider,
                 ownership=ownership,
                 source="hosted_sse",
                 event="timeline_transcript_preview_sse_first_timeout",
@@ -934,7 +942,7 @@ except Exception as exc:
             if kind == "ready":
                 self.observe(
                     case_id=case_id,
-                    provider="codex",
+                    provider=self.args.provider,
                     ownership=ownership,
                     source="hosted_sse",
                     event="timeline_transcript_preview_sse_ready",
@@ -945,7 +953,7 @@ except Exception as exc:
                 saw_first = True
                 self.observe(
                     case_id=case_id,
-                    provider="codex",
+                    provider=self.args.provider,
                     ownership=ownership,
                     source="hosted_sse",
                     event="timeline_transcript_preview_sse_first_visible",
@@ -956,7 +964,7 @@ except Exception as exc:
                 saw_full = True
                 self.observe(
                     case_id=case_id,
-                    provider="codex",
+                    provider=self.args.provider,
                     ownership=ownership,
                     source="hosted_sse",
                     event="timeline_transcript_preview_sse_visible",
@@ -967,7 +975,7 @@ except Exception as exc:
             elif kind in {"first_timeout", "timeout", "error"}:
                 self.observe(
                     case_id=case_id,
-                    provider="codex",
+                    provider=self.args.provider,
                     ownership=ownership,
                     source="hosted_sse",
                     event=f"timeline_transcript_preview_sse_{kind}",
@@ -986,7 +994,7 @@ except Exception as exc:
         if not saw_first:
             self.observe(
                 case_id=case_id,
-                provider="codex",
+                provider=self.args.provider,
                 ownership=ownership,
                 source="hosted_sse",
                 event="timeline_transcript_preview_sse_first_visible_timeout",
@@ -996,7 +1004,7 @@ except Exception as exc:
         elif not saw_full:
             self.observe(
                 case_id=case_id,
-                provider="codex",
+                provider=self.args.provider,
                 ownership=ownership,
                 source="hosted_sse",
                 event="timeline_transcript_preview_sse_visible_timeout",
@@ -1015,7 +1023,7 @@ except Exception as exc:
         if not token:
             self.observe(
                 case_id=case_id,
-                provider="codex",
+                provider=self.args.provider,
                 ownership=ownership,
                 source="hosted_sse",
                 event="timeline_close_sse_timeout",
@@ -1028,11 +1036,11 @@ except Exception as exc:
 import json, sys, time
 import httpx
 
-token, sid, project = sys.argv[1], sys.argv[2], sys.argv[3]
+token, sid, project, provider = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 headers = {"Cookie": f"longhouse_session={token}"}
 params = {
     "project": project,
-    "provider": "codex",
+    "provider": provider,
     "limit": "20",
     "hide_autonomous": "true",
     "skip_initial_replay": "true",
@@ -1138,6 +1146,7 @@ except Exception as exc:
                 token,
                 session_id,
                 self.project,
+                self.args.provider,
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -1160,7 +1169,7 @@ except Exception as exc:
             if kind == "ready":
                 self.observe(
                     case_id=case_id,
-                    provider="codex",
+                    provider=self.args.provider,
                     ownership=ownership,
                     source="hosted_sse",
                     event="timeline_close_sse_ready",
@@ -1172,7 +1181,7 @@ except Exception as exc:
                 saw_terminal = True
                 self.observe(
                     case_id=case_id,
-                    provider="codex",
+                    provider=self.args.provider,
                     ownership=ownership,
                     source="hosted_sse",
                     event="timeline_close_sse_visible",
@@ -1184,7 +1193,7 @@ except Exception as exc:
                 saw_terminal = True
                 self.observe(
                     case_id=case_id,
-                    provider="codex",
+                    provider=self.args.provider,
                     ownership=ownership,
                     source="hosted_sse",
                     event=f"timeline_close_sse_{kind}",
@@ -1203,7 +1212,7 @@ except Exception as exc:
         if not saw_closed and not saw_terminal:
             self.observe(
                 case_id=case_id,
-                provider="codex",
+                provider=self.args.provider,
                 ownership=ownership,
                 source="hosted_sse",
                 event="timeline_close_sse_timeout",
@@ -1225,7 +1234,7 @@ except Exception as exc:
         if not token:
             self.observe(
                 case_id=case_id,
-                provider="codex",
+                provider=self.args.provider,
                 ownership=ownership,
                 source="browser_ui",
                 event="browser_ui_error",
@@ -1252,6 +1261,7 @@ except Exception as exc:
                 session_id,
                 self.project,
                 nonce,
+                self.args.provider,
             ],
             cwd=str(ROOT),
             env=env,
@@ -1279,6 +1289,9 @@ except Exception as exc:
             "timeline_stream_heartbeat": "browser_timeline_stream_heartbeat",
             "timeline_stream_session_upsert": "browser_timeline_stream_session_upsert",
             "timeline_stream_session_remove": "browser_timeline_stream_session_remove",
+            "timeline_stream_workspace_connected": "browser_workspace_stream_connected",
+            "timeline_stream_workspace_changed": "browser_workspace_stream_changed",
+            "timeline_stream_workspace_preview_changed": "browser_workspace_preview_stream_changed",
             "live_transcript_first_painted": "browser_live_transcript_first_painted",
             "live_transcript_nonce_painted": "browser_live_transcript_nonce_painted",
         }
@@ -1316,7 +1329,7 @@ except Exception as exc:
                     current_session_id = received
             self.observe(
                 case_id=case_id,
-                provider="codex",
+                provider=self.args.provider,
                 ownership=ownership,
                 source="browser_ui",
                 event=event,
@@ -1336,7 +1349,7 @@ except Exception as exc:
         if proc.returncode not in {0, None}:
             self.observe(
                 case_id=case_id,
-                provider="codex",
+                provider=self.args.provider,
                 ownership=ownership,
                 source="browser_ui",
                 event="browser_ui_error",
@@ -1473,7 +1486,7 @@ except Exception as exc:
                 )
         self.observe(
             case_id=case_id,
-            provider="codex",
+            provider=self.args.provider,
             ownership=ownership,
             source="harness",
             event="launch_requested",
@@ -1839,6 +1852,271 @@ except Exception as exc:
             "thread_id": thread_id,
             "thread_path": str(thread_path) if thread_path else None,
         }
+
+    def run_managed_claude(self) -> dict[str, Any]:
+        case_id = "C1"
+        ownership = "managed"
+        nonce = f"LH_PROBE_CLAUDE_MANAGED_{self.run_id}"
+        name = f"{self.args.name_prefix}-managed-claude-{self.run_id}"
+        session_id_file = self.output_dir / "claude-browser-session-id.txt"
+        poc_dir = self.output_dir / "claude-poc"
+        poc_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            session_id_file.unlink()
+        except FileNotFoundError:
+            pass
+
+        self.browser_session_cookie()
+        browser_ui = None
+        if self.args.profile == "warm-live" and not self.args.skip_browser_ui:
+            browser_ui = self.start_browser_ui_observer(
+                "-",
+                nonce,
+                case_id=case_id,
+                ownership=ownership,
+                session_id_file=session_id_file,
+            )
+            browser_ready = self.wait_for_observation(
+                case_id,
+                PENDING_BROWSER_SESSION_ID,
+                "browser_ui_loaded",
+                timeout=30,
+            )
+            stream_ready = self.wait_for_observation(
+                case_id,
+                PENDING_BROWSER_SESSION_ID,
+                "browser_timeline_stream_connected",
+                timeout=10,
+            )
+            if not browser_ready:
+                raise RuntimeError(
+                    "warm browser observer did not reach ready state before managed Claude launch: "
+                    f"browser_ready={browser_ready} stream_ready={stream_ready}"
+                )
+            self.observe(
+                case_id=case_id,
+                provider="claude",
+                ownership=ownership,
+                source="harness",
+                event="warm_ready_at",
+                payload={
+                    "browser_loaded": browser_ready,
+                    "timeline_stream_connected": stream_ready,
+                },
+            )
+
+        self.observe(
+            case_id=case_id,
+            provider="claude",
+            ownership=ownership,
+            source="harness",
+            event="launch_requested",
+            payload={"nonce": nonce, "name": name},
+        )
+        cmd = [
+            str(ROOT / "scripts" / "ops" / "run-managed-claude-poc.py"),
+            "--cwd",
+            str(ROOT),
+            "--project",
+            self.project,
+            "--name",
+            name,
+            "--prompt",
+            f"Reply with exactly {nonce}",
+            "--expected",
+            nonce,
+            "--run-id",
+            f"{self.run_id}-claude",
+            "--output-dir",
+            str(poc_dir),
+            "--response-timeout-secs",
+            "90",
+            "--post-close-probe-secs",
+            "5",
+            "--skip-live-probe",
+            "--skip-post-close-probe",
+            "--session-id-file",
+            str(session_id_file),
+        ]
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.observe(
+            case_id=case_id,
+            provider="claude",
+            ownership=ownership,
+            source="harness",
+            event="managed_launch_started",
+            payload={"cmd": redact_cmd(cmd), "poc_dir": str(poc_dir)},
+        )
+
+        events_path = poc_dir / "events.jsonl"
+        imported_count = 0
+        session_id: str | None = None
+        observed_expected = False
+        while proc.poll() is None:
+            imported_count, session_id, observed_expected = self.import_claude_poc_events(
+                events_path,
+                case_id=case_id,
+                ownership=ownership,
+                imported_count=imported_count,
+                session_id=session_id,
+                observed_expected=observed_expected,
+            )
+            time.sleep(0.1)
+        stdout, stderr = proc.communicate()
+        imported_count, session_id, observed_expected = self.import_claude_poc_events(
+            events_path,
+            case_id=case_id,
+            ownership=ownership,
+            imported_count=imported_count,
+            session_id=session_id,
+            observed_expected=observed_expected,
+        )
+        summary = read_json(poc_dir / "summary.json") or {}
+        session_id = session_id or str(summary.get("session_id") or "").strip() or None
+        observed_expected = observed_expected or bool(summary.get("observed_expected"))
+        self.observe(
+            case_id=case_id,
+            provider="claude",
+            ownership=ownership,
+            source="harness",
+            event="managed_launch_completed",
+            session_id=session_id,
+            payload={
+                "returncode": proc.returncode,
+                "stdout": (stdout or "")[-1000:],
+                "stderr": (stderr or "")[-1000:],
+                "summary": summary,
+            },
+        )
+        if not session_id:
+            raise RuntimeError(f"managed Claude POC did not report a session id: returncode={proc.returncode}")
+        if proc.returncode != 0 or not observed_expected:
+            raise RuntimeError(
+                "managed Claude POC failed: "
+                f"returncode={proc.returncode} observed_expected={observed_expected}"
+            )
+
+        self.poll_timeline_session(
+            session_id,
+            case_id=case_id,
+            ownership=ownership,
+            predicate=timeline_has_card,
+            event="timeline_card_visible_pre_ingest",
+            timeout=30,
+            interval=0.25,
+        )
+        self.poll_hosted_session(
+            session_id,
+            case_id=case_id,
+            ownership=ownership,
+            predicate=lambda data: hosted_assistant_events_contain(data, nonce),
+            event="assistant_response_hosted",
+            timeout=60,
+            interval=0.25,
+        )
+        self.poll_hosted_session(
+            session_id,
+            case_id=case_id,
+            ownership=ownership,
+            predicate=lambda data: lifecycle_closed(data),
+            event="hosted_runtime_closed",
+            timeout=30,
+            interval=0.25,
+        )
+        if browser_ui is not None:
+            browser_ui.join(timeout=150)
+        self.write_snapshot(case_id, ownership, session_id, "post_claude")
+        return {
+            "case_id": case_id,
+            "session_id": session_id,
+            "nonce": nonce,
+            "poc_dir": str(poc_dir),
+            "precondition": None,
+        }
+
+    def import_claude_poc_events(
+        self,
+        path: Path,
+        *,
+        case_id: str,
+        ownership: str,
+        imported_count: int,
+        session_id: str | None,
+        observed_expected: bool,
+    ) -> tuple[int, str | None, bool]:
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return imported_count, session_id, observed_expected
+        for line in lines[imported_count:]:
+            row = safe_json_loads(line)
+            if not isinstance(row, dict):
+                continue
+            event = str(row.get("event") or "")
+            payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+            row_session_id = str(payload.get("session_id") or session_id or "").strip() or None
+            wall = row.get("observed_at_wall")
+            if event == "session_id_observed" and row_session_id:
+                session_id = row_session_id
+                self.observe(
+                    case_id=case_id,
+                    provider="claude",
+                    ownership=ownership,
+                    source="claude_poc",
+                    event="session_id_observed",
+                    session_id=session_id,
+                    provider_session_id=session_id,
+                    payload={"poc_event": event, "observed_at_wall": wall, **payload},
+                )
+            elif event == "prompt_sent" and row_session_id:
+                self.observe(
+                    case_id=case_id,
+                    provider="claude",
+                    ownership=ownership,
+                    source="claude_poc",
+                    event="prompt_sent_started",
+                    session_id=row_session_id,
+                    payload={"timestamp": wall, "poc_event": event, **payload},
+                )
+            elif event == "assistant_transcript_observed" and row_session_id:
+                observed_expected = True
+                timestamp = payload.get("transcript_timestamp") or wall
+                self.observe(
+                    case_id=case_id,
+                    provider="claude",
+                    ownership=ownership,
+                    source="provider_transcript",
+                    event="assistant_response_local",
+                    session_id=row_session_id,
+                    payload={"timestamp": timestamp, "poc_event": event, "observed_at_wall": wall, **payload},
+                )
+            elif event in {"exit_sent", "exit_sent_after_timeout"} and row_session_id:
+                self.observe(
+                    case_id=case_id,
+                    provider="claude",
+                    ownership=ownership,
+                    source="claude_poc",
+                    event="shutdown_requested",
+                    session_id=row_session_id,
+                    payload={"timestamp": wall, "poc_event": event, **payload},
+                )
+            elif event == "process_exit_final" and row_session_id:
+                self.observe(
+                    case_id=case_id,
+                    provider="claude",
+                    ownership=ownership,
+                    source="claude_poc",
+                    event="provider_process_exit_observed",
+                    session_id=row_session_id,
+                    payload={"timestamp": wall, "poc_event": event, **payload},
+                )
+        return len(lines), session_id, observed_expected
 
     def prepare_codex_hooks(self, *, case_id: str, ownership: str) -> None:
         result = self.probe_codex_longhouse_hooks(trust=self.args.trust_longhouse_codex_hooks)
@@ -2212,6 +2490,13 @@ except Exception as exc:
             "session_id_observed",
             "browser_timeline_card_painted",
         )
+        if browser_card_latency is None:
+            browser_card_latency = self.event_wall_delta_ms(
+                case_id,
+                session_id,
+                "session_id_observed",
+                "browser_timeline_card_painted",
+            )
         live_http_latency = self.event_delta_ms(
             case_id,
             session_id,
@@ -2334,17 +2619,69 @@ except Exception as exc:
                 "timeline_transcript_preview_sse_visible",
                 "browser_transcript_preview_nonce_painted",
             )
+        workspace_stream_event = (
+            "browser_workspace_preview_stream_changed"
+            if self.event_observed_at_ms(case_id, session_id, "browser_workspace_preview_stream_changed") is not None
+            else "browser_workspace_stream_changed"
+        )
+        browser_workspace_to_first_paint_latency = self.event_payload_elapsed_delta_nearest_before_ms(
+            case_id,
+            session_id,
+            workspace_stream_event,
+            "browser_live_transcript_first_painted",
+        )
+        if browser_workspace_to_first_paint_latency is None:
+            browser_workspace_to_first_paint_latency = self.event_delta_any_order_ms(
+                case_id,
+                session_id,
+                workspace_stream_event,
+                "browser_live_transcript_first_painted",
+            )
+        browser_workspace_to_tail_paint_latency = self.event_payload_elapsed_delta_nearest_before_ms(
+            case_id,
+            session_id,
+            workspace_stream_event,
+            "browser_live_transcript_nonce_painted",
+        )
+        if browser_workspace_to_tail_paint_latency is None:
+            browser_workspace_to_tail_paint_latency = self.event_delta_any_order_ms(
+                case_id,
+                session_id,
+                workspace_stream_event,
+                "browser_live_transcript_nonce_painted",
+            )
+        browser_workspace_after_sse_latency = self.event_delta_any_order_ms(
+            case_id,
+            session_id,
+            "timeline_transcript_preview_sse_first_visible",
+            workspace_stream_event,
+        )
         warm_ready_to_prompt_latency = self.event_delta_ms(
             case_id,
             session_id,
             "warm_ready_at",
             "prompt_sent_started",
         )
+        terminal = terminal_details(hosted)
+        transcript_ingest = transcript_ingest_details(hosted, self.remote_clock_skew_ms)
+        durable_archive_latency = (
+            transcript_ingest.get("skew_adjusted_lag_ms")
+            if transcript_ingest.get("skew_adjusted_lag_ms") is not None
+            else transcript_ingest.get("ingest_lag_ms")
+            if transcript_ingest.get("ingest_lag_ms") is not None
+            else propagation_latency
+        )
         close_http_latency = self.event_delta_ms(
             case_id,
             session_id,
             "shutdown_requested",
             "hosted_runtime_closed",
+        )
+        close_backend_latency = self.terminal_received_delta_from_event_ms(
+            case_id,
+            session_id,
+            terminal,
+            "shutdown_requested",
         )
         close_sse_ready_before_shutdown = (
             self.event_delta_ms(
@@ -2410,6 +2747,8 @@ except Exception as exc:
             if close_browser_latency is not None
             else close_sse_latency
             if close_sse_latency is not None
+            else close_backend_latency
+            if close_backend_latency is not None
             else close_http_latency
         )
         close_source = (
@@ -2417,10 +2756,10 @@ except Exception as exc:
             if close_browser_latency is not None
             else "sse"
             if close_sse_latency is not None
+            else "hosted_terminal"
+            if close_backend_latency is not None
             else "http"
         )
-        terminal = terminal_details(hosted)
-        transcript_ingest = transcript_ingest_details(hosted, self.remote_clock_skew_ms)
         latest_health = self.latest_local_health_summary(case_id, session_id)
         latest_health_state = latest_health.get("health_state")
         transport_failure = self.transport_failure_classification(case_id, session_id, latest_health_state)
@@ -2433,7 +2772,7 @@ except Exception as exc:
             "nonce": nonce,
             "ownership": ownership,
             "transport": transport,
-            "provider": session.get("provider") or "codex",
+            "provider": session.get("provider") or self.args.provider,
             "live_first_from_local_ms": None,
             "live_first_target_ms": live_first_output_target_ms(),
             "live_first_pass": None,
@@ -2477,16 +2816,21 @@ except Exception as exc:
             "browser_live_tail_from_live_truth_wall_ms": browser_live_full_from_live_truth_wall_latency,
             "browser_live_first_after_sse_raw_ms": browser_first_after_sse_latency,
             "browser_live_tail_after_sse_raw_ms": browser_full_after_sse_latency,
+            "browser_workspace_stream_event": workspace_stream_event,
+            "browser_workspace_stream_to_first_paint_ms": browser_workspace_to_first_paint_latency,
+            "browser_workspace_stream_to_tail_paint_ms": browser_workspace_to_tail_paint_latency,
+            "browser_workspace_stream_after_sse_ms": browser_workspace_after_sse_latency,
             "warm_ready_to_prompt_ms": warm_ready_to_prompt_latency,
             "warm_live_prompt_to_sse_first_ms": first_live_sse_latency,
             "warm_live_prompt_to_browser_first_paint_ms": browser_live_first_latency,
             "warm_live_sse_to_browser_first_paint_ms": browser_first_after_sse_latency,
-            "durable_archive_local_to_hosted_ms": propagation_latency,
+            "durable_archive_local_to_hosted_ms": durable_archive_latency,
             "durable_archive_target_ms": durable_archive_target_ms(),
             "durable_archive_pass": None,
             "close_observed_ms": close_latency,
             "close_source": close_source if close_latency is not None else None,
             "close_http_observed_ms": close_http_latency,
+            "close_backend_observed_ms": close_backend_latency,
             "close_sse_observed_ms": close_sse_latency,
             "close_browser_observed_ms": close_browser_latency,
             "close_browser_after_http_raw_ms": close_browser_after_http_latency,
@@ -2618,8 +2962,10 @@ except Exception as exc:
             transcript += f" observed_in={transcript_latency}ms"
         if provider_latency is not None:
             transcript += f" provider={provider_latency}ms"
-        if propagation_latency is not None:
-            transcript += f" local_to_hosted={propagation_latency}ms"
+        if durable_archive_latency is not None:
+            transcript += f" local_to_hosted={durable_archive_latency}ms"
+            if propagation_latency is not None and propagation_latency != durable_archive_latency:
+                transcript += f" poll_observed={propagation_latency}ms"
         if card_latency is not None:
             transcript += f" timeline_card_pre_ingest={card_latency}ms"
         if browser_card_latency is not None:
@@ -2660,13 +3006,19 @@ except Exception as exc:
             transcript += f" sse_to_browser_first_live={browser_first_after_sse_latency}ms"
         if browser_full_after_sse_latency is not None:
             transcript += f" sse_to_browser_live={browser_full_after_sse_latency}ms"
+        if browser_workspace_to_first_paint_latency is not None:
+            transcript += f" browser_workspace_stream_to_first_paint={browser_workspace_to_first_paint_latency}ms"
+        if browser_workspace_to_tail_paint_latency is not None:
+            transcript += f" browser_workspace_stream_to_tail_paint={browser_workspace_to_tail_paint_latency}ms"
+        if browser_workspace_after_sse_latency is not None:
+            transcript += f" browser_workspace_stream_after_sse={browser_workspace_after_sse_latency}ms"
         if transcript_ingest.get("ingest_lag_ms") is not None:
             transcript += f" server_ingest_lag={transcript_ingest['ingest_lag_ms']}ms"
         if transcript_ingest.get("skew_adjusted_lag_ms") is not None:
             transcript += f" skew_adjusted_ingest={transcript_ingest['skew_adjusted_lag_ms']}ms"
-        if propagation_latency is not None:
-            durable_state = "pass" if propagation_latency <= durable_archive_target_ms() else "slow"
-            metrics["durable_archive_pass"] = propagation_latency <= durable_archive_target_ms()
+        if durable_archive_latency is not None:
+            durable_state = "pass" if durable_archive_latency <= durable_archive_target_ms() else "slow"
+            metrics["durable_archive_pass"] = durable_archive_latency <= durable_archive_target_ms()
             transcript += f" durable_archive={durable_state} target={durable_archive_target_ms()}ms"
         bridge_live = bridge_live_details(hosted, nonce, self.remote_clock_skew_ms)
         if bridge_live:
@@ -2913,6 +3265,77 @@ except Exception as exc:
                 return timestamp
         return None
 
+    def event_payload_elapsed_delta_ms(
+        self,
+        case_id: str,
+        session_id: str,
+        start_event: str,
+        end_event: str,
+    ) -> int | None:
+        start = self.event_payload_elapsed_ms(case_id, session_id, start_event)
+        end = self.event_payload_elapsed_ms(case_id, session_id, end_event)
+        if start is None or end is None:
+            return None
+        return end - start
+
+    def event_payload_elapsed_ms(self, case_id: str, session_id: str, event: str) -> int | None:
+        for row in self.observations:
+            if row.get("case_id") != case_id or row.get("session_id") != session_id:
+                continue
+            if row.get("event") != event:
+                continue
+            payload = row.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            value = payload.get("elapsed_ms")
+            if isinstance(value, int | float):
+                return int(value)
+        return None
+
+    def event_payload_elapsed_delta_nearest_before_ms(
+        self,
+        case_id: str,
+        session_id: str,
+        start_event: str,
+        end_event: str,
+    ) -> int | None:
+        end = self.event_payload_elapsed_ms(case_id, session_id, end_event)
+        if end is None:
+            return None
+        starts: list[int] = []
+        for row in self.observations:
+            if row.get("case_id") != case_id or row.get("session_id") != session_id:
+                continue
+            if row.get("event") != start_event:
+                continue
+            payload = row.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            value = payload.get("elapsed_ms")
+            if isinstance(value, int | float):
+                elapsed = int(value)
+                if elapsed <= end:
+                    starts.append(elapsed)
+        if not starts:
+            return None
+        return end - max(starts)
+
+    def terminal_received_delta_from_event_ms(
+        self,
+        case_id: str,
+        session_id: str,
+        terminal: dict[str, Any],
+        start_event: str,
+    ) -> int | None:
+        start = self.event_payload_wall_ms(case_id, session_id, start_event)
+        received = terminal.get("received_at_ms")
+        if start is None or not isinstance(received, int):
+            return None
+        delta = received - start
+        if self.remote_clock_skew_ms is not None:
+            delta -= self.remote_clock_skew_ms
+        return max(0, delta)
+
     def wait_for_observation(
         self,
         case_id: str,
@@ -3089,6 +3512,8 @@ def payload_wall_timestamp(row: dict[str, Any]) -> int | None:
 def payload_wall_candidate_paths(event: str) -> tuple[tuple[str, ...], ...]:
     if event == "assistant_response_local":
         return (("timestamp",),)
+    if event in {"session_id_observed", "prompt_sent_started", "shutdown_requested"}:
+        return (("observed_at_wall",), ("timestamp",))
     if event.startswith("timeline_live_transcript_sse"):
         return (
             ("live_transcript", "occurred_at"),
@@ -3187,22 +3612,52 @@ def terminal_details(data: dict[str, Any]) -> dict[str, Any]:
         "reason": str(runtime.get("terminal_reason") or "").strip() or None,
         "source": str(runtime.get("terminal_source") or "").strip() or None,
         "ingest_lag_ms": None,
+        "observed_at_ms": None,
+        "received_at_ms": None,
     }
+    fallback: dict[str, Any] | None = None
     for event in data.get("runtime_observations") or []:
         if event.get("kind") != "terminal_signal":
             continue
-        details["source"] = details["source"] or str(event.get("source") or "").strip() or None
-        occurred_at = parse_db_timestamp(event.get("occurred_at"))
-        received_at = parse_db_timestamp(event.get("received_at"))
-        if occurred_at is not None and received_at is not None:
-            details["ingest_lag_ms"] = int((received_at - occurred_at).total_seconds() * 1000)
         payload = safe_json_loads(str(event.get("payload_json") or "")) or {}
-        if isinstance(payload, dict):
-            details["state"] = details["state"] or str(payload.get("terminal_state") or "").strip() or None
-            details["reason"] = details["reason"] or str(payload.get("terminal_reason") or "").strip() or None
-            details["source"] = details["source"] or str(payload.get("terminal_source") or "").strip() or None
-        break
+        payload_source = str(payload.get("terminal_source") or "").strip() if isinstance(payload, dict) else ""
+        event_source = str(event.get("source") or "").strip()
+        candidate = _terminal_details_from_event(event, payload if isinstance(payload, dict) else {})
+        if fallback is None:
+            fallback = candidate
+        preferred_source = str(details.get("source") or "").strip()
+        if preferred_source and preferred_source not in {event_source, payload_source}:
+            continue
+        _merge_terminal_details(details, candidate)
+        return details
+    if fallback is not None:
+        _merge_terminal_details(details, fallback)
     return details
+
+
+def _terminal_details_from_event(event: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    occurred_at = parse_db_timestamp(event.get("occurred_at"))
+    received_at = parse_db_timestamp(event.get("received_at"))
+    details: dict[str, Any] = {
+        "source": str(event.get("source") or "").strip() or None,
+        "state": str(payload.get("terminal_state") or "").strip() or None,
+        "reason": str(payload.get("terminal_reason") or "").strip() or None,
+        "ingest_lag_ms": None,
+        "observed_at_ms": int(occurred_at.timestamp() * 1000) if occurred_at is not None else None,
+        "received_at_ms": int(received_at.timestamp() * 1000) if received_at is not None else None,
+    }
+    payload_source = str(payload.get("terminal_source") or "").strip()
+    if payload_source:
+        details["source"] = payload_source
+    if occurred_at is not None and received_at is not None:
+        details["ingest_lag_ms"] = int((received_at - occurred_at).total_seconds() * 1000)
+    return details
+
+
+def _merge_terminal_details(details: dict[str, Any], candidate: dict[str, Any]) -> None:
+    for key in ("state", "reason", "source", "ingest_lag_ms", "observed_at_ms", "received_at_ms"):
+        if details.get(key) is None and candidate.get(key) is not None:
+            details[key] = candidate[key]
 
 
 def transcript_ingest_details(data: dict[str, Any], remote_clock_skew_ms: int | None) -> dict[str, Any]:
@@ -3621,7 +4076,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default="baseline",
         help="Profiler scenario to run. warm-live measures an already-open timeline; cold-timeline opens the browser after session truth exists.",
     )
-    parser.add_argument("--provider", choices=["codex"], default="codex")
+    parser.add_argument("--provider", choices=["claude", "codex"], default="codex")
     parser.add_argument("--ownership", choices=["managed", "unmanaged", "all"], default="all")
     parser.add_argument("--subdomain", default="david010")
     parser.add_argument("--container")
@@ -3696,7 +4151,7 @@ def run_single(args: argparse.Namespace) -> tuple[int, Path]:
     profiler = Profiler(args)
     profiler.observe(
         case_id="run",
-        provider="codex",
+        provider=args.provider,
         ownership=args.ownership,
         source="harness",
         event="run_started",
@@ -3718,26 +4173,30 @@ def run_single(args: argparse.Namespace) -> tuple[int, Path]:
     results: list[dict[str, Any]] = []
     errors: list[str] = []
     try:
-        if args.ownership in {"managed", "all"} and not args.skip_managed:
+        if args.ownership in {"managed", "all"} and not args.skip_managed and args.provider == "codex":
             results.append(profiler.run_managed_codex())
+        elif args.ownership in {"managed", "all"} and not args.skip_managed and args.provider == "claude":
+            results.append(profiler.run_managed_claude())
     except Exception as exc:
-        errors.append(f"managed Codex failed: {exc}")
+        errors.append(f"managed {args.provider} failed: {exc}")
         profiler.observe(
-            case_id="B1",
-            provider="codex",
+            case_id="B1" if args.provider == "codex" else "C1",
+            provider=args.provider,
             ownership="managed",
             source="harness",
             event="mismatch_detected",
             payload={"error": str(exc)},
         )
     try:
-        if args.ownership in {"unmanaged", "all"} and not args.skip_unmanaged:
+        if args.ownership in {"unmanaged", "all"} and not args.skip_unmanaged and args.provider == "codex":
             results.append(profiler.run_unmanaged_codex())
+        elif args.ownership in {"unmanaged", "all"} and not args.skip_unmanaged:
+            raise RuntimeError(f"unmanaged {args.provider} profiling is not implemented")
     except Exception as exc:
-        errors.append(f"unmanaged Codex failed: {exc}")
+        errors.append(f"unmanaged {args.provider} failed: {exc}")
         profiler.observe(
             case_id="A1",
-            provider="codex",
+            provider=args.provider,
             ownership="unmanaged",
             source="harness",
             event="mismatch_detected",
@@ -4031,7 +4490,7 @@ def run_batch(args: argparse.Namespace) -> int:
                 "generated_at": utc_now(),
                 "profile": args.profile,
                 "profile_class": args.profile_class or profile_class_for(args.profile),
-                "sla_case_id": args.sla_case or DEFAULT_SLA_CASE_BY_PROFILE.get(args.profile),
+                "sla_case_id": args.sla_case or default_sla_case_id(args.profile, args.provider),
                 "iterations": args.iterations,
                 "runs": child_runs,
                 "aggregate": aggregate,

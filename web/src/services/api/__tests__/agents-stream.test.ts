@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { connectTimelineSessionsStream } from "../agents";
+import { connectSessionWorkspaceStream, connectTimelineSessionsStream } from "../agents";
 
 type EventListener = (event: MessageEvent) => void;
 
@@ -125,5 +125,78 @@ describe("Timeline session stream", () => {
     disconnect();
     window.removeEventListener("longhouse:timeline-stream", onTimelineStreamEvent);
     expect(MockEventSource.instances[0].close).toHaveBeenCalledTimes(1);
+  });
+
+  it("dispatches workspace stream receive metadata for profiler correlation", () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_779_482_800_010);
+    const onWorkspaceChanged = vi.fn();
+    const onTimelineStreamEvent = vi.fn();
+    window.addEventListener("longhouse:timeline-stream", onTimelineStreamEvent);
+
+    const disconnect = connectSessionWorkspaceStream(
+      "session-1",
+      { onWorkspaceChanged },
+      { skipInitial: true },
+    );
+
+    expect(MockEventSource.instances).toHaveLength(1);
+    expect(MockEventSource.instances[0].url).toContain(
+      "/api/timeline/sessions/session-1/workspace/stream",
+    );
+    expect(MockEventSource.instances[0].url).toContain("skip_initial=true");
+
+    MockEventSource.instances[0].emit("connected", {
+      session_id: "session-1",
+      server_now_ms: 1_779_482_799_950,
+    });
+    MockEventSource.instances[0].emit("workspace_changed", {
+      session_id: "session-1",
+      latest_event_id: 42,
+      latest_event_emitted_at_ms: 1_779_482_799_900,
+      server_fanout_at_ms: 1_779_482_799_980,
+      server_now_ms: 1_779_482_800_000,
+      pubsub_seq: 7,
+      transcript_preview: {
+        event_id: 42,
+        text: "hello profiler",
+        event_origin: "live_provisional",
+      },
+    });
+
+    expect(onWorkspaceChanged).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session_id: "session-1",
+        latest_event_id: 42,
+      }),
+    );
+    const streamEventDetails = onTimelineStreamEvent.mock.calls.map(([event]) => (event as CustomEvent).detail);
+    expect(streamEventDetails).toContainEqual(
+      expect.objectContaining({
+        kind: "workspace_connected",
+        session_id: "session-1",
+        server_now_ms: 1_779_482_799_950,
+        client_received_at_ms: 1_779_482_800_010,
+      }),
+    );
+    expect(streamEventDetails).toContainEqual(
+      expect.objectContaining({
+        kind: "workspace_changed",
+        session_id: "session-1",
+        latest_event_id: 42,
+        latest_event_emitted_at_ms: 1_779_482_799_900,
+        server_fanout_at_ms: 1_779_482_799_980,
+        server_now_ms: 1_779_482_800_000,
+        pubsub_seq: 7,
+        client_received_at_ms: 1_779_482_800_010,
+        has_transcript_preview: true,
+        transcript_preview_event_id: 42,
+        transcript_preview_origin: "live_provisional",
+        transcript_preview_text_length: 14,
+      }),
+    );
+
+    disconnect();
+    window.removeEventListener("longhouse:timeline-stream", onTimelineStreamEvent);
+    nowSpy.mockRestore();
   });
 });
