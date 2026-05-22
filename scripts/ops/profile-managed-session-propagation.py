@@ -815,13 +815,7 @@ import httpx
 
 token, sid, project, nonce = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 headers = {"Cookie": f"longhouse_session={token}"}
-params = {
-    "project": project,
-    "provider": "codex",
-    "limit": "20",
-    "hide_autonomous": "true",
-    "skip_initial_replay": "true",
-}
+params = {"skip_initial": "true"}
 event_name = None
 data_lines = []
 first_observed = False
@@ -834,16 +828,11 @@ def transcript_preview_from_event(data):
         return None
     if not isinstance(obj, dict):
         return None
-    session = obj.get("session")
-    if not isinstance(session, dict) or session.get("thread_id") != sid:
+    if obj.get("session_id") != sid:
         return None
-    candidates = [session.get("head"), session]
-    for candidate in candidates:
-        if not isinstance(candidate, dict):
-            continue
-        preview = candidate.get("transcript_preview")
-        if isinstance(preview, dict) and preview.get("text"):
-            return preview
+    preview = obj.get("transcript_preview")
+    if isinstance(preview, dict) and preview.get("text"):
+        return preview
     return None
 
 def emit(kind, preview=None, error=None):
@@ -863,7 +852,7 @@ def flush_event():
     data = "\n".join(data_lines)
     event_name = None
     data_lines = []
-    if current_event != "session_upsert":
+    if current_event != "workspace_changed":
         return False
     preview = transcript_preview_from_event(data)
     if not preview:
@@ -881,7 +870,7 @@ try:
     timeout = httpx.Timeout(95.0, connect=3.0, read=95.0)
     with httpx.stream(
         "GET",
-        "http://127.0.0.1:8000/api/timeline/sessions/stream",
+        f"http://127.0.0.1:8000/api/timeline/sessions/{sid}/workspace/stream",
         params=params,
         headers=headers,
         timeout=timeout,
@@ -2323,14 +2312,28 @@ except Exception as exc:
             case_id,
             session_id,
             "timeline_transcript_preview_sse_first_visible",
-            "browser_transcript_preview_first_painted",
+            "browser_live_transcript_first_painted",
         )
+        if browser_first_after_sse_latency is None:
+            browser_first_after_sse_latency = self.event_delta_any_order_ms(
+                case_id,
+                session_id,
+                "timeline_transcript_preview_sse_first_visible",
+                "browser_transcript_preview_first_painted",
+            )
         browser_full_after_sse_latency = self.event_delta_any_order_ms(
             case_id,
             session_id,
             "timeline_transcript_preview_sse_visible",
-            "browser_transcript_preview_nonce_painted",
+            "browser_live_transcript_nonce_painted",
         )
+        if browser_full_after_sse_latency is None:
+            browser_full_after_sse_latency = self.event_delta_any_order_ms(
+                case_id,
+                session_id,
+                "timeline_transcript_preview_sse_visible",
+                "browser_transcript_preview_nonce_painted",
+            )
         warm_ready_to_prompt_latency = self.event_delta_ms(
             case_id,
             session_id,
