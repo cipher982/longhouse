@@ -1682,7 +1682,7 @@ class AgentsStore:
             from zerg.services.session_turns import maybe_mark_session_turn_durable
 
             maybe_mark_session_turn_durable(self.db, session_id=session_id)
-            materialize_managed_transcript_turns(self.db, session_id=session_id)
+            materialize_managed_transcript_turns(self.db, session_id=session_id, incremental=True)
             _commit_with_telemetry()
 
         logger.info(

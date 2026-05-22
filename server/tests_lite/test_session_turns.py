@@ -445,6 +445,63 @@ def test_materialize_managed_transcript_turns_backfills_native_completed_turns_i
         assert db.query(SessionTurn).filter(SessionTurn.session_id == session.id).count() == 1
 
 
+def test_materialize_managed_transcript_turns_incremental_scans_after_last_materialized_turn(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        session = _seed_session(db)
+        old_user = AgentEvent(
+            session_id=session.id,
+            role="user",
+            content_text="old prompt",
+            timestamp=datetime(2026, 4, 23, 20, 0, 0, tzinfo=timezone.utc),
+        )
+        old_assistant = AgentEvent(
+            session_id=session.id,
+            role="assistant",
+            content_text="old answer",
+            timestamp=datetime(2026, 4, 23, 20, 0, 5, tzinfo=timezone.utc),
+        )
+        db.add_all([old_user, old_assistant])
+        db.commit()
+
+        assert materialize_managed_transcript_turns(db, session_id=session.id) == 1
+        db.commit()
+        old_assistant_id = int(old_assistant.id)
+
+        db.add_all(
+            [
+                AgentEvent(
+                    session_id=session.id,
+                    role="user",
+                    content_text="new prompt",
+                    timestamp=datetime(2026, 4, 23, 20, 1, 0, tzinfo=timezone.utc),
+                ),
+                AgentEvent(
+                    session_id=session.id,
+                    role="assistant",
+                    content_text="new answer",
+                    timestamp=datetime(2026, 4, 23, 20, 1, 7, tzinfo=timezone.utc),
+                ),
+            ]
+        )
+        db.commit()
+
+        seen_event_ids: list[int] = []
+        original_iter = session_turns_service._iter_completed_transcript_turn_pairs
+
+        def spy_iter(events):
+            seen_event_ids.extend(int(event.id) for event in events)
+            return original_iter(events)
+
+        monkeypatch.setattr(session_turns_service, "_iter_completed_transcript_turn_pairs", spy_iter)
+
+        assert materialize_managed_transcript_turns(db, session_id=session.id, incremental=True) == 1
+        assert seen_event_ids
+        assert all(event_id > old_assistant_id for event_id in seen_event_ids)
+        assert db.query(SessionTurn).filter(SessionTurn.session_id == session.id).count() == 2
+
+
 def test_materialize_managed_transcript_turns_skips_session_with_pending_request_turn(tmp_path):
     SessionLocal = _make_db(tmp_path)
 
