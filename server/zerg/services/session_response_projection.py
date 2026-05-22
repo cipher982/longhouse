@@ -18,6 +18,7 @@ from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
+from zerg.services.session_turns import load_pending_response_turn_map
 from zerg.services.session_views import SessionResponse
 from zerg.services.session_views import build_session_response
 from zerg.services.session_views import normalize_utc_datetime
@@ -76,6 +77,7 @@ def build_session_response_list(
     runtime_state_map = load_runtime_state_map(db, session_ids)
     control_state_map = load_managed_control_state_map(db, session_ids)
     transcript_preview_map = load_active_provisional_preview_map(db, session_ids)
+    pending_response_turn_map = load_pending_response_turn_map(db, session_ids)
     first_user_map = store.get_first_message_map(session_ids, role="user", max_len=80)
     thread_cache: dict[str, tuple[str, int]] = store.batch_thread_meta(sessions)
     binding_overlay_map = load_binding_overlay(db, session_ids, now=now)
@@ -118,6 +120,7 @@ def build_session_response_list(
                 owner_id=owner_id,
                 summary_status=summary_status,
                 kernel_capabilities=kernel_capabilities_map.get(session.id),
+                has_pending_response_turn=bool(pending_response_turn_map.get(session.id)),
             )
         )
 

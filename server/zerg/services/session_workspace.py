@@ -16,6 +16,7 @@ from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
+from zerg.services.session_turns import load_pending_response_turn_map
 from zerg.services.session_views import SessionProjectionItemResponse
 from zerg.services.session_views import SessionProjectionResponse
 from zerg.services.session_views import SessionMobileTailResponse
@@ -93,6 +94,8 @@ def build_session_workspace(
                 runtime_state_map=runtime_state_map,
                 now=now,
             )
+        with timing.span("pending_turns"):
+            pending_response_turn_map = load_pending_response_turn_map(db, thread_session_ids)
         with timing.span("binding_overlay"):
             binding_overlay_map = load_binding_overlay(db, thread_session_ids, now=now)
         with timing.span("kernel_capabilities"):
@@ -116,6 +119,7 @@ def build_session_workspace(
                 transcript_preview=transcript_preview_map.get(str(item.id)),
                 owner_id=owner_id,
                 kernel_capabilities=kernel_capabilities_map.get(item.id),
+                has_pending_response_turn=bool(pending_response_turn_map.get(item.id)),
             )
             for item in thread_sessions
         }
@@ -139,6 +143,7 @@ def build_session_workspace(
             transcript_preview=transcript_preview_map.get(str(session.id)),
             owner_id=owner_id,
             kernel_capabilities=kernel_capabilities_map.get(session.id),
+            has_pending_response_turn=bool(pending_response_turn_map.get(session.id)),
         )
 
     with timing.span("build_projection"):
@@ -239,6 +244,8 @@ def build_session_mobile_tail(
                 runtime_state_map=runtime_state_map,
                 now=now,
             )
+        with timing.span("pending_turns"):
+            pending_response_turn_map = load_pending_response_turn_map(db, thread_session_ids)
         with timing.span("binding_overlay"):
             binding_overlay_map = load_binding_overlay(db, thread_session_ids, now=now)
 
@@ -259,6 +266,7 @@ def build_session_mobile_tail(
             control_overlay=control_state_map.get(session.id),
             transcript_preview=transcript_preview_map.get(str(session.id)),
             owner_id=owner_id,
+            has_pending_response_turn=bool(pending_response_turn_map.get(session.id)),
         )
 
     with timing.span("build_projection"):

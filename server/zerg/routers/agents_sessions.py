@@ -47,6 +47,7 @@ from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.session_turns import execute_session_turn_write
 from zerg.services.session_turns import get_session_turn_by_id
+from zerg.services.session_turns import load_pending_response_turn_map
 from zerg.services.session_turns import list_session_turns
 from zerg.services.session_turns import materialize_managed_transcript_turns
 from zerg.services.session_views import ActiveSessionResponse
@@ -770,6 +771,7 @@ async def get_session(
     with timing.span("load_runtime"):
         runtime_state_map = load_runtime_state_map(db, [session.id])
         transcript_preview_map = load_active_provisional_preview_map(db, [session.id])
+        pending_response_turn_map = load_pending_response_turn_map(db, [session.id])
         binding_overlay_map = load_binding_overlay(db, [session.id], now=now)
         control_state_map = load_managed_control_state_map(db, [session.id])
     with timing.span("build_response"):
@@ -791,6 +793,7 @@ async def get_session(
             control_overlay=control_state_map.get(session.id),
             transcript_preview=transcript_preview_map.get(str(session.id)),
             owner_id=effective_owner_id,
+            has_pending_response_turn=bool(pending_response_turn_map.get(session.id)),
         )
     timing.apply(response)
     return result
@@ -831,6 +834,7 @@ async def get_session_thread(
     with timing.span("load_runtime"):
         runtime_state_map = load_runtime_state_map(db, [item.id for item in thread_sessions])
         transcript_preview_map = load_active_provisional_preview_map(db, [item.id for item in thread_sessions])
+        pending_response_turn_map = load_pending_response_turn_map(db, thread_session_ids)
         binding_overlay_map = load_binding_overlay(db, [item.id for item in thread_sessions], now=now)
         control_state_map = load_managed_control_state_map(db, [item.id for item in thread_sessions])
 
@@ -858,6 +862,7 @@ async def get_session_thread(
                     binding_overlay=binding_overlay_map.get(item.id),
                     control_overlay=control_state_map.get(item.id),
                     owner_id=effective_owner_id,
+                    has_pending_response_turn=bool(pending_response_turn_map.get(item.id)),
                 )
                 for item in thread_sessions
             ],

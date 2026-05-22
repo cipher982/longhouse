@@ -230,6 +230,7 @@ def build_session_runtime_display(
     user_messages: int | None = None,
     assistant_messages: int | None = None,
     has_visible_transcript_preview: bool = False,
+    has_pending_response_turn: bool = False,
     now: datetime | None = None,
 ) -> SessionRuntimeDisplay:
     status = runtime_view.status
@@ -357,6 +358,7 @@ def build_session_runtime_display(
         user_messages=user_messages,
         assistant_messages=assistant_messages,
         has_visible_transcript_preview=has_visible_transcript_preview,
+        has_pending_response_turn=has_pending_response_turn,
         now=now,
     )
     if transcript_sync_pending:
@@ -476,6 +478,7 @@ def _transcript_sync_pending(
     user_messages: int | None,
     assistant_messages: int | None,
     has_visible_transcript_preview: bool,
+    has_pending_response_turn: bool,
     now: datetime | None,
 ) -> bool:
     if control_path != "managed" or lifecycle != "open":
@@ -484,7 +487,7 @@ def _transcript_sync_pending(
         return False
     if has_visible_transcript_preview:
         return False
-    if int(user_messages or 0) <= int(assistant_messages or 0):
+    if not has_pending_response_turn and int(user_messages or 0) <= int(assistant_messages or 0):
         return False
 
     signal_at = normalize_utc(runtime_view.presence_updated_at) or normalize_utc(runtime_view.last_live_at)
