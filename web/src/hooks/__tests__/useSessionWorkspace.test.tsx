@@ -350,6 +350,61 @@ describe("useSessionWorkspace", () => {
     });
   });
 
+  it("keeps SSE transcript previews visible when query data is still stale", async () => {
+    seedHookMocks(1);
+    let handlers:
+      | {
+          onWorkspaceChanged?: (data: {
+            session_id: string;
+            latest_event_id: number;
+            thread_session_count: number;
+            transcript_preview?: {
+              event_id: number;
+              text: string;
+              event_origin: string;
+              timestamp: string;
+              is_provisional: boolean;
+              is_complete: boolean;
+              content_cursor?: string | null;
+              is_stale: boolean;
+              stale_reason?: null;
+            } | null;
+          }) => void;
+        }
+      | undefined;
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    const { result } = renderHook(() => useSessionWorkspace(baseSession.id));
+
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        latest_event_id: 80,
+        thread_session_count: 1,
+        transcript_preview: {
+          event_id: 321,
+          text: "Preview from SSE before refetch wins",
+          event_origin: "live_provisional",
+          timestamp: "2026-03-14T12:01:21.000Z",
+          is_provisional: true,
+          is_complete: false,
+          content_cursor: "cursor-321",
+          is_stale: false,
+          stale_reason: null,
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.events.map((event) => event.content_text)).toContain(
+        "Preview from SSE before refetch wins",
+      );
+    });
+  });
+
   it("waits to emit render telemetry until the latest SSE event is in the rendered projection", async () => {
     let handlers:
       | {

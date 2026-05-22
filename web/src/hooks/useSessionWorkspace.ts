@@ -105,8 +105,14 @@ export function useSessionWorkspace(
   const onlineEpoch = useOnlineEpoch();
   const queryClient = useQueryClient();
   const [streamConnected, setStreamConnected] = useState(false);
+  const [streamTranscriptPreview, setStreamTranscriptPreview] =
+    useState<SessionTranscriptPreview | null | undefined>(undefined);
   const pendingRenderBeaconRef = useRef<PendingRenderBeacon | null>(null);
   const [pendingRenderBeaconVersion, setPendingRenderBeaconVersion] = useState(0);
+
+  useEffect(() => {
+    setStreamTranscriptPreview(undefined);
+  }, [sessionId]);
 
   // SSE stream subscription — invalidates queries on server-side change detection
   useEffect(() => {
@@ -130,6 +136,7 @@ export function useSessionWorkspace(
           recordServerClockSkew(data?.server_now_ms);
           if (Object.prototype.hasOwnProperty.call(data, "transcript_preview")) {
             const transcriptPreview = data.transcript_preview ?? null;
+            setStreamTranscriptPreview(transcriptPreview);
             queryClient.setQueriesData<AgentSessionWorkspaceResponse>(
               { queryKey: ["agent-session-workspace", sessionId] },
               (current) => {
@@ -195,8 +202,26 @@ export function useSessionWorkspace(
       return WORKSPACE_FALLBACK_REFRESH_MS;
     },
   });
-  const session = workspaceData?.session ?? null;
-  const threadData = workspaceData?.thread ?? null;
+  const rawSession = workspaceData?.session ?? null;
+  const session = useMemo(
+    () =>
+      rawSession && streamTranscriptPreview !== undefined
+        ? applyTranscriptPreviewToSession(rawSession, streamTranscriptPreview)
+        : rawSession,
+    [rawSession, streamTranscriptPreview],
+  );
+  const threadData = useMemo(() => {
+    const rawThread = workspaceData?.thread ?? null;
+    if (!rawThread || !sessionId || streamTranscriptPreview === undefined) {
+      return rawThread;
+    }
+    return {
+      ...rawThread,
+      sessions: rawThread.sessions.map((item) =>
+        item.id === sessionId ? applyTranscriptPreviewToSession(item, streamTranscriptPreview) : item,
+      ),
+    };
+  }, [workspaceData?.thread, sessionId, streamTranscriptPreview]);
   const {
     data: turnsData,
     isLoading: turnsLoading,
@@ -301,8 +326,8 @@ export function useSessionWorkspace(
   );
 
   const visibleProjectionItems = useMemo(
-    () => projectionItemsWithTranscriptPreview(projectionItems, workspaceData?.session ?? null),
-    [projectionItems, workspaceData?.session],
+    () => projectionItemsWithTranscriptPreview(projectionItems, session),
+    [projectionItems, session],
   );
   const model = useMemo(() => buildTimelineModel(visibleProjectionItems), [visibleProjectionItems]);
   const events = model.events;
