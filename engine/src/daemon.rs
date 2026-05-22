@@ -53,7 +53,7 @@ pub struct ConnectConfig {
 /// burst while keeping live transcript shipping responsive. Provider writes
 /// that need more coalescing are still protected by per-path in-flight work
 /// and the reconciliation scanner.
-const WATCHER_FLUSH_INTERVAL: Duration = Duration::from_millis(40);
+const WATCHER_FLUSH_INTERVAL: Duration = Duration::from_millis(15);
 
 const INITIAL_SPOOL_PATH_LIMIT: usize = 100;
 const PERIODIC_SPOOL_PATH_LIMIT: usize = 50;
