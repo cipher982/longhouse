@@ -16,10 +16,10 @@ describe("landing provider claims", () => {
     expect(screen.getByText("Claude Code")).toBeInTheDocument();
     expect(screen.getByText("Archive, search, and strongest control path")).toBeInTheDocument();
     expect(screen.getByText("Archive, search, and Longhouse launch path")).toBeInTheDocument();
-    expect(screen.getByText("Archive and search today")).toBeInTheDocument();
+    expect(screen.getByText("Archive, launch, and hook-backed phase signals")).toBeInTheDocument();
     expect(screen.getByText("Strongest today")).toBeInTheDocument();
     expect(screen.getByText("Control-ready")).toBeInTheDocument();
-    expect(screen.getByText("Archive first")).toBeInTheDocument();
+    expect(screen.getByText("New path")).toBeInTheDocument();
     expect(
       screen.getByText(/Codex launch-through-Longhouse is supported/i),
     ).toBeInTheDocument();
