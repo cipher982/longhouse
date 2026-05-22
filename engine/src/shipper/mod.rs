@@ -32,7 +32,7 @@ use crate::state::spool::Spool;
 /// Live-transcript batch target. Each ship is one HTTP round trip; for live
 /// work this is a tail-latency knob, so we keep it small.
 const LIVE_TARGET_BATCH_BYTES: u64 = 512 * 1024;
-const BACKGROUND_REPAIR_TARGET_BATCH_BYTES: u64 = 128 * 1024;
+const BACKGROUND_REPAIR_TARGET_BATCH_BYTES: u64 = 32 * 1024;
 
 /// Archive / replay batch target. Per phase-4 review (codex), use two discrete
 /// bands rather than a log-shaped controller — a second controller layered on
@@ -126,7 +126,7 @@ mod target_batch_bytes_tests {
     #[test]
     fn max_batch_bytes_clamps_both_bands() {
         // A tight max_batch_bytes ceiling must still win, on both bands.
-        let tight: u64 = 64 * 1024;
+        let tight: u64 = 16 * 1024;
         assert_eq!(target_batch_bytes_for_band(BatchBand::Live, tight), tight);
         assert_eq!(
             target_batch_bytes_for_band(BatchBand::BackgroundRepair, tight),
