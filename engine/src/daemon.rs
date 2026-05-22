@@ -36,7 +36,7 @@ use crate::shipping_stats::RecentShipStatsTracker;
 use crate::state::db::open_db;
 use crate::state::file_state::FileState;
 use crate::state::spool::Spool;
-use crate::watcher::SessionWatcher;
+use crate::watcher::{SessionWatcher, WatcherEvent};
 
 /// Configuration for the connect daemon.
 pub struct ConnectConfig {
@@ -66,6 +66,8 @@ const FLIGHT_SAMPLE_INTERVAL_SECS: u64 = 5;
 const LOCAL_WORK_TICK_INTERVAL: Duration = Duration::from_millis(250);
 const OUTBOX_DRAIN_INTERVAL: Duration = Duration::from_millis(100);
 const UNMANAGED_BINDING_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
+const MANAGED_WAKE_FSEVENT_DEFER_WINDOW: Duration = Duration::from_secs(30);
+const MANAGED_WAKE_FSEVENT_FALLBACK_DELAY: Duration = Duration::from_secs(5);
 const MAX_TRANSCRIPT_WAKE_TRACKED_PATHS: usize = 4096;
 const OFFLINE_CONNECT_FAILURE_THRESHOLD: u32 = 3;
 const CLAUDE_TERMINAL_EVENT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -346,6 +348,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut last_unmanaged_session_bindings: Option<Vec<heartbeat::UnmanagedSessionBinding>> = None;
     let mut last_unmanaged_session_bindings_refreshed_at: Option<Instant> = None;
     let mut latest_transcript_wake_observed: HashMap<PathBuf, i64> = HashMap::new();
+    let mut managed_codex_transcript_paths: HashSet<PathBuf> = HashSet::new();
     let mut bridge_reaper = ManagedBridgeReaper::from_env();
     let mut outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
     let mut runtime_outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
@@ -450,19 +453,20 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             }
 
             Some(signal) = transcript_wake_rx.recv() => {
-                if let Some((path, provider, observation)) = record_transcript_wake_hint(
+                if let Some(path) = enqueue_transcript_wake_signal(
+                    &mut scheduler,
                     &mut latest_transcript_wake_observed,
                     signal,
                 ) {
-                    scheduler.enqueue_observation(path, provider, WorkPriority::Live, observation);
+                    deferred_retries.remove(&path);
+                    pump_ready_local_work(
+                        &mut scheduler,
+                        &mut in_flight,
+                        &task_context,
+                        &mut deferred_retries,
+                        offline.is_offline,
+                    );
                 }
-                pump_ready_local_work(
-                    &mut scheduler,
-                    &mut in_flight,
-                    &task_context,
-                    &mut deferred_retries,
-                    offline.is_offline,
-                );
             }
 
             discovery_result = discovery_tasks.join_next(), if !discovery_tasks.is_empty() => {
@@ -705,9 +709,76 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // soft offline windows so short transport hiccups cannot stale the
             // local outbox or miss session wakeups.
             Some(first_event) = watcher.next_event() => {
-                let events = watcher.collect_batch_after(first_event, WATCHER_FLUSH_INTERVAL).await;
+                // Keep the coalescing wait cancellable by transcript wakes.
+                // The wake socket is the managed-session completion lane, so
+                // it should not sit behind filesystem batching.
+                let flush = tokio::time::sleep(WATCHER_FLUSH_INTERVAL);
+                tokio::pin!(flush);
+                loop {
+                    tokio::select! {
+                        biased;
+                        Some(signal) = transcript_wake_rx.recv() => {
+                            if let Some(path) = enqueue_transcript_wake_signal(
+                                &mut scheduler,
+                                &mut latest_transcript_wake_observed,
+                                signal,
+                            ) {
+                                deferred_retries.remove(&path);
+                                pump_ready_local_work(
+                                    &mut scheduler,
+                                    &mut in_flight,
+                                    &task_context,
+                                    &mut deferred_retries,
+                                    offline.is_offline,
+                                );
+                            }
+                        }
+                        _ = &mut flush => {
+                            break;
+                        }
+                    }
+                }
+                let events = watcher.collect_ready_batch(first_event);
                 for event in events {
                     if let Some(provider) = discovery::provider_for_path(&event.path, &providers) {
+                        if should_defer_fsevent_for_managed_wake(
+                            &latest_transcript_wake_observed,
+                            &managed_codex_transcript_paths,
+                            &event,
+                            provider,
+                        ) {
+                            let observation = ObservationTrace {
+                                source: "fsevent",
+                                observed_at_ms: event.observed_at_ms,
+                                latest_observed_at_ms: Some(
+                                    event.latest_observed_at_ms.max(event.observed_at_ms),
+                                ),
+                                wake_received_at_ms: None,
+                                enqueued_at_ms: now_ms(),
+                                session_id: None,
+                                turn_id: None,
+                                wake_reason: None,
+                                file_len_hint: None,
+                            };
+                            deferred_retries.insert(
+                                event.path.clone(),
+                                DeferredRetry {
+                                    due_at: Instant::now() + MANAGED_WAKE_FSEVENT_FALLBACK_DELAY,
+                                    provider,
+                                    priority: WorkPriority::Live,
+                                    observation,
+                                },
+                            );
+                            tracing::debug!(
+                                provider,
+                                path = %event.path.display(),
+                                observed_at_ms = event.observed_at_ms,
+                                latest_observed_at_ms = event.latest_observed_at_ms,
+                                delay_ms = MANAGED_WAKE_FSEVENT_FALLBACK_DELAY.as_millis(),
+                                "Deferring filesystem live ship because managed wake socket owns this turn"
+                            );
+                            continue;
+                        }
                         scheduler.enqueue_observed_window(
                             event.path,
                             provider,
@@ -894,6 +965,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // Frequent local status file refresh for ambient UX and debugging
             _ = local_status_timer.tick() => {
                 let observations = managed_bridge_scan::collect_observations();
+                refresh_managed_codex_transcript_paths(
+                    &mut managed_codex_transcript_paths,
+                    &observations,
+                );
                 let claude_observations = managed_claude_scan::collect_observations();
                 reconcile_claude_terminal_signals(
                     &mut live_claude_channels,
@@ -969,6 +1044,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // Periodic server heartbeat
             _ = heartbeat_timer.tick() => {
                 let observations = managed_bridge_scan::collect_observations();
+                refresh_managed_codex_transcript_paths(
+                    &mut managed_codex_transcript_paths,
+                    &observations,
+                );
                 let claude_observations = managed_claude_scan::collect_observations();
                 reconcile_claude_terminal_signals(
                     &mut live_claude_channels,
@@ -1838,6 +1917,60 @@ fn record_transcript_wake_hint(
             file_len_hint: signal.file_len_hint,
         },
     ))
+}
+
+fn enqueue_transcript_wake_signal(
+    scheduler: &mut PathScheduler,
+    latest_transcript_wake_observed: &mut HashMap<PathBuf, i64>,
+    signal: TranscriptWakeSignal,
+) -> Option<PathBuf> {
+    if let Some((path, provider, observation)) =
+        record_transcript_wake_hint(latest_transcript_wake_observed, signal)
+    {
+        let scheduled_path = path.clone();
+        scheduler.enqueue_observation(path, provider, WorkPriority::Live, observation);
+        Some(scheduled_path)
+    } else {
+        None
+    }
+}
+
+fn should_defer_fsevent_for_managed_wake(
+    latest_transcript_wake_observed: &HashMap<PathBuf, i64>,
+    managed_codex_transcript_paths: &HashSet<PathBuf>,
+    event: &WatcherEvent,
+    provider: &str,
+) -> bool {
+    if provider != "codex" {
+        return false;
+    }
+    if managed_codex_transcript_paths.contains(&event.path) {
+        return true;
+    }
+    let Some(last_wake_observed_at_ms) = latest_transcript_wake_observed.get(&event.path) else {
+        return false;
+    };
+    let suppress_ms = MANAGED_WAKE_FSEVENT_DEFER_WINDOW.as_millis() as i64;
+    now_ms().saturating_sub(*last_wake_observed_at_ms) <= suppress_ms
+}
+
+fn refresh_managed_codex_transcript_paths(
+    managed_codex_transcript_paths: &mut HashSet<PathBuf>,
+    observations: &[managed_bridge_scan::CodexBridgeObservation],
+) {
+    managed_codex_transcript_paths.clear();
+    for observation in observations {
+        if !(observation.bridge_alive
+            || observation.app_server_alive
+            || observation.has_tui_attachment)
+        {
+            continue;
+        }
+        let Some(path) = observation.thread_path.as_deref() else {
+            continue;
+        };
+        managed_codex_transcript_paths.insert(PathBuf::from(path));
+    }
 }
 
 fn remember_transcript_wake_observation(
@@ -2914,6 +3047,126 @@ mod tests {
         assert_eq!(scheduled.2.turn_id.as_deref(), Some("turn-123"));
         assert_eq!(scheduled.2.wake_reason.as_deref(), Some("turn_completed"));
         assert_eq!(scheduled.2.file_len_hint, Some(456));
+    }
+
+    #[test]
+    fn test_enqueue_transcript_wake_signal_queues_live_work() {
+        let transcript = tempfile::NamedTempFile::new().unwrap();
+        let mut latest_wakes = HashMap::new();
+        let mut scheduler = PathScheduler::new(4);
+
+        assert!(enqueue_transcript_wake_signal(
+            &mut scheduler,
+            &mut latest_wakes,
+            TranscriptWakeSignal {
+                provider: "codex".to_string(),
+                path: transcript.path().to_path_buf(),
+                phase: "idle".to_string(),
+                observed_at_ms: 123,
+                session_id: Some("session-123".to_string()),
+                turn_id: Some("turn-123".to_string()),
+                wake_reason: Some("turn_completed".to_string()),
+                file_len_hint: Some(456),
+                received_at_ms: Some(124),
+            },
+        )
+        .is_some());
+
+        let launched = scheduler.pop_launchable().unwrap();
+        assert_eq!(launched.path, transcript.path());
+        assert_eq!(launched.provider, "codex");
+        assert_eq!(launched.priority, WorkPriority::Live);
+        assert_eq!(launched.observation.source, "wake_socket");
+        assert_eq!(
+            launched.observation.wake_reason.as_deref(),
+            Some("turn_completed")
+        );
+    }
+
+    #[test]
+    fn test_recent_managed_wake_defers_codex_fsevent_shipping() {
+        let path = PathBuf::from("/tmp/managed-codex.jsonl");
+        let now = now_ms();
+        let event = WatcherEvent {
+            path: path.clone(),
+            observed_at_ms: now,
+            latest_observed_at_ms: now,
+        };
+        let latest_wakes = HashMap::from([(path, now)]);
+
+        assert!(should_defer_fsevent_for_managed_wake(
+            &latest_wakes,
+            &HashSet::new(),
+            &event,
+            "codex"
+        ));
+        assert!(!should_defer_fsevent_for_managed_wake(
+            &latest_wakes,
+            &HashSet::new(),
+            &event,
+            "claude"
+        ));
+    }
+
+    #[test]
+    fn test_old_managed_wake_does_not_suppress_codex_fsevent_shipping() {
+        let path = PathBuf::from("/tmp/managed-codex.jsonl");
+        let now = now_ms();
+        let old = now - MANAGED_WAKE_FSEVENT_DEFER_WINDOW.as_millis() as i64 - 1;
+        let event = WatcherEvent {
+            path: path.clone(),
+            observed_at_ms: now,
+            latest_observed_at_ms: now,
+        };
+        let latest_wakes = HashMap::from([(path, old)]);
+
+        assert!(!should_defer_fsevent_for_managed_wake(
+            &latest_wakes,
+            &HashSet::new(),
+            &event,
+            "codex"
+        ));
+    }
+
+    #[test]
+    fn test_managed_codex_path_defers_fsevent_before_first_wake() {
+        let path = PathBuf::from("/tmp/managed-codex.jsonl");
+        let now = now_ms();
+        let event = WatcherEvent {
+            path: path.clone(),
+            observed_at_ms: now,
+            latest_observed_at_ms: now,
+        };
+        let managed_paths = HashSet::from([path]);
+
+        assert!(should_defer_fsevent_for_managed_wake(
+            &HashMap::new(),
+            &managed_paths,
+            &event,
+            "codex"
+        ));
+    }
+
+    #[test]
+    fn test_refresh_managed_codex_transcript_paths_keeps_live_bridges() {
+        let path = PathBuf::from("/tmp/managed-live.jsonl");
+        let inactive_path = PathBuf::from("/tmp/managed-dead.jsonl");
+        let observations = vec![
+            codex_bridge_observation(&path, None, None, "2026-05-05T12:00:02Z", true),
+            managed_bridge_scan::CodexBridgeObservation {
+                bridge_alive: false,
+                app_server_alive: false,
+                has_tui_attachment: false,
+                thread_path: Some(inactive_path.display().to_string()),
+                ..codex_bridge_observation(&inactive_path, None, None, "2026-05-05T12:00:02Z", true)
+            },
+        ];
+        let mut managed_paths = HashSet::new();
+
+        refresh_managed_codex_transcript_paths(&mut managed_paths, &observations);
+
+        assert!(managed_paths.contains(&path));
+        assert!(!managed_paths.contains(&inactive_path));
     }
 
     #[test]

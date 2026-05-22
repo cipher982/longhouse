@@ -8,7 +8,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Result;
 use notify::event::{CreateKind, DataChange, EventKind, ModifyKind};
@@ -146,29 +145,15 @@ impl SessionWatcher {
         self.rx.recv().await
     }
 
-    /// Collect additional changed paths for `flush_interval` after `first`, then
-    /// return the deduplicated batch.
-    ///
-    /// This implements throttling (not debouncing): we always flush after the
-    /// interval, even if writes are still happening. This prevents starvation
-    /// on continuously-appended JSONL files.
-    ///
-    /// Call this only after a raw watcher event has already been received. The
-    /// internal coalescing wait is intentionally outside the main daemon
-    /// `select!` so a timer/control-channel branch cannot cancel the batch and
-    /// drop the first filesystem event.
-    pub async fn collect_batch_after(
-        &mut self,
-        first: WatcherEvent,
-        flush_interval: Duration,
-    ) -> Vec<WatcherEvent> {
+    /// Drain the currently buffered watcher events and coalesce them with
+    /// `first`. The caller owns any wait/coalescing policy before this point.
+    pub fn collect_ready_batch(&mut self, first: WatcherEvent) -> Vec<WatcherEvent> {
         let mut batch: HashMap<PathBuf, (i64, i64)> = HashMap::new();
         batch.insert(
             first.path,
             (first.observed_at_ms, first.latest_observed_at_ms),
         );
 
-        tokio::time::sleep(flush_interval).await;
         while let Ok(event) = self.rx.try_recv() {
             batch
                 .entry(event.path)
