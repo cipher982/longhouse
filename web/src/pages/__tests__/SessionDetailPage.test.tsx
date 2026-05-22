@@ -50,26 +50,10 @@ vi.mock("../../components/SessionChat", () => ({
   ),
 }));
 
-vi.mock("../../components/workspace/WorkspaceShell", () => ({
-  WorkspaceShell: ({
-    header,
-    sidebar,
-    main,
-    inspector,
-  }: {
-    header: React.ReactNode;
-    sidebar: React.ReactNode;
-    main: React.ReactNode;
-    inspector?: React.ReactNode;
-  }) => (
-    <div data-testid="workspace-shell">
-      <div>{header}</div>
-      <div>{sidebar}</div>
-      <div>{main}</div>
-      <div>{inspector}</div>
-    </div>
-  ),
-}));
+async function openInfoDrawer(user: ReturnType<typeof userEvent.setup>) {
+  const button = screen.getByTestId("session-info-button");
+  await user.click(button);
+}
 
 function makeCapabilities(
   overrides: Partial<SessionCapabilities> = {},
@@ -287,9 +271,8 @@ describe("SessionDetailPage", () => {
       "session-workspace-route--managed",
       "session-workspace-route--tone-running",
     );
-    expect(
-      screen.getByRole("group", { name: "Primary loop modes" }),
-    ).toBeInTheDocument();
+    // Loop mode lives on the composer dock in the new layout.
+    expect(screen.getByTestId("session-loop-mode-pill")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Assist" })).toHaveAttribute(
       "aria-pressed",
       "true",
@@ -298,37 +281,15 @@ describe("SessionDetailPage", () => {
       "aria-pressed",
       "false",
     );
+    // Drawer-only context (summary / metadata / terminal attach) is hidden by default.
+    expect(screen.queryByText("Summary")).not.toBeInTheDocument();
+    expect(screen.queryByText("Metadata")).not.toBeInTheDocument();
     expect(
-      screen.getByText("Drafts replies for review. You choose what gets sent."),
-    ).toBeInTheDocument();
-    const loopModeTitle = screen.getByText("Loop Mode");
-    const summaryTitle = screen.getByText("Summary");
-    const metadataTitle = screen.getByText("Metadata");
-    const terminalTitle = screen.getByText("Terminal");
-    expect(
-      loopModeTitle.compareDocumentPosition(summaryTitle) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(
-      summaryTitle.compareDocumentPosition(metadataTitle) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(
-      metadataTitle.compareDocumentPosition(terminalTitle) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(
-      screen.queryByTestId("session-attach-callout"),
+      screen.queryByTestId("session-debug-attach"),
     ).not.toBeInTheDocument();
-    expect(screen.getByTestId("session-debug-attach")).toHaveTextContent(
-      "Terminal",
-    );
-    expect(screen.getByTestId("session-debug-attach")).toHaveTextContent(
-      "Attach command",
-    );
-    expect(screen.getByTestId("session-debug-attach-command")).toHaveTextContent(
-      "codex-bridge attach --session-id session-codex",
-    );
+    expect(
+      screen.queryByTestId("render-telemetry-panel"),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByTestId("session-launch-profile"),
     ).not.toBeInTheDocument();
@@ -341,8 +302,33 @@ describe("SessionDetailPage", () => {
       "data-launch-command",
       "",
     );
-    expect(screen.getByTestId("render-telemetry-panel")).toBeInTheDocument();
     expect(screen.getByText("Transcript row from Codex.")).toBeInTheDocument();
+
+    await openInfoDrawer(user);
+    const drawer = screen.getByTestId("session-info-drawer");
+    const summaryTitle = screen.getByText("Summary");
+    const metadataTitle = screen.getByText("Metadata");
+    const terminalTitle = screen.getByText("Terminal");
+    expect(drawer).toContainElement(summaryTitle);
+    expect(drawer).toContainElement(metadataTitle);
+    expect(drawer).toContainElement(terminalTitle);
+    expect(
+      summaryTitle.compareDocumentPosition(metadataTitle) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      metadataTitle.compareDocumentPosition(terminalTitle) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.getByTestId("session-debug-attach")).toHaveTextContent(
+      "Terminal",
+    );
+    expect(screen.getByTestId("session-debug-attach")).toHaveTextContent(
+      "Attach command",
+    );
+    expect(screen.getByTestId("session-debug-attach-command")).toHaveTextContent(
+      "codex-bridge attach --session-id session-codex",
+    );
 
     const toolLabel = screen.getByText("Bash");
     const toolRow = toolLabel.closest("button");
@@ -358,18 +344,21 @@ describe("SessionDetailPage", () => {
     expect(screen.getByText("output")).toBeInTheDocument();
   });
 
-  it("does not render HEAD as branch metadata", () => {
+  it("does not render HEAD as branch metadata", async () => {
+    const user = userEvent.setup();
     const session = makeSession({ git_branch: "HEAD" });
     mockWorkspaceState({ session, model: buildTimelineModel([]) });
 
     renderSessionDetailPage();
+    await openInfoDrawer(user);
 
     expect(screen.getByText("Metadata")).toBeInTheDocument();
     expect(screen.queryByText("Branch")).not.toBeInTheDocument();
     expect(screen.queryByText("HEAD")).not.toBeInTheDocument();
   });
 
-  it("keeps terminal attach in the terminal section when control is offline", () => {
+  it("keeps terminal attach in the terminal section when control is offline", async () => {
+    const user = userEvent.setup();
     const session = makeSession({
       ended_at: null,
       status: "working",
@@ -407,6 +396,7 @@ describe("SessionDetailPage", () => {
     mockWorkspaceState({ session, model });
 
     renderSessionDetailPage();
+    await openInfoDrawer(user);
 
     expect(
       screen.queryByTestId("session-attach-callout"),
@@ -424,14 +414,6 @@ describe("SessionDetailPage", () => {
       "session-continuation-unavailable",
     );
     expect(continuationNotice).toHaveTextContent("Control is offline");
-    const loopModeTitle = screen.getByText("Loop Mode");
-    expect(
-      continuationNotice.compareDocumentPosition(loopModeTitle) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(
-      screen.getByText("Saved as a preference. Active controls return when the host reconnects."),
-    ).toBeInTheDocument();
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
       "data-disabled-reason",
       "Longhouse can see this Codex session, but cannot send prompts until the engine reconnects.",
@@ -792,7 +774,7 @@ describe("SessionDetailPage", () => {
     );
   });
 
-  it("keeps the dock visible for searchable-only sessions and explains the search-only state", () => {
+  it("keeps the dock visible for searchable-only sessions and explains the search-only state", async () => {
     const session = makeSession({
       provider: "gemini",
       home_label: null,
@@ -863,23 +845,28 @@ describe("SessionDetailPage", () => {
       };
     });
 
+    const user = userEvent.setup();
     renderSessionDetailPage();
 
     expect(screen.getByTestId("session-chat")).toBeInTheDocument();
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
       "data-disabled-reason",
-      "Longhouse can search this unmanaged Gemini session here, but it cannot steer it. Launch new Gemini sessions through Longhouse when you want to steer them from Longhouse.",
+      "This unmanaged Gemini session is read-only in Longhouse.",
     );
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
       "data-launch-command",
       "",
     );
+    await openInfoDrawer(user);
+    expect(screen.getByTestId("session-managed-launch-hint")).toHaveTextContent(
+      "Start the next Google CLI session with Antigravity",
+    );
     expect(
-      screen.queryByTestId("session-managed-launch-hint"),
+      screen.getByTestId("session-managed-launch-hint-command"),
+    ).toHaveTextContent("longhouse antigravity");
+    expect(
+      screen.queryByTestId("session-continuation-unavailable"),
     ).not.toBeInTheDocument();
-    expect(
-      screen.getByTestId("session-continuation-unavailable"),
-    ).toHaveTextContent("Gemini session — unmanaged");
     expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
       "Read only",
     );
@@ -892,7 +879,7 @@ describe("SessionDetailPage", () => {
     );
   });
 
-  it("shows a compact managed-launch hint for imported Codex sessions", () => {
+  it("shows a compact managed-launch hint for imported Codex sessions", async () => {
     const session = makeSession({
       provider: "codex",
       home_label: null,
@@ -958,7 +945,9 @@ describe("SessionDetailPage", () => {
       };
     });
 
+    const user = userEvent.setup();
     renderSessionDetailPage();
+    await openInfoDrawer(user);
 
     expect(screen.getByTestId("session-managed-launch-hint")).toHaveTextContent(
       "Start the next Codex session through Longhouse",

@@ -1,6 +1,5 @@
 import { Badge, Button } from "../ui";
-import type { AgentSession, SessionLoopMode } from "../../services/api/agents";
-import { config } from "../../lib/config";
+import type { AgentSession } from "../../services/api/agents";
 import { normalizeExecutionVenueLabel } from "../../lib/sessionExecutionHome";
 import { isSessionClosed } from "../../lib/sessionRuntime";
 import { getBranchLabel } from "../../lib/sessionUtils";
@@ -14,7 +13,6 @@ import {
   getSessionOriginLabel,
   truncatePath,
 } from "../../lib/sessionWorkspace";
-import { LoopModeSelector } from "./LoopModeSelector";
 import { ContinuationsList } from "./ContinuationsList";
 import { ManagedLaunchHintCard } from "./ManagedLaunchHintCard";
 
@@ -30,8 +28,8 @@ interface SessionContextPaneProps {
     title: string;
     body: string;
   } | null;
-  loopModePending?: boolean;
-  onLoopModeChange?: (nextMode: SessionLoopMode) => void;
+  /** When true (drawer mode), suppress the title hero — the page header already shows it. */
+  hideHero?: boolean;
 }
 
 function MetaRow({ label, value }: { label: string; value: string }) {
@@ -52,8 +50,7 @@ export function SessionContextPane({
   onOpenSession,
   onOpenLatest,
   continuationNotice = null,
-  loopModePending = false,
-  onLoopModeChange,
+  hideHero = false,
 }: SessionContextPaneProps) {
   const interaction = getSessionInteractionCapabilities({
     session,
@@ -72,15 +69,6 @@ export function SessionContextPane({
     homeLabel ||
     interaction.sourceOriginLabel ||
     "this machine";
-  const loopModeCaption = config.demoMode
-    ? "Preview only in the demo."
-    : !interaction.isManagedLocalSession
-      ? "Stored preference only. Start a managed session to steer from Longhouse."
-      : interaction.liveControlAvailable
-        ? session.loop_mode === "autopilot"
-          ? "Saved as an autopilot preference. Automatic turns are not active until a runner is connected."
-          : "Drafts replies for review. You choose what gets sent."
-        : "Saved as a preference. Active controls return when the host reconnects.";
   const attachDebugCopy = `Run this on ${attachRunnerLabel} to open this existing managed ${interaction.providerLabel} session in a terminal UI. This does not restart the session.`;
   const shouldShowNotice =
     continuationNotice && !interaction.managedLaunchSuggestion;
@@ -105,10 +93,33 @@ export function SessionContextPane({
 
   return (
     <div className="session-context-pane">
-      {/* Identity */}
-      <div className="session-pane-section session-pane-section--hero">
-        <div className="session-context-title">{title}</div>
-        <div className="session-context-subtitle">
+      {hideHero ? null : (
+        <div className="session-pane-section session-pane-section--hero">
+          <div className="session-context-title">{title}</div>
+          <div className="session-context-subtitle">
+            <span className="session-context-provider">
+              <span
+                className="session-context-provider-dot"
+                style={{ backgroundColor: getProviderColor(session.provider) }}
+              />
+              {formatProviderLabel(session.provider)}
+            </span>
+            {homeLabel ? (
+              <span className="session-context-subtitle__sep">{homeLabel}</span>
+            ) : null}
+            {session.environment && session.environment !== "production" ? (
+              <Badge variant="warning" data-testid="session-env-badge">
+                {session.environment}
+              </Badge>
+            ) : null}
+          </div>
+          <div className="session-context-stats" data-testid="session-stats-line">
+            {statsLine}
+          </div>
+        </div>
+      )}
+      {hideHero ? (
+        <div className="session-context-stats session-context-stats--drawer" data-testid="session-stats-line">
           <span className="session-context-provider">
             <span
               className="session-context-provider-dot"
@@ -116,19 +127,15 @@ export function SessionContextPane({
             />
             {formatProviderLabel(session.provider)}
           </span>
-          {homeLabel ? (
-            <span className="session-context-subtitle__sep">{homeLabel}</span>
-          ) : null}
+          {homeLabel ? <span className="session-context-subtitle__sep">{homeLabel}</span> : null}
           {session.environment && session.environment !== "production" ? (
             <Badge variant="warning" data-testid="session-env-badge">
               {session.environment}
             </Badge>
           ) : null}
+          <span className="session-context-subtitle__sep">{statsLine}</span>
         </div>
-        <div className="session-context-stats" data-testid="session-stats-line">
-          {statsLine}
-        </div>
-      </div>
+      ) : null}
 
       {!isViewingHead && headThreadSession ? (
         <div
@@ -170,15 +177,6 @@ export function SessionContextPane({
             </div>
           ) : null}
         </div>
-      ) : null}
-
-      {interaction.isManagedLocalSession ? (
-        <LoopModeSelector
-          currentMode={session.loop_mode}
-          caption={loopModeCaption}
-          pending={loopModePending}
-          onChange={onLoopModeChange}
-        />
       ) : null}
 
       {session.summary ? (
