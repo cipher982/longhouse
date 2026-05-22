@@ -1868,6 +1868,14 @@ fn work_context(priority: WorkPriority) -> &'static str {
     }
 }
 
+fn batch_band_for_priority(priority: WorkPriority) -> shipper::BatchBand {
+    match priority {
+        WorkPriority::Live => shipper::BatchBand::Live,
+        WorkPriority::Scan => shipper::BatchBand::BackgroundRepair,
+        WorkPriority::Retry => shipper::BatchBand::Archive,
+    }
+}
+
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
@@ -2213,14 +2221,10 @@ async fn prepare_file_for_job(
     } else {
         shipper::SourceLineMode::Full
     };
-    // Band is keyed off WorkPriority, NOT SourceLineMode. Live work for any
-    // provider keeps the small live target so latency stays low; replay/scan
-    // gets the larger archive target to amortize the round trip.
-    let batch_band = if job.priority == WorkPriority::Live {
-        shipper::BatchBand::Live
-    } else {
-        shipper::BatchBand::Archive
-    };
+    // Band is keyed off WorkPriority, NOT SourceLineMode. Live work stays
+    // latency-sized; background repair stays tiny so it cannot monopolize the
+    // hosted write lane; explicit retry still amortizes the round trip.
+    let batch_band = batch_band_for_priority(job.priority);
     let blocking_span = tracing::info_span!(
         "engine.ship.prepare.blocking",
         longhouse.provider = %provider,
@@ -3523,6 +3527,26 @@ mod tests {
         assert_eq!(job.priority, WorkPriority::Scan);
         assert_eq!(job.observation.source, "reconciliation_scan");
         assert_eq!(work_context(job.priority), "reconciliation_scan");
+        assert_eq!(
+            batch_band_for_priority(job.priority),
+            shipper::BatchBand::BackgroundRepair
+        );
+    }
+
+    #[test]
+    fn test_batch_band_for_priority_keeps_retry_archive_sized() {
+        assert_eq!(
+            batch_band_for_priority(WorkPriority::Live),
+            shipper::BatchBand::Live
+        );
+        assert_eq!(
+            batch_band_for_priority(WorkPriority::Retry),
+            shipper::BatchBand::Archive
+        );
+        assert_eq!(
+            batch_band_for_priority(WorkPriority::Scan),
+            shipper::BatchBand::BackgroundRepair
+        );
     }
 
     #[test]
