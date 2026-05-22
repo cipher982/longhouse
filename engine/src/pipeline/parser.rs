@@ -1,4 +1,4 @@
-//! Session file parser for Claude Code, Codex, and Gemini sessions.
+//! Session file parser for Claude Code, Codex, Antigravity, and legacy Gemini sessions.
 //!
 //! Mirrors the Python parser at `zerg/services/shipper/parser.py`.
 //! Extracts meaningful events (user messages, assistant text, tool calls,
@@ -8,7 +8,8 @@
 //! Supported formats (dispatched by file extension):
 //! - **Claude** (`.jsonl`): `{type: "user"|"assistant", message: {content: ...}}`
 //! - **Codex** (`.jsonl`): `{type: "response_item", payload: {type: "message"|"function_call"|..., role: ..., content: [...]}}`
-//! - **Gemini** (`.json`): `{sessionId, messages: [{type: "user"|"gemini", content, toolCalls: [...]}]}`
+//! - **Antigravity** (`.jsonl`): `{step_index, source, type, created_at, content, tool_calls}`
+//! - **Legacy Gemini** (`.json`): `{sessionId, messages: [{type: "user"|"gemini", content, toolCalls: [...]}]}`
 //!
 //! Gemini files are full JSON documents rewritten in-place (not JSONL appended),
 //! so they are always parsed from offset 0. The backend deduplicates events by hash.
@@ -61,6 +62,7 @@ pub struct ParsedEvent {
     /// - Codex function_call:    payload.call_id
     /// - Codex function_output:  payload.call_id
     /// - Gemini tool_call:       tc.id
+    /// - Antigravity tool_call:  synthetic step/name id when no provider id is available
     /// None for all non-tool events and where provider doesn't emit an ID.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
@@ -110,6 +112,10 @@ pub struct ParseResult {
 #[derive(Deserialize)]
 struct RawLine {
     r#type: Option<String>,
+    /// Antigravity transcript format.
+    step_index: Option<u64>,
+    source: Option<String>,
+    created_at: Option<String>,
     timestamp: Option<String>,
     uuid: Option<String>,
     cwd: Option<String>,
@@ -135,6 +141,8 @@ struct RawLine {
     message: Option<RawMessage>,
     /// Codex format: `{payload: {type: ..., role: ..., content: [...]}}`
     payload: Option<CodexPayload>,
+    /// Antigravity format: model response records can carry proposed tool calls.
+    tool_calls: Option<Vec<AntigravityToolCall>>,
 }
 
 #[derive(Deserialize)]
@@ -204,6 +212,16 @@ struct CodexPayloadParentage {
 struct CodexContentItem {
     r#type: Option<String>,
     text: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Antigravity-specific types
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct AntigravityToolCall {
+    name: Option<String>,
+    args: Option<Box<RawValue>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -470,7 +488,9 @@ pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
 
     // Ensure session_id is a valid UUID. Non-UUID stems (e.g. "agent-a51c878")
     // get a deterministic UUID v5 derived from the full file path.
-    let mut session_id = if Uuid::parse_str(&raw_stem).is_ok() {
+    let mut session_id = if let Some(antigravity_id) = antigravity_session_id_from_path(path) {
+        antigravity_id
+    } else if Uuid::parse_str(&raw_stem).is_ok() {
         raw_stem
     } else {
         Uuid::new_v5(&Uuid::NAMESPACE_URL, path.to_string_lossy().as_bytes()).to_string()
@@ -548,6 +568,19 @@ pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
     }
 
     Ok(result)
+}
+
+fn antigravity_session_id_from_path(path: &Path) -> Option<String> {
+    let components: Vec<&str> = path
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect();
+    for window in components.windows(2) {
+        if window[0] == "brain" && Uuid::parse_str(window[1]).is_ok() {
+            return Some(window[1].to_string());
+        }
+    }
+    None
 }
 
 /// Scan the start of a JSONL file for Codex `session_meta` identity fields.
@@ -1246,7 +1279,12 @@ fn collect_metadata(
         meta.is_sidechain = true;
     }
 
-    if let Some(ts) = obj.timestamp.as_deref().and_then(parse_timestamp) {
+    if let Some(ts) = obj
+        .timestamp
+        .as_deref()
+        .or(obj.created_at.as_deref())
+        .and_then(parse_timestamp)
+    {
         match min_ts {
             Some(ref existing) if ts < *existing => *min_ts = Some(ts),
             None => *min_ts = Some(ts),
@@ -1276,6 +1314,11 @@ fn extract_events(
     events: &mut Vec<ParsedEvent>,
 ) {
     let event_type = obj.r#type.as_deref().unwrap_or("");
+
+    if is_antigravity_line(obj) {
+        extract_antigravity_events(obj, session_id, line_offset, raw_line, events);
+        return;
+    }
 
     // Keep compaction-adjacent records as first-class system events.
     if let Some(meta_event) =
@@ -1354,6 +1397,162 @@ fn extract_events(
         _ => {
             // Unknown type — skip
         }
+    }
+}
+
+fn is_antigravity_line(obj: &RawLine) -> bool {
+    obj.step_index.is_some() && obj.source.is_some() && obj.created_at.is_some()
+}
+
+fn antigravity_timestamp(obj: &RawLine) -> DateTime<Utc> {
+    obj.created_at
+        .as_deref()
+        .or(obj.timestamp.as_deref())
+        .and_then(parse_timestamp)
+        .unwrap_or_else(Utc::now)
+}
+
+fn antigravity_uuid(obj: &RawLine, line_offset: u64, suffix: &str) -> String {
+    match obj.step_index {
+        Some(step) => format!("antigravity-step-{step}-{suffix}"),
+        None => format!("antigravity-offset-{line_offset}-{suffix}"),
+    }
+}
+
+fn antigravity_user_text(content: &str) -> String {
+    let start_tag = "<USER_REQUEST>";
+    let end_tag = "</USER_REQUEST>";
+    if let Some(start) = content.find(start_tag) {
+        let after_start = start + start_tag.len();
+        if let Some(end) = content[after_start..].find(end_tag) {
+            let text = content[after_start..after_start + end].trim();
+            if !text.is_empty() {
+                return text.to_string();
+            }
+        }
+    }
+    content.trim().to_string()
+}
+
+fn antigravity_tool_name_from_type(event_type: &str) -> String {
+    event_type.trim().to_ascii_lowercase().replace('_', "-")
+}
+
+fn extract_antigravity_events(
+    obj: &RawLine,
+    session_id: &str,
+    line_offset: u64,
+    raw_line: &str,
+    events: &mut Vec<ParsedEvent>,
+) {
+    let event_type = obj.r#type.as_deref().unwrap_or("");
+    let source = obj.source.as_deref().unwrap_or("");
+    let timestamp = antigravity_timestamp(obj);
+    let mut emitted_raw_line = false;
+
+    if event_type == "USER_INPUT" {
+        if let Some(content) = obj.content.as_deref() {
+            let text = antigravity_user_text(content);
+            if !text.is_empty() {
+                events.push(ParsedEvent {
+                    uuid: antigravity_uuid(obj, line_offset, "user"),
+                    session_id: session_id.to_string(),
+                    timestamp,
+                    role: Role::User,
+                    content_text: Some(text),
+                    tool_name: None,
+                    tool_input_json: None,
+                    tool_output_text: None,
+                    tool_call_id: None,
+                    source_offset: line_offset,
+                    raw_type: "antigravity_user".to_string(),
+                    raw_line: Some(raw_line.to_string()),
+                });
+            }
+        }
+        return;
+    }
+
+    if let Some(tool_calls) = obj.tool_calls.as_ref() {
+        for (idx, call) in tool_calls.iter().enumerate() {
+            let Some(tool_name) = call.name.as_ref().filter(|name| !name.trim().is_empty()) else {
+                continue;
+            };
+            let call_id = obj
+                .step_index
+                .map(|step| format!("antigravity-{step}-{idx}"));
+            events.push(ParsedEvent {
+                uuid: antigravity_uuid(obj, line_offset, &format!("tool-{idx}")),
+                session_id: session_id.to_string(),
+                timestamp,
+                role: Role::Assistant,
+                content_text: None,
+                tool_name: Some(tool_name.clone()),
+                tool_input_json: call.args.clone(),
+                tool_output_text: None,
+                tool_call_id: call_id,
+                source_offset: line_offset,
+                raw_type: "antigravity_tool_call".to_string(),
+                raw_line: if emitted_raw_line {
+                    None
+                } else {
+                    emitted_raw_line = true;
+                    Some(raw_line.to_string())
+                },
+            });
+        }
+    }
+
+    if let Some(content) = obj.content.as_deref() {
+        let text = content.trim();
+        if text.is_empty() {
+            return;
+        }
+        let is_assistant = source == "MODEL" && event_type.ends_with("_RESPONSE");
+        let role = if is_assistant {
+            Role::Assistant
+        } else if source == "SYSTEM" {
+            Role::System
+        } else {
+            Role::Tool
+        };
+        let is_tool_role = matches!(role, Role::Tool);
+        let (content_text, tool_name, tool_output_text, raw_type) = match &role {
+            Role::Tool => (
+                None,
+                Some(antigravity_tool_name_from_type(event_type)),
+                Some(text.to_string()),
+                "antigravity_tool_result",
+            ),
+            Role::System => (Some(text.to_string()), None, None, "antigravity_system"),
+            _ => (Some(text.to_string()), None, None, "antigravity_assistant"),
+        };
+        events.push(ParsedEvent {
+            uuid: antigravity_uuid(
+                obj,
+                line_offset,
+                if is_tool_role {
+                    "tool-result"
+                } else {
+                    "content"
+                },
+            ),
+            session_id: session_id.to_string(),
+            timestamp,
+            role,
+            content_text,
+            tool_name,
+            tool_input_json: None,
+            tool_output_text,
+            tool_call_id: None,
+            source_offset: line_offset,
+            raw_type: raw_type.to_string(),
+            raw_line: if emitted_raw_line {
+                None
+            } else {
+                Some(raw_line.to_string())
+            },
+        });
     }
 }
 
@@ -3428,6 +3627,91 @@ mod tests {
             result.events[0].content_text.as_deref(),
             Some("[3 images attached]")
         );
+    }
+
+    #[test]
+    fn test_antigravity_parse_user_tool_and_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let conversation_id = "53116f30-f150-458c-b36e-2e30f576dc74";
+        let transcript_dir = dir
+            .path()
+            .join(".gemini")
+            .join("antigravity")
+            .join("brain")
+            .join(conversation_id)
+            .join(".system_generated")
+            .join("logs");
+        std::fs::create_dir_all(&transcript_dir).unwrap();
+        let path = transcript_dir.join("transcript.jsonl");
+        let lines = [
+            serde_json::json!({
+                "step_index": 0,
+                "source": "USER_EXPLICIT",
+                "type": "USER_INPUT",
+                "status": "DONE",
+                "created_at": "2026-05-21T22:27:41Z",
+                "content": "<USER_REQUEST>\nfix the build\n</USER_REQUEST>"
+            })
+            .to_string(),
+            serde_json::json!({
+                "step_index": 1,
+                "source": "MODEL",
+                "type": "PLANNER_RESPONSE",
+                "status": "DONE",
+                "created_at": "2026-05-21T22:27:42Z",
+                "tool_calls": [{"name": "list_dir", "args": {"DirectoryPath": "/tmp"}}]
+            })
+            .to_string(),
+            serde_json::json!({
+                "step_index": 2,
+                "source": "MODEL",
+                "type": "LIST_DIRECTORY",
+                "status": "DONE",
+                "created_at": "2026-05-21T22:27:43Z",
+                "content": "Summary: files listed."
+            })
+            .to_string(),
+            serde_json::json!({
+                "step_index": 3,
+                "source": "MODEL",
+                "type": "FINAL_RESPONSE",
+                "status": "DONE",
+                "created_at": "2026-05-21T22:27:44Z",
+                "content": "Done."
+            })
+            .to_string(),
+        ];
+        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+
+        let result = parse_session_file(&path, 0).unwrap();
+
+        assert_eq!(result.metadata.session_id, conversation_id);
+        assert_eq!(result.events.len(), 4);
+        assert_eq!(result.events[0].role, Role::User);
+        assert_eq!(
+            result.events[0].content_text.as_deref(),
+            Some("fix the build")
+        );
+        assert_eq!(result.events[1].role, Role::Assistant);
+        assert_eq!(result.events[1].tool_name.as_deref(), Some("list_dir"));
+        assert_eq!(
+            result.events[1]
+                .tool_input_json
+                .as_ref()
+                .map(|raw| raw.get()),
+            Some(r#"{"DirectoryPath":"/tmp"}"#)
+        );
+        assert_eq!(result.events[2].role, Role::Tool);
+        assert_eq!(
+            result.events[2].tool_output_text.as_deref(),
+            Some("Summary: files listed.")
+        );
+        assert_eq!(result.events[3].role, Role::Assistant);
+        assert_eq!(result.events[3].content_text.as_deref(), Some("Done."));
+        assert!(result
+            .events
+            .iter()
+            .all(|event| event.session_id == conversation_id));
     }
 
     #[test]

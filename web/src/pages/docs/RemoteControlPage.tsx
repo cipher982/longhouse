@@ -29,8 +29,8 @@ export default function RemoteControlPage() {
         <p>
           <strong>Provider truth matters.</strong> Claude is the strongest
           control-after-launch path today. Codex is supported and useful here
-          too. Gemini still lands in the archive, but it is not the control
-          story to buy yet.
+          too. Antigravity is the new Google CLI path; existing Gemini sessions
+          still land in the archive as legacy imports.
         </p>
       </div>
 

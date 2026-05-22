@@ -42,6 +42,7 @@ PROVIDER_DISPLAY_NAMES = {
     "codex": "Codex",
     "cursor": "Cursor",
     "gemini": "Gemini",
+    "antigravity": "Antigravity",
     "openai": "OpenAI",
     "zai": "z.ai",
     "z.ai": "z.ai",

@@ -24,7 +24,7 @@ from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_loop_mode import coerce_session_loop_mode
 
-_VALID_PROVIDERS = {"claude", "codex", "opencode"}
+_VALID_PROVIDERS = {"claude", "codex", "opencode", "antigravity"}
 _MANAGED_LOCAL_NAME_SAFE_CHARS = re.compile(r"[^A-Za-z0-9_.-]+")
 _MANAGED_LOCAL_NAME_MAX = 64
 
@@ -91,7 +91,8 @@ def _resolve_runner(db: Session, owner_id: int, target: str, *, required: bool =
 def _require_runner_ready(runner, *, owner_id: int) -> None:
     if runner.status == "revoked":
         raise ManagedLocalLaunchError(
-            f"Remote command Runner '{runner.name}' has been revoked. This is separate from the Machine Agent " "that ships transcripts.",
+            f"Remote command Runner '{runner.name}' has been revoked. This is separate from the Machine Agent "
+            "that ships transcripts.",
             status_code=409,
         )
 
@@ -106,7 +107,8 @@ def _require_runner_ready(runner, *, owner_id: int) -> None:
     capabilities = runner.capabilities or []
     if "exec.full" not in capabilities:
         raise ManagedLocalLaunchError(
-            f"Remote command Runner '{runner.name}' must have exec.full capability for browser-launched managed sessions",
+            f"Remote command Runner '{runner.name}' must have exec.full capability for "
+            "browser-launched managed sessions",
             status_code=400,
         )
 
@@ -142,13 +144,14 @@ def launch_managed_local_session_sync(db: Session, params: ManagedLocalLaunchPar
     if not str(params.machine_name or "").strip():
         raise ManagedLocalLaunchError(
             "Browser-launched managed-local sessions were removed. Launch from the target machine with "
-            "`longhouse claude`, `longhouse codex`, or `longhouse opencode`.",
+            "`longhouse claude`, `longhouse codex`, `longhouse opencode`, or `longhouse antigravity`.",
             status_code=410,
         )
 
     if provider == "claude" and params.native_claude_channels_available is False:
         raise ManagedLocalLaunchError(
-            "Native Claude channels are unavailable on this machine. Longhouse now requires the local Claude channel bridge.",
+            "Native Claude channels are unavailable on this machine. Longhouse now requires "
+            "the local Claude channel bridge.",
             status_code=412,
         )
 
@@ -222,8 +225,11 @@ def launch_managed_local_session_sync(db: Session, params: ManagedLocalLaunchPar
         control_plane = "codex_bridge"
     elif provider == "opencode":
         control_plane = "opencode_process"
+    elif provider == "antigravity":
+        control_plane = "antigravity_process"
     else:
         control_plane = "claude_channel_bridge"
+    process_observe_only = provider in {"opencode", "antigravity"}
     record_connection(
         db,
         run=run,
@@ -231,11 +237,11 @@ def launch_managed_local_session_sync(db: Session, params: ManagedLocalLaunchPar
         acquisition_kind="spawned_control",
         state="attached",
         external_name=session.managed_session_name,
-        can_send_input=1,
-        can_interrupt=1,
-        can_terminate=1,
+        can_send_input=0 if process_observe_only else 1,
+        can_interrupt=0 if process_observe_only else 1,
+        can_terminate=0 if process_observe_only else 1,
         can_tail_output=1,
-        can_resume=1,
+        can_resume=0 if process_observe_only else 1,
     )
 
     mark_managed_local_session_launched(db, session=session)

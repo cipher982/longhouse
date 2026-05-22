@@ -7,7 +7,7 @@ import {
 describe("providers launch support", () => {
   it("keeps the launch provider capability contract explicit", () => {
     const providers = getLaunchProviderSupportList();
-    expect(providers.map((provider) => provider.id)).toEqual(["claude", "codex", "gemini"]);
+    expect(providers.map((provider) => provider.id)).toEqual(["claude", "codex", "antigravity"]);
     expect(providers.every((provider) => provider.archiveVisibility === "live")).toBe(true);
     expect(providers.every((provider) => provider.cloudSessionStart === "live")).toBe(true);
   });
@@ -21,9 +21,9 @@ describe("providers launch support", () => {
       hooksSupport: "none",
       telemetryQuality: "structured",
     });
-    expect(getLaunchProviderSupport("gemini")).toMatchObject({
-      hooksSupport: "none",
-      telemetryQuality: "basic",
+    expect(getLaunchProviderSupport("antigravity")).toMatchObject({
+      hooksSupport: "live",
+      telemetryQuality: "structured",
     });
   });
 });

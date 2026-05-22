@@ -17,6 +17,7 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret-value")
 os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-value")
 
+from tests_lite._capability_test_helper import build_session_capabilities
 from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
@@ -25,7 +26,6 @@ from zerg.models.agents import ManagedSessionControlState
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents_store import AgentsStore
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
-from tests_lite._capability_test_helper import build_session_capabilities
 from zerg.services.session_capabilities import project_current_session_capabilities
 from zerg.services.session_capabilities import project_current_session_capabilities_from_facts
 from zerg.services.session_current_control import current_session_capabilities
@@ -102,6 +102,8 @@ def _seed_agent_session(db, *, seed_kernel_rows: bool = True, **overrides) -> Ag
             kernel_plane = "codex_bridge"
         elif provider == "opencode" or transport == "opencode_process":
             kernel_plane = "opencode_process"
+        elif provider == "antigravity" or transport == "antigravity_process":
+            kernel_plane = "antigravity_process"
         else:
             kernel_plane = "claude_channel_bridge"
         seed_managed_kernel_rows(db, session, control_plane=kernel_plane)
@@ -210,6 +212,24 @@ def test_opencode_process_transport_is_managed_but_not_remote_controllable():
     capabilities = build_session_capabilities(session)
 
     assert capabilities.managed_transport == ManagedSessionTransport.OPENCODE_PROCESS
+    assert capabilities.live_control_available is False
+    assert capabilities.host_reattach_available is False
+    assert capabilities.reply_to_live_session_available is False
+    assert capabilities.can_queue_next_input is False
+    assert capabilities.can_steer_active_turn is False
+
+
+def test_antigravity_process_transport_is_managed_but_not_remote_controllable():
+    session = _make_session(
+        provider="antigravity",
+        execution_home="managed_local",
+        managed_transport=ManagedSessionTransport.ANTIGRAVITY_PROCESS.value,
+        source_runner_id=17,
+    )
+
+    capabilities = build_session_capabilities(session)
+
+    assert capabilities.managed_transport == ManagedSessionTransport.ANTIGRAVITY_PROCESS
     assert capabilities.live_control_available is False
     assert capabilities.host_reattach_available is False
     assert capabilities.reply_to_live_session_available is False

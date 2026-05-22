@@ -138,6 +138,7 @@ def _provider_label(session: AgentSession | None) -> str | None:
         "claude": "Claude",
         "codex": "Codex",
         "gemini": "Gemini",
+        "antigravity": "Antigravity",
     }
     return labels.get(provider, provider[:1].upper() + provider[1:])
 

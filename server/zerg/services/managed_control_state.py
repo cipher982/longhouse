@@ -36,6 +36,8 @@ def _kernel_control_plane_for_provider(provider: str) -> str:
         return "codex_bridge"
     if provider == "opencode":
         return "opencode_process"
+    if provider == "antigravity":
+        return "antigravity_process"
     return "claude_channel_bridge"
 
 

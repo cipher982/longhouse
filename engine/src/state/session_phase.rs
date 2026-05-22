@@ -11,6 +11,8 @@ pub enum PhaseSource {
     ClaudeHook,
     /// Codex hook-derived phase signal drained from the outbox.
     CodexHook,
+    /// Antigravity hook-derived phase signal drained from the outbox.
+    AntigravityHook,
     /// Codex bridge WebSocket tracker-derived phase signal.
     CodexBridgeWs,
 }
@@ -20,16 +22,17 @@ impl PhaseSource {
         match self {
             PhaseSource::ClaudeHook => "claude_hook",
             PhaseSource::CodexHook => "codex_hook",
+            PhaseSource::AntigravityHook => "antigravity_hook",
             PhaseSource::CodexBridgeWs => "codex_bridge",
         }
     }
 
     pub const fn for_hook_provider(provider: &str) -> Self {
         // Small match-returning-const helper for hook outbox coalescing.
-        if matches!(provider.as_bytes(), b"codex") {
-            PhaseSource::CodexHook
-        } else {
-            PhaseSource::ClaudeHook
+        match provider.as_bytes() {
+            b"codex" => PhaseSource::CodexHook,
+            b"antigravity" => PhaseSource::AntigravityHook,
+            _ => PhaseSource::ClaudeHook,
         }
     }
 }
@@ -239,6 +242,22 @@ mod tests {
         assert_eq!(row.2, None);
         assert_eq!(row.3, "claude_hook");
         assert_eq!(row.4, "2026-04-19T00:00:00+00:00");
+    }
+
+    #[test]
+    fn hook_phase_source_matches_provider() {
+        assert_eq!(
+            PhaseSource::for_hook_provider("claude").as_str(),
+            "claude_hook"
+        );
+        assert_eq!(
+            PhaseSource::for_hook_provider("codex").as_str(),
+            "codex_hook"
+        );
+        assert_eq!(
+            PhaseSource::for_hook_provider("antigravity").as_str(),
+            "antigravity_hook"
+        );
     }
 
     #[test]

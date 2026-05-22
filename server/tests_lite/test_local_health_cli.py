@@ -505,6 +505,26 @@ def test_collect_local_health_surfaces_opencode_provider_cli(monkeypatch, tmp_pa
     }
 
 
+def test_collect_local_health_surfaces_antigravity_provider_cli(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr(
+        local_health_service.shutil,
+        "which",
+        lambda name: "/Users/test/.local/bin/agy" if name == "agy" else None,
+    )
+    _write_engine_status(tmp_path, age_seconds=5)
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["provider_clis"]["antigravity"] == {
+        "path": "/Users/test/.local/bin/agy",
+        "source": "PATH",
+        "resolution_error": None,
+        "env_override": None,
+    }
+
+
 def test_collect_local_health_surfaces_missing_opencode_provider_cli(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
@@ -517,6 +537,22 @@ def test_collect_local_health_surfaces_missing_opencode_provider_cli(monkeypatch
         "path": None,
         "source": "missing",
         "resolution_error": "`opencode` not found on PATH",
+        "env_override": None,
+    }
+
+
+def test_collect_local_health_surfaces_missing_antigravity_provider_cli(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr(local_health_service.shutil, "which", lambda name: None)
+    _write_engine_status(tmp_path, age_seconds=5)
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["provider_clis"]["antigravity"] == {
+        "path": None,
+        "source": "missing",
+        "resolution_error": "`agy` not found on PATH",
         "env_override": None,
     }
 
@@ -537,6 +573,25 @@ def test_collect_local_health_surfaces_opencode_env_override(monkeypatch, tmp_pa
         "source": local_health_service.OPENCODE_BIN_ENV,
         "resolution_error": None,
         "env_override": str(opencode_bin),
+    }
+
+
+def test_collect_local_health_surfaces_antigravity_env_override(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    antigravity_bin = tmp_path / "agy"
+    antigravity_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+    antigravity_bin.chmod(0o755)
+    monkeypatch.setenv(local_health_service.ANTIGRAVITY_BIN_ENV, str(antigravity_bin))
+    _write_engine_status(tmp_path, age_seconds=5)
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["provider_clis"]["antigravity"] == {
+        "path": str(antigravity_bin),
+        "source": local_health_service.ANTIGRAVITY_BIN_ENV,
+        "resolution_error": None,
+        "env_override": str(antigravity_bin),
     }
 
 
@@ -2621,6 +2676,32 @@ def test_process_scan_detects_managed_opencode_via_env(monkeypatch):
     assert row["phase"] is None
 
 
+def test_process_scan_detects_managed_antigravity_via_env(monkeypatch):
+    now = datetime(2026, 4, 19, 0, 0, 0, tzinfo=timezone.utc)
+    proc = _FakeProc(
+        pid=55509,
+        cmdline=["/Users/test/.local/bin/agy"],
+        create_time=now.timestamp(),
+        env={
+            "LONGHOUSE_MANAGED_SESSION_ID": "bfb567fb-7e0f-4552-8411-24f682751484",
+            "LONGHOUSE_DEVICE_ID": "device-antigravity",
+        },
+        cwd="/Users/test/git/zerg",
+    )
+    _patch_process_iter(monkeypatch, [proc])
+
+    rows = local_health_service._collect_managed_sessions_by_process(existing_session_ids=set())
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["session_id"] == "bfb567fb-7e0f-4552-8411-24f682751484"
+    assert row["provider"] == "antigravity"
+    assert row["pid"] == 55509
+    assert row["cwd"] == "/Users/test/git/zerg"
+    assert row["device_id"] == "device-antigravity"
+    assert row["state"] == "attached"
+
+
 def test_process_scan_uses_phase_overlay_when_available(monkeypatch, tmp_path: Path):
     now = datetime(2026, 4, 19, 0, 0, 0, tzinfo=timezone.utc)
     session_id = "bfb567fb-7e0f-4552-8411-24f682751484"
@@ -3056,13 +3137,32 @@ def test_collect_unmanaged_processes_reports_live_bare_provider_clis(monkeypatch
         env={},
         cwd="/Users/test/git/open-source-widget",
     )
+    unmanaged_antigravity = _FakeProc(
+        pid=11471,
+        cmdline=["/Users/test/.local/bin/agy"],
+        create_time=(now + timedelta(seconds=120)).timestamp(),
+        env={},
+        cwd="/Users/test/git/antigravity-widget",
+    )
     _patch_process_iter(
-        monkeypatch, [managed_claude, unmanaged_zerg_codex, unmanaged_myagents_codex, unmanaged_opencode]
+        monkeypatch,
+        [managed_claude, unmanaged_zerg_codex, unmanaged_myagents_codex, unmanaged_opencode, unmanaged_antigravity],
     )
 
     rows = local_health_service._collect_unmanaged_processes()
 
     assert rows == [
+        {
+            "provider": "antigravity",
+            "control_path": "unmanaged",
+            "liveness_model": "process_scan",
+            "provider_cli": {"path": "/Users/test/.local/bin/agy", "source": "process"},
+            "pid": 11471,
+            "workspace_label": "antigravity-widget",
+            "cwd": "/Users/test/git/antigravity-widget",
+            "branch": None,
+            "started_at": "2026-04-19T00:02:00Z",
+        },
         {
             "provider": "opencode",
             "control_path": "unmanaged",
@@ -3157,6 +3257,24 @@ def test_collect_unmanaged_processes_detects_node_wrapped_opencode(monkeypatch):
     assert rows[0]["provider_cli"] == {"path": "node", "source": "process"}
 
 
+def test_collect_unmanaged_processes_detects_node_wrapped_antigravity(monkeypatch):
+    now = datetime(2026, 4, 19, 0, 0, 0, tzinfo=timezone.utc)
+    proc = _FakeProc(
+        pid=11472,
+        cmdline=["node", "/opt/homebrew/bin/agy"],
+        create_time=now.timestamp(),
+        env={},
+        cwd="/Users/test/git/zerg",
+    )
+    _patch_process_iter(monkeypatch, [proc])
+
+    rows = local_health_service._collect_unmanaged_processes()
+
+    assert len(rows) == 1
+    assert rows[0]["provider"] == "antigravity"
+    assert rows[0]["provider_cli"] == {"path": "node", "source": "process"}
+
+
 def test_collect_unmanaged_processes_skips_longhouse_opencode_wrappers(monkeypatch):
     now = datetime(2026, 4, 19, 0, 0, 0, tzinfo=timezone.utc)
     direct_wrapper = _FakeProc(
@@ -3173,7 +3291,14 @@ def test_collect_unmanaged_processes_skips_longhouse_opencode_wrappers(monkeypat
         env={},
         cwd="/Users/test/git/zerg",
     )
-    _patch_process_iter(monkeypatch, [direct_wrapper, node_wrapper])
+    antigravity_wrapper = _FakeProc(
+        pid=11475,
+        cmdline=["node", "/usr/local/bin/longhouse-antigravity"],
+        create_time=now.timestamp(),
+        env={},
+        cwd="/Users/test/git/zerg",
+    )
+    _patch_process_iter(monkeypatch, [direct_wrapper, node_wrapper, antigravity_wrapper])
 
     rows = local_health_service._collect_unmanaged_processes()
 

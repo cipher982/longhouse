@@ -86,7 +86,7 @@ backfill migrations.
 | `observation_id` | Deterministic unique id for idempotency. |
 | `session_id` | Longhouse session id when known. |
 | `runtime_key` | Runtime binding key when the observation is not yet tied to a session. |
-| `provider` | Provider such as `codex`, `claude`, or `gemini`. |
+| `provider` | Provider such as `codex`, `claude`, `antigravity`, or legacy `gemini`. |
 | `device_id` | Machine identity when supplied. |
 | `source_domain` | Broad domain: `transcript`, `runtime`, `control`, `engine`. |
 | `source` | Producer/source label, for example `agents_ingest` or `codex_bridge_live`. |
