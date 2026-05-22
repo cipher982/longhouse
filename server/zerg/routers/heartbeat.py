@@ -253,22 +253,7 @@ def _clear_synthetic_managed_missing_runtime_on_reattach(
     return touched_session_ids
 
 
-def _managed_lease_history_keys(db: Session, runtime_keys: list[str]) -> set[str]:
-    if not runtime_keys:
-        return set()
-    rows = (
-        db.query(SessionObservation.runtime_key)
-        .filter(SessionObservation.runtime_key.in_(runtime_keys))
-        .filter(SessionObservation.source == MANAGED_SESSION_LEASE_SOURCE)
-        .filter(SessionObservation.kind == OBS_KIND_RUNTIME_SIGNAL)
-        .distinct()
-        .all()
-    )
-    return {row[0] for row in rows}
-
-
-def _runtime_observation_payload(observation: SessionObservation) -> dict:
-    payload_raw = observation.payload_json
+def _runtime_observation_payload_from_raw(payload_raw: str | dict | None) -> dict:
     if isinstance(payload_raw, dict):
         return payload_raw
     try:
@@ -278,12 +263,7 @@ def _runtime_observation_payload(observation: SessionObservation) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
-def _is_synthetic_missing_managed_lease_observation(observation: SessionObservation) -> bool:
-    if (observation.source or "").strip() != MANAGED_SESSION_LEASE_SOURCE:
-        return False
-    if (observation.kind or "").strip() != OBS_KIND_RUNTIME_SIGNAL:
-        return False
-    payload = _runtime_observation_payload(observation)
+def _is_synthetic_missing_managed_lease_payload(payload: dict) -> bool:
     if str(payload.get("kind") or "").strip() != "phase_signal":
         return False
     if str(payload.get("phase") or "").strip() != "blocked":
@@ -298,7 +278,11 @@ def _latest_real_managed_lease_at_by_key(db: Session, runtime_keys: list[str]) -
     if not runtime_keys:
         return {}
     rows = (
-        db.query(SessionObservation)
+        db.query(
+            SessionObservation.runtime_key,
+            SessionObservation.observed_at,
+            SessionObservation.payload_json,
+        )
         .filter(SessionObservation.runtime_key.in_(runtime_keys))
         .filter(SessionObservation.source == MANAGED_SESSION_LEASE_SOURCE)
         .filter(SessionObservation.kind == OBS_KIND_RUNTIME_SIGNAL)
@@ -310,16 +294,17 @@ def _latest_real_managed_lease_at_by_key(db: Session, runtime_keys: list[str]) -
         .all()
     )
     latest: dict[str, datetime] = {}
-    for observation in rows:
+    for runtime_key, observed_at, payload_json in rows:
         # Rows are ordered newest-first per runtime_key, so the first
         # non-synthetic row we keep is the latest real managed lease signal.
-        if observation.runtime_key in latest:
+        if runtime_key in latest:
             continue
-        if _is_synthetic_missing_managed_lease_observation(observation):
+        payload = _runtime_observation_payload_from_raw(payload_json)
+        if _is_synthetic_missing_managed_lease_payload(payload):
             continue
-        occurred_at = normalize_utc(observation.observed_at)
+        occurred_at = normalize_utc(observed_at)
         if occurred_at is not None:
-            latest[observation.runtime_key] = occurred_at
+            latest[runtime_key] = occurred_at
     return latest
 
 
@@ -344,7 +329,6 @@ def _runtime_events_for_missing_managed_leases(
         .all()
     )
     runtime_keys = [state.runtime_key for state, _session in rows]
-    lease_history_keys = _managed_lease_history_keys(db, runtime_keys)
     latest_real_lease_at = _latest_real_managed_lease_at_by_key(db, runtime_keys)
 
     events: list[RuntimeEventIngest] = []
@@ -355,11 +339,12 @@ def _runtime_events_for_missing_managed_leases(
         session_id = state.session_id
         if not provider or session_id is None or (provider, session_id) in observed:
             continue
-        if state.runtime_key not in lease_history_keys:
+        latest_real_lease_at_for_key = latest_real_lease_at.get(state.runtime_key)
+        if latest_real_lease_at_for_key is None:
             continue
 
         timeline_anchor_at = (
-            latest_real_lease_at.get(state.runtime_key)
+            latest_real_lease_at_for_key
             or normalize_utc(state.timeline_anchor_at)
             or normalize_utc(session.last_activity_at)
             or normalize_utc(state.last_progress_at)
