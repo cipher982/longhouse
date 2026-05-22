@@ -194,10 +194,59 @@ describe("SessionChat", () => {
 
     const recovery = await screen.findByTestId("session-chat-stall-recovery");
     expect(recovery).toHaveTextContent(/managed session appears stalled/i);
-    expect(screen.queryByText(/click queue next to auto-send/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /stop/i })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /interrupt/i }));
     await waitFor(() => expect(interruptCalls).toBe(1));
+  });
+
+  it("shows an inline Stop button for locked managed-local sessions", async () => {
+    const user = userEvent.setup();
+    let interruptCalls = 0;
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: true, fork_available: true });
+      }
+      if (String(path).endsWith("/interrupt-live") && init?.method === "POST") {
+        interruptCalls += 1;
+        return Promise.resolve({
+          interrupt_dispatched: true,
+          confirmed_stopped: false,
+          session_id: "sess-1",
+          exit_code: 0,
+          error: null,
+          released_lock: true,
+        });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat({
+      chatMode: "managed_local",
+    });
+
+    expect(await screen.findByRole("button", { name: /stop/i })).toBeEnabled();
+    expect(screen.getByText(/stop to interrupt/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /stop/i }));
+    await waitFor(() => expect(interruptCalls).toBe(1));
+  });
+
+  it("does not mention Stop when a locked session is not interruptible", () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData<SessionLockInfo | null>(["session-lock", "sess-1"], {
+      locked: true,
+      holder: null,
+      time_remaining_seconds: null,
+      fork_available: true,
+    });
+
+    renderSessionChat({}, { queryClient });
+
+    expect(screen.getByText(/you can draft the next message/i)).not.toHaveTextContent(/Stop/i);
+    expect(screen.queryByRole("button", { name: /stop/i })).not.toBeInTheDocument();
   });
 
   it("keeps the dock visible but replaces disabled composer controls when control is offline", () => {
@@ -537,8 +586,9 @@ describe("SessionChat", () => {
 
     // Lock notice adapts to the queue-next affordance.
     expect(
-      screen.getByText(/click queue next to auto-send/i),
+      screen.getByText(/queue next auto-sends at the next turn boundary/i),
     ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /stop/i })).toBeEnabled();
 
     await user.type(screen.getByRole("textbox"), "wait for it");
     // Button says "Queue next" while working with queue capability, and is
