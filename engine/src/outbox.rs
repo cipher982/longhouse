@@ -255,7 +255,7 @@ fn collect_outbox_impl(
     }
 
     let mut result = OutboxLocalDrainResult::default();
-    let local_phase_conn = if persist_local_state {
+    let local_phase_conn = if persist_local_state && !by_session.is_empty() {
         match crate::state::db::open_db(db_path) {
             Ok(conn) => Some(conn),
             Err(err) => {
@@ -906,6 +906,21 @@ mod tests {
         assert!(
             f.exists(),
             "presence file should remain until the POST/delete phase completes"
+        );
+    }
+
+    #[test]
+    fn test_empty_outbox_does_not_open_local_phase_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("engine.db");
+
+        let result = collect_outbox_with_local_state_result(dir.path(), Some(&db_path));
+
+        assert!(result.signals.is_empty());
+        assert!(result.posts.is_empty());
+        assert!(
+            !db_path.exists(),
+            "empty outbox ticks should not touch SQLite on the daemon hot loop"
         );
     }
 
