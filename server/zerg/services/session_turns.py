@@ -279,6 +279,19 @@ def materialize_managed_transcript_turns(
     if incremental:
         event_floor = _transcript_materialization_event_floor(existing_turns)
         if event_floor is not None:
+            has_new_user_event = (
+                db.query(AgentEvent.id)
+                .filter(
+                    AgentEvent.session_id == session_id,
+                    AgentEvent.id > event_floor,
+                    AgentEvent.role == "user",
+                )
+                .filter(durable_transcript_event_predicate())
+                .limit(1)
+                .one_or_none()
+            )
+            if has_new_user_event is None:
+                return 0
             events_query = events_query.filter(AgentEvent.id > event_floor)
 
     events = events_query.order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc()).all()
