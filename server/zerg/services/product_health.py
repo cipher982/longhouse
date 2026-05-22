@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import json
 import re
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
-from typing import Any
 
 from sqlalchemy.orm import Session
 
-from zerg.models.agents import SessionObservation
 from zerg.schemas.observability import ProductHealthCheckEvidenceRefResponse
 from zerg.schemas.observability import ProductHealthCheckListResponse
 from zerg.schemas.observability import ProductHealthCheckLivePreviewCellResponse
@@ -23,9 +20,9 @@ from zerg.schemas.observability import ProductHealthCheckSummaryResponse
 from zerg.schemas.observability import ProductHealthCheckThresholdsResponse
 from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS
 from zerg.services.agent_heartbeat_health import list_machine_transport_health
-from zerg.services.session_observations import OBS_KIND_CLIENT_RENDER
-from zerg.services.session_observations import SOURCE_DOMAIN_CLIENT
-from zerg.utils.time import normalize_utc
+from zerg.services.client_render_observations import ClientRenderObservation
+from zerg.services.client_render_observations import ClientRenderObservationList
+from zerg.services.client_render_observations import list_client_render_observations
 from zerg.utils.time import utc_now
 
 MACHINE_CONNECTED_CHECK_ID = "machine_connected"
@@ -48,28 +45,10 @@ class _Window:
 
 
 @dataclass(frozen=True)
-class _RenderObservation:
-    observation_id: str
-    session_id: str | None
-    provider: str | None
-    surface: str | None
-    managed: bool | None
-    observed_at: datetime | None
-    latency_ms: int | None
-    ios_render_duration_ms: int | None
-
-
-@dataclass(frozen=True)
 class _CellKey:
     provider: str | None
     surface: str | None
     managed: bool | None
-
-
-@dataclass(frozen=True)
-class _RenderObservationSet:
-    rows: list[_RenderObservation]
-    truncated: bool
 
 
 def build_product_health_checks(
@@ -83,12 +62,13 @@ def build_product_health_checks(
     resolved_window = _parse_window(window)
     generated_at = utc_now()
     since = generated_at - resolved_window.delta
-    render_observations = _load_render_observations(
+    render_observations = list_client_render_observations(
         db,
         since=since,
         provider=provider,
         surface=surface,
         managed=managed,
+        limit=LIVE_PREVIEW_OBSERVATION_LIMIT,
     )
     live_preview = build_live_preview_check(
         db,
@@ -118,7 +98,7 @@ def build_live_preview_check(
     window: str = "15m",
     resolved_window: _Window | None = None,
     generated_at: datetime | None = None,
-    observations: _RenderObservationSet | None = None,
+    observations: ClientRenderObservationList | None = None,
     provider: str | None = None,
     surface: str | None = None,
     managed: bool | None = None,
@@ -127,12 +107,13 @@ def build_live_preview_check(
     generated_at = generated_at or utc_now()
     if observations is None:
         since = generated_at - resolved_window.delta
-        observations = _load_render_observations(
+        observations = list_client_render_observations(
             db,
             since=since,
             provider=provider,
             surface=surface,
             managed=managed,
+            limit=LIVE_PREVIEW_OBSERVATION_LIMIT,
         )
     cells = _build_live_preview_cells(
         observations.rows,
@@ -149,65 +130,15 @@ def build_live_preview_check(
     )
 
 
-def _load_render_observations(
-    db: Session,
-    *,
-    since: datetime,
-    provider: str | None,
-    surface: str | None,
-    managed: bool | None,
-) -> _RenderObservationSet:
-    since = normalize_utc(since) or utc_now()
-    provider = _normalize_text_filter(provider)
-    surface = _normalize_text_filter(surface)
-    query = (
-        db.query(SessionObservation)
-        .filter(SessionObservation.source_domain == SOURCE_DOMAIN_CLIENT)
-        .filter(SessionObservation.kind == OBS_KIND_CLIENT_RENDER)
-        .filter(SessionObservation.observed_at >= since)
-        .order_by(SessionObservation.observed_at.desc(), SessionObservation.id.desc())
-    )
-    if provider:
-        query = query.filter(SessionObservation.provider == provider)
-    query = query.limit(LIVE_PREVIEW_OBSERVATION_LIMIT + 1)
-
-    rows = query.all()
-    truncated = len(rows) > LIVE_PREVIEW_OBSERVATION_LIMIT
-    rows = rows[:LIVE_PREVIEW_OBSERVATION_LIMIT]
-    observations: list[_RenderObservation] = []
-    for row in rows:
-        payload = _parse_payload(row.payload_json)
-        row_surface = _str_or_none(payload.get("surface"))
-        row_managed = _bool_or_none(payload.get("managed"))
-        if surface is not None and row_surface != surface:
-            continue
-        if managed is not None and row_managed is not managed:
-            continue
-        webkit = payload.get("webkit") if isinstance(payload.get("webkit"), dict) else {}
-        observations.append(
-            _RenderObservation(
-                observation_id=row.observation_id,
-                session_id=str(row.session_id) if row.session_id else None,
-                provider=row.provider or None,
-                surface=row_surface,
-                managed=row_managed,
-                observed_at=normalize_utc(row.observed_at),
-                latency_ms=_int_or_none(payload.get("latency_ms")),
-                ios_render_duration_ms=_int_or_none(webkit.get("render_duration_ms")),
-            )
-        )
-    return _RenderObservationSet(rows=observations, truncated=truncated)
-
-
 def _build_live_preview_cells(
-    observations: list[_RenderObservation],
+    observations: list[ClientRenderObservation],
     *,
     truncated: bool,
     provider: str | None,
     surface: str | None,
     managed: bool | None,
 ) -> list[ProductHealthCheckLivePreviewCellResponse]:
-    grouped: dict[_CellKey, list[_RenderObservation]] = defaultdict(list)
+    grouped: dict[_CellKey, list[ClientRenderObservation]] = defaultdict(list)
     for observation in observations:
         grouped[
             _CellKey(
@@ -241,7 +172,7 @@ def _build_live_preview_cells(
 
 def _build_live_preview_cell(
     key: _CellKey,
-    rows: list[_RenderObservation],
+    rows: list[ClientRenderObservation],
     *,
     truncated: bool,
 ) -> ProductHealthCheckLivePreviewCellResponse:
@@ -286,7 +217,7 @@ def _build_live_preview_cell(
 def _missing_live_preview_signals(
     key: _CellKey,
     *,
-    rows: list[_RenderObservation],
+    rows: list[ClientRenderObservation],
     latency_values: list[int],
     ios_render_values: list[int],
 ) -> list[str]:
@@ -301,7 +232,7 @@ def _missing_live_preview_signals(
     return missing
 
 
-def _coverage_for_missing(rows: list[_RenderObservation], missing: list[str]) -> str:
+def _coverage_for_missing(rows: list[ClientRenderObservation], missing: list[str]) -> str:
     if not rows:
         return "none"
     return "partial" if missing else "full"
@@ -318,7 +249,7 @@ def _verdict_for_live_preview(*, coverage: str, render_p95_ms: int | None) -> st
 
 
 def _live_preview_evidence(
-    rows: list[_RenderObservation],
+    rows: list[ClientRenderObservation],
     *,
     verdict: str,
 ) -> list[ProductHealthCheckEvidenceRefResponse]:
@@ -412,7 +343,7 @@ def _machine_connected_headline(*, total: int, healthy: int, unhealthy: int) -> 
 
 
 def _build_render_freshness_summary(
-    observations: list[_RenderObservation],
+    observations: list[ClientRenderObservation],
     *,
     window: _Window,
     generated_at: datetime,
@@ -516,16 +447,6 @@ def _parse_window(value: str) -> _Window:
     return _Window(label=f"{count}{unit}", delta=timedelta(seconds=seconds))
 
 
-def _parse_payload(raw: str | None) -> dict[str, Any]:
-    if not raw:
-        return {}
-    try:
-        value = json.loads(raw)
-    except (TypeError, ValueError):
-        return {}
-    return value if isinstance(value, dict) else {}
-
-
 def _format_age(seconds: int) -> str:
     if seconds < 60:
         return f"{seconds}s"
@@ -534,46 +455,6 @@ def _format_age(seconds: int) -> str:
         return f"{minutes}m"
     hours = minutes // 60
     return f"{hours}h"
-
-
-def _str_or_none(value: Any) -> str | None:
-    if isinstance(value, str) and value.strip():
-        return value.strip().lower()
-    return None
-
-
-def _normalize_text_filter(value: str | None) -> str | None:
-    if value is None:
-        return None
-    normalized = value.strip().lower()
-    return normalized or None
-
-
-def _bool_or_none(value: Any) -> bool | None:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        lowered = value.strip().lower()
-        if lowered in {"true", "1", "yes"}:
-            return True
-        if lowered in {"false", "0", "no"}:
-            return False
-    return None
-
-
-def _int_or_none(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str):
-        try:
-            return int(float(value))
-        except ValueError:
-            return None
-    return None
 
 
 def _percentile(values: list[int], percentile: float) -> int | None:

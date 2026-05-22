@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Run live QA against a Longhouse hosted instance.
+# Run the canonical post-deploy QA against a Longhouse hosted instance.
+# This owns hosted continuation-readiness coverage through managed-control
+# projection checks; bespoke provider-backed continuation smoke was retired.
 #
 # Usage:
 #   ./scripts/qa-live.sh

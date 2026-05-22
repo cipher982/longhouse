@@ -24,11 +24,11 @@ from zerg.schemas.observability import RealtimePropagationSessionReportResponse
 from zerg.schemas.observability import RealtimePropagationSessionResponse
 from zerg.schemas.observability import RealtimePropagationShipTraceResponse
 from zerg.schemas.observability import RealtimePropagationStageResponse
-from zerg.services.session_observations import OBS_KIND_CLIENT_RENDER
+from zerg.services.client_render_observations import ClientRenderObservation
+from zerg.services.client_render_observations import list_client_render_observations
 from zerg.services.session_observations import OBS_KIND_PROVIDER_EVENT
 from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
 from zerg.services.session_observations import OBS_KIND_SERVER_FANOUT
-from zerg.services.session_observations import SOURCE_DOMAIN_CLIENT
 from zerg.utils.time import normalize_utc
 from zerg.utils.time import utc_now
 
@@ -94,8 +94,7 @@ class _ShipTracePayload:
 
 @dataclass(frozen=True)
 class _RenderMatch:
-    row: SessionObservation
-    payload: dict[str, Any]
+    observation: ClientRenderObservation
     matched_by: str
 
 
@@ -225,23 +224,13 @@ def _load_client_renders(
     session_id: UUID,
     surface: str | None,
     limit: int,
-) -> list[_ObservationPayload]:
-    query = (
-        db.query(SessionObservation)
-        .filter(SessionObservation.session_id == session_id)
-        .filter(SessionObservation.source_domain == SOURCE_DOMAIN_CLIENT)
-        .filter(SessionObservation.kind == OBS_KIND_CLIENT_RENDER)
-    )
-    rows = (
-        query.order_by(SessionObservation.observed_at.desc(), SessionObservation.id.desc())
-        .limit(limit)
-        .all()
-    )
-    rendered = [_ObservationPayload(row=row, payload=_decode_payload(row)) for row in rows]
-    if surface is None:
-        return rendered
-    surface_key = surface.strip().lower()
-    return [item for item in rendered if str(item.payload.get("surface") or "").strip().lower() == surface_key]
+) -> list[ClientRenderObservation]:
+    return list_client_render_observations(
+        db,
+        session_id=session_id,
+        surface=surface,
+        limit=limit,
+    ).rows
 
 
 def _load_server_fanouts(
@@ -267,7 +256,7 @@ def _build_event_report(
     provider_observations: list[_ObservationPayload],
     ship_traces: list[_ShipTracePayload],
     server_fanouts: list[_ServerFanoutPayload],
-    client_renders: list[_ObservationPayload],
+    client_renders: list[ClientRenderObservation],
 ) -> RealtimePropagationEventResponse:
     provider_observation = _match_provider_observation(event, provider_observations)
     ship_trace = _match_ship_trace(event, ship_traces)
@@ -295,7 +284,7 @@ def _build_event_report(
     )
     total_provider_to_first_render_ms = None
     if provider_ts is not None and first_render is not None:
-        total_provider_to_first_render_ms = _duration_ms(provider_ts, first_render.row.observed_at)
+        total_provider_to_first_render_ms = _duration_ms(provider_ts, first_render.observation.row.observed_at)
     measured_total_ms = _measured_total_ms(stages)
     unaccounted_ms = (
         total_provider_to_first_render_ms - measured_total_ms
@@ -324,7 +313,7 @@ def _build_event_report(
         measured_total_ms=measured_total_ms,
         unaccounted_ms=unaccounted_ms,
         client_clock_skew_ms=(
-            _int_or_none(first_render.payload.get("clock_skew_ms")) if first_render is not None else None
+            _int_or_none(first_render.observation.payload.get("clock_skew_ms")) if first_render is not None else None
         ),
         bottleneck=bottleneck,
         stages=stages,
@@ -410,7 +399,7 @@ def _match_server_fanout(
 
 def _match_client_renders(
     event: AgentEvent,
-    client_renders: list[_ObservationPayload],
+    client_renders: list[ClientRenderObservation],
 ) -> list[_RenderMatch]:
     matches: list[_RenderMatch] = []
     projection_item_id = f"{event.role}:{event.id}"
@@ -426,13 +415,13 @@ def _match_client_renders(
             if latest_item_id == projection_item_id:
                 matched_by = "latest_item_id"
         if matched_by is not None:
-            matches.append(_RenderMatch(row=item.row, payload=payload, matched_by=matched_by))
+            matches.append(_RenderMatch(observation=item, matched_by=matched_by))
 
     return sorted(
         matches,
         key=lambda match: (
-            normalize_utc(match.row.observed_at) or datetime.max.replace(tzinfo=timezone.utc),
-            int(match.row.id),
+            normalize_utc(match.observation.row.observed_at) or datetime.max.replace(tzinfo=timezone.utc),
+            int(match.observation.row.id),
         ),
     )
 
@@ -456,14 +445,14 @@ def _build_stages(
     server_fanout_at = normalize_utc(server_fanout.row.observed_at) if server_fanout is not None else None
     client_received_at = (
         _client_dt_from_ms(
-            first_render.payload.get("client_received_at_ms"),
-            first_render.payload.get("clock_skew_ms"),
+            first_render.observation.payload.get("client_received_at_ms"),
+            first_render.observation.payload.get("clock_skew_ms"),
         )
         if first_render
         else None
     )
-    client_rendered = normalize_utc(first_render.row.observed_at) if first_render else None
-    clock_skew_ms = _int_or_none(first_render.payload.get("clock_skew_ms")) if first_render else None
+    client_rendered = normalize_utc(first_render.observation.row.observed_at) if first_render else None
+    clock_skew_ms = _int_or_none(first_render.observation.payload.get("clock_skew_ms")) if first_render else None
     render_note = (
         "Includes server fanout, client receive, API refresh, and render until those probes are split."
     )
@@ -631,7 +620,7 @@ def _build_event_gaps(
         gaps.append("missing_server_fanout_observation")
     if first_render is None:
         gaps.append("missing_client_render_beacon")
-    elif first_render.payload.get("client_received_at_ms") is None:
+    elif first_render.observation.payload.get("client_received_at_ms") is None:
         gaps.append("missing_client_received_timestamp")
     return gaps
 
@@ -693,14 +682,14 @@ def _build_ship_trace_response(trace: _ShipTracePayload) -> RealtimePropagationS
 
 
 def _build_client_render_response(match: _RenderMatch) -> RealtimePropagationClientRenderResponse:
-    payload = match.payload
+    payload = match.observation.payload
     webkit = payload.get("webkit") if isinstance(payload.get("webkit"), dict) else {}
     return RealtimePropagationClientRenderResponse(
         surface=str(payload.get("surface") or "unknown"),
         event_id=_str_or_none(payload.get("event_id")),
         matched_by=match.matched_by,
-        observed_at=match.row.observed_at,
-        received_at=match.row.received_at,
+        observed_at=match.observation.row.observed_at,
+        received_at=match.observation.row.received_at,
         emitted_at_ms=_int_or_none(payload.get("emitted_at_ms")),
         rendered_at_ms=_int_or_none(payload.get("rendered_at_ms")),
         clock_skew_ms=_int_or_none(payload.get("clock_skew_ms")),
