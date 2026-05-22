@@ -239,7 +239,11 @@ try {
     }
     const kind = typeof detail.kind === "string" ? detail.kind : "unknown";
     emit(`timeline_stream_${kind}`, { detail });
-    if (kind === "workspace_changed" && detail.has_transcript_preview) {
+    if (
+      kind === "workspace_changed" &&
+      detail.has_transcript_preview &&
+      Number(detail.transcript_preview_text_length || 0) > 0
+    ) {
       emit("timeline_stream_workspace_preview_changed", { detail });
     }
   });
