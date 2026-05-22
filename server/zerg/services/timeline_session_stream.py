@@ -103,6 +103,14 @@ async def stream_timeline_sessions_for_browser(
             if preflight_enabled and pending_timeline_message is not None:
                 targeted_session_id = _timeline_message_session_id(pending_timeline_message)
                 targeted_thread_id = previous_session_threads.get(targeted_session_id or "")
+                if targeted_session_id and not targeted_thread_id:
+                    with session_factory() as db:
+                        current_window_signature = _load_timeline_stream_window_signature(db=db, params=params)
+                    current_session_threads = _index_timeline_window_signature(current_window_signature)
+                    targeted_thread_id = current_session_threads.get(targeted_session_id)
+                    if targeted_thread_id:
+                        previous_window_signature = current_window_signature
+                        previous_session_threads.update(current_session_threads)
                 if targeted_session_id and targeted_thread_id:
                     with session_factory() as db:
                         targeted_card = _load_timeline_stream_card(

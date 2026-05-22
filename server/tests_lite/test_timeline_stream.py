@@ -486,6 +486,62 @@ def test_timeline_stream_skip_initial_replay_sends_targeted_update_only(tmp_path
     reset_pubsub_for_test()
 
 
+def test_timeline_stream_skip_initial_replay_targets_new_session_without_full_replay(tmp_path):
+    reset_pubsub_for_test()
+    session_local = _make_db(tmp_path, "timeline_stream_skip_initial_new_session.db")
+    now = datetime.now(timezone.utc)
+
+    with session_local() as db:
+        _seed_session(
+            db,
+            started_at=now - timedelta(minutes=5),
+            ended_at=None,
+            project="skip-initial-existing",
+        )
+
+    async def _collect_after_new_session_publish():
+        stream = timeline_stream.stream_timeline_sessions_for_browser(
+            _ConnectedRequest(),
+            session_factory=session_local,
+            params=_stream_params(limit=2),
+            skip_initial_replay=True,
+        )
+        try:
+            connected = await anext(stream)
+            next_event = asyncio.create_task(anext(stream))
+            await asyncio.sleep(0)
+            with session_local() as db:
+                new_session = _seed_session(
+                    db,
+                    started_at=now,
+                    ended_at=None,
+                    project="skip-initial-new",
+                )
+                new_session_id = str(new_session.id)
+            get_pubsub().publish(TOPIC_TIMELINE, {"kind": "test", "session_id": new_session_id})
+            upsert = await asyncio.wait_for(next_event, timeout=0.5)
+
+            followup = asyncio.create_task(anext(stream))
+            done, pending = await asyncio.wait({followup}, timeout=0.05)
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            assert not done
+            return connected, upsert, new_session_id
+        finally:
+            await stream.aclose()
+
+    connected, upsert, new_session_id = asyncio.run(_collect_after_new_session_publish())
+    payload = json.loads(upsert["data"])
+
+    assert connected["event"] == "connected"
+    assert upsert["event"] == "session_upsert"
+    assert payload["session"]["thread_id"] == new_session_id
+    assert payload["session"]["head"]["project"] == "skip-initial-new"
+    reset_pubsub_for_test()
+
+
 def test_timeline_stream_upserts_on_bridge_transcript_preview_only_change(tmp_path):
     reset_pubsub_for_test()
     session_local = _make_db(tmp_path, "timeline_stream_live_overlay.db")
