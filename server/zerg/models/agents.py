@@ -400,14 +400,6 @@ class SessionObservation(AgentsBase):
         ),
         Index("ix_session_observations_domain_kind", "source_domain", "kind", "observed_at"),
         Index("ix_session_observations_source_cursor", "source", "source_cursor"),
-        Index(
-            "ix_session_observations_runtime_source_kind_observed",
-            "runtime_key",
-            "source",
-            "kind",
-            "observed_at",
-            "id",
-        ),
     )
 
 
