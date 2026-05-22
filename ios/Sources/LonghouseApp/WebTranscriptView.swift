@@ -369,6 +369,7 @@ struct WebTranscriptView: UIViewRepresentable {
         }
 
         private func emitNearTopIfNeeded(_ scrollView: UIScrollView) {
+            guard userScrollInProgress || !shouldStickToBottom else { return }
             guard scrollView.contentSize.height > scrollView.bounds.height + 240 else { return }
             guard scrollView.contentOffset.y < 180 else { return }
             let now = Date()
