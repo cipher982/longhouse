@@ -35,6 +35,7 @@ from zerg.metrics import agents_heartbeat_write_seconds
 from zerg.metrics import managed_session_heartbeat_lease_rows_total
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
+from zerg.models.agents import ManagedSessionControlState
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import UnmanagedSessionBinding
@@ -274,39 +275,44 @@ def _is_synthetic_missing_managed_lease_payload(payload: dict) -> bool:
     return isinstance(event_payload, dict) and event_payload.get("state") == "missing"
 
 
-def _latest_real_managed_lease_at_by_key(db: Session, runtime_keys: list[str]) -> dict[str, datetime | None]:
-    if not runtime_keys:
-        return {}
+def _state_is_synthetic_missing_managed_lease(state: SessionRuntimeState) -> bool:
+    if str(state.phase_source or "").strip() != MANAGED_SESSION_LEASE_SOURCE:
+        return False
+    if str(state.phase or "").strip() != "blocked":
+        return False
+    return str(state.active_tool or "").strip() == "control path"
+
+
+def _state_has_real_managed_lease_history(state: SessionRuntimeState) -> bool:
+    return (
+        str(state.phase_source or "").strip() == MANAGED_SESSION_LEASE_SOURCE
+        and not _state_is_synthetic_missing_managed_lease(state)
+    )
+
+
+def _latest_real_managed_lease_at_for_key(db: Session, runtime_key: str) -> tuple[bool, datetime | None]:
     rows = (
         db.query(
-            SessionObservation.runtime_key,
             SessionObservation.observed_at,
             SessionObservation.payload_json,
         )
-        .filter(SessionObservation.runtime_key.in_(runtime_keys))
+        .filter(SessionObservation.runtime_key == runtime_key)
         .filter(SessionObservation.source == MANAGED_SESSION_LEASE_SOURCE)
         .filter(SessionObservation.kind == OBS_KIND_RUNTIME_SIGNAL)
-        .order_by(
-            SessionObservation.runtime_key.asc(),
-            SessionObservation.observed_at.desc(),
-            SessionObservation.id.desc(),
-        )
+        .order_by(SessionObservation.observed_at.desc(), SessionObservation.id.desc())
+        .limit(200)
         .all()
     )
-    latest: dict[str, datetime | None] = {}
-    for runtime_key, observed_at, payload_json in rows:
-        # Rows are ordered newest-first per runtime_key, so the first
-        # non-synthetic row we keep is the latest real managed lease signal.
-        if runtime_key in latest and latest[runtime_key] is not None:
-            continue
+    saw_lease_history = False
+    for observed_at, payload_json in rows:
+        saw_lease_history = True
         payload = _runtime_observation_payload_from_raw(payload_json)
         if _is_synthetic_missing_managed_lease_payload(payload):
-            latest.setdefault(runtime_key, None)
             continue
         occurred_at = normalize_utc(observed_at)
         if occurred_at is not None:
-            latest[runtime_key] = occurred_at
-    return latest
+            return True, occurred_at
+    return saw_lease_history, None
 
 
 def _runtime_events_for_missing_managed_leases(
@@ -329,8 +335,13 @@ def _runtime_events_for_missing_managed_leases(
         .filter(SessionRuntimeState.terminal_state.is_(None))
         .all()
     )
-    runtime_keys = [state.runtime_key for state, _session in rows]
-    latest_real_lease_at = _latest_real_managed_lease_at_by_key(db, runtime_keys)
+    control_rows = (
+        db.query(ManagedSessionControlState)
+        .filter(ManagedSessionControlState.device_id == device_id)
+        .all()
+    )
+    control_by_session = {row.session_id: row for row in control_rows}
+    legacy_real_lease_at_by_key: dict[str, tuple[bool, datetime | None]] = {}
 
     events: list[RuntimeEventIngest] = []
     for state, session in rows:
@@ -340,12 +351,32 @@ def _runtime_events_for_missing_managed_leases(
         session_id = state.session_id
         if not provider or session_id is None or (provider, session_id) in observed:
             continue
-        latest_real_lease_at_for_key = latest_real_lease_at.get(state.runtime_key)
-        if state.runtime_key not in latest_real_lease_at:
+
+        control_row = control_by_session.get(session_id)
+        lease_history_at = None
+        if control_row is not None:
+            lease_history_at = normalize_utc(control_row.lease_observed_at) or normalize_utc(
+                control_row.last_control_seen_at,
+            )
+
+        if lease_history_at is None and _state_has_real_managed_lease_history(state):
+            lease_history_at = normalize_utc(state.last_runtime_signal_at) or normalize_utc(state.timeline_anchor_at)
+
+        if lease_history_at is None and _state_is_synthetic_missing_managed_lease(state):
+            if state.runtime_key not in legacy_real_lease_at_by_key:
+                legacy_real_lease_at_by_key[state.runtime_key] = _latest_real_managed_lease_at_for_key(
+                    db,
+                    state.runtime_key,
+                )
+            saw_legacy_history, legacy_real_lease_at = legacy_real_lease_at_by_key[state.runtime_key]
+            if saw_legacy_history:
+                lease_history_at = legacy_real_lease_at or normalize_utc(state.timeline_anchor_at)
+
+        if lease_history_at is None:
             continue
 
         timeline_anchor_at = (
-            latest_real_lease_at_for_key
+            lease_history_at
             or normalize_utc(state.timeline_anchor_at)
             or normalize_utc(session.last_activity_at)
             or normalize_utc(state.last_progress_at)
