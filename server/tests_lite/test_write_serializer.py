@@ -225,8 +225,8 @@ async def test_summary_task_bookkeeping_jumps_ahead_of_archive_ingest(tmp_path):
         "task-timeout",
         "summary",
         "task-done",
-        "server-fanout",
         "archive",
+        "server-fanout",
     ]
 
 
