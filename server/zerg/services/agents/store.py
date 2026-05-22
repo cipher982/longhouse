@@ -35,11 +35,13 @@ from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.provisional_events import visible_transcript_event_predicate
+from zerg.services.raw_json_compression import CODEC_PLAIN
 from zerg.services.raw_json_compression import CODEC_ZSTD
 from zerg.services.raw_json_compression import compress_raw_json
 from zerg.services.raw_json_compression import decode_raw_json
 from zerg.services.agents.kernel_writes import ensure_primary_thread
 from zerg.services.agents.kernel_writes import record_thread_alias
+from zerg.services.session_observation_reducers import ProviderEventReduction
 from zerg.services.session_observation_reducers import reduce_provider_event_observation
 from zerg.services.session_observations import record_provider_event_observation
 from zerg.services.session_observations import record_source_line_observation
@@ -1552,6 +1554,7 @@ class AgentsStore:
         inserted_event_ids: list[int] = []
         needs_session_wide_fts_backfill = False
         provider_events_received_at = datetime.now(timezone.utc)
+        direct_event_projection = not fts_triggers_dropped
 
         stage_started = time.monotonic()
         try:
@@ -1584,8 +1587,42 @@ class AgentsStore:
                     event_uuid=event_uuid,
                     parent_event_uuid=parent_event_uuid,
                     received_at=provider_events_received_at,
+                    load_observation=not direct_event_projection,
                 )
-                if observation_result.observation is not None:
+                if direct_event_projection:
+                    raw_json_z = compress_raw_json(event_data.raw_json) if event_data.raw_json is not None else None
+                    event_stmt = (
+                        sqlite_insert(AgentEvent)
+                        .values(
+                            session_id=session_id,
+                            thread_id=thread_id,
+                            branch_id=ingest_branch.id,
+                            role=event_data.role,
+                            content_text=event_data.content_text,
+                            tool_name=event_data.tool_name,
+                            tool_input_json=event_data.tool_input_json,
+                            tool_output_text=event_data.tool_output_text,
+                            tool_call_id=event_data.tool_call_id,
+                            timestamp=event_data.timestamp,
+                            source_path=event_data.source_path,
+                            source_offset=event_data.source_offset,
+                            event_hash=event_hash,
+                            raw_json=None,
+                            raw_json_z=raw_json_z,
+                            raw_json_codec=CODEC_ZSTD if raw_json_z else CODEC_PLAIN,
+                            schema_version=1,
+                            event_uuid=event_uuid,
+                            parent_event_uuid=parent_event_uuid,
+                            event_origin="durable",
+                        )
+                        .on_conflict_do_nothing()
+                    )
+                    insert_result = self.db.execute(event_stmt) if observation_result.inserted else None
+                    event_inserted = bool(
+                        insert_result is not None and insert_result.rowcount and insert_result.rowcount > 0
+                    )
+                    reduction = ProviderEventReduction(event=None, inserted=event_inserted)
+                elif observation_result.observation is not None:
                     reduction = reduce_provider_event_observation(self.db, observation_result.observation)
                 else:
                     reduction = None
@@ -1625,6 +1662,8 @@ class AgentsStore:
                 except Exception:
                     logger.exception("Failed to restore FTS triggers after ingest error for session %s", session_id)
             raise
+        if events_inserted > 0 and latest_inserted_event_id is None:
+            latest_inserted_event_id = self.get_latest_event_id(session_id)
         _record_stage("provider_event_observations", stage_started)
 
         if fts_triggers_dropped:
