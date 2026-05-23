@@ -87,6 +87,12 @@ pub struct HeartbeatPayload {
     /// whose provider process is confirmed gone.
     #[serde(default)]
     pub unmanaged_session_bindings: Vec<UnmanagedSessionBinding>,
+    /// Resolved local session/execution view. This is the canonical local
+    /// identity graph projection for menu bar and local-health consumers:
+    /// managed/unmanaged presentation state is derived after joining raw
+    /// bridge, channel, transcript, and process observations.
+    #[serde(default)]
+    pub sessions: Vec<ResolvedLocalSession>,
     /// Phase-2 adaptive backlog limiter snapshot. Drives AIMD off the
     /// `X-Ingest-Queue-Wait-Ms` header on each successful ship; absent on
     /// processes that haven't built a scheduler yet (e.g. legacy heartbeat
@@ -120,6 +126,80 @@ pub struct UnmanagedSessionBinding {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_mtime: Option<String>,
     pub observed_at: String,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+pub struct ResolvedLocalSession {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    pub provider: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_session_id: Option<String>,
+    pub control_path: String,
+    pub presentation_state: String,
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase_observed_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_activity_at: Option<String>,
+    pub workspace: ResolvedWorkspace,
+    pub process: ResolvedProcess,
+    pub bridge: ResolvedBridge,
+    pub evidence: ResolvedEvidence,
+    #[serde(default)]
+    pub reason_codes: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq, Default)]
+pub struct ResolvedWorkspace {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq, Default)]
+pub struct ResolvedProcess {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub process_start_time: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq, Default)]
+pub struct ResolvedBridge {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bridge_pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_server_pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ws_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub heartbeat_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_subscription_status: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq, Default)]
+pub struct ResolvedEvidence {
+    pub process_observed: bool,
+    pub transcript_observed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bridge_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hook_seen_at: Option<String>,
+    #[serde(default)]
+    pub join_keys: Vec<String>,
 }
 
 pub use crate::unmanaged_bindings::collect_unmanaged_session_bindings_with_store;
@@ -217,6 +297,7 @@ impl HeartbeatPayload {
             is_offline: stats.is_offline,
             managed_sessions: Vec::new(),
             unmanaged_session_bindings: Vec::new(),
+            sessions: Vec::new(),
             adaptive_backlog_limiter: None,
         }
     }
@@ -376,6 +457,255 @@ pub fn filter_unmanaged_bindings_owned_by_managed_observations(
                 && !binding_owned_by_claude(binding, &managed_claude)
         })
         .collect()
+}
+
+pub fn resolved_sessions_from_observations(
+    managed_sessions: &[ManagedSessionLease],
+    unmanaged_bindings: &[UnmanagedSessionBinding],
+    codex_observations: &[CodexBridgeObservation],
+    claude_observations: &[ClaudeChannelObservation],
+) -> Vec<ResolvedLocalSession> {
+    let codex_by_session: HashMap<&str, &CodexBridgeObservation> = codex_observations
+        .iter()
+        .map(|obs| (obs.session_id.as_str(), obs))
+        .collect();
+    let claude_by_session: HashMap<&str, &ClaudeChannelObservation> = claude_observations
+        .iter()
+        .map(|obs| (obs.session_id.as_str(), obs))
+        .collect();
+
+    let mut sessions = Vec::with_capacity(managed_sessions.len() + unmanaged_bindings.len());
+    for lease in managed_sessions {
+        match lease.provider.as_str() {
+            "codex" => sessions.push(resolved_managed_codex_session(
+                lease,
+                codex_by_session.get(lease.session_id.as_str()).copied(),
+            )),
+            "claude" => sessions.push(resolved_managed_claude_session(
+                lease,
+                claude_by_session.get(lease.session_id.as_str()).copied(),
+            )),
+            _ => sessions.push(resolved_managed_generic_session(lease)),
+        }
+    }
+    for binding in unmanaged_bindings {
+        sessions.push(resolved_unmanaged_session(binding));
+    }
+    sessions.sort_by(|a, b| {
+        a.control_path
+            .cmp(&b.control_path)
+            .then_with(|| a.provider.cmp(&b.provider))
+            .then_with(|| {
+                a.session_id
+                    .as_deref()
+                    .unwrap_or("")
+                    .cmp(b.session_id.as_deref().unwrap_or(""))
+            })
+            .then_with(|| {
+                a.provider_session_id
+                    .as_deref()
+                    .unwrap_or("")
+                    .cmp(b.provider_session_id.as_deref().unwrap_or(""))
+            })
+    });
+    sessions
+}
+
+fn resolved_managed_codex_session(
+    lease: &ManagedSessionLease,
+    obs: Option<&CodexBridgeObservation>,
+) -> ResolvedLocalSession {
+    let cwd = obs.and_then(|obs| obs.cwd.clone());
+    let provider_session_id = obs.and_then(|obs| obs.thread_id.clone());
+    let thread_path = obs.and_then(|obs| obs.thread_path.clone());
+    let process_pid = obs.and_then(|obs| obs.app_server_pid);
+    let mut join_keys = vec![format!("session_id={}", lease.session_id)];
+    if let Some(provider_session_id) = provider_session_id.as_deref() {
+        join_keys.push(format!("provider_session_id={provider_session_id}"));
+    }
+    if let Some(thread_path) = thread_path.as_deref() {
+        join_keys.push(format!("thread_path={thread_path}"));
+    }
+    if let Some(pid) = process_pid {
+        join_keys.push(format!("app_server_pid={pid}"));
+    }
+
+    ResolvedLocalSession {
+        session_id: Some(lease.session_id.clone()),
+        provider: lease.provider.clone(),
+        provider_session_id,
+        control_path: "managed".to_string(),
+        presentation_state: managed_presentation_state(&lease.state),
+        state: lease.state.clone(),
+        phase: lease.phase.clone(),
+        tool_name: lease.tool_name.clone(),
+        phase_observed_at: Some(lease.observed_at.clone()),
+        last_activity_at: Some(lease.observed_at.clone()),
+        workspace: workspace_from_cwd(cwd),
+        process: ResolvedProcess {
+            pid: process_pid,
+            process_start_time: None,
+            started_at: None,
+        },
+        bridge: ResolvedBridge {
+            bridge_pid: obs.map(|obs| obs.bridge_pid),
+            app_server_pid: process_pid,
+            ws_url: obs.and_then(|obs| obs.ws_url.clone()),
+            heartbeat_at: obs.map(|obs| obs.updated_at.clone()),
+            status: obs.map(|obs| obs.status.clone()),
+            thread_subscription_status: obs.and_then(|obs| obs.thread_subscription_status.clone()),
+        },
+        evidence: ResolvedEvidence {
+            process_observed: obs.is_some_and(|obs| obs.app_server_alive || obs.has_tui_attachment),
+            transcript_observed: thread_path.is_some(),
+            bridge_state: obs.map(|obs| obs.status.clone()),
+            hook_seen_at: None,
+            join_keys,
+        },
+        reason_codes: Vec::new(),
+    }
+}
+
+fn resolved_managed_claude_session(
+    lease: &ManagedSessionLease,
+    obs: Option<&ClaudeChannelObservation>,
+) -> ResolvedLocalSession {
+    let provider_session_id = obs.and_then(|obs| obs.provider_session_id.clone());
+    let process_pid = obs.and_then(|obs| obs.claude_pid);
+    let mut join_keys = vec![format!("session_id={}", lease.session_id)];
+    if let Some(provider_session_id) = provider_session_id.as_deref() {
+        join_keys.push(format!("provider_session_id={provider_session_id}"));
+    }
+    if let Some(pid) = process_pid {
+        join_keys.push(format!("claude_pid={pid}"));
+    }
+    let transcript_observed = provider_session_id.is_some();
+
+    ResolvedLocalSession {
+        session_id: Some(lease.session_id.clone()),
+        provider: lease.provider.clone(),
+        provider_session_id,
+        control_path: "managed".to_string(),
+        presentation_state: managed_presentation_state(&lease.state),
+        state: lease.state.clone(),
+        phase: lease.phase.clone(),
+        tool_name: lease.tool_name.clone(),
+        phase_observed_at: Some(lease.observed_at.clone()),
+        last_activity_at: Some(lease.observed_at.clone()),
+        workspace: ResolvedWorkspace::default(),
+        process: ResolvedProcess {
+            pid: process_pid,
+            process_start_time: None,
+            started_at: None,
+        },
+        bridge: ResolvedBridge {
+            bridge_pid: obs.and_then(|obs| obs.bridge_pid),
+            app_server_pid: None,
+            ws_url: None,
+            heartbeat_at: obs.map(|obs| obs.updated_at.clone()),
+            status: lease.bridge_status.clone(),
+            thread_subscription_status: None,
+        },
+        evidence: ResolvedEvidence {
+            process_observed: obs.is_some_and(|obs| obs.claude_alive),
+            transcript_observed,
+            bridge_state: lease.bridge_status.clone(),
+            hook_seen_at: None,
+            join_keys,
+        },
+        reason_codes: Vec::new(),
+    }
+}
+
+fn resolved_managed_generic_session(lease: &ManagedSessionLease) -> ResolvedLocalSession {
+    ResolvedLocalSession {
+        session_id: Some(lease.session_id.clone()),
+        provider: lease.provider.clone(),
+        provider_session_id: None,
+        control_path: "managed".to_string(),
+        presentation_state: managed_presentation_state(&lease.state),
+        state: lease.state.clone(),
+        phase: lease.phase.clone(),
+        tool_name: lease.tool_name.clone(),
+        phase_observed_at: Some(lease.observed_at.clone()),
+        last_activity_at: Some(lease.observed_at.clone()),
+        workspace: ResolvedWorkspace::default(),
+        process: ResolvedProcess::default(),
+        bridge: ResolvedBridge::default(),
+        evidence: ResolvedEvidence {
+            process_observed: false,
+            transcript_observed: false,
+            bridge_state: lease.bridge_status.clone(),
+            hook_seen_at: None,
+            join_keys: vec![format!("session_id={}", lease.session_id)],
+        },
+        reason_codes: Vec::new(),
+    }
+}
+
+fn resolved_unmanaged_session(binding: &UnmanagedSessionBinding) -> ResolvedLocalSession {
+    let mut join_keys = vec![format!(
+        "provider_session_id={}",
+        binding.provider_session_id
+    )];
+    if let Some(source_path) = binding.source_path.as_deref() {
+        join_keys.push(format!("source_path={source_path}"));
+    }
+    if let Some(pid) = binding.pid {
+        join_keys.push(format!("pid={pid}"));
+    }
+
+    ResolvedLocalSession {
+        session_id: None,
+        provider: binding.provider.clone(),
+        provider_session_id: Some(binding.provider_session_id.clone()),
+        control_path: "unmanaged".to_string(),
+        presentation_state: "unmanaged".to_string(),
+        state: "unmanaged".to_string(),
+        phase: None,
+        tool_name: None,
+        phase_observed_at: None,
+        last_activity_at: Some(binding.observed_at.clone()),
+        workspace: workspace_from_cwd(binding.cwd.clone()),
+        process: ResolvedProcess {
+            pid: binding.pid,
+            process_start_time: binding.process_start_time.clone(),
+            started_at: binding.process_start_time.clone(),
+        },
+        bridge: ResolvedBridge::default(),
+        evidence: ResolvedEvidence {
+            process_observed: binding.pid.is_some(),
+            transcript_observed: binding.source_path.is_some(),
+            bridge_state: None,
+            hook_seen_at: Some(binding.observed_at.clone()),
+            join_keys,
+        },
+        reason_codes: Vec::new(),
+    }
+}
+
+fn managed_presentation_state(state: &str) -> String {
+    match state {
+        "attached" => "managed_attached",
+        "detached" => "managed_detached",
+        "degraded" => "managed_degraded",
+        _ => "stale_evidence",
+    }
+    .to_string()
+}
+
+fn workspace_from_cwd(cwd: Option<String>) -> ResolvedWorkspace {
+    let label = cwd.as_deref().and_then(|path| {
+        Path::new(path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_string)
+    });
+    ResolvedWorkspace {
+        cwd,
+        label,
+        branch: None,
+    }
 }
 
 #[derive(Default)]
@@ -775,6 +1105,7 @@ mod tests {
             is_offline: false,
             managed_sessions: Vec::new(),
             unmanaged_session_bindings: Vec::new(),
+            sessions: Vec::new(),
             adaptive_backlog_limiter: None,
         };
 
@@ -847,6 +1178,7 @@ mod tests {
                 lease_ttl_ms: 900_000,
             }],
             unmanaged_session_bindings: Vec::new(),
+            sessions: Vec::new(),
             adaptive_backlog_limiter: None,
         };
 
@@ -872,6 +1204,7 @@ mod tests {
             last_turn_status: Some("completed".to_string()),
             last_error: None,
             thread_subscription_status: Some("subscribed".to_string()),
+            bridge_pid: 12344,
             app_server_pid: Some(12345),
             app_server_pgid: Some(12345),
             updated_at: "2026-04-26T00:00:00Z".to_string(),
@@ -1130,6 +1463,64 @@ mod tests {
     }
 
     #[test]
+    fn resolved_sessions_join_managed_codex_evidence_and_unmanaged_bindings() {
+        let mut obs = test_observation("managed-codex", "ws://127.0.0.1:45685/session");
+        obs.cwd = Some("/Users/test/git/zerg".to_string());
+        obs.thread_id = Some("thread-managed".to_string());
+        obs.thread_path = Some("/Users/test/.codex/sessions/thread-managed.jsonl".to_string());
+        obs.bridge_pid = 111;
+        obs.app_server_pid = Some(222);
+        obs.app_server_alive = true;
+
+        let lease = ManagedSessionLease {
+            session_id: "managed-codex".to_string(),
+            provider: "codex".to_string(),
+            machine_id: "cinder".to_string(),
+            sequence: 1,
+            state: "attached".to_string(),
+            phase: Some("thinking".to_string()),
+            tool_name: None,
+            bridge_status: Some("ready".to_string()),
+            thread_subscription_status: Some("subscribed".to_string()),
+            observed_at: "2026-05-05T12:00:00Z".to_string(),
+            lease_ttl_ms: 900_000,
+        };
+        let unmanaged = test_binding("claude", "claude-unmanaged", 333);
+
+        let sessions = resolved_sessions_from_observations(&[lease], &[unmanaged], &[obs], &[]);
+
+        assert_eq!(sessions.len(), 2);
+        let managed = sessions
+            .iter()
+            .find(|session| session.control_path == "managed")
+            .unwrap();
+        assert_eq!(managed.provider, "codex");
+        assert_eq!(
+            managed.provider_session_id.as_deref(),
+            Some("thread-managed")
+        );
+        assert_eq!(managed.presentation_state, "managed_attached");
+        assert_eq!(managed.workspace.label.as_deref(), Some("zerg"));
+        assert_eq!(managed.bridge.bridge_pid, Some(111));
+        assert_eq!(managed.bridge.app_server_pid, Some(222));
+        assert!(
+            managed
+                .evidence
+                .join_keys
+                .iter()
+                .any(|key| key == "provider_session_id=thread-managed")
+        );
+
+        let unmanaged = sessions
+            .iter()
+            .find(|session| session.control_path == "unmanaged")
+            .unwrap();
+        assert_eq!(unmanaged.provider, "claude");
+        assert_eq!(unmanaged.presentation_state, "unmanaged");
+        assert_eq!(unmanaged.process.pid, Some(333));
+    }
+
+    #[test]
     fn test_heartbeat_payload_no_last_ship() {
         let payload = HeartbeatPayload {
             version: "0.1.0".to_string(),
@@ -1165,6 +1556,7 @@ mod tests {
             is_offline: true,
             managed_sessions: Vec::new(),
             unmanaged_session_bindings: Vec::new(),
+            sessions: Vec::new(),
             adaptive_backlog_limiter: None,
         };
 
@@ -1218,6 +1610,7 @@ mod tests {
             is_offline: false,
             managed_sessions: Vec::new(),
             unmanaged_session_bindings: Vec::new(),
+            sessions: Vec::new(),
             adaptive_backlog_limiter: None,
         };
 
@@ -1340,6 +1733,7 @@ mod tests {
             is_offline: false,
             managed_sessions: Vec::new(),
             unmanaged_session_bindings: Vec::new(),
+            sessions: Vec::new(),
             adaptive_backlog_limiter: None,
         };
         let stats = HeartbeatStats {
@@ -1417,6 +1811,7 @@ mod tests {
             is_offline: false,
             managed_sessions: Vec::new(),
             unmanaged_session_bindings: Vec::new(),
+            sessions: Vec::new(),
             adaptive_backlog_limiter: None,
         };
         let stats = HeartbeatStats {
