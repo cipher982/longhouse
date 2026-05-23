@@ -405,6 +405,7 @@ def test_agents_send_live_route_ignores_device_mismatch_and_dispatches(monkeypat
         timeout_secs=15,
         verify_turn_started=False,
         verification_timeout_secs=None,
+        attachments=None,
     ):
         calls.append(
             {

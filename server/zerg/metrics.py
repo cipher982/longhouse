@@ -278,6 +278,24 @@ try:
         labelnames=("invariant",),
     )
 
+    session_input_attachments_total = Counter(
+        "session_input_attachments_total",
+        "Image-attach multipart submissions by client and outcome",
+        labelnames=("client", "outcome"),
+    )
+
+    session_input_attachment_bytes = Histogram(
+        "session_input_attachment_bytes",
+        "Bytes per stored attachment after server validation",
+        buckets=(64_000, 128_000, 256_000, 512_000, 1_024_000, 2_097_152),
+    )
+
+    session_input_attachment_blob_fetches_total = Counter(
+        "session_input_attachment_blob_fetches_total",
+        "Engine blob fetches against /api/agents/.../attachments/.../blob by outcome",
+        labelnames=("outcome",),
+    )
+
 except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib absent
 
     class _NoopCounter:  # noqa: D401 – tiny helper
@@ -303,6 +321,8 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
     managed_session_heartbeat_lease_rows_total = _NoopCounter()  # type: ignore[assignment]
     managed_codex_runtime_observations_total = _NoopCounter()  # type: ignore[assignment]
     managed_codex_bridge_freshness_total = _NoopCounter()  # type: ignore[assignment]
+    session_input_attachments_total = _NoopCounter()  # type: ignore[assignment]
+    session_input_attachment_blob_fetches_total = _NoopCounter()  # type: ignore[assignment]
 
     # Provide *noop* Gauge so code can call ``set`` without importing
     # the optional dependency in minimal CI images.
@@ -349,6 +369,7 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
     agents_ingest_payload_bytes = _NoopHistogram()  # type: ignore[assignment]
     agents_heartbeat_write_seconds = _NoopHistogram()  # type: ignore[assignment]
     agents_heartbeat_payload_bytes = _NoopHistogram()  # type: ignore[assignment]
+    session_input_attachment_bytes = _NoopHistogram()  # type: ignore[assignment]
     event_age_at_ingest_seconds = _NoopHistogram()  # type: ignore[assignment]
     event_end_to_end_latency_seconds = _NoopHistogram()  # type: ignore[assignment]
     event_render_beacons_total = _NoopCounter()  # type: ignore[assignment]

@@ -407,6 +407,7 @@ async def _build_managed_local_chat_response(
     lock_scope_id: str,
     db: Session,
     session_input_id: int | None = None,
+    attachments: list[dict] | None = None,
 ) -> JSONResponse:
     """Dispatch text to a managed-local session and return a fast ack.
 
@@ -422,6 +423,7 @@ async def _build_managed_local_chat_response(
         lock_scope_id=lock_scope_id,
         db=db,
         session_input_id=session_input_id,
+        attachments=attachments,
     )
 
 
@@ -854,6 +856,7 @@ async def _dispatch_managed_local_text(
     lock_scope_id: str,
     db: Session,
     session_input_id: int | None = None,
+    attachments: list[dict] | None = None,
 ) -> JSONResponse:
     """Send text to a managed-local session and return acceptance status."""
     tracer = get_tracer(__name__)
@@ -928,6 +931,7 @@ async def _dispatch_managed_local_text(
                 timeout_secs=15,
                 verify_turn_started=True,
                 verification_timeout_secs=15.0,
+                attachments=attachments,
             )
             send_observed_at = datetime.now(timezone.utc)
             set_span_attributes(

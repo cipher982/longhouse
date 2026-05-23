@@ -59,7 +59,8 @@ extension APISessionCapabilitiesResponse {
             defaultInputIntent: defaultInputIntent,
             composerEnabled: composerEnabled,
             composerPlaceholder: composerPlaceholder,
-            composerDisabledReason: composerDisabledReason
+            composerDisabledReason: composerDisabledReason,
+            attachImages: attachImages
         )
     }
 }

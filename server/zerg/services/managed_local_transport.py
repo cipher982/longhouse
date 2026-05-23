@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import shlex
+from typing import Any, Mapping, Sequence
 
 from zerg.models.agents import AgentSession
 from zerg.services.claude_channel_bridge import build_claude_channel_exec_command
@@ -129,7 +131,35 @@ def build_managed_local_interrupt_command(*, session: AgentSession) -> str:
     )
 
 
-def build_managed_local_send_text_command(*, session: AgentSession, text: str) -> str:
+def _attachment_args(
+    attachments: Sequence[Mapping[str, Any]] | None,
+    *,
+    transport: ManagedSessionTransport,
+) -> tuple[str, ...]:
+    """Serialize attachment refs into `--attachments-json <json>` for the
+    engine codex-bridge subprocess. Returns empty tuple when there are no
+    attachments so text-only sends keep their previous shape.
+
+    Only the codex_app_server transport supports attachments today; for any
+    other transport, a non-empty list is a hard error rather than a silent
+    drop.
+    """
+    if not attachments:
+        return ()
+    if transport != ManagedSessionTransport.CODEX_APP_SERVER:
+        raise ManagedLocalTransportError(
+            "Attachments are only supported on codex_app_server transports",
+        )
+    payload = json.dumps(list(attachments), separators=(",", ":"))
+    return ("--attachments-json", shlex.quote(payload))
+
+
+def build_managed_local_send_text_command(
+    *,
+    session: AgentSession,
+    text: str,
+    attachments: Sequence[Mapping[str, Any]] | None = None,
+) -> str:
     transport = _resolve_transport(getattr(session, "managed_transport", None))
     if transport == ManagedSessionTransport.OPENCODE_PROCESS:
         raise ManagedLocalTransportError("opencode_process does not support remote text sends yet")
@@ -138,11 +168,12 @@ def build_managed_local_send_text_command(*, session: AgentSession, text: str) -
     session_id = str(getattr(session, "id", "") or "").strip()
     if not session_id:
         raise ManagedLocalTransportError("Managed local session is missing session ID")
+    attach_args = _attachment_args(attachments, transport=transport)
     if transport == ManagedSessionTransport.CODEX_APP_SERVER:
         return _build_engine_bridge_shell_command(
             session_id=session_id,
             subcommand="send",
-            args=("--text", shlex.quote(text)),
+            args=("--text", shlex.quote(text), *attach_args),
         )
     return _build_longhouse_cli_shell_command(
         subcommand="send",
@@ -150,7 +181,12 @@ def build_managed_local_send_text_command(*, session: AgentSession, text: str) -
     )
 
 
-def build_managed_local_steer_text_command(*, session: AgentSession, text: str) -> str:
+def build_managed_local_steer_text_command(
+    *,
+    session: AgentSession,
+    text: str,
+    attachments: Sequence[Mapping[str, Any]] | None = None,
+) -> str:
     """Build a mid-turn steer command. Codex-only this batch; Claude channel
     has no equivalent first-class primitive yet."""
     transport = _resolve_transport(getattr(session, "managed_transport", None))
@@ -165,10 +201,11 @@ def build_managed_local_steer_text_command(*, session: AgentSession, text: str) 
     session_id = str(getattr(session, "id", "") or "").strip()
     if not session_id:
         raise ManagedLocalTransportError("Managed local session is missing session ID")
+    attach_args = _attachment_args(attachments, transport=transport)
     return _build_engine_bridge_shell_command(
         session_id=session_id,
         subcommand="steer",
-        args=("--text", shlex.quote(text)),
+        args=("--text", shlex.quote(text), *attach_args),
     )
 
 

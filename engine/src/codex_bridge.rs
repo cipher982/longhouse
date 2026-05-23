@@ -93,6 +93,7 @@ pub struct BridgeSendConfig {
     pub text: String,
     pub state_root: Option<PathBuf>,
     pub allow_direct_ws_fallback: bool,
+    pub attachments: Vec<crate::codex_attachments::AttachmentRef>,
 }
 
 #[derive(Debug, Clone)]
@@ -106,6 +107,7 @@ pub struct BridgeSteerConfig {
     pub session_id: String,
     pub text: String,
     pub state_root: Option<PathBuf>,
+    pub attachments: Vec<crate::codex_attachments::AttachmentRef>,
 }
 
 /// Failure modes specific to the steer IPC path. Distinguishes "the turn
@@ -306,6 +308,7 @@ enum IpcCommand {
     TurnStart {
         text: String,
         thread_id: String,
+        attachments: Vec<crate::codex_attachments::AttachmentRef>,
         reply: oneshot::Sender<Result<Value>>,
     },
     /// Mid-turn steer routed through the daemon's persistent app-server
@@ -316,6 +319,7 @@ enum IpcCommand {
         text: String,
         thread_id: String,
         expected_turn_id: String,
+        attachments: Vec<crate::codex_attachments::AttachmentRef>,
         reply: oneshot::Sender<Result<Value>>,
     },
     Stop {
@@ -435,10 +439,13 @@ async fn handle_ipc_connection(
                 .and_then(Value::as_str)
                 .context("IPC steer request missing 'expected_turn_id'")?
                 .to_string();
+            let attachments = crate::codex_attachments::parse_attachments(&request)
+                .context("IPC steer request has invalid attachments")?;
             IpcCommand::Steer {
                 text,
                 thread_id,
                 expected_turn_id,
+                attachments,
                 reply: reply_tx,
             }
         }
@@ -453,9 +460,12 @@ async fn handle_ipc_connection(
                 .and_then(Value::as_str)
                 .context("IPC request missing 'thread_id'")?
                 .to_string();
+            let attachments = crate::codex_attachments::parse_attachments(&request)
+                .context("IPC turn/start request has invalid attachments")?;
             IpcCommand::TurnStart {
                 text,
                 thread_id,
+                attachments,
                 reply: reply_tx,
             }
         }
@@ -669,6 +679,7 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
 
 pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     let pid = std::process::id();
+    crate::codex_attachments::cleanup_session_tmpdir(&config.session_id);
     let initial_state = BridgeStateFile {
         session_id: config.session_id.clone(),
         cwd: config.cwd.display().to_string(),
@@ -929,19 +940,20 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
             }
             Some(cmd) = ipc_rx.recv() => {
                 match cmd {
-                    IpcCommand::TurnStart { text, thread_id, reply } => {
+                    IpcCommand::TurnStart { text, thread_id, attachments, reply } => {
                         let result = handle_ipc_turn_start(
                             &config,
                             &mut client,
                             &mut context,
                             &text,
                             &thread_id,
+                            &attachments,
                         )
                         .await
                         .and_then(|summary| serde_json::to_value(summary).map_err(Into::into));
                         let _ = reply.send(result);
                     }
-                    IpcCommand::Steer { text, thread_id, expected_turn_id, reply } => {
+                    IpcCommand::Steer { text, thread_id, expected_turn_id, attachments, reply } => {
                         let result = handle_ipc_steer(
                             &config,
                             &mut client,
@@ -949,6 +961,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                             &text,
                             &thread_id,
                             &expected_turn_id,
+                            &attachments,
                         )
                         .await
                         .map(|_| json!({}));
@@ -958,6 +971,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                         terminal_reason,
                         reply,
                     } => {
+                        crate::codex_attachments::cleanup_session_tmpdir(&context.state.session_id);
                         context.state.status = "stopped".to_string();
                         context.state.active_turn_id = None;
                         context.state.last_error = None;
@@ -1008,20 +1022,34 @@ async fn handle_ipc_steer(
     text: &str,
     thread_id: &str,
     expected_turn_id: &str,
+    attachments: &[crate::codex_attachments::AttachmentRef],
 ) -> Result<()> {
-    send_request_with_runtime(
+    let fetched = crate::codex_attachments::fetch_all(
+        &context.runtime.http,
+        &config.api_url,
+        &config.api_token,
+        &context.state.session_id,
+        attachments,
+    )
+    .await?;
+    let had_attachments = !fetched.is_empty();
+    let input = crate::codex_attachments::build_user_input_items(text, &fetched);
+    let result = send_request_with_runtime(
         client,
         "turn/steer",
         json!({
             "threadId": thread_id,
             "expectedTurnId": expected_turn_id,
-            "input": [{"type": "text", "text": text}],
+            "input": input,
         }),
         config,
         context,
     )
-    .await
-    .map(|_| ())
+    .await;
+    if result.is_err() && had_attachments {
+        crate::codex_attachments::cleanup_session_tmpdir(&context.state.session_id);
+    }
+    result.map(|_| ())
 }
 
 async fn handle_ipc_turn_start(
@@ -1030,18 +1058,38 @@ async fn handle_ipc_turn_start(
     context: &mut BridgeContext,
     text: &str,
     thread_id: &str,
+    attachments: &[crate::codex_attachments::AttachmentRef],
 ) -> Result<BridgeSendSummary> {
-    let response = send_request_with_runtime(
+    let fetched = crate::codex_attachments::fetch_all(
+        &context.runtime.http,
+        &config.api_url,
+        &config.api_token,
+        &context.state.session_id,
+        attachments,
+    )
+    .await?;
+    let had_attachments = !fetched.is_empty();
+    let input = crate::codex_attachments::build_user_input_items(text, &fetched);
+    let response = match send_request_with_runtime(
         client,
         "turn/start",
         json!({
             "threadId": thread_id,
-            "input": [{"type": "text", "text": text}],
+            "input": input,
         }),
         config,
         context,
     )
-    .await?;
+    .await
+    {
+        Ok(value) => value,
+        Err(err) => {
+            if had_attachments {
+                crate::codex_attachments::cleanup_session_tmpdir(&context.state.session_id);
+            }
+            return Err(err);
+        }
+    };
     let turn_id = extract_string(&response, &["turn", "id"])
         .context("missing turn.id in IPC turn/start response")?;
     let turn_status =
@@ -1068,8 +1116,8 @@ async fn handle_ipc_turn_start(
 }
 
 pub async fn cmd_codex_bridge_send(config: BridgeSendConfig) -> Result<BridgeSendSummary> {
-    if config.text.trim().is_empty() {
-        bail!("text must not be empty");
+    if config.text.trim().is_empty() && config.attachments.is_empty() {
+        bail!("text must not be empty when no attachments are present");
     }
     let state = load_ready_state(&config.session_id, config.state_root.as_deref())?;
     let thread_id = state
@@ -1083,7 +1131,7 @@ pub async fn cmd_codex_bridge_send(config: BridgeSendConfig) -> Result<BridgeSen
     let sock_path = ipc_socket_path(&paths.state_file);
     #[cfg(unix)]
     if sock_path.exists() {
-        match send_via_ipc(&sock_path, &config.text, &thread_id).await {
+        match send_via_ipc(&sock_path, &config.text, &thread_id, &config.attachments).await {
             Ok(summary) => return Ok(summary),
             Err(e) => {
                 // Only fall back on connection failures. If the daemon accepted the
@@ -1121,6 +1169,11 @@ pub async fn cmd_codex_bridge_send(config: BridgeSendConfig) -> Result<BridgeSen
             "IPC socket {} is missing for managed Codex session {}; refusing direct WebSocket fallback. Restart the bridge or pass --allow-direct-ws-fallback for explicit debug/operator use",
             sock_path.display(),
             config.session_id
+        );
+    }
+    if !config.attachments.is_empty() {
+        bail!(
+            "direct WebSocket fallback does not support attachments; restart the bridge so the daemon IPC socket is available"
         );
     }
     eprintln!(
@@ -1167,10 +1220,15 @@ const IPC_STOP_TIMEOUT: Duration = Duration::from_secs(3);
 const CHILD_SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_millis(500);
 
 #[cfg(unix)]
-async fn send_via_ipc(sock_path: &Path, text: &str, thread_id: &str) -> Result<BridgeSendSummary> {
+async fn send_via_ipc(
+    sock_path: &Path,
+    text: &str,
+    thread_id: &str,
+    attachments: &[crate::codex_attachments::AttachmentRef],
+) -> Result<BridgeSendSummary> {
     tokio::time::timeout(
         IPC_SEND_TIMEOUT,
-        send_via_ipc_inner(sock_path, text, thread_id),
+        send_via_ipc_inner(sock_path, text, thread_id, attachments),
     )
     .await
     .map_err(|_| anyhow!("IPC send timed out after {}s", IPC_SEND_TIMEOUT.as_secs()))?
@@ -1181,15 +1239,20 @@ async fn send_via_ipc_inner(
     sock_path: &Path,
     text: &str,
     thread_id: &str,
+    attachments: &[crate::codex_attachments::AttachmentRef],
 ) -> Result<BridgeSendSummary> {
     let mut stream = tokio::net::UnixStream::connect(sock_path)
         .await
         .with_context(|| format!("connecting to IPC socket {}", sock_path.display()))?;
 
-    let mut request = serde_json::to_vec(&json!({
+    let mut payload = json!({
         "text": text,
         "thread_id": thread_id,
-    }))?;
+    });
+    if !attachments.is_empty() {
+        payload["attachments"] = serde_json::to_value(attachments)?;
+    }
+    let mut request = serde_json::to_vec(&payload)?;
     request.push(b'\n');
     stream.write_all(&request).await?;
     stream.shutdown().await?;
@@ -1236,10 +1299,11 @@ async fn send_via_ipc_steer(
     text: &str,
     thread_id: &str,
     expected_turn_id: &str,
+    attachments: &[crate::codex_attachments::AttachmentRef],
 ) -> Result<()> {
     tokio::time::timeout(
         IPC_SEND_TIMEOUT,
-        send_via_ipc_steer_inner(sock_path, text, thread_id, expected_turn_id),
+        send_via_ipc_steer_inner(sock_path, text, thread_id, expected_turn_id, attachments),
     )
     .await
     .map_err(|_| anyhow!("IPC steer timed out after {}s", IPC_SEND_TIMEOUT.as_secs()))?
@@ -1251,17 +1315,22 @@ async fn send_via_ipc_steer_inner(
     text: &str,
     thread_id: &str,
     expected_turn_id: &str,
+    attachments: &[crate::codex_attachments::AttachmentRef],
 ) -> Result<()> {
     let mut stream = tokio::net::UnixStream::connect(sock_path)
         .await
         .with_context(|| format!("connecting to IPC socket {}", sock_path.display()))?;
 
-    let mut request = serde_json::to_vec(&json!({
+    let mut payload = json!({
         "kind": "steer",
         "text": text,
         "thread_id": thread_id,
         "expected_turn_id": expected_turn_id,
-    }))?;
+    });
+    if !attachments.is_empty() {
+        payload["attachments"] = serde_json::to_value(attachments)?;
+    }
+    let mut request = serde_json::to_vec(&payload)?;
     request.push(b'\n');
     stream.write_all(&request).await?;
     stream.shutdown().await?;
@@ -1424,7 +1493,15 @@ pub async fn cmd_codex_bridge_steer(
     let sock_path = ipc_socket_path(&paths.state_file);
     #[cfg(unix)]
     if sock_path.exists() {
-        match send_via_ipc_steer(&sock_path, &config.text, &thread_id, &turn_id).await {
+        match send_via_ipc_steer(
+            &sock_path,
+            &config.text,
+            &thread_id,
+            &turn_id,
+            &config.attachments,
+        )
+        .await
+        {
             Ok(()) => return Ok(()),
             Err(err) => {
                 let msg = format!("{err}");
@@ -1459,7 +1536,14 @@ pub async fn cmd_codex_bridge_steer(
     }
 
     // Fallback: direct WS (used when the daemon socket is missing or the
-    // connect itself failed). Slower — full handshake per call.
+    // connect itself failed). Slower — full handshake per call. Direct WS
+    // cannot fetch attachment blobs (no per-session tmpdir, no token), so
+    // refuse rather than silently dropping the images.
+    if !config.attachments.is_empty() {
+        return Err(BridgeSteerError::Protocol(anyhow!(
+            "direct WebSocket steer fallback does not support attachments; restart the bridge so the daemon IPC socket is available"
+        )));
+    }
     let ws_url = state
         .ws_url
         .clone()
@@ -4498,6 +4582,7 @@ mod tests {
             text: "continue".to_string(),
             state_root: Some(temp.path().to_path_buf()),
             allow_direct_ws_fallback: false,
+            attachments: Vec::new(),
         })
         .await
         .unwrap_err()
@@ -5541,7 +5626,7 @@ mod tests {
             .unwrap();
 
         let summary =
-            handle_ipc_turn_start(&config, &mut client, &mut context, "continue", "thr_test")
+            handle_ipc_turn_start(&config, &mut client, &mut context, "continue", "thr_test", &[])
                 .await
                 .unwrap();
 
@@ -5725,7 +5810,7 @@ mod tests {
             let _ = sock_clone;
         });
 
-        send_via_ipc_steer(&sock, "ipc steer", "thr-1", "turn-1")
+        send_via_ipc_steer(&sock, "ipc steer", "thr-1", "turn-1", &[])
             .await
             .unwrap();
         server.await.unwrap();
@@ -5749,7 +5834,7 @@ mod tests {
                 .unwrap();
         });
 
-        let err = send_via_ipc_steer(&sock, "x", "thr", "turn")
+        let err = send_via_ipc_steer(&sock, "x", "thr", "turn", &[])
             .await
             .unwrap_err();
         let msg = format!("{err}");

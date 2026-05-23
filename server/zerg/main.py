@@ -145,6 +145,8 @@ from zerg.routers.runs import router as runs_router
 from zerg.routers.runtime import router as runtime_router
 from zerg.routers.session_chat import agents_router as agents_session_chat_router
 from zerg.routers.session_chat import router as session_chat_router
+from zerg.routers.session_inputs_attachments import agents_router as agents_session_inputs_attachments_router
+from zerg.routers.session_inputs_attachments import router as session_inputs_attachments_router
 from zerg.routers.skills import router as skills_router
 from zerg.routers.stream import router as stream_router
 from zerg.routers.system import router as system_router
@@ -283,6 +285,8 @@ api_app.include_router(reliability_router)
 api_app.include_router(skills_router)
 api_app.include_router(session_chat_router)
 api_app.include_router(agents_session_chat_router)
+api_app.include_router(session_inputs_attachments_router)
+api_app.include_router(agents_session_inputs_attachments_router)
 api_app.include_router(timeline_stream_router)
 api_app.include_router(timeline_router)
 api_app.include_router(timeline_canary_stream_router)
