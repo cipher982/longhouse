@@ -30,7 +30,16 @@
       "bridge_pid": 4202,
       "app_server_pid": 4203,
       "thread_subscription_status": "subscribed",
-      "reason_codes": []
+      "reason_codes": [],
+      "evidence": {
+        "process_observed": true,
+        "transcript_observed": true,
+        "bridge_state": "ready",
+        "join_keys": [
+          "provider_session_id=thread-codex",
+          "app_server_pid=4203"
+        ]
+      }
     }
   ],
   "unmanaged_processes": [
@@ -45,7 +54,17 @@
       "started_at": "2026-05-05T11:45:00Z",
       "provider_session_id": "thread-claude-unmanaged",
       "source_path": "/Users/test/.claude/projects/myagents/session.jsonl",
-      "observed_at": "2026-05-05T11:59:59Z"
+      "observed_at": "2026-05-05T11:59:59Z",
+      "evidence": {
+        "process_observed": true,
+        "transcript_observed": true,
+        "hook_seen_at": "2026-05-05T11:59:59Z",
+        "join_keys": [
+          "provider_session_id=thread-claude-unmanaged",
+          "source_path=/Users/test/.claude/projects/myagents/session.jsonl",
+          "pid=48145"
+        ]
+      }
     }
   ]
 }
