@@ -97,6 +97,7 @@ final class SessionChatStressUITests: XCTestCase {
         XCTAssertEqual(afterParentChurn.repeats, 0, readProbe(probeURL))
 
         dragTowardOlderMessages(transcript)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.35))
 
         try? "1".write(to: triggerURL, atomically: true, encoding: .utf8)
 
@@ -129,9 +130,12 @@ final class SessionChatStressUITests: XCTestCase {
     }
 
     private func dragTowardOlderMessages(_ element: XCUIElement) {
-        let start = element.coordinate(withNormalizedOffset: CGVector(dx: 0.50, dy: 0.30))
-        let end = element.coordinate(withNormalizedOffset: CGVector(dx: 0.50, dy: 0.82))
-        start.press(forDuration: 0.05, thenDragTo: end)
+        for _ in 0..<2 {
+            let start = element.coordinate(withNormalizedOffset: CGVector(dx: 0.50, dy: 0.28))
+            let end = element.coordinate(withNormalizedOffset: CGVector(dx: 0.50, dy: 0.90))
+            start.press(forDuration: 0.12, thenDragTo: end)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.20))
+        }
     }
 
     private func waitForProbeFile(
