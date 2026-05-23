@@ -176,6 +176,30 @@ private func mockSession(
             seenAtSecondsAgo: 12
         ),
         mockSession(
+            id: "7",
+            project: "runtime",
+            title: "Approval Needed for Shell Command",
+            summary: "The managed session is waiting on a permission decision before it can continue the current turn.",
+            provider: "gemini",
+            statusLabel: "Blocked Shell",
+            statusTone: "blocked",
+            activityRecency: "live",
+            anchorSecondsAgo: 20,
+            seenAtSecondsAgo: 20
+        ),
+        mockSession(
+            id: "8",
+            project: "agents",
+            title: "Worker Stalled During Local QA",
+            summary: "The session stopped making progress during verification and needs inspection before the next action.",
+            provider: "antigravity",
+            statusLabel: "Stalled",
+            statusTone: "stalled",
+            activityRecency: "live",
+            anchorSecondsAgo: 2 * 60,
+            seenAtSecondsAgo: 2 * 60
+        ),
+        mockSession(
             id: "5",
             project: "hdr",
             title: "Photo Pipeline Rebuild",
@@ -216,6 +240,70 @@ private func mockSession(
     }
     .background(Color(.systemGroupedBackground))
     .preferredColorScheme(.dark)
+}
+
+#Preview("Timeline cards — attention colors light") {
+    let sessions: [SessionSummary] = [
+        mockSession(
+            id: "thinking-light",
+            project: "zerg",
+            title: "Agent Working",
+            summary: "Thinking and tool use share one working treatment.",
+            provider: "claude",
+            statusLabel: "Thinking",
+            statusTone: "thinking",
+            activityRecency: "live",
+            anchorSecondsAgo: 7,
+            seenAtSecondsAgo: 7
+        ),
+        mockSession(
+            id: "running-light",
+            project: "zerg",
+            title: "Agent Running Shell",
+            summary: "Tool execution stays in the same working family as thinking.",
+            provider: "codex",
+            statusLabel: "Using Shell",
+            statusTone: "running",
+            activityRecency: "live",
+            anchorSecondsAgo: 12,
+            seenAtSecondsAgo: 12
+        ),
+        mockSession(
+            id: "blocked-light",
+            project: "zerg",
+            title: "Needs User Attention",
+            summary: "Blocked uses amber attention while red remains reserved for broken transport.",
+            provider: "gemini",
+            statusLabel: "Blocked Shell",
+            statusTone: "blocked",
+            activityRecency: "live",
+            anchorSecondsAgo: 30,
+            seenAtSecondsAgo: 30
+        ),
+        mockSession(
+            id: "idle-light",
+            project: "zerg",
+            title: "Parked Session",
+            summary: "Idle stays quiet unless a later watched-session pipeline makes it important.",
+            provider: "antigravity",
+            statusLabel: "Idle",
+            statusTone: "idle",
+            activityRecency: "live",
+            anchorSecondsAgo: 4 * 60,
+            seenAtSecondsAgo: 4 * 60
+        ),
+    ]
+
+    return ScrollView {
+        VStack(spacing: 12) {
+            ForEach(sessions) { session in
+                TimelineSessionCardRow(session: session, emphasized: false, connectionState: .healthy)
+            }
+        }
+        .padding(16)
+    }
+    .background(Color(.systemGroupedBackground))
+    .preferredColorScheme(.light)
 }
 
 #Preview("Summary status — all four") {
