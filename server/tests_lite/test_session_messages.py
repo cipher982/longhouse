@@ -198,6 +198,7 @@ def test_create_message_delivers_immediately_for_safe_managed_local(monkeypatch,
         timeout_secs=15,
         verify_turn_started=False,
         verification_timeout_secs=None,
+        attachments=None,
     ):
         send_calls.append(
             {
@@ -308,6 +309,7 @@ def test_create_message_uses_runtime_state_when_presence_missing(monkeypatch, tm
         timeout_secs=15,
         verify_turn_started=False,
         verification_timeout_secs=None,
+        attachments=None,
     ):
         send_calls.append(
             {
@@ -379,6 +381,7 @@ def test_create_message_delivers_to_engine_controlled_codex_without_runner(monke
         timeout_secs=15,
         verify_turn_started=False,
         verification_timeout_secs=None,
+        attachments=None,
     ):
         send_calls.append(
             {
@@ -446,6 +449,7 @@ def test_presence_safe_transition_delivers_oldest_queued_message(monkeypatch, tm
         timeout_secs=15,
         verify_turn_started=False,
         verification_timeout_secs=None,
+        attachments=None,
     ):
         send_calls.append(text)
         return SimpleNamespace(ok=True, error=None)
@@ -510,6 +514,7 @@ def test_runtime_safe_transition_delivers_queued_message_without_presence(monkey
         timeout_secs=15,
         verify_turn_started=False,
         verification_timeout_secs=None,
+        attachments=None,
     ):
         send_calls.append(text)
         return SimpleNamespace(ok=True, error=None)
@@ -598,6 +603,7 @@ def test_presence_safe_transition_drains_multiple_queued_messages(monkeypatch, t
         timeout_secs=15,
         verify_turn_started=False,
         verification_timeout_secs=None,
+        attachments=None,
     ):
         send_calls.append(text)
         return SimpleNamespace(ok=True, error=None)
@@ -668,6 +674,7 @@ def test_presence_safe_transition_stops_drain_when_session_leaves_safe_boundary(
         timeout_secs=15,
         verify_turn_started=False,
         verification_timeout_secs=None,
+        attachments=None,
     ):
         send_calls.append(text)
         _upsert_runtime_state(db, session, "running")

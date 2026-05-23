@@ -44,6 +44,7 @@ from zerg.services.session_current_control import current_session_capabilities
 from zerg.services.session_input_attachments import ALLOWED_MIME_TYPES
 from zerg.services.session_input_attachments import MAX_ATTACHMENT_BYTES
 from zerg.services.session_input_attachments import MAX_ATTACHMENTS_PER_INPUT
+from zerg.services.session_input_attachments import StoredAttachment
 from zerg.services.session_input_attachments import absolute_blob_path
 from zerg.services.session_input_attachments import get_attachment
 from zerg.services.session_input_attachments import list_attachments_for_input
@@ -62,6 +63,30 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/sessions", tags=["session-chat"])
 agents_router = APIRouter(prefix="/agents/sessions", tags=["agents"])
+
+
+def _attachment_ref_for_engine(
+    *,
+    session_id: str,
+    input_id: int,
+    stored: StoredAttachment,
+) -> dict:
+    """Build the JSON the engine needs to fetch this blob over machine auth.
+
+    The path is relative to the runtime host's public origin; the engine
+    resolves it against its own ``api_url`` so we don't need to know the
+    public hostname here. Sha256 + mime + id round-trip into the engine's
+    ``AttachmentRef``.
+    """
+    return {
+        "id": str(stored.id),
+        "mime_type": stored.mime_type,
+        "sha256": stored.sha256,
+        "blob_url": (
+            f"/api/agents/sessions/{session_id}"
+            f"/inputs/{input_id}/attachments/{stored.id}/blob"
+        ),
+    }
 
 
 def _validate_attachments(files: List[UploadFile]) -> None:
@@ -145,6 +170,7 @@ async def create_session_input_with_attachments(
             detail="another dispatch is in flight for this session; try again",
         )
 
+    stored_refs: list[dict] = []
     try:
         row = create_session_input(
             db,
@@ -166,13 +192,20 @@ async def create_session_input_with_attachments(
                         f"{MAX_ATTACHMENT_BYTES // 1024 // 1024}MB"
                     ),
                 )
-            store_attachment_blob(
+            stored = store_attachment_blob(
                 db,
                 session_input=row,
                 mime_type=upload.content_type,
                 data=data,
                 original_filename=upload.filename,
                 original_byte_size=len(data),
+            )
+            stored_refs.append(
+                _attachment_ref_for_engine(
+                    session_id=str(source_session.id),
+                    input_id=int(row.id),
+                    stored=stored,
+                )
             )
     except HTTPException:
         await session_lock_manager.release(lock_scope_id, delivery_request_id)
@@ -196,6 +229,7 @@ async def create_session_input_with_attachments(
             lock_scope_id=lock_scope_id,
             db=db,
             session_input_id=int(row.id),
+            attachments=stored_refs,
         )
     except HTTPException:
         await session_lock_manager.release(lock_scope_id, delivery_request_id)

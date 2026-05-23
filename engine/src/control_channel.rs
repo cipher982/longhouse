@@ -589,6 +589,7 @@ async fn execute_command(
                 text,
                 state_root: None,
                 allow_direct_ws_fallback: false,
+                attachments: Vec::new(),
             })
             .await
             .map_err(|err| CommandError::command_failed(err))?;
@@ -628,6 +629,7 @@ async fn execute_command(
                 session_id,
                 text,
                 state_root: None,
+                attachments: Vec::new(),
             })
             .await
             {

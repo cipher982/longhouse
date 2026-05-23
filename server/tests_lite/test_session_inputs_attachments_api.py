@@ -252,8 +252,14 @@ def _stub_dispatch(monkeypatch):
         timeout_secs=15,
         verify_turn_started=False,
         verification_timeout_secs=None,
+        attachments=None,
     ):
-        calls.append({"session_id": str(session.id), "text": text, "commis_id": commis_id})
+        calls.append({
+            "session_id": str(session.id),
+            "text": text,
+            "commis_id": commis_id,
+            "attachments": list(attachments or []),
+        })
         return SimpleNamespace(
             ok=True,
             exit_code=0,
@@ -297,6 +303,13 @@ def test_multipart_upload_succeeds_on_codex(monkeypatch, tmp_path):
         assert body["intent"] == "auto"
         assert len(calls) == 1
         assert calls[0]["text"] == "look at this"
+        forwarded = calls[0]["attachments"]
+        assert len(forwarded) == 1
+        ref = forwarded[0]
+        assert ref["mime_type"] == "image/png"
+        assert len(ref["sha256"]) == 64
+        assert ref["blob_url"].startswith(f"/api/agents/sessions/{session_id}/inputs/")
+        assert ref["blob_url"].endswith("/blob")
 
         with session_local() as db:
             row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
@@ -311,6 +324,8 @@ def test_multipart_upload_succeeds_on_codex(monkeypatch, tmp_path):
             assert attach.mime_type == "image/png"
             assert attach.byte_size == len(_PNG_BYTES)
             assert len(attach.sha256) == 64
+            assert ref["id"] == str(attach.id)
+            assert ref["sha256"] == attach.sha256
     finally:
         asyncio.run(session_lock_manager.release(str(session_id)))
         api_app_ref.dependency_overrides = {}
