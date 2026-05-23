@@ -107,6 +107,53 @@ class ManagedSessionLeaseIn(UTCBaseModel):
     lease_ttl_ms: int = Field(DEFAULT_MANAGED_SESSION_LEASE_TTL_MS, ge=1, le=MAX_MANAGED_SESSION_LEASE_TTL_MS)
 
 
+class ResolvedWorkspaceIn(UTCBaseModel):
+    cwd: str | None = Field(None, max_length=1024)
+    label: str | None = Field(None, max_length=255)
+    branch: str | None = Field(None, max_length=255)
+
+
+class ResolvedProcessIn(UTCBaseModel):
+    pid: int | None = None
+    process_start_time: datetime | None = None
+    started_at: datetime | None = None
+
+
+class ResolvedBridgeIn(UTCBaseModel):
+    bridge_pid: int | None = None
+    app_server_pid: int | None = None
+    ws_url: str | None = Field(None, max_length=1024)
+    heartbeat_at: datetime | None = None
+    status: str | None = Field(None, max_length=64)
+    thread_subscription_status: str | None = Field(None, max_length=64)
+
+
+class ResolvedEvidenceIn(UTCBaseModel):
+    process_observed: bool = False
+    transcript_observed: bool = False
+    bridge_state: str | None = Field(None, max_length=64)
+    hook_seen_at: datetime | None = None
+    join_keys: list[str] = Field(default_factory=list)
+
+
+class ResolvedLocalSessionIn(UTCBaseModel):
+    session_id: UUID | None = None
+    provider: str = Field(..., max_length=64)
+    provider_session_id: str | None = Field(None, max_length=255)
+    control_path: str = Field(..., max_length=32)
+    presentation_state: str = Field(..., max_length=32)
+    state: str = Field(..., max_length=32)
+    phase: str | None = Field(None, max_length=32)
+    tool_name: str | None = Field(None, max_length=128)
+    phase_observed_at: datetime | None = None
+    last_activity_at: datetime | None = None
+    workspace: ResolvedWorkspaceIn = Field(default_factory=ResolvedWorkspaceIn)
+    process: ResolvedProcessIn = Field(default_factory=ResolvedProcessIn)
+    bridge: ResolvedBridgeIn = Field(default_factory=ResolvedBridgeIn)
+    evidence: ResolvedEvidenceIn = Field(default_factory=ResolvedEvidenceIn)
+    reason_codes: list[str] = Field(default_factory=list)
+
+
 class HeartbeatIn(BaseModel):
     """Payload from the engine daemon."""
 
@@ -145,6 +192,9 @@ class HeartbeatIn(BaseModel):
     # Phase 5 of session-liveness-honesty: unmanaged pid/cwd/source bindings.
     # Optional — older engines don't send this. See UnmanagedSessionBindingIn.
     unmanaged_session_bindings: list[UnmanagedSessionBindingIn] = Field(default_factory=list)
+    # Canonical engine-resolved local session snapshot. When present, server
+    # ingest prefers this over legacy managed/unmanaged arrays for identity.
+    sessions: list[ResolvedLocalSessionIn] | None = None
 
 
 def _managed_lease_provider_label(lease: ManagedSessionLeaseIn) -> str:
@@ -186,6 +236,87 @@ def _record_managed_session_lease(lease: ManagedSessionLeaseIn) -> None:
         state=_managed_lease_state_label(lease),
         phase=_managed_lease_phase_label(lease),
     ).inc()
+
+
+def _resolved_join_key_value(evidence: ResolvedEvidenceIn, prefix: str) -> str | None:
+    match_prefix = f"{prefix}="
+    for raw_key in evidence.join_keys:
+        key = str(raw_key or "").strip()
+        if key.startswith(match_prefix):
+            return key[len(match_prefix) :] or None
+    return None
+
+
+def _resolved_session_control_path(session: ResolvedLocalSessionIn) -> str:
+    return str(session.control_path or "").strip().lower()
+
+
+def _resolved_session_presentation_state(session: ResolvedLocalSessionIn) -> str:
+    return str(session.presentation_state or "").strip().lower()
+
+
+def _managed_leases_from_resolved_sessions(
+    sessions: list[ResolvedLocalSessionIn],
+    *,
+    device_id: str,
+    received_at: datetime,
+    legacy_leases: list[ManagedSessionLeaseIn],
+) -> list[ManagedSessionLeaseIn]:
+    legacy_by_session = {lease.session_id: lease for lease in legacy_leases if lease.session_id is not None}
+    sequence = max(int(received_at.timestamp() * 1000), 0)
+    leases: list[ManagedSessionLeaseIn] = []
+    for session in sessions:
+        if _resolved_session_control_path(session) != "managed" or session.session_id is None:
+            continue
+        legacy = legacy_by_session.get(session.session_id)
+        observed_at = session.phase_observed_at or session.last_activity_at or session.bridge.heartbeat_at or received_at
+        leases.append(
+            ManagedSessionLeaseIn(
+                session_id=session.session_id,
+                provider=session.provider,
+                machine_id=(legacy.machine_id if legacy else None) or device_id,
+                sequence=(legacy.sequence if legacy else sequence),
+                state=session.state,
+                phase=session.phase,
+                tool_name=session.tool_name,
+                bridge_status=session.bridge.status,
+                thread_subscription_status=session.bridge.thread_subscription_status,
+                observed_at=observed_at,
+                lease_ttl_ms=(legacy.lease_ttl_ms if legacy else DEFAULT_MANAGED_SESSION_LEASE_TTL_MS),
+            )
+        )
+    return leases
+
+
+def _unmanaged_bindings_from_resolved_sessions(
+    sessions: list[ResolvedLocalSessionIn],
+    *,
+    device_id: str,
+    received_at: datetime,
+) -> list[UnmanagedSessionBindingIn]:
+    bindings: list[UnmanagedSessionBindingIn] = []
+    for session in sessions:
+        control_path = _resolved_session_control_path(session)
+        presentation_state = _resolved_session_presentation_state(session)
+        if control_path != "unmanaged" and presentation_state != "unmanaged":
+            continue
+        provider_session_id = str(session.provider_session_id or "").strip()
+        if not provider_session_id:
+            continue
+        observed_at = session.last_activity_at or session.phase_observed_at or session.evidence.hook_seen_at or received_at
+        bindings.append(
+            UnmanagedSessionBindingIn(
+                machine_id=device_id,
+                provider=session.provider,
+                provider_session_id=provider_session_id,
+                source_path=_resolved_join_key_value(session.evidence, "source_path"),
+                pid=session.process.pid,
+                process_start_time=session.process.process_start_time or session.process.started_at,
+                cwd=session.workspace.cwd,
+                observed_at=observed_at,
+            )
+        )
+    return bindings
 
 
 def _is_managed_codex_session(session: AgentSession | None) -> bool:
@@ -647,10 +778,29 @@ async def ingest_heartbeat(
             _ship_latency_p95 = payload.ship_latency_p95_ms_1h
             _disk = payload.disk_free_bytes
             _offline = 1 if payload.is_offline else 0
-            _managed_leases = payload.managed_sessions
-            _managed_leases_present = "managed_sessions" in payload.model_fields_set
-            _unmanaged_bindings = payload.unmanaged_session_bindings
-            _unmanaged_bindings_present = "unmanaged_session_bindings" in payload.model_fields_set
+            _resolved_sessions = payload.sessions or []
+            _resolved_sessions_present = "sessions" in payload.model_fields_set
+            _managed_leases = (
+                _managed_leases_from_resolved_sessions(
+                    _resolved_sessions,
+                    device_id=_device_id,
+                    received_at=_now,
+                    legacy_leases=payload.managed_sessions,
+                )
+                if _resolved_sessions_present
+                else payload.managed_sessions
+            )
+            _managed_leases_present = _resolved_sessions_present or "managed_sessions" in payload.model_fields_set
+            _unmanaged_bindings = (
+                _unmanaged_bindings_from_resolved_sessions(
+                    _resolved_sessions,
+                    device_id=_device_id,
+                    received_at=_now,
+                )
+                if _resolved_sessions_present
+                else payload.unmanaged_session_bindings
+            )
+            _unmanaged_bindings_present = _resolved_sessions_present or "unmanaged_session_bindings" in payload.model_fields_set
 
             def _do_heartbeat(write_db: Session) -> dict[UUID, tuple[str | None, str]]:
                 publish_sessions: dict[UUID, tuple[str | None, str]] = {}
