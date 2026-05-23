@@ -49,7 +49,7 @@ final class SessionOpenPerformanceUITests: XCTestCase {
             row.tap()
 
             XCTAssertTrue(waitForProbeFile(probeURL, timeout: 10) { metrics in
-                metrics.stage == "rendered" && metrics.rows >= 50
+                metrics.isPaintComplete
             }, readProbe(probeURL))
 
             samplesMs.append(Int(Date().timeIntervalSince(startedAt) * 1000))
@@ -92,7 +92,12 @@ final class SessionOpenPerformanceUITests: XCTestCase {
 
 private struct ProbeMetrics {
     let rows: Int
+    let bytes: Int
     let stage: String
+
+    var isPaintComplete: Bool {
+        (stage == "rendered" || stage == "duplicate") && rows >= 50 && bytes > 0
+    }
 
     init(label: String) {
         let pairs = Dictionary(uniqueKeysWithValues: label.split(separator: " ").compactMap { token -> (String, String)? in
@@ -101,6 +106,7 @@ private struct ProbeMetrics {
             return (String(parts[0]), String(parts[1]))
         })
         rows = Int(pairs["rows"] ?? "0") ?? 0
+        bytes = Int(pairs["bytes"] ?? "0") ?? 0
         stage = pairs["stage"] ?? "none"
     }
 }
