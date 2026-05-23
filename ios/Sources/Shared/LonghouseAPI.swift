@@ -332,7 +332,18 @@ struct LonghouseAPI: Sendable {
         let attachmentBytes = attachments.reduce(0) { $0 + $1.byteSize }
         let started = Date()
 
-        let (data, httpResponse) = try await data(for: request)
+        let data: Data
+        let httpResponse: HTTPURLResponse
+        do {
+            (data, httpResponse) = try await self.data(for: request)
+        } catch {
+            let elapsedMs = Int(Date().timeIntervalSince(started) * 1000)
+            print(
+                "[image-attach] ios upload transport_failed count=\(attachments.count) " +
+                "attachment_bytes=\(attachmentBytes) total_bytes=\(totalBytes) elapsed_ms=\(elapsedMs)"
+            )
+            throw error
+        }
         let elapsedMs = Int(Date().timeIntervalSince(started) * 1000)
         print(
             "[image-attach] ios upload count=\(attachments.count) " +

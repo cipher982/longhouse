@@ -122,7 +122,7 @@ def _client_label_from_user_agent(user_agent: str | None) -> str:
     if not user_agent:
         return "unknown"
     lowered = user_agent.lower()
-    if "longhouse-ios" in lowered or "cfnetwork" in lowered:
+    if "longhouse-ios" in lowered:
         return "ios"
     if "mozilla" in lowered or "chrome" in lowered or "safari" in lowered:
         return "web"
@@ -188,8 +188,16 @@ async def create_session_input_with_attachments(
             )
         upload_payloads.append((upload, data))
 
-    source_session = _load_session_for_continuation(db, session_id)
-    _assert_live_session_send_available(db, source_session, owner_id=current_user.id)
+    try:
+        source_session = _load_session_for_continuation(db, session_id)
+    except HTTPException:
+        _record_outcome("rejected_session")
+        raise
+    try:
+        _assert_live_session_send_available(db, source_session, owner_id=current_user.id)
+    except HTTPException:
+        _record_outcome("rejected_live_control")
+        raise
 
     capabilities = current_session_capabilities(db, source_session, owner_id=current_user.id)
     transport = (capabilities.managed_transport.value if capabilities.managed_transport else "")
