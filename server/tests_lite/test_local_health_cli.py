@@ -2280,6 +2280,11 @@ def test_collect_local_health_fast_uses_resolved_sessions_without_process_scan(m
     )
     now = datetime(2026, 5, 5, 12, 0, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(local_health_service, "_utc_now", lambda: now)
+    monkeypatch.setattr(
+        local_health_service,
+        "_load_managed_session_phase_state",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("fast local-health must not read phase overlay")),
+    )
     managed_id = "55c61956-7554-4713-8c9b-fb0fa6164c2c"
     unmanaged_id = "019dcac2-fd02-7a97-85b8-6f725b9d6252"
     _write_engine_status(
@@ -2432,6 +2437,11 @@ def test_collect_local_health_fast_sessions_only_golden(monkeypatch, tmp_path: P
     )
     now = datetime(2026, 5, 5, 12, 0, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(local_health_service, "_utc_now", lambda: now)
+    monkeypatch.setattr(
+        local_health_service,
+        "_load_managed_session_phase_state",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("fast local-health must not read phase overlay")),
+    )
     status_path = get_agent_status_path(tmp_path)
     status_path.parent.mkdir(parents=True, exist_ok=True)
     status_path.write_text(json.dumps(_load_local_health_fixture("engine_status_sessions_only.json")))
