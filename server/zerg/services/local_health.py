@@ -2135,6 +2135,8 @@ def _resolved_session_state(raw_row: Mapping[str, Any]) -> str:
         return "detached"
     if presentation_state == "managed_degraded":
         return "degraded"
+    if presentation_state == "stale_evidence":
+        return "degraded"
     return normalized_state or "unknown"
 
 

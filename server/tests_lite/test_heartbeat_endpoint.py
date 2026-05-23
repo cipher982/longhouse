@@ -402,6 +402,69 @@ def test_heartbeat_legacy_managed_sessions_still_materialize_control(tmp_path):
         api_app_ref.dependency_overrides = {}
 
 
+def test_heartbeat_rejects_null_resolved_sessions(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    client, api_app_ref = _make_client(SessionLocal)
+
+    try:
+        response = client.post(
+            "/api/agents/heartbeat",
+            json={
+                "version": "0.7.0",
+                "daemon_pid": 42,
+                "sessions": None,
+            },
+        )
+
+        assert response.status_code == 422
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_heartbeat_empty_resolved_sessions_detaches_missing_managed_control(tmp_path):
+    from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+
+    SessionLocal = _make_db(tmp_path)
+    client, api_app_ref = _make_client(SessionLocal)
+    session_id = uuid4()
+
+    try:
+        with SessionLocal() as db:
+            session = AgentSession(
+                id=session_id,
+                provider="codex",
+                environment="laptop",
+                started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
+                provider_session_id="thread-codex",
+                execution_home="managed_local",
+                managed_transport="codex_app_server",
+                user_messages=1,
+                assistant_messages=1,
+                tool_calls=0,
+                is_writable_head=1,
+            )
+            db.add(session)
+            db.flush()
+            seed_managed_kernel_rows(db, session, control_plane="codex_bridge")
+            db.commit()
+
+        response = client.post(
+            "/api/agents/heartbeat",
+            json={
+                "version": "0.7.0",
+                "daemon_pid": 42,
+                "sessions": [],
+            },
+        )
+
+        assert response.status_code == 204, response.text
+        with SessionLocal() as db:
+            connection = db.query(SessionConnection).one()
+            assert connection.state == "detached"
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
 def test_heartbeat_empty_resolved_sessions_closes_stale_unmanaged_session(tmp_path):
     SessionLocal = _make_db(tmp_path)
     client, api_app_ref = _make_client(SessionLocal)

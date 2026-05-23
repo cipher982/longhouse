@@ -110,6 +110,7 @@ def _fast_local_health_contract_projection(snapshot: dict) -> dict:
             "app_server_pid": row.get("app_server_pid"),
             "thread_subscription_status": row.get("thread_subscription_status"),
             "reason_codes": row.get("reason_codes"),
+            "evidence": row.get("evidence"),
         }
 
     def unmanaged_row(row: dict) -> dict:
@@ -125,6 +126,7 @@ def _fast_local_health_contract_projection(snapshot: dict) -> dict:
             "provider_session_id": row.get("provider_session_id"),
             "source_path": row.get("source_path"),
             "observed_at": row.get("observed_at"),
+            "evidence": row.get("evidence"),
         }
 
     return {
@@ -2453,6 +2455,47 @@ def test_collect_local_health_fast_flags_invalid_resolved_sessions_contract(monk
     assert snapshot["managed_summary"]["canonical_sessions_invalid"] is True
     assert snapshot["managed_sessions"] == []
     assert snapshot["unmanaged_processes"] == []
+
+
+def test_collect_local_health_fast_treats_stale_evidence_as_degraded(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr(
+        local_health_service,
+        "_compute_process_snapshot",
+        lambda: (_ for _ in ()).throw(AssertionError("fast local-health must not scan processes")),
+    )
+    now = datetime(2026, 5, 5, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(local_health_service, "_utc_now", lambda: now)
+    _write_engine_status(
+        tmp_path,
+        age_seconds=1,
+        payload={
+            "sessions": [
+                {
+                    "session_id": "55c61956-7554-4713-8c9b-fb0fa6164c2c",
+                    "provider": "codex",
+                    "provider_session_id": "thread-codex",
+                    "control_path": "managed",
+                    "presentation_state": "stale_evidence",
+                    "state": "reconnecting",
+                    "last_activity_at": "2026-05-05T11:59:58Z",
+                    "workspace": {"cwd": "/Users/test/git/zerg", "label": "zerg"},
+                    "process": {"pid": 4201},
+                    "bridge": {},
+                    "evidence": {"process_observed": True, "transcript_observed": True},
+                    "reason_codes": ["future_state"],
+                }
+            ],
+        },
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path, fast=True)
+
+    assert snapshot["health_state"] == "broken"
+    assert snapshot["headline"] == "Longhouse lost managed session control"
+    assert snapshot["managed_sessions"][0]["state"] == "degraded"
+    assert "managed_session_control_degraded" in snapshot["reasons"]
 
 
 def test_collect_local_health_fast_sessions_only_golden(monkeypatch, tmp_path: Path):

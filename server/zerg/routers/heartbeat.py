@@ -194,7 +194,7 @@ class HeartbeatIn(BaseModel):
     unmanaged_session_bindings: list[UnmanagedSessionBindingIn] = Field(default_factory=list)
     # Canonical engine-resolved local session snapshot. When present, server
     # ingest prefers this over legacy managed/unmanaged arrays for identity.
-    sessions: list[ResolvedLocalSessionIn] | None = None
+    sessions: list[ResolvedLocalSessionIn] = Field(default_factory=list)
 
 
 def _managed_lease_provider_label(lease: ManagedSessionLeaseIn) -> str:
@@ -778,7 +778,7 @@ async def ingest_heartbeat(
             _ship_latency_p95 = payload.ship_latency_p95_ms_1h
             _disk = payload.disk_free_bytes
             _offline = 1 if payload.is_offline else 0
-            _resolved_sessions = payload.sessions or []
+            _resolved_sessions = payload.sessions
             _resolved_sessions_present = "sessions" in payload.model_fields_set
             _managed_leases = (
                 _managed_leases_from_resolved_sessions(
