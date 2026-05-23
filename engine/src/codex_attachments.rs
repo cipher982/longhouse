@@ -271,6 +271,7 @@ pub async fn fetch_all(
     if attachments.is_empty() {
         return Ok(Vec::new());
     }
+    let started = Instant::now();
     let mut handles = Vec::with_capacity(attachments.len());
     for attachment in attachments {
         let http = http.clone();
@@ -301,8 +302,23 @@ pub async fn fetch_all(
     }
     if let Some(err) = first_err {
         cleanup_session_tmpdir(session_id);
+        eprintln!(
+            "[codex-attach] fetch_all failed session={} count={} elapsed_ms={} error={}",
+            session_id,
+            attachments.len(),
+            started.elapsed().as_millis(),
+            err
+        );
         return Err(err);
     }
+    let total_bytes: usize = fetched.iter().map(|f| f.bytes).sum();
+    eprintln!(
+        "[codex-attach] fetch_all ok session={} count={} total_bytes={} elapsed_ms={}",
+        session_id,
+        fetched.len(),
+        total_bytes,
+        started.elapsed().as_millis()
+    );
     Ok(fetched)
 }
 

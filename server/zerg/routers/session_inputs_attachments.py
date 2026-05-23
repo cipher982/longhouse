@@ -22,6 +22,7 @@ from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import File
 from fastapi import Form
+from fastapi import Header
 from fastapi import HTTPException
 from fastapi import UploadFile
 from fastapi import status
@@ -32,6 +33,9 @@ from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
+from zerg.metrics import session_input_attachment_blob_fetches_total
+from zerg.metrics import session_input_attachment_bytes
+from zerg.metrics import session_input_attachments_total
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
 from zerg.routers.session_chat import QueuedInputSummary
@@ -114,6 +118,17 @@ def _queued_summary_from_row(row) -> QueuedInputSummary:
     )
 
 
+def _client_label_from_user_agent(user_agent: str | None) -> str:
+    if not user_agent:
+        return "unknown"
+    lowered = user_agent.lower()
+    if "longhouse-ios" in lowered or "cfnetwork" in lowered:
+        return "ios"
+    if "mozilla" in lowered or "chrome" in lowered or "safari" in lowered:
+        return "web"
+    return "other"
+
+
 @router.post("/{session_id}/inputs-multipart", response_model=SessionInputResponse)
 async def create_session_input_with_attachments(
     session_id: str,
@@ -121,6 +136,7 @@ async def create_session_input_with_attachments(
     intent: str = Form(INPUT_INTENT_AUTO),
     client_request_id: str | None = Form(None, max_length=64),
     attachments: List[UploadFile] = File(...),
+    user_agent: str | None = Header(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_browser_route_user),
 ) -> SessionInputResponse:
@@ -132,17 +148,28 @@ async def create_session_input_with_attachments(
     Queue-with-attachments is also rejected because the queued-input
     drain path doesn't load attachments yet.
     """
+    client_label = _client_label_from_user_agent(user_agent)
+
+    def _record_outcome(outcome: str) -> None:
+        session_input_attachments_total.labels(client=client_label, outcome=outcome).inc()
+
     if not attachments:
+        _record_outcome("rejected_empty")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="multipart input requires at least one attachment",
         )
     if intent != INPUT_INTENT_AUTO:
+        _record_outcome("rejected_intent")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"intent {intent!r} not supported with attachments",
         )
-    _validate_attachments(attachments)
+    try:
+        _validate_attachments(attachments)
+    except HTTPException:
+        _record_outcome("rejected_validation")
+        raise
 
     # Read every upload + check size before we touch the DB. If a later
     # attachment is too large, we don't want a half-stored input in
@@ -151,6 +178,7 @@ async def create_session_input_with_attachments(
     for upload in attachments:
         data = await upload.read()
         if len(data) > MAX_ATTACHMENT_BYTES:
+            _record_outcome("rejected_oversize")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
@@ -166,6 +194,7 @@ async def create_session_input_with_attachments(
     capabilities = current_session_capabilities(db, source_session, owner_id=current_user.id)
     transport = (capabilities.managed_transport.value if capabilities.managed_transport else "")
     if transport != "codex_app_server":
+        _record_outcome("rejected_capability")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="image attach is only supported on codex sessions",
@@ -183,6 +212,7 @@ async def create_session_input_with_attachments(
         ttl_seconds=300,
     )
     if not lock:
+        _record_outcome("rejected_lock")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="another dispatch is in flight for this session; try again",
@@ -220,12 +250,14 @@ async def create_session_input_with_attachments(
         await session_lock_manager.release(lock_scope_id, delivery_request_id)
         if "row" in locals():
             mark_failed(db, int(row.id), error="attachment store rejected")
+        _record_outcome("store_rejected")
         raise
     except Exception as exc:
         await session_lock_manager.release(lock_scope_id, delivery_request_id)
         if "row" in locals():
             mark_failed(db, int(row.id), error=f"attachment store failed: {exc}")
         logger.exception("attachment upload failed for session %s", source_session.id)
+        _record_outcome("store_failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="failed to store attachments",
@@ -245,11 +277,13 @@ async def create_session_input_with_attachments(
     except HTTPException:
         await session_lock_manager.release(lock_scope_id, delivery_request_id)
         mark_failed(db, int(row.id), error="dispatch rejected")
+        _record_outcome("dispatch_rejected")
         raise
     except Exception as exc:
         await session_lock_manager.release(lock_scope_id, delivery_request_id)
         mark_failed(db, int(row.id), error=str(exc)[:200])
         logger.exception("attachment dispatch failed for session %s", source_session.id)
+        _record_outcome("dispatch_failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"dispatch failed: {exc}",
@@ -258,6 +292,7 @@ async def create_session_input_with_attachments(
     dispatch_status = int(getattr(dispatch_response, "status_code", 200) or 200)
     if dispatch_status >= 400:
         mark_failed(db, int(row.id), error=f"dispatch returned {dispatch_status}")
+        _record_outcome("dispatch_error")
         raise HTTPException(
             status_code=dispatch_status,
             detail=f"managed local dispatch returned {dispatch_status}",
@@ -266,10 +301,14 @@ async def create_session_input_with_attachments(
     mark_delivered(db, int(row.id))
 
     attachments_list = list_attachments_for_input(db, int(row.id))
+    for stored in attachments_list:
+        session_input_attachment_bytes.observe(int(stored.byte_size))
+    _record_outcome("delivered")
     logger.info(
-        "session_input_attachments_uploaded session=%s input=%d count=%d total_bytes=%d",
+        "session_input_attachments_uploaded session=%s input=%d client=%s count=%d total_bytes=%d",
         source_session.id,
         int(row.id),
+        client_label,
         len(attachments_list),
         sum(a.byte_size for a in attachments_list),
     )
@@ -305,6 +344,7 @@ async def fetch_attachment_blob(
         attach_uuid = uuid.UUID(attachment_id)
         session_uuid = uuid.UUID(session_id)
     except ValueError as exc:
+        session_input_attachment_blob_fetches_total.labels(outcome="bad_uuid").inc()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found") from exc
 
     if device_token is None:
@@ -314,12 +354,16 @@ async def fetch_attachment_blob(
 
     row = get_attachment(db, attach_uuid)
     if row is None or row.session_id != session_uuid or int(row.session_input_id) != input_id:
+        session_input_attachment_blob_fetches_total.labels(outcome="not_found").inc()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
 
     blob_path: Path = absolute_blob_path(row)
     if not blob_path.exists():
         logger.warning("attachment row %s exists but blob is missing at %s", row.id, blob_path)
+        session_input_attachment_blob_fetches_total.labels(outcome="blob_missing").inc()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
+
+    session_input_attachment_blob_fetches_total.labels(outcome="served").inc()
 
     def _iter_blob():
         with blob_path.open("rb") as fh:

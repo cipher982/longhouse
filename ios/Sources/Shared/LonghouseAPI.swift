@@ -319,15 +319,26 @@ struct LonghouseAPI: Sendable {
         request.httpMethod = "POST"
         request.addValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         request.addValue("application/json", forHTTPHeaderField: "Accept")
-        request.httpBody = Self.buildMultipartBody(
+        request.addValue("Longhouse-iOS", forHTTPHeaderField: "User-Agent")
+        let body = Self.buildMultipartBody(
             boundary: boundary,
             text: text,
             intent: "auto",
             clientRequestId: clientRequestId,
             attachments: attachments,
         )
+        request.httpBody = body
+        let totalBytes = body.count
+        let attachmentBytes = attachments.reduce(0) { $0 + $1.byteSize }
+        let started = Date()
 
         let (data, httpResponse) = try await data(for: request)
+        let elapsedMs = Int(Date().timeIntervalSince(started) * 1000)
+        print(
+            "[image-attach] ios upload count=\(attachments.count) " +
+            "attachment_bytes=\(attachmentBytes) total_bytes=\(totalBytes) " +
+            "status=\(httpResponse.statusCode) elapsed_ms=\(elapsedMs)"
+        )
         guard (200..<300).contains(httpResponse.statusCode) else {
             if let structured = Self.parseStructuredError(statusCode: httpResponse.statusCode, data: data) {
                 throw structured

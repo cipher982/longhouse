@@ -69,10 +69,27 @@ export async function postSessionInputMultipart(
   form.append("intent", "auto");
   if (body.client_request_id) form.append("client_request_id", body.client_request_id);
   body.attachments.forEach((a) => form.append("attachments", a.blob, a.filename));
-  return request<SessionInputResponse>(`/sessions/${sessionId}/inputs-multipart`, {
-    method: "POST",
-    body: form,
-  });
+  const totalBytes = body.attachments.reduce((sum, a) => sum + a.blob.size, 0);
+  const started = performance.now();
+  try {
+    const result = await request<SessionInputResponse>(`/sessions/${sessionId}/inputs-multipart`, {
+      method: "POST",
+      body: form,
+    });
+    const elapsedMs = Math.round(performance.now() - started);
+    console.info(
+      `[image-attach] web upload count=${body.attachments.length} ` +
+      `total_bytes=${totalBytes} elapsed_ms=${elapsedMs}`,
+    );
+    return result;
+  } catch (err) {
+    const elapsedMs = Math.round(performance.now() - started);
+    console.warn(
+      `[image-attach] web upload failed count=${body.attachments.length} ` +
+      `total_bytes=${totalBytes} elapsed_ms=${elapsedMs}`,
+    );
+    throw err;
+  }
 }
 
 export async function fetchSessionInputs(
