@@ -2252,6 +2252,17 @@ def _collect_resolved_sessions_from_engine_status(
     return managed_sessions, unmanaged_processes
 
 
+def _resolved_sessions_missing_summary() -> dict[str, Any]:
+    return {
+        "attached_count": 0,
+        "detached_count": 0,
+        "degraded_count": 0,
+        "orphan_bridge_count": 0,
+        "latest_activity_at": None,
+        "canonical_sessions_missing": True,
+    }
+
+
 def _collect_unmanaged_processes_from_engine_status(engine_status: dict[str, Any]) -> list[dict[str, Any]]:
     payload = _engine_status_payload(engine_status)
     raw_rows = payload.get("unmanaged_session_bindings")
@@ -2577,6 +2588,7 @@ class _HealthClassificationContext:
     managed_degraded: int
     orphan_bridge_count: int
     unknown_managed_phase_count: int
+    canonical_sessions_missing: bool
     repair_action: str
 
 
@@ -2670,6 +2682,18 @@ def _add_engine_status_reasons(
         _with_action(actions, f"Inspect logs: {engine_log_path}")
     elif engine_age is not None and engine_age > ENGINE_FRESH_SECONDS:
         reasons.append("engine_status_aging")
+
+
+def _add_canonical_session_reasons(
+    reasons: list[str],
+    actions: list[str],
+    *,
+    canonical_sessions_missing: bool,
+) -> None:
+    if not canonical_sessions_missing:
+        return
+    reasons.append("engine_status_sessions_missing")
+    _with_action(actions, "Restart or repair Longhouse so the engine emits resolved sessions")
 
 
 def _add_managed_session_reasons(
@@ -2834,8 +2858,11 @@ def _health_flags(
     managed_degraded: int,
     managed_detached: int,
     unknown_managed_phase_count: int,
+    canonical_sessions_missing: bool,
 ) -> tuple[bool, bool]:
     broken, degraded = _launch_health_flags(launch_state)
+    if canonical_sessions_missing:
+        degraded = True
     managed_broken, managed_degraded_flag = _managed_health_flags(
         orphan_bridge_count=orphan_bridge_count,
         managed_degraded=managed_degraded,
@@ -2927,6 +2954,8 @@ def _degraded_health_headline(
         headline = "Longhouse local status is aging"
     elif "engine_status_aging" in reasons:
         headline = "Longhouse local status is aging"
+    elif "engine_status_sessions_missing" in reasons:
+        headline = "Longhouse local status needs a newer engine"
     elif "managed_session_detached" in reasons:
         if managed_detached == 1 and managed_attached == 0:
             headline = "Managed session is running in background"
@@ -2969,6 +2998,7 @@ def _health_classification_context(
         managed_degraded=int((managed_summary or {}).get("degraded_count") or 0),
         orphan_bridge_count=int((managed_summary or {}).get("orphan_bridge_count") or 0),
         unknown_managed_phase_count=sum(1 for session in managed_sessions if _managed_phase_is_unknown(session.get("raw_phase"))),
+        canonical_sessions_missing=bool((managed_summary or {}).get("canonical_sessions_missing")),
         repair_action=_repair_action_for_launch_readiness(launch_readiness),
     )
 
@@ -3008,6 +3038,11 @@ def _collect_health_reasons(
         service_status=context.service_status,
         repair_action=context.repair_action,
         shipper_state_missing=context.shipper_state_missing,
+    )
+    _add_canonical_session_reasons(
+        reasons,
+        actions,
+        canonical_sessions_missing=context.canonical_sessions_missing,
     )
     _add_spool_pending_reason(
         reasons,
@@ -3092,6 +3127,7 @@ def _classify_health(
         managed_degraded=context.managed_degraded,
         managed_detached=context.managed_detached,
         unknown_managed_phase_count=context.unknown_managed_phase_count,
+        canonical_sessions_missing=context.canonical_sessions_missing,
     )
 
     if broken:
@@ -3215,16 +3251,9 @@ def _collect_managed_session_sources(
             engine_status,
             phase_overlay=phase_overlay,
         )
-        if resolved_sessions is not None:
-            process_sessions, unmanaged_processes = resolved_sessions
-        else:
-            # Compatibility shim for engines older than the resolved `sessions`
-            # contract. New engines always emit `sessions`, including `[]`.
-            process_sessions = _collect_managed_sessions_from_engine_status(
-                engine_status,
-                phase_overlay=phase_overlay,
-            )
-            unmanaged_processes = _collect_unmanaged_processes_from_engine_status(engine_status)
+        if resolved_sessions is None:
+            return _resolved_sessions_missing_summary(), [], [], []
+        process_sessions, unmanaged_processes = resolved_sessions
     else:
         with _process_snapshot_scope():
             provider_processes = _scan_provider_processes()

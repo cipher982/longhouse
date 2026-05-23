@@ -1,0 +1,51 @@
+{
+  "collection_tier": "fast",
+  "health_state": "healthy",
+  "severity": "green",
+  "headline": "Longhouse shipping healthy",
+  "reasons": [],
+  "managed_summary": {
+    "attached_count": 1,
+    "detached_count": 0,
+    "degraded_count": 0,
+    "orphan_bridge_count": 0,
+    "latest_activity_at": "2026-05-05T11:59:58Z"
+  },
+  "managed_sessions": [
+    {
+      "session_id": "sess-managed-codex",
+      "provider": "codex",
+      "provider_session_id": "thread-codex",
+      "control_path": "managed",
+      "liveness_model": "engine_status",
+      "workspace_label": "zerg",
+      "cwd": "/Users/test/git/zerg",
+      "branch": "kernel-canonical-sessions",
+      "state": "attached",
+      "raw_phase": "thinking",
+      "phase": "thinking",
+      "phase_observed_at": "2026-05-05T11:59:50Z",
+      "last_activity_at": "2026-05-05T11:59:58Z",
+      "bridge_status": "ready",
+      "bridge_pid": 4202,
+      "app_server_pid": 4203,
+      "thread_subscription_status": "subscribed",
+      "reason_codes": []
+    }
+  ],
+  "unmanaged_processes": [
+    {
+      "provider": "claude",
+      "control_path": "unmanaged",
+      "liveness_model": "engine_status",
+      "pid": 48145,
+      "workspace_label": "myagents",
+      "cwd": "/Users/test/git/myagents",
+      "branch": null,
+      "started_at": "2026-05-05T11:45:00Z",
+      "provider_session_id": "thread-claude-unmanaged",
+      "source_path": "/Users/test/.claude/projects/myagents/session.jsonl",
+      "observed_at": "2026-05-05T11:59:59Z"
+    }
+  ]
+}

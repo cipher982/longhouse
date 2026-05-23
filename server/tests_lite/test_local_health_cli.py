@@ -81,6 +81,64 @@ def _write_engine_status(tmp_path: Path, *, age_seconds: int = 0, payload: dict 
     os.utime(status_path, (timestamp, timestamp))
 
 
+def _local_health_fixture_path(name: str) -> Path:
+    return Path(__file__).parent / "fixtures" / "local_health" / name
+
+
+def _load_local_health_fixture(name: str):
+    return json.loads(_local_health_fixture_path(name).read_text())
+
+
+def _fast_local_health_contract_projection(snapshot: dict) -> dict:
+    def managed_row(row: dict) -> dict:
+        return {
+            "session_id": row.get("session_id"),
+            "provider": row.get("provider"),
+            "provider_session_id": row.get("provider_session_id"),
+            "control_path": row.get("control_path"),
+            "liveness_model": row.get("liveness_model"),
+            "workspace_label": row.get("workspace_label"),
+            "cwd": row.get("cwd"),
+            "branch": row.get("branch"),
+            "state": row.get("state"),
+            "raw_phase": row.get("raw_phase"),
+            "phase": row.get("phase"),
+            "phase_observed_at": row.get("phase_observed_at"),
+            "last_activity_at": row.get("last_activity_at"),
+            "bridge_status": row.get("bridge_status"),
+            "bridge_pid": row.get("bridge_pid"),
+            "app_server_pid": row.get("app_server_pid"),
+            "thread_subscription_status": row.get("thread_subscription_status"),
+            "reason_codes": row.get("reason_codes"),
+        }
+
+    def unmanaged_row(row: dict) -> dict:
+        return {
+            "provider": row.get("provider"),
+            "control_path": row.get("control_path"),
+            "liveness_model": row.get("liveness_model"),
+            "pid": row.get("pid"),
+            "workspace_label": row.get("workspace_label"),
+            "cwd": row.get("cwd"),
+            "branch": row.get("branch"),
+            "started_at": row.get("started_at"),
+            "provider_session_id": row.get("provider_session_id"),
+            "source_path": row.get("source_path"),
+            "observed_at": row.get("observed_at"),
+        }
+
+    return {
+        "collection_tier": snapshot["collection_tier"],
+        "health_state": snapshot["health_state"],
+        "severity": snapshot["severity"],
+        "headline": snapshot["headline"],
+        "reasons": snapshot["reasons"],
+        "managed_summary": snapshot["managed_summary"],
+        "managed_sessions": [managed_row(row) for row in snapshot["managed_sessions"]],
+        "unmanaged_processes": [unmanaged_row(row) for row in snapshot["unmanaged_processes"]],
+    }
+
+
 def _write_outbox_file(tmp_path: Path, *, age_seconds: int = 0, name: str = "prs.1.json") -> None:
     outbox_dir = get_agent_outbox_dir(tmp_path)
     outbox_dir.mkdir(parents=True, exist_ok=True)
@@ -2212,7 +2270,7 @@ def test_collect_local_health_surfaces_live_unmanaged_processes_separately_from_
     assert snapshot["activity_summary"]["provider_counts_recent"] == {"claude": 2, "codex": 1}
 
 
-def test_collect_local_health_fast_uses_engine_status_without_process_scan(monkeypatch, tmp_path: Path):
+def test_collect_local_health_fast_uses_resolved_sessions_without_process_scan(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
     monkeypatch.setattr(
@@ -2228,32 +2286,76 @@ def test_collect_local_health_fast_uses_engine_status_without_process_scan(monke
         tmp_path,
         age_seconds=1,
         payload={
-            "managed_sessions": [
+            "sessions": [
                 {
                     "session_id": managed_id,
                     "provider": "codex",
-                    "machine_id": "david010",
-                    "sequence": 4,
+                    "provider_session_id": "thread-codex",
+                    "control_path": "managed",
+                    "presentation_state": "managed_attached",
                     "state": "attached",
                     "phase": "thinking",
                     "tool_name": None,
-                    "bridge_status": "ready",
-                    "thread_subscription_status": "subscribed",
-                    "observed_at": "2026-05-05T11:59:58Z",
-                    "lease_ttl_ms": 900000,
-                }
-            ],
-            "unmanaged_session_bindings": [
+                    "phase_observed_at": "2026-05-05T11:59:58Z",
+                    "last_activity_at": "2026-05-05T11:59:58Z",
+                    "workspace": {
+                        "cwd": "/Users/test/git/zerg",
+                        "label": "zerg",
+                        "branch": "kernel-canonical-sessions",
+                    },
+                    "process": {
+                        "pid": 4201,
+                        "process_start_time": "2026-05-05T11:20:00Z",
+                        "started_at": "2026-05-05T11:20:00Z",
+                    },
+                    "bridge": {
+                        "bridge_pid": 4202,
+                        "app_server_pid": 4203,
+                        "heartbeat_at": "2026-05-05T11:59:58Z",
+                        "status": "ready",
+                        "thread_subscription_status": "subscribed",
+                    },
+                    "evidence": {
+                        "process_observed": True,
+                        "transcript_observed": True,
+                        "bridge_state": "ready",
+                        "join_keys": [
+                            "provider_session_id=thread-codex",
+                            "app_server_pid=4203",
+                        ],
+                    },
+                    "reason_codes": [],
+                },
                 {
-                    "machine_id": "david010",
                     "provider": "claude",
                     "provider_session_id": unmanaged_id,
-                    "pid": 48145,
-                    "process_start_time": "2026-05-05T11:45:00Z",
-                    "cwd": "/Users/test/git/zerg",
-                    "source_path": "/Users/test/.claude/projects/zerg/session.jsonl",
-                    "observed_at": "2026-05-05T11:59:59Z",
-                }
+                    "control_path": "unmanaged",
+                    "presentation_state": "unmanaged",
+                    "state": "unmanaged",
+                    "last_activity_at": "2026-05-05T11:59:59Z",
+                    "workspace": {
+                        "cwd": "/Users/test/git/zerg",
+                        "label": "zerg",
+                        "branch": None,
+                    },
+                    "process": {
+                        "pid": 48145,
+                        "process_start_time": "2026-05-05T11:45:00Z",
+                        "started_at": "2026-05-05T11:45:00Z",
+                    },
+                    "bridge": {},
+                    "evidence": {
+                        "process_observed": True,
+                        "transcript_observed": True,
+                        "hook_seen_at": "2026-05-05T11:59:59Z",
+                        "join_keys": [
+                            "provider_session_id=019dcac2-fd02-7a97-85b8-6f725b9d6252",
+                            "source_path=/Users/test/.claude/projects/zerg/session.jsonl",
+                            "pid=48145",
+                        ],
+                    },
+                    "reason_codes": [],
+                },
             ],
         },
     )
@@ -2269,6 +2371,78 @@ def test_collect_local_health_fast_uses_engine_status_without_process_scan(monke
     assert snapshot["unmanaged_processes"][0]["pid"] == 48145
     assert snapshot["unmanaged_processes"][0]["workspace_label"] == "zerg"
     assert snapshot["unmanaged_processes"][0]["liveness_model"] == "engine_status"
+
+
+def test_collect_local_health_fast_flags_missing_resolved_sessions_contract(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr(
+        local_health_service,
+        "_compute_process_snapshot",
+        lambda: (_ for _ in ()).throw(AssertionError("fast local-health must not scan processes")),
+    )
+    now = datetime(2026, 5, 5, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(local_health_service, "_utc_now", lambda: now)
+    _write_engine_status(
+        tmp_path,
+        age_seconds=1,
+        payload={
+            "managed_sessions": [
+                {
+                    "session_id": "legacy-managed",
+                    "provider": "codex",
+                    "state": "attached",
+                    "phase": "thinking",
+                    "observed_at": "2026-05-05T11:59:58Z",
+                    "lease_ttl_ms": 900000,
+                }
+            ],
+            "unmanaged_session_bindings": [
+                {
+                    "provider": "claude",
+                    "provider_session_id": "legacy-unmanaged",
+                    "pid": 48145,
+                    "process_start_time": "2026-05-05T11:45:00Z",
+                    "cwd": "/Users/test/git/zerg",
+                    "observed_at": "2026-05-05T11:59:59Z",
+                }
+            ],
+        },
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path, fast=True)
+
+    assert snapshot["collection_tier"] == "fast"
+    assert snapshot["health_state"] == "degraded"
+    assert snapshot["severity"] == "yellow"
+    assert snapshot["headline"] == "Longhouse local status needs a newer engine"
+    assert "engine_status_sessions_missing" in snapshot["reasons"]
+    assert snapshot["managed_summary"]["canonical_sessions_missing"] is True
+    assert snapshot["managed_sessions"] == []
+    assert snapshot["unmanaged_processes"] == []
+
+
+def test_collect_local_health_fast_sessions_only_golden(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr(
+        local_health_service,
+        "_compute_process_snapshot",
+        lambda: (_ for _ in ()).throw(AssertionError("fast local-health must not scan processes")),
+    )
+    now = datetime(2026, 5, 5, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(local_health_service, "_utc_now", lambda: now)
+    status_path = get_agent_status_path(tmp_path)
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    status_path.write_text(json.dumps(_load_local_health_fixture("engine_status_sessions_only.json")))
+    timestamp = time.time() - 1
+    os.utime(status_path, (timestamp, timestamp))
+
+    snapshot = local_health_service.collect_local_health(tmp_path, fast=True)
+
+    assert _fast_local_health_contract_projection(snapshot) == _load_local_health_fixture(
+        "fast_snapshot_sessions_only.golden.json"
+    )
 
 
 def test_collect_local_health_fast_prefers_resolved_engine_sessions(monkeypatch, tmp_path: Path):
