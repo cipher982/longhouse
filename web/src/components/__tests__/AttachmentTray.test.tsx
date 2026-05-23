@@ -41,6 +41,22 @@ describe("AttachmentTray", () => {
     expect(screen.queryByLabelText("Attach images")).toBeNull();
   });
 
+  it("can disable adding without trapping existing attachments", () => {
+    const onRemove = vi.fn();
+    render(
+      <AttachmentTray
+        attachments={[attach("1")]}
+        onAddFiles={vi.fn()}
+        onRemove={onRemove}
+        addDisabled
+      />,
+    );
+
+    expect(screen.queryByLabelText("Attach images")).toBeNull();
+    fireEvent.click(screen.getByLabelText("Remove 1.png"));
+    expect(onRemove).toHaveBeenCalledWith("1");
+  });
+
   it("surfaces compressor errors", () => {
     render(
       <AttachmentTray

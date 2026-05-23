@@ -52,6 +52,15 @@ struct SessionView: View {
         composerHasText || !attachmentStore.isEmpty
     }
 
+    private var attachmentInputEnabled: Bool {
+        guard viewModel.detail?.attachImagesEnabled == true else { return false }
+        return primaryIntent == "auto"
+    }
+
+    private var attachmentSendBlocked: Bool {
+        !attachmentStore.isEmpty && primaryIntent != "auto"
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             transcript
@@ -298,17 +307,20 @@ struct SessionView: View {
                 .accessibilityLabel("Draft reply")
 
                 if detail.attachImagesEnabled {
+                    let attachmentSlotsLeft = attachmentStore.slotsLeft
+                    let attachmentIsProcessing = attachmentStore.isProcessing
+                    let canAttachImages = attachmentInputEnabled
                     PhotosPicker(
                         selection: $pickerSelection,
-                        maxSelectionCount: max(1, attachmentStore.slotsLeft),
+                        maxSelectionCount: max(1, attachmentSlotsLeft),
                         matching: .images
                     ) {
-                        Image(systemName: attachmentStore.isProcessing ? "ellipsis.circle" : "paperclip")
+                        Image(systemName: attachmentIsProcessing ? "ellipsis.circle" : "paperclip")
                             .font(.title3)
-                            .foregroundStyle(attachmentStore.slotsLeft > 0 ? Color.accentColor : Color.secondary.opacity(0.3))
+                            .foregroundStyle(canAttachImages && attachmentSlotsLeft > 0 ? Color.accentColor : Color.secondary.opacity(0.3))
                     }
                     .frame(width: 32, height: 32)
-                    .disabled(attachmentStore.slotsLeft <= 0 || attachmentStore.isProcessing || isLoadingPickerItems || viewModel.isSending)
+                    .disabled(!canAttachImages || attachmentSlotsLeft <= 0 || attachmentIsProcessing || isLoadingPickerItems || viewModel.isSending)
                     .accessibilityLabel("Attach images")
                     .accessibilityIdentifier("session-chat-attach")
                 }
@@ -333,7 +345,7 @@ struct SessionView: View {
                             .foregroundStyle(composerHasContent ? Color.accentColor : Color.secondary.opacity(0.3))
                     }
                 }
-                .disabled(!composerHasContent || viewModel.isSending || viewModel.isDrafting || attachmentStore.isProcessing || isLoadingPickerItems)
+                .disabled(!composerHasContent || viewModel.isSending || viewModel.isDrafting || attachmentStore.isProcessing || isLoadingPickerItems || attachmentSendBlocked)
                 .accessibilityLabel(sendAccessibilityLabel)
                 .accessibilityIdentifier("session-chat-send")
                 .contextMenu {
@@ -489,9 +501,11 @@ struct SessionView: View {
         let trimmed = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         let pendingAttachments = attachmentStore.snapshot()
         guard !trimmed.isEmpty || !pendingAttachments.isEmpty else { return }
-        // Multipart route only accepts intent=auto in v1. Force auto when
-        // attachments are present, regardless of the requested intent.
-        let resolvedIntent = pendingAttachments.isEmpty ? (intent ?? primaryIntent) : "auto"
+        let requestedIntent = intent ?? primaryIntent
+        if !pendingAttachments.isEmpty && requestedIntent != "auto" {
+            attachmentStore.errorMessage = "Images can be sent when the session is ready for a new turn."
+            return
+        }
         composerText = ""
         composerFocused = false
         // Snapshot+clear before send so a slow request doesn't keep the
@@ -501,7 +515,7 @@ struct SessionView: View {
             text: trimmed,
             sessionId: sessionId,
             appState: appState,
-            intent: resolvedIntent,
+            intent: requestedIntent,
             attachments: pendingAttachments,
         )
         if sent {

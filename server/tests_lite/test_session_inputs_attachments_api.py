@@ -27,6 +27,7 @@ os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-1234")
 os.environ.setdefault("GOOGLE_CLIENT_ID", "test-google-client-id")
 os.environ.setdefault("GOOGLE_CLIENT_SECRET", "test-google-client-secret")
 
+from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 from zerg.database import get_db
 from zerg.database import initialize_database
 from zerg.database import make_engine
@@ -34,14 +35,9 @@ from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
-from zerg.models.agents import AgentEvent
-from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionInputAttachment
-from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionRuntimeState
-from zerg.models.agents import SessionThread
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
@@ -51,11 +47,13 @@ from zerg.services.agents_store import SessionIngest
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.session_continuity import session_lock_manager
 from zerg.services.session_input_attachments import cleanup_stale_blobs
+from zerg.services.session_input_attachments import store_attachment_blob
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
+from zerg.services.session_inputs import INPUT_STATUS_FAILED
+from zerg.services.session_inputs import create_session_input
+from zerg.services.session_inputs import requeue_stuck_delivering
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
-from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
-
 
 # A 1x1 PNG (~70 bytes) — enough to hash, well under the 2MB cap.
 _PNG_BYTES = (
@@ -565,3 +563,39 @@ def test_cleanup_stale_blobs_removes_terminal_aged_rows(monkeypatch, tmp_path):
     finally:
         asyncio.run(session_lock_manager.release(str(session_id)))
         api_app_ref.dependency_overrides = {}
+
+
+def test_startup_reconciliation_fails_stuck_attachment_rows(monkeypatch, tmp_path):
+    _set_blob_root(monkeypatch, tmp_path)
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_codex_session(session_local)
+
+    with session_local() as db:
+        row = create_session_input(
+            db,
+            session_id=session_id,
+            text="look at this",
+            owner_id=user_id,
+            intent="auto",
+            status="delivering",
+            client_request_id="crash-attachment",
+            delivery_request_id="crash-attachment-delivery",
+        )
+        store_attachment_blob(
+            db,
+            session_input=row,
+            mime_type="image/png",
+            data=_PNG_BYTES,
+            original_filename="a.png",
+            original_byte_size=len(_PNG_BYTES),
+        )
+        row.updated_at = datetime.now(timezone.utc) - timedelta(seconds=300)
+        db.commit()
+
+        requeued = requeue_stuck_delivering(db)
+
+        assert requeued == 0
+        db.expire_all()
+        refreshed = db.query(SessionInput).filter(SessionInput.id == row.id).one()
+        assert refreshed.status == INPUT_STATUS_FAILED
+        assert refreshed.last_error == "attachment delivery interrupted by restart"

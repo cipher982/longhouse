@@ -679,6 +679,7 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
 
 pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     let pid = std::process::id();
+    crate::codex_attachments::cleanup_session_tmpdir(&config.session_id);
     let initial_state = BridgeStateFile {
         session_id: config.session_id.clone(),
         cwd: config.cwd.display().to_string(),

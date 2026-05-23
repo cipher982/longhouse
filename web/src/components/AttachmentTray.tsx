@@ -12,6 +12,7 @@ interface Props {
   error?: string | null;
   onClearError?: () => void;
   disabled?: boolean;
+  addDisabled?: boolean;
 }
 
 export function AttachmentTray({
@@ -22,10 +23,11 @@ export function AttachmentTray({
   error,
   onClearError,
   disabled,
+  addDisabled,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const slotsLeft = COMPOSER_ATTACHMENT_LIMITS.maxAttachments - attachments.length;
-  const canAdd = !disabled && slotsLeft > 0;
+  const canAdd = !disabled && !addDisabled && slotsLeft > 0;
 
   return (
     <div className="session-chat-attachment-tray" data-testid="attachment-tray">
