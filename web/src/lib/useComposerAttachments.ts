@@ -36,13 +36,16 @@ export function useComposerAttachments(): UseComposerAttachmentsApi {
   const [isCompressing, setIsCompressing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const counterRef = useRef(0);
+  const mountedRef = useRef(true);
 
   const sync = useCallback(() => {
+    if (!mountedRef.current) return;
     setAttachmentsState([...ref.current]);
   }, []);
 
   useEffect(() => {
     return () => {
+      mountedRef.current = false;
       ref.current.forEach((a) => URL.revokeObjectURL(a.previewUrl));
       ref.current = [];
     };
@@ -90,13 +93,16 @@ export function useComposerAttachments(): UseComposerAttachmentsApi {
             }
           }
         }
-        // Cap defensively in case the loop somehow over-pushed.
+        // Cap defensively in case the loop somehow over-pushed; revoke any
+        // overflow previews so we don't leak object URLs.
         if (ref.current.length > MAX_ATTACHMENTS) {
+          const overflow = ref.current.slice(MAX_ATTACHMENTS);
+          overflow.forEach((a) => URL.revokeObjectURL(a.previewUrl));
           ref.current = ref.current.slice(0, MAX_ATTACHMENTS);
         }
         sync();
       } finally {
-        setIsCompressing(false);
+        if (mountedRef.current) setIsCompressing(false);
       }
     },
     [sync],

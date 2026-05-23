@@ -522,6 +522,9 @@ export function SessionChat({
       // attachment-only sends are valid and the server accepts text="".
       if (!message && !hasAttachments) return;
       if (isSubmitting || isComposerDisabled || isSendBlocked) return;
+      // Block send while compression is in flight; the snapshot would miss
+      // the pending file and the late add could repopulate the cleared tray.
+      if (composerAttachments.isCompressing) return;
 
       setDraft("");
       setError(null);
@@ -568,10 +571,13 @@ export function SessionChat({
   const handleComposerDrop = useCallback(
     (e: React.DragEvent) => {
       if (!attachImagesEnabled) return;
-      const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith("image/"));
-      if (!files.length) return;
+      const dropped = Array.from(e.dataTransfer.files);
+      if (!dropped.length) return;
+      // Always preventDefault on file drops — even non-image drops, otherwise
+      // the browser navigates away and the user loses their draft.
       e.preventDefault();
-      void composerAttachments.addFiles(files);
+      const images = dropped.filter((f) => f.type.startsWith("image/"));
+      if (images.length) void composerAttachments.addFiles(images);
     },
     [attachImagesEnabled, composerAttachments],
   );
@@ -1070,7 +1076,7 @@ export function SessionChat({
                       type="submit"
                       variant="primary"
                       size="sm"
-                      disabled={!hasComposerContent || isSubmitting || isDraftingReply || isSendBlocked}
+                      disabled={!hasComposerContent || isSubmitting || isDraftingReply || isSendBlocked || composerAttachments.isCompressing}
                     >
                       {submitButtonLabel}
                     </Button>
@@ -1123,7 +1129,7 @@ export function SessionChat({
                         type="submit"
                         variant="primary"
                         size="sm"
-                        disabled={isComposerDisabled || !hasComposerContent || isSubmitting || isDraftingReply || isSendBlocked}
+                        disabled={isComposerDisabled || !hasComposerContent || isSubmitting || isDraftingReply || isSendBlocked || composerAttachments.isCompressing}
                         title={composerDisabledReason ?? undefined}
                       >
                         {submitButtonLabel}
