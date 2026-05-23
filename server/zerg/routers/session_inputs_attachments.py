@@ -126,21 +126,39 @@ async def create_session_input_with_attachments(
 ) -> SessionInputResponse:
     """Send a user input with one or more image attachments.
 
-    v1 only supports auto + steer (live dispatch). Queue-with-attachments
-    is rejected — the queued-input drain path doesn't yet load attachments,
-    and silently downgrading would be a no-silent-fallback violation.
+    v1 only supports the ``auto`` intent. ``steer`` would need the live
+    steer chain to accept attachments and would race the dispatch lock
+    that this route already acquires for the regular send path.
+    Queue-with-attachments is also rejected because the queued-input
+    drain path doesn't load attachments yet.
     """
     if not attachments:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="multipart input requires at least one attachment",
         )
-    if intent not in (INPUT_INTENT_AUTO, INPUT_INTENT_STEER):
+    if intent != INPUT_INTENT_AUTO:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"intent {intent!r} not supported with attachments",
         )
     _validate_attachments(attachments)
+
+    # Read every upload + check size before we touch the DB. If a later
+    # attachment is too large, we don't want a half-stored input in
+    # ``delivering`` state with earlier blobs orphaned on disk.
+    upload_payloads: list[tuple[UploadFile, bytes]] = []
+    for upload in attachments:
+        data = await upload.read()
+        if len(data) > MAX_ATTACHMENT_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"attachment {upload.filename!r} exceeds "
+                    f"{MAX_ATTACHMENT_BYTES // 1024 // 1024}MB"
+                ),
+            )
+        upload_payloads.append((upload, data))
 
     source_session = _load_session_for_continuation(db, session_id)
     _assert_live_session_send_available(db, source_session, owner_id=current_user.id)
@@ -182,16 +200,7 @@ async def create_session_input_with_attachments(
             client_request_id=request_id,
             delivery_request_id=delivery_request_id,
         )
-        for upload in attachments:
-            data = await upload.read()
-            if len(data) > MAX_ATTACHMENT_BYTES:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=(
-                        f"attachment {upload.filename!r} exceeds "
-                        f"{MAX_ATTACHMENT_BYTES // 1024 // 1024}MB"
-                    ),
-                )
+        for upload, data in upload_payloads:
             stored = store_attachment_blob(
                 db,
                 session_input=row,
@@ -209,6 +218,8 @@ async def create_session_input_with_attachments(
             )
     except HTTPException:
         await session_lock_manager.release(lock_scope_id, delivery_request_id)
+        if "row" in locals():
+            mark_failed(db, int(row.id), error="attachment store rejected")
         raise
     except Exception as exc:
         await session_lock_manager.release(lock_scope_id, delivery_request_id)

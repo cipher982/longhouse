@@ -1101,8 +1101,8 @@ async fn handle_ipc_turn_start(
 }
 
 pub async fn cmd_codex_bridge_send(config: BridgeSendConfig) -> Result<BridgeSendSummary> {
-    if config.text.trim().is_empty() {
-        bail!("text must not be empty");
+    if config.text.trim().is_empty() && config.attachments.is_empty() {
+        bail!("text must not be empty when no attachments are present");
     }
     let state = load_ready_state(&config.session_id, config.state_root.as_deref())?;
     let thread_id = state

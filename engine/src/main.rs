@@ -712,6 +712,12 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let command_name = command_name(&cli.command);
 
+    // Drop any leftover image-attach blobs from a prior process before
+    // touching anything else. Cheap, best-effort, no-op when empty.
+    if matches!(cli.command, Commands::Connect { .. }) {
+        crate::codex_attachments::cleanup_orphan_tmpdirs();
+    }
+
     // For Connect (daemon) mode: use rolling file appender.
     // For all other commands: log to stderr as usual.
     let _guard;
@@ -1292,12 +1298,18 @@ mod tests {
 
     #[test]
     fn codex_bridge_send_parses_attachments_json() {
+        let attach_id = uuid::Uuid::new_v4().to_string();
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let blob_url = format!(
+            "/api/agents/sessions/{}/inputs/1/attachments/{}/blob",
+            session_id, attach_id
+        );
         let attachments = serde_json::json!([
             {
-                "id": "att_1",
+                "id": attach_id,
                 "mime_type": "image/png",
                 "sha256": "a".repeat(64),
-                "blob_url": "https://example.com/blob/1",
+                "blob_url": blob_url,
             }
         ])
         .to_string();
@@ -1322,8 +1334,8 @@ mod tests {
             } => {
                 let parsed = parse_attachments_cli_arg(attachments_json.as_deref()).unwrap();
                 assert_eq!(parsed.len(), 1);
-                assert_eq!(parsed[0].id, "att_1");
-                assert_eq!(parsed[0].blob_url, "https://example.com/blob/1");
+                assert_eq!(parsed[0].id, attach_id);
+                assert_eq!(parsed[0].blob_url, blob_url);
             }
             _ => panic!("expected codex-bridge send command"),
         }
@@ -1344,12 +1356,18 @@ mod tests {
 
     #[test]
     fn codex_bridge_steer_accepts_attachments_json() {
+        let attach_id = uuid::Uuid::new_v4().to_string();
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let blob_url = format!(
+            "/api/agents/sessions/{}/inputs/2/attachments/{}/blob",
+            session_id, attach_id
+        );
         let attachments = serde_json::json!([
             {
-                "id": "att_2",
+                "id": attach_id,
                 "mime_type": "image/jpeg",
                 "sha256": "b".repeat(64),
-                "blob_url": "https://example.com/blob/2",
+                "blob_url": blob_url,
             }
         ])
         .to_string();
@@ -1374,7 +1392,7 @@ mod tests {
             } => {
                 let parsed = parse_attachments_cli_arg(attachments_json.as_deref()).unwrap();
                 assert_eq!(parsed.len(), 1);
-                assert_eq!(parsed[0].id, "att_2");
+                assert_eq!(parsed[0].id, attach_id);
             }
             _ => panic!("expected codex-bridge steer command"),
         }

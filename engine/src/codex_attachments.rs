@@ -10,13 +10,14 @@
 //! Codex itself loads the file off disk — we never hand it base64.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 const ATTACHMENT_FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 const TMP_ROOT_NAME: &str = "lh-attach";
@@ -63,24 +64,52 @@ pub fn parse_attachments(request: &Value) -> Result<Vec<AttachmentRef>> {
     for (idx, item) in array.iter().enumerate() {
         let parsed: AttachmentRef = serde_json::from_value(item.clone())
             .with_context(|| format!("attachments[{idx}] is not a valid AttachmentRef"))?;
-        if parsed.id.trim().is_empty() {
-            bail!("attachments[{idx}].id is empty");
+        if Uuid::parse_str(&parsed.id).is_err() {
+            bail!("attachments[{idx}].id is not a valid UUID");
         }
-        if parsed.sha256.len() != 64 {
+        if parsed.sha256.len() != 64 || !parsed.sha256.chars().all(|c| c.is_ascii_hexdigit()) {
             bail!("attachments[{idx}].sha256 must be 64 hex chars");
         }
-        if parsed.blob_url.trim().is_empty() {
-            bail!("attachments[{idx}].blob_url is empty");
-        }
+        validate_blob_url(&parsed.blob_url)
+            .with_context(|| format!("attachments[{idx}].blob_url"))?;
         out.push(parsed);
     }
     Ok(out)
 }
 
+/// Reject anything that isn't a relative path under `/api/agents/`.
+///
+/// The engine forwards `X-Agents-Token` to whatever URL we resolve, so an
+/// absolute URL — even with the right scheme — would let a leaked or
+/// malformed payload exfiltrate the machine token. Keeping this strict
+/// also means tests can only assert one canonical resolution path.
+fn validate_blob_url(blob_url: &str) -> Result<()> {
+    let trimmed = blob_url.trim();
+    if trimmed.is_empty() {
+        bail!("is empty");
+    }
+    if !trimmed.starts_with('/') {
+        bail!("must be a relative path starting with '/'");
+    }
+    if !trimmed.starts_with("/api/agents/") {
+        bail!("must point at /api/agents/");
+    }
+    if trimmed.contains("..") {
+        bail!("must not contain '..'");
+    }
+    Ok(())
+}
+
 /// Per-session tmpdir for attachment blobs. Lives under `$TMPDIR/lh-attach`
-/// so cleanup on engine restart is straightforward.
+/// so cleanup on engine restart is straightforward. Session id is verified
+/// to be a UUID before reaching here so `..` / `/` can never escape.
 pub fn session_tmpdir(session_id: &str) -> PathBuf {
     std::env::temp_dir().join(TMP_ROOT_NAME).join(session_id)
+}
+
+/// Root tmpdir for all sessions. Used by startup orphan cleanup.
+pub fn tmp_root() -> PathBuf {
+    std::env::temp_dir().join(TMP_ROOT_NAME)
 }
 
 fn extension_for_mime(mime: &str) -> &'static str {
@@ -93,20 +122,14 @@ fn extension_for_mime(mime: &str) -> &'static str {
     }
 }
 
-/// Resolve `blob_url` against the engine's configured `api_url`. Absolute
-/// URLs (`https://...`) pass through unchanged; relative paths starting
-/// with `/` are joined onto the api base so the backend doesn't need to
-/// know what hostname the engine actually reaches it at.
+/// Resolve `blob_url` against the engine's configured `api_url`.
+/// `validate_blob_url` already enforced relative + `/api/agents/` prefix,
+/// so we just join here. The backend never has to know what hostname the
+/// engine actually reaches it at, and we never send the machine token to
+/// an arbitrary origin.
 fn resolve_blob_url(api_url: &str, blob_url: &str) -> String {
-    if blob_url.starts_with("http://") || blob_url.starts_with("https://") {
-        return blob_url.to_string();
-    }
     let base = api_url.trim_end_matches('/');
-    if blob_url.starts_with('/') {
-        format!("{base}{blob_url}")
-    } else {
-        format!("{base}/{blob_url}")
-    }
+    format!("{base}{blob_url}")
 }
 
 /// Fetch one attachment over HTTP, verify sha256, and write it under
@@ -118,6 +141,13 @@ pub async fn fetch_one(
     session_id: &str,
     attachment: &AttachmentRef,
 ) -> Result<FetchedAttachment> {
+    if Uuid::parse_str(session_id).is_err() {
+        bail!("session_id {session_id:?} is not a valid UUID");
+    }
+    if Uuid::parse_str(&attachment.id).is_err() {
+        bail!("attachment id {:?} is not a valid UUID", attachment.id);
+    }
+    validate_blob_url(&attachment.blob_url)?;
     let started = Instant::now();
     let resolved_url = resolve_blob_url(api_url, &attachment.blob_url);
     let response = http
@@ -163,16 +193,15 @@ pub async fn fetch_one(
     }
 
     let dir = session_tmpdir(session_id);
-    fs::create_dir_all(&dir)
+    create_dir_owner_only(&dir)
         .with_context(|| format!("creating attachment tmpdir {}", dir.display()))?;
     let path = dir.join(format!(
         "{}.{}",
         attachment.id,
         extension_for_mime(&attachment.mime_type)
     ));
-    fs::write(&path, &bytes)
+    write_owner_only(&path, &bytes)
         .with_context(|| format!("writing attachment blob {}", path.display()))?;
-    set_owner_only_perms(&path)?;
 
     let elapsed_ms = started.elapsed().as_millis();
     eprintln!(
@@ -192,16 +221,41 @@ pub async fn fetch_one(
 }
 
 #[cfg(unix)]
-fn set_owner_only_perms(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let mut perms = fs::metadata(path)?.permissions();
-    perms.set_mode(0o600);
-    fs::set_permissions(path, perms)?;
+fn create_dir_owner_only(dir: &std::path::Path) -> Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    if dir.exists() {
+        return Ok(());
+    }
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true).mode(0o700);
+    builder.create(dir)?;
     Ok(())
 }
 
 #[cfg(not(unix))]
-fn set_owner_only_perms(_path: &Path) -> Result<()> {
+fn create_dir_owner_only(dir: &std::path::Path) -> Result<()> {
+    fs::create_dir_all(dir)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn write_owner_only(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_owner_only(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    fs::write(path, bytes)?;
     Ok(())
 }
 
@@ -267,6 +321,30 @@ pub fn cleanup_session_tmpdir(session_id: &str) {
     }
 }
 
+/// Wipe every per-session attachment tmpdir under `$TMPDIR/lh-attach`.
+///
+/// Called once at engine startup. A previous engine process may have
+/// crashed mid-turn and left blobs on disk; we'd rather drop them than
+/// leak them into a fresh session by accident.
+pub fn cleanup_orphan_tmpdirs() {
+    let root = tmp_root();
+    if !root.exists() {
+        return;
+    }
+    match fs::remove_dir_all(&root) {
+        Ok(_) => {
+            eprintln!("[codex-attach] cleared orphan tmpdir {}", root.display());
+        }
+        Err(err) => {
+            eprintln!(
+                "[codex-attach] startup cleanup of {} failed: {}",
+                root.display(),
+                err
+            );
+        }
+    }
+}
+
 /// Build the `input` array for `turn/start` / `turn/steer`. LocalImage
 /// items come first, then a Text item — matches Codex's CLI drag-drop
 /// ordering. When `text` is empty and there are attachments, we still
@@ -305,45 +383,89 @@ mod tests {
         assert!(parse_attachments(&req).unwrap().is_empty());
     }
 
+    fn sample_id() -> String {
+        Uuid::new_v4().to_string()
+    }
+
+    fn sample_blob_url(id: &str) -> String {
+        format!(
+            "/api/agents/sessions/{}/inputs/1/attachments/{}/blob",
+            sample_id(),
+            id,
+        )
+    }
+
     #[test]
     fn parse_attachments_round_trips_one() {
+        let id = sample_id();
         let sha = "a".repeat(64);
         let req = json!({
             "attachments": [{
-                "id": "abc",
+                "id": id,
                 "mime_type": "image/png",
                 "sha256": sha,
-                "blob_url": "https://example/x",
+                "blob_url": sample_blob_url(&id),
             }]
         });
         let parsed = parse_attachments(&req).unwrap();
         assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0].id, "abc");
+        assert_eq!(parsed[0].id, id);
         assert_eq!(parsed[0].mime_type, "image/png");
     }
 
     #[test]
     fn parse_attachments_rejects_short_sha() {
+        let id = sample_id();
         let req = json!({
             "attachments": [{
-                "id": "abc",
+                "id": id,
                 "mime_type": "image/png",
                 "sha256": "short",
-                "blob_url": "https://example/x",
+                "blob_url": sample_blob_url(&id),
             }]
         });
         assert!(parse_attachments(&req).is_err());
     }
 
     #[test]
-    fn parse_attachments_rejects_empty_id() {
+    fn parse_attachments_rejects_non_uuid_id() {
         let sha = "a".repeat(64);
         let req = json!({
             "attachments": [{
-                "id": "",
+                "id": "../etc/passwd",
                 "mime_type": "image/png",
                 "sha256": sha,
-                "blob_url": "https://example/x",
+                "blob_url": "/api/agents/sessions/x/inputs/1/attachments/y/blob",
+            }]
+        });
+        assert!(parse_attachments(&req).is_err());
+    }
+
+    #[test]
+    fn parse_attachments_rejects_absolute_blob_url() {
+        let id = sample_id();
+        let sha = "a".repeat(64);
+        let req = json!({
+            "attachments": [{
+                "id": id,
+                "mime_type": "image/png",
+                "sha256": sha,
+                "blob_url": "https://attacker.example/api/agents/sessions/x/blob",
+            }]
+        });
+        assert!(parse_attachments(&req).is_err());
+    }
+
+    #[test]
+    fn parse_attachments_rejects_path_traversal() {
+        let id = sample_id();
+        let sha = "a".repeat(64);
+        let req = json!({
+            "attachments": [{
+                "id": id,
+                "mime_type": "image/png",
+                "sha256": sha,
+                "blob_url": "/api/agents/../private",
             }]
         });
         assert!(parse_attachments(&req).is_err());
@@ -398,18 +520,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_blob_url_passes_absolute_through() {
-        assert_eq!(
-            resolve_blob_url("https://api.example", "https://other/x.bin"),
-            "https://other/x.bin"
-        );
-        assert_eq!(
-            resolve_blob_url("https://api.example", "http://internal/x.bin"),
-            "http://internal/x.bin"
-        );
-    }
-
-    #[test]
     fn resolve_blob_url_joins_relative_path() {
         assert_eq!(
             resolve_blob_url("https://api.example", "/api/agents/sessions/s/inputs/1/blob"),
@@ -417,10 +527,6 @@ mod tests {
         );
         assert_eq!(
             resolve_blob_url("https://api.example/", "/api/agents/x"),
-            "https://api.example/api/agents/x"
-        );
-        assert_eq!(
-            resolve_blob_url("https://api.example/", "api/agents/x"),
             "https://api.example/api/agents/x"
         );
     }
