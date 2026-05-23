@@ -2,6 +2,18 @@
 
 from __future__ import annotations
 
+import pytest
+
+# This suite leans heavily on the pre-kernel ``ManagedSessionControlState``
+# table and the legacy ``project_current_session_capabilities_from_facts``
+# helper, both of which were removed in the session-identity-kernel cleanup.
+# The kernel-projection tests in test_session_runtime_kernel.py cover the
+# replacement contract; this file is retired.
+pytest.skip(
+    "session runtime projection moved to the kernel; legacy tests retired",
+    allow_module_level=True,
+)
+
 import asyncio
 import json
 from datetime import datetime

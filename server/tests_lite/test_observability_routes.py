@@ -79,7 +79,6 @@ def _seed_session(
         project=project,
         device_id=device_id,
         device_name=device_name,
-        provider_session_id=str(uuid4()),
         managed_transport=managed_transport,
         started_at=datetime(2026, 4, 23, 18, 0, 0, tzinfo=timezone.utc),
         user_messages=1,
@@ -87,6 +86,50 @@ def _seed_session(
         tool_calls=0,
     )
     db.add(session)
+    db.flush()
+
+    # Session-identity-kernel cleanup: managed_transport derives from
+    # session_connections.control_plane. Seed the kernel rows so the
+    # observability endpoint sees this as managed.
+    from zerg.models.agents import SessionConnection
+    from zerg.models.agents import SessionRun
+    from zerg.models.agents import SessionThread
+
+    thread = SessionThread(
+        id=uuid4(),
+        session_id=session.id,
+        provider=provider,
+        is_primary=1,
+    )
+    db.add(thread)
+    db.flush()
+    session.primary_thread_id = thread.id
+
+    if managed_transport is not None:
+        plane_map = {
+            "claude_channel_bridge": "claude_channel_bridge",
+            "codex_app_server": "codex_app_server",
+            "opencode_process": "opencode_process",
+            "antigravity_process": "antigravity_process",
+        }
+        control_plane = plane_map.get(managed_transport, managed_transport)
+        run = SessionRun(
+            id=uuid4(),
+            thread_id=thread.id,
+            provider=provider,
+            host_id=device_id,
+            started_at=datetime(2026, 4, 23, 18, 0, 0, tzinfo=timezone.utc),
+        )
+        db.add(run)
+        db.flush()
+        db.add(
+            SessionConnection(
+                run_id=run.id,
+                control_plane=control_plane,
+                acquisition_kind="spawned_control",
+                state="attached",
+            )
+        )
     db.commit()
     db.refresh(session)
     return session

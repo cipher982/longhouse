@@ -228,7 +228,10 @@ impl AdaptiveLimiter {
     /// time to keep the cap from oscillating on noise.
     #[cfg(test)]
     pub fn clear_adjust_cooldown(&self) {
-        self.state.lock().expect("limiter state poisoned").last_adjust = None;
+        self.state
+            .lock()
+            .expect("limiter state poisoned")
+            .last_adjust = None;
     }
 
     pub fn snapshot(&self) -> LimiterSnapshot {

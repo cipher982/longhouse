@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from zerg.services.session_capabilities import SessionCapabilityFlags
+from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_execution_home import infer_execution_home
@@ -45,17 +45,26 @@ def _execution_home_label(execution_home: SessionExecutionHome) -> str | None:
     return None
 
 
-def build_session_capabilities(session: Any) -> SessionCapabilityFlags:
+def build_session_capabilities(session: Any) -> KernelSessionCapabilities:
     if session is None:
-        return SessionCapabilityFlags(
-            execution_home=SessionExecutionHome.UNMANAGED_LOCAL,
-            managed_transport=None,
+        return KernelSessionCapabilities(
+            session_id="",
+            thread_id=None,
+            run_id=None,
+            connection_id=None,
+            control_plane=None,
+            connection_state=None,
+            control_label="imported",
             live_control_available=False,
             host_reattach_available=False,
-            reply_to_live_session_available=False,
-            can_queue_next_input=False,
-            can_steer_active_turn=False,
-            home_label=None,
+            observe_only=False,
+            search_only=True,
+            can_send_input=False,
+            can_interrupt=False,
+            can_terminate=False,
+            can_tail_output=False,
+            can_resume=False,
+            staleness_reason="imported_only",
         )
     execution_home = infer_execution_home(
         execution_home=getattr(session, "execution_home", None),
@@ -69,14 +78,30 @@ def build_session_capabilities(session: Any) -> SessionCapabilityFlags:
     has_runner = getattr(session, "source_runner_id", None) is not None
     live_control_available = bool(is_managed_local and has_live_transport and has_runner)
     host_reattach_available = bool(is_managed_local and has_live_transport)
-    can_steer = live_control_available and managed_transport == ManagedSessionTransport.CODEX_APP_SERVER
-    return SessionCapabilityFlags(
-        execution_home=execution_home,
-        managed_transport=managed_transport,
+    can_send = live_control_available
+
+    control_label = "imported"
+    if live_control_available:
+        control_label = "live"
+    elif host_reattach_available:
+        control_label = "reattach"
+
+    return KernelSessionCapabilities(
+        session_id=str(getattr(session, "id", "")),
+        thread_id=None,
+        run_id=None,
+        connection_id=None,
+        control_plane="codex_bridge" if managed_transport == ManagedSessionTransport.CODEX_APP_SERVER else None,
+        connection_state="attached" if live_control_available else "detached",
+        control_label=control_label,
         live_control_available=live_control_available,
         host_reattach_available=host_reattach_available,
-        reply_to_live_session_available=live_control_available,
-        can_queue_next_input=live_control_available,
-        can_steer_active_turn=can_steer,
-        home_label=_execution_home_label(execution_home),
+        observe_only=False,
+        search_only=not (live_control_available or host_reattach_available),
+        can_send_input=can_send,
+        can_interrupt=live_control_available,
+        can_terminate=live_control_available,
+        can_tail_output=live_control_available,
+        can_resume=live_control_available or host_reattach_available,
+        staleness_reason=None if live_control_available else "imported_only",
     )

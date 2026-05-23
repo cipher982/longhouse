@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
 
-from zerg.services.session_capabilities import SessionCapabilityFlags
+from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.session_runtime import SessionRuntimeView
 
 
@@ -87,7 +87,7 @@ _EXPLICIT_CLOSED_TERMINAL_STATES = {"session_ended", "finished", "user_closed", 
 _UNVERIFIED_TERMINAL_STATES = {"host_expired"}
 
 
-def _control_path(capabilities: SessionCapabilityFlags) -> str:
+def _control_path(capabilities: KernelSessionCapabilities) -> str:
     """Derive control ownership from the kernel-projected capability flags.
 
     A session is "managed" iff the kernel said Longhouse owns a control
@@ -297,7 +297,7 @@ def _process_state(
 def build_session_liveness_facts(
     *,
     runtime_view: SessionRuntimeView | None,
-    capabilities: SessionCapabilityFlags,
+    capabilities: KernelSessionCapabilities,
     last_activity_at: datetime | None,
     binding_overlay=None,
     binding_host_state: str | None = None,

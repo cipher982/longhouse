@@ -62,6 +62,49 @@ def _seed_session(db, *, managed_transport: str | None = None) -> AgentSession:
         managed_transport=managed_transport,
     )
     db.add(session)
+    db.flush()
+
+    # Session-identity-kernel cleanup: managed_transport derives from
+    # session_connections.control_plane on the primary thread's latest run.
+    from zerg.models.agents import SessionConnection
+    from zerg.models.agents import SessionRun
+    from zerg.models.agents import SessionThread
+
+    thread = SessionThread(
+        id=uuid4(),
+        session_id=session.id,
+        provider=session.provider,
+        is_primary=1,
+    )
+    db.add(thread)
+    db.flush()
+    session.primary_thread_id = thread.id
+
+    if managed_transport is not None:
+        plane_map = {
+            "claude_channel_bridge": "claude_channel_bridge",
+            "codex_app_server": "codex_app_server",
+            "opencode_process": "opencode_process",
+            "antigravity_process": "antigravity_process",
+        }
+        control_plane = plane_map.get(managed_transport, managed_transport)
+        run = SessionRun(
+            id=uuid4(),
+            thread_id=thread.id,
+            provider=session.provider,
+            host_id=session.device_id,
+            started_at=datetime(2026, 4, 16, 10, 0, 0),
+        )
+        db.add(run)
+        db.flush()
+        db.add(
+            SessionConnection(
+                run_id=run.id,
+                control_plane=control_plane,
+                acquisition_kind="spawned_control",
+                state="attached",
+            )
+        )
     db.commit()
     db.refresh(session)
     return session

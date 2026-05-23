@@ -194,7 +194,7 @@ describe("SessionChat", () => {
 
     const recovery = await screen.findByTestId("session-chat-stall-recovery");
     expect(recovery).toHaveTextContent(/managed session appears stalled/i);
-    expect(screen.queryByRole("button", { name: /stop/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/queue next auto-sends at the next turn boundary/i)).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /interrupt/i }));
     await waitFor(() => expect(interruptCalls).toBe(1));

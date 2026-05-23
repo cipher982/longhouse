@@ -450,7 +450,10 @@ mod tests {
     #[test]
     fn test_parse_server_timing_garbage_values_drop_silently() {
         let mut headers = HeaderMap::new();
-        headers.insert("X-Ingest-Queue-Wait-Ms", HeaderValue::from_static("not-a-number"));
+        headers.insert(
+            "X-Ingest-Queue-Wait-Ms",
+            HeaderValue::from_static("not-a-number"),
+        );
         headers.insert("X-Ingest-Exec-Ms", HeaderValue::from_static("inf"));
         headers.insert("X-Ingest-Label", HeaderValue::from_static(""));
         let timing = parse_server_timing(&headers);

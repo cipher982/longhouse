@@ -68,7 +68,8 @@ async def semantic_search_sessions(
         filter_query = filter_query.filter(AgentSession.provider == provider)
     if environment:
         filter_query = filter_query.filter(AgentSession.environment == environment)
-    filter_query = filter_query.filter(AgentSession.user_messages > 0).filter(AgentSession.is_sidechain == 0)
+    # Session-identity-kernel cleanup: ``is_sidechain`` was dropped.
+    filter_query = filter_query.filter(AgentSession.user_messages > 0)
     valid_ids = {str(row[0]) for row in filter_query.all()}
 
     matched_rows: list[tuple[AgentSession, str | None, float]] = []

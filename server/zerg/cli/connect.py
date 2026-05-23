@@ -358,8 +358,7 @@ def _resolve_configured_url(url: object | None, config_dir: Path | None) -> str:
 
     typer.secho("No Longhouse URL configured.", fg=typer.colors.RED)
     typer.echo(
-        "Run `longhouse onboard` for a local setup, "
-        "`longhouse auth --url <url>` for a remote instance, or pass `--url` explicitly."
+        "Run `longhouse onboard` for a local setup, " "`longhouse auth --url <url>` for a remote instance, or pass `--url` explicitly."
     )
     raise typer.Exit(code=1)
 
@@ -544,6 +543,8 @@ def connect(
     """
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
+
+    del debounce  # accepted for backwards-compat but no longer wired
 
     config_dir = resolve_longhouse_home_from_provider_home(claude_dir) if claude_dir else None
 
@@ -849,10 +850,7 @@ def _handle_status() -> None:
                     detail = f"{detail} ({version})"
                 typer.echo(detail)
             elif runtime_mode == "broken-install":
-                typer.echo(
-                    "Desktop App runtime: install is missing, broken, or unsupported "
-                    "(run: longhouse machine repair)"
-                )
+                typer.echo("Desktop App runtime: install is missing, broken, or unsupported " "(run: longhouse machine repair)")
 
 
 def _handle_uninstall() -> None:

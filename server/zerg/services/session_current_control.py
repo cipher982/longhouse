@@ -6,20 +6,11 @@ from datetime import timezone
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
-from zerg.services.agents.kernel_capability_adapter import build_session_capabilities_from_kernel
+from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
+from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
 from zerg.services.managed_control_dispatcher import select_managed_control_transport
-from zerg.services.managed_control_state import CONTROL_SOURCE_LEGACY_RUNNER
-from zerg.services.managed_control_state import engine_channel_control_overlay
-from zerg.services.managed_control_state import live_transport_control_overlay
-from zerg.services.managed_control_state import load_managed_control_state_map
-from zerg.services.session_capabilities import SessionCapabilityFlags
-from zerg.services.session_capabilities import project_current_session_capabilities_from_facts
-from zerg.services.session_liveness_facts import build_session_liveness_facts
-from zerg.services.session_runner_state import managed_runner_host_state
-from zerg.services.session_runtime import load_runtime_state_map
-from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.utils.time import normalize_utc
 
 _ENGINE_ATTACHED_RUNTIME_SOURCES = {"codex_bridge", "codex_bridge_live"}
@@ -55,9 +46,7 @@ def _control_overlay_attached(session: AgentSession, control_overlay, *, now: da
     lease_state = _normalized(getattr(control_overlay, "lease_state", None)).lower()
     if control_state not in {"online", "attached"} and lease_state != "attached":
         return False
-    expires_at = normalize_utc(
-        getattr(control_overlay, "control_expires_at", None) or getattr(control_overlay, "expires_at", None)
-    )
+    expires_at = normalize_utc(getattr(control_overlay, "control_expires_at", None) or getattr(control_overlay, "expires_at", None))
     if expires_at is None:
         return False
     return expires_at > now
@@ -91,57 +80,12 @@ def current_session_capabilities(
     session: AgentSession,
     *,
     owner_id: int | None = None,
-) -> SessionCapabilityFlags:
+) -> KernelSessionCapabilities:
     """Return user-action capabilities backed by current runtime truth.
 
-    Capability flags come from the kernel projection. Runtime/lifecycle
-    overlays may only down-gate (turn live → reattach/search-only); they
-    cannot promote a kernel-`False` flag to `True`.
+    Capability flags come from the kernel projection.
     """
-    capability_flags = build_session_capabilities_from_kernel(db, session)
-    is_engine_control_online = engine_control_online(session, owner_id)
-    now = datetime.now(timezone.utc)
-    last_activity_at = getattr(session, "last_activity_at", None)
-    if last_activity_at is None:
-        last_activity_at = getattr(session, "ended_at", None) or getattr(session, "started_at", None)
-    runtime_state_map = load_runtime_state_map(db, [session.id])
-    control_state_map = load_managed_control_state_map(db, [session.id])
-    control_overlay = control_state_map.get(session.id)
-    runtime_overlay = resolve_runtime_overlay(
-        session,
-        last_activity_at=last_activity_at,
-        runtime_state_map=runtime_state_map,
-        now=now,
-    )
-    is_engine_session_attached = is_engine_control_online and engine_session_control_attached(
-        session,
-        runtime_overlay,
-        control_overlay=control_overlay,
-        now=now,
-    )
-    binding_host_state = None
-    if is_engine_session_attached:
-        binding_host_state = "online"
-        control_overlay = engine_channel_control_overlay(session, seen_at=now)
-    elif (capability_flags.live_control_available or capability_flags.host_reattach_available) and getattr(
-        session, "source_runner_id", None
-    ) is not None:
-        binding_host_state = managed_runner_host_state(db, session)
-        if binding_host_state == "online" and control_overlay is None:
-            control_overlay = live_transport_control_overlay(
-                session,
-                source=CONTROL_SOURCE_LEGACY_RUNNER,
-                seen_at=now,
-            )
-    liveness_facts = build_session_liveness_facts(
-        runtime_view=runtime_overlay,
-        capabilities=capability_flags,
-        last_activity_at=last_activity_at,
-        binding_host_state=binding_host_state,
-        control_overlay=control_overlay,
-        now=now,
-    )
-    return project_current_session_capabilities_from_facts(capability_flags, liveness_facts=liveness_facts, now=now)
+    return project_session_capabilities(db, session_id=session.id)
 
 
 __all__ = [

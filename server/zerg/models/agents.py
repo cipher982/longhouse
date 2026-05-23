@@ -26,8 +26,6 @@ from sqlalchemy.sql import func
 
 from zerg.database import Base
 from zerg.models.types import GUID
-from zerg.session_execution_home import SessionExecutionHome
-from zerg.session_loop_mode import SessionLoopMode
 
 if TYPE_CHECKING:
     pass
@@ -78,24 +76,11 @@ class AgentSession(AgentsBase):
     assistant_messages = Column(Integer, default=0)
     tool_calls = Column(Integer, default=0)
 
-    # Provider-specific session ID (e.g., Claude Code session UUID from filename)
-    provider_session_id = Column(String(255), nullable=True, index=True)
-
-    # Product-level continuation lineage (distinct from rewind/source-line branches).
-    thread_root_session_id = Column(GUID(), nullable=True, index=True)
-    continued_from_session_id = Column(GUID(), nullable=True, index=True)
-    continuation_kind = Column(String(20), nullable=True)  # local, cloud, runner
-    origin_label = Column(String(255), nullable=True)
-    branched_from_event_id = Column(Integer, nullable=True)
-    is_writable_head = Column(Integer, nullable=False, server_default=text("1"))
-
-    # Pre-computed summary (generated async after ingest)
-    summary = Column(Text, nullable=True)  # 2-4 sentence quick summary
-    summary_title = Column(String(200), nullable=True)  # Short title for startup continuity and summaries
-    # Events covered by current summary (legacy count-based cursor)
+    summary = Column(Text, nullable=True)
+    summary_title = Column(String(255), nullable=True)
     summary_event_count = Column(Integer, server_default=text("0"))
-    # ID of last AgentEvent included in summary (efficient cursor)
     last_summarized_event_id = Column(Integer, nullable=True)
+
     # Monotonic transcript generation for replay-safe downstream work.
     transcript_revision = Column(Integer, nullable=False, server_default=text("0"))
     summary_revision = Column(Integer, nullable=False, server_default=text("0"))
@@ -112,52 +97,335 @@ class AgentSession(AgentsBase):
     # active (default) | parked | snoozed | archived
     user_state = Column(String(20), nullable=False, server_default=text("'active'"))
     user_state_at = Column(DateTime(timezone=True), nullable=True)
-    execution_home = Column(
-        String(32),
-        nullable=False,
-        server_default=text(f"'{SessionExecutionHome.UNMANAGED_LOCAL.value}'"),
-        index=True,
-    )
-    managed_transport = Column(String(32), nullable=True)
-    source_runner_id = Column(Integer, nullable=True, index=True)
-    source_runner_name = Column(String(255), nullable=True)
-    managed_session_name = Column(String(255), nullable=True)
-    loop_mode = Column(String(20), nullable=False, server_default=text(f"'{SessionLoopMode.ASSIST.value}'"))
-    # legacy — loop controller removed, column kept for DB compat
-    loop_thread_id = Column(Integer, nullable=True, index=True)
 
-    # Debounce outgoing mobile pager pushes when a session flaps in and out of
-    # attention states.
-    last_attention_push_at = Column(DateTime(timezone=True), nullable=True)
-    last_attention_push_state = Column(String(20), nullable=True)
-
-    # Sidechain flag: True when session is a Task sub-agent (not a human-initiated session)
-    is_sidechain = Column(Integer, nullable=False, server_default=text("0"))
-
-    # Session identity kernel — primary thread pointer. Nullable during
-    # Phase 1/2 because backfill creates the thread row after the session.
-    # See docs/specs/session-identity-kernel.md.
+    # Session identity kernel — primary thread pointer.
+    # Kept nullable for now: legacy ingest paths and a number of tests
+    # create AgentSession rows before the kernel thread is materialized.
+    # ``ensure_primary_thread`` backfills this on the next write touch.
     primary_thread_id = Column(GUID(), nullable=True, index=True)
 
-    # Remote-launch lifecycle (see docs/specs/remote-session-launch.md).
-    # NULL means "launched the old way"; treat as equivalent to 'live'.
-    launch_state = Column(String(32), nullable=True)
-    launch_error_code = Column(String(64), nullable=True)
-    launch_error_message = Column(Text, nullable=True)
-    launch_lease_until = Column(DateTime(timezone=True), nullable=True)
-    launch_command_id = Column(String(64), nullable=True, index=True)
-    launch_client_request_id = Column(String(64), nullable=True, index=True)
+    # APNS attention-push debounce state. The cleanup landed kernel rows
+    # for control truth; these two fields are durable per-session debounce
+    # state for outbound push notifications and intentionally live here
+    # rather than in a kernel table.
+    last_attention_push_at = Column(DateTime(timezone=True), nullable=True)
+    last_attention_push_state = Column(String(40), nullable=True)
+
+    # Per-session loop mode (assist/autopilot). Durable user-facing setting,
+    # not control-plane state — kernel rows do not encode it. Stored as a
+    # plain column so PATCH /loop-mode survives restart and refresh.
+    loop_mode = Column(String(32), nullable=True)
 
     # Relationships
     branches = relationship("AgentSessionBranch", back_populates="session", cascade="all, delete-orphan")
     events = relationship("AgentEvent", back_populates="session", cascade="all, delete-orphan")
     source_lines = relationship("AgentSourceLine", back_populates="session", cascade="all, delete-orphan")
 
+    def __init__(self, **kwargs):
+        # provider_session_id is read-only (returns str(self.id)) — drop it.
+        kwargs.pop("provider_session_id", None)
+        # The remaining legacy attrs route through property setters into the
+        # transient _legacy_attrs bag, so callers that pass them via the
+        # constructor still work without persisting.
+        legacy_keys = {
+            "thread_root_session_id",
+            "continued_from_session_id",
+            "continuation_kind",
+            "branched_from_event_id",
+            "is_writable_head",
+            "execution_home",
+            "managed_transport",
+            "source_runner_id",
+            "source_runner_name",
+            "managed_session_name",
+            "loop_thread_id",
+            "is_sidechain",
+            "launch_state",
+            "launch_error_code",
+            "launch_error_message",
+            "launch_lease_until",
+            "launch_command_id",
+            "launch_client_request_id",
+            "origin_label",
+            # last_attention_push_at / last_attention_push_state are real
+            # columns again — not legacy. They go through the standard
+            # SQLAlchemy setter via super().__init__().
+        }
+        legacy_payload = {k: kwargs.pop(k) for k in list(kwargs.keys()) if k in legacy_keys}
+        super().__init__(**kwargs)
+        for key, value in legacy_payload.items():
+            setattr(self, key, value)
+
+    @property
+    def provider_session_id(self) -> str:
+        return str(self.id) if self.id is not None else ""
+
+    # ------------------------------------------------------------------
+    # Legacy attribute shims.
+    #
+    # The session-identity-kernel cleanup deleted ~20 columns that older
+    # call sites still read (and a few still write).  Rather than thread
+    # the cleanup through every router/service/test in one go, we expose
+    # property shims that:
+    #   * return sensible defaults for reads (so projections keep working)
+    #   * accept writes into a transient per-instance dict so legacy
+    #     setter call sites do not crash
+    #
+    # The transient values are *not* persisted — the columns are gone.
+    # Anything that materially depends on persistence has moved to the
+    # kernel tables (SessionThread/SessionRun/SessionConnection).
+    # ------------------------------------------------------------------
+
+    def _legacy_get(self, key, default=None):
+        bag = self.__dict__.get("_legacy_attrs")
+        if bag is None:
+            return default
+        return bag.get(key, default)
+
+    def _legacy_set(self, key, value):
+        bag = self.__dict__.get("_legacy_attrs")
+        if bag is None:
+            bag = {}
+            object.__setattr__(self, "_legacy_attrs", bag)
+        bag[key] = value
+
+    @property
+    def thread_root_session_id(self):  # type: ignore[no-redef]
+        # Session-identity-kernel cleanup: each session is its own thread
+        # root in the kernel projection.
+        stored = self._legacy_get("thread_root_session_id", None)
+        if stored is not None:
+            return stored
+        return self.id
+
+    @thread_root_session_id.setter
+    def thread_root_session_id(self, value):
+        self._legacy_set("thread_root_session_id", value)
+
+    @property
+    def continued_from_session_id(self):
+        return self._legacy_get("continued_from_session_id", None)
+
+    @continued_from_session_id.setter
+    def continued_from_session_id(self, value):
+        self._legacy_set("continued_from_session_id", value)
+
+    @property
+    def continuation_kind(self):
+        # Session-identity-kernel cleanup: default to "local" for read paths
+        # that still expect a value; explicit setters still win.
+        stored = self._legacy_get("continuation_kind", None)
+        if stored is not None:
+            return stored
+        return "local"
+
+    @continuation_kind.setter
+    def continuation_kind(self, value):
+        self._legacy_set("continuation_kind", value)
+
+    @property
+    def branched_from_event_id(self):
+        return self._legacy_get("branched_from_event_id", None)
+
+    @branched_from_event_id.setter
+    def branched_from_event_id(self, value):
+        self._legacy_set("branched_from_event_id", value)
+
+    @property
+    def is_writable_head(self):
+        return self._legacy_get("is_writable_head", 1)
+
+    @is_writable_head.setter
+    def is_writable_head(self, value):
+        self._legacy_set("is_writable_head", value)
+
+    @property
+    def is_sidechain(self):
+        return self._legacy_get("is_sidechain", 0)
+
+    @is_sidechain.setter
+    def is_sidechain(self, value):
+        self._legacy_set("is_sidechain", value)
+
+    @property
+    def execution_home(self):
+        return self._legacy_get("execution_home", None)
+
+    @execution_home.setter
+    def execution_home(self, value):
+        self._legacy_set("execution_home", value)
+
+    @property
+    def managed_transport(self):
+        stored = self._legacy_get("managed_transport", None)
+        if stored is not None:
+            return stored
+        # Session-identity-kernel cleanup: derive from SessionConnection
+        # rows so callers that read after a refresh see a sane value.
+        # Memoize the derived value into _legacy_attrs so subsequent reads
+        # work even after the SQLAlchemy session is closed/detached.
+        try:
+            from sqlalchemy.orm import object_session
+
+            sess = object_session(self)
+            if sess is None:
+                return None
+            run = (
+                sess.query(SessionRun)
+                .join(SessionThread, SessionRun.thread_id == SessionThread.id)
+                .filter(SessionThread.session_id == self.id)
+                .order_by(SessionRun.started_at.desc(), SessionRun.id.desc())
+                .first()
+            )
+            if run is None:
+                return None
+            conn = sess.query(SessionConnection).filter(SessionConnection.run_id == run.id).order_by(SessionConnection.id.desc()).first()
+            if conn is None:
+                return None
+            mapping = {
+                "codex_bridge": "codex_app_server",
+                "codex_app_server": "codex_app_server",
+                "claude_channel_bridge": "claude_channel_bridge",
+                "opencode_process": "opencode_process",
+                "antigravity_process": "antigravity_process",
+            }
+            derived = mapping.get((conn.control_plane or "").strip())
+            if derived is not None:
+                self._legacy_set("managed_transport", derived)
+            return derived
+        except Exception:
+            return None
+
+    @managed_transport.setter
+    def managed_transport(self, value):
+        self._legacy_set("managed_transport", value)
+
+    @property
+    def source_runner_id(self):
+        bag = self.__dict__.get("_legacy_attrs")
+        if bag is not None and "source_runner_id" in bag:
+            # Explicit set wins (including explicit None for codex).
+            return bag["source_runner_id"]
+        # Derive from Runner table by device_id (= runner name).
+        # Codex control runs through the Machine Agent channel, not a
+        # remote-command Runner — derive from kernel control_plane and
+        # return None for codex_bridge / codex_app_server.
+        try:
+            from sqlalchemy.orm import object_session
+
+            sess = object_session(self)
+            if sess is None or not self.device_id:
+                return None
+            transport = self.managed_transport
+            if transport in ("codex_app_server",):
+                self._legacy_set("source_runner_id", None)
+                return None
+            from zerg.models.models import Runner
+
+            runner = sess.query(Runner).filter(Runner.name == self.device_id).first()
+            if runner is None:
+                return None
+            self._legacy_set("source_runner_id", int(runner.id))
+            return int(runner.id)
+        except Exception:
+            return None
+
+    @source_runner_id.setter
+    def source_runner_id(self, value):
+        self._legacy_set("source_runner_id", value)
+
+    @property
+    def source_runner_name(self):
+        stored = self._legacy_get("source_runner_name", None)
+        if stored is not None:
+            return stored
+        # device_id is the canonical machine name post-cleanup.
+        return self.device_id
+
+    @source_runner_name.setter
+    def source_runner_name(self, value):
+        self._legacy_set("source_runner_name", value)
+
+    @property
+    def managed_session_name(self):
+        return self._legacy_get("managed_session_name", None)
+
+    @managed_session_name.setter
+    def managed_session_name(self, value):
+        self._legacy_set("managed_session_name", value)
+
+    @property
+    def loop_thread_id(self):
+        return self._legacy_get("loop_thread_id", None)
+
+    @loop_thread_id.setter
+    def loop_thread_id(self, value):
+        self._legacy_set("loop_thread_id", value)
+
+    @property
+    def launch_state(self):
+        return self._legacy_get("launch_state", None)
+
+    @launch_state.setter
+    def launch_state(self, value):
+        self._legacy_set("launch_state", value)
+
+    @property
+    def launch_error_code(self):
+        return self._legacy_get("launch_error_code", None)
+
+    @launch_error_code.setter
+    def launch_error_code(self, value):
+        self._legacy_set("launch_error_code", value)
+
+    @property
+    def launch_error_message(self):
+        return self._legacy_get("launch_error_message", None)
+
+    @launch_error_message.setter
+    def launch_error_message(self, value):
+        self._legacy_set("launch_error_message", value)
+
+    @property
+    def launch_lease_until(self):
+        return self._legacy_get("launch_lease_until", None)
+
+    @launch_lease_until.setter
+    def launch_lease_until(self, value):
+        self._legacy_set("launch_lease_until", value)
+
+    @property
+    def launch_command_id(self):
+        return self._legacy_get("launch_command_id", None)
+
+    @launch_command_id.setter
+    def launch_command_id(self, value):
+        self._legacy_set("launch_command_id", value)
+
+    @property
+    def launch_client_request_id(self):
+        return self._legacy_get("launch_client_request_id", None)
+
+    @launch_client_request_id.setter
+    def launch_client_request_id(self, value):
+        self._legacy_set("launch_client_request_id", value)
+
+    @property
+    def origin_label(self):
+        stored = self._legacy_get("origin_label", None)
+        if stored:
+            return stored
+        # Session-identity-kernel cleanup: derive a sensible default from
+        # the surviving columns so legacy projections still get a label.
+        return self.device_id or self.environment
+
+    @origin_label.setter
+    def origin_label(self, value):
+        self._legacy_set("origin_label", value)
+
     __table_args__ = (
         Index("ix_sessions_project_started", "project", "started_at"),
         Index("ix_sessions_provider_started", "provider", "started_at"),
-        Index("ix_sessions_thread_head", "thread_root_session_id", "is_writable_head"),
-        Index("ix_sessions_continued_from_started", "continued_from_session_id", "started_at"),
     )
 
 
@@ -220,7 +488,8 @@ class AgentEvent(AgentsBase):
         nullable=False,
         index=True,
     )
-    # Session identity kernel — nullable in Phase 1, NOT NULL in Phase 3.
+    # Session identity kernel — kept nullable for now: legacy ingest paths
+    # write events before the kernel thread is materialized.
     thread_id = Column(GUID(), nullable=True, index=True)
 
     # Event content
@@ -318,7 +587,8 @@ class AgentSourceLine(AgentsBase):
         nullable=False,
         index=True,
     )
-    # Session identity kernel — nullable in Phase 1, NOT NULL in Phase 3.
+    # Session identity kernel — kept nullable for now: legacy ingest paths
+    # write observations before the kernel thread is materialized.
     thread_id = Column(GUID(), nullable=True, index=True)
     source_path = Column(Text, nullable=False)
     source_offset = Column(BigInteger, nullable=False)
@@ -368,8 +638,8 @@ class SessionObservation(AgentsBase):
     id = Column(Integer, primary_key=True, autoincrement=True)
     observation_id = Column(String(512), nullable=False)
     session_id = Column(GUID(), nullable=True, index=True)
-    # Session identity kernel — observations carry thread_id when known so
-    # subagent observations don't collide with the parent session's stream.
+    # Session identity kernel — kept nullable for now: legacy ingest paths
+    # write observations before the kernel thread is materialized.
     thread_id = Column(GUID(), nullable=True, index=True)
     runtime_key = Column(String(255), nullable=True, index=True)
     provider = Column(String(64), nullable=False)
@@ -501,7 +771,8 @@ class SessionTurn(AgentsBase):
         nullable=False,
         index=True,
     )
-    # Session identity kernel — nullable in Phase 1, NOT NULL in Phase 3.
+    # Session identity kernel — kept nullable for now: legacy ingest paths
+    # create SessionTurn rows before the kernel thread/run is materialized.
     thread_id = Column(GUID(), nullable=True, index=True)
     run_id = Column(GUID(), nullable=True, index=True)
     request_id = Column(String(64), nullable=True, index=True)
@@ -555,8 +826,8 @@ class SessionRuntimeState(AgentsBase):
 
     runtime_key = Column(String(255), primary_key=True)
     session_id = Column(GUID(), nullable=True, index=True)
-    # Session identity kernel — runtime state moves to run-keyed parentage in
-    # Phase 3 so a stale run cannot pollute a resumed run. Nullable in Phase 1.
+    # Session identity kernel — kept nullable for now: legacy ingest paths
+    # create runtime-state rows before the kernel thread/run is materialized.
     thread_id = Column(GUID(), nullable=True, index=True)
     run_id = Column(GUID(), nullable=True, index=True)
     provider = Column(String(64), nullable=False)
@@ -582,104 +853,6 @@ class SessionRuntimeState(AgentsBase):
         Index("ix_runtime_state_anchor", "timeline_anchor_at"),
         Index("ix_runtime_state_updated", "updated_at"),
         Index("ix_runtime_state_device_provider", "device_id", "provider"),
-    )
-
-
-class ManagedSessionControlState(AgentsBase):
-    """Reducer-owned control-liveness projection for a managed session.
-
-    This is intentionally separate from ``SessionRuntimeState``. Runtime state
-    answers what the provider is doing; this row answers whether Longhouse has
-    a fresh managed control path for the session.
-    """
-
-    __tablename__ = "managed_session_control_state"
-
-    session_id = Column(GUID(), primary_key=True)
-    provider = Column(String(64), nullable=False)
-    device_id = Column(String(255), nullable=True, index=True)
-    machine_id = Column(String(255), nullable=True)
-    transport = Column(String(64), nullable=True)
-    lease_state = Column(String(32), nullable=False, server_default=text("'unknown'"))
-    control_state = Column(String(32), nullable=False, server_default=text("'unknown'"))
-    reason = Column(String(64), nullable=True)
-    source = Column(String(64), nullable=False, server_default=text("'machine_heartbeat'"))
-    sequence = Column(Integer, nullable=True)
-    last_control_seen_at = Column(DateTime(timezone=True), nullable=True)
-    lease_observed_at = Column(DateTime(timezone=True), nullable=True)
-    lease_ttl_ms = Column(Integer, nullable=True)
-    control_expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
-    bridge_status = Column(String(64), nullable=True)
-    thread_subscription_status = Column(String(64), nullable=True)
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
-
-    __table_args__ = (
-        Index("ix_managed_control_device_state", "device_id", "control_state"),
-        Index("ix_managed_control_expires", "control_expires_at"),
-    )
-
-
-class UnmanagedSessionBinding(AgentsBase):
-    """Machine-agent observed binding of an unmanaged provider CLI process to
-    its JSONL transcript.
-
-    Phase 5 of docs/specs/session-liveness-honesty.md. Populated by the
-    Rust engine's heartbeat. Lets the Runtime Host verify whether an
-    unmanaged session's underlying process is still alive so Phase 6 can
-    honestly promote lifecycle=closed on confirmed process death.
-
-    Identity is (machine_id, provider, provider_session_id). When the
-    provider_session_id is unstable or absent, (machine_id, provider,
-    source_inode, source_device) is the fallback identity.
-
-    Liveness is (pid, process_start_time) — pid alone is not trusted
-    because of reuse. A change in process_start_time for the same pid
-    closes the previous binding as stale.
-
-    Auto-created via AgentsBase.metadata.create_all() — no Alembic required.
-    """
-
-    __tablename__ = "unmanaged_session_bindings"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    machine_id = Column(String(255), nullable=False, index=True)
-    device_id = Column(String(255), nullable=True)
-    provider = Column(String(64), nullable=False)
-    provider_session_id = Column(String(255), nullable=False)
-    session_id = Column(GUID(), nullable=True, index=True)
-    source_path = Column(String(1024), nullable=True)
-    source_inode = Column(Integer, nullable=True)
-    source_device = Column(Integer, nullable=True)
-    pid = Column(Integer, nullable=True)
-    process_start_time = Column(DateTime(timezone=True), nullable=True)
-    cwd = Column(String(1024), nullable=True)
-    # Latest JSONL progress the agent saw for this session
-    source_offset = Column(Integer, nullable=True)
-    source_mtime = Column(DateTime(timezone=True), nullable=True)
-    # Liveness bookkeeping
-    observed_at = Column(DateTime(timezone=True), nullable=False)
-    last_seen_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    # 'observed': pid+start_time confirm alive; 'missing': process not in latest
-    # scan but still within stale window; 'stale': confirmed gone / superseded.
-    binding_state = Column(String(32), nullable=False, server_default=text("'observed'"))
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    updated_at = Column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
-
-    __table_args__ = (
-        UniqueConstraint(
-            "machine_id",
-            "provider",
-            "provider_session_id",
-            name="uq_unmanaged_binding_identity",
-        ),
-        Index("ix_unmanaged_binding_session", "session_id"),
-        Index("ix_unmanaged_binding_last_seen", "last_seen_at"),
     )
 
 
@@ -761,7 +934,8 @@ class SessionInput(AgentsBase):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     session_id = Column(GUID(), nullable=False, index=True)
-    # Session identity kernel — nullable in Phase 1, NOT NULL in Phase 3.
+    # Session identity kernel — kept nullable for now: legacy paths write
+    # session_inputs before the kernel thread is materialized.
     thread_id = Column(GUID(), nullable=True, index=True)
     body = Column("text", Text, nullable=False)
     owner_id = Column(Integer, nullable=True, index=True)  # authoring user, null on legacy rows
@@ -857,9 +1031,7 @@ class SessionThread(AgentsBase):
     provider = Column(String(64), nullable=False, index=True)
 
     # Lineage — null for root threads; set for subagents and continuations.
-    _parent_thread_fk = (
-        "session_threads.id" if AGENTS_SCHEMA is None else f"{AGENTS_SCHEMA}.session_threads.id"
-    )
+    _parent_thread_fk = "session_threads.id" if AGENTS_SCHEMA is None else f"{AGENTS_SCHEMA}.session_threads.id"
     parent_thread_id = Column(
         GUID(),
         ForeignKey(_parent_thread_fk, ondelete="SET NULL"),
@@ -1120,3 +1292,78 @@ class SessionLaunchAttempt(AgentsBase):
         ),
         Index("ix_launch_attempts_state_created", "state", "created_at"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Eager-derive legacy ``managed_transport`` on instance load.
+#
+# Several deleted columns are now derived on read from kernel rows
+# (``SessionThread`` / ``SessionRun`` / ``SessionConnection``).  Tests and
+# call sites frequently read these properties on detached instances after a
+# ``with SessionLocal() as db:`` block exits — at that point
+# ``object_session(self)`` is None, so the derivation cannot reach the DB.
+#
+# We listen to the ORM ``load`` event and stash the derived value into the
+# transient ``_legacy_attrs`` dict while the instance is still attached.
+# ---------------------------------------------------------------------------
+from sqlalchemy import event as _sa_event  # noqa: E402
+
+_CONTROL_PLANE_TO_TRANSPORT = {
+    "codex_bridge": "codex_app_server",
+    "codex_app_server": "codex_app_server",
+    "claude_channel_bridge": "claude_channel_bridge",
+    "opencode_process": "opencode_process",
+    "antigravity_process": "antigravity_process",
+}
+
+
+@_sa_event.listens_for(AgentSession, "load")
+def _seed_legacy_attrs_on_load(target, _context):
+    """Populate transient ``_legacy_attrs`` from kernel rows at load time.
+
+    Runs while the instance is attached to a session, so the derivation
+    queries (which rely on ``object_session``) can reach the DB.
+    """
+    try:
+        from sqlalchemy.orm import object_session
+
+        sess = object_session(target)
+        if sess is None:
+            return
+        run = (
+            sess.query(SessionRun)
+            .join(SessionThread, SessionRun.thread_id == SessionThread.id)
+            .filter(SessionThread.session_id == target.id)
+            .order_by(SessionRun.started_at.desc(), SessionRun.id.desc())
+            .first()
+        )
+        if run is None:
+            return
+        conn = sess.query(SessionConnection).filter(SessionConnection.run_id == run.id).order_by(SessionConnection.id.desc()).first()
+        if conn is None:
+            return
+        derived = _CONTROL_PLANE_TO_TRANSPORT.get((conn.control_plane or "").strip())
+        if derived is not None:
+            target._legacy_set("managed_transport", derived)
+        # Also seed source_runner_id by Runner.name == device_id while
+        # the instance is still attached.  Do not overwrite an explicit set.
+        # Codex/antigravity sessions never carry a remote-command Runner —
+        # control_plane carries that truth now.
+        try:
+            from zerg.models.models import Runner
+
+            bag = target.__dict__.get("_legacy_attrs") or {}
+            if "source_runner_id" not in bag and target.device_id:
+                control_plane = (conn.control_plane or "").strip() if conn else ""
+                if control_plane in ("codex_bridge", "codex_app_server", "antigravity_process"):
+                    target._legacy_set("source_runner_id", None)
+                else:
+                    runner = sess.query(Runner).filter(Runner.name == target.device_id).first()
+                    if runner is not None:
+                        target._legacy_set("source_runner_id", int(runner.id))
+        except Exception:
+            pass
+    except Exception:
+        # Pre-launch defensive: never let a load-event derivation break
+        # ORM hydration. Property fallback still runs if attached.
+        pass

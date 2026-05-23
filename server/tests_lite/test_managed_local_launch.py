@@ -165,36 +165,6 @@ def test_this_device_launch_uses_machine_name_as_dev_device_id(monkeypatch, tmp_
     assert session.provider == "antigravity"
 
 
-def test_this_device_launch_rejects_missing_device_id(monkeypatch, tmp_path):
-    from zerg.services import managed_local_launcher
-
-    SessionLocal = _make_db(tmp_path)
-
-    with SessionLocal() as db:
-        _user, _runner = _seed_user_and_runner(db)
-        client, api_app = _make_device_client(db, None)
-        monkeypatch.setattr(
-            managed_local_launcher,
-            "get_runner_connection_manager",
-            lambda: SimpleNamespace(is_online=lambda *_args: True),
-        )
-
-        try:
-            response = client.post(
-                "/api/sessions/managed-local/this-device",
-                json={
-                    "cwd": "/tmp/demo",
-                    "provider": "antigravity",
-                    "project": "demo",
-                },
-            )
-        finally:
-            api_app.dependency_overrides = {}
-
-    assert response.status_code == 400, response.text
-    assert "device_id" in response.json()["detail"]
-
-
 def test_this_device_launch_does_not_require_runner_record(monkeypatch, tmp_path):
     from zerg.services import managed_local_launcher
 

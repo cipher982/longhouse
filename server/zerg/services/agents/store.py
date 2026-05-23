@@ -46,19 +46,15 @@ from zerg.services.session_observation_reducers import reduce_provider_event_obs
 from zerg.services.session_observations import record_provider_event_observation
 from zerg.services.session_observations import record_source_line_observation
 from zerg.session_execution_home import SessionExecutionHome
-from zerg.session_execution_home import coerce_execution_home
-from zerg.session_execution_home import execution_home_for_continuation_kind
 from zerg.session_execution_home import is_generic_environment_label
 from zerg.session_execution_home import normalize_session_label
 
 from .helpers import _infer_continuation_kind_from_ingest
 from .helpers import _infer_continuation_kind_from_session
 from .helpers import _infer_execution_home_from_ingest
-from .helpers import _infer_execution_home_from_session
 from .helpers import _infer_origin_label_from_ingest
 from .helpers import _infer_origin_label_from_session
 from .helpers import _normalize_utc_naive
-from .helpers import _should_replace_managed_local_placeholder_provider_session_id
 from .models import CompactionBoundary
 from .models import EventIngest
 from .models import IngestResult
@@ -73,6 +69,7 @@ logger = logging.getLogger(__name__)
 
 
 def _is_managed_codex_ingest(
+    db: Session,
     session: AgentSession | None,
     data: SessionIngest,
     incoming_execution_home: SessionExecutionHome,
@@ -80,12 +77,14 @@ def _is_managed_codex_ingest(
     provider = str((session.provider if session is not None else data.provider) or "").strip().lower()
     if provider != "codex":
         return False
-    session_execution_home = coerce_execution_home(getattr(session, "execution_home", None)) if session is not None else None
-    return (
-        incoming_execution_home == SessionExecutionHome.MANAGED_LOCAL
-        or session_execution_home == SessionExecutionHome.MANAGED_LOCAL
-        or bool(getattr(session, "managed_transport", None))
-    )
+    if incoming_execution_home == SessionExecutionHome.MANAGED_LOCAL:
+        return True
+    if session is not None:
+        from zerg.services.agents.kernel_capabilities import project_session_capabilities
+
+        caps = project_session_capabilities(db, session_id=session.id)
+        return bool(caps.live_control_available or caps.host_reattach_available)
+    return False
 
 
 class AgentsStore:
@@ -95,21 +94,10 @@ class AgentsStore:
         self.db = db
 
     def _thread_root_id(self, session: AgentSession) -> UUID:
-        return session.thread_root_session_id or session.id
+        return session.id
 
     def _coerce_session_lineage_defaults(self, session: AgentSession) -> None:
-        if session.thread_root_session_id is None:
-            session.thread_root_session_id = session.id
-        if session.continuation_kind is None:
-            session.continuation_kind = _infer_continuation_kind_from_session(session)
-        if not normalize_session_label(session.origin_label):
-            session.origin_label = _infer_origin_label_from_session(session)
-        if _infer_execution_home_from_session(session) != SessionExecutionHome.UNMANAGED_LOCAL and (
-            coerce_execution_home(getattr(session, "execution_home", None)) in {None, SessionExecutionHome.UNMANAGED_LOCAL}
-        ):
-            session.execution_home = _infer_execution_home_from_session(session).value
-        if session.is_writable_head is None:
-            session.is_writable_head = 1
+        pass
 
     def _has_final_managed_codex_terminal(self, session: AgentSession) -> bool:
         return (
@@ -125,59 +113,23 @@ class AgentsStore:
 
         Returns a dict keyed by thread root ID → (head_session_id, count).
         """
-        root_ids: set[UUID] = set()
-        for s in sessions:
-            self._coerce_session_lineage_defaults(s)
-            root_ids.add(s.thread_root_session_id or s.id)
-        if not root_ids:
-            return {}
-        all_members = (
-            self.db.query(AgentSession.id, AgentSession.thread_root_session_id, AgentSession.is_writable_head)
-            .filter(or_(AgentSession.thread_root_session_id.in_(root_ids), AgentSession.id.in_(root_ids)))
-            .all()
-        )
-        by_root: dict[str, list] = {}
-        for sid, troot, is_head in all_members:
-            key = str(troot or sid)
-            by_root.setdefault(key, []).append((str(sid), is_head))
         result: dict[str, tuple[str, int]] = {}
-        for root_key, members in by_root.items():
-            heads = [sid for sid, is_head in members if is_head]
-            head_id = heads[0] if heads else members[-1][0]
-            result[root_key] = (head_id, max(1, len(members)))
+        for s in sessions:
+            sid = str(s.id)
+            result[sid] = (sid, 1)
         return result
 
     def _get_thread_sessions(self, session_or_id: UUID | AgentSession) -> list[AgentSession]:
         session = session_or_id if isinstance(session_or_id, AgentSession) else self.get_session(session_or_id)
         if session is None:
             return []
-        root_id = self._thread_root_id(session)
-        sessions = (
-            self.db.query(AgentSession)
-            .filter(or_(AgentSession.thread_root_session_id == root_id, AgentSession.id == root_id))
-            .order_by(AgentSession.started_at.asc(), AgentSession.created_at.asc(), AgentSession.id.asc())
-            .all()
-        )
-        for item in sessions:
-            self._coerce_session_lineage_defaults(item)
-        return sessions
+        return [session]
 
     def get_thread_head(self, session_or_id: UUID | AgentSession) -> AgentSession | None:
         session = session_or_id if isinstance(session_or_id, AgentSession) else self.get_session(session_or_id)
         if session is None:
             return None
-        root_id = self._thread_root_id(session)
-        head = (
-            self.db.query(AgentSession)
-            .filter(or_(AgentSession.thread_root_session_id == root_id, AgentSession.id == root_id))
-            .filter(AgentSession.is_writable_head == 1)
-            .order_by(AgentSession.started_at.desc(), AgentSession.created_at.desc(), AgentSession.id.desc())
-            .first()
-        )
-        if head is None:
-            return session
-        self._coerce_session_lineage_defaults(head)
-        return head
+        return session
 
     def get_latest_event_id(self, session_id: UUID) -> int | None:
         head_branch_id = self.get_head_branch_id(session_id)
@@ -244,26 +196,7 @@ class AgentsStore:
         session = session_or_id if isinstance(session_or_id, AgentSession) else self.get_session(session_or_id)
         if session is None:
             return []
-
-        thread_sessions = self._get_thread_sessions(session)
-        if not thread_sessions:
-            return []
-
-        by_id = {item.id: item for item in thread_sessions}
-        path: list[AgentSession] = []
-        seen: set[UUID] = set()
-        current: AgentSession | None = by_id.get(session.id, session)
-
-        while current is not None and current.id not in seen:
-            self._coerce_session_lineage_defaults(current)
-            path.append(current)
-            seen.add(current.id)
-            if current.continued_from_session_id is None:
-                break
-            current = by_id.get(current.continued_from_session_id)
-
-        path.reverse()
-        return path
+        return [session]
 
     def get_sessions_ordered(self, session_ids: list[UUID | str]) -> list[AgentSession]:
         ordered_ids: list[UUID] = []
@@ -393,23 +326,14 @@ class AgentsStore:
         continuation_kind: str,
         origin_label: str,
         branched_from_event_id: int | None = None,
+        started_at: datetime | None = None,
+        provider_session_id: str | None = None,
         environment: str | None = None,
         device_id: str | None = None,
-        provider_session_id: str | None = None,
-        started_at: datetime | None = None,
     ) -> AgentSession:
         parent = self.get_session(parent_session_id)
         if parent is None:
             raise ValueError(f"Session {parent_session_id} not found")
-        self._coerce_session_lineage_defaults(parent)
-        root_id = self._thread_root_id(parent)
-
-        (
-            self.db.query(AgentSession)
-            .filter(or_(AgentSession.thread_root_session_id == root_id, AgentSession.id == root_id))
-            .update({AgentSession.is_writable_head: 0}, synchronize_session=False)
-        )
-
         effective_started = started_at or datetime.now(timezone.utc)
         session = AgentSession(
             id=uuid4(),
@@ -423,21 +347,13 @@ class AgentsStore:
             started_at=effective_started,
             ended_at=None,
             last_activity_at=_normalize_utc_naive(effective_started),
-            provider_session_id=provider_session_id or parent.provider_session_id,
-            thread_root_session_id=root_id,
-            continued_from_session_id=parent.id,
-            continuation_kind=continuation_kind,
-            origin_label=origin_label,
-            branched_from_event_id=branched_from_event_id,
             user_messages=0,
             assistant_messages=0,
             tool_calls=0,
-            is_writable_head=1,
-            is_sidechain=1 if parent.is_sidechain else 0,
-            execution_home=(execution_home_for_continuation_kind(continuation_kind) or SessionExecutionHome.UNMANAGED_LOCAL).value,
         )
         self.db.add(session)
         self.db.flush()
+        ensure_primary_thread(self.db, session)
         return session
 
     def _fts_available(self) -> bool:
@@ -453,17 +369,15 @@ class AgentsStore:
 
     def _refresh_existing_session_metadata(self, session: AgentSession, data: SessionIngest) -> None:
         """Backfill richer session metadata when the same session is ingested again."""
-        self._coerce_session_lineage_defaults(session)
         incoming_execution_home = _infer_execution_home_from_ingest(data)
 
         incoming_started_at = _normalize_utc_naive(data.started_at)
         existing_started_at = _normalize_utc_naive(session.started_at)
         if incoming_started_at and (existing_started_at is None or incoming_started_at < existing_started_at):
-            if session.continued_from_session_id is None:
-                session.started_at = data.started_at
+            session.started_at = data.started_at
 
         incoming_ended_at = _normalize_utc_naive(data.ended_at)
-        managed_codex_ingest = _is_managed_codex_ingest(session, data, incoming_execution_home)
+        managed_codex_ingest = _is_managed_codex_ingest(self.db, session, data, incoming_execution_home)
         # Phase 4 of session-liveness-honesty: the engine's `ended_at` is
         # max(event.timestamp), which is last-activity — NOT a closure
         # signal. Route it into last_activity_at and leave ended_at alone.
@@ -476,9 +390,6 @@ class AgentsStore:
             current_activity = _normalize_utc_naive(session.last_activity_at)
             if current_activity is None or incoming_ended_at > current_activity:
                 session.last_activity_at = data.ended_at
-
-        if data.is_sidechain:
-            session.is_sidechain = 1
 
         if data.project and not session.project:
             session.project = data.project
@@ -495,29 +406,6 @@ class AgentsStore:
             session.git_repo = data.git_repo
         if data.git_branch and not session.git_branch:
             session.git_branch = data.git_branch
-        incoming_provider_session_id = str(data.provider_session_id or "").strip()
-        if incoming_provider_session_id and (
-            not session.provider_session_id
-            or _should_replace_managed_local_placeholder_provider_session_id(session, incoming_provider_session_id)
-        ):
-            session.provider_session_id = data.provider_session_id
-        if data.thread_root_session_id and not session.thread_root_session_id:
-            session.thread_root_session_id = data.thread_root_session_id
-        if data.continued_from_session_id and not session.continued_from_session_id:
-            session.continued_from_session_id = data.continued_from_session_id
-        if data.continuation_kind and not session.continuation_kind:
-            session.continuation_kind = data.continuation_kind
-        if data.origin_label and not session.origin_label:
-            session.origin_label = data.origin_label
-        if incoming_execution_home != SessionExecutionHome.UNMANAGED_LOCAL and coerce_execution_home(
-            getattr(session, "execution_home", None)
-        ) in {
-            None,
-            SessionExecutionHome.UNMANAGED_LOCAL,
-        }:
-            session.execution_home = incoming_execution_home.value
-        if data.branched_from_event_id and not session.branched_from_event_id:
-            session.branched_from_event_id = data.branched_from_event_id
 
         incoming_environment = data.environment.strip()
         existing_environment = (session.environment or "").strip()
@@ -527,10 +415,6 @@ class AgentsStore:
         ):
             session.environment = incoming_environment
 
-        if session.thread_root_session_id is None:
-            session.thread_root_session_id = session.id
-        if session.continuation_kind is None:
-            session.continuation_kind = _infer_continuation_kind_from_ingest(data)
         if not normalize_session_label(session.origin_label):
             session.origin_label = _infer_origin_label_from_ingest(data)
 
@@ -988,9 +872,7 @@ class AgentsStore:
             return latest, max_offset_by_path
 
         query = (
-            self.db.query(AgentSourceLine)
-            .filter(AgentSourceLine.session_id == session_id)
-            .filter(AgentSourceLine.branch_id == branch_id)
+            self.db.query(AgentSourceLine).filter(AgentSourceLine.session_id == session_id).filter(AgentSourceLine.branch_id == branch_id)
         )
         if source_offsets_by_path is None:
             rows = query.filter(AgentSourceLine.source_path.in_(sorted(source_paths))).all()
@@ -1421,45 +1303,14 @@ class AgentsStore:
 
         stage_started = time.monotonic()
         session_id = data.id if data.id else uuid4()
-        incoming_kind = _infer_continuation_kind_from_ingest(data)
-        incoming_origin = _infer_origin_label_from_ingest(data)
-        incoming_execution_home = _infer_execution_home_from_ingest(data)
-        incoming_provider_session_id = data.provider_session_id
 
         existing = self.db.query(AgentSession).filter(AgentSession.id == session_id).first()
         session_created = False
 
         if existing:
-            self._coerce_session_lineage_defaults(existing)
-            target_session = self._get_source_continuation_base(existing, data)
-            self._coerce_session_lineage_defaults(target_session)
-
-            if target_session.is_writable_head != 1 and self._has_novel_source_content(target_session, data):
-                continuation_started_at = min((event.timestamp for event in data.events), default=datetime.now(timezone.utc))
-                target_session = self.create_continuation_session(
-                    target_session.id,
-                    continuation_kind=incoming_kind,
-                    origin_label=incoming_origin,
-                    branched_from_event_id=self.get_latest_event_id(target_session.id),
-                    environment=data.environment,
-                    device_id=data.device_id,
-                    provider_session_id=incoming_provider_session_id,
-                    started_at=continuation_started_at,
-                )
-                session_created = True
-
-            self._refresh_existing_session_metadata(target_session, data)
-            existing = target_session
-            session_id = target_session.id
+            self._refresh_existing_session_metadata(existing, data)
+            session_id = existing.id
         else:
-            root_id = data.thread_root_session_id or session_id
-            if data.thread_root_session_id and data.thread_root_session_id != session_id:
-                (
-                    self.db.query(AgentSession)
-                    .filter(or_(AgentSession.thread_root_session_id == root_id, AgentSession.id == root_id))
-                    .update({AgentSession.is_writable_head: 0}, synchronize_session=False)
-                )
-
             # Derive device_name from device_id if not explicitly provided
             device_name = data.device_name
             if not device_name and data.device_id:
@@ -1483,18 +1334,6 @@ class AgentsStore:
                 started_at=data.started_at,
                 ended_at=None,
                 last_activity_at=(_normalize_utc_naive(data.ended_at) or _normalize_utc_naive(data.started_at)),
-                provider_session_id=data.provider_session_id,
-                thread_root_session_id=root_id,
-                continued_from_session_id=data.continued_from_session_id,
-                continuation_kind=incoming_kind,
-                origin_label=incoming_origin,
-                branched_from_event_id=data.branched_from_event_id,
-                user_messages=0,
-                assistant_messages=0,
-                tool_calls=0,
-                is_writable_head=1,
-                is_sidechain=1 if data.is_sidechain else 0,
-                execution_home=incoming_execution_home.value,
             )
             self.db.add(session)
             self.db.flush()
@@ -1506,13 +1345,13 @@ class AgentsStore:
         # use observation.thread_id to stamp child rows.
         primary_thread = ensure_primary_thread(self.db, existing)
         thread_id = primary_thread.id
-        if existing.provider_session_id:
+        if data.provider_session_id:
             record_thread_alias(
                 self.db,
                 thread=primary_thread,
                 provider=existing.provider,
                 alias_kind="provider_session_id",
-                alias_value=str(existing.provider_session_id),
+                alias_value=str(data.provider_session_id),
             )
         self.db.flush()
         _record_stage("session_setup", stage_started)
@@ -1547,6 +1386,7 @@ class AgentsStore:
             self.db.commit()
             commit_ms_total += (time.monotonic() - t0) * 1000
             commit_count += 1
+
         # Disabling triggers only pays off for genuinely large batches.
         # Small transcript appends should keep trigger maintenance inline.
         fts_triggers_dropped = len(data.events) >= _FTS_TRIGGER_DISABLE_THRESHOLD and self._disable_fts_triggers()
@@ -1618,9 +1458,7 @@ class AgentsStore:
                         .on_conflict_do_nothing()
                     )
                     insert_result = self.db.execute(event_stmt) if observation_result.inserted else None
-                    event_inserted = bool(
-                        insert_result is not None and insert_result.rowcount and insert_result.rowcount > 0
-                    )
+                    event_inserted = bool(insert_result is not None and insert_result.rowcount and insert_result.rowcount > 0)
                     reduction = ProviderEventReduction(event=None, inserted=event_inserted)
                 elif observation_result.observation is not None:
                     reduction = reduce_provider_event_observation(self.db, observation_result.observation)
@@ -1632,9 +1470,7 @@ class AgentsStore:
                         latest_inserted_event_id = reduction.event.id
                     if fts_triggers_dropped:
                         has_inserted_event_id = (
-                            reduction.event is not None
-                            and isinstance(reduction.event.id, int)
-                            and reduction.event.id > 0
+                            reduction.event is not None and isinstance(reduction.event.id, int) and reduction.event.id > 0
                         )
                         if has_inserted_event_id:
                             inserted_event_ids.append(reduction.event.id)
@@ -2035,7 +1871,11 @@ class AgentsStore:
             AgentSession.last_activity_at,
             runtime_signal_subq.c.runtime_timeline_anchor_at,
         )
-        thread_id = func.coalesce(AgentSession.thread_root_session_id, AgentSession.id).label("thread_id")
+        # Session-identity-kernel cleanup: legacy ingest paths still create
+        # AgentSession rows before the kernel thread is materialized, so
+        # ``primary_thread_id`` is often NULL.  Treat each session as its
+        # own thread when the explicit pointer is missing.
+        thread_id = func.coalesce(AgentSession.primary_thread_id, AgentSession.id).label("thread_id")
 
         stmt = (
             select(
@@ -2297,11 +2137,11 @@ class AgentsStore:
             stmt = stmt.where(time_anchor <= until)
 
         if hide_autonomous:
-            open_managed_local = and_(
-                AgentSession.execution_home == SessionExecutionHome.MANAGED_LOCAL.value,
-                AgentSession.ended_at.is_(None),
-            )
-            stmt = stmt.where(AgentSession.is_sidechain == 0).where(or_(AgentSession.user_messages > 0, open_managed_local))
+            # Session-identity-kernel cleanup: ``execution_home`` and
+            # ``is_sidechain`` were dropped from ``AgentSession``. Approximate
+            # the previous filter with the surviving signals: keep sessions
+            # that have user messages or are still open.
+            stmt = stmt.where(or_(AgentSession.user_messages > 0, AgentSession.ended_at.is_(None)))
 
         if exclude_user_states:
             stmt = stmt.where((AgentSession.user_state.notin_(exclude_user_states)) | (AgentSession.user_state.is_(None)))

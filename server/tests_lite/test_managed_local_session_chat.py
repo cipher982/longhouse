@@ -426,6 +426,27 @@ def test_managed_local_draft_reply_requires_live_control(tmp_path):
         source_session.execution_home = SessionExecutionHome.UNMANAGED_LOCAL.value
         source_session.managed_transport = None
         source_session.source_runner_id = None
+        # Session-identity-kernel cleanup: live-control truth lives on
+        # session_connections + session_runs; clearing legacy attrs alone
+        # leaves the kernel row claiming the session is steerable. Drop the
+        # kernel rows so the capability projection collapses to observe-only.
+        from zerg.models.agents import SessionConnection, SessionRun, SessionThread
+
+        for conn in (
+            db.query(SessionConnection)
+            .join(SessionRun, SessionConnection.run_id == SessionRun.id)
+            .join(SessionThread, SessionRun.thread_id == SessionThread.id)
+            .filter(SessionThread.session_id == source_session.id)
+            .all()
+        ):
+            db.delete(conn)
+        for run in (
+            db.query(SessionRun)
+            .join(SessionThread, SessionRun.thread_id == SessionThread.id)
+            .filter(SessionThread.session_id == source_session.id)
+            .all()
+        ):
+            db.delete(run)
         db.commit()
         client, api_app_ref = _make_client(db, user)
 

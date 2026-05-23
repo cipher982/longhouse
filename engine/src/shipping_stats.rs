@@ -243,11 +243,8 @@ impl RecentShipStatsTracker {
             latencies.sort_unstable();
             summary.ship_latency_p50_ms_1h = percentile(&latencies, 0.50);
             summary.ship_latency_p95_ms_1h = percentile(&latencies, 0.95);
-            summary.events_per_sec_ewma_10s = self
-                .throughput
-                .lock()
-                .ok()
-                .and_then(|t| t.current(now));
+            summary.events_per_sec_ewma_10s =
+                self.throughput.lock().ok().and_then(|t| t.current(now));
             summary
         } else {
             ShipStatsSummary::default()
@@ -466,7 +463,7 @@ mod tests {
         let mut tput = EwmaThroughput::default();
         let t0 = Instant::now();
         tput.record(t0, 100, 100); // 1000 eps initial
-        // 60s later, with TIME_CONSTANT 10s, decay factor ≈ e^-6 ≈ 0.0025
+                                   // 60s later, with TIME_CONSTANT 10s, decay factor ≈ e^-6 ≈ 0.0025
         let later = t0 + Duration::from_secs(60);
         let v = tput.current(later).unwrap();
         assert!(v < 5.0, "expected near-zero after 60s idle, got {v}");

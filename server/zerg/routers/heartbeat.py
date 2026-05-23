@@ -35,10 +35,8 @@ from zerg.metrics import agents_heartbeat_write_seconds
 from zerg.metrics import managed_session_heartbeat_lease_rows_total
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
-from zerg.models.agents import ManagedSessionControlState
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
-from zerg.models.agents import UnmanagedSessionBinding
 from zerg.models.device_token import DeviceToken
 from zerg.observability import get_tracer
 from zerg.observability import set_span_attributes
@@ -231,9 +229,7 @@ def _clear_synthetic_managed_missing_runtime_on_reattach(
     """Drop synthetic missing-lease runtime terminals when control reattaches."""
 
     attached_session_ids = {
-        lease.session_id
-        for lease in leases
-        if lease.session_id is not None and (lease.state or "").strip().lower() == "attached"
+        lease.session_id for lease in leases if lease.session_id is not None and (lease.state or "").strip().lower() == "attached"
     }
     if not attached_session_ids:
         return set()
@@ -284,10 +280,7 @@ def _state_is_synthetic_missing_managed_lease(state: SessionRuntimeState) -> boo
 
 
 def _state_has_real_managed_lease_history(state: SessionRuntimeState) -> bool:
-    return (
-        str(state.phase_source or "").strip() == MANAGED_SESSION_LEASE_SOURCE
-        and not _state_is_synthetic_missing_managed_lease(state)
-    )
+    return str(state.phase_source or "").strip() == MANAGED_SESSION_LEASE_SOURCE and not _state_is_synthetic_missing_managed_lease(state)
 
 
 def _latest_real_managed_lease_at_for_key(db: Session, runtime_key: str) -> tuple[bool, datetime | None]:
@@ -335,12 +328,7 @@ def _runtime_events_for_missing_managed_leases(
         .filter(SessionRuntimeState.terminal_state.is_(None))
         .all()
     )
-    control_rows = (
-        db.query(ManagedSessionControlState)
-        .filter(ManagedSessionControlState.device_id == device_id)
-        .all()
-    )
-    control_by_session = {row.session_id: row for row in control_rows}
+    control_by_session: dict[UUID, object] = {}
     legacy_real_lease_at_by_key: dict[str, tuple[bool, datetime | None]] = {}
 
     events: list[RuntimeEventIngest] = []
@@ -425,106 +413,14 @@ def _upsert_unmanaged_session_bindings(
     device_id: str,
     received_at: datetime,
 ) -> set[UUID]:
-    """Upsert unmanaged session bindings reported by the machine agent.
+    """Compatibility stub: the legacy ``UnmanagedSessionBinding`` table is gone.
 
-    Identity: (machine_id, provider, provider_session_id).
-
-    PID-reuse defense: if the existing row's process_start_time differs
-    from the incoming value, the old pid/start pair is stale — overwrite
-    with the new observation and leave binding_state='observed'. Phase 6
-    will consume binding_state to drive lifecycle=closed.
+    The kernel writes ``SessionConnection`` rows for observe-only/log_tail
+    evidence; bare unmanaged binding ingest is a no-op until that path lands.
     """
-    touched_session_ids: set[UUID] = set()
-    for binding in bindings:
-        machine = (binding.machine_id or "").strip()
-        provider = (binding.provider or "").strip().lower()
-        raw_session_key = (binding.provider_session_id or "").strip()
-        session_key = _normalize_unmanaged_provider_session_id(provider, raw_session_key)
-        if not machine or not provider or not session_key:
-            continue
 
-        existing = (
-            db.query(UnmanagedSessionBinding)
-            .filter(
-                UnmanagedSessionBinding.machine_id == machine,
-                UnmanagedSessionBinding.provider == provider,
-                UnmanagedSessionBinding.provider_session_id == session_key,
-            )
-            .first()
-        )
-        if existing is None and raw_session_key and raw_session_key != session_key:
-            existing = (
-                db.query(UnmanagedSessionBinding)
-                .filter(
-                    UnmanagedSessionBinding.machine_id == machine,
-                    UnmanagedSessionBinding.provider == provider,
-                    UnmanagedSessionBinding.provider_session_id == raw_session_key,
-                )
-                .first()
-            )
-
-        # Soft-link to sessions by (provider, provider_session_id).
-        linked_session_id = None
-        if session_key:
-            linked = (
-                db.query(AgentSession.id)
-                .filter(
-                    AgentSession.provider == provider,
-                    AgentSession.provider_session_id == session_key,
-                )
-                .first()
-            )
-            if linked is not None:
-                linked_session_id = linked[0]
-
-        fields = dict(
-            machine_id=machine,
-            device_id=device_id,
-            provider=provider,
-            provider_session_id=session_key,
-            session_id=linked_session_id,
-            source_path=binding.source_path,
-            source_inode=binding.source_inode,
-            source_device=binding.source_device,
-            pid=binding.pid,
-            process_start_time=binding.process_start_time,
-            cwd=binding.cwd,
-            source_offset=binding.source_offset,
-            source_mtime=binding.source_mtime,
-            observed_at=binding.observed_at or received_at,
-            last_seen_at=received_at,
-            binding_state="observed",
-        )
-
-        publish_keys = {
-            "device_id",
-            "session_id",
-            "source_path",
-            "source_inode",
-            "source_device",
-            "pid",
-            "process_start_time",
-            "cwd",
-            "binding_state",
-        }
-
-        def _publish_value(key: str, value: object) -> object:
-            if key == "process_start_time":
-                return normalize_utc(value) if isinstance(value, datetime) else value
-            return value
-
-        should_publish = existing is None or any(
-            _publish_value(key, getattr(existing, key)) != _publish_value(key, fields[key]) for key in publish_keys
-        )
-
-        if existing is None:
-            db.add(UnmanagedSessionBinding(**fields))
-        else:
-            for key, value in fields.items():
-                setattr(existing, key, value)
-        if should_publish and linked_session_id is not None:
-            touched_session_ids.add(linked_session_id)
-    return touched_session_ids
+    del db, bindings, device_id, received_at
+    return set()
 
 
 def _mark_missing_unmanaged_session_bindings_stale(
@@ -533,44 +429,10 @@ def _mark_missing_unmanaged_session_bindings_stale(
     *,
     device_id: str,
 ) -> set[UUID]:
-    """Mark previously observed bindings stale when this heartbeat omits them.
+    """Compatibility stub for the deleted ``UnmanagedSessionBinding`` table."""
 
-    The engine sends a full snapshot of currently live unmanaged bindings. If
-    a binding from this device was observed before and is absent now, the
-    local process is gone; downstream display code maps ``binding_state=stale``
-    to ``lifecycle=closed``.
-    """
-    observed_keys: set[tuple[str, str, str]] = set()
-    for binding in bindings:
-        machine = (binding.machine_id or "").strip()
-        provider = (binding.provider or "").strip().lower()
-        raw_session_key = (binding.provider_session_id or "").strip()
-        session_key = _normalize_unmanaged_provider_session_id(provider, raw_session_key)
-        if machine and provider and session_key:
-            observed_keys.add((machine, provider, session_key))
-
-    touched_session_ids: set[UUID] = set()
-    rows = (
-        db.query(UnmanagedSessionBinding)
-        .filter(UnmanagedSessionBinding.device_id == device_id)
-        .filter(UnmanagedSessionBinding.binding_state == "observed")
-        .all()
-    )
-    for row in rows:
-        key = (
-            str(row.machine_id or "").strip(),
-            str(row.provider or "").strip().lower(),
-            _normalize_unmanaged_provider_session_id(
-                str(row.provider or "").strip().lower(),
-                str(row.provider_session_id or "").strip(),
-            ),
-        )
-        if key not in observed_keys:
-            if row.binding_state != "stale":
-                row.binding_state = "stale"
-                if row.session_id is not None:
-                    touched_session_ids.add(row.session_id)
-    return touched_session_ids
+    del db, bindings, device_id
+    return set()
 
 
 def _runtime_events_for_missing_unbound_unmanaged_sessions(
@@ -600,24 +462,10 @@ def _runtime_events_for_missing_unbound_unmanaged_sessions(
         if provider in MISSING_UNBOUND_UNMANAGED_PROVIDERS and session_key:
             observed_keys.add((provider, session_key))
 
-    # Any existing binding for this device/provider/session is handled by the
-    # binding-overlay path, including stale rows. This function only covers
-    # sessions that never had a binding row.
-    existing_binding_keys = {
-        (
-            str(row.provider or "").strip().lower(),
-            _normalize_unmanaged_provider_session_id(
-                str(row.provider or "").strip().lower(),
-                str(row.provider_session_id or "").strip(),
-            ),
-        )
-        for row in (
-            db.query(UnmanagedSessionBinding.provider, UnmanagedSessionBinding.provider_session_id)
-            .filter(UnmanagedSessionBinding.device_id == device_id)
-            .filter(UnmanagedSessionBinding.provider.in_(MISSING_UNBOUND_UNMANAGED_PROVIDERS))
-            .all()
-        )
-    }
+    # The legacy UnmanagedSessionBinding table is gone; treat every
+    # session that has runtime state as eligible (kernel ``SessionConnection``
+    # ingest will replace this path soon).
+    existing_binding_keys: set[tuple[str, str]] = set()
 
     rows = (
         db.query(SessionRuntimeState, AgentSession)

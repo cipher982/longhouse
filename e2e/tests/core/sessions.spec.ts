@@ -356,10 +356,15 @@ test.describe("Sessions Page", () => {
     await expect(matchedEvent).toBeVisible({ timeout: 15000 });
   });
 
-  test("Query grouping keeps one honest thread card when multiple raw matches exist", async ({
+  test.skip("Query grouping keeps one honest thread card when multiple raw matches exist", async ({
     page,
     request,
   }) => {
+    // Lineage-based thread grouping (thread_root_session_id /
+    // continued_from_session_id) was removed by the session-identity-kernel
+    // cleanup. Each session is now its own thread root, so a query that
+    // matches two raw sessions in the same logical thread legitimately
+    // surfaces two timeline cards.
     const suffix = randomUUID().slice(0, 8);
     const project = `thread-query-group-${suffix}`;
     const token = `grouped-hit-${suffix}`;

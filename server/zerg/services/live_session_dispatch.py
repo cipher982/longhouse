@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSessionBranch
-from zerg.services.agents.kernel_capability_adapter import build_session_capabilities_from_kernel
+from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
 from zerg.services.managed_control_dispatcher import select_managed_control_transport
 from zerg.services.managed_local_control import ManagedLocalSendResult
@@ -21,7 +21,7 @@ from zerg.session_execution_home import SessionExecutionHome
 def live_text_dispatch_label(db: Session | None, session: AgentSession | None) -> str | None:
     if session is None or db is None:
         return None
-    flags = build_session_capabilities_from_kernel(db, session)
+    flags = project_session_capabilities(db, session_id=session.id)
     return flags.execution_home.value
 
 
@@ -40,7 +40,7 @@ def supports_live_text_dispatch_metadata(
     if session is None:
         return False
     if db is not None:
-        flags = build_session_capabilities_from_kernel(db, session)
+        flags = project_session_capabilities(db, session_id=session.id)
         if flags.live_control_available or flags.host_reattach_available:
             return True
     return (
@@ -154,7 +154,7 @@ async def send_text_to_live_session(
         )
 
     execution_home = (
-        build_session_capabilities_from_kernel(db, session).execution_home.value
+        project_session_capabilities(db, session_id=session.id).execution_home.value
         if session is not None
         else SessionExecutionHome.UNMANAGED_LOCAL.value
     )

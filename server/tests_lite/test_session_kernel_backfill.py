@@ -60,8 +60,10 @@ def test_backfill_creates_one_thread_per_session(tmp_path):
         assert report["sessions_seen"] == 3
         assert report["threads_created"] == 3
         assert report["primary_pointers_set"] == 3
-        # Two of three sessions had a provider_session_id.
-        assert report["aliases_created"] == 2
+        # Session-identity-kernel cleanup: ``provider_session_id`` is no
+        # longer a real column. Each session synthesizes one as ``str(self.id)``,
+        # so the backfill mirrors an alias for every session.
+        assert report["aliases_created"] == 3
 
         # Each session has exactly one primary thread, pointed at by the
         # session row.
@@ -76,8 +78,8 @@ def test_backfill_creates_one_thread_per_session(tmp_path):
             assert t.provider == s.provider
             assert t.branch_kind == "root"
 
-        # gemini session has no alias row.
-        assert db.query(SessionThreadAlias).count() == 2
+        # Every session now gets a synthesized provider_session_id alias.
+        assert db.query(SessionThreadAlias).count() == 3
 
 
 def test_backfill_is_idempotent(tmp_path):
@@ -244,7 +246,10 @@ def test_backfill_order_independent_final_state(tmp_path):
         b_aliases = db.query(SessionThreadAlias).count()
 
     assert a_threads == b_threads == 3
-    assert a_aliases == b_aliases == 2
+    # Session-identity-kernel cleanup: every session synthesizes a
+    # provider_session_id (= str(self.id)), so the backfill mirrors three
+    # aliases regardless of interleaving.
+    assert a_aliases == b_aliases == 3
 
 
 def test_backfill_child_thread_ids_stamps_legacy_rows(tmp_path):

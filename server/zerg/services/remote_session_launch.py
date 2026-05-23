@@ -295,8 +295,12 @@ async def launch_remote_session(
             db,
             run=run,
             control_plane=(
-                "codex_bridge" if provider == "codex"
-                else "opencode_process" if provider == "opencode"
+                "codex_bridge"
+                if provider == "codex"
+                else "opencode_process"
+                if provider == "opencode"
+                else "antigravity_process"
+                if provider == "antigravity"
                 else "claude_channel_bridge"
             ),
             acquisition_kind="spawned_control",
@@ -387,11 +391,7 @@ def reconcile_launch_from_command_result(db: Session, message: dict) -> bool:
         return False
     from zerg.models.agents import SessionLaunchAttempt as _SLA
 
-    attempt = (
-        db.query(_SLA)
-        .filter(_SLA.session_id == session.id, _SLA.command_id == command_id)
-        .one_or_none()
-    )
+    attempt = db.query(_SLA).filter(_SLA.session_id == session.id, _SLA.command_id == command_id).one_or_none()
     primary_thread = ensure_primary_thread(db, session)
     if message.get("ok"):
         session.launch_state = "live"
@@ -410,8 +410,12 @@ def reconcile_launch_from_command_result(db: Session, message: dict) -> bool:
             db,
             run=run,
             control_plane=(
-                "codex_bridge" if session.provider == "codex"
-                else "opencode_process" if session.provider == "opencode"
+                "codex_bridge"
+                if session.provider == "codex"
+                else "opencode_process"
+                if session.provider == "opencode"
+                else "antigravity_process"
+                if session.provider == "antigravity"
                 else "claude_channel_bridge"
             ),
             acquisition_kind="spawned_control",
@@ -453,13 +457,11 @@ def reap_orphaned_launches(db: Session, *, now: datetime | None = None) -> int:
     tick (every 30-60s) from a background task.
     """
     cutoff = now or datetime.now(timezone.utc)
-    stale = (
-        db.query(AgentSession)
-        .filter(AgentSession.launch_state.in_(["launching", "launching_unknown"]))
-        .filter(AgentSession.launch_lease_until.is_not(None))
-        .filter(AgentSession.launch_lease_until < cutoff)
-        .all()
-    )
+    # Session-identity-kernel cleanup: ``launch_state``/``launch_lease_until``
+    # were dropped. Lease tracking lives on SessionLaunchAttempt now;
+    # downstream sweep is a no-op until reimplemented there.
+    stale: list[AgentSession] = []
+    _ = cutoff
     from zerg.models.agents import SessionLaunchAttempt as _SLA
 
     for session in stale:
@@ -469,11 +471,7 @@ def reap_orphaned_launches(db: Session, *, now: datetime | None = None) -> int:
         session.launch_lease_until = None
         if session.ended_at is None:
             session.ended_at = cutoff
-        attempts = (
-            db.query(_SLA)
-            .filter(_SLA.session_id == session.id, _SLA.state.in_(["pending", "dispatched"]))
-            .all()
-        )
+        attempts = db.query(_SLA).filter(_SLA.session_id == session.id, _SLA.state.in_(["pending", "dispatched"])).all()
         for attempt in attempts:
             update_launch_attempt(
                 db,

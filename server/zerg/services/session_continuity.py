@@ -130,7 +130,22 @@ def _export_session_from_db(session_id: str, db: Session) -> tuple[bytes, str, s
         raise ValueError(f"Session {session_id} not found")
 
     jsonl_bytes, session = result
-    provider_session_id = session.provider_session_id or str(session.id)
+    # Session-identity-kernel cleanup: ``provider_session_id`` is no longer a
+    # column. Prefer the per-thread alias when one exists; the synthesized
+    # str(self.id) fallback keeps unmanaged paths working.
+    from zerg.models.agents import SessionThread
+    from zerg.models.agents import SessionThreadAlias
+
+    alias_value = (
+        db.query(SessionThreadAlias.alias_value)
+        .join(SessionThread, SessionThreadAlias.thread_id == SessionThread.id)
+        .filter(SessionThread.session_id == session.id)
+        .filter(SessionThreadAlias.alias_kind == "provider_session_id")
+        .order_by(SessionThreadAlias.id.desc())
+        .limit(1)
+        .scalar()
+    )
+    provider_session_id = alias_value or str(session.id)
     if provider_session_id:
         validate_session_id(provider_session_id)
     return jsonl_bytes, session.cwd or "", provider_session_id

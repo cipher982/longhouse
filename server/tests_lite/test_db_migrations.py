@@ -250,6 +250,12 @@ def test_startup_migration_adds_runner_availability_policy_and_backfills_default
 
 
 def test_startup_migration_adds_session_execution_home_columns(tmp_path):
+    import pytest
+
+    pytest.skip(
+        "session-identity-kernel cleanup: execution_home/managed_transport/source_runner_* "
+        "columns were removed; transport now derives from session_connections.control_plane."
+    )
     db_path = tmp_path / "legacy_sessions.db"
     engine = make_engine(f"sqlite:///{db_path}")
 
@@ -281,6 +287,12 @@ def test_startup_migration_adds_session_execution_home_columns(tmp_path):
 
 
 def test_startup_migration_adds_session_loop_mode_and_backfills_assist(tmp_path):
+    import pytest
+
+    pytest.skip(
+        "session-identity-kernel cleanup: loop_mode/loop_thread_id columns were removed; "
+        "loop continuations are no longer modeled on AgentSession."
+    )
     db_path = tmp_path / "legacy_sessions_loop_mode.db"
     engine = make_engine(f"sqlite:///{db_path}")
 

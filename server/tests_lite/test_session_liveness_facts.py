@@ -3,24 +3,32 @@ from datetime import timedelta
 from datetime import timezone
 from types import SimpleNamespace
 
-from zerg.services.session_capabilities import SessionCapabilityFlags
+from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_runtime import SessionRuntimeView
-from zerg.session_execution_home import SessionExecutionHome
 
 NOW = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
 
 
-def _capabilities(*, managed: bool = False) -> SessionCapabilityFlags:
-    return SessionCapabilityFlags(
-        execution_home=SessionExecutionHome.MANAGED_LOCAL if managed else SessionExecutionHome.UNMANAGED_LOCAL,
-        managed_transport=None,
+def _capabilities(*, managed: bool = False) -> KernelSessionCapabilities:
+    return KernelSessionCapabilities(
+        session_id="00000000-0000-0000-0000-000000000000",
+        thread_id=None,
+        run_id=None,
+        connection_id=None,
+        control_plane="claude_channel_bridge" if managed else None,
+        connection_state="attached" if managed else None,
+        control_label="live" if managed else "imported",
         live_control_available=managed,
         host_reattach_available=managed,
-        reply_to_live_session_available=managed,
-        can_queue_next_input=managed,
-        can_steer_active_turn=False,
-        home_label="On this Mac" if managed else None,
+        observe_only=False,
+        search_only=not managed,
+        can_send_input=managed,
+        can_interrupt=managed,
+        can_terminate=managed,
+        can_tail_output=managed,
+        can_resume=managed,
+        staleness_reason=None if managed else "imported_only",
     )
 
 

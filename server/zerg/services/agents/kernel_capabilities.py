@@ -23,12 +23,9 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionRun
-from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionThread
-
 
 _STATE_PRIORITY = {
     "attached": 5,
@@ -73,14 +70,49 @@ class KernelSessionCapabilities:
     # "no_run", "connection_released", "process_ended", "imported_only".
     staleness_reason: Optional[str]
 
+    @property
+    def reply_to_live_session_available(self) -> bool:
+        return bool(self.live_control_available and self.can_send_input)
+
+    @property
+    def can_queue_next_input(self) -> bool:
+        return bool(self.live_control_available and self.can_send_input)
+
+    @property
+    def can_steer_active_turn(self) -> bool:
+        return bool(self.live_control_available and self.control_plane == "codex_bridge")
+
+    @property
+    def execution_home(self):
+        from zerg.session_execution_home import SessionExecutionHome
+
+        return (
+            SessionExecutionHome.MANAGED_LOCAL
+            if (self.live_control_available or self.host_reattach_available)
+            else SessionExecutionHome.UNMANAGED_LOCAL
+        )
+
+    @property
+    def managed_transport(self):
+        from zerg.session_execution_home import ManagedSessionTransport
+
+        if self.control_plane == "codex_bridge":
+            return ManagedSessionTransport.CODEX_APP_SERVER
+        if self.control_plane == "claude_channel_bridge":
+            return ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE
+        if self.control_plane == "opencode_process":
+            return ManagedSessionTransport.OPENCODE_PROCESS
+        if self.control_plane == "antigravity_process":
+            return ManagedSessionTransport.ANTIGRAVITY_PROCESS
+        return None
+
+    @property
+    def home_label(self) -> Optional[str]:
+        return "On this Mac" if (self.live_control_available or self.host_reattach_available) else None
+
 
 def _connection_capability_count(conn: SessionConnection) -> int:
-    return int(
-        bool(conn.can_send_input)
-        + bool(conn.can_interrupt)
-        + bool(conn.can_terminate)
-        + bool(conn.can_tail_output)
-    )
+    return int(bool(conn.can_send_input) + bool(conn.can_interrupt) + bool(conn.can_terminate) + bool(conn.can_tail_output))
 
 
 def _connection_sort_key(conn: SessionConnection) -> tuple:
@@ -148,7 +180,9 @@ def _label_for(
     can_tail = bool(best.can_tail_output)
 
     if is_steerable_kind and state in ("attached", "degraded"):
-        return ("live", True, False, False, False, None)
+        # Live spawned/adopted control on the host: also expose
+        # ``host_reattach_available`` so attach-command generation works.
+        return ("live", True, True, False, False, None)
 
     if is_steerable_kind and state in ("detached", "released"):
         # Process owner is gone but the control plane could be reattached.
@@ -160,9 +194,7 @@ def _label_for(
     return ("search-only", False, False, True, False, "observe_only")
 
 
-def project_session_capabilities(
-    db: Session, *, session_id
-) -> KernelSessionCapabilities:
+def project_session_capabilities(db: Session, *, session_id) -> KernelSessionCapabilities:
     """Project capabilities for one session from kernel rows only.
 
     Returns a fully-populated payload even for sessions without a thread/run
@@ -194,21 +226,21 @@ def project_session_capabilities(
             .first()
         )
         if latest_run is not None:
-            connections = (
-                db.query(SessionConnection)
-                .filter(SessionConnection.run_id == latest_run.id)
-                .all()
-            )
+            connections = db.query(SessionConnection).filter(SessionConnection.run_id == latest_run.id).all()
     return _payload_from_rows(sid=sid, thread=thread, latest_run=latest_run, connections=connections)
 
 
 def _imported_payload(
-    *, sid: str, thread_id: Optional[str] = None, run_id: Optional[str] = None,
-    has_thread: bool, has_run: bool, run_ended: bool, best: Optional[SessionConnection],
+    *,
+    sid: str,
+    thread_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    has_thread: bool,
+    has_run: bool,
+    run_ended: bool,
+    best: Optional[SessionConnection],
 ) -> KernelSessionCapabilities:
-    label, live, reattach, observe, search, reason = _label_for(
-        has_thread=has_thread, has_run=has_run, run_ended=run_ended, best=best
-    )
+    label, live, reattach, observe, search, reason = _label_for(has_thread=has_thread, has_run=has_run, run_ended=run_ended, best=best)
     return KernelSessionCapabilities(
         session_id=sid,
         thread_id=thread_id,
@@ -240,14 +272,10 @@ def _payload_from_rows(
     if thread is None:
         return _imported_payload(sid=sid, has_thread=False, has_run=False, run_ended=False, best=None)
     if latest_run is None:
-        return _imported_payload(
-            sid=sid, thread_id=str(thread.id), has_thread=True, has_run=False, run_ended=False, best=None
-        )
+        return _imported_payload(sid=sid, thread_id=str(thread.id), has_thread=True, has_run=False, run_ended=False, best=None)
     best = _select_best_connection(connections)
     run_ended = latest_run.ended_at is not None
-    label, live, reattach, observe, search, reason = _label_for(
-        has_thread=True, has_run=True, run_ended=run_ended, best=best
-    )
+    label, live, reattach, observe, search, reason = _label_for(has_thread=True, has_run=True, run_ended=run_ended, best=best)
     if best is None:
         return KernelSessionCapabilities(
             session_id=sid,
@@ -294,9 +322,7 @@ def _payload_from_rows(
     )
 
 
-def project_capabilities_bulk(
-    db: Session, *, session_ids: list
-) -> dict:
+def project_capabilities_bulk(db: Session, *, session_ids: list) -> dict:
     """Project capabilities for many sessions with three batched queries.
 
     Returns ``{session_id: KernelSessionCapabilities}``. Sessions without a
@@ -334,11 +360,7 @@ def project_capabilities_bulk(
     run_ids = [r.id for r in runs_by_thread.values()]
     conns_by_run: dict = defaultdict(list)
     if run_ids:
-        conns = (
-            db.query(SessionConnection)
-            .filter(SessionConnection.run_id.in_(run_ids))
-            .all()
-        )
+        conns = db.query(SessionConnection).filter(SessionConnection.run_id.in_(run_ids)).all()
         for c in conns:
             conns_by_run[c.run_id].append(c)
 
@@ -346,9 +368,7 @@ def project_capabilities_bulk(
         thread = thread_by_session.get(sid)
         latest_run = runs_by_thread.get(thread.id) if thread is not None else None
         connections = conns_by_run.get(latest_run.id, []) if latest_run is not None else []
-        out[sid] = _payload_from_rows(
-            sid=str(sid), thread=thread, latest_run=latest_run, connections=connections
-        )
+        out[sid] = _payload_from_rows(sid=str(sid), thread=thread, latest_run=latest_run, connections=connections)
     return out
 
 

@@ -588,9 +588,7 @@ async def get_timeline_session_mobile_tail(
     branch_mode: str = Query("head", description="Branch projection mode: head|all"),
     limit: int = Query(50, ge=1, le=200, description="Max projected tail items"),
     offset: int = Query(0, ge=0, description="Items before the latest tail window"),
-    snapshot_event_id: Optional[int] = Query(
-        None, description="Previous snapshot marker for older-page drift detection"
-    ),
+    snapshot_event_id: Optional[int] = Query(None, description="Previous snapshot marker for older-page drift detection"),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_browser_user),
 ):
@@ -657,12 +655,10 @@ def _load_workspace_signature(
     if session is None:
         return ()
 
-    thread_root_id = session.thread_root_session_id or session.id
-    thread_sessions = (
-        db.query(AgentSession.id, AgentSession.updated_at)
-        .filter((AgentSession.id == thread_root_id) | (AgentSession.thread_root_session_id == thread_root_id))
-        .all()
-    )
+    # Session-identity-kernel cleanup: ``thread_root_session_id`` was dropped.
+    # Treat each session as its own thread root for the workspace signature.
+    thread_root_id = session.id
+    thread_sessions = db.query(AgentSession.id, AgentSession.updated_at).filter(AgentSession.id == thread_root_id).all()
     thread_session_ids = [str(row.id) for row in thread_sessions]
     latest_session_updated = max((row.updated_at for row in thread_sessions if row.updated_at), default=None)
 
@@ -671,11 +667,7 @@ def _load_workspace_signature(
 
     # Latest event emitted_at (the provider/engine timestamp on the newest event).
     # This feeds client beacons so we can measure true end-to-end latency.
-    latest_event_timestamp = (
-        db.query(func.max(AgentEvent.timestamp))
-        .filter(AgentEvent.session_id.in_(thread_session_ids))
-        .scalar()
-    )
+    latest_event_timestamp = db.query(func.max(AgentEvent.timestamp)).filter(AgentEvent.session_id.in_(thread_session_ids)).scalar()
 
     # Latest runtime signal across thread — the runtime state row advances on every
     # hook-driven phase change, so this replaces the old SessionPresence anchor.
@@ -958,19 +950,10 @@ async def _session_workspace_stream(
             previous_bridge_transcript_head = old_sig[7] if old_sig is not None and len(old_sig) > 7 else 0
             durable_event_changed = bool(
                 latest_event_id
-                and (
-                    (old_sig is not None and latest_event_id != previous_latest_event_id)
-                    or (old_sig is None and consumed_seq)
-                )
+                and ((old_sig is not None and latest_event_id != previous_latest_event_id) or (old_sig is None and consumed_seq))
             )
-            live_preview_changed = bool(
-                bridge_transcript_head
-                and bridge_transcript_head != previous_bridge_transcript_head
-            )
-            if (
-                transcript_preview_payload is None
-                and (live_preview_changed or durable_event_changed)
-            ):
+            live_preview_changed = bool(bridge_transcript_head and bridge_transcript_head != previous_bridge_transcript_head)
+            if transcript_preview_payload is None and (live_preview_changed or durable_event_changed):
                 with session_factory() as db:
                     transcript_preview_payload = _load_workspace_transcript_preview_payload(
                         db,

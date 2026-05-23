@@ -72,9 +72,8 @@ pub fn cmd_bench(
     );
 
     if let Some(url) = ship_url {
-        let token = ship_token.ok_or_else(|| {
-            anyhow::anyhow!("--ship-token is required when --ship-url is set")
-        })?;
+        let token = ship_token
+            .ok_or_else(|| anyhow::anyhow!("--ship-token is required when --ship-url is set"))?;
         let result = crate::bench::run_benchmark_ship(&files, url, token, ship_concurrency, algo)?;
         result.print_summary();
     } else if parallel {
