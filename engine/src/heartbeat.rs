@@ -1554,7 +1554,7 @@ mod tests {
             sequence: 1,
             state: "attached".to_string(),
             phase: Some("thinking".to_string()),
-            tool_name: None,
+            tool_name: Some("Bash".to_string()),
             bridge_status: Some("ready".to_string()),
             thread_subscription_status: Some("subscribed".to_string()),
             observed_at: "2026-05-05T12:00:00Z".to_string(),
@@ -1576,8 +1576,24 @@ mod tests {
         );
         assert_eq!(managed.presentation_state, "managed_attached");
         assert_eq!(managed.workspace.label.as_deref(), Some("zerg"));
+        assert_eq!(managed.workspace.cwd.as_deref(), Some("/Users/test/git/zerg"));
+        assert_eq!(managed.phase.as_deref(), Some("thinking"));
+        assert_eq!(managed.tool_name.as_deref(), Some("Bash"));
+        assert_eq!(
+            managed.phase_observed_at.as_deref(),
+            Some("2026-05-05T12:00:00Z")
+        );
+        assert_eq!(
+            managed.last_activity_at.as_deref(),
+            Some("2026-05-05T12:00:00Z")
+        );
         assert_eq!(managed.bridge.bridge_pid, Some(111));
         assert_eq!(managed.bridge.app_server_pid, Some(222));
+        assert_eq!(managed.bridge.status.as_deref(), Some("ready"));
+        assert_eq!(
+            managed.bridge.thread_subscription_status.as_deref(),
+            Some("subscribed")
+        );
         assert!(
             managed
                 .evidence
@@ -1593,6 +1609,23 @@ mod tests {
         assert_eq!(unmanaged.provider, "claude");
         assert_eq!(unmanaged.presentation_state, "unmanaged");
         assert_eq!(unmanaged.process.pid, Some(333));
+        assert_eq!(
+            unmanaged.provider_session_id.as_deref(),
+            Some("claude-unmanaged")
+        );
+        assert_eq!(unmanaged.workspace.label.as_deref(), Some("project"));
+        assert_eq!(unmanaged.workspace.cwd.as_deref(), Some("/tmp/project"));
+        assert_eq!(
+            unmanaged.evidence.hook_seen_at.as_deref(),
+            Some("2026-05-05T12:00:02Z")
+        );
+        assert!(
+            unmanaged
+                .evidence
+                .join_keys
+                .iter()
+                .any(|key| key == "source_path=/tmp/claude-unmanaged.jsonl")
+        );
     }
 
     #[test]
