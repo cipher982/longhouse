@@ -1260,7 +1260,7 @@ fn write_local_status_snapshot(
             .cmp(&b.provider)
             .then_with(|| a.session_id.cmp(&b.session_id))
     });
-    payload.unmanaged_session_bindings =
+    let unmanaged_session_bindings =
         if let Some(cached_bindings) = unmanaged_session_binding_override {
             cached_bindings.to_vec()
         } else {
@@ -1270,6 +1270,12 @@ fn write_local_status_snapshot(
                 chrono::Utc::now(),
             )
         };
+    payload.unmanaged_session_bindings =
+        heartbeat::filter_unmanaged_bindings_owned_by_managed_observations(
+            unmanaged_session_bindings,
+            observations,
+            claude_observations,
+        );
     // Compute the fresh ledger view up front so a read failure is both
     // logged and encoded in the status file as `phase_ledger_status`.
     // Downstream readers (verify-runtime-truth, local-health) can then

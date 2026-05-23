@@ -6,6 +6,8 @@
 //! - less frequent server heartbeats to `/api/agents/heartbeat`
 
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -357,6 +359,127 @@ pub fn leases_from_claude_channel_observations(
 
     leases.sort_by(|a, b| a.session_id.cmp(&b.session_id));
     leases
+}
+
+pub fn filter_unmanaged_bindings_owned_by_managed_observations(
+    bindings: Vec<UnmanagedSessionBinding>,
+    codex_observations: &[CodexBridgeObservation],
+    claude_observations: &[ClaudeChannelObservation],
+) -> Vec<UnmanagedSessionBinding> {
+    let managed_codex = ManagedCodexKeys::from_observations(codex_observations);
+    let managed_claude = ManagedClaudeKeys::from_observations(claude_observations);
+
+    bindings
+        .into_iter()
+        .filter(|binding| {
+            !binding_owned_by_codex(binding, &managed_codex)
+                && !binding_owned_by_claude(binding, &managed_claude)
+        })
+        .collect()
+}
+
+#[derive(Default)]
+struct ManagedCodexKeys {
+    provider_session_ids: HashSet<String>,
+    source_paths: HashSet<String>,
+    pids: HashSet<u32>,
+}
+
+impl ManagedCodexKeys {
+    fn from_observations(observations: &[CodexBridgeObservation]) -> Self {
+        let mut keys = Self::default();
+        for obs in observations {
+            if codex_bridge_observation_is_stopped(obs)
+                || !(obs.bridge_alive || obs.app_server_alive || obs.has_tui_attachment)
+            {
+                continue;
+            }
+            if let Some(thread_id) = normalized_string(obs.thread_id.as_deref()) {
+                keys.provider_session_ids.insert(thread_id);
+            }
+            if let Some(thread_path) = normalized_path_string(obs.thread_path.as_deref()) {
+                keys.source_paths.insert(thread_path);
+            }
+            if let Some(pid) = obs.app_server_pid {
+                keys.pids.insert(pid);
+            }
+        }
+        keys
+    }
+}
+
+#[derive(Default)]
+struct ManagedClaudeKeys {
+    provider_session_ids: HashSet<String>,
+    pids: HashSet<u32>,
+}
+
+impl ManagedClaudeKeys {
+    fn from_observations(observations: &[ClaudeChannelObservation]) -> Self {
+        let mut keys = Self::default();
+        for obs in observations {
+            if !(obs.claude_alive || obs.bridge_alive) {
+                continue;
+            }
+            if let Some(provider_session_id) = normalized_string(obs.provider_session_id.as_deref())
+            {
+                keys.provider_session_ids.insert(provider_session_id);
+            }
+            if let Some(pid) = obs.claude_pid {
+                keys.pids.insert(pid);
+            }
+            if let Some(pid) = obs.bridge_pid {
+                keys.pids.insert(pid);
+            }
+        }
+        keys
+    }
+}
+
+fn binding_owned_by_codex(binding: &UnmanagedSessionBinding, keys: &ManagedCodexKeys) -> bool {
+    if !binding.provider.eq_ignore_ascii_case("codex") {
+        return false;
+    }
+    if keys
+        .provider_session_ids
+        .contains(binding.provider_session_id.trim())
+    {
+        return true;
+    }
+    if binding.pid.is_some_and(|pid| keys.pids.contains(&pid)) {
+        return true;
+    }
+    binding
+        .source_path
+        .as_deref()
+        .and_then(|source_path| normalized_path_string(Some(source_path)))
+        .is_some_and(|source_path| keys.source_paths.contains(&source_path))
+}
+
+fn binding_owned_by_claude(binding: &UnmanagedSessionBinding, keys: &ManagedClaudeKeys) -> bool {
+    if !binding.provider.eq_ignore_ascii_case("claude") {
+        return false;
+    }
+    if keys
+        .provider_session_ids
+        .contains(binding.provider_session_id.trim())
+    {
+        return true;
+    }
+    binding.pid.is_some_and(|pid| keys.pids.contains(&pid))
+}
+
+fn normalized_string(value: Option<&str>) -> Option<String> {
+    let trimmed = value?.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn normalized_path_string(value: Option<&str>) -> Option<String> {
+    normalized_string(value).map(|path| Path::new(&path).to_string_lossy().to_string())
 }
 
 trait EmptyStringFallback {
@@ -915,6 +1038,95 @@ mod tests {
         assert_eq!(lease.phase.as_deref(), Some("needs_user"));
         assert_eq!(lease.bridge_status.as_deref(), Some("ready"));
         assert_eq!(lease.lease_ttl_ms, 900_000);
+    }
+
+    fn test_binding(
+        provider: &str,
+        provider_session_id: &str,
+        pid: u32,
+    ) -> UnmanagedSessionBinding {
+        UnmanagedSessionBinding {
+            machine_id: "cinder".to_string(),
+            provider: provider.to_string(),
+            provider_session_id: provider_session_id.to_string(),
+            source_path: Some(format!("/tmp/{provider_session_id}.jsonl")),
+            source_inode: None,
+            source_device: None,
+            pid: Some(pid),
+            process_start_time: Some("2026-05-05T12:00:00Z".to_string()),
+            cwd: Some("/tmp/project".to_string()),
+            source_offset: None,
+            source_mtime: None,
+            observed_at: "2026-05-05T12:00:02Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn filters_unmanaged_codex_binding_owned_by_bridge_thread() {
+        let mut obs = test_observation("managed-codex", "ws://127.0.0.1:45683/session");
+        obs.thread_id = Some("thread-managed".to_string());
+        obs.thread_path = Some("/tmp/thread-managed.jsonl".to_string());
+        obs.has_tui_attachment = false;
+        obs.app_server_alive = true;
+
+        let mut by_path = test_binding("codex", "other-thread", 456);
+        by_path.source_path = Some("/tmp/thread-managed.jsonl".to_string());
+        let bindings = vec![
+            test_binding("codex", "thread-managed", 123),
+            by_path,
+            test_binding("codex", "thread-unmanaged", 789),
+        ];
+
+        let filtered =
+            filter_unmanaged_bindings_owned_by_managed_observations(bindings, &[obs], &[]);
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].provider_session_id, "thread-unmanaged");
+    }
+
+    #[test]
+    fn keeps_codex_binding_when_matching_bridge_is_stopped_and_dead() {
+        let mut obs = test_observation("stopped-codex", "ws://127.0.0.1:45684/session");
+        obs.thread_id = Some("thread-stopped".to_string());
+        obs.status = "stopped".to_string();
+        obs.bridge_alive = false;
+        obs.has_tui_attachment = false;
+        obs.app_server_alive = false;
+
+        let bindings = vec![test_binding("codex", "thread-stopped", 123)];
+
+        let filtered =
+            filter_unmanaged_bindings_owned_by_managed_observations(bindings.clone(), &[obs], &[]);
+
+        assert_eq!(filtered, bindings);
+    }
+
+    #[test]
+    fn filters_unmanaged_claude_binding_owned_by_channel() {
+        use crate::managed_claude_scan::ClaudeChannelObservation;
+
+        let obs = ClaudeChannelObservation {
+            session_id: "managed-claude".to_string(),
+            provider_session_id: Some("claude-provider-session".to_string()),
+            state_file: PathBuf::from("/tmp/managed-claude.json"),
+            claude_pid: Some(321),
+            bridge_pid: Some(322),
+            ready: true,
+            updated_at: "2026-05-07T20:03:50Z".to_string(),
+            claude_alive: true,
+            bridge_alive: true,
+        };
+        let bindings = vec![
+            test_binding("claude", "claude-provider-session", 999),
+            test_binding("claude", "other-claude-session", 321),
+            test_binding("claude", "real-unmanaged", 987),
+        ];
+
+        let filtered =
+            filter_unmanaged_bindings_owned_by_managed_observations(bindings, &[], &[obs]);
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].provider_session_id, "real-unmanaged");
     }
 
     #[test]
