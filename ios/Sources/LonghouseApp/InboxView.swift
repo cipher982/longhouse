@@ -322,6 +322,7 @@ private struct RuntimeBadge: View {
         // phase-signal deadline hasn't passed. Anything else freezes.
         let pulsing = globalHealthy && withinDeadline && attentionTone == .working
         let color = globalHealthy && !sessionStale ? timelineStatusColor(session) : .secondary
+        let backgroundOpacity = globalHealthy && !sessionStale && attentionTone == .working ? 0.22 : 0.14
 
         HStack(spacing: 6) {
             LivenessDot(color: color, pulsing: pulsing)
@@ -349,7 +350,7 @@ private struct RuntimeBadge: View {
         .foregroundStyle(color)
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
-        .background(color.opacity(0.14), in: Capsule())
+        .background(color.opacity(backgroundOpacity), in: Capsule())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(runtimeBadgeAccessibilityLabel(for: session, stale: sessionStale))
     }
@@ -889,7 +890,7 @@ private func timelineCardAccentColor(_ session: SessionSummary, connectionState:
     case .attention:
         return .orange
     case .working:
-        return .secondary.opacity(0.65)
+        return .primary
     case .closed:
         return .secondary.opacity(0.38)
     case .quiet:
