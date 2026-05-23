@@ -126,7 +126,7 @@ export LONGHOUSE_HOST="0.0.0.0"
 longhouse serve`}
       </CodeBlock>
       <p>
-        Put a reverse proxy (nginx, Caddy) in front for TLS. The hosted beta
+        Put a reverse proxy (nginx, Caddy) in front for TLS. The hosted plan
         handles all of this for you if you prefer not to run infrastructure.
       </p>
     </>
