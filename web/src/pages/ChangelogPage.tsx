@@ -39,7 +39,7 @@ export default function ChangelogPage() {
 
         <div className="docs-section changelog-empty-state">
           <p className="changelog-empty-text">
-            We're currently in beta. A detailed changelog will be available once we reach our first stable release.
+            Longhouse is in alpha. A detailed changelog will be available once we reach our first stable release.
           </p>
           <p className="changelog-empty-links">
             Follow development on{" "}

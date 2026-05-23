@@ -61,7 +61,7 @@ longhouse connect --domain longhouse.example.com --install
 
 Set `LONGHOUSE_PASSWORD_HASH` before binding beyond localhost. For TLS, put Caddy in front — `reverse_proxy 127.0.0.1:8080` is the whole config.
 
-Hosted beta (we run the Runtime Host for you) lands later at <https://longhouse.ai>.
+Or skip running the box — hosted (we run the Runtime Host for you) is available at <https://control.longhouse.ai/signup>.
 
 ## Repair
 
