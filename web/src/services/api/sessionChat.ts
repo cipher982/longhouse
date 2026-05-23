@@ -50,6 +50,31 @@ export async function postSessionInput(
   });
 }
 
+export interface MultipartAttachment {
+  blob: Blob;
+  filename: string;
+}
+
+export async function postSessionInputMultipart(
+  sessionId: string,
+  body: {
+    text: string;
+    attachments: MultipartAttachment[];
+    client_request_id?: string | null;
+  },
+): Promise<SessionInputResponse> {
+  // Multipart route is auto-intent only in v1; the server enforces this.
+  const form = new FormData();
+  form.append("text", body.text);
+  form.append("intent", "auto");
+  if (body.client_request_id) form.append("client_request_id", body.client_request_id);
+  body.attachments.forEach((a) => form.append("attachments", a.blob, a.filename));
+  return request<SessionInputResponse>(`/sessions/${sessionId}/inputs-multipart`, {
+    method: "POST",
+    body: form,
+  });
+}
+
 export async function fetchSessionInputs(
   sessionId: string,
 ): Promise<QueuedInputSummary[]> {
