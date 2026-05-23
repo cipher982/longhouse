@@ -3218,6 +3218,8 @@ def _collect_managed_session_sources(
         if resolved_sessions is not None:
             process_sessions, unmanaged_processes = resolved_sessions
         else:
+            # Compatibility shim for engines older than the resolved `sessions`
+            # contract. New engines always emit `sessions`, including `[]`.
             process_sessions = _collect_managed_sessions_from_engine_status(
                 engine_status,
                 phase_overlay=phase_overlay,
