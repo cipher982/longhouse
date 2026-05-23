@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import plistlib
 import shlex
+import shutil
 import subprocess
 import sys
 import xml.sax.saxutils as saxutils
@@ -27,19 +28,41 @@ LAUNCHD_LABEL = "ai.longhouse.app"
 LEGACY_LAUNCHD_LABEL = "com.longhouse.local-health-menubar"
 LOG_BASENAME = "desktop-app"
 LEGACY_LOG_BASENAME = "local-health-menubar"
-DEFAULT_REFRESH_SECONDS = 10
+DEFAULT_REFRESH_SECONDS = 30
 
 
 def build_snapshot_command(*, claude_dir: str | None = None) -> str:
     return shlex.join(build_snapshot_arguments(claude_dir=claude_dir))
 
 
+def _executable_file(path: Path) -> bool:
+    return path.is_file() and os.access(path, os.X_OK)
+
+
+def _default_cli_snapshot_prefix() -> list[str]:
+    user_local_bin = Path.home() / ".local" / "bin"
+    user_local_health = user_local_bin / "longhouse-local-health"
+    if _executable_file(user_local_health):
+        return [str(user_local_health)]
+
+    path_local_health = shutil.which("longhouse-local-health")
+    if path_local_health:
+        return [path_local_health]
+
+    user_local_longhouse = user_local_bin / "longhouse"
+    if _executable_file(user_local_longhouse):
+        return [str(user_local_longhouse), "local-health"]
+
+    path_longhouse = shutil.which("longhouse")
+    if path_longhouse:
+        return [path_longhouse, "local-health"]
+
+    return [sys.executable, "-m", "zerg.cli.local_health_fast"]
+
+
 def build_snapshot_arguments(*, claude_dir: str | None = None) -> list[str]:
     command = [
-        sys.executable,
-        "-m",
-        "zerg.cli.main",
-        "local-health",
+        *_default_cli_snapshot_prefix(),
         "--fast",
         "--json",
     ]
@@ -87,6 +110,14 @@ def _log_glob_from_stdout(stdout_path: str, fallback_basename: str) -> str:
     else:
         base = fallback_basename
     return str(expanded.parent / f"{base}.*.log")
+
+
+def _extract_flag_value(arguments: list[str], flag: str) -> str | None:
+    for index, argument in enumerate(arguments):
+        if argument == flag and index + 1 < len(arguments):
+            value = str(arguments[index + 1]).strip()
+            return value or None
+    return None
 
 
 def _bundle_version(app_bundle: Path) -> str | None:
@@ -221,14 +252,8 @@ def get_desktop_app_service_info() -> dict[str, str]:
         "service_file": str(plist_path),
         "log_path": str(log_dir / f"{log_basename}.*.log"),
     }
-    artifact = resolve_installed_runtime_artifact(RuntimeComponent.DESKTOP_APP)
-    if artifact is not None:
-        info["artifact_component"] = artifact.component.value
-        info["artifact_path"] = artifact.path
-        info["launch_path"] = artifact.launch_path
-        info["runtime_mode"] = "app-bundle"
-        return info
-
+    program_arguments: list[str] | None = None
+    health_exec_missing = False
     if plist_path.exists():
         try:
             payload = plistlib.loads(plist_path.read_bytes())
@@ -238,23 +263,45 @@ def get_desktop_app_service_info() -> dict[str, str]:
             stdout_path = payload.get("StandardOutPath")
             if stdout_path:
                 info["log_path"] = _log_glob_from_stdout(str(stdout_path), log_basename)
-        program_arguments = payload.get("ProgramArguments") if isinstance(payload, dict) else None
-        if isinstance(program_arguments, list) and program_arguments:
-            launch_path = str(program_arguments[0])
-            info["launch_path"] = launch_path
-            if ".app/Contents/MacOS/" in launch_path:
-                artifact_path = launch_path.split("/Contents/MacOS/", 1)[0]
-                info["artifact_path"] = artifact_path
-                bundle_path = Path(artifact_path)
-                if _is_local_source_build(bundle_path):
-                    info["runtime_mode"] = "source-build"
-                    version = _bundle_version(bundle_path)
-                    if version:
-                        info["bundle_version"] = version
-                    return info
-            else:
-                info["artifact_path"] = launch_path
-            info["runtime_mode"] = "broken-install"
+            raw_arguments = payload.get("ProgramArguments")
+            if isinstance(raw_arguments, list):
+                program_arguments = [str(item) for item in raw_arguments]
+                health_exec = _extract_flag_value(program_arguments, "--health-exec")
+                if health_exec:
+                    info["health_exec_path"] = health_exec
+                    health_exec_exists = Path(health_exec).expanduser().exists()
+                    info["health_exec_exists"] = "true" if health_exec_exists else "false"
+                    if not health_exec_exists:
+                        health_exec_missing = True
+
+    artifact = resolve_installed_runtime_artifact(RuntimeComponent.DESKTOP_APP)
+    if artifact is not None:
+        info["artifact_component"] = artifact.component.value
+        info["artifact_path"] = artifact.path
+        info["launch_path"] = artifact.launch_path
+        info["runtime_mode"] = "broken-health-exec" if health_exec_missing else "app-bundle"
+        if health_exec_missing:
+            info["health_exec_error"] = "configured health executable is missing"
+        return info
+
+    if program_arguments:
+        launch_path = str(program_arguments[0])
+        info["launch_path"] = launch_path
+        if ".app/Contents/MacOS/" in launch_path:
+            artifact_path = launch_path.split("/Contents/MacOS/", 1)[0]
+            info["artifact_path"] = artifact_path
+            bundle_path = Path(artifact_path)
+            if _is_local_source_build(bundle_path):
+                info["runtime_mode"] = "source-build"
+                version = _bundle_version(bundle_path)
+                if version:
+                    info["bundle_version"] = version
+                return info
+        else:
+            info["artifact_path"] = launch_path
+        info["runtime_mode"] = "broken-health-exec" if health_exec_missing else "broken-install"
+        if health_exec_missing:
+            info["health_exec_error"] = "configured health executable is missing"
     return info
 
 
