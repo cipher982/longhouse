@@ -1276,6 +1276,12 @@ fn write_local_status_snapshot(
             observations,
             claude_observations,
         );
+    payload.sessions = heartbeat::resolved_sessions_from_observations(
+        &payload.managed_sessions,
+        &payload.unmanaged_session_bindings,
+        observations,
+        claude_observations,
+    );
     // Compute the fresh ledger view up front so a read failure is both
     // logged and encoded in the status file as `phase_ledger_status`.
     // Downstream readers (verify-runtime-truth, local-health) can then
@@ -2593,6 +2599,7 @@ mod tests {
             is_offline: false,
             managed_sessions: Vec::new(),
             unmanaged_session_bindings: Vec::new(),
+            sessions: Vec::new(),
             adaptive_backlog_limiter: None,
         }
     }
@@ -2633,6 +2640,7 @@ mod tests {
             last_turn_status: last_turn_status.map(str::to_string),
             last_error: None,
             thread_subscription_status: Some("subscribed".to_string()),
+            bridge_pid: 12344,
             app_server_pid: None,
             app_server_pgid: None,
             updated_at: updated_at.to_string(),

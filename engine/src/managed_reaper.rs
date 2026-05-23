@@ -35,7 +35,7 @@ use tokio::time::Instant;
 
 use crate::codex_bridge::{self, BridgeStopConfig};
 use crate::managed_bridge_scan::{
-    self, codex_tui_process_attached, collect_process_commands, pid_alive, CodexBridgeObservation,
+    self, CodexBridgeObservation, codex_tui_process_attached, collect_process_commands, pid_alive,
 };
 
 pub const DEFAULT_REAP_GRACE_SECS: u64 = 120;
@@ -371,6 +371,7 @@ mod tests {
             last_turn_status: Some("completed".to_string()),
             last_error: None,
             thread_subscription_status: Some("subscribed".to_string()),
+            bridge_pid: 4241,
             app_server_pid: Some(4242),
             app_server_pgid: Some(4242),
             updated_at: "2026-05-01T00:00:00Z".to_string(),
