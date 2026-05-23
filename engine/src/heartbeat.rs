@@ -1485,6 +1485,30 @@ mod tests {
         assert_eq!(filtered[0].provider_session_id, "real-unmanaged");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn keeps_unmanaged_codex_binding_when_process_group_does_not_match_bridge() {
+        let current_pid = std::process::id();
+        let current_pgid = unsafe { libc::getpgid(i32::try_from(current_pid).unwrap()) };
+        assert!(current_pgid > 0);
+
+        let mut obs = test_observation("managed-codex", "ws://127.0.0.1:45684/session");
+        obs.thread_id = None;
+        obs.thread_path = None;
+        obs.app_server_pid = None;
+        obs.app_server_pgid = Some(current_pgid + 1);
+        obs.bridge_alive = false;
+        obs.has_tui_attachment = false;
+        obs.app_server_alive = true;
+
+        let bindings = vec![test_binding("codex", "real-unmanaged", current_pid)];
+
+        let filtered =
+            filter_unmanaged_bindings_owned_by_managed_observations(bindings.clone(), &[obs], &[]);
+
+        assert_eq!(filtered, bindings);
+    }
+
     #[test]
     fn filters_unmanaged_claude_binding_owned_by_channel() {
         use crate::managed_claude_scan::ClaudeChannelObservation;
