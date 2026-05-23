@@ -713,6 +713,7 @@ struct ManagedCodexKeys {
     provider_session_ids: HashSet<String>,
     source_paths: HashSet<String>,
     pids: HashSet<u32>,
+    process_group_ids: HashSet<i32>,
 }
 
 impl ManagedCodexKeys {
@@ -732,6 +733,9 @@ impl ManagedCodexKeys {
             }
             if let Some(pid) = obs.app_server_pid {
                 keys.pids.insert(pid);
+            }
+            if let Some(pgid) = obs.app_server_pgid.filter(|pgid| *pgid > 0) {
+                keys.process_group_ids.insert(pgid);
             }
         }
         keys
@@ -779,11 +783,30 @@ fn binding_owned_by_codex(binding: &UnmanagedSessionBinding, keys: &ManagedCodex
     if binding.pid.is_some_and(|pid| keys.pids.contains(&pid)) {
         return true;
     }
+    if binding
+        .pid
+        .and_then(current_process_group_id)
+        .is_some_and(|pgid| keys.process_group_ids.contains(&pgid))
+    {
+        return true;
+    }
     binding
         .source_path
         .as_deref()
         .and_then(|source_path| normalized_path_string(Some(source_path)))
         .is_some_and(|source_path| keys.source_paths.contains(&source_path))
+}
+
+#[cfg(unix)]
+fn current_process_group_id(pid: u32) -> Option<i32> {
+    let pid = i32::try_from(pid).ok()?;
+    let pgid = unsafe { libc::getpgid(pid) };
+    if pgid > 0 { Some(pgid) } else { None }
+}
+
+#[cfg(not(unix))]
+fn current_process_group_id(_pid: u32) -> Option<i32> {
+    None
 }
 
 fn binding_owned_by_claude(binding: &UnmanagedSessionBinding, keys: &ManagedClaudeKeys) -> bool {
@@ -1432,6 +1455,34 @@ mod tests {
             filter_unmanaged_bindings_owned_by_managed_observations(bindings.clone(), &[obs], &[]);
 
         assert_eq!(filtered, bindings);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn filters_unmanaged_codex_binding_owned_by_bridge_process_group() {
+        let current_pid = std::process::id();
+        let current_pgid = unsafe { libc::getpgid(i32::try_from(current_pid).unwrap()) };
+        assert!(current_pgid > 0);
+
+        let mut obs = test_observation("managed-codex", "ws://127.0.0.1:45684/session");
+        obs.thread_id = None;
+        obs.thread_path = None;
+        obs.app_server_pid = None;
+        obs.app_server_pgid = Some(current_pgid);
+        obs.bridge_alive = false;
+        obs.has_tui_attachment = false;
+        obs.app_server_alive = true;
+
+        let bindings = vec![
+            test_binding("codex", "same-process-group", current_pid),
+            test_binding("codex", "real-unmanaged", u32::MAX),
+        ];
+
+        let filtered =
+            filter_unmanaged_bindings_owned_by_managed_observations(bindings, &[obs], &[]);
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].provider_session_id, "real-unmanaged");
     }
 
     #[test]

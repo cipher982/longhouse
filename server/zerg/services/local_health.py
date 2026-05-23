@@ -2097,6 +2097,161 @@ def _collect_managed_sessions_from_engine_status(
     return sessions
 
 
+def _engine_status_resolved_sessions(engine_status: dict[str, Any]) -> list[Any] | None:
+    payload = _engine_status_payload(engine_status)
+    raw_rows = payload.get("sessions")
+    if not isinstance(raw_rows, list):
+        return None
+    return raw_rows
+
+
+def _resolved_session_mapping(raw_row: Any, field_name: str) -> Mapping[str, Any]:
+    raw_value = raw_row.get(field_name) if isinstance(raw_row, Mapping) else None
+    if isinstance(raw_value, Mapping):
+        return raw_value
+    return {}
+
+
+def _resolved_session_state(raw_row: Mapping[str, Any]) -> str:
+    normalized_state = _normalize_optional_string(raw_row.get("state"))
+    if normalized_state in {"attached", "detached", "degraded"}:
+        return normalized_state
+
+    presentation_state = _normalize_optional_string(raw_row.get("presentation_state"))
+    if presentation_state == "managed_attached":
+        return "attached"
+    if presentation_state == "managed_detached":
+        return "detached"
+    if presentation_state == "managed_degraded":
+        return "degraded"
+    return normalized_state or "unknown"
+
+
+def _resolved_join_key_value(evidence: Mapping[str, Any], prefix: str) -> str | None:
+    raw_join_keys = evidence.get("join_keys")
+    if not isinstance(raw_join_keys, list):
+        return None
+    match_prefix = f"{prefix}="
+    for raw_key in raw_join_keys:
+        key = _normalize_optional_string(raw_key)
+        if key and key.startswith(match_prefix):
+            return key[len(match_prefix) :] or None
+    return None
+
+
+def _resolved_engine_managed_session_row(
+    *,
+    raw_row: Mapping[str, Any],
+    phase_overlay: dict[str, dict[str, str | None]] | None,
+) -> dict[str, Any]:
+    session_id = _normalize_optional_string(raw_row.get("session_id"))
+    provider = _normalize_optional_string(raw_row.get("provider")) or "unknown"
+    state = _resolved_session_state(raw_row)
+    workspace = _resolved_session_mapping(raw_row, "workspace")
+    bridge = _resolved_session_mapping(raw_row, "bridge")
+    evidence = _resolved_session_mapping(raw_row, "evidence")
+
+    raw_phase = _normalize_optional_string(raw_row.get("phase"))
+    tool_name = _normalize_optional_string(raw_row.get("tool_name"))
+    phase_state = phase_overlay.get(session_id or "") if phase_overlay else None
+    overlay_phase = _normalize_optional_string(phase_state.get("phase")) if phase_state else None
+    overlay_tool = _normalize_optional_string(phase_state.get("tool_name")) if phase_state else None
+    phase_observed_at = _normalize_optional_string(phase_state.get("observed_at")) if phase_state else None
+    phase_last_activity_at = _normalize_optional_string(phase_state.get("last_activity_at")) if phase_state else None
+    overlay_workspace_label = _normalize_optional_string(phase_state.get("workspace_label")) if phase_state else None
+    overlay_workspace_path = _normalize_optional_string(phase_state.get("workspace_path")) if phase_state else None
+    display_phase = overlay_phase if overlay_phase is not None else raw_phase
+    display_tool = overlay_tool if overlay_phase is not None else tool_name
+    row_phase_observed_at = _normalize_optional_string(raw_row.get("phase_observed_at"))
+    last_activity_at = _normalize_optional_string(raw_row.get("last_activity_at"))
+    bridge_heartbeat_at = _normalize_optional_string(bridge.get("heartbeat_at"))
+
+    return {
+        "session_id": session_id,
+        "provider": provider,
+        "provider_session_id": _normalize_optional_string(raw_row.get("provider_session_id")),
+        "control_path": CONTROL_PATH_MANAGED,
+        "liveness_model": LIVENESS_MODEL_ENGINE_STATUS,
+        "provider_cli": None,
+        "workspace_label": overlay_workspace_label or _normalize_optional_string(workspace.get("label")),
+        "cwd": overlay_workspace_path or _normalize_optional_string(workspace.get("cwd")),
+        "branch": _normalize_optional_string(workspace.get("branch")),
+        "state": state,
+        "raw_phase": display_phase,
+        "phase": _phase_display_label(display_phase, display_tool),
+        "phase_observed_at": phase_observed_at or row_phase_observed_at,
+        "last_activity_at": _max_rfc3339(last_activity_at, phase_last_activity_at, phase_observed_at),
+        "bridge_status": _normalize_optional_string(bridge.get("status")),
+        "bridge_pid": _normalize_optional_int(bridge.get("bridge_pid")),
+        "app_server_pid": _normalize_optional_int(bridge.get("app_server_pid")),
+        "bridge_heartbeat_at": bridge_heartbeat_at,
+        "thread_subscription_status": _normalize_optional_string(bridge.get("thread_subscription_status")),
+        "reason_codes": (list(raw_row.get("reason_codes") or []) if isinstance(raw_row.get("reason_codes"), list) else []),
+        "evidence": dict(evidence),
+    }
+
+
+def _resolved_engine_unmanaged_process_row(raw_row: Mapping[str, Any]) -> dict[str, Any]:
+    workspace = _resolved_session_mapping(raw_row, "workspace")
+    process = _resolved_session_mapping(raw_row, "process")
+    evidence = _resolved_session_mapping(raw_row, "evidence")
+    cwd = _normalize_optional_string(workspace.get("cwd"))
+    observed_at = (
+        _normalize_optional_string(raw_row.get("last_activity_at"))
+        or _normalize_optional_string(raw_row.get("phase_observed_at"))
+        or _normalize_optional_string(evidence.get("hook_seen_at"))
+    )
+    started_at = (
+        _normalize_optional_string(process.get("started_at"))
+        or _normalize_optional_string(process.get("process_start_time"))
+        or observed_at
+    )
+    source_path = _resolved_join_key_value(evidence, "source_path")
+    return {
+        "provider": _normalize_optional_string(raw_row.get("provider")),
+        "control_path": CONTROL_PATH_UNMANAGED,
+        "liveness_model": LIVENESS_MODEL_ENGINE_STATUS,
+        "provider_cli": None,
+        "pid": _normalize_optional_int(process.get("pid")),
+        "workspace_label": _normalize_optional_string(workspace.get("label")) or (Path(cwd).name if cwd else None),
+        "cwd": cwd,
+        "branch": _normalize_optional_string(workspace.get("branch")),
+        "started_at": started_at,
+        "provider_session_id": _normalize_optional_string(raw_row.get("provider_session_id")),
+        "source_path": source_path,
+        "observed_at": observed_at,
+        "evidence": dict(evidence),
+    }
+
+
+def _collect_resolved_sessions_from_engine_status(
+    engine_status: dict[str, Any],
+    *,
+    phase_overlay: dict[str, dict[str, str | None]] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]] | None:
+    raw_rows = _engine_status_resolved_sessions(engine_status)
+    if raw_rows is None:
+        return None
+
+    managed_sessions: list[dict[str, Any]] = []
+    unmanaged_processes: list[dict[str, Any]] = []
+    for raw_row in raw_rows:
+        if not isinstance(raw_row, Mapping):
+            continue
+        control_path = _normalize_optional_string(raw_row.get("control_path"))
+        presentation_state = _normalize_optional_string(raw_row.get("presentation_state"))
+        if control_path == CONTROL_PATH_MANAGED:
+            managed_sessions.append(_resolved_engine_managed_session_row(raw_row=raw_row, phase_overlay=phase_overlay))
+        elif control_path == CONTROL_PATH_UNMANAGED or presentation_state == CONTROL_PATH_UNMANAGED:
+            unmanaged_processes.append(_resolved_engine_unmanaged_process_row(raw_row))
+
+    unmanaged_processes.sort(
+        key=lambda row: _parse_rfc3339(row.get("started_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    return managed_sessions, unmanaged_processes
+
+
 def _collect_unmanaged_processes_from_engine_status(engine_status: dict[str, Any]) -> list[dict[str, Any]]:
     payload = _engine_status_payload(engine_status)
     raw_rows = payload.get("unmanaged_session_bindings")
@@ -3056,11 +3211,18 @@ def _collect_managed_session_sources(
     if fast:
         bridge_sessions: list[dict[str, Any]] = []
         orphan_bridges: list[dict[str, Any]] = []
-        process_sessions = _collect_managed_sessions_from_engine_status(
+        resolved_sessions = _collect_resolved_sessions_from_engine_status(
             engine_status,
             phase_overlay=phase_overlay,
         )
-        unmanaged_processes = _collect_unmanaged_processes_from_engine_status(engine_status)
+        if resolved_sessions is not None:
+            process_sessions, unmanaged_processes = resolved_sessions
+        else:
+            process_sessions = _collect_managed_sessions_from_engine_status(
+                engine_status,
+                phase_overlay=phase_overlay,
+            )
+            unmanaged_processes = _collect_unmanaged_processes_from_engine_status(engine_status)
     else:
         with _process_snapshot_scope():
             provider_processes = _scan_provider_processes()
