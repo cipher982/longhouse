@@ -9,7 +9,7 @@ const props: ValueProp[] = [
     action: "Import once",
     title: "Every session lands in one timeline",
     description:
-      "Bring Claude, Codex, and Antigravity sessions into a searchable archive immediately. Legacy Gemini imports remain searchable.",
+      "Bring Claude, Codex, Antigravity, and OpenCode sessions into a searchable archive immediately. Legacy Gemini imports remain searchable.",
   },
   {
     action: "Launch through Longhouse",

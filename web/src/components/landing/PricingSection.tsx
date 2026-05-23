@@ -40,7 +40,7 @@ export function PricingSection() {
       features: [
         "Run it on your laptop first, or on a VPS / Mac mini / homelab box for durability",
         "Free and open source",
-        "Import existing Claude, Codex, Antigravity, and legacy Gemini sessions immediately",
+        "Import existing Claude, Codex, Antigravity, OpenCode, and legacy Gemini sessions immediately",
         "Browser, CLI, and /api/agents/* included",
       ],
       ctaText: "Self-Host Free",

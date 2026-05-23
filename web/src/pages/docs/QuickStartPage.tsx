@@ -52,7 +52,7 @@ export default function QuickStartPage() {
       <h2>3. Find one prior session</h2>
       <p>
         Use the timeline or search to find one real past session. If you have
-        used Claude Code, Codex, Antigravity, or legacy Gemini CLI on this machine, Longhouse will
+        used Claude Code, Codex, Antigravity, OpenCode, or legacy Gemini CLI on this machine, Longhouse will
         import your sessions during setup.
       </p>
       <div className="docs-callout">
@@ -79,16 +79,17 @@ export default function QuickStartPage() {
         reachable later:
       </p>
       <CodeBlock title="terminal">
-        {`longhouse claude    # Claude Code with control channel
-longhouse codex     # Codex CLI with control channel
-longhouse antigravity # Antigravity CLI with archive + phase hooks`}
+        {`longhouse claude       # Claude Code with control channel
+longhouse codex        # Codex CLI with control channel
+longhouse antigravity  # Antigravity CLI, managed observe-only
+longhouse opencode     # OpenCode, managed observe-only`}
       </CodeBlock>
       <p>
         When Longhouse launches the session, it owns the session record and
         local observation path. Claude is the strongest managed path today, and{" "}
         <code>longhouse codex</code> also keeps a Codex session steerable.
-        Antigravity is the new Google path and starts as managed observe-only:
-        archive, transcript, and phase signals without remote send controls.
+        Antigravity and OpenCode start as managed observe-only: archive,
+        transcript, and phase signals without remote send controls yet.
       </p>
       <div className="docs-callout">
         <p>
@@ -96,8 +97,8 @@ longhouse antigravity # Antigravity CLI with archive + phase hooks`}
           but managed sessions keep Longhouse ownership of the launch and
           observation path. Use <code>longhouse claude</code> or{" "}
           <code>longhouse codex</code> for steerable sessions, and{" "}
-          <code>longhouse antigravity</code> for managed Google CLI archive
-          and phase signals.
+          <code>longhouse antigravity</code> or <code>longhouse opencode</code>{" "}
+          for managed observe-only archive and signals.
         </p>
       </div>
 

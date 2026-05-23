@@ -29,7 +29,7 @@ Use Longhouse in product copy. Keep Zerg internal.
 ## Product Thesis
 
 1. **Session sync and memory are table stakes.**
-   Users should be able to pull up any relevant Claude, Codex, or Gemini session from the web or CLI without hunting through local logs.
+   Users should be able to pull up any relevant Claude, Codex, Antigravity, or OpenCode session from the web or CLI without hunting through local logs.
 
 2. **The wedge is remote control over real sessions running on user-owned machines.**
    The product becomes compelling when the user can steer work after launch, not just read a transcript.
@@ -127,7 +127,7 @@ Longhouse is not:
 
 ### Core
 
-- session ingest for Claude Code, Codex CLI, and Gemini CLI
+- session ingest for Claude Code, Codex CLI, Antigravity CLI, and OpenCode (legacy Gemini imports stay searchable)
 - timeline, search, session detail, and recall
 - canonical `/api/agents/*` machine surface plus CLI parity
 - managed-local launch and remote control on user-owned machines

@@ -50,7 +50,7 @@ export function HeroSection() {
         </h1>
 
         <p className="landing-hero-subhead">
-          Longhouse captures every Claude, Codex, and Antigravity session from your
+          Longhouse captures every Claude, Codex, Antigravity, and OpenCode session from your
           machines — searchable on the web, one glance away on your phone.
         </p>
 
