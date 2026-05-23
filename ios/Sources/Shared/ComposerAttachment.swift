@@ -29,18 +29,23 @@ final class ComposerAttachmentStore: ObservableObject {
     /// already be compressed (PhotosPicker hands us decoded image data) but
     /// we re-encode through ImageCompression for size + dimension control.
     func ingest(rawImages: [(filename: String, data: Data)]) async {
+        guard !isProcessing else {
+            errorMessage = "Still processing previous selection — try again in a moment."
+            return
+        }
         guard slotsLeft > 0 else {
             errorMessage = "Max \(ComposerAttachmentLimits.maxAttachments) attachments."
             return
         }
         isProcessing = true
         defer { isProcessing = false }
-        let toProcess = Array(rawImages.prefix(slotsLeft))
-        for raw in toProcess {
+        for raw in rawImages {
+            guard attachments.count < ComposerAttachmentLimits.maxAttachments else { break }
             do {
                 let compressed = try await Task.detached(priority: .userInitiated) {
                     try ImageCompression.compress(raw.data)
                 }.value
+                guard attachments.count < ComposerAttachmentLimits.maxAttachments else { break }
                 if compressed.data.count > ComposerAttachmentLimits.maxBytes {
                     let kb = compressed.data.count / 1024
                     errorMessage = "\(raw.filename) is still \(kb) KB after compression (max 2 MB)."

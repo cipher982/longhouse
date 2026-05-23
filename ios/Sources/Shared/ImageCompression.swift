@@ -1,8 +1,6 @@
 import Foundation
 import UIKit
 import ImageIO
-import MobileCoreServices
-import UniformTypeIdentifiers
 
 /// Compressed image payload destined for the multipart upload.
 struct CompressedImage: Sendable {
@@ -36,36 +34,27 @@ enum ImageCompression {
     /// adding a webp encode for iOS is not worth the dependency here.
     static func compress(_ data: Data) throws -> CompressedImage {
         guard !data.isEmpty else { throw ImageCompressionError.empty }
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-              let cg = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
             throw ImageCompressionError.decodeFailed
         }
-        let original = UIImage(cgImage: cg)
-        let scaled = downscale(original)
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: Int(maxLongEdge),
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            throw ImageCompressionError.decodeFailed
+        }
+        let scaled = UIImage(cgImage: cg)
         guard let jpeg = scaled.jpegData(compressionQuality: jpegQuality) else {
             throw ImageCompressionError.encodeFailed
         }
         return CompressedImage(
             data: jpeg,
             mimeType: "image/jpeg",
-            width: Int(scaled.size.width * scaled.scale),
-            height: Int(scaled.size.height * scaled.scale),
+            width: cg.width,
+            height: cg.height,
         )
-    }
-
-    private static func downscale(_ image: UIImage) -> UIImage {
-        let pixelWidth = image.size.width * image.scale
-        let pixelHeight = image.size.height * image.scale
-        let longest = max(pixelWidth, pixelHeight)
-        guard longest > maxLongEdge else { return image }
-        let scale = maxLongEdge / longest
-        let target = CGSize(width: pixelWidth * scale, height: pixelHeight * scale)
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1
-        format.opaque = false
-        let renderer = UIGraphicsImageRenderer(size: target, format: format)
-        return renderer.image { _ in
-            image.draw(in: CGRect(origin: .zero, size: target))
-        }
     }
 }

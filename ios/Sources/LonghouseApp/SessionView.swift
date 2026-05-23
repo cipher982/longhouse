@@ -30,6 +30,7 @@ struct SessionView: View {
     @FocusState private var composerFocused: Bool
     @StateObject private var attachmentStore = ComposerAttachmentStore()
     @State private var pickerSelection: [PhotosPickerItem] = []
+    @State private var isLoadingPickerItems: Bool = false
 
     init(
         sessionId: String,
@@ -307,7 +308,7 @@ struct SessionView: View {
                             .foregroundStyle(attachmentStore.slotsLeft > 0 ? Color.accentColor : Color.secondary.opacity(0.3))
                     }
                     .frame(width: 32, height: 32)
-                    .disabled(attachmentStore.slotsLeft <= 0 || attachmentStore.isProcessing || viewModel.isSending)
+                    .disabled(attachmentStore.slotsLeft <= 0 || attachmentStore.isProcessing || isLoadingPickerItems || viewModel.isSending)
                     .accessibilityLabel("Attach images")
                     .accessibilityIdentifier("session-chat-attach")
                 }
@@ -332,11 +333,11 @@ struct SessionView: View {
                             .foregroundStyle(composerHasContent ? Color.accentColor : Color.secondary.opacity(0.3))
                     }
                 }
-                .disabled(!composerHasContent || viewModel.isSending || viewModel.isDrafting || attachmentStore.isProcessing)
+                .disabled(!composerHasContent || viewModel.isSending || viewModel.isDrafting || attachmentStore.isProcessing || isLoadingPickerItems)
                 .accessibilityLabel(sendAccessibilityLabel)
                 .accessibilityIdentifier("session-chat-send")
                 .contextMenu {
-                    if showSecondaryQueueAction {
+                    if showSecondaryQueueAction && attachmentStore.isEmpty {
                         Button {
                             Task { await send(intent: "steer") }
                         } label: {
@@ -356,15 +357,32 @@ struct SessionView: View {
         .onChange(of: pickerSelection) { _, items in
             guard !items.isEmpty else { return }
             Task {
+                await MainActor.run { isLoadingPickerItems = true }
                 var raw: [(filename: String, data: Data)] = []
+                var loadFailures = 0
+                for _ in items.indices {
+                    raw.append((filename: "", data: Data()))
+                }
                 for (idx, item) in items.enumerated() {
-                    if let data = try? await item.loadTransferable(type: Data.self) {
-                        let name = item.itemIdentifier.map { "ios-\($0).jpg" } ?? "ios-\(idx).jpg"
-                        raw.append((filename: name, data: data))
+                    do {
+                        if let data = try await item.loadTransferable(type: Data.self) {
+                            raw[idx] = (filename: "image-\(UUID().uuidString).jpg", data: data)
+                        } else {
+                            loadFailures += 1
+                        }
+                    } catch {
+                        loadFailures += 1
                     }
                 }
-                await attachmentStore.ingest(rawImages: raw)
-                await MainActor.run { pickerSelection = [] }
+                let loaded = raw.filter { !$0.data.isEmpty }
+                await attachmentStore.ingest(rawImages: loaded)
+                await MainActor.run {
+                    if loadFailures > 0 && loaded.isEmpty {
+                        attachmentStore.errorMessage = "Could not load selected image."
+                    }
+                    pickerSelection = []
+                    isLoadingPickerItems = false
+                }
             }
         }
     }
@@ -467,6 +485,7 @@ struct SessionView: View {
     private func send(intent: String? = nil) async {
         guard !viewModel.isSending else { return }
         guard !attachmentStore.isProcessing else { return }
+        guard !isLoadingPickerItems else { return }
         let trimmed = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         let pendingAttachments = attachmentStore.snapshot()
         guard !trimmed.isEmpty || !pendingAttachments.isEmpty else { return }
@@ -496,6 +515,11 @@ struct SessionView: View {
                     }
                 }
             }
+        } else if !pendingAttachments.isEmpty {
+            // Send failed: re-ingest the compressed attachments so the user
+            // can retry without re-picking from Photos.
+            let raw = pendingAttachments.map { (filename: $0.filename, data: $0.data) }
+            await attachmentStore.ingest(rawImages: raw)
         }
     }
 

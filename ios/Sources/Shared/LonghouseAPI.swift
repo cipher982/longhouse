@@ -362,14 +362,22 @@ struct LonghouseAPI: Sendable {
         }
 
         for attachment in attachments {
+            let safeFilename = sanitizeMultipartFilename(attachment.filename)
             body.append("\(dashes)\(boundary)\(crlf)".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"images\"; filename=\"\(attachment.filename)\"\(crlf)".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"attachments\"; filename=\"\(safeFilename)\"\(crlf)".data(using: .utf8)!)
             body.append("Content-Type: \(attachment.mimeType)\(crlf)\(crlf)".data(using: .utf8)!)
             body.append(attachment.data)
             body.append(crlf.data(using: .utf8)!)
         }
         body.append("\(dashes)\(boundary)\(dashes)\(crlf)".data(using: .utf8)!)
         return body
+    }
+
+    private static func sanitizeMultipartFilename(_ name: String) -> String {
+        let stripped = name.replacingOccurrences(of: "\"", with: "")
+            .replacingOccurrences(of: "\r", with: "")
+            .replacingOccurrences(of: "\n", with: "")
+        return stripped.isEmpty ? "image.jpg" : stripped
     }
 
     /// Extract `{"detail": {"error_code": ..., "message": ...}}` from an

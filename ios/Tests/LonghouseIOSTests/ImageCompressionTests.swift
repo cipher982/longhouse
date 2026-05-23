@@ -74,7 +74,7 @@ struct MultipartBodyTests {
         #expect(s.contains("name=\"intent\""))
         #expect(s.contains("name=\"client_request_id\""))
         #expect(s.contains("ios-abc"))
-        #expect(s.contains("name=\"images\"; filename=\"shot.jpg\""))
+        #expect(s.contains("name=\"attachments\"; filename=\"shot.jpg\""))
         #expect(s.contains("Content-Type: image/jpeg"))
         #expect(s.contains("--Boundary-FIXED--"))
     }
