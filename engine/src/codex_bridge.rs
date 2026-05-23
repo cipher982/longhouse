@@ -1031,8 +1031,9 @@ async fn handle_ipc_steer(
         attachments,
     )
     .await?;
+    let had_attachments = !fetched.is_empty();
     let input = crate::codex_attachments::build_user_input_items(text, &fetched);
-    send_request_with_runtime(
+    let result = send_request_with_runtime(
         client,
         "turn/steer",
         json!({
@@ -1043,8 +1044,11 @@ async fn handle_ipc_steer(
         config,
         context,
     )
-    .await
-    .map(|_| ())
+    .await;
+    if result.is_err() && had_attachments {
+        crate::codex_attachments::cleanup_session_tmpdir(&context.state.session_id);
+    }
+    result.map(|_| ())
 }
 
 async fn handle_ipc_turn_start(
@@ -1063,8 +1067,9 @@ async fn handle_ipc_turn_start(
         attachments,
     )
     .await?;
+    let had_attachments = !fetched.is_empty();
     let input = crate::codex_attachments::build_user_input_items(text, &fetched);
-    let response = send_request_with_runtime(
+    let response = match send_request_with_runtime(
         client,
         "turn/start",
         json!({
@@ -1074,7 +1079,16 @@ async fn handle_ipc_turn_start(
         config,
         context,
     )
-    .await?;
+    .await
+    {
+        Ok(value) => value,
+        Err(err) => {
+            if had_attachments {
+                crate::codex_attachments::cleanup_session_tmpdir(&context.state.session_id);
+            }
+            return Err(err);
+        }
+    };
     let turn_id = extract_string(&response, &["turn", "id"])
         .context("missing turn.id in IPC turn/start response")?;
     let turn_status =

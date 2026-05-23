@@ -118,7 +118,17 @@ def store_attachment_blob(
         original_byte_size=original_byte_size,
     )
     db.add(row)
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        # Row never landed; remove the just-written blob so disk and metadata
+        # don't drift. The reaper can't see this blob — there's no row to join.
+        db.rollback()
+        try:
+            blob_path.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("attachment store: failed to unlink orphan blob %s", blob_path, exc_info=True)
+        raise
     db.refresh(row)
     return _to_stored(row)
 
