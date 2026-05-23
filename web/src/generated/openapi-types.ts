@@ -3019,6 +3019,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sessions/{session_id}/inputs-multipart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Session Input With Attachments
+         * @description Send a user input with one or more image attachments.
+         *
+         *     v1 only supports the ``auto`` intent. ``steer`` would need the live
+         *     steer chain to accept attachments and would race the dispatch lock
+         *     that this route already acquires for the regular send path.
+         *     Queue-with-attachments is also rejected because the queued-input
+         *     drain path doesn't load attachments yet.
+         */
+        post: operations["create_session_input_with_attachments_sessions__session_id__inputs_multipart_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/sessions/{session_id}/inputs/{input_id}/attachments/{attachment_id}/blob": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fetch Attachment Blob
+         * @description Stream a single attachment blob to the engine.
+         *
+         *     Always returns 404 on any cross-row mismatch (wrong session, wrong
+         *     input). The engine still verifies sha256 before handing the path to
+         *     Codex — the 404 is a defense-in-depth boundary, not a primary
+         *     integrity contract.
+         */
+        get: operations["fetch_attachment_blob_agents_sessions__session_id__inputs__input_id__attachments__attachment_id__blob_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/timeline/sessions/stream": {
         parameters: {
             query?: never;
@@ -5080,6 +5131,23 @@ export interface components {
              * @default
              */
             message: string;
+        };
+        /** Body_create_session_input_with_attachments_sessions__session_id__inputs_multipart_post */
+        Body_create_session_input_with_attachments_sessions__session_id__inputs_multipart_post: {
+            /**
+             * Text
+             * @default
+             */
+            text: string;
+            /**
+             * Intent
+             * @default auto
+             */
+            intent: string;
+            /** Client Request Id */
+            client_request_id?: string | null;
+            /** Attachments */
+            attachments: string[];
         };
         /** Body_upload_current_user_avatar_users_me_avatar_post */
         Body_upload_current_user_avatar_users_me_avatar_post: {
@@ -8533,6 +8601,12 @@ export interface components {
              * @default false
              */
             can_resume: boolean;
+            /**
+             * Attach Images
+             * @description True when the session can accept image attachments on input (codex_app_server only)
+             * @default false
+             */
+            attach_images: boolean;
         };
         /** SessionControlResponse */
         SessionControlResponse: {
@@ -15788,6 +15862,77 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionInterruptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_session_input_with_attachments_sessions__session_id__inputs_multipart_post: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_create_session_input_with_attachments_sessions__session_id__inputs_multipart_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionInputResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fetch_attachment_blob_agents_sessions__session_id__inputs__input_id__attachments__attachment_id__blob_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+                input_id: number;
+                attachment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

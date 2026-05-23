@@ -103,6 +103,7 @@ protocol SessionWorkspaceClient: Sendable {
         snapshotEventId: Int?
     ) async throws -> SessionMobileTailResponse
     func sendInput(id: String, text: String, intent: String, clientRequestId: String?) async throws -> SessionInputResponse
+    func sendInputMultipart(id: String, text: String, attachments: [ComposerAttachment], clientRequestId: String?) async throws -> SessionInputResponse
     func draftReply(id: String, maxChars: Int) async throws -> DraftReplyResponse
     func setSessionLoopMode(id: String, loopMode: SessionLoopMode) async throws -> LoopModeResponse
     func postRenderBeacon(_ payload: RenderBeaconReporter.Payload) async
@@ -303,6 +304,72 @@ struct LonghouseAPI: Sendable {
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
         return try JSONDecoder.snakeCase.decode(APISessionInputResponse.self, from: data).sessionInputResponse
+    }
+
+    /// Multipart POST for inputs that include image attachments. Server route
+    /// only accepts `intent=auto` in v1 (steer/queue must use the JSON endpoint).
+    func sendInputMultipart(
+        id: String,
+        text: String,
+        attachments: [ComposerAttachment],
+        clientRequestId: String? = nil
+    ) async throws -> SessionInputResponse {
+        let boundary = "Boundary-\(UUID().uuidString)"
+        var request = URLRequest(url: baseURL.appendingPathComponent("/api/sessions/\(id)/inputs-multipart"))
+        request.httpMethod = "POST"
+        request.addValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = Self.buildMultipartBody(
+            boundary: boundary,
+            text: text,
+            intent: "auto",
+            clientRequestId: clientRequestId,
+            attachments: attachments,
+        )
+
+        let (data, httpResponse) = try await data(for: request)
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            if let structured = Self.parseStructuredError(statusCode: httpResponse.statusCode, data: data) {
+                throw structured
+            }
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
+        return try JSONDecoder.snakeCase.decode(APISessionInputResponse.self, from: data).sessionInputResponse
+    }
+
+    static func buildMultipartBody(
+        boundary: String,
+        text: String,
+        intent: String,
+        clientRequestId: String?,
+        attachments: [ComposerAttachment]
+    ) -> Data {
+        var body = Data()
+        let crlf = "\r\n"
+        let dashes = "--"
+
+        func appendField(name: String, value: String) {
+            body.append("\(dashes)\(boundary)\(crlf)".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"\(name)\"\(crlf)\(crlf)".data(using: .utf8)!)
+            body.append(value.data(using: .utf8) ?? Data())
+            body.append(crlf.data(using: .utf8)!)
+        }
+
+        appendField(name: "text", value: text)
+        appendField(name: "intent", value: intent)
+        if let clientRequestId, !clientRequestId.isEmpty {
+            appendField(name: "client_request_id", value: clientRequestId)
+        }
+
+        for attachment in attachments {
+            body.append("\(dashes)\(boundary)\(crlf)".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"images\"; filename=\"\(attachment.filename)\"\(crlf)".data(using: .utf8)!)
+            body.append("Content-Type: \(attachment.mimeType)\(crlf)\(crlf)".data(using: .utf8)!)
+            body.append(attachment.data)
+            body.append(crlf.data(using: .utf8)!)
+        }
+        body.append("\(dashes)\(boundary)\(dashes)\(crlf)".data(using: .utf8)!)
+        return body
     }
 
     /// Extract `{"detail": {"error_code": ..., "message": ...}}` from an

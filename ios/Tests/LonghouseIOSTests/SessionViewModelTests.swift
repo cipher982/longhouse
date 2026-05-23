@@ -715,6 +715,10 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
         return sendResponse
     }
 
+    func sendInputMultipart(id: String, text: String, attachments: [ComposerAttachment], clientRequestId: String?) async throws -> SessionInputResponse {
+        try await sendInput(id: id, text: text, intent: "auto", clientRequestId: clientRequestId)
+    }
+
     func draftReply(id: String, maxChars: Int) async throws -> DraftReplyResponse {
         DraftReplyResponse(draftText: "Draft", model: "test", generatedAt: "2026-05-02T20:00:00Z", basedOnEventIds: [])
     }
