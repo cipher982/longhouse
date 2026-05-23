@@ -23,6 +23,7 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from zerg import managed_phase_contract
 from zerg.cli import local_health as local_health_cli
+from zerg.cli import local_health_fast
 from zerg.cli.main import app
 from zerg.services import local_health as local_health_service
 from zerg.services import session_runtime
@@ -2270,6 +2271,74 @@ def test_collect_local_health_fast_uses_engine_status_without_process_scan(monke
     assert snapshot["unmanaged_processes"][0]["liveness_model"] == "engine_status"
 
 
+def test_collect_local_health_fast_filters_managed_codex_engine_bindings(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr(
+        local_health_service,
+        "_compute_process_snapshot",
+        lambda: (_ for _ in ()).throw(AssertionError("fast local-health must not scan processes")),
+    )
+    now = datetime(2026, 5, 5, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(local_health_service, "_utc_now", lambda: now)
+    managed_session_id = "55c61956-7554-4713-8c9b-fb0fa6164c2c"
+    managed_thread_id = "019e5554-458c-7062-a2ff-42a5730af960"
+    managed_thread_path = tmp_path / ".codex" / "sessions" / "rollout.jsonl"
+    state_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
+    state_dir.mkdir(parents=True)
+    (state_dir / f"{managed_session_id}.json").write_text(
+        json.dumps(
+            {
+                "session_id": managed_session_id,
+                "thread_id": managed_thread_id,
+                "thread_path": str(managed_thread_path),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(local_health_service, "_codex_bridge_state_dir", lambda _base_dir: state_dir)
+    _write_engine_status(
+        tmp_path,
+        age_seconds=1,
+        payload={
+            "managed_sessions": [
+                {
+                    "session_id": managed_session_id,
+                    "provider": "codex",
+                    "state": "attached",
+                    "phase": "thinking",
+                    "observed_at": "2026-05-05T11:59:58Z",
+                }
+            ],
+            "unmanaged_session_bindings": [
+                {
+                    "machine_id": "david010",
+                    "provider": "codex",
+                    "provider_session_id": managed_thread_id,
+                    "pid": 48145,
+                    "process_start_time": "2026-05-05T11:45:00Z",
+                    "source_path": str(managed_thread_path),
+                    "observed_at": "2026-05-05T11:59:59Z",
+                },
+                {
+                    "machine_id": "david010",
+                    "provider": "claude",
+                    "provider_session_id": "real-unmanaged",
+                    "pid": 48146,
+                    "process_start_time": "2026-05-05T11:46:00Z",
+                    "source_path": "/Users/test/.claude/projects/session.jsonl",
+                    "observed_at": "2026-05-05T11:59:59Z",
+                },
+            ],
+        },
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path, fast=True)
+
+    assert [row["provider"] for row in snapshot["unmanaged_processes"]] == ["claude"]
+    assert snapshot["unmanaged_processes"][0]["provider_session_id"] == "real-unmanaged"
+
+
 def test_local_health_menubar_requires_installed_app(monkeypatch, tmp_path: Path):
     runner = CliRunner()
     calls: list[dict[str, object]] = []
@@ -2463,6 +2532,23 @@ def test_update_info_present_in_json_cli_output(monkeypatch, tmp_path: Path):
     assert payload["update_info"]["latest_version"] == "0.1.9"
     assert payload["update_info"]["upgrade_command"] == "uv tool upgrade longhouse"
     assert payload["update_info"]["supported"] is True
+
+
+def test_fast_local_health_entrypoint_emits_json(monkeypatch, capsys):
+    captured: dict[str, object] = {}
+
+    def fake_collect(claude_dir: str | None, *, fast: bool) -> dict[str, object]:
+        captured["claude_dir"] = claude_dir
+        captured["fast"] = fast
+        return {"health_state": "healthy", "severity": "green"}
+
+    monkeypatch.setattr(local_health_fast, "_collect", fake_collect)
+
+    exit_code = local_health_fast.main(["--fast", "--json", "--claude-dir", "/tmp/claude"])
+
+    assert exit_code == 0
+    assert captured == {"claude_dir": "/tmp/claude", "fast": True}
+    assert json.loads(capsys.readouterr().out) == {"health_state": "healthy", "severity": "green"}
 
 
 # ----------------------------------------------------------------------------
