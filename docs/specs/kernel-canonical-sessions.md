@@ -48,7 +48,8 @@ bridge, transcript, and hook evidence into session ownership.
 - Server heartbeat ingest can consume resolved session rows as the primary
   machine session identity signal while still accepting older engines.
 - Legacy `managed_sessions` and `unmanaged_session_bindings` remain accepted
-  during transition, but are no longer the preferred read contract.
+  only by compatibility/deep diagnostic paths during transition. Fast
+  local-health and the menu bar do not read them as a session identity fallback.
 - Golden fixtures cover `engine-status.json` and
   `longhouse-local-health --fast --json` with only `payload.sessions` present.
 - Dogfood shows managed Codex sessions as managed and a deliberately bare
@@ -71,6 +72,8 @@ bridge, transcript, and hook evidence into session ownership.
 
 - Fast local-health reads only `payload.sessions` for session identity.
 - Legacy array fallback is removed from the fast/menu-bar path.
+- Missing `payload.sessions` is a yellow old-engine contract state; present
+  but invalid `payload.sessions` is a separate corrupt-contract state.
 - Deep/process-scan logic remains available for explicit diagnostics.
 - Add fixtures where `engine-status.json` contains `sessions` but no legacy
   arrays.
