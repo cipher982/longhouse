@@ -51,7 +51,7 @@ export default function MachineAPIPage() {
 #   limit              - max results (default 50)
 #   offset             - pagination offset
 #   project            - filter by project name
-#   provider           - filter by provider (claude, codex, antigravity, gemini)
+#   provider           - filter by provider (claude, codex, antigravity, opencode; gemini for legacy archives)
 #   environment        - filter by environment (production, development, test, e2e)
 #   device_id          - filter by device ID
 #   days_back          - look back N days (default 14, max 90)

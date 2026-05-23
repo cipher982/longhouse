@@ -27,7 +27,7 @@ export default function OverviewPage() {
 
       <h2>What Longhouse Does</h2>
       <p>
-        Longhouse puts Claude Code, Codex CLI, and Antigravity CLI sessions into one
+        Longhouse puts Claude Code, Codex CLI, Antigravity CLI, and OpenCode sessions into one
         searchable timeline. Bare provider runs land as unmanaged history.
         When you launch a session through Longhouse, it becomes managed, so you
         can message, tail, or continue it later from the browser, CLI, or API.
@@ -98,7 +98,7 @@ export default function OverviewPage() {
         </Link>
         <Link to="/docs/integrations" className="docs-overview-card">
           <h3>Integrations</h3>
-          <p>Claude Code, Codex CLI, Antigravity CLI, and more.</p>
+          <p>Claude Code, Codex CLI, Antigravity CLI, OpenCode, and more.</p>
         </Link>
         <Link to="/docs/configuration" className="docs-overview-card">
           <h3>Configuration</h3>

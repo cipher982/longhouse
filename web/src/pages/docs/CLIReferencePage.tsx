@@ -25,20 +25,25 @@ longhouse serve --port 9090    # custom port
 longhouse serve --demo         # start with demo data`}
       </CodeBlock>
 
-      <h3>longhouse claude / codex</h3>
+      <h3>longhouse claude / codex / antigravity / opencode</h3>
       <p>
         Launch a managed provider CLI session with a Longhouse control channel.
         The session runs in your terminal and stays reachable from other
         surfaces.
       </p>
       <CodeBlock title="terminal">
-        {`longhouse claude               # start Claude Code
-longhouse codex                # start Codex CLI`}
+        {`longhouse claude               # start Claude Code (steerable)
+longhouse codex                # start Codex CLI (steerable)
+longhouse antigravity          # start Antigravity CLI (managed observe-only)
+longhouse opencode             # start OpenCode (managed observe-only)`}
       </CodeBlock>
       <p>
         Use these as the default launch path for new work. Bare{" "}
-        <code>claude</code> and <code>codex</code> runs still import into the
-        timeline, but they remain unmanaged history.
+        <code>claude</code>, <code>codex</code>, <code>antigravity</code>, and{" "}
+        <code>opencode</code> runs still import into the timeline, but they
+        remain unmanaged history. Claude and Codex support full live control;{" "}
+        Antigravity and OpenCode are managed observe-only today (archive,
+        transcript, and phase signals without remote send controls).
       </p>
 
       <h3>longhouse ship</h3>

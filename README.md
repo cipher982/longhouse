@@ -1,6 +1,6 @@
 # Longhouse
 
-Mission control for CLI agent sessions running on machines you own. One searchable timeline for Claude Code, Codex, and Antigravity sessions, with live control where the provider CLI supports it. Legacy Gemini sessions remain searchable.
+Mission control for CLI agent sessions running on machines you own. One searchable timeline for Claude Code, Codex, Antigravity, and OpenCode sessions, with live control where the provider CLI supports it. Legacy Gemini sessions remain searchable.
 
 Works on your laptop. Shines on a machine that stays on.
 
@@ -27,11 +27,13 @@ All three install the same product. The shell installer also drops `Longhouse.ap
 ## First Session
 
 ```bash
-longhouse claude     # managed session, steerable later
-longhouse codex      # same, for Codex CLI
+longhouse claude       # managed session, steerable later
+longhouse codex        # same, for Codex CLI
+longhouse antigravity  # managed observe-only launch
+longhouse opencode     # managed observe-only launch
 ```
 
-Bare `claude` and `codex` still get ingested into the timeline — they just stay unmanaged (searchable, not steerable).
+Bare `claude`, `codex`, `antigravity`, and `opencode` still get ingested into the timeline — they just stay unmanaged (searchable, not steerable).
 
 The web UI lives at `http://localhost:8080`. The same surface is scriptable:
 
@@ -103,7 +105,7 @@ Issues: <https://github.com/cipher982/longhouse/issues>
 
 ## Status
 
-Alpha. Actively developed. Claude Code, Codex, and Antigravity sessions sync today; legacy Gemini imports remain supported. Managed launch is live for Claude, Codex, and Antigravity, and the native iOS companion can page on `needs_user` / `blocked` once APNs is configured.
+Alpha. Actively developed. Claude Code, Codex, Antigravity, and OpenCode sessions sync today; legacy Gemini imports remain supported. Managed launch is live for Claude, Codex, Antigravity, and OpenCode (Antigravity and OpenCode are observe-only at the live-control layer), and the native iOS companion can page on `needs_user` / `blocked` once APNs is configured.
 
 Built by [David Rose](https://github.com/cipher982). Apache-2.0.
 

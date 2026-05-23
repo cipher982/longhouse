@@ -43,7 +43,7 @@ export default function SearchPage() {
       </p>
       <p>
         Use the sidebar filters to narrow by date range, provider (Claude,
-        Codex, Antigravity, Gemini), or project.
+        Codex, Antigravity, OpenCode; Gemini for legacy archives), or project.
       </p>
 
       <h2>Search from the API</h2>
