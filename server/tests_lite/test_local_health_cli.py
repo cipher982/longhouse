@@ -2427,6 +2427,34 @@ def test_collect_local_health_fast_flags_missing_resolved_sessions_contract(monk
     assert snapshot["unmanaged_processes"] == []
 
 
+def test_collect_local_health_fast_flags_invalid_resolved_sessions_contract(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr(
+        local_health_service,
+        "_compute_process_snapshot",
+        lambda: (_ for _ in ()).throw(AssertionError("fast local-health must not scan processes")),
+    )
+    now = datetime(2026, 5, 5, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(local_health_service, "_utc_now", lambda: now)
+    _write_engine_status(
+        tmp_path,
+        age_seconds=1,
+        payload={"sessions": {"not": "a-list"}},
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path, fast=True)
+
+    assert snapshot["collection_tier"] == "fast"
+    assert snapshot["health_state"] == "degraded"
+    assert snapshot["severity"] == "yellow"
+    assert snapshot["headline"] == "Longhouse local status has invalid session data"
+    assert "engine_status_sessions_invalid" in snapshot["reasons"]
+    assert snapshot["managed_summary"]["canonical_sessions_invalid"] is True
+    assert snapshot["managed_sessions"] == []
+    assert snapshot["unmanaged_processes"] == []
+
+
 def test_collect_local_health_fast_sessions_only_golden(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))

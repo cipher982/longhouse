@@ -2099,10 +2099,21 @@ def _collect_managed_sessions_from_engine_status(
 
 def _engine_status_resolved_sessions(engine_status: dict[str, Any]) -> list[Any] | None:
     payload = _engine_status_payload(engine_status)
+    if "sessions" not in payload:
+        return None
     raw_rows = payload.get("sessions")
     if not isinstance(raw_rows, list):
         return None
     return raw_rows
+
+
+def _engine_status_resolved_sessions_issue(engine_status: dict[str, Any]) -> str | None:
+    payload = _engine_status_payload(engine_status)
+    if "sessions" not in payload:
+        return "missing"
+    if not isinstance(payload.get("sessions"), list):
+        return "invalid"
+    return None
 
 
 def _resolved_session_mapping(raw_row: Any, field_name: str) -> Mapping[str, Any]:
@@ -2240,52 +2251,19 @@ def _collect_resolved_sessions_from_engine_status(
     return managed_sessions, unmanaged_processes
 
 
-def _resolved_sessions_missing_summary() -> dict[str, Any]:
-    return {
+def _resolved_sessions_unusable_summary(issue: str | None) -> dict[str, Any]:
+    summary = {
         "attached_count": 0,
         "detached_count": 0,
         "degraded_count": 0,
         "orphan_bridge_count": 0,
         "latest_activity_at": None,
-        "canonical_sessions_missing": True,
     }
-
-
-def _collect_unmanaged_processes_from_engine_status(engine_status: dict[str, Any]) -> list[dict[str, Any]]:
-    payload = _engine_status_payload(engine_status)
-    raw_rows = payload.get("unmanaged_session_bindings")
-    if not isinstance(raw_rows, list):
-        return []
-
-    processes: list[dict[str, Any]] = []
-    for raw_row in raw_rows:
-        if not isinstance(raw_row, Mapping):
-            continue
-        cwd = _normalize_optional_string(raw_row.get("cwd"))
-        observed_at = _normalize_optional_string(raw_row.get("observed_at"))
-        started_at = _normalize_optional_string(raw_row.get("process_start_time")) or observed_at
-        processes.append(
-            {
-                "provider": _normalize_optional_string(raw_row.get("provider")),
-                "control_path": CONTROL_PATH_UNMANAGED,
-                "liveness_model": LIVENESS_MODEL_ENGINE_STATUS,
-                "provider_cli": None,
-                "pid": _normalize_optional_int(raw_row.get("pid")),
-                "workspace_label": Path(cwd).name if cwd else None,
-                "cwd": cwd,
-                "branch": None,
-                "started_at": started_at,
-                "provider_session_id": _normalize_optional_string(raw_row.get("provider_session_id")),
-                "source_path": _normalize_optional_string(raw_row.get("source_path")),
-                "observed_at": observed_at,
-            }
-        )
-
-    processes.sort(
-        key=lambda row: _parse_rfc3339(row.get("started_at")) or datetime.min.replace(tzinfo=timezone.utc),
-        reverse=True,
-    )
-    return processes
+    if issue == "invalid":
+        summary["canonical_sessions_invalid"] = True
+    else:
+        summary["canonical_sessions_missing"] = True
+    return summary
 
 
 def _merge_managed_sessions(
@@ -2577,6 +2555,7 @@ class _HealthClassificationContext:
     orphan_bridge_count: int
     unknown_managed_phase_count: int
     canonical_sessions_missing: bool
+    canonical_sessions_invalid: bool
     repair_action: str
 
 
@@ -2677,11 +2656,14 @@ def _add_canonical_session_reasons(
     actions: list[str],
     *,
     canonical_sessions_missing: bool,
+    canonical_sessions_invalid: bool,
 ) -> None:
-    if not canonical_sessions_missing:
-        return
-    reasons.append("engine_status_sessions_missing")
-    _with_action(actions, "Restart or repair Longhouse so the engine emits resolved sessions")
+    if canonical_sessions_missing:
+        reasons.append("engine_status_sessions_missing")
+        _with_action(actions, "Restart or repair Longhouse so the engine emits resolved sessions")
+    if canonical_sessions_invalid:
+        reasons.append("engine_status_sessions_invalid")
+        _with_action(actions, "Inspect engine-status.json or restart Longhouse")
 
 
 def _add_managed_session_reasons(
@@ -2847,9 +2829,10 @@ def _health_flags(
     managed_detached: int,
     unknown_managed_phase_count: int,
     canonical_sessions_missing: bool,
+    canonical_sessions_invalid: bool,
 ) -> tuple[bool, bool]:
     broken, degraded = _launch_health_flags(launch_state)
-    if canonical_sessions_missing:
+    if canonical_sessions_missing or canonical_sessions_invalid:
         degraded = True
     managed_broken, managed_degraded_flag = _managed_health_flags(
         orphan_bridge_count=orphan_bridge_count,
@@ -2944,6 +2927,8 @@ def _degraded_health_headline(
         headline = "Longhouse local status is aging"
     elif "engine_status_sessions_missing" in reasons:
         headline = "Longhouse local status needs a newer engine"
+    elif "engine_status_sessions_invalid" in reasons:
+        headline = "Longhouse local status has invalid session data"
     elif "managed_session_detached" in reasons:
         if managed_detached == 1 and managed_attached == 0:
             headline = "Managed session is running in background"
@@ -2987,6 +2972,7 @@ def _health_classification_context(
         orphan_bridge_count=int((managed_summary or {}).get("orphan_bridge_count") or 0),
         unknown_managed_phase_count=sum(1 for session in managed_sessions if _managed_phase_is_unknown(session.get("raw_phase"))),
         canonical_sessions_missing=bool((managed_summary or {}).get("canonical_sessions_missing")),
+        canonical_sessions_invalid=bool((managed_summary or {}).get("canonical_sessions_invalid")),
         repair_action=_repair_action_for_launch_readiness(launch_readiness),
     )
 
@@ -3031,6 +3017,7 @@ def _collect_health_reasons(
         reasons,
         actions,
         canonical_sessions_missing=context.canonical_sessions_missing,
+        canonical_sessions_invalid=context.canonical_sessions_invalid,
     )
     _add_spool_pending_reason(
         reasons,
@@ -3116,6 +3103,7 @@ def _classify_health(
         managed_detached=context.managed_detached,
         unknown_managed_phase_count=context.unknown_managed_phase_count,
         canonical_sessions_missing=context.canonical_sessions_missing,
+        canonical_sessions_invalid=context.canonical_sessions_invalid,
     )
 
     if broken:
@@ -3237,7 +3225,8 @@ def _collect_managed_session_sources(
         orphan_bridges: list[dict[str, Any]] = []
         resolved_sessions = _collect_resolved_sessions_from_engine_status(engine_status)
         if resolved_sessions is None:
-            return _resolved_sessions_missing_summary(), [], [], []
+            issue = _engine_status_resolved_sessions_issue(engine_status)
+            return _resolved_sessions_unusable_summary(issue), [], [], []
         process_sessions, unmanaged_processes = resolved_sessions
     else:
         with _process_snapshot_scope():
