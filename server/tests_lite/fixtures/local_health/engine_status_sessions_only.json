@@ -1,0 +1,100 @@
+{
+  "version": "0.1.16-dev+canonical",
+  "daemon_pid": 1234,
+  "last_ship_at": "2026-05-05T11:59:58Z",
+  "last_ship_attempt_at": "2026-05-05T11:59:58Z",
+  "last_ship_result": "ok",
+  "last_ship_latency_ms": 120,
+  "spool_pending_count": 0,
+  "spool_dead_count": 0,
+  "parse_error_count_1h": 0,
+  "consecutive_ship_failures": 0,
+  "ship_attempts_1h": 2,
+  "ship_successes_1h": 2,
+  "ship_rate_limited_1h": 0,
+  "ship_server_errors_1h": 0,
+  "ship_payload_rejections_1h": 0,
+  "ship_payload_too_large_1h": 0,
+  "ship_retryable_client_errors_1h": 0,
+  "ship_connect_errors_1h": 0,
+  "ship_attempts_10m": 1,
+  "ship_successes_10m": 1,
+  "ship_rate_limited_10m": 0,
+  "ship_server_errors_10m": 0,
+  "ship_retryable_client_errors_10m": 0,
+  "ship_connect_errors_10m": 0,
+  "disk_free_bytes": 21474836480,
+  "is_offline": false,
+  "recent_dead_letters": [],
+  "sessions": [
+    {
+      "session_id": "sess-managed-codex",
+      "provider": "codex",
+      "provider_session_id": "thread-codex",
+      "control_path": "managed",
+      "presentation_state": "managed_attached",
+      "state": "attached",
+      "phase": "thinking",
+      "tool_name": null,
+      "phase_observed_at": "2026-05-05T11:59:50Z",
+      "last_activity_at": "2026-05-05T11:59:58Z",
+      "workspace": {
+        "cwd": "/Users/test/git/zerg",
+        "label": "zerg",
+        "branch": "kernel-canonical-sessions"
+      },
+      "process": {
+        "pid": 4201,
+        "process_start_time": "2026-05-05T11:20:00Z",
+        "started_at": "2026-05-05T11:20:00Z"
+      },
+      "bridge": {
+        "bridge_pid": 4202,
+        "app_server_pid": 4203,
+        "heartbeat_at": "2026-05-05T11:59:58Z",
+        "status": "ready",
+        "thread_subscription_status": "subscribed"
+      },
+      "evidence": {
+        "process_observed": true,
+        "transcript_observed": true,
+        "bridge_state": "ready",
+        "join_keys": [
+          "provider_session_id=thread-codex",
+          "app_server_pid=4203"
+        ]
+      },
+      "reason_codes": []
+    },
+    {
+      "provider": "claude",
+      "provider_session_id": "thread-claude-unmanaged",
+      "control_path": "unmanaged",
+      "presentation_state": "unmanaged",
+      "state": "unmanaged",
+      "last_activity_at": "2026-05-05T11:59:59Z",
+      "workspace": {
+        "cwd": "/Users/test/git/myagents",
+        "label": "myagents",
+        "branch": null
+      },
+      "process": {
+        "pid": 48145,
+        "process_start_time": "2026-05-05T11:45:00Z",
+        "started_at": "2026-05-05T11:45:00Z"
+      },
+      "bridge": {},
+      "evidence": {
+        "process_observed": true,
+        "transcript_observed": true,
+        "hook_seen_at": "2026-05-05T11:59:59Z",
+        "join_keys": [
+          "provider_session_id=thread-claude-unmanaged",
+          "source_path=/Users/test/.claude/projects/myagents/session.jsonl",
+          "pid=48145"
+        ]
+      },
+      "reason_codes": []
+    }
+  ]
+}
