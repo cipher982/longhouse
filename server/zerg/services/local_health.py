@@ -2097,62 +2097,15 @@ def _collect_managed_sessions_from_engine_status(
     return sessions
 
 
-def _managed_codex_bridge_thread_keys(base_dir: Path) -> tuple[set[str], set[str]]:
-    state_dir = _codex_bridge_state_dir(base_dir)
-    if not state_dir.exists():
-        return set(), set()
-
-    thread_ids: set[str] = set()
-    thread_paths: set[str] = set()
-    for path in sorted(state_dir.glob("*.json")):
-        try:
-            state = json.loads(path.read_text())
-        except Exception:
-            continue
-        thread_id = _normalize_optional_string(state.get("thread_id"))
-        if thread_id:
-            thread_ids.add(thread_id)
-        thread_path = _normalize_binding_path(state.get("thread_path"))
-        if thread_path:
-            thread_paths.add(thread_path)
-    return thread_ids, thread_paths
-
-
-def _engine_unmanaged_row_matches_managed_codex_bridge(
-    raw_row: Mapping[str, Any],
-    *,
-    bridge_thread_ids: set[str],
-    bridge_thread_paths: set[str],
-) -> bool:
-    if _normalize_optional_string(raw_row.get("provider")) != "codex":
-        return False
-    provider_session_id = _normalize_optional_string(raw_row.get("provider_session_id"))
-    if provider_session_id and provider_session_id in bridge_thread_ids:
-        return True
-    source_path = _normalize_binding_path(raw_row.get("source_path"))
-    return bool(source_path and source_path in bridge_thread_paths)
-
-
-def _collect_unmanaged_processes_from_engine_status(
-    engine_status: dict[str, Any],
-    *,
-    base_dir: Path,
-) -> list[dict[str, Any]]:
+def _collect_unmanaged_processes_from_engine_status(engine_status: dict[str, Any]) -> list[dict[str, Any]]:
     payload = _engine_status_payload(engine_status)
     raw_rows = payload.get("unmanaged_session_bindings")
     if not isinstance(raw_rows, list):
         return []
 
-    bridge_thread_ids, bridge_thread_paths = _managed_codex_bridge_thread_keys(base_dir)
     processes: list[dict[str, Any]] = []
     for raw_row in raw_rows:
         if not isinstance(raw_row, Mapping):
-            continue
-        if _engine_unmanaged_row_matches_managed_codex_bridge(
-            raw_row,
-            bridge_thread_ids=bridge_thread_ids,
-            bridge_thread_paths=bridge_thread_paths,
-        ):
             continue
         cwd = _normalize_optional_string(raw_row.get("cwd"))
         observed_at = _normalize_optional_string(raw_row.get("observed_at"))
@@ -3107,7 +3060,7 @@ def _collect_managed_session_sources(
             engine_status,
             phase_overlay=phase_overlay,
         )
-        unmanaged_processes = _collect_unmanaged_processes_from_engine_status(engine_status, base_dir=base_dir)
+        unmanaged_processes = _collect_unmanaged_processes_from_engine_status(engine_status)
     else:
         with _process_snapshot_scope():
             provider_processes = _scan_provider_processes()
