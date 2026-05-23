@@ -2271,6 +2271,135 @@ def test_collect_local_health_fast_uses_engine_status_without_process_scan(monke
     assert snapshot["unmanaged_processes"][0]["liveness_model"] == "engine_status"
 
 
+def test_collect_local_health_fast_prefers_resolved_engine_sessions(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr(
+        local_health_service,
+        "_compute_process_snapshot",
+        lambda: (_ for _ in ()).throw(AssertionError("fast local-health must not scan processes")),
+    )
+    now = datetime(2026, 5, 5, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(local_health_service, "_utc_now", lambda: now)
+    managed_id = "sess-managed-codex"
+    unmanaged_id = "sess-unmanaged-claude"
+    _write_engine_status(
+        tmp_path,
+        age_seconds=1,
+        payload={
+            "sessions": [
+                {
+                    "session_id": managed_id,
+                    "provider": "codex",
+                    "provider_session_id": "thread-codex",
+                    "control_path": "managed",
+                    "presentation_state": "managed_attached",
+                    "state": "attached",
+                    "phase": "thinking",
+                    "tool_name": None,
+                    "phase_observed_at": "2026-05-05T11:59:50Z",
+                    "last_activity_at": "2026-05-05T11:59:58Z",
+                    "workspace": {
+                        "cwd": "/Users/test/git/zerg",
+                        "label": "zerg",
+                        "branch": "session-identity-kernel-cleanup",
+                    },
+                    "process": {
+                        "pid": 4201,
+                        "process_start_time": "2026-05-05T11:20:00Z",
+                        "started_at": "2026-05-05T11:20:00Z",
+                    },
+                    "bridge": {
+                        "bridge_pid": 4202,
+                        "app_server_pid": 4203,
+                        "heartbeat_at": "2026-05-05T11:59:58Z",
+                        "status": "ready",
+                        "thread_subscription_status": "subscribed",
+                    },
+                    "evidence": {
+                        "process_observed": True,
+                        "transcript_observed": True,
+                        "bridge_state": "ready",
+                        "hook_seen_at": "2026-05-05T11:59:57Z",
+                        "join_keys": [
+                            "provider_session_id=thread-codex",
+                            "app_server_pid=4203",
+                        ],
+                    },
+                    "reason_codes": ["bridge_ready"],
+                },
+                {
+                    "session_id": None,
+                    "provider": "claude",
+                    "provider_session_id": unmanaged_id,
+                    "control_path": "unmanaged",
+                    "presentation_state": "unmanaged",
+                    "state": "unmanaged",
+                    "last_activity_at": "2026-05-05T11:59:59Z",
+                    "workspace": {
+                        "cwd": "/Users/test/git/myagents",
+                        "label": "myagents",
+                        "branch": None,
+                    },
+                    "process": {
+                        "pid": 48145,
+                        "process_start_time": "2026-05-05T11:45:00Z",
+                        "started_at": "2026-05-05T11:45:00Z",
+                    },
+                    "bridge": {},
+                    "evidence": {
+                        "process_observed": True,
+                        "transcript_observed": True,
+                        "bridge_state": None,
+                        "hook_seen_at": "2026-05-05T11:59:59Z",
+                        "join_keys": [
+                            "provider_session_id=sess-unmanaged-claude",
+                            "source_path=/Users/test/.claude/projects/myagents/session.jsonl",
+                            "pid=48145",
+                        ],
+                    },
+                    "reason_codes": [],
+                },
+            ],
+            "managed_sessions": [],
+            "unmanaged_session_bindings": [
+                {
+                    "provider": "codex",
+                    "provider_session_id": "legacy-row-should-not-show",
+                    "pid": 9999,
+                    "process_start_time": "2026-05-05T11:00:00Z",
+                    "cwd": "/Users/test/git/legacy",
+                    "observed_at": "2026-05-05T11:59:59Z",
+                }
+            ],
+        },
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path, fast=True)
+
+    assert snapshot["collection_tier"] == "fast"
+    assert [row["session_id"] for row in snapshot["managed_sessions"]] == [managed_id]
+    managed = snapshot["managed_sessions"][0]
+    assert managed["provider"] == "codex"
+    assert managed["workspace_label"] == "zerg"
+    assert managed["branch"] == "session-identity-kernel-cleanup"
+    assert managed["phase"] == "thinking"
+    assert managed["bridge_pid"] == 4202
+    assert managed["app_server_pid"] == 4203
+    assert managed["thread_subscription_status"] == "subscribed"
+    assert managed["evidence"]["join_keys"] == [
+        "provider_session_id=thread-codex",
+        "app_server_pid=4203",
+    ]
+    assert [row["provider_session_id"] for row in snapshot["unmanaged_processes"]] == [unmanaged_id]
+    unmanaged = snapshot["unmanaged_processes"][0]
+    assert unmanaged["provider"] == "claude"
+    assert unmanaged["pid"] == 48145
+    assert unmanaged["workspace_label"] == "myagents"
+    assert unmanaged["source_path"] == "/Users/test/.claude/projects/myagents/session.jsonl"
+    assert unmanaged["liveness_model"] == "engine_status"
+
+
 def test_local_health_menubar_requires_installed_app(monkeypatch, tmp_path: Path):
     runner = CliRunner()
     calls: list[dict[str, object]] = []
