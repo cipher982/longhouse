@@ -218,6 +218,8 @@ struct TimelineSessionCardRow: View {
     var connectionState: ConnectionState = .healthy
 
     var body: some View {
+        let cardAccent = timelineCardAccentColor(session, connectionState: connectionState)
+
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
                 Text(session.projectLabel)
@@ -278,13 +280,13 @@ struct TimelineSessionCardRow: View {
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(alignment: .leading) {
             RoundedRectangle(cornerRadius: 2)
-                .fill(runtimeColor(session))
+                .fill(cardAccent)
                 .frame(width: emphasized ? 4 : 3)
                 .padding(.vertical, 12)
         }
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(runtimeColor(session).opacity(emphasized ? 0.45 : 0.18), lineWidth: emphasized ? 1.2 : 0.8)
+                .stroke(cardAccent.opacity(emphasized ? 0.45 : 0.18), lineWidth: emphasized ? 1.2 : 0.8)
         }
     }
 }
@@ -313,11 +315,12 @@ private struct RuntimeBadge: View {
         // .reconnecting, and .offline all retract to .secondary so a
         // non-pulsing colored dot can't masquerade as "live".
         let globalHealthy = connectionState == .healthy
+        let attentionTone = timelineAttentionTone(session.timelineStatusTone)
         let withinDeadline = phaseSignalFresh(session)
         let sessionStale = !withinDeadline && !isClosed
         // Pulse only when global is healthy AND the server's own
         // phase-signal deadline hasn't passed. Anything else freezes.
-        let pulsing = globalHealthy && withinDeadline && !isClosed
+        let pulsing = globalHealthy && withinDeadline && attentionTone == .working
         let color = globalHealthy && !sessionStale ? timelineStatusColor(session) : .secondary
 
         HStack(spacing: 6) {
@@ -347,6 +350,8 @@ private struct RuntimeBadge: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
         .background(color.opacity(0.14), in: Capsule())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(runtimeBadgeAccessibilityLabel(for: session, stale: sessionStale))
     }
 }
 
@@ -428,11 +433,14 @@ private struct LivenessDot: View {
     let color: Color
     let pulsing: Bool
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var animate = false
 
     var body: some View {
+        let shouldPulse = pulsing && !reduceMotion
+
         ZStack {
-            if pulsing {
+            if shouldPulse {
                 Circle()
                     .stroke(color, lineWidth: 1.4)
                     .scaleEffect(animate ? 2.0 : 1.0)
@@ -448,8 +456,8 @@ private struct LivenessDot: View {
         // Drive `animate` from the `pulsing` prop directly so LazyVStack
         // recycling (which can swap pulsing on without firing onAppear)
         // still kicks the animation back on.
-        .onAppear { animate = pulsing }
-        .onChange(of: pulsing) { _, isPulsing in
+        .onAppear { animate = shouldPulse }
+        .onChange(of: shouldPulse) { _, isPulsing in
             animate = isPulsing
         }
     }
@@ -852,23 +860,53 @@ private func nonEmpty(_ value: String?) -> String? {
     return trimmed
 }
 
-private func runtimeColor(_ session: SessionSummary) -> Color {
-    switch session.timelineBorderTone {
-    case "active": return .blue
-    case "running": return .green
-    case "thinking", "blocked", "stalled": return .orange
-    case "closed": return .secondary
-    default: return .secondary
+private enum TimelineAttentionTone {
+    case working
+    case attention
+    case quiet
+    case closed
+}
+
+private func timelineAttentionTone(_ tone: String) -> TimelineAttentionTone {
+    switch tone.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "thinking", "running":
+        return .working
+    case "blocked", "stalled":
+        return .attention
+    case "closed":
+        return .closed
+    default:
+        return .quiet
+    }
+}
+
+private func timelineCardAccentColor(_ session: SessionSummary, connectionState: ConnectionState) -> Color {
+    // A non-healthy connection suppresses per-card attention color; the
+    // connection strip owns that severity signal.
+    guard connectionState == .healthy else { return .secondary.opacity(0.45) }
+
+    switch timelineAttentionTone(session.timelineBorderTone) {
+    case .attention:
+        return .orange
+    case .working:
+        return .secondary.opacity(0.65)
+    case .closed:
+        return .secondary.opacity(0.38)
+    case .quiet:
+        return .secondary.opacity(0.45)
     }
 }
 
 private func timelineStatusColor(_ session: SessionSummary) -> Color {
-    switch session.timelineStatusTone {
-    case "active": return .blue
-    case "running": return .green
-    case "thinking", "blocked", "stalled": return .orange
-    case "closed": return .secondary
-    default: return .secondary
+    switch timelineAttentionTone(session.timelineStatusTone) {
+    case .working:
+        return .primary
+    case .attention:
+        return .orange
+    case .closed:
+        return .secondary.opacity(0.7)
+    case .quiet:
+        return .secondary
     }
 }
 
@@ -876,15 +914,8 @@ private func managementColor(_ session: SessionSummary) -> Color {
     .secondary
 }
 
-private func providerColor(_ provider: String?) -> Color {
-    switch provider?.lowercased() {
-    case "codex": return .green
-    case "antigravity": return .orange
-    case "gemini": return .blue
-    case "claude": return .orange
-    case "zai": return .purple
-    default: return .secondary
-    }
+private func providerColor(_: String?) -> Color {
+    .secondary
 }
 
 private func providerIcon(_ provider: String?) -> String {
@@ -936,6 +967,17 @@ func stateDurationLabel(for session: SessionSummary) -> String? {
     if session.timelineStatusLabel == "Closed" { return nil }
     guard let date = parseLonghouseDate(session.timelineAnchor) else { return nil }
     return compactDuration(since: date)
+}
+
+private func runtimeBadgeAccessibilityLabel(for session: SessionSummary, stale: Bool) -> String {
+    var parts = [session.timelineStatusLabel]
+    if let duration = stateDurationLabel(for: session) {
+        parts.append(duration)
+    }
+    if stale {
+        parts.append("stale")
+    }
+    return parts.joined(separator: ", ")
 }
 
 /// Compact, no-"ago" duration: "5s", "12s", "3m", "1h", "2d".
