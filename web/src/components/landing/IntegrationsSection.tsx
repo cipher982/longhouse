@@ -17,6 +17,7 @@ export function IntegrationsSection() {
     claude: <SparklesIcon width={40} height={40} />,
     codex: <CodeIcon width={40} height={40} />,
     antigravity: <SparklesIcon width={40} height={40} />,
+    opencode: <CodeIcon width={40} height={40} />,
   };
 
   const providers: Provider[] = getLaunchProviderSupportList().map((provider) => ({
@@ -31,10 +32,10 @@ export function IntegrationsSection() {
     <section id="providers" className="landing-integrations">
       <div className="landing-section-inner">
         <p className="landing-section-label">Provider Truth</p>
-        <h2 className="landing-section-title">Claude is strongest today. Antigravity is replacing Gemini.</h2>
+        <h2 className="landing-section-title">Claude is strongest today. Antigravity and OpenCode round out the lineup.</h2>
         <p className="landing-section-subtitle">
-          Claude, Codex, and Antigravity all land in the same timeline. Capability after launch depends on how
-          mature each control path is today, and the page should say that plainly.
+          Claude, Codex, Antigravity, and OpenCode all land in the same timeline. Capability after launch depends
+          on how mature each control path is today, and the page should say that plainly.
         </p>
 
         <div className="landing-providers-grid">
@@ -57,8 +58,8 @@ export function IntegrationsSection() {
         </div>
 
         <p className="landing-providers-tagline">
-          Codex launch-through-Longhouse is supported, but Claude is still the strongest continuation path.
-          Existing Gemini sessions stay searchable as legacy imports.
+          Codex launch-through-Longhouse is supported; Antigravity and OpenCode are managed observe-only today.
+          Claude is still the strongest continuation path. Existing Gemini sessions stay searchable as legacy imports.
         </p>
       </div>
     </section>

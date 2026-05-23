@@ -6,7 +6,7 @@
  * Add new providers here when onboarding them.
  */
 
-export type LaunchProviderId = "claude" | "codex" | "antigravity";
+export type LaunchProviderId = "claude" | "codex" | "opencode" | "antigravity";
 
 export type LaunchProviderSupport = {
   id: LaunchProviderId;
@@ -40,11 +40,21 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
     hooksSupport: "none",
     telemetryQuality: "structured",
   },
+  opencode: {
+    id: "opencode",
+    marketingName: "OpenCode",
+    cardDescription: "Archive, launch, and managed observe",
+    statusLabel: "Observe-only today",
+    archiveVisibility: "live",
+    cloudSessionStart: "live",
+    hooksSupport: "none",
+    telemetryQuality: "structured",
+  },
   antigravity: {
     id: "antigravity",
     marketingName: "Antigravity CLI",
     cardDescription: "Archive, launch, and hook-backed phase signals",
-    statusLabel: "New path",
+    statusLabel: "Observe-only today",
     archiveVisibility: "live",
     cloudSessionStart: "live",
     hooksSupport: "live",
@@ -59,6 +69,8 @@ export function getProviderColor(provider: string): string {
       return "var(--color-provider-claude)";
     case "codex":
       return "var(--color-provider-codex)";
+    case "opencode":
+      return "var(--color-provider-opencode)";
     case "gemini":
       return "var(--color-provider-gemini)";
     case "antigravity":
@@ -77,6 +89,8 @@ export function getProviderIcon(provider: string): string {
       return "C";
     case "codex":
       return "X";
+    case "opencode":
+      return "O";
     case "gemini":
       return "G";
     case "antigravity":
@@ -105,5 +119,6 @@ export function getLaunchProviderSupportList(): LaunchProviderSupport[] {
     LAUNCH_PROVIDER_SUPPORT.claude,
     LAUNCH_PROVIDER_SUPPORT.codex,
     LAUNCH_PROVIDER_SUPPORT.antigravity,
+    LAUNCH_PROVIDER_SUPPORT.opencode,
   ];
 }
