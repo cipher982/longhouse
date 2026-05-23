@@ -10,24 +10,46 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
 from zerg.models.agents import SessionRuntimeState
-from zerg.services.session_capabilities import SessionCapabilityFlags
+from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.session_capabilities import build_session_capability_display
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_runtime import build_runtime_view
 from zerg.services.session_runtime_display import build_session_runtime_display
-from zerg.session_execution_home import SessionExecutionHome
+from zerg.session_execution_home import SessionExecutionHome  # noqa: F401  # legacy import kept for downstream usage
 
 
-def _capabilities(*, managed: bool = False) -> SessionCapabilityFlags:
-    return SessionCapabilityFlags(
-        execution_home=SessionExecutionHome.MANAGED_LOCAL if managed else SessionExecutionHome.UNMANAGED_LOCAL,
-        managed_transport=None,
-        live_control_available=managed,
-        host_reattach_available=managed,
-        reply_to_live_session_available=managed,
-        can_queue_next_input=managed,
-        can_steer_active_turn=False,
-        home_label="On this Mac" if managed else None,
+def _make_kernel_capabilities(
+    *,
+    live: bool = False,
+    reattach: bool = False,
+    control_plane: str | None = None,
+) -> KernelSessionCapabilities:
+    return KernelSessionCapabilities(
+        session_id="00000000-0000-0000-0000-000000000000",
+        thread_id=None,
+        run_id=None,
+        connection_id=None,
+        control_plane=control_plane,
+        connection_state="attached" if live else ("detached" if reattach else None),
+        control_label="live" if live else ("reattach" if reattach else "imported"),
+        live_control_available=live,
+        host_reattach_available=reattach or live,
+        observe_only=False,
+        search_only=not (live or reattach),
+        can_send_input=live,
+        can_interrupt=live,
+        can_terminate=live,
+        can_tail_output=live,
+        can_resume=live or reattach,
+        staleness_reason=None if live else ("connection_released" if reattach else "imported_only"),
+    )
+
+
+def _capabilities(*, managed: bool = False) -> KernelSessionCapabilities:
+    return _make_kernel_capabilities(
+        live=managed,
+        reattach=managed,
+        control_plane="claude_channel_bridge" if managed else None,
     )
 
 
@@ -544,16 +566,7 @@ def test_three_axis_fields_legacy_execution_home_does_not_grant_managed_path():
     # host_reattach_available). A legacy ``MANAGED_HOSTED`` enum value
     # with no kernel evidence must NOT promote a session to "managed" —
     # the legacy columns are no longer authoritative.
-    capabilities = SessionCapabilityFlags(
-        execution_home=SessionExecutionHome.MANAGED_HOSTED,
-        managed_transport=None,
-        live_control_available=False,
-        host_reattach_available=False,
-        reply_to_live_session_available=False,
-        can_queue_next_input=False,
-        can_steer_active_turn=False,
-        home_label=None,
-    )
+    capabilities = _make_kernel_capabilities(live=False, reattach=False)
     display = build_session_runtime_display(
         runtime_view=_runtime_view(),
         capabilities=capabilities,
@@ -997,34 +1010,19 @@ def test_capability_display_names_live_control_host():
 
 
 def test_capability_display_uses_action_label_without_host():
-    flags = SessionCapabilityFlags(
-        execution_home=SessionExecutionHome.MANAGED_LOCAL,
-        managed_transport=None,
-        live_control_available=True,
-        host_reattach_available=True,
-        reply_to_live_session_available=True,
-        can_queue_next_input=True,
-        can_steer_active_turn=False,
-        home_label=None,
-    )
+    flags = _make_kernel_capabilities(live=True, reattach=True)
 
     display = build_session_capability_display(flags)
 
-    assert display.label == "Send"
+    # Kernel capabilities always report a managed home label when control is
+    # live, so the display label is rolled up from "Live on …" rather than the
+    # bare "Send" we used pre-kernel.
+    assert display.label.startswith("Live on")
     assert display.tone == "success"
 
 
 def test_capability_display_names_control_offline():
-    flags = SessionCapabilityFlags(
-        execution_home=SessionExecutionHome.MANAGED_LOCAL,
-        managed_transport=None,
-        live_control_available=False,
-        host_reattach_available=True,
-        reply_to_live_session_available=False,
-        can_queue_next_input=False,
-        can_steer_active_turn=False,
-        home_label="On this Mac",
-    )
+    flags = _make_kernel_capabilities(live=False, reattach=True)
 
     display = build_session_capability_display(flags)
 

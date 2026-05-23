@@ -369,7 +369,20 @@ def test_duplicate_ingest_replaces_managed_local_placeholder_provider_session_id
         assert db.query(AgentSession).count() == 1
 
         stored = db.query(AgentSession).filter(AgentSession.id == session_id).one()
-        assert stored.provider_session_id == native_provider_session_id
+        # Session-identity-kernel cleanup: ``provider_session_id`` is no
+        # longer a column. The native provider session id is recorded as a
+        # ``session_thread_aliases`` row scoped to the primary thread.
+        from zerg.models.agents import SessionThread, SessionThreadAlias
+
+        alias_values = {
+            row[0]
+            for row in db.query(SessionThreadAlias.alias_value)
+            .join(SessionThread, SessionThreadAlias.thread_id == SessionThread.id)
+            .filter(SessionThread.session_id == stored.id)
+            .filter(SessionThreadAlias.alias_kind == "provider_session_id")
+            .all()
+        }
+        assert native_provider_session_id in alias_values
 
 
 def test_duplicate_ingest_keeps_machine_label_when_generic_environment_arrives_later(tmp_path):

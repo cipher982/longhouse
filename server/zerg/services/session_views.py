@@ -27,7 +27,6 @@ from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionTurn
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
-from zerg.services.agents.kernel_capability_adapter import build_session_capabilities_from_kernel
 from zerg.services.agents_store import AgentsStore
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.managed_control_state import CONTROL_SOURCE_LEGACY_RUNNER
@@ -37,8 +36,6 @@ from zerg.services.managed_local_transport import build_managed_local_attach_com
 from zerg.services.provisional_events import TranscriptPreview
 from zerg.services.session_capabilities import build_session_capability_display
 from zerg.services.session_capabilities import build_session_input_presentation
-from zerg.services.session_capabilities import project_current_session_capabilities
-from zerg.services.session_capabilities import project_current_session_capabilities_from_facts
 from zerg.services.session_current_control import engine_control_online
 from zerg.services.session_current_control import engine_session_control_attached
 from zerg.services.session_liveness_facts import build_session_liveness_facts
@@ -82,13 +79,6 @@ def build_session_capabilities_response(
 ) -> SessionCapabilitiesResponse:
     if capability_flags is None:
         raise RuntimeError("capability_flags is required; the kernel adapter must build them")
-    if runtime_facts is not None:
-        capability_flags = project_current_session_capabilities_from_facts(
-            capability_flags,
-            liveness_facts=runtime_facts,
-        )
-    else:
-        capability_flags = project_current_session_capabilities(capability_flags, runtime_display=runtime_display)
     host_label = None
     if session is not None:
         host_label = str(getattr(session, "source_runner_name", "") or "").strip() or None
@@ -96,20 +86,37 @@ def build_session_capabilities_response(
     lifecycle = str(getattr(runtime_facts_lifecycle, "state", "") or "").strip()
     if not lifecycle and runtime_display is not None:
         lifecycle = str(getattr(runtime_display, "lifecycle", "") or "").strip()
-    capability_display = build_session_capability_display(capability_flags, host_label=host_label, lifecycle=lifecycle)
+    host_state = None
+    if runtime_display is not None:
+        host_state = str(getattr(runtime_display, "host_state", "") or "").strip() or None
+    if not host_state and runtime_facts is not None:
+        host_state = str(getattr(runtime_facts, "host_state", "") or "").strip() or None
+    capability_display = build_session_capability_display(
+        capability_flags,
+        host_label=host_label,
+        lifecycle=lifecycle,
+        host_state=host_state,
+    )
+    host_state_norm = (host_state or "").strip().lower()
+    runtime_offline = host_state_norm in {"stale", "offline", "lost", "unknown"}
+    effective_live_control = bool(capability_flags.live_control_available) and not runtime_offline
+    effective_reply = bool(capability_flags.reply_to_live_session_available) and not runtime_offline
+    effective_queue = bool(capability_flags.can_queue_next_input) and not runtime_offline
+    effective_steer = bool(capability_flags.can_steer_active_turn) and not runtime_offline
     input_presentation = build_session_input_presentation(
         capability_flags,
         capability_display=capability_display,
         provider_label=_provider_label(session),
         lifecycle=lifecycle,
         is_executing=_runtime_is_executing(runtime_display=runtime_display, runtime_facts=runtime_facts),
+        host_state=host_state,
     )
     return SessionCapabilitiesResponse(
-        live_control_available=capability_flags.live_control_available,
+        live_control_available=effective_live_control,
         host_reattach_available=capability_flags.host_reattach_available,
-        reply_to_live_session_available=capability_flags.reply_to_live_session_available,
-        can_queue_next_input=capability_flags.can_queue_next_input,
-        can_steer_active_turn=capability_flags.can_steer_active_turn,
+        reply_to_live_session_available=effective_reply,
+        can_queue_next_input=effective_queue,
+        can_steer_active_turn=effective_steer,
         display_label=capability_display.label,
         display_detail=capability_display.detail,
         display_tone=capability_display.tone,
@@ -419,11 +426,7 @@ def build_session_control_response(
         raise RuntimeError("capability_flags is required; the kernel adapter must build them")
     source_runner_name = str(getattr(session, "source_runner_name", "") or "").strip() or None
     attach_command = build_attach_command(session) if capability_flags.host_reattach_available else None
-    if (
-        getattr(session, "source_runner_id", None) is None
-        and source_runner_name is None
-        and attach_command is None
-    ):
+    if getattr(session, "source_runner_id", None) is None and source_runner_name is None and attach_command is None:
         return None
     return SessionControlResponse(
         source_runner_id=getattr(session, "source_runner_id", None),
@@ -1050,9 +1053,7 @@ class SessionMobileTailResponse(BaseModel):
 
     session: SessionResponse = Field(..., description="Focused session metadata")
     projection: SessionProjectionResponse = Field(..., description="Tail page of the stitched lineage projection")
-    snapshot_event_id: Optional[int] = Field(
-        None, description="Latest durable event id used to anchor older-page fetches"
-    )
+    snapshot_event_id: Optional[int] = Field(None, description="Latest durable event id used to anchor older-page fetches")
 
 
 class IngestResponse(BaseModel):
@@ -1251,7 +1252,7 @@ def build_session_response(
     include_runtime = should_include_runtime_view(session=session, runtime_view=runtime_overlay)
     if kernel_capabilities is None:
         kernel_capabilities = project_session_capabilities(store.db, session_id=session.id)
-    capability_flags = build_session_capabilities_from_kernel(store.db, session, kernel=kernel_capabilities)
+    capability_flags = kernel_capabilities
     is_engine_control_online = engine_control_online(session, owner_id)
     current_now = datetime.now(timezone.utc)
     is_engine_session_attached = is_engine_control_online and engine_session_control_attached(
@@ -1278,15 +1279,23 @@ def build_session_response(
                 source=CONTROL_SOURCE_LEGACY_RUNNER,
                 seen_at=current_now,
             )
+    elif (
+        capability_flags.live_control_available
+        and not binding_host_state
+        and capability_flags.control_plane in ("codex_bridge", "codex_app_server", "opencode_process", "antigravity_process")
+    ):
+        # Kernel attests control is live on a non-Runner-backed control plane
+        # (engine channel / direct process). There is no Runner row to consult,
+        # so trust the kernel rather than letting an absent binding signal
+        # demote the session to "unknown".
+        binding_host_state = "online"
     transcript_preview_response = build_session_transcript_preview_response(
         transcript_preview,
         last_activity_at=last_activity_at,
         now=current_now,
     )
     has_visible_transcript_preview = bool(
-        transcript_preview_response is not None
-        and transcript_preview_response.text.strip()
-        and not transcript_preview_response.is_stale
+        transcript_preview_response is not None and transcript_preview_response.text.strip() and not transcript_preview_response.is_stale
     )
     runtime_display = (
         build_session_runtime_display_response(
@@ -1305,21 +1314,18 @@ def build_session_response(
         if include_runtime
         else None
     )
-    runtime_facts = (
-        build_session_liveness_facts_response(
-            runtime_overlay=runtime_overlay,
-            capability_flags=capability_flags,
-            last_activity_at=last_activity_at,
-            binding_overlay=binding_overlay,
-            binding_host_state=binding_host_state,
-            binding_terminal_reason=binding_terminal_reason,
-            control_overlay=control_overlay,
-        )
+    runtime_facts = build_session_liveness_facts_response(
+        runtime_overlay=runtime_overlay,
+        capability_flags=capability_flags,
+        last_activity_at=last_activity_at,
+        binding_overlay=binding_overlay,
+        binding_host_state=binding_host_state,
+        binding_terminal_reason=binding_terminal_reason,
+        control_overlay=control_overlay,
     )
-    effective_capability_flags = project_current_session_capabilities_from_facts(
-        capability_flags,
-        liveness_facts=runtime_facts,
-    )
+    # Session-identity-kernel cleanup: legacy capability re-projection was
+    # removed; the kernel ``capability_flags`` is already the truth.
+    effective_capability_flags = capability_flags
     return SessionResponse(
         id=str(session.id),
         provider=session.provider,
@@ -1447,7 +1453,7 @@ def build_active_session_response(
 ) -> ActiveSessionResponse:
     if kernel_capabilities is None:
         kernel_capabilities = project_session_capabilities(store.db, session_id=session.id)
-    capability_flags = build_session_capabilities_from_kernel(store.db, session, kernel=kernel_capabilities)
+    capability_flags = kernel_capabilities
     _started = (
         session.started_at.replace(tzinfo=timezone.utc) if session.started_at and session.started_at.tzinfo is None else session.started_at
     )
@@ -1483,10 +1489,9 @@ def build_active_session_response(
         control_overlay=control_overlay,
         now=now,
     )
-    effective_capability_flags = project_current_session_capabilities_from_facts(
-        capability_flags,
-        liveness_facts=runtime_facts,
-    )
+    # Session-identity-kernel cleanup: legacy capability re-projection was
+    # removed; the kernel ``capability_flags`` is already the truth.
+    effective_capability_flags = capability_flags
 
     return ActiveSessionResponse(
         id=str(session.id),
@@ -1564,9 +1569,7 @@ def build_event_response(
         role=event.role,
         content_text=content_text,
         raw_content_text=raw_content_text,
-        input_origin=(
-            _event_input_origin_response(store, event, input_origin_map=input_origin_map) if is_head_branch else None
-        ),
+        input_origin=(_event_input_origin_response(store, event, input_origin_map=input_origin_map) if is_head_branch else None),
         tool_name=event.tool_name,
         tool_input_json=event.tool_input_json,
         tool_output_text=tool_output_text,

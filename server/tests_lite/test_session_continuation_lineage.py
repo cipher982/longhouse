@@ -1,3 +1,15 @@
+"""Retired: thread_root_session_id / continued_from_session_id /
+continuation_kind / origin_label columns were deleted by the
+session-identity-kernel cleanup.
+"""
+
+import pytest
+
+pytest.skip(
+    "lineage columns deleted by session-identity-kernel cleanup",
+    allow_module_level=True,
+)
+
 from datetime import datetime
 from datetime import timezone
 from uuid import uuid4

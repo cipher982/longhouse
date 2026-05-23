@@ -1,28 +1,20 @@
 """Tests for the unmanaged-bindings read-side service (Phase 5c + 6).
 
-Covers:
-- host_state derived from latest heartbeat age per machine
-- lifecycle=closed promotion when an 'observed' binding goes stale while
-  the host is still online (machine agent confirms process-gone)
-- lifecycle=closed immediately when binding_state='stale' is recorded
-- Sessions with no binding get no overlay entry (caller defaults to unknown)
+Retired: ``UnmanagedSessionBinding`` was removed in the session-identity-
+kernel cleanup. Equivalent observation evidence now lives on
+``SessionConnection`` rows (acquisition_kind='observe_only',
+control_plane='log_tail'). The tests below were tightly coupled to the
+deleted table and have been retired pending kernel-shaped replacements.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
-from datetime import timedelta
-from datetime import timezone
-from uuid import uuid4
+import pytest
 
-from sqlalchemy.orm import sessionmaker
-
-from zerg.database import make_engine
-from zerg.models.agents import AgentHeartbeat
-from zerg.models.agents import AgentSession
-from zerg.database import Base
-from zerg.models.agents import UnmanagedSessionBinding
-from zerg.services.unmanaged_bindings import load_binding_overlay
+pytest.skip(
+    "UnmanagedSessionBinding service replaced by kernel SessionConnection projection",
+    allow_module_level=True,
+)
 
 
 def _make_db(tmp_path):

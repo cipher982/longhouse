@@ -1,7 +1,22 @@
 from __future__ import annotations
 
-import asyncio
 import os
+
+import pytest
+
+# The session-identity-kernel cleanup deleted the ManagedSessionControlState
+# table and the legacy ``project_current_session_capabilities*`` helpers that
+# this module exercises end-to-end. The kernel projection
+# (``project_session_capabilities``) is the new contract and has its own
+# coverage in tests_lite/test_session_runtime.py and the timeline runtime
+# tests. Keep this file as a placeholder so the module path stays valid for
+# any inbound references; the assertions are obsolete.
+pytest.skip(
+    "session capability projection moved to the kernel; legacy tests retired",
+    allow_module_level=True,
+)
+
+import asyncio
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -22,12 +37,9 @@ from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentSession
-from zerg.models.agents import ManagedSessionControlState
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents_store import AgentsStore
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
-from zerg.services.session_capabilities import project_current_session_capabilities
-from zerg.services.session_capabilities import project_current_session_capabilities_from_facts
 from zerg.services.session_current_control import current_session_capabilities
 from zerg.services.session_liveness_facts import ActivityObservation
 from zerg.services.session_liveness_facts import ControlObservation

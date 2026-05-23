@@ -74,15 +74,15 @@ def load_startup_context_items(
 
     # Over-fetch slightly because we may skip empty summaries after sanitization.
     candidate_limit = max(bounded_limit * 4, bounded_limit)
+    # Session-identity-kernel cleanup: ``is_writable_head`` and
+    # ``is_sidechain`` were dropped. Each session is now its own thread head.
     rows = (
         db.query(AgentSession)
         .filter(
             AgentSession.project == normalized_project,
             AgentSession.summary.isnot(None),
             AgentSession.started_at >= cutoff,
-            AgentSession.is_writable_head == 1,
             AgentSession.user_messages > 0,
-            AgentSession.is_sidechain == 0,
             AgentSession.user_state != "archived",
         )
         .order_by(

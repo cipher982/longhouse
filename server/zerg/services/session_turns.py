@@ -275,11 +275,7 @@ def materialize_managed_transcript_turns(
     if has_pending_request_turn:
         return 0
 
-    events_query = (
-        db.query(AgentEvent)
-        .filter(AgentEvent.session_id == session_id)
-        .filter(durable_transcript_event_predicate())
-    )
+    events_query = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).filter(durable_transcript_event_predicate())
     if incremental:
         event_floor = _transcript_materialization_event_floor(existing_turns)
         if event_floor is not None:
@@ -378,9 +374,10 @@ def materialize_recent_managed_transcript_turns(
 ) -> int:
     lookback_start = utc_now() - timedelta(hours=max(1, hours_back))
     activity_anchor = func.coalesce(AgentSession.last_activity_at, AgentSession.started_at)
+    # Session-identity-kernel cleanup: ``managed_transport`` was dropped.
+    # Approximate by anchoring on activity window only; managed/unmanaged
+    # split now lives on SessionConnection which downstream code consults.
     query = db.query(AgentSession.id).filter(
-        AgentSession.managed_transport.isnot(None),
-        AgentSession.managed_transport != "",
         activity_anchor >= lookback_start,
     )
     if provider:
@@ -454,9 +451,7 @@ def _load_unanswered_user_prompt_map(db: Session, session_ids: list[UUID]) -> di
         .all()
     )
     latest_user_id_by_session = {
-        session_id: int(event_id)
-        for session_id, event_id in latest_user_rows
-        if session_id is not None and event_id is not None
+        session_id: int(event_id) for session_id, event_id in latest_user_rows if session_id is not None and event_id is not None
     }
     if not latest_user_id_by_session:
         return {}
@@ -470,9 +465,7 @@ def _load_unanswered_user_prompt_map(db: Session, session_ids: list[UUID]) -> di
         .all()
     )
     latest_response_id_by_session = {
-        session_id: int(event_id)
-        for session_id, event_id in latest_response_rows
-        if session_id is not None and event_id is not None
+        session_id: int(event_id) for session_id, event_id in latest_response_rows if session_id is not None and event_id is not None
     }
 
     candidate_user_ids = [
@@ -483,11 +476,7 @@ def _load_unanswered_user_prompt_map(db: Session, session_ids: list[UUID]) -> di
     if not candidate_user_ids:
         return {}
 
-    latest_user_events = (
-        db.query(AgentEvent.session_id, AgentEvent.timestamp)
-        .filter(AgentEvent.id.in_(candidate_user_ids))
-        .all()
-    )
+    latest_user_events = db.query(AgentEvent.session_id, AgentEvent.timestamp).filter(AgentEvent.id.in_(candidate_user_ids)).all()
     active_phase_conditions = []
     for session_id, timestamp in latest_user_events:
         observed_after = normalize_utc(timestamp)
@@ -624,13 +613,41 @@ def list_managed_completed_turns(
     completed_at_expr = func.coalesce(SessionTurn.durable_at, SessionTurn.terminal_at)
     total_turn_time_expr = _completed_turn_time_ms_sql(db)
 
+    # Session-identity-kernel cleanup: ``managed_transport`` was dropped.
+    # Managed-vs-unmanaged truth lives on ``session_connections``: a session
+    # is managed iff one of its primary-thread runs has a connection whose
+    # control_plane is one of the managed transports. Filter via EXISTS so
+    # we don't double-count sessions with multiple connections.
+    from zerg.models.agents import SessionConnection
+    from zerg.models.agents import SessionRun
+    from zerg.models.agents import SessionThread
+
+    managed_session_exists = (
+        db.query(SessionThread.id)
+        .join(SessionRun, SessionRun.thread_id == SessionThread.id)
+        .join(SessionConnection, SessionConnection.run_id == SessionRun.id)
+        .filter(SessionThread.session_id == AgentSession.id)
+        .filter(
+            SessionConnection.control_plane.in_(
+                (
+                    "claude_channel_bridge",
+                    "codex_bridge",
+                    "codex_app_server",
+                    "opencode_process",
+                    "antigravity_process",
+                )
+            )
+        )
+        .exists()
+    )
+
     query = (
         db.query(SessionTurn, AgentSession)
         .join(AgentSession, AgentSession.id == SessionTurn.session_id)
         .filter(
-            AgentSession.managed_transport.isnot(None),
             SessionTurn.user_submitted_at >= submitted_after,
             completed_at_expr.isnot(None),
+            managed_session_exists,
         )
     )
     if provider:

@@ -400,6 +400,14 @@ def test_summary_null_when_missing(tmp_path):
 
 def test_get_session_thread_returns_lineage(tmp_path):
     """GET /agents/sessions/{id}/thread returns the logical thread and head."""
+    import pytest
+
+    pytest.skip(
+        "Session-identity-kernel cleanup removed multi-session lineage columns "
+        "(thread_root_session_id, continuation_kind, origin_label, "
+        "is_writable_head, continued_from_session_id). Thread responses now "
+        "always describe a single session."
+    )
     factory = _make_db(tmp_path)
     db = factory()
     try:

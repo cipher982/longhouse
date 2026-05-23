@@ -123,7 +123,8 @@ def _hybrid_semantic_candidate_ids(db: Session, params: SessionListParams) -> se
     if params.environment:
         filter_q = filter_q.filter(AgentSession.environment == params.environment)
     if params.hide_autonomous:
-        filter_q = filter_q.filter(AgentSession.user_messages > 0).filter(AgentSession.is_sidechain == 0)
+        # Session-identity-kernel cleanup: ``is_sidechain`` was dropped.
+        filter_q = filter_q.filter(AgentSession.user_messages > 0)
     return {str(row[0]) for row in filter_q.all()}
 
 

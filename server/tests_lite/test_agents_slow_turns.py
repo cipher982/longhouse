@@ -23,6 +23,9 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentHeartbeat
 from zerg.database import Base
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionConnection
+from zerg.models.agents import SessionRun
+from zerg.models.agents import SessionThread
 from zerg.models.agents import SessionTurn
 from zerg.services.session_turns import SESSION_TURN_STATE_ACTIVE
 from zerg.services.session_turns import SESSION_TURN_STATE_DURABLE
@@ -60,6 +63,14 @@ def _make_client(SessionLocal):
     return client, api_app
 
 
+_TRANSPORT_TO_CONTROL_PLANE = {
+    "claude_channel_bridge": "claude_channel_bridge",
+    "codex_app_server": "codex_app_server",
+    "opencode_process": "opencode_process",
+    "antigravity_process": "antigravity_process",
+}
+
+
 def _seed_session(
     db,
     *,
@@ -76,14 +87,46 @@ def _seed_session(
         project=project,
         device_id=device_id,
         device_name=device_name,
-        provider_session_id=str(uuid4()),
-        managed_transport=managed_transport,
         started_at=datetime(2026, 4, 23, 18, 0, 0, tzinfo=timezone.utc),
         user_messages=1,
         assistant_messages=1,
         tool_calls=0,
     )
     db.add(session)
+    db.flush()
+
+    # Session-identity-kernel cleanup: managed_transport derives from
+    # session_connections.control_plane on the primary thread's latest run.
+    # Seed the kernel rows so transport-derivation queries find the session.
+    thread = SessionThread(
+        id=uuid4(),
+        session_id=session.id,
+        provider=provider,
+        is_primary=1,
+    )
+    db.add(thread)
+    db.flush()
+    session.primary_thread_id = thread.id
+
+    if managed_transport is not None:
+        control_plane = _TRANSPORT_TO_CONTROL_PLANE.get(managed_transport, managed_transport)
+        run = SessionRun(
+            id=uuid4(),
+            thread_id=thread.id,
+            provider=provider,
+            host_id=device_id,
+            started_at=datetime(2026, 4, 23, 18, 0, 0, tzinfo=timezone.utc),
+        )
+        db.add(run)
+        db.flush()
+        db.add(
+            SessionConnection(
+                run_id=run.id,
+                control_plane=control_plane,
+                acquisition_kind="spawned_control",
+                state="attached",
+            )
+        )
     db.commit()
     db.refresh(session)
     return session

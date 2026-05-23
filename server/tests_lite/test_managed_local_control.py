@@ -1054,7 +1054,8 @@ def test_send_text_to_managed_local_session_verifies_claude_channel_bridge_via_p
     with SessionLocal() as db:
         user, runner, session = _seed_user_runner_and_session(db, provider="claude")
         session.managed_transport = ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value
-        session.provider_session_id = "provider-abc"
+        # Session-identity-kernel cleanup: ``provider_session_id`` is no
+        # longer settable on AgentSession; it derives from session.id.
         session.cwd = "/tmp/demo"
         db.commit()
 
@@ -1087,7 +1088,8 @@ def test_send_text_to_managed_local_session_reports_claude_channel_verification_
     with SessionLocal() as db:
         user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
         session.managed_transport = ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value
-        session.provider_session_id = "provider-abc"
+        # Session-identity-kernel cleanup: ``provider_session_id`` is no
+        # longer settable on AgentSession; it derives from session.id.
         session.cwd = "/tmp/demo"
         db.commit()
 

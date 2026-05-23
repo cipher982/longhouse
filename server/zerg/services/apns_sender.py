@@ -22,7 +22,7 @@ from zerg.models.apns_device_registration import APNSDeviceRegistration
 from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration
 from zerg.models.apns_widget_push_state import APNSWidgetPushState
 from zerg.models.user import User
-from zerg.services.agents.kernel_capability_adapter import build_session_capabilities_from_kernel
+from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.session_runtime_display import build_session_runtime_display
@@ -430,7 +430,7 @@ def prepare_session_live_activity_pushes(
     )
     runtime_display = build_session_runtime_display(
         runtime_view=runtime_overlay,
-        capabilities=build_session_capabilities_from_kernel(db, session),
+        capabilities=project_session_capabilities(db, session_id=session.id),
         ended_at=session.ended_at,
     )
     presence_state = runtime_display.state or str(current_state or getattr(session, "status", None) or "unknown")
@@ -821,9 +821,7 @@ def active_ios_targets_for_owner(
     log_context: str,
 ) -> tuple[APNSDeviceTarget, ...] | None:
     """Public alias for `_active_ios_targets_for_owner` (kept for legacy callers)."""
-    return _active_ios_targets_for_owner(
-        db, owner_id=owner_id, platform=platform, log_context=log_context
-    )
+    return _active_ios_targets_for_owner(db, owner_id=owner_id, platform=platform, log_context=log_context)
 
 
 def _active_ios_targets_for_owner(

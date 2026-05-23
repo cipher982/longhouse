@@ -1,7 +1,9 @@
 """Managed-session control liveness projection.
 
-This module owns the explicit control lane. It deliberately does not describe
-provider phase or transcript activity.
+Post-kernel cleanup: the legacy ``ManagedSessionControlState`` table is
+gone. Control liveness is derived from ``SessionConnection`` rows owned by
+the kernel projection. This module keeps a small overlay shape so existing
+callers don't have to rewrite every projection at once.
 """
 
 from __future__ import annotations
@@ -16,14 +18,36 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
-from zerg.models.agents import ManagedSessionControlState
+from zerg.models.agents import SessionConnection
+from zerg.models.agents import SessionRun
+from zerg.models.agents import SessionThread
 from zerg.utils.time import normalize_utc
 
+CONTROL_SOURCE_HEARTBEAT = "machine_heartbeat"
+CONTROL_SOURCE_ENGINE_CHANNEL = "machine_control_ws"
+CONTROL_SOURCE_LEGACY_RUNNER = "legacy_runner"
+DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS = 15 * 60 * 1000
+_CONTROL_READY_BRIDGE_STATUSES = {"ready", "healthy", ""}
 
 _KERNEL_STATE_BY_CONTROL_STATE = {
     "online": "attached",
     "degraded": "degraded",
     "offline": "detached",
+}
+
+_CONTROL_STATE_BY_KERNEL_STATE = {
+    "attached": "online",
+    "degraded": "degraded",
+    "detached": "offline",
+    "released": "offline",
+    "ended": "offline",
+}
+
+_PROVIDER_BY_CONTROL_PLANE = {
+    "codex_bridge": "codex",
+    "claude_channel_bridge": "claude",
+    "opencode_process": "opencode",
+    "antigravity_process": "antigravity",
 }
 
 
@@ -50,24 +74,15 @@ def _mirror_connection_state(
     external_name: str | None,
     device_id: str | None,
 ) -> None:
-    """Phase 2 dual-write: mirror managed control state to session_connections.
+    """Materialize a kernel ``SessionConnection`` reflecting control state.
 
     Positive attach evidence (online/degraded) materializes a thread + open
     run on demand and upserts an attached/degraded connection. Negative
     evidence (offline) only flips an existing connection — it never
     fabricates a run for a session we have no live record of, since that
     would conflate "we don't know about it" with "it ended."
-
-    Capability flags are intentionally not asserted here. Launchers own
-    capabilities; the bridge only reports liveness. When we materialize a
-    new connection from adopted control evidence, capabilities default to
-    0 and a separate launcher path is responsible for re-asserting them
-    when ownership is reclaimed.
     """
 
-    from zerg.models.agents import SessionConnection
-    from zerg.models.agents import SessionRun
-    from zerg.models.agents import SessionThread
     from zerg.services.agents.kernel_writes import ensure_open_run_for_session
     from zerg.services.agents.kernel_writes import upsert_connection_for_run
 
@@ -75,8 +90,6 @@ def _mirror_connection_state(
     control_plane = _kernel_control_plane_for_provider(provider)
 
     if kernel_state in {"detached", "released", "ended"}:
-        # Negative evidence: only flip an existing connection. Do not
-        # fabricate a run/connection just to record "offline."
         existing = (
             db.query(SessionConnection)
             .join(SessionRun, SessionConnection.run_id == SessionRun.id)
@@ -90,7 +103,6 @@ def _mirror_connection_state(
         )
         if existing is None:
             return
-        # Reuse the upsert path so released_at semantics stay in one place.
         upsert_connection_for_run(
             db,
             run=db.query(SessionRun).filter(SessionRun.id == existing.run_id).one(),
@@ -119,12 +131,6 @@ def _mirror_connection_state(
         state=kernel_state,
         external_name=external_name,
     )
-
-CONTROL_SOURCE_HEARTBEAT = "machine_heartbeat"
-CONTROL_SOURCE_ENGINE_CHANNEL = "machine_control_ws"
-CONTROL_SOURCE_LEGACY_RUNNER = "legacy_runner"
-DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS = 15 * 60 * 1000
-_CONTROL_READY_BRIDGE_STATUSES = {"ready", "healthy", ""}
 
 
 @dataclass(frozen=True)
@@ -177,29 +183,46 @@ def _lease_control_state(
     return "unknown", "unknown_lease_state"
 
 
-def _session_transport(db: Session, session_id: UUID) -> str | None:
-    row = db.query(AgentSession.managed_transport).filter(AgentSession.id == session_id).first()
-    if row is None:
-        return None
-    return _normalized(row[0]) or None
+def _provider_for_connection(conn: SessionConnection) -> str:
+    plane = _normalized(conn.control_plane)
+    return _PROVIDER_BY_CONTROL_PLANE.get(plane, "unknown")
 
 
-def _overlay_from_row(row: ManagedSessionControlState) -> ManagedControlOverlay:
+def _control_state_for_connection(conn: SessionConnection) -> str:
+    state = _normalized(conn.state).lower()
+    return _CONTROL_STATE_BY_KERNEL_STATE.get(state, "unknown")
+
+
+def _lease_state_for_connection(conn: SessionConnection) -> str:
+    state = _normalized(conn.state).lower() or "unknown"
+    return state
+
+
+def _overlay_from_connection(
+    *,
+    session_id: UUID,
+    conn: SessionConnection,
+) -> ManagedControlOverlay:
+    last_seen = normalize_utc(conn.last_health_at) or normalize_utc(conn.acquired_at)
+    lease_ttl_ms = DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS
+    expires_at: datetime | None = None
+    if last_seen is not None:
+        expires_at = last_seen + timedelta(milliseconds=lease_ttl_ms)
     return ManagedControlOverlay(
-        session_id=row.session_id,
-        provider=_normalized(row.provider).lower() or "unknown",
-        device_id=_normalized(row.device_id) or None,
-        machine_id=_normalized(row.machine_id) or None,
-        transport=_normalized(row.transport) or None,
-        lease_state=_normalized(row.lease_state).lower() or "unknown",
-        control_state=_normalized(row.control_state).lower() or "unknown",
-        reason=_normalized(row.reason) or None,
-        source=_normalized(row.source) or CONTROL_SOURCE_HEARTBEAT,
-        sequence=int(row.sequence) if row.sequence is not None else None,
-        last_control_seen_at=normalize_utc(row.last_control_seen_at),
-        lease_observed_at=normalize_utc(row.lease_observed_at),
-        lease_ttl_ms=int(row.lease_ttl_ms) if row.lease_ttl_ms is not None else None,
-        control_expires_at=normalize_utc(row.control_expires_at),
+        session_id=session_id,
+        provider=_provider_for_connection(conn),
+        device_id=None,
+        machine_id=_normalized(conn.external_name) or None,
+        transport=None,
+        lease_state=_lease_state_for_connection(conn),
+        control_state=_control_state_for_connection(conn),
+        reason=None,
+        source=CONTROL_SOURCE_HEARTBEAT,
+        sequence=None,
+        last_control_seen_at=last_seen,
+        lease_observed_at=last_seen,
+        lease_ttl_ms=lease_ttl_ms,
+        control_expires_at=expires_at,
     )
 
 
@@ -220,8 +243,8 @@ def live_transport_control_overlay(
         session_id=session.id,
         provider=_normalized(getattr(session, "provider", None)).lower() or "unknown",
         device_id=_normalized(device_id or getattr(session, "device_id", None)) or None,
-        machine_id=_normalized(machine_id or getattr(session, "source_runner_name", None)) or None,
-        transport=_normalized(getattr(session, "managed_transport", None)) or None,
+        machine_id=_normalized(machine_id) or None,
+        transport=None,
         lease_state="attached",
         control_state="online",
         reason=None,
@@ -255,7 +278,8 @@ def upsert_managed_control_leases(
     device_id: str,
     received_at: datetime,
 ) -> set[UUID]:
-    """Materialize managed lease snapshots into explicit control facts."""
+    """Materialize managed lease snapshots into kernel ``SessionConnection`` rows."""
+
     touched: set[UUID] = set()
     seen_at = normalize_utc(received_at) or _utc_now()
     for lease in leases:
@@ -266,49 +290,34 @@ def upsert_managed_control_leases(
         lease_state = _normalized(getattr(lease, "state", None)).lower() or "unknown"
         bridge_status = _normalized(getattr(lease, "bridge_status", None)) or None
         thread_subscription_status = _normalized(getattr(lease, "thread_subscription_status", None)) or None
-        control_state, reason = _lease_control_state(
+        control_state, _reason = _lease_control_state(
             lease_state=lease_state,
             bridge_status=bridge_status,
             thread_subscription_status=thread_subscription_status,
         )
-        ttl_ms = int(getattr(lease, "lease_ttl_ms", 0) or 0) or DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS
-        expires_at = seen_at + timedelta(milliseconds=ttl_ms)
-        row = db.query(ManagedSessionControlState).filter(ManagedSessionControlState.session_id == session_id).first()
-        values = {
-            "session_id": session_id,
-            "provider": provider,
-            "device_id": device_id,
-            "machine_id": _normalized(getattr(lease, "machine_id", None)) or None,
-            "transport": _session_transport(db, session_id),
-            "lease_state": lease_state,
-            "control_state": control_state,
-            "reason": reason,
-            "source": CONTROL_SOURCE_HEARTBEAT,
-            "sequence": int(getattr(lease, "sequence", 0) or 0),
-            "last_control_seen_at": seen_at,
-            "lease_observed_at": normalize_utc(getattr(lease, "observed_at", None)),
-            "lease_ttl_ms": ttl_ms,
-            "control_expires_at": expires_at,
-            "bridge_status": bridge_status,
-            "thread_subscription_status": thread_subscription_status,
-        }
-        if row is None:
-            db.add(ManagedSessionControlState(**values))
-            touched.add(session_id)
-        else:
-            changed = any(getattr(row, key) != value for key, value in values.items() if key != "session_id")
-            for key, value in values.items():
-                setattr(row, key, value)
-            if changed:
-                touched.add(session_id)
+        machine_id = _normalized(getattr(lease, "machine_id", None)) or None
         _mirror_connection_state(
             db,
             session_id=session_id,
             provider=provider,
             control_state=control_state,
-            external_name=values.get("machine_id"),
+            external_name=machine_id,
             device_id=device_id,
         )
+        touched.add(session_id)
+    # Update last_health_at on the affected connections so freshness reflects
+    # this snapshot. ``_mirror_connection_state`` only writes state; bump
+    # health timestamps here so overlay projection picks up "just seen".
+    if touched:
+        rows = (
+            db.query(SessionConnection)
+            .join(SessionRun, SessionConnection.run_id == SessionRun.id)
+            .join(SessionThread, SessionRun.thread_id == SessionThread.id)
+            .filter(SessionThread.session_id.in_(touched))
+            .all()
+        )
+        for row in rows:
+            row.last_health_at = seen_at
     return touched
 
 
@@ -319,33 +328,36 @@ def mark_missing_managed_control_leases(
     device_id: str,
     received_at: datetime,
 ) -> set[UUID]:
-    """Mark known managed controls from this device offline when omitted."""
+    """Mark connections from this device offline when omitted from the snapshot."""
+
     seen_session_ids = {getattr(lease, "session_id", None) for lease in leases}
     seen_session_ids.discard(None)
+    # Without ManagedSessionControlState we no longer have a per-device
+    # index of "what was previously known managed for this device". The
+    # heartbeat path still owns liveness via ``_mirror_connection_state``
+    # for present leases; absent ones can be conservatively flipped via the
+    # control_plane state already on SessionConnection if their last health
+    # is older than the snapshot's seen_at.
     seen_at = normalize_utc(received_at) or _utc_now()
-    query = db.query(ManagedSessionControlState).filter(ManagedSessionControlState.device_id == device_id)
-    if seen_session_ids:
-        query = query.filter(ManagedSessionControlState.session_id.notin_(seen_session_ids))
-    rows = query.all()
     touched: set[UUID] = set()
-    for row in rows:
-        if row.control_state == "offline" and row.reason == "missing_from_snapshot":
+
+    # Find connections in attached/degraded state whose health timestamps
+    # predate this snapshot — those must be missing from the snapshot.
+    query = (
+        db.query(SessionConnection, SessionThread.session_id)
+        .join(SessionRun, SessionConnection.run_id == SessionRun.id)
+        .join(SessionThread, SessionRun.thread_id == SessionThread.id)
+        .filter(SessionConnection.state.in_(("attached", "degraded")))
+    )
+    if seen_session_ids:
+        query = query.filter(SessionThread.session_id.notin_(seen_session_ids))
+    for conn, session_id in query.all():
+        last_health = normalize_utc(conn.last_health_at)
+        if last_health is not None and last_health >= seen_at:
             continue
-        row.lease_state = "missing"
-        row.control_state = "offline"
-        row.reason = "missing_from_snapshot"
-        row.source = CONTROL_SOURCE_HEARTBEAT
-        row.last_control_seen_at = seen_at
-        row.control_expires_at = seen_at
-        touched.add(row.session_id)
-        _mirror_connection_state(
-            db,
-            session_id=row.session_id,
-            provider=_normalized(row.provider).lower() or "unknown",
-            control_state="offline",
-            external_name=_normalized(row.machine_id) or None,
-            device_id=device_id,
-        )
+        conn.state = "detached"
+        conn.last_health_at = seen_at
+        touched.add(session_id)
     return touched
 
 
@@ -355,5 +367,32 @@ def load_managed_control_state_map(
 ) -> dict[UUID, ManagedControlOverlay]:
     if not session_ids:
         return {}
-    rows = db.query(ManagedSessionControlState).filter(ManagedSessionControlState.session_id.in_(session_ids)).all()
-    return {row.session_id: _overlay_from_row(row) for row in rows}
+    rows = (
+        db.query(SessionThread.session_id, SessionConnection)
+        .join(SessionRun, SessionRun.thread_id == SessionThread.id)
+        .join(SessionConnection, SessionConnection.run_id == SessionRun.id)
+        .filter(
+            SessionThread.session_id.in_(session_ids),
+            SessionConnection.control_plane.in_(tuple(_PROVIDER_BY_CONTROL_PLANE.keys())),
+        )
+        .all()
+    )
+    best: dict[UUID, SessionConnection] = {}
+    for session_id, conn in rows:
+        existing = best.get(session_id)
+        if existing is None:
+            best[session_id] = conn
+            continue
+        # Prefer attached > degraded > others, then most recent health.
+        prefer = _connection_priority(conn)
+        current = _connection_priority(existing)
+        if prefer > current:
+            best[session_id] = conn
+    return {sid: _overlay_from_connection(session_id=sid, conn=conn) for sid, conn in best.items()}
+
+
+def _connection_priority(conn: SessionConnection) -> tuple:
+    state = _normalized(conn.state).lower()
+    state_rank = {"attached": 5, "degraded": 4, "detached": 3, "released": 2, "ended": 1}.get(state, 0)
+    last_health = normalize_utc(conn.last_health_at) or datetime.min.replace(tzinfo=timezone.utc)
+    return (state_rank, last_health, conn.id)

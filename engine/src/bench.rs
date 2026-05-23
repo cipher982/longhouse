@@ -287,17 +287,15 @@ impl ShipBenchResult {
             self.ship_latency_p50_ms, self.ship_latency_p95_ms
         );
         match (self.server_queue_wait_p50_ms, self.server_queue_wait_p95_ms) {
-            (Some(p50), Some(p95)) => eprintln!(
-                "Server queue:   p50 {:.1}ms / p95 {:.1}ms",
-                p50, p95
-            ),
+            (Some(p50), Some(p95)) => {
+                eprintln!("Server queue:   p50 {:.1}ms / p95 {:.1}ms", p50, p95)
+            }
             _ => eprintln!("Server queue:   (no X-Ingest-* headers seen)"),
         }
         match (self.server_exec_p50_ms, self.server_exec_p95_ms) {
-            (Some(p50), Some(p95)) => eprintln!(
-                "Server exec:    p50 {:.1}ms / p95 {:.1}ms",
-                p50, p95
-            ),
+            (Some(p50), Some(p95)) => {
+                eprintln!("Server exec:    p50 {:.1}ms / p95 {:.1}ms", p50, p95)
+            }
             _ => {}
         }
         if self.failures > 0 {
@@ -374,7 +372,8 @@ pub fn run_benchmark_ship(
         use tokio::sync::Semaphore;
 
         let sem = Arc::new(Semaphore::new(concurrency.max(1)));
-        let ship_latencies: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::with_capacity(prepared.len())));
+        let ship_latencies: Arc<Mutex<Vec<f64>>> =
+            Arc::new(Mutex::new(Vec::with_capacity(prepared.len())));
         let server_queue: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::new()));
         let server_exec: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::new()));
         let failures = Arc::new(std::sync::atomic::AtomicUsize::new(0));

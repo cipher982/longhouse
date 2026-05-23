@@ -27,8 +27,6 @@ from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
 from zerg.services.session_observations import record_runtime_observation
-from zerg.session_execution_home import ManagedSessionTransport
-from zerg.session_execution_home import SessionExecutionHome
 from zerg.utils.time import normalize_utc
 
 RuntimeEventKind = Literal["phase_signal", "progress_signal", "terminal_signal", "binding_signal"]
@@ -488,13 +486,22 @@ def _is_bridge_transcript_event(event: RuntimeEventIngest) -> bool:
 
 
 def _managed_codex_session_ids(db: Session) -> list[UUID]:
+    # Session-identity-kernel cleanup: ``execution_home`` /
+    # ``managed_transport`` were dropped. Use SessionConnection rows on the
+    # ``codex_bridge``/``codex_app_server`` control plane to identify managed
+    # Codex sessions.
+    from zerg.models.agents import SessionConnection
+    from zerg.models.agents import SessionRun
+    from zerg.models.agents import SessionThread
+
     rows = (
         db.query(AgentSession.id)
+        .join(SessionThread, SessionThread.id == AgentSession.primary_thread_id)
+        .join(SessionRun, SessionRun.thread_id == SessionThread.id)
+        .join(SessionConnection, SessionConnection.run_id == SessionRun.id)
         .filter(AgentSession.provider == "codex")
-        .filter(
-            (AgentSession.execution_home == SessionExecutionHome.MANAGED_LOCAL.value)
-            | (AgentSession.managed_transport == ManagedSessionTransport.CODEX_APP_SERVER.value)
-        )
+        .filter(SessionConnection.control_plane.in_(["codex_bridge", "codex_app_server"]))
+        .distinct()
         .all()
     )
     return [row[0] for row in rows]
@@ -627,9 +634,7 @@ def runtime_event_from_observation(observation) -> RuntimeEventIngest | None:
     kind = str(payload.get("kind") or "").strip()
     valid_kinds = {"phase_signal", "progress_signal", "terminal_signal", "binding_signal"}
     if kind not in valid_kinds:
-        raise ValueError(
-            f"runtime_signal observation {observation.observation_id} has invalid kind {kind!r}"
-        )
+        raise ValueError(f"runtime_signal observation {observation.observation_id} has invalid kind {kind!r}")
     return RuntimeEventIngest(
         runtime_key=observation.runtime_key
         or runtime_key_for_session(
@@ -802,9 +807,7 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
             # Blocked-with-no-tool means "still blocked on the same tool as
             # last time" — keep the prior active_tool instead of dropping
             # it. Running signals always carry the tool explicitly.
-            next_active_tool = event.tool_name or (
-                state.active_tool if next_phase == "blocked" else None
-            )
+            next_active_tool = event.tool_name or (state.active_tool if next_phase == "blocked" else None)
         if latest_phase_signal_at is not None and occurred_at < latest_phase_signal_at:
             if stale_lease_observed_at is None:
                 return "ignored"
@@ -817,11 +820,7 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
             refresh_at = _managed_lease_refresh_at(event, occurred_at)
             freshness_ms = _phase_signal_freshness_ms(event, next_phase)
             state.last_live_at = _latest_timestamp(state.last_live_at, refresh_at)
-            state.freshness_expires_at = (
-                refresh_at + timedelta(milliseconds=freshness_ms)
-                if freshness_ms is not None
-                else None
-            )
+            state.freshness_expires_at = refresh_at + timedelta(milliseconds=freshness_ms) if freshness_ms is not None else None
             event_source = str(event.source or "").strip()
             if event_source in MANAGED_CODEX_RUNTIME_SOURCES:
                 state.phase_source = event_source
@@ -835,10 +834,7 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
                 return "applied"
             return "ignored"
         phase_changed = state.phase != next_phase
-        active_tool_changed = (
-            next_phase in {"running", "blocked"}
-            and (state.active_tool or None) != (next_active_tool or None)
-        )
+        active_tool_changed = next_phase in {"running", "blocked"} and (state.active_tool or None) != (next_active_tool or None)
         if phase_changed or active_tool_changed:
             if phase_changed and _phase_reanchors(state.phase, next_phase):
                 state.timeline_anchor_at = occurred_at
@@ -854,11 +850,7 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
         freshness_base_at = _managed_lease_refresh_at(event, occurred_at)
         state.last_live_at = _latest_timestamp(occurred_at, freshness_base_at)
         freshness_ms = _phase_signal_freshness_ms(event, next_phase)
-        state.freshness_expires_at = (
-            freshness_base_at + timedelta(milliseconds=freshness_ms)
-            if freshness_ms is not None
-            else None
-        )
+        state.freshness_expires_at = freshness_base_at + timedelta(milliseconds=freshness_ms) if freshness_ms is not None else None
         state.terminal_state = None
         state.terminal_reason = None
         state.terminal_source = None
@@ -875,11 +867,7 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
         state.last_progress_at = occurred_at
         state.timeline_anchor_at = occurred_at
         progress_kind = str((event.payload or {}).get("progress_kind") or "").strip()
-        if (
-            state.terminal_state is None
-            and state.phase in ATTENTION_PHASES
-            and progress_kind == "transcript_append"
-        ):
+        if state.terminal_state is None and state.phase in ATTENTION_PHASES and progress_kind == "transcript_append":
             state.phase = "idle"
             state.active_tool = None
             state.freshness_expires_at = None
@@ -901,20 +889,13 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
             state.phase_source = "progress"
 
     elif event.kind == "terminal_signal":
-        terminal_state = (
-            str((event.payload or {}).get("terminal_state") or "finished").strip()
-            or "finished"
-        )
+        terminal_state = str((event.payload or {}).get("terminal_state") or "finished").strip() or "finished"
         latest_terminal_related_at = _latest_timestamp(
             state.last_runtime_signal_at,
             state.last_progress_at,
             state.terminal_at,
         )
-        if (
-            latest_terminal_related_at is not None
-            and occurred_at < latest_terminal_related_at
-            and terminal_state != "session_ended"
-        ):
+        if latest_terminal_related_at is not None and occurred_at < latest_terminal_related_at and terminal_state != "session_ended":
             return "ignored"
         terminal_reason = str((event.payload or {}).get("terminal_reason") or "").strip() or None
         if terminal_reason is None and terminal_state in {"process_gone", "host_expired", "user_closed"}:

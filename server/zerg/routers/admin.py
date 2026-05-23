@@ -515,9 +515,7 @@ class ConfigureTestSessionRuntimeRequest(BaseModel):
     """Test-only session runtime override for Playwright coverage."""
 
     execution_home: Literal["unmanaged_local", "managed_local", "managed_hosted", "cloud_takeover"] = "managed_local"
-    managed_transport: Optional[
-        Literal["claude_channel_bridge", "codex_app_server", "opencode_process", "antigravity_process"]
-    ] = None
+    managed_transport: Optional[Literal["claude_channel_bridge", "codex_app_server", "opencode_process", "antigravity_process"]] = None
     source_runner_id: Optional[int] = None
     source_runner_name: Optional[str] = None
     managed_session_name: Optional[str] = None
@@ -743,12 +741,13 @@ async def list_remote_launch_debug(
     Surfaces launching / launching_unknown / launch_failed / launch_orphaned
     rows so an operator can debug propagation or control-channel issues.
     """
-    q = db.query(AgentSession).filter(AgentSession.launch_state.is_not(None))
-    if not include_live:
-        q = q.filter(AgentSession.launch_state != "live")
-    q = q.order_by(AgentSession.started_at.desc())
-    rows = q.limit(limit).all()
-    total = q.count()
+    # Session-identity-kernel cleanup: ``launch_state`` was dropped from
+    # ``AgentSession``. The remote-launch debug surface is no longer wired
+    # to a column-backed store; return empty until it is re-implemented on
+    # ``SessionLaunchAttempt``.
+    rows: list[AgentSession] = []
+    total = 0
+    _ = include_live
     entries = [
         RemoteLaunchDebugEntry(
             session_id=str(row.id),

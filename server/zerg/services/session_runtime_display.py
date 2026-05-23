@@ -13,7 +13,7 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 
-from zerg.services.session_capabilities import SessionCapabilityFlags
+from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.utils.time import normalize_utc
 
@@ -72,7 +72,7 @@ def _has_fresh_signal(
 
 def _truth_tier(
     *,
-    capabilities: SessionCapabilityFlags,
+    capabilities: KernelSessionCapabilities,
     confidence: str | None,
     runtime_source: str | None,
     presence_state: str | None,
@@ -224,7 +224,7 @@ def _managed_copy(
 def build_session_runtime_display(
     *,
     runtime_view: SessionRuntimeView,
-    capabilities: SessionCapabilityFlags,
+    capabilities: KernelSessionCapabilities,
     ended_at: datetime | None,
     binding_host_state: str | None = None,
     binding_terminal_reason: str | None = None,
@@ -377,8 +377,7 @@ def build_session_runtime_display(
     tone = (
         "active"
         if transcript_sync_pending
-        else
-        "inactive"
+        else "inactive"
         if lifecycle == "closed"
         or unmanaged_attention_unverified
         or no_runtime_signal
@@ -413,7 +412,7 @@ def build_session_runtime_display(
     )
 
 
-def _derive_control_path(capabilities: SessionCapabilityFlags) -> str:
+def _derive_control_path(capabilities: KernelSessionCapabilities) -> str:
     """Durable: does Longhouse own a control path for this session?
 
     Sourced from the kernel-projected capability flags. A managed

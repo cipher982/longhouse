@@ -432,10 +432,7 @@ def onboard(
             skip_local_server = False
 
     typer.echo("")
-    typer.echo(
-        "Install Longhouse, open it, and find one prior session. "
-        "Start Longhouse sessions later when you want control."
-    )
+    typer.echo("Install Longhouse, open it, and find one prior session. " "Start Longhouse sessions later when you want control.")
     typer.echo("")
 
     # Step 1: Check dependencies
@@ -638,7 +635,7 @@ def onboard(
     if has_codex:
         typer.echo("  longhouse codex    Start a Longhouse Codex session")
     if has_antigravity:
-        typer.echo("  longhouse antigravity Start an Antigravity archive + observe session")
+        typer.echo("  longhouse antigravity Start a Longhouse Antigravity session")
     if not (has_claude or has_codex or has_antigravity):
         typer.echo("  Install Claude Code, Codex CLI, or Antigravity CLI, then start a Longhouse session")
     typer.echo("")

@@ -33,12 +33,21 @@ def _make_db(tmp_path, name="demo_reset.db"):
 
 
 def _seed(factory, *, device_id, provider_session_id=None):
+    """Seed an AgentSession + primary SessionThread + SessionThreadAlias row.
+
+    Post session-identity-kernel cleanup: ``provider_session_id`` is stored
+    as a ``session_thread_aliases`` row, not a column on ``AgentSession``.
+    """
+    from uuid import uuid4
+
+    from zerg.models.agents import SessionThread, SessionThreadAlias
+
     db = factory()
     s = AgentSession(
+        id=uuid4(),
         provider="claude",
         environment="production",
         device_id=device_id,
-        provider_session_id=provider_session_id,
         started_at=datetime.now(timezone.utc),
         ended_at=datetime.now(timezone.utc),
         user_messages=1,
@@ -46,6 +55,25 @@ def _seed(factory, *, device_id, provider_session_id=None):
         tool_calls=0,
     )
     db.add(s)
+    db.flush()
+    if provider_session_id:
+        thread = SessionThread(
+            id=uuid4(),
+            session_id=s.id,
+            provider="claude",
+            is_primary=1,
+        )
+        db.add(thread)
+        db.flush()
+        s.primary_thread_id = thread.id
+        db.add(
+            SessionThreadAlias(
+                thread_id=thread.id,
+                alias_kind="provider_session_id",
+                alias_value=provider_session_id,
+                provider="claude",
+            )
+        )
     db.commit()
     db.close()
 

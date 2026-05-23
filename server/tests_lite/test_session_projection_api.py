@@ -1,3 +1,12 @@
+import pytest
+
+pytest.skip(
+    "session-identity-kernel cleanup: thread_root_session_id and continuation lineage "
+    "columns were removed; each session is now its own thread root and the legacy "
+    "stitching projection is retired.",
+    allow_module_level=True,
+)
+
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone

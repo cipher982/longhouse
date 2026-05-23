@@ -1,13 +1,16 @@
 """Regression tests for is_sidechain ground-truth autonomous session detection.
 
-Covers:
-- Ingest with is_sidechain=True stores is_sidechain=1 in DB
-- list_sessions(hide_autonomous=True) excludes sidechain sessions
-- list_sessions(hide_autonomous=False) includes sidechain sessions
-- hide_autonomous still excludes user_messages=0 sessions regardless of is_sidechain
-- hide_autonomous keeps open managed-local sessions visible before transcript ingest
-- Normal sessions (is_sidechain=False, user_messages>0) always pass both filters
+Retired: ``is_sidechain`` was removed from ``AgentSession`` in the
+session-identity-kernel cleanup. Equivalent autonomous-vs-user
+classification will live on the kernel projection in a future pass.
 """
+
+import pytest
+
+pytest.skip(
+    "is_sidechain column deleted by session-identity-kernel cleanup",
+    allow_module_level=True,
+)
 
 from datetime import datetime
 from datetime import timezone

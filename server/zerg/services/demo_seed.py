@@ -8,6 +8,8 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionThread
+from zerg.models.agents import SessionThreadAlias
 from zerg.services.agents_store import AgentsStore
 from zerg.services.demo_sessions import build_demo_agent_sessions
 
@@ -22,23 +24,44 @@ def is_demo_provider_session_id(provider_session_id: str | None) -> bool:
 
 
 def get_existing_demo_provider_session_ids(db: Session) -> set[str]:
-    """Return currently-seeded demo provider session ids."""
+    """Return currently-seeded demo provider session ids.
+
+    Post session-identity-kernel cleanup: ``provider_session_id`` is no
+    longer a column on ``AgentSession``. The truth lives on
+    ``session_thread_aliases`` rows scoped to each session's primary
+    thread, so we filter there instead.
+    """
     rows = (
-        db.query(AgentSession.provider_session_id)
-        .filter(AgentSession.provider_session_id.isnot(None))
-        .filter(AgentSession.provider_session_id.like(f"{DEMO_PROVIDER_SESSION_PREFIX}%"))
+        db.query(SessionThreadAlias.alias_value)
+        .filter(SessionThreadAlias.alias_kind == "provider_session_id")
+        .filter(SessionThreadAlias.alias_value.like(f"{DEMO_PROVIDER_SESSION_PREFIX}%"))
         .all()
     )
     return {row[0] for row in rows if row[0]}
 
 
 def delete_demo_sessions(db: Session) -> int:
-    """Delete all demo sessions and return number of rows removed."""
-    deleted = (
-        db.query(AgentSession)
-        .filter(AgentSession.provider_session_id.like(f"{DEMO_PROVIDER_SESSION_PREFIX}%"))
-        .delete(synchronize_session=False)
+    """Delete all demo sessions and return number of rows removed.
+
+    Find sessions via their primary ``session_thread_aliases`` row whose
+    ``alias_value`` starts with the demo prefix. Cascading FKs handle the
+    kernel rows + events + source lines.
+    """
+    session_ids = (
+        db.query(SessionThread.session_id)
+        .join(
+            SessionThreadAlias,
+            SessionThreadAlias.thread_id == SessionThread.id,
+        )
+        .filter(SessionThreadAlias.alias_kind == "provider_session_id")
+        .filter(SessionThreadAlias.alias_value.like(f"{DEMO_PROVIDER_SESSION_PREFIX}%"))
+        .distinct()
+        .all()
     )
+    ids = [sid for (sid,) in session_ids if sid is not None]
+    if not ids:
+        return 0
+    deleted = db.query(AgentSession).filter(AgentSession.id.in_(ids)).delete(synchronize_session=False)
     db.commit()
     return int(deleted or 0)
 

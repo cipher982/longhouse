@@ -40,6 +40,7 @@ from zerg.models_config import get_llm_client_for_use_case
 from zerg.observability import get_tracer
 from zerg.observability import mark_span_error
 from zerg.observability import set_span_attributes
+from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.agents_store import AgentsStore
 from zerg.services.managed_local_control import MANAGED_LOCAL_CONTROL_STATUS_COMPLETED
 from zerg.services.managed_local_control import MANAGED_LOCAL_CONTROL_STATUS_FAILED
@@ -60,7 +61,6 @@ from zerg.services.managed_local_event_polling import fetch_managed_local_events
 from zerg.services.managed_local_event_polling import get_managed_local_latest_event_id
 from zerg.services.managed_local_event_polling import get_session_turn_snapshot_best_effort
 from zerg.services.managed_local_event_polling import hydrate_turn_events_from_snapshot
-from zerg.services.agents.kernel_capability_adapter import build_session_capabilities_from_kernel
 from zerg.services.session_continuity import session_lock_manager
 from zerg.services.session_current_control import current_session_capabilities
 from zerg.services.session_turns import SESSION_TURN_ERROR_SEND_FAILED
@@ -178,7 +178,7 @@ def _resolve_agents_owner_id(db: Session, device_token: DeviceToken | None) -> i
 
 def _managed_local_launch_response(db: Session, result) -> ManagedLocalSessionLaunchResponse:
     session = result.session
-    capabilities = build_session_capabilities_from_kernel(db, session)
+    capabilities = project_session_capabilities(db, session_id=session.id)
     # The kernel projection is the truth: a launch response is only valid if
     # the kernel rows actually grant managed control. ``execution_home`` /
     # ``managed_transport`` columns are no longer authoritative.

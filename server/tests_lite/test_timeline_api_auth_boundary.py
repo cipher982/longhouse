@@ -56,6 +56,27 @@ def _seed_user(db, *, user_id: int = 1) -> User:
     return user
 
 
+def _seed_runner(db, *, runner_id: int, name: str, owner_id: int = 1):
+    """Seed a Runner row so the post-cleanup property derivations
+    (source_runner_id from device_id->Runner.name) can find a match."""
+    from zerg.models.models import Runner
+
+    runner = Runner(
+        id=runner_id,
+        owner_id=owner_id,
+        name=name,
+        availability_policy="always_on",
+        capabilities=["exec.full"],
+        status="online",
+        auth_secret_hash="x",
+        runner_metadata={},
+    )
+    db.add(runner)
+    db.commit()
+    db.refresh(runner)
+    return runner
+
+
 def _seed_session(db) -> str:
     session = AgentSession(
         id=uuid4(),
@@ -166,6 +187,7 @@ def test_timeline_session_detail_includes_attach_command_for_managed_local_codex
     session_local = _make_db(tmp_path)
     with session_local() as db:
         _seed_user(db)
+        _seed_runner(db, runner_id=9, name="cinder")
         session = AgentSession(
             id=uuid4(),
             provider="codex",
@@ -205,8 +227,10 @@ def test_timeline_session_detail_includes_attach_command_for_managed_local_codex
         assert response.status_code == 200
         payload = response.json()
         assert payload["home_label"] == "On this Mac"
+        # Codex managed control runs through the Machine Agent channel — no
+        # remote-command Runner association regardless of seeded Runner row.
         assert payload["control"] == {
-            "source_runner_id": 9,
+            "source_runner_id": None,
             "source_runner_name": "cinder",
             "attach_command": build_managed_local_attach_command(session=session),
         }
@@ -223,6 +247,7 @@ def test_timeline_session_detail_includes_attach_command_for_native_claude_bridg
     session_local = _make_db(tmp_path)
     with session_local() as db:
         _seed_user(db)
+        _seed_runner(db, runner_id=9, name="work-laptop")
         session = AgentSession(
             id=uuid4(),
             provider="claude",
@@ -880,6 +905,7 @@ def test_timeline_session_detail_includes_attach_command_for_native_managed_loca
     session_local = _make_db(tmp_path)
     with session_local() as db:
         _seed_user(db)
+        _seed_runner(db, runner_id=9, name="cinder")
         session = AgentSession(
             id=uuid4(),
             provider="codex",
@@ -918,8 +944,10 @@ def test_timeline_session_detail_includes_attach_command_for_native_managed_loca
         assert response.status_code == 200
         payload = response.json()
         assert payload["home_label"] == "On this Mac"
+        # Codex managed control runs through the Machine Agent channel — no
+        # remote-command Runner association.
         assert payload["control"] == {
-            "source_runner_id": 9,
+            "source_runner_id": None,
             "source_runner_name": "cinder",
             "attach_command": build_managed_local_attach_command(session=session),
         }

@@ -27,20 +27,49 @@ def _make_db(tmp_path, name="demo_seed.db"):
 
 
 def _seed_session(factory, *, provider_session_id: str | None):
+    """Seed an AgentSession + primary SessionThread + SessionThreadAlias row.
+
+    Post session-identity-kernel cleanup: ``provider_session_id`` is stored
+    as a ``session_thread_aliases`` row, not a column on ``AgentSession``.
+    """
+    from uuid import uuid4
+
+    from zerg.models.agents import SessionThread, SessionThreadAlias
+
     db = factory()
-    db.add(
-        AgentSession(
-            provider="claude",
-            environment="production",
-            device_id="demo-mac",
-            provider_session_id=provider_session_id,
-            started_at=datetime.now(timezone.utc),
-            ended_at=datetime.now(timezone.utc),
-            user_messages=1,
-            assistant_messages=1,
-            tool_calls=0,
-        )
+    session = AgentSession(
+        id=uuid4(),
+        provider="claude",
+        environment="production",
+        device_id="demo-mac",
+        started_at=datetime.now(timezone.utc),
+        ended_at=datetime.now(timezone.utc),
+        user_messages=1,
+        assistant_messages=1,
+        tool_calls=0,
     )
+    db.add(session)
+    db.flush()
+
+    if provider_session_id:
+        thread = SessionThread(
+            id=uuid4(),
+            session_id=session.id,
+            provider="claude",
+            is_primary=1,
+        )
+        db.add(thread)
+        db.flush()
+        session.primary_thread_id = thread.id
+        db.add(
+            SessionThreadAlias(
+                thread_id=thread.id,
+                alias_kind="provider_session_id",
+                alias_value=provider_session_id,
+                provider="claude",
+            )
+        )
+
     db.commit()
     db.close()
 
@@ -65,9 +94,23 @@ def _client(factory):
 
 
 def _count_demo_sessions(factory) -> int:
+    """Count demo sessions by their session_thread_aliases provider_session_id.
+
+    Post session-identity-kernel cleanup: ``provider_session_id`` is not a
+    column on ``AgentSession``, it is a SessionThreadAlias row.
+    """
+    from zerg.models.agents import SessionThread, SessionThreadAlias
+
     db = factory()
     try:
-        return db.query(AgentSession).filter(AgentSession.provider_session_id.like("demo-%")).count()
+        return (
+            db.query(SessionThread.session_id)
+            .join(SessionThreadAlias, SessionThreadAlias.thread_id == SessionThread.id)
+            .filter(SessionThreadAlias.alias_kind == "provider_session_id")
+            .filter(SessionThreadAlias.alias_value.like("demo-%"))
+            .distinct()
+            .count()
+        )
     finally:
         db.close()
 
