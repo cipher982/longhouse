@@ -539,6 +539,7 @@ async def send_text_to_managed_local_session(
     timeout_secs: int = 15,
     verify_turn_started: bool = False,
     verification_timeout_secs: float | None = None,
+    attachments: list[dict] | None = None,
 ) -> ManagedLocalSendResult:
     """Send text into a managed-local session via its configured transport.
 
@@ -566,7 +567,11 @@ async def send_text_to_managed_local_session(
         else 0
     )
     try:
-        command = build_managed_local_send_text_command(session=session, text=text)
+        command = build_managed_local_send_text_command(
+            session=session,
+            text=text,
+            attachments=attachments,
+        )
     except ManagedLocalTransportError as exc:
         return ManagedLocalSendResult(ok=False, error=str(exc))
     result = await dispatch_managed_control_command(
@@ -676,6 +681,7 @@ async def steer_text_to_managed_local_session(
     text: str,
     commis_id: str | None = None,
     timeout_secs: int = 15,
+    attachments: list[dict] | None = None,
 ) -> ManagedLocalSendResult:
     """Inject mid-turn steer text into the currently active Codex turn.
 
@@ -700,7 +706,11 @@ async def steer_text_to_managed_local_session(
         return ManagedLocalSendResult(ok=False, error=transport_error)
 
     try:
-        command = build_managed_local_steer_text_command(session=session, text=text)
+        command = build_managed_local_steer_text_command(
+            session=session,
+            text=text,
+            attachments=attachments,
+        )
     except ManagedLocalTransportError as exc:
         return ManagedLocalSendResult(ok=False, error=str(exc))
 

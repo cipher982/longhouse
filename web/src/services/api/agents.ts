@@ -221,6 +221,12 @@ export interface SessionCapabilities {
   composer_enabled?: boolean;
   composer_placeholder?: string;
   composer_disabled_reason?: string | null;
+  /**
+   * True when this session accepts image attachments on input. Today this is
+   * codex_app_server + live_control_available; the server is the source of
+   * truth so the web client doesn't have to know the transport set.
+   */
+  attach_images?: boolean;
 }
 
 export interface AgentSessionsListResponse {

@@ -50,6 +50,48 @@ export async function postSessionInput(
   });
 }
 
+export interface MultipartAttachment {
+  blob: Blob;
+  filename: string;
+}
+
+export async function postSessionInputMultipart(
+  sessionId: string,
+  body: {
+    text: string;
+    attachments: MultipartAttachment[];
+    client_request_id?: string | null;
+  },
+): Promise<SessionInputResponse> {
+  // Multipart route is auto-intent only in v1; the server enforces this.
+  const form = new FormData();
+  form.append("text", body.text);
+  form.append("intent", "auto");
+  if (body.client_request_id) form.append("client_request_id", body.client_request_id);
+  body.attachments.forEach((a) => form.append("attachments", a.blob, a.filename));
+  const totalBytes = body.attachments.reduce((sum, a) => sum + a.blob.size, 0);
+  const started = performance.now();
+  try {
+    const result = await request<SessionInputResponse>(`/sessions/${sessionId}/inputs-multipart`, {
+      method: "POST",
+      body: form,
+    });
+    const elapsedMs = Math.round(performance.now() - started);
+    console.info(
+      `[image-attach] web upload count=${body.attachments.length} ` +
+      `total_bytes=${totalBytes} elapsed_ms=${elapsedMs}`,
+    );
+    return result;
+  } catch (err) {
+    const elapsedMs = Math.round(performance.now() - started);
+    console.warn(
+      `[image-attach] web upload failed count=${body.attachments.length} ` +
+      `total_bytes=${totalBytes} elapsed_ms=${elapsedMs}`,
+    );
+    throw err;
+  }
+}
+
 export async function fetchSessionInputs(
   sessionId: string,
 ): Promise<QueuedInputSummary[]> {

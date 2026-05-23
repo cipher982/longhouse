@@ -92,6 +92,53 @@ def test_build_managed_local_send_text_command_uses_engine_bridge_for_codex_app_
     assert '"$engine" codex-bridge send --session-id session-123 --text continue' in inner
 
 
+def test_build_managed_local_send_text_command_appends_attachments_json_for_codex():
+    session = SimpleNamespace(
+        id="session-123",
+        managed_transport=ManagedSessionTransport.CODEX_APP_SERVER.value,
+        provider="codex",
+    )
+    refs = [
+        {
+            "id": "att_1",
+            "mime_type": "image/png",
+            "sha256": "a" * 64,
+            "blob_url": "/api/agents/sessions/session-123/inputs/1/attachments/att_1/blob",
+        }
+    ]
+    command = build_managed_local_send_text_command(
+        session=session,
+        text="hello",
+        attachments=refs,
+    )
+    inner = _wrapped_inner(command)
+    assert "--attachments-json" in inner
+    # Either the JSON is single-quote-shell-quoted; assert it contains the id and sha.
+    assert "att_1" in inner
+    assert "a" * 64 in inner
+
+
+def test_build_managed_local_send_text_command_rejects_attachments_for_claude_channel():
+    session = SimpleNamespace(
+        id="session-123",
+        managed_transport=ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value,
+        provider="claude",
+    )
+    with pytest.raises(ManagedLocalTransportError):
+        build_managed_local_send_text_command(
+            session=session,
+            text="hello",
+            attachments=[
+                {
+                    "id": "x",
+                    "mime_type": "image/png",
+                    "sha256": "a" * 64,
+                    "blob_url": "/x",
+                }
+            ],
+        )
+
+
 def test_build_managed_local_send_text_command_uses_local_bridge_for_claude_channel_transport():
     session = SimpleNamespace(
         id="session-123",

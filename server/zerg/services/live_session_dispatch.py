@@ -125,6 +125,7 @@ async def send_text_to_live_session(
     timeout_secs: int = 15,
     verify_turn_started: bool = False,
     verification_timeout_secs: float | None = None,
+    attachments: list[dict] | None = None,
 ) -> ManagedLocalSendResult:
     """Send text to a live session through the single transport dispatch seam.
 
@@ -149,6 +150,7 @@ async def send_text_to_live_session(
             timeout_secs=timeout_secs,
             verify_turn_started=verify_turn_started,
             verification_timeout_secs=verification_timeout_secs,
+            attachments=attachments,
         )
 
     execution_home = (

@@ -127,7 +127,24 @@ def build_session_capabilities_response(
         can_terminate=(kernel_capabilities.can_terminate if kernel_capabilities is not None else False),
         can_tail_output=(kernel_capabilities.can_tail_output if kernel_capabilities is not None else False),
         can_resume=(kernel_capabilities.can_resume if kernel_capabilities is not None else False),
+        attach_images=_attach_images_capability(capability_flags),
     )
+
+
+def _attach_images_capability(capability_flags) -> bool:
+    """True when this session can accept image attachments.
+
+    Gated on (a) the session having live control and (b) the underlying
+    transport being codex_app_server. The engine-side LocalImage helper
+    only knows how to thread attachments into Codex turns today.
+    """
+    transport = getattr(capability_flags, "managed_transport", None)
+    if transport is None:
+        return False
+    transport_value = getattr(transport, "value", str(transport))
+    if transport_value != "codex_app_server":
+        return False
+    return bool(capability_flags.live_control_available)
 
 
 def _provider_label(session: AgentSession | None) -> str | None:
@@ -479,6 +496,10 @@ class SessionCapabilitiesResponse(BaseModel):
     can_terminate: bool = Field(False, description="Kernel: connection grants terminate capability and is currently live")
     can_tail_output: bool = Field(False, description="Kernel: connection grants output tailing capability")
     can_resume: bool = Field(False, description="Kernel: connection can be resumed (live or reattach)")
+    attach_images: bool = Field(
+        False,
+        description="True when the session can accept image attachments on input (codex_app_server only)",
+    )
 
 
 class SessionRuntimeDisplayResponse(BaseModel):

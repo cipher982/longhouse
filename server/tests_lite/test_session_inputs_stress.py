@@ -183,6 +183,7 @@ def _install_dispatch_stubs(monkeypatch, *, send_latency_secs: float = 0.0):
         timeout_secs=15,
         verify_turn_started=False,
         verification_timeout_secs=None,
+        attachments=None,
     ):
         if send_latency_secs > 0:
             await asyncio.sleep(send_latency_secs)

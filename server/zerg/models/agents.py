@@ -789,6 +789,34 @@ class SessionInput(AgentsBase):
     )
 
 
+class SessionInputAttachment(AgentsBase):
+    """Image attachment associated with a SessionInput row.
+
+    The blob lives on disk under ``data/attachments/<session_id>/<id>.bin``;
+    this row records the metadata needed to render thumbnails, verify the
+    bytes the engine fetched, and clean up after delivery.
+    """
+
+    __tablename__ = "session_input_attachments"
+
+    id = Column(GUID(), primary_key=True, default=uuid4)
+    _input_fk = "session_inputs.id" if AGENTS_SCHEMA is None else f"{AGENTS_SCHEMA}.session_inputs.id"
+    session_input_id = Column(
+        Integer,
+        ForeignKey(_input_fk, ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    session_id = Column(GUID(), nullable=False, index=True)
+    mime_type = Column(String(64), nullable=False)
+    byte_size = Column(Integer, nullable=False)
+    sha256 = Column(String(64), nullable=False)
+    blob_path = Column(Text, nullable=False)
+    original_filename = Column(String(255), nullable=True)
+    original_byte_size = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
 # ---------------------------------------------------------------------------
 # Session identity kernel — see docs/specs/session-identity-kernel.md
 #

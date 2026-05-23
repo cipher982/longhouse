@@ -332,6 +332,32 @@ async def lifespan(app: FastAPI):
                 failed.append(f"remote_launch_reaper ({e})")
                 logger.exception("Failed to start remote_launch_reaper")
 
+            # Image attachment blob reaper: drops blobs whose parent session_input
+            # is in a terminal state and older than the retention window.
+            try:
+                from zerg.database import get_session_factory as _get_sf_attach
+                from zerg.services.session_input_attachments import cleanup_stale_blobs
+
+                async def _attachment_cleanup_loop() -> None:
+                    while True:
+                        try:
+                            await asyncio.sleep(3600)
+                            db = _get_sf_attach()()
+                            try:
+                                cleanup_stale_blobs(db)
+                            finally:
+                                db.close()
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception:  # noqa: BLE001
+                            logger.exception("attachment cleanup tick failed")
+
+                asyncio.create_task(_attachment_cleanup_loop())
+                started.append("attachment_cleanup")
+            except Exception as e:  # noqa: BLE001
+                failed.append(f"attachment_cleanup ({e})")
+                logger.exception("Failed to start attachment_cleanup")
+
             # Live session summary/title enrichment. This scans session revision
             # lag directly; it is intentionally separate from the legacy ingest
             # task workers.

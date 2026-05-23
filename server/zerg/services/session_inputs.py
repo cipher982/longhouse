@@ -19,6 +19,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import SessionInput
+from zerg.models.agents import SessionInputAttachment
 
 logger = logging.getLogger(__name__)
 
@@ -262,10 +263,13 @@ def requeue_stuck_delivering(db: Session, *, stale_after_secs: float = DELIVERIN
     Called once at runtime startup; wedged rows usually mean the process died
     mid-dispatch.
 
-    - `intent=auto` / `intent=queue` rows: rewind to `queued` so the next
-      terminal-phase drain picks them up. Safe because the user asked for
-      either "best-effort dispatch" or "wait for the next boundary" — both
-      are compatible with a later retry.
+    - `intent=auto` / `intent=queue` rows without attachments: rewind to
+      `queued` so the next terminal-phase drain picks them up. Safe because
+      the user asked for either "best-effort dispatch" or "wait for the next
+      boundary" — both are compatible with a later retry.
+    - rows with attachments: transition to `failed`, never requeue. The
+      queued-input drain currently carries text only; requeueing would silently
+      resend a screenshot turn without the screenshots.
     - `intent=steer` rows: transition to `failed`, never requeue. Steer is
       a corrective, time-sensitive intent; converting it into a queued
       message after a crash would be a silent fallback that violates the
@@ -274,6 +278,8 @@ def requeue_stuck_delivering(db: Session, *, stale_after_secs: float = DELIVERIN
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(seconds=stale_after_secs)
 
+    attached_input_ids = db.query(SessionInputAttachment.session_input_id)
+
     # Intent-aware split.
     requeued = (
         db.query(SessionInput)
@@ -281,11 +287,29 @@ def requeue_stuck_delivering(db: Session, *, stale_after_secs: float = DELIVERIN
             SessionInput.status == INPUT_STATUS_DELIVERING,
             SessionInput.updated_at < cutoff,
             SessionInput.intent != INPUT_INTENT_STEER,
+            ~SessionInput.id.in_(attached_input_ids),
         )
         .update(
             {
                 "status": INPUT_STATUS_QUEUED,
                 "delivery_request_id": None,
+                "updated_at": now,
+            },
+            synchronize_session=False,
+        )
+    )
+    failed_with_attachments = (
+        db.query(SessionInput)
+        .filter(
+            SessionInput.status == INPUT_STATUS_DELIVERING,
+            SessionInput.updated_at < cutoff,
+            SessionInput.intent != INPUT_INTENT_STEER,
+            SessionInput.id.in_(attached_input_ids),
+        )
+        .update(
+            {
+                "status": INPUT_STATUS_FAILED,
+                "last_error": "attachment delivery interrupted by restart",
                 "updated_at": now,
             },
             synchronize_session=False,
@@ -310,6 +334,11 @@ def requeue_stuck_delivering(db: Session, *, stale_after_secs: float = DELIVERIN
     db.commit()
     if requeued:
         logger.info("Requeued %d stuck SessionInput rows from delivering -> queued", requeued)
+    if failed_with_attachments:
+        logger.info(
+            "Marked %d stuck attachment SessionInput rows as failed (no text-only requeue)",
+            failed_with_attachments,
+        )
     if failed:
         logger.info("Marked %d stuck steer SessionInput rows as failed (no silent requeue)", failed)
     return int(requeued)

@@ -175,6 +175,7 @@ def _stub_dispatch(monkeypatch, *, emit_verified_user_event: bool = False):
         timeout_secs=15,
         verify_turn_started=False,
         verification_timeout_secs=None,
+        attachments=None,
     ):
         calls.append({"session_id": str(session.id), "text": text, "commis_id": commis_id})
         verified_user_event_id = None

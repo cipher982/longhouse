@@ -1,6 +1,7 @@
 mod bench;
 mod build_identity;
 mod codex_app_server_canary;
+mod codex_attachments;
 mod codex_bridge;
 mod codex_source;
 mod codex_ws_relay;
@@ -47,6 +48,24 @@ use codex_bridge::{
 use config::ShipperConfig;
 use pipeline::compressor::CompressionAlgo;
 use state::db::open_db;
+
+/// Parse the `--attachments-json` CLI flag into the engine's typed
+/// `AttachmentRef` list. Empty / `None` / `null` / `[]` all collapse to no
+/// attachments so text-only callers don't need to special-case the flag.
+fn parse_attachments_cli_arg(
+    raw: Option<&str>,
+) -> anyhow::Result<Vec<crate::codex_attachments::AttachmentRef>> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let value: serde_json::Value = serde_json::from_str(trimmed)
+        .map_err(|e| anyhow::anyhow!("--attachments-json is not valid JSON: {e}"))?;
+    crate::codex_attachments::parse_attachments(&serde_json::json!({ "attachments": value }))
+}
 
 fn parse_compression_algo(s: &str) -> anyhow::Result<CompressionAlgo> {
     match s.to_lowercase().as_str() {
@@ -544,6 +563,11 @@ enum CodexBridgeCommands {
         #[arg(long, hide = true)]
         allow_direct_ws_fallback: bool,
 
+        /// JSON array of attachment refs: `[{"id":"...","mime_type":"image/png","sha256":"...","blob_url":"..."}]`.
+        /// Empty / unset means text-only.
+        #[arg(long)]
+        attachments_json: Option<String>,
+
         #[arg(long)]
         json: bool,
     },
@@ -572,6 +596,10 @@ enum CodexBridgeCommands {
 
         #[arg(long)]
         state_root: Option<PathBuf>,
+
+        /// JSON array of attachment refs (same shape as `send --attachments-json`).
+        #[arg(long)]
+        attachments_json: Option<String>,
     },
 
     /// Stop a running managed bridge and its local Codex app-server child
@@ -683,6 +711,12 @@ where
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let command_name = command_name(&cli.command);
+
+    // Drop any leftover image-attach blobs from a prior process before
+    // touching anything else. Cheap, best-effort, no-op when empty.
+    if matches!(cli.command, Commands::Connect { .. }) {
+        crate::codex_attachments::cleanup_orphan_tmpdirs();
+    }
 
     // For Connect (daemon) mode: use rolling file appender.
     // For all other commands: log to stderr as usual.
@@ -1097,13 +1131,16 @@ fn main() -> anyhow::Result<()> {
                     text,
                     state_root,
                     allow_direct_ws_fallback,
+                    attachments_json,
                     json,
                 } => {
+                    let attachments = parse_attachments_cli_arg(attachments_json.as_deref())?;
                     let summary = rt.block_on(cmd_codex_bridge_send(BridgeSendConfig {
                         session_id,
                         text,
                         state_root,
                         allow_direct_ws_fallback,
+                        attachments,
                     }))?;
                     if json {
                         println!("{}", serde_json::to_string_pretty(&summary)?);
@@ -1127,11 +1164,14 @@ fn main() -> anyhow::Result<()> {
                     session_id,
                     text,
                     state_root,
+                    attachments_json,
                 } => {
+                    let attachments = parse_attachments_cli_arg(attachments_json.as_deref())?;
                     let res = rt.block_on(cmd_codex_bridge_steer(BridgeSteerConfig {
                         session_id,
                         text,
                         state_root,
+                        attachments,
                     }));
                     match res {
                         Ok(()) => {}
@@ -1253,6 +1293,108 @@ mod tests {
                     },
             } => assert!(allow_direct_ws_fallback),
             _ => panic!("expected codex-bridge send command"),
+        }
+    }
+
+    #[test]
+    fn codex_bridge_send_parses_attachments_json() {
+        let attach_id = uuid::Uuid::new_v4().to_string();
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let blob_url = format!(
+            "/api/agents/sessions/{}/inputs/1/attachments/{}/blob",
+            session_id, attach_id
+        );
+        let attachments = serde_json::json!([
+            {
+                "id": attach_id,
+                "mime_type": "image/png",
+                "sha256": "a".repeat(64),
+                "blob_url": blob_url,
+            }
+        ])
+        .to_string();
+        let cli = Cli::try_parse_from([
+            "longhouse-engine",
+            "codex-bridge",
+            "send",
+            "--session-id",
+            "sess-test",
+            "--text",
+            "look at this",
+            "--attachments-json",
+            &attachments,
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::CodexBridge {
+                command:
+                    CodexBridgeCommands::Send {
+                        attachments_json, ..
+                    },
+            } => {
+                let parsed = parse_attachments_cli_arg(attachments_json.as_deref()).unwrap();
+                assert_eq!(parsed.len(), 1);
+                assert_eq!(parsed[0].id, attach_id);
+                assert_eq!(parsed[0].blob_url, blob_url);
+            }
+            _ => panic!("expected codex-bridge send command"),
+        }
+    }
+
+    #[test]
+    fn parse_attachments_cli_arg_handles_missing_and_empty() {
+        assert!(parse_attachments_cli_arg(None).unwrap().is_empty());
+        assert!(parse_attachments_cli_arg(Some("")).unwrap().is_empty());
+        assert!(parse_attachments_cli_arg(Some("   ")).unwrap().is_empty());
+        assert!(parse_attachments_cli_arg(Some("[]")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn parse_attachments_cli_arg_rejects_invalid_json() {
+        assert!(parse_attachments_cli_arg(Some("not json")).is_err());
+    }
+
+    #[test]
+    fn codex_bridge_steer_accepts_attachments_json() {
+        let attach_id = uuid::Uuid::new_v4().to_string();
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let blob_url = format!(
+            "/api/agents/sessions/{}/inputs/2/attachments/{}/blob",
+            session_id, attach_id
+        );
+        let attachments = serde_json::json!([
+            {
+                "id": attach_id,
+                "mime_type": "image/jpeg",
+                "sha256": "b".repeat(64),
+                "blob_url": blob_url,
+            }
+        ])
+        .to_string();
+        let cli = Cli::try_parse_from([
+            "longhouse-engine",
+            "codex-bridge",
+            "steer",
+            "--session-id",
+            "sess-test",
+            "--text",
+            "fine-tune",
+            "--attachments-json",
+            &attachments,
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::CodexBridge {
+                command:
+                    CodexBridgeCommands::Steer {
+                        attachments_json, ..
+                    },
+            } => {
+                let parsed = parse_attachments_cli_arg(attachments_json.as_deref()).unwrap();
+                assert_eq!(parsed.len(), 1);
+                assert_eq!(parsed[0].id, attach_id);
+            }
+            _ => panic!("expected codex-bridge steer command"),
         }
     }
 

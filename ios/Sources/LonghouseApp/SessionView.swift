@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 
 struct SessionWorkspaceStreamSource: Sendable {
     let start: @Sendable () async -> AsyncStream<SessionWorkspaceStream.Event>
@@ -27,6 +28,9 @@ struct SessionView: View {
     @StateObject private var liveActivityManager = SessionLiveActivityManager()
     @State private var composerText: String = ""
     @FocusState private var composerFocused: Bool
+    @StateObject private var attachmentStore = ComposerAttachmentStore()
+    @State private var pickerSelection: [PhotosPickerItem] = []
+    @State private var isLoadingPickerItems: Bool = false
 
     init(
         sessionId: String,
@@ -42,6 +46,19 @@ struct SessionView: View {
 
     private var composerHasText: Bool {
         !composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var composerHasContent: Bool {
+        composerHasText || !attachmentStore.isEmpty
+    }
+
+    private var attachmentInputEnabled: Bool {
+        guard viewModel.detail?.attachImagesEnabled == true else { return false }
+        return primaryIntent == "auto"
+    }
+
+    private var attachmentSendBlocked: Bool {
+        !attachmentStore.isEmpty && primaryIntent != "auto"
     }
 
     var body: some View {
@@ -268,6 +285,10 @@ struct SessionView: View {
                     .foregroundStyle(.orange)
             }
 
+            if detail.attachImagesEnabled {
+                attachmentTray
+            }
+
             HStack(alignment: .bottom, spacing: 8) {
                 // Sparkle: AI draft, only when field is empty
                 Button {
@@ -284,6 +305,25 @@ struct SessionView: View {
                 .frame(width: 32, height: 32)
                 .disabled(composerHasText || viewModel.isSending || viewModel.isDrafting)
                 .accessibilityLabel("Draft reply")
+
+                if detail.attachImagesEnabled {
+                    let attachmentSlotsLeft = attachmentStore.slotsLeft
+                    let attachmentIsProcessing = attachmentStore.isProcessing
+                    let canAttachImages = attachmentInputEnabled
+                    PhotosPicker(
+                        selection: $pickerSelection,
+                        maxSelectionCount: max(1, attachmentSlotsLeft),
+                        matching: .images
+                    ) {
+                        Image(systemName: attachmentIsProcessing ? "ellipsis.circle" : "paperclip")
+                            .font(.title3)
+                            .foregroundStyle(canAttachImages && attachmentSlotsLeft > 0 ? Color.accentColor : Color.secondary.opacity(0.3))
+                    }
+                    .frame(width: 32, height: 32)
+                    .disabled(!canAttachImages || attachmentSlotsLeft <= 0 || attachmentIsProcessing || isLoadingPickerItems || viewModel.isSending)
+                    .accessibilityLabel("Attach images")
+                    .accessibilityIdentifier("session-chat-attach")
+                }
 
                 TextField(detail.composerPlaceholder, text: $composerText, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
@@ -302,14 +342,14 @@ struct SessionView: View {
                     } else {
                         Image(systemName: sendIcon)
                             .font(.title2)
-                            .foregroundStyle(composerHasText ? Color.accentColor : Color.secondary.opacity(0.3))
+                            .foregroundStyle(composerHasContent ? Color.accentColor : Color.secondary.opacity(0.3))
                     }
                 }
-                .disabled(!composerHasText || viewModel.isSending || viewModel.isDrafting)
+                .disabled(!composerHasContent || viewModel.isSending || viewModel.isDrafting || attachmentStore.isProcessing || isLoadingPickerItems || attachmentSendBlocked)
                 .accessibilityLabel(sendAccessibilityLabel)
                 .accessibilityIdentifier("session-chat-send")
                 .contextMenu {
-                    if showSecondaryQueueAction {
+                    if showSecondaryQueueAction && attachmentStore.isEmpty {
                         Button {
                             Task { await send(intent: "steer") }
                         } label: {
@@ -326,6 +366,82 @@ struct SessionView: View {
         }
         .padding(12)
         .background(.bar)
+        .onChange(of: pickerSelection) { _, items in
+            guard !items.isEmpty else { return }
+            Task {
+                await MainActor.run { isLoadingPickerItems = true }
+                var raw: [(filename: String, data: Data)] = []
+                var loadFailures = 0
+                for _ in items.indices {
+                    raw.append((filename: "", data: Data()))
+                }
+                for (idx, item) in items.enumerated() {
+                    do {
+                        if let data = try await item.loadTransferable(type: Data.self) {
+                            raw[idx] = (filename: "image-\(UUID().uuidString).jpg", data: data)
+                        } else {
+                            loadFailures += 1
+                        }
+                    } catch {
+                        loadFailures += 1
+                    }
+                }
+                let loaded = raw.filter { !$0.data.isEmpty }
+                await attachmentStore.ingest(rawImages: loaded)
+                await MainActor.run {
+                    if loadFailures > 0 && loaded.isEmpty {
+                        attachmentStore.errorMessage = "Could not load selected image."
+                    }
+                    pickerSelection = []
+                    isLoadingPickerItems = false
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var attachmentTray: some View {
+        if !attachmentStore.attachments.isEmpty || attachmentStore.errorMessage != nil {
+            VStack(alignment: .leading, spacing: 6) {
+                if !attachmentStore.attachments.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(attachmentStore.attachments) { item in
+                                ZStack(alignment: .topTrailing) {
+                                    if let thumb = item.thumbnail {
+                                        Image(uiImage: thumb)
+                                            .resizable()
+                                            .scaledToFill()
+                                            .frame(width: 56, height: 56)
+                                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                                    } else {
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .fill(Color.secondary.opacity(0.2))
+                                            .frame(width: 56, height: 56)
+                                    }
+                                    Button {
+                                        attachmentStore.remove(item.id)
+                                    } label: {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .font(.system(size: 18))
+                                            .foregroundStyle(.white, .black.opacity(0.7))
+                                            .padding(2)
+                                    }
+                                    .accessibilityLabel("Remove \(item.filename)")
+                                }
+                            }
+                        }
+                    }
+                    .accessibilityIdentifier("session-chat-attachment-tray")
+                }
+                if let err = attachmentStore.errorMessage {
+                    Text(err)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .onTapGesture { attachmentStore.errorMessage = nil }
+                }
+            }
+        }
     }
 
     private func unavailableComposerFooter(detail: SessionDetail) -> some View {
@@ -380,16 +496,27 @@ struct SessionView: View {
 
     private func send(intent: String? = nil) async {
         guard !viewModel.isSending else { return }
+        guard !attachmentStore.isProcessing else { return }
+        guard !isLoadingPickerItems else { return }
         let trimmed = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        let resolvedIntent = intent ?? primaryIntent
+        let pendingAttachments = attachmentStore.snapshot()
+        guard !trimmed.isEmpty || !pendingAttachments.isEmpty else { return }
+        let requestedIntent = intent ?? primaryIntent
+        if !pendingAttachments.isEmpty && requestedIntent != "auto" {
+            attachmentStore.errorMessage = "Images can be sent when the session is ready for a new turn."
+            return
+        }
         composerText = ""
         composerFocused = false
+        // Snapshot+clear before send so a slow request doesn't keep the
+        // thumbnails next to a fresh empty draft.
+        attachmentStore.clear()
         let sent = await viewModel.send(
             text: trimmed,
             sessionId: sessionId,
             appState: appState,
-            intent: resolvedIntent,
+            intent: requestedIntent,
+            attachments: pendingAttachments,
         )
         if sent {
             let token = viewModel.sendCounter
@@ -402,6 +529,11 @@ struct SessionView: View {
                     }
                 }
             }
+        } else if !pendingAttachments.isEmpty {
+            // Send failed: re-ingest the compressed attachments so the user
+            // can retry without re-picking from Photos.
+            let raw = pendingAttachments.map { (filename: $0.filename, data: $0.data) }
+            await attachmentStore.ingest(rawImages: raw)
         }
     }
 
@@ -755,7 +887,13 @@ final class SessionViewModel: ObservableObject {
         isInitialLoading = false
     }
 
-    func send(text: String, sessionId: String, appState: AppState, intent: String = "auto") async -> Bool {
+    func send(
+        text: String,
+        sessionId: String,
+        appState: AppState,
+        intent: String = "auto",
+        attachments: [ComposerAttachment] = []
+    ) async -> Bool {
         let clientRequestId = "ios-\(UUID().uuidString)"
         let localInput = SubmittedInput(
             id: clientRequestId,
@@ -781,12 +919,24 @@ final class SessionViewModel: ObservableObject {
         draftErrorMessage = nil
         defer { isSending = false }
         do {
-            let response = try await api.sendInput(
-                id: sessionId,
-                text: text,
-                intent: intent,
-                clientRequestId: clientRequestId
-            )
+            let response: SessionInputResponse
+            if attachments.isEmpty {
+                response = try await api.sendInput(
+                    id: sessionId,
+                    text: text,
+                    intent: intent,
+                    clientRequestId: clientRequestId
+                )
+            } else {
+                // Server v1 multipart accepts intent=auto only; the UI gates
+                // attachments to managed Codex sessions at the composer level.
+                response = try await api.sendInputMultipart(
+                    id: sessionId,
+                    text: text,
+                    attachments: attachments,
+                    clientRequestId: clientRequestId
+                )
+            }
             sendCounter &+= 1
             lastSendOutcome = response.outcome
             queuedInputCount = response.pendingInputCount

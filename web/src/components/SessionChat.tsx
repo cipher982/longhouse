@@ -19,12 +19,15 @@ import {
   fetchSessionLockStatus,
   interruptLiveSession,
   postSessionInput,
+  postSessionInputMultipart,
   type QueuedInputSummary,
   type SessionLockInfo,
 } from "../services/api";
 import type { AgentSession } from "../services/api/agents";
 import type { ManagedLaunchSuggestion } from "../lib/sessionWorkspace";
+import { useComposerAttachments } from "../lib/useComposerAttachments";
 import { Badge, Button, Spinner } from "./ui";
+import { AttachmentTray } from "./AttachmentTray";
 import { ManagedLaunchHintCard } from "./session-workspace/ManagedLaunchHintCard";
 import "../styles/session-chat.css";
 
@@ -108,7 +111,7 @@ interface SessionChatProps {
   isStalled?: boolean;
 }
 
-export type SessionChatTarget = Pick<AgentSession, "id" | "project" | "provider">;
+export type SessionChatTarget = Pick<AgentSession, "id" | "project" | "provider" | "capabilities">;
 
 function getToolPrefix(toolNotices?: string[]): string {
   return toolNotices?.length ? toolNotices.join("\n") + "\n\n" : "";
@@ -158,6 +161,8 @@ export function SessionChat({
   const isDock = layout === "dock";
   const isManagedLocal = chatMode === "managed_local";
   const isComposerDisabled = Boolean(composerDisabledReason);
+  const attachImagesEnabled = isManagedLocal && Boolean(session.capabilities?.attach_images);
+  const composerAttachments = useComposerAttachments();
   const showComposerUnavailableState = isComposerDisabled;
   const queryClient = useQueryClient();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -383,16 +388,26 @@ export function SessionChat({
   const [turnEndedDraft, setTurnEndedDraft] = useState<string | null>(null);
 
   const handleManagedLocalSend = useCallback(
-    async (message: string, intent: "auto" | "queue" | "steer" = "auto") => {
+    async (
+      message: string,
+      intent: "auto" | "queue" | "steer" = "auto",
+      attachments: { blob: Blob; filename: string }[] = [],
+    ) => {
       const clientRequestId = newClientRequestId();
       setPendingManagedLocalMessage(message);
       setIsSubmitting(true);
       try {
-        const result = await postSessionInput(session.id, {
-          text: message,
-          intent,
-          client_request_id: clientRequestId,
-        });
+        const result = attachments.length
+          ? await postSessionInputMultipart(session.id, {
+              text: message,
+              attachments,
+              client_request_id: clientRequestId,
+            })
+          : await postSessionInput(session.id, {
+              text: message,
+              intent,
+              client_request_id: clientRequestId,
+            });
 
         // Seed the queued-inputs cache immediately so the chip appears
         // before the next poll.
@@ -419,6 +434,7 @@ export function SessionChat({
         } else {
           setPendingManagedLocalMessage(null);
         }
+        return true;
       } catch (e) {
         // Parse structured backend errors so turn_ended on steer surfaces
         // as an actionable prompt, not a mystery failure.
@@ -431,6 +447,7 @@ export function SessionChat({
           setError(e instanceof Error ? e.message : "Unknown error");
         }
         setPendingManagedLocalMessage(null);
+        return false;
       } finally {
         setIsSubmitting(false);
       }
@@ -478,6 +495,7 @@ export function SessionChat({
   const canSteerNow = isSendLocked && canSteerActiveTurn;
   const canQueueNow = isSendLocked && canQueueNextInput && !queueFull;
   const canInterruptTurn = isManagedLocal && isSendLocked;
+  const attachmentInputEnabled = attachImagesEnabled && !isSendLocked;
   // Inline interrupt is offered for any locked managed-local turn. When the
   // stall-recovery card is showing it already exposes the same action, so we
   // hide the composer copy to avoid two buttons doing the identical thing.
@@ -493,21 +511,95 @@ export function SessionChat({
     : "auto";
   // Primary send is blocked when there's no available action.
   const isSendBlocked = isSendLocked && !canSteerNow && !canQueueNow;
+  const attachmentSendBlocked =
+    composerAttachments.attachments.length > 0 && primaryIntent !== "auto";
+  // Attachment-only sends are valid when the route accepts them.
+  const hasComposerContent = Boolean(draft.trim()) || composerAttachments.attachments.length > 0;
 
   const handleSend = useCallback(
     async (e: FormEvent) => {
       e.preventDefault();
 
       const message = draft.trim();
-      if (!message || isSubmitting || isComposerDisabled || isSendBlocked) return;
+      const pendingAttachments = composerAttachments.attachments;
+      const hasAttachments = pendingAttachments.length > 0;
+      // Attachments require message text only when the user wrote nothing —
+      // attachment-only sends are valid and the server accepts text="".
+      if (!message && !hasAttachments) return;
+      if (isSubmitting || isComposerDisabled || isSendBlocked) return;
+      if (hasAttachments && primaryIntent !== "auto") {
+        setError("Image attachments can only be sent when the session is ready for a new turn.");
+        return;
+      }
+      // Block send while compression is in flight; the snapshot would miss
+      // the pending file and the late add could repopulate the cleared tray.
+      if (composerAttachments.isCompressing) return;
 
       setDraft("");
       setError(null);
       setBlockedKeyboardSubmit(false);
 
-      await handleManagedLocalSend(message, primaryIntent);
+      const attachmentArgs = hasAttachments
+        ? pendingAttachments.map((a) => ({ blob: a.blob, filename: a.filename }))
+        : [];
+      const sent = await handleManagedLocalSend(message, primaryIntent, attachmentArgs);
+      if (sent) {
+        if (hasAttachments) composerAttachments.clear();
+      } else {
+        setDraft(message);
+      }
     },
-    [draft, isSubmitting, handleManagedLocalSend, isComposerDisabled, isSendBlocked, primaryIntent],
+    [
+      draft,
+      isSubmitting,
+      handleManagedLocalSend,
+      isComposerDisabled,
+      isSendBlocked,
+      primaryIntent,
+      composerAttachments,
+    ],
+  );
+
+  const handleComposerPaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      if (!attachmentInputEnabled) return;
+      const files: File[] = [];
+      for (const item of Array.from(e.clipboardData.items)) {
+        if (item.kind === "file" && item.type.startsWith("image/")) {
+          const f = item.getAsFile();
+          if (f) files.push(f);
+        }
+      }
+      if (files.length) {
+        e.preventDefault();
+        void composerAttachments.addFiles(files);
+      }
+    },
+    [attachmentInputEnabled, composerAttachments],
+  );
+
+  const handleComposerDrop = useCallback(
+    (e: React.DragEvent) => {
+      if (!attachmentInputEnabled) return;
+      const dropped = Array.from(e.dataTransfer.files);
+      if (!dropped.length) return;
+      // Always preventDefault on file drops — even non-image drops, otherwise
+      // the browser navigates away and the user loses their draft.
+      e.preventDefault();
+      const images = dropped.filter((f) => f.type.startsWith("image/"));
+      if (images.length) void composerAttachments.addFiles(images);
+    },
+    [attachmentInputEnabled, composerAttachments],
+  );
+
+  const handleComposerDragOver = useCallback(
+    (e: React.DragEvent) => {
+      if (!attachmentInputEnabled) return;
+      if (Array.from(e.dataTransfer.items).some((it) => it.kind === "file")) {
+        e.preventDefault();
+      }
+    },
+    [attachmentInputEnabled],
   );
 
   const handleSecondaryQueue = useCallback(async () => {
@@ -878,6 +970,9 @@ export function SessionChat({
         className={`session-chat-composer${isDock ? " session-chat-composer--dock" : ""}`}
         onSubmit={handleSend}
         title={composerDisabledReason ?? undefined}
+        onPaste={attachmentInputEnabled ? handleComposerPaste : undefined}
+        onDrop={attachmentInputEnabled ? handleComposerDrop : undefined}
+        onDragOver={attachmentInputEnabled ? handleComposerDragOver : undefined}
       >
         {showComposerUnavailableState ? (
           managedLaunchSuggestion ? (
@@ -930,6 +1025,18 @@ export function SessionChat({
                 <span className="session-chat-pending-message__spinner" aria-label="Sending" />
               </div>
             ) : null}
+            {attachImagesEnabled ? (
+              <AttachmentTray
+                attachments={composerAttachments.attachments}
+                onAddFiles={composerAttachments.addFiles}
+                onRemove={composerAttachments.removeAttachment}
+                isCompressing={composerAttachments.isCompressing}
+                error={composerAttachments.error}
+                onClearError={composerAttachments.clearError}
+                disabled={isSubmitting}
+                addDisabled={!attachmentInputEnabled}
+              />
+            ) : null}
             {isDock ? (
               <div className="session-chat-composer-row">
                 <textarea
@@ -980,7 +1087,7 @@ export function SessionChat({
                       type="submit"
                       variant="primary"
                       size="sm"
-                      disabled={!draft.trim() || isSubmitting || isDraftingReply || isSendBlocked}
+                      disabled={!hasComposerContent || isSubmitting || isDraftingReply || isSendBlocked || attachmentSendBlocked || composerAttachments.isCompressing}
                     >
                       {submitButtonLabel}
                     </Button>
@@ -1033,7 +1140,7 @@ export function SessionChat({
                         type="submit"
                         variant="primary"
                         size="sm"
-                        disabled={isComposerDisabled || !draft.trim() || isSubmitting || isDraftingReply || isSendBlocked}
+                        disabled={isComposerDisabled || !hasComposerContent || isSubmitting || isDraftingReply || isSendBlocked || attachmentSendBlocked || composerAttachments.isCompressing}
                         title={composerDisabledReason ?? undefined}
                       >
                         {submitButtonLabel}

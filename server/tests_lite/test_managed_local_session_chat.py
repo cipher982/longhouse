@@ -250,6 +250,7 @@ def test_managed_local_claude_dispatch_returns_json_ack(monkeypatch, tmp_path):
             timeout_secs=15,
             verify_turn_started=False,
             verification_timeout_secs=None,
+            attachments=None,
         ):
             calls.append({
                 "owner_id": owner_id,
@@ -322,6 +323,7 @@ def test_managed_local_codex_dispatch_returns_json_ack(monkeypatch, tmp_path):
             timeout_secs=15,
             verify_turn_started=False,
             verification_timeout_secs=None,
+            attachments=None,
         ):
             return SimpleNamespace(ok=True, exit_code=0, error=None, verified_turn_started=True)
 
@@ -456,6 +458,7 @@ def test_managed_local_dispatch_send_failure_returns_502(monkeypatch, tmp_path):
             timeout_secs=15,
             verify_turn_started=False,
             verification_timeout_secs=None,
+            attachments=None,
         ):
             return SimpleNamespace(ok=False, exit_code=None, error="Runner send failed", verified_turn_started=False)
 
@@ -505,6 +508,7 @@ def test_managed_local_dispatch_send_failure_releases_lock_for_retry(monkeypatch
             timeout_secs=15,
             verify_turn_started=False,
             verification_timeout_secs=None,
+            attachments=None,
         ):
             nonlocal send_calls
             send_calls += 1
@@ -557,6 +561,7 @@ def test_managed_local_dispatch_requires_verified_turn_start(monkeypatch, tmp_pa
             timeout_secs=15,
             verify_turn_started=False,
             verification_timeout_secs=None,
+            attachments=None,
         ):
             return SimpleNamespace(ok=True, exit_code=0, error=None, verified_turn_started=False)
 
@@ -606,6 +611,7 @@ def test_managed_local_dispatch_keeps_lock_until_terminal(monkeypatch, tmp_path)
             timeout_secs=15,
             verify_turn_started=False,
             verification_timeout_secs=None,
+            attachments=None,
         ):
             return SimpleNamespace(ok=True, exit_code=0, error=None, verified_turn_started=True)
 
@@ -649,6 +655,7 @@ def test_managed_local_dispatch_updates_lock_endpoint_until_terminal(monkeypatch
             timeout_secs=15,
             verify_turn_started=False,
             verification_timeout_secs=None,
+            attachments=None,
         ):
             return SimpleNamespace(ok=True, exit_code=0, error=None, verified_turn_started=True)
 
@@ -861,6 +868,7 @@ def test_managed_local_dispatch_send_crash_does_not_persist_orphan_canonical_tur
             timeout_secs=15,
             verify_turn_started=False,
             verification_timeout_secs=None,
+            attachments=None,
         ):
             raise RuntimeError("dispatch crashed")
 

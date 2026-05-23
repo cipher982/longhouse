@@ -29,6 +29,7 @@ struct APISessionCapabilitiesResponse: Codable, Hashable, Sendable {
     let canTerminate: Bool?
     let canTailOutput: Bool?
     let canResume: Bool?
+    let attachImages: Bool?
 }
 
 struct APISessionControlResponse: Codable, Hashable, Sendable {

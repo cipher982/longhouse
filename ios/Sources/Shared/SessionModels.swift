@@ -597,6 +597,7 @@ struct SessionCapabilities: Codable, Sendable {
     let composerEnabled: Bool?
     let composerPlaceholder: String?
     let composerDisabledReason: String?
+    let attachImages: Bool?
 }
 
 struct TimelineBadgePresentation: Codable, Hashable, Sendable {
@@ -755,6 +756,12 @@ struct SessionDetail: Codable, Identifiable, Sendable {
 
     var canSendLive: Bool {
         capabilities.composerEnabled ?? (capabilities.liveControlAvailable || capabilities.replyToLiveSessionAvailable)
+    }
+
+    /// Codex managed sessions advertise `attach_images=true` once both the
+    /// backend and the engine on this device support the attach pipeline.
+    var attachImagesEnabled: Bool {
+        canSendLive && (capabilities.attachImages ?? false)
     }
 
     var canQueueNextInput: Bool {

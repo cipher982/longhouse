@@ -328,6 +328,10 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         return SessionInputResponse(outcome: .sent, inputId: inputID, clientRequestId: clientRequestId, intent: intent, queued: [])
     }
 
+    func sendInputMultipart(id: String, text: String, attachments: [ComposerAttachment], clientRequestId: String?) async throws -> SessionInputResponse {
+        try await sendInput(id: id, text: text, intent: "auto", clientRequestId: clientRequestId)
+    }
+
     func draftReply(id: String, maxChars: Int) async throws -> DraftReplyResponse {
         DraftReplyResponse(
             draftText: "Drafted fixture reply",
@@ -558,7 +562,8 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 defaultInputIntent: "auto",
                 composerEnabled: true,
                 composerPlaceholder: "Send a message to the live Codex session...",
-                composerDisabledReason: nil
+                composerDisabledReason: nil,
+                attachImages: false
             ),
             runtimeDisplay: SessionRuntimeDisplay(
                 truthTier: "live",
