@@ -99,9 +99,7 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
             typer.echo(f"  launch blocked by: {control_channel['launch_blocked_by']}")
         if control_channel.get("last_error_code") or control_channel.get("last_error_message"):
             typer.echo(
-                "  last error: "
-                f"{control_channel.get('last_error_code') or '-'}"
-                f" - {control_channel.get('last_error_message') or '-'}"
+                "  last error: " f"{control_channel.get('last_error_code') or '-'}" f" - {control_channel.get('last_error_message') or '-'}"
             )
 
     provider_clis = dict(snapshot.get("provider_clis") or {})
@@ -329,7 +327,7 @@ def local_health_window(
 @app.command("menubar")
 def local_health_menubar(
     ctx: typer.Context,
-    refresh_seconds: int = typer.Option(10, "--refresh-seconds", min=2, help="Live refresh cadence in seconds."),
+    refresh_seconds: int = typer.Option(30, "--refresh-seconds", min=2, help="Live refresh cadence in seconds."),
 ) -> None:
     """Launch the Longhouse desktop app in menu bar mode."""
     claude_dir = (ctx.obj or {}).get("claude_dir")

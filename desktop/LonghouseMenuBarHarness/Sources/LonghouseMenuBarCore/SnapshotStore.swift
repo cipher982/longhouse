@@ -11,6 +11,7 @@ public enum SnapshotRefreshReason: Sendable {
 public final class SnapshotStore: ObservableObject {
     public static let historyRetentionMinutes = 30
     public static let bootGraceSeconds: TimeInterval = 10
+    public static let staleCacheFailureSeconds: TimeInterval = 120
 
     @Published public private(set) var snapshot: HealthSnapshot?
     @Published public private(set) var history: [SnapshotHistorySample]
@@ -138,6 +139,20 @@ public final class SnapshotStore: ObservableObject {
 
     public func clearFeedback() {
         feedback = nil
+    }
+
+    public func staleCachedSnapshotFailureMessage(relativeTo referenceDate: Date) -> String? {
+        guard let snapshot, let loadError else {
+            return nil
+        }
+        guard let collectedAt = snapshot.collectedAtDate else {
+            return "Longhouse status is stale. Refresh failed: \(loadError)"
+        }
+        guard referenceDate.timeIntervalSince(collectedAt) > Self.staleCacheFailureSeconds else {
+            return nil
+        }
+        let age = snapshot.snapshotAgeCompactLabel(relativeTo: referenceDate)
+        return "Longhouse status is stale. Last successful update was \(age) ago. Refresh failed: \(loadError)"
     }
 
     private func startRefresh(reason: SnapshotRefreshReason) {

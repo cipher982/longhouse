@@ -6,6 +6,8 @@
 //! - less frequent server heartbeats to `/api/agents/heartbeat`
 
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -85,6 +87,12 @@ pub struct HeartbeatPayload {
     /// whose provider process is confirmed gone.
     #[serde(default)]
     pub unmanaged_session_bindings: Vec<UnmanagedSessionBinding>,
+    /// Resolved local session/execution view. This is the canonical local
+    /// identity graph projection for menu bar and local-health consumers:
+    /// managed/unmanaged presentation state is derived after joining raw
+    /// bridge, channel, transcript, and process observations.
+    #[serde(default)]
+    pub sessions: Vec<ResolvedLocalSession>,
     /// Phase-2 adaptive backlog limiter snapshot. Drives AIMD off the
     /// `X-Ingest-Queue-Wait-Ms` header on each successful ship; absent on
     /// processes that haven't built a scheduler yet (e.g. legacy heartbeat
@@ -118,6 +126,80 @@ pub struct UnmanagedSessionBinding {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_mtime: Option<String>,
     pub observed_at: String,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+pub struct ResolvedLocalSession {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    pub provider: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_session_id: Option<String>,
+    pub control_path: String,
+    pub presentation_state: String,
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase_observed_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_activity_at: Option<String>,
+    pub workspace: ResolvedWorkspace,
+    pub process: ResolvedProcess,
+    pub bridge: ResolvedBridge,
+    pub evidence: ResolvedEvidence,
+    #[serde(default)]
+    pub reason_codes: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq, Default)]
+pub struct ResolvedWorkspace {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq, Default)]
+pub struct ResolvedProcess {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub process_start_time: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq, Default)]
+pub struct ResolvedBridge {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bridge_pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_server_pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ws_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub heartbeat_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_subscription_status: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq, Default)]
+pub struct ResolvedEvidence {
+    pub process_observed: bool,
+    pub transcript_observed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bridge_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hook_seen_at: Option<String>,
+    #[serde(default)]
+    pub join_keys: Vec<String>,
 }
 
 pub use crate::unmanaged_bindings::collect_unmanaged_session_bindings_with_store;
@@ -215,6 +297,7 @@ impl HeartbeatPayload {
             is_offline: stats.is_offline,
             managed_sessions: Vec::new(),
             unmanaged_session_bindings: Vec::new(),
+            sessions: Vec::new(),
             adaptive_backlog_limiter: None,
         }
     }
@@ -357,6 +440,399 @@ pub fn leases_from_claude_channel_observations(
 
     leases.sort_by(|a, b| a.session_id.cmp(&b.session_id));
     leases
+}
+
+pub fn filter_unmanaged_bindings_owned_by_managed_observations(
+    bindings: Vec<UnmanagedSessionBinding>,
+    codex_observations: &[CodexBridgeObservation],
+    claude_observations: &[ClaudeChannelObservation],
+) -> Vec<UnmanagedSessionBinding> {
+    let managed_codex = ManagedCodexKeys::from_observations(codex_observations);
+    let managed_claude = ManagedClaudeKeys::from_observations(claude_observations);
+
+    bindings
+        .into_iter()
+        .filter(|binding| {
+            !binding_owned_by_codex(binding, &managed_codex)
+                && !binding_owned_by_claude(binding, &managed_claude)
+        })
+        .collect()
+}
+
+pub fn resolved_sessions_from_observations(
+    managed_sessions: &[ManagedSessionLease],
+    unmanaged_bindings: &[UnmanagedSessionBinding],
+    codex_observations: &[CodexBridgeObservation],
+    claude_observations: &[ClaudeChannelObservation],
+) -> Vec<ResolvedLocalSession> {
+    let codex_by_session: HashMap<&str, &CodexBridgeObservation> = codex_observations
+        .iter()
+        .map(|obs| (obs.session_id.as_str(), obs))
+        .collect();
+    let claude_by_session: HashMap<&str, &ClaudeChannelObservation> = claude_observations
+        .iter()
+        .map(|obs| (obs.session_id.as_str(), obs))
+        .collect();
+
+    let mut sessions = Vec::with_capacity(managed_sessions.len() + unmanaged_bindings.len());
+    for lease in managed_sessions {
+        match lease.provider.as_str() {
+            "codex" => sessions.push(resolved_managed_codex_session(
+                lease,
+                codex_by_session.get(lease.session_id.as_str()).copied(),
+            )),
+            "claude" => sessions.push(resolved_managed_claude_session(
+                lease,
+                claude_by_session.get(lease.session_id.as_str()).copied(),
+            )),
+            _ => sessions.push(resolved_managed_generic_session(lease)),
+        }
+    }
+    for binding in unmanaged_bindings {
+        sessions.push(resolved_unmanaged_session(binding));
+    }
+    sessions.sort_by(|a, b| {
+        a.control_path
+            .cmp(&b.control_path)
+            .then_with(|| a.provider.cmp(&b.provider))
+            .then_with(|| {
+                a.session_id
+                    .as_deref()
+                    .unwrap_or("")
+                    .cmp(b.session_id.as_deref().unwrap_or(""))
+            })
+            .then_with(|| {
+                a.provider_session_id
+                    .as_deref()
+                    .unwrap_or("")
+                    .cmp(b.provider_session_id.as_deref().unwrap_or(""))
+            })
+    });
+    sessions
+}
+
+fn resolved_managed_codex_session(
+    lease: &ManagedSessionLease,
+    obs: Option<&CodexBridgeObservation>,
+) -> ResolvedLocalSession {
+    let cwd = obs.and_then(|obs| obs.cwd.clone());
+    let provider_session_id = obs.and_then(|obs| obs.thread_id.clone());
+    let thread_path = obs.and_then(|obs| obs.thread_path.clone());
+    let process_pid = obs.and_then(|obs| obs.app_server_pid);
+    let mut join_keys = vec![format!("session_id={}", lease.session_id)];
+    if let Some(provider_session_id) = provider_session_id.as_deref() {
+        join_keys.push(format!("provider_session_id={provider_session_id}"));
+    }
+    if let Some(thread_path) = thread_path.as_deref() {
+        join_keys.push(format!("thread_path={thread_path}"));
+    }
+    if let Some(pid) = process_pid {
+        join_keys.push(format!("app_server_pid={pid}"));
+    }
+
+    ResolvedLocalSession {
+        session_id: Some(lease.session_id.clone()),
+        provider: lease.provider.clone(),
+        provider_session_id,
+        control_path: "managed".to_string(),
+        presentation_state: managed_presentation_state(&lease.state),
+        state: lease.state.clone(),
+        phase: lease.phase.clone(),
+        tool_name: lease.tool_name.clone(),
+        phase_observed_at: Some(lease.observed_at.clone()),
+        last_activity_at: Some(lease.observed_at.clone()),
+        workspace: workspace_from_cwd(cwd),
+        process: ResolvedProcess {
+            pid: process_pid,
+            process_start_time: None,
+            started_at: None,
+        },
+        bridge: ResolvedBridge {
+            bridge_pid: obs.map(|obs| obs.bridge_pid),
+            app_server_pid: process_pid,
+            ws_url: obs.and_then(|obs| obs.ws_url.clone()),
+            heartbeat_at: obs.map(|obs| obs.updated_at.clone()),
+            status: obs.map(|obs| obs.status.clone()),
+            thread_subscription_status: obs.and_then(|obs| obs.thread_subscription_status.clone()),
+        },
+        evidence: ResolvedEvidence {
+            process_observed: obs.is_some_and(|obs| obs.app_server_alive || obs.has_tui_attachment),
+            transcript_observed: thread_path.is_some(),
+            bridge_state: obs.map(|obs| obs.status.clone()),
+            hook_seen_at: None,
+            join_keys,
+        },
+        reason_codes: Vec::new(),
+    }
+}
+
+fn resolved_managed_claude_session(
+    lease: &ManagedSessionLease,
+    obs: Option<&ClaudeChannelObservation>,
+) -> ResolvedLocalSession {
+    let provider_session_id = obs.and_then(|obs| obs.provider_session_id.clone());
+    let process_pid = obs.and_then(|obs| obs.claude_pid);
+    let mut join_keys = vec![format!("session_id={}", lease.session_id)];
+    if let Some(provider_session_id) = provider_session_id.as_deref() {
+        join_keys.push(format!("provider_session_id={provider_session_id}"));
+    }
+    if let Some(pid) = process_pid {
+        join_keys.push(format!("claude_pid={pid}"));
+    }
+    let transcript_observed = provider_session_id.is_some();
+
+    ResolvedLocalSession {
+        session_id: Some(lease.session_id.clone()),
+        provider: lease.provider.clone(),
+        provider_session_id,
+        control_path: "managed".to_string(),
+        presentation_state: managed_presentation_state(&lease.state),
+        state: lease.state.clone(),
+        phase: lease.phase.clone(),
+        tool_name: lease.tool_name.clone(),
+        phase_observed_at: Some(lease.observed_at.clone()),
+        last_activity_at: Some(lease.observed_at.clone()),
+        workspace: ResolvedWorkspace::default(),
+        process: ResolvedProcess {
+            pid: process_pid,
+            process_start_time: None,
+            started_at: None,
+        },
+        bridge: ResolvedBridge {
+            bridge_pid: obs.and_then(|obs| obs.bridge_pid),
+            app_server_pid: None,
+            ws_url: None,
+            heartbeat_at: obs.map(|obs| obs.updated_at.clone()),
+            status: lease.bridge_status.clone(),
+            thread_subscription_status: None,
+        },
+        evidence: ResolvedEvidence {
+            process_observed: obs.is_some_and(|obs| obs.claude_alive),
+            transcript_observed,
+            bridge_state: lease.bridge_status.clone(),
+            hook_seen_at: None,
+            join_keys,
+        },
+        reason_codes: Vec::new(),
+    }
+}
+
+fn resolved_managed_generic_session(lease: &ManagedSessionLease) -> ResolvedLocalSession {
+    ResolvedLocalSession {
+        session_id: Some(lease.session_id.clone()),
+        provider: lease.provider.clone(),
+        provider_session_id: None,
+        control_path: "managed".to_string(),
+        presentation_state: managed_presentation_state(&lease.state),
+        state: lease.state.clone(),
+        phase: lease.phase.clone(),
+        tool_name: lease.tool_name.clone(),
+        phase_observed_at: Some(lease.observed_at.clone()),
+        last_activity_at: Some(lease.observed_at.clone()),
+        workspace: ResolvedWorkspace::default(),
+        process: ResolvedProcess::default(),
+        bridge: ResolvedBridge::default(),
+        evidence: ResolvedEvidence {
+            process_observed: false,
+            transcript_observed: false,
+            bridge_state: lease.bridge_status.clone(),
+            hook_seen_at: None,
+            join_keys: vec![format!("session_id={}", lease.session_id)],
+        },
+        reason_codes: Vec::new(),
+    }
+}
+
+fn resolved_unmanaged_session(binding: &UnmanagedSessionBinding) -> ResolvedLocalSession {
+    let mut join_keys = vec![format!(
+        "provider_session_id={}",
+        binding.provider_session_id
+    )];
+    if let Some(source_path) = binding.source_path.as_deref() {
+        join_keys.push(format!("source_path={source_path}"));
+    }
+    if let Some(pid) = binding.pid {
+        join_keys.push(format!("pid={pid}"));
+    }
+
+    ResolvedLocalSession {
+        session_id: None,
+        provider: binding.provider.clone(),
+        provider_session_id: Some(binding.provider_session_id.clone()),
+        control_path: "unmanaged".to_string(),
+        presentation_state: "unmanaged".to_string(),
+        state: "unmanaged".to_string(),
+        phase: None,
+        tool_name: None,
+        phase_observed_at: None,
+        last_activity_at: Some(binding.observed_at.clone()),
+        workspace: workspace_from_cwd(binding.cwd.clone()),
+        process: ResolvedProcess {
+            pid: binding.pid,
+            process_start_time: binding.process_start_time.clone(),
+            started_at: binding.process_start_time.clone(),
+        },
+        bridge: ResolvedBridge::default(),
+        evidence: ResolvedEvidence {
+            process_observed: binding.pid.is_some(),
+            transcript_observed: binding.source_path.is_some(),
+            bridge_state: None,
+            hook_seen_at: Some(binding.observed_at.clone()),
+            join_keys,
+        },
+        reason_codes: Vec::new(),
+    }
+}
+
+fn managed_presentation_state(state: &str) -> String {
+    match state {
+        "attached" => "managed_attached",
+        "detached" => "managed_detached",
+        "degraded" => "managed_degraded",
+        _ => "stale_evidence",
+    }
+    .to_string()
+}
+
+fn workspace_from_cwd(cwd: Option<String>) -> ResolvedWorkspace {
+    let label = cwd.as_deref().and_then(|path| {
+        Path::new(path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_string)
+    });
+    ResolvedWorkspace {
+        cwd,
+        label,
+        branch: None,
+    }
+}
+
+#[derive(Default)]
+struct ManagedCodexKeys {
+    provider_session_ids: HashSet<String>,
+    source_paths: HashSet<String>,
+    pids: HashSet<u32>,
+    process_group_ids: HashSet<i32>,
+}
+
+impl ManagedCodexKeys {
+    fn from_observations(observations: &[CodexBridgeObservation]) -> Self {
+        let mut keys = Self::default();
+        for obs in observations {
+            if codex_bridge_observation_is_stopped(obs)
+                || !(obs.bridge_alive || obs.app_server_alive || obs.has_tui_attachment)
+            {
+                continue;
+            }
+            if let Some(thread_id) = normalized_string(obs.thread_id.as_deref()) {
+                keys.provider_session_ids.insert(thread_id);
+            }
+            if let Some(thread_path) = normalized_path_string(obs.thread_path.as_deref()) {
+                keys.source_paths.insert(thread_path);
+            }
+            if let Some(pid) = obs.app_server_pid {
+                keys.pids.insert(pid);
+            }
+            if let Some(pgid) = obs.app_server_pgid.filter(|pgid| *pgid > 0) {
+                keys.process_group_ids.insert(pgid);
+            }
+        }
+        keys
+    }
+}
+
+#[derive(Default)]
+struct ManagedClaudeKeys {
+    provider_session_ids: HashSet<String>,
+    pids: HashSet<u32>,
+}
+
+impl ManagedClaudeKeys {
+    fn from_observations(observations: &[ClaudeChannelObservation]) -> Self {
+        let mut keys = Self::default();
+        for obs in observations {
+            if !(obs.claude_alive || obs.bridge_alive) {
+                continue;
+            }
+            if let Some(provider_session_id) = normalized_string(obs.provider_session_id.as_deref())
+            {
+                keys.provider_session_ids.insert(provider_session_id);
+            }
+            if let Some(pid) = obs.claude_pid {
+                keys.pids.insert(pid);
+            }
+            if let Some(pid) = obs.bridge_pid {
+                keys.pids.insert(pid);
+            }
+        }
+        keys
+    }
+}
+
+fn binding_owned_by_codex(binding: &UnmanagedSessionBinding, keys: &ManagedCodexKeys) -> bool {
+    if !binding.provider.eq_ignore_ascii_case("codex") {
+        return false;
+    }
+    if keys
+        .provider_session_ids
+        .contains(binding.provider_session_id.trim())
+    {
+        return true;
+    }
+    if binding.pid.is_some_and(|pid| keys.pids.contains(&pid)) {
+        return true;
+    }
+    if binding
+        .pid
+        .and_then(current_process_group_id)
+        .is_some_and(|pgid| keys.process_group_ids.contains(&pgid))
+    {
+        return true;
+    }
+    binding
+        .source_path
+        .as_deref()
+        .and_then(|source_path| normalized_path_string(Some(source_path)))
+        .is_some_and(|source_path| keys.source_paths.contains(&source_path))
+}
+
+#[cfg(unix)]
+fn current_process_group_id(pid: u32) -> Option<i32> {
+    let pid = i32::try_from(pid).ok()?;
+    let pgid = unsafe { libc::getpgid(pid) };
+    if pgid > 0 { Some(pgid) } else { None }
+}
+
+#[cfg(not(unix))]
+fn current_process_group_id(_pid: u32) -> Option<i32> {
+    None
+}
+
+fn binding_owned_by_claude(binding: &UnmanagedSessionBinding, keys: &ManagedClaudeKeys) -> bool {
+    if !binding.provider.eq_ignore_ascii_case("claude") {
+        return false;
+    }
+    if keys
+        .provider_session_ids
+        .contains(binding.provider_session_id.trim())
+    {
+        return true;
+    }
+    binding.pid.is_some_and(|pid| keys.pids.contains(&pid))
+}
+
+fn normalized_string(value: Option<&str>) -> Option<String> {
+    let trimmed = value?.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn normalized_path_string(value: Option<&str>) -> Option<String> {
+    normalized_string(value).map(|path| Path::new(&path).to_string_lossy().to_string())
 }
 
 trait EmptyStringFallback {
@@ -652,6 +1128,7 @@ mod tests {
             is_offline: false,
             managed_sessions: Vec::new(),
             unmanaged_session_bindings: Vec::new(),
+            sessions: Vec::new(),
             adaptive_backlog_limiter: None,
         };
 
@@ -724,6 +1201,7 @@ mod tests {
                 lease_ttl_ms: 900_000,
             }],
             unmanaged_session_bindings: Vec::new(),
+            sessions: Vec::new(),
             adaptive_backlog_limiter: None,
         };
 
@@ -749,6 +1227,7 @@ mod tests {
             last_turn_status: Some("completed".to_string()),
             last_error: None,
             thread_subscription_status: Some("subscribed".to_string()),
+            bridge_pid: 12344,
             app_server_pid: Some(12345),
             app_server_pgid: Some(12345),
             updated_at: "2026-04-26T00:00:00Z".to_string(),
@@ -917,6 +1396,238 @@ mod tests {
         assert_eq!(lease.lease_ttl_ms, 900_000);
     }
 
+    fn test_binding(
+        provider: &str,
+        provider_session_id: &str,
+        pid: u32,
+    ) -> UnmanagedSessionBinding {
+        UnmanagedSessionBinding {
+            machine_id: "cinder".to_string(),
+            provider: provider.to_string(),
+            provider_session_id: provider_session_id.to_string(),
+            source_path: Some(format!("/tmp/{provider_session_id}.jsonl")),
+            source_inode: None,
+            source_device: None,
+            pid: Some(pid),
+            process_start_time: Some("2026-05-05T12:00:00Z".to_string()),
+            cwd: Some("/tmp/project".to_string()),
+            source_offset: None,
+            source_mtime: None,
+            observed_at: "2026-05-05T12:00:02Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn filters_unmanaged_codex_binding_owned_by_bridge_thread() {
+        let mut obs = test_observation("managed-codex", "ws://127.0.0.1:45683/session");
+        obs.thread_id = Some("thread-managed".to_string());
+        obs.thread_path = Some("/tmp/thread-managed.jsonl".to_string());
+        obs.has_tui_attachment = false;
+        obs.app_server_alive = true;
+
+        let mut by_path = test_binding("codex", "other-thread", 456);
+        by_path.source_path = Some("/tmp/thread-managed.jsonl".to_string());
+        let bindings = vec![
+            test_binding("codex", "thread-managed", 123),
+            by_path,
+            test_binding("codex", "thread-unmanaged", 789),
+        ];
+
+        let filtered =
+            filter_unmanaged_bindings_owned_by_managed_observations(bindings, &[obs], &[]);
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].provider_session_id, "thread-unmanaged");
+    }
+
+    #[test]
+    fn keeps_codex_binding_when_matching_bridge_is_stopped_and_dead() {
+        let mut obs = test_observation("stopped-codex", "ws://127.0.0.1:45684/session");
+        obs.thread_id = Some("thread-stopped".to_string());
+        obs.status = "stopped".to_string();
+        obs.bridge_alive = false;
+        obs.has_tui_attachment = false;
+        obs.app_server_alive = false;
+
+        let bindings = vec![test_binding("codex", "thread-stopped", 123)];
+
+        let filtered =
+            filter_unmanaged_bindings_owned_by_managed_observations(bindings.clone(), &[obs], &[]);
+
+        assert_eq!(filtered, bindings);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn filters_unmanaged_codex_binding_owned_by_bridge_process_group() {
+        let current_pid = std::process::id();
+        let current_pgid = unsafe { libc::getpgid(i32::try_from(current_pid).unwrap()) };
+        assert!(current_pgid > 0);
+
+        let mut obs = test_observation("managed-codex", "ws://127.0.0.1:45684/session");
+        obs.thread_id = None;
+        obs.thread_path = None;
+        obs.app_server_pid = None;
+        obs.app_server_pgid = Some(current_pgid);
+        obs.bridge_alive = false;
+        obs.has_tui_attachment = false;
+        obs.app_server_alive = true;
+
+        let bindings = vec![
+            test_binding("codex", "same-process-group", current_pid),
+            test_binding("codex", "real-unmanaged", u32::MAX),
+        ];
+
+        let filtered =
+            filter_unmanaged_bindings_owned_by_managed_observations(bindings, &[obs], &[]);
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].provider_session_id, "real-unmanaged");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn keeps_unmanaged_codex_binding_when_process_group_does_not_match_bridge() {
+        let current_pid = std::process::id();
+        let current_pgid = unsafe { libc::getpgid(i32::try_from(current_pid).unwrap()) };
+        assert!(current_pgid > 0);
+
+        let mut obs = test_observation("managed-codex", "ws://127.0.0.1:45684/session");
+        obs.thread_id = None;
+        obs.thread_path = None;
+        obs.app_server_pid = None;
+        obs.app_server_pgid = Some(current_pgid + 1);
+        obs.bridge_alive = false;
+        obs.has_tui_attachment = false;
+        obs.app_server_alive = true;
+
+        let bindings = vec![test_binding("codex", "real-unmanaged", current_pid)];
+
+        let filtered =
+            filter_unmanaged_bindings_owned_by_managed_observations(bindings.clone(), &[obs], &[]);
+
+        assert_eq!(filtered, bindings);
+    }
+
+    #[test]
+    fn filters_unmanaged_claude_binding_owned_by_channel() {
+        use crate::managed_claude_scan::ClaudeChannelObservation;
+
+        let obs = ClaudeChannelObservation {
+            session_id: "managed-claude".to_string(),
+            provider_session_id: Some("claude-provider-session".to_string()),
+            state_file: PathBuf::from("/tmp/managed-claude.json"),
+            claude_pid: Some(321),
+            bridge_pid: Some(322),
+            ready: true,
+            updated_at: "2026-05-07T20:03:50Z".to_string(),
+            claude_alive: true,
+            bridge_alive: true,
+        };
+        let bindings = vec![
+            test_binding("claude", "claude-provider-session", 999),
+            test_binding("claude", "other-claude-session", 321),
+            test_binding("claude", "real-unmanaged", 987),
+        ];
+
+        let filtered =
+            filter_unmanaged_bindings_owned_by_managed_observations(bindings, &[], &[obs]);
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].provider_session_id, "real-unmanaged");
+    }
+
+    #[test]
+    fn resolved_sessions_join_managed_codex_evidence_and_unmanaged_bindings() {
+        let mut obs = test_observation("managed-codex", "ws://127.0.0.1:45685/session");
+        obs.cwd = Some("/Users/test/git/zerg".to_string());
+        obs.thread_id = Some("thread-managed".to_string());
+        obs.thread_path = Some("/Users/test/.codex/sessions/thread-managed.jsonl".to_string());
+        obs.bridge_pid = 111;
+        obs.app_server_pid = Some(222);
+        obs.app_server_alive = true;
+
+        let lease = ManagedSessionLease {
+            session_id: "managed-codex".to_string(),
+            provider: "codex".to_string(),
+            machine_id: "cinder".to_string(),
+            sequence: 1,
+            state: "attached".to_string(),
+            phase: Some("thinking".to_string()),
+            tool_name: Some("Bash".to_string()),
+            bridge_status: Some("ready".to_string()),
+            thread_subscription_status: Some("subscribed".to_string()),
+            observed_at: "2026-05-05T12:00:00Z".to_string(),
+            lease_ttl_ms: 900_000,
+        };
+        let unmanaged = test_binding("claude", "claude-unmanaged", 333);
+
+        let sessions = resolved_sessions_from_observations(&[lease], &[unmanaged], &[obs], &[]);
+
+        assert_eq!(sessions.len(), 2);
+        let managed = sessions
+            .iter()
+            .find(|session| session.control_path == "managed")
+            .unwrap();
+        assert_eq!(managed.provider, "codex");
+        assert_eq!(
+            managed.provider_session_id.as_deref(),
+            Some("thread-managed")
+        );
+        assert_eq!(managed.presentation_state, "managed_attached");
+        assert_eq!(managed.workspace.label.as_deref(), Some("zerg"));
+        assert_eq!(managed.workspace.cwd.as_deref(), Some("/Users/test/git/zerg"));
+        assert_eq!(managed.phase.as_deref(), Some("thinking"));
+        assert_eq!(managed.tool_name.as_deref(), Some("Bash"));
+        assert_eq!(
+            managed.phase_observed_at.as_deref(),
+            Some("2026-05-05T12:00:00Z")
+        );
+        assert_eq!(
+            managed.last_activity_at.as_deref(),
+            Some("2026-05-05T12:00:00Z")
+        );
+        assert_eq!(managed.bridge.bridge_pid, Some(111));
+        assert_eq!(managed.bridge.app_server_pid, Some(222));
+        assert_eq!(managed.bridge.status.as_deref(), Some("ready"));
+        assert_eq!(
+            managed.bridge.thread_subscription_status.as_deref(),
+            Some("subscribed")
+        );
+        assert!(
+            managed
+                .evidence
+                .join_keys
+                .iter()
+                .any(|key| key == "provider_session_id=thread-managed")
+        );
+
+        let unmanaged = sessions
+            .iter()
+            .find(|session| session.control_path == "unmanaged")
+            .unwrap();
+        assert_eq!(unmanaged.provider, "claude");
+        assert_eq!(unmanaged.presentation_state, "unmanaged");
+        assert_eq!(unmanaged.process.pid, Some(333));
+        assert_eq!(
+            unmanaged.provider_session_id.as_deref(),
+            Some("claude-unmanaged")
+        );
+        assert_eq!(unmanaged.workspace.label.as_deref(), Some("project"));
+        assert_eq!(unmanaged.workspace.cwd.as_deref(), Some("/tmp/project"));
+        assert_eq!(
+            unmanaged.evidence.hook_seen_at.as_deref(),
+            Some("2026-05-05T12:00:02Z")
+        );
+        assert!(
+            unmanaged
+                .evidence
+                .join_keys
+                .iter()
+                .any(|key| key == "source_path=/tmp/claude-unmanaged.jsonl")
+        );
+    }
+
     #[test]
     fn test_heartbeat_payload_no_last_ship() {
         let payload = HeartbeatPayload {
@@ -953,6 +1664,7 @@ mod tests {
             is_offline: true,
             managed_sessions: Vec::new(),
             unmanaged_session_bindings: Vec::new(),
+            sessions: Vec::new(),
             adaptive_backlog_limiter: None,
         };
 
@@ -1006,6 +1718,7 @@ mod tests {
             is_offline: false,
             managed_sessions: Vec::new(),
             unmanaged_session_bindings: Vec::new(),
+            sessions: Vec::new(),
             adaptive_backlog_limiter: None,
         };
 
@@ -1128,6 +1841,7 @@ mod tests {
             is_offline: false,
             managed_sessions: Vec::new(),
             unmanaged_session_bindings: Vec::new(),
+            sessions: Vec::new(),
             adaptive_backlog_limiter: None,
         };
         let stats = HeartbeatStats {
@@ -1205,6 +1919,7 @@ mod tests {
             is_offline: false,
             managed_sessions: Vec::new(),
             unmanaged_session_bindings: Vec::new(),
+            sessions: Vec::new(),
             adaptive_backlog_limiter: None,
         };
         let stats = HeartbeatStats {

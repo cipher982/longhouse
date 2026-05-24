@@ -13,6 +13,7 @@ targeting api_app. No shared conftest.
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -20,14 +21,24 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
+os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionConnection
+from zerg.models.agents import SessionRuntimeState
 from zerg.database import Base
+from zerg.services.session_runtime import RuntimeEventIngest
+from zerg.services.session_runtime import ingest_runtime_events
+from zerg.services.session_runtime import runtime_key_for_session
 
 # ---------------------------------------------------------------------------
 # DB helper
@@ -260,6 +271,258 @@ def test_heartbeat_endpoint_persists_transport_summary_fields(tmp_path):
             assert raw["ship_rate_limited_1h"] == 3
             assert raw["ship_latency_p50_ms_1h"] == 140
             assert raw["ship_latency_p95_ms_1h"] == 260
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_heartbeat_resolved_sessions_materialize_managed_control(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    client, api_app_ref = _make_client(SessionLocal)
+    session_id = uuid4()
+
+    try:
+        with SessionLocal() as db:
+            db.add(
+                AgentSession(
+                    id=session_id,
+                    provider="codex",
+                    environment="laptop",
+                    started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
+                    last_activity_at=datetime(2026, 5, 5, 11, 59, tzinfo=timezone.utc),
+                    provider_session_id="thread-codex",
+                    execution_home="managed_local",
+                    managed_transport="codex_app_server",
+                    user_messages=1,
+                    assistant_messages=1,
+                    tool_calls=0,
+                    is_writable_head=1,
+                )
+            )
+            db.commit()
+
+        response = client.post(
+            "/api/agents/heartbeat",
+            json={
+                "version": "0.7.0",
+                "daemon_pid": 42,
+                "sessions": [
+                    {
+                        "session_id": str(session_id),
+                        "provider": "codex",
+                        "provider_session_id": "thread-codex",
+                        "control_path": "managed",
+                        "presentation_state": "managed_attached",
+                        "state": "attached",
+                        "phase": "thinking",
+                        "tool_name": None,
+                        "phase_observed_at": "2026-05-05T11:59:58Z",
+                        "last_activity_at": "2026-05-05T11:59:58Z",
+                        "workspace": {"cwd": "/Users/test/git/zerg", "label": "zerg"},
+                        "process": {"pid": 4201, "started_at": "2026-05-05T11:20:00Z"},
+                        "bridge": {
+                            "bridge_pid": 4202,
+                            "app_server_pid": 4203,
+                            "heartbeat_at": "2026-05-05T11:59:58Z",
+                            "status": "ready",
+                            "thread_subscription_status": "subscribed",
+                        },
+                        "evidence": {"process_observed": True, "transcript_observed": True},
+                        "reason_codes": [],
+                    }
+                ],
+            },
+        )
+
+        assert response.status_code == 204, response.text
+        with SessionLocal() as db:
+            connection = db.query(SessionConnection).one()
+            row = db.query(AgentHeartbeat).one()
+            raw = json.loads(row.raw_json)
+
+            assert connection.control_plane == "codex_bridge"
+            assert connection.state == "attached"
+            assert connection.last_health_at is not None
+            assert raw["sessions"][0]["control_path"] == "managed"
+            assert raw["managed_sessions"] == []
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_heartbeat_legacy_managed_sessions_still_materialize_control(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    client, api_app_ref = _make_client(SessionLocal)
+    session_id = uuid4()
+
+    try:
+        with SessionLocal() as db:
+            db.add(
+                AgentSession(
+                    id=session_id,
+                    provider="claude",
+                    environment="laptop",
+                    started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
+                    provider_session_id="thread-claude",
+                    execution_home="managed_local",
+                    managed_transport="claude_channel_bridge",
+                    user_messages=1,
+                    assistant_messages=1,
+                    tool_calls=0,
+                    is_writable_head=1,
+                )
+            )
+            db.commit()
+
+        response = client.post(
+            "/api/agents/heartbeat",
+            json={
+                "version": "0.6.0",
+                "daemon_pid": 42,
+                "managed_sessions": [
+                    {
+                        "session_id": str(session_id),
+                        "provider": "claude",
+                        "machine_id": "cinder",
+                        "sequence": 42,
+                        "state": "attached",
+                        "phase": "idle",
+                        "bridge_status": "ready",
+                        "observed_at": "2026-05-05T11:59:58Z",
+                        "lease_ttl_ms": 900000,
+                    }
+                ],
+            },
+        )
+
+        assert response.status_code == 204, response.text
+        with SessionLocal() as db:
+            connection = db.query(SessionConnection).one()
+            assert connection.control_plane == "claude_channel_bridge"
+            assert connection.state == "attached"
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_heartbeat_rejects_null_resolved_sessions(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    client, api_app_ref = _make_client(SessionLocal)
+
+    try:
+        response = client.post(
+            "/api/agents/heartbeat",
+            json={
+                "version": "0.7.0",
+                "daemon_pid": 42,
+                "sessions": None,
+            },
+        )
+
+        assert response.status_code == 422
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_heartbeat_empty_resolved_sessions_detaches_missing_managed_control(tmp_path):
+    from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+
+    SessionLocal = _make_db(tmp_path)
+    client, api_app_ref = _make_client(SessionLocal)
+    session_id = uuid4()
+
+    try:
+        with SessionLocal() as db:
+            session = AgentSession(
+                id=session_id,
+                provider="codex",
+                environment="laptop",
+                started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
+                provider_session_id="thread-codex",
+                execution_home="managed_local",
+                managed_transport="codex_app_server",
+                user_messages=1,
+                assistant_messages=1,
+                tool_calls=0,
+                is_writable_head=1,
+            )
+            db.add(session)
+            db.flush()
+            seed_managed_kernel_rows(db, session, control_plane="codex_bridge")
+            db.commit()
+
+        response = client.post(
+            "/api/agents/heartbeat",
+            json={
+                "version": "0.7.0",
+                "daemon_pid": 42,
+                "sessions": [],
+            },
+        )
+
+        assert response.status_code == 204, response.text
+        with SessionLocal() as db:
+            connection = db.query(SessionConnection).one()
+            assert connection.state == "detached"
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_heartbeat_empty_resolved_sessions_closes_stale_unmanaged_session(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    client, api_app_ref = _make_client(SessionLocal)
+    session_id = uuid4()
+    provider_session_id = str(session_id)
+    now = datetime.now(timezone.utc)
+
+    try:
+        with SessionLocal() as db:
+            session = AgentSession(
+                id=session_id,
+                provider="codex",
+                environment="laptop",
+                started_at=now - timedelta(minutes=20),
+                last_activity_at=now - timedelta(minutes=10),
+                provider_session_id=provider_session_id,
+                execution_home="unmanaged_local",
+                user_messages=1,
+                assistant_messages=1,
+                tool_calls=0,
+                is_writable_head=1,
+            )
+            db.add(session)
+            db.commit()
+            ingest_runtime_events(
+                db,
+                [
+                    RuntimeEventIngest(
+                        runtime_key=runtime_key_for_session("codex", provider_session_id),
+                        session_id=session_id,
+                        provider="codex",
+                        device_id="testclient",
+                        source="codex_hook",
+                        kind="phase_signal",
+                        phase="thinking",
+                        occurred_at=now - timedelta(minutes=10),
+                        freshness_ms=90 * 1000,
+                        dedupe_key="resolved-snapshot-unmanaged-phase",
+                        payload={},
+                    )
+                ],
+            )
+            db.commit()
+
+        response = client.post(
+            "/api/agents/heartbeat",
+            json={
+                "version": "0.7.0",
+                "daemon_pid": 42,
+                "sessions": [],
+            },
+        )
+
+        assert response.status_code == 204, response.text
+        with SessionLocal() as db:
+            state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session_id).one()
+            assert state.terminal_state == "process_gone"
+            assert state.terminal_source == "engine_process_snapshot"
     finally:
         api_app_ref.dependency_overrides = {}
 

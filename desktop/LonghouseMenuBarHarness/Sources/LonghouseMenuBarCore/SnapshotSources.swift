@@ -101,7 +101,7 @@ public enum HealthSnapshotDecoder {
 }
 
 public struct HarnessRuntimeConfig {
-    public static let defaultRefreshIntervalSeconds: TimeInterval = 10
+    public static let defaultRefreshIntervalSeconds: TimeInterval = 30
 
     public let outputURL: URL?
     public let source: any HealthSnapshotSource
