@@ -113,7 +113,7 @@ def _require_json_object(result: HttpResult, *, context: str) -> dict[str, Any]:
 def _commit_matches(observed: str | None, expected: str | None) -> bool:
     observed = (observed or "").strip()
     expected = (expected or "").strip()
-    if not expected:
+    if expected.lower() in {"", "any", "live", "current"}:
         return True
     if not observed:
         return False

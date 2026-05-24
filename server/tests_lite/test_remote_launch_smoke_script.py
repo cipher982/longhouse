@@ -34,6 +34,8 @@ def test_commit_match_accepts_full_or_short_sha() -> None:
 
     assert smoke._commit_matches(full, full)
     assert smoke._commit_matches(full, "ca73cc1f")
+    assert smoke._commit_matches(full, "live")
+    assert smoke._commit_matches(full, "any")
     assert not smoke._commit_matches("ca73cc1f", full)
     assert not smoke._commit_matches(full, "40a262b2")
 
