@@ -45,7 +45,11 @@ jobs:
     timeout-minutes: 25
     if: >-
       ${{
-        (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+        (
+          github.event_name == 'workflow_run'
+          && github.event.workflow_run.conclusion == 'success'
+          && vars.REMOTE_LAUNCH_SMOKE_AFTER_DEPLOY_ENABLED == 'true'
+        )
         || (github.event_name == 'schedule' && vars.REMOTE_LAUNCH_SMOKE_ENABLED == 'true')
         || github.event_name == 'workflow_dispatch'
       }}
