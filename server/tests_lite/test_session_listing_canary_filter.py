@@ -61,6 +61,10 @@ def test_default_session_listing_hides_internal_canary_sessions(tmp_path):
         assert total == 1
         assert [session.id for session in sessions] == [visible.id]
 
+        project_sessions, project_total = store.list_sessions(project="canary", hide_autonomous=False)
+        assert project_total == 0
+        assert project_sessions == []
+
         canary_sessions, canary_total = store.list_sessions(provider="canary", hide_autonomous=False)
         assert canary_total == 1
         assert [session.id for session in canary_sessions] == [canary.id]
