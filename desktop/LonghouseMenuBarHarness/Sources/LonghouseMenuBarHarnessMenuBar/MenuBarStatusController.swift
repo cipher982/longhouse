@@ -82,15 +82,15 @@ final class MenuBarStatusController: NSObject {
             return
         }
 
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: refreshIntervalSeconds, repeats: true) { [weak store] _ in
+        let timer = Timer(timeInterval: refreshIntervalSeconds, repeats: true) { [weak store] _ in
             Task { @MainActor in
                 store?.refresh(reason: .background)
             }
         }
+        timer.tolerance = max(1.0, refreshIntervalSeconds * 0.2)
+        refreshTimer = timer
 
-        if let refreshTimer {
-            RunLoop.main.add(refreshTimer, forMode: .common)
-        }
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     private func observeStore() {
@@ -111,6 +111,7 @@ final class MenuBarStatusController: NSObject {
     private func openPanel(relativeTo button: NSStatusBarButton) {
         panelGeneration &+= 1
         store.beginPresentationUpdates()
+        store.refresh(reason: .background)
         panelController.show(relativeTo: button)
         installEventMonitors(for: panelGeneration)
     }
@@ -142,7 +143,10 @@ final class MenuBarStatusController: NSObject {
     }
 
     private func statusItemAttentionColor() -> NSColor? {
-        if store.loadError != nil {
+        if store.staleCachedSnapshotFailureMessage(relativeTo: Date()) != nil {
+            return .systemRed
+        }
+        if store.loadError != nil && store.snapshot == nil {
             return .systemRed
         }
         guard let snapshot = store.snapshot else {
@@ -172,7 +176,10 @@ final class MenuBarStatusController: NSObject {
     }
 
     private func statusItemAttentionLabel() -> String? {
-        if store.loadError != nil {
+        if store.staleCachedSnapshotFailureMessage(relativeTo: Date()) != nil {
+            return "Longhouse status is stale"
+        }
+        if store.loadError != nil && store.snapshot == nil {
             return "Longhouse needs attention"
         }
         guard let snapshot = store.snapshot, snapshot.needsMenuBarAttention else {

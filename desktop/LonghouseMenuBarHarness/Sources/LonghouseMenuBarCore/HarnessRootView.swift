@@ -25,6 +25,10 @@ public struct HarnessRootView: View {
         Group {
             if store.isBooting && (store.snapshot?.parsedSeverity ?? .gray) != .green {
                 MenuBarBootingView()
+            } else if let staleFailureMessage = store.staleCachedSnapshotFailureMessage(relativeTo: store.presentationDate) {
+                MenuBarFailureView(message: staleFailureMessage) {
+                    store.refresh(reason: .manual)
+                }
             } else if let snapshot = store.snapshot {
                 MenuBarPanelView(
                     snapshot: snapshot,

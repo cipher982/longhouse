@@ -1260,7 +1260,7 @@ fn write_local_status_snapshot(
             .cmp(&b.provider)
             .then_with(|| a.session_id.cmp(&b.session_id))
     });
-    payload.unmanaged_session_bindings =
+    let unmanaged_session_bindings =
         if let Some(cached_bindings) = unmanaged_session_binding_override {
             cached_bindings.to_vec()
         } else {
@@ -1270,6 +1270,18 @@ fn write_local_status_snapshot(
                 chrono::Utc::now(),
             )
         };
+    payload.unmanaged_session_bindings =
+        heartbeat::filter_unmanaged_bindings_owned_by_managed_observations(
+            unmanaged_session_bindings,
+            observations,
+            claude_observations,
+        );
+    payload.sessions = heartbeat::resolved_sessions_from_observations(
+        &payload.managed_sessions,
+        &payload.unmanaged_session_bindings,
+        observations,
+        claude_observations,
+    );
     // Compute the fresh ledger view up front so a read failure is both
     // logged and encoded in the status file as `phase_ledger_status`.
     // Downstream readers (verify-runtime-truth, local-health) can then
@@ -1334,47 +1346,57 @@ fn record_flight_sample(
 }
 
 fn runtime_truth_signature(payload: &heartbeat::HeartbeatPayload) -> String {
-    let mut managed: Vec<String> = payload
-        .managed_sessions
+    let mut sessions: Vec<String> = payload
+        .sessions
         .iter()
-        .map(|lease| {
+        .map(|session| {
+            let mut join_keys = session.evidence.join_keys.clone();
+            join_keys.sort();
+            let mut reason_codes = session.reason_codes.clone();
+            reason_codes.sort();
             format!(
-                "{}|{}|{}|{}|{}|{}|{}",
-                lease.provider,
-                lease.session_id,
-                lease.machine_id,
-                lease.state,
-                lease.phase.as_deref().unwrap_or(""),
-                lease.tool_name.as_deref().unwrap_or(""),
-                lease.bridge_status.as_deref().unwrap_or("")
+                "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+                session.provider,
+                session.session_id.as_deref().unwrap_or(""),
+                session.provider_session_id.as_deref().unwrap_or(""),
+                session.control_path,
+                session.presentation_state,
+                session.state,
+                session.phase.as_deref().unwrap_or(""),
+                session.tool_name.as_deref().unwrap_or(""),
+                session.workspace.cwd.as_deref().unwrap_or(""),
+                session.workspace.label.as_deref().unwrap_or(""),
+                session.workspace.branch.as_deref().unwrap_or(""),
+                session
+                    .process
+                    .pid
+                    .map(|pid| pid.to_string())
+                    .unwrap_or_default(),
+                session.process.process_start_time.as_deref().unwrap_or(""),
+                session
+                    .bridge
+                    .bridge_pid
+                    .map(|pid| pid.to_string())
+                    .unwrap_or_default(),
+                session
+                    .bridge
+                    .app_server_pid
+                    .map(|pid| pid.to_string())
+                    .unwrap_or_default(),
+                session.bridge.status.as_deref().unwrap_or(""),
+                session
+                    .bridge
+                    .thread_subscription_status
+                    .as_deref()
+                    .unwrap_or(""),
+                join_keys.join(","),
+                reason_codes.join(",")
             )
         })
         .collect();
-    managed.sort();
+    sessions.sort();
 
-    let mut unmanaged: Vec<String> = payload
-        .unmanaged_session_bindings
-        .iter()
-        .map(|binding| {
-            format!(
-                "{}|{}|{}|{}|{}|{}|{}",
-                binding.machine_id,
-                binding.provider,
-                binding.provider_session_id,
-                binding.pid.map(|pid| pid.to_string()).unwrap_or_default(),
-                binding.process_start_time.as_deref().unwrap_or(""),
-                binding.cwd.as_deref().unwrap_or(""),
-                binding.source_path.as_deref().unwrap_or("")
-            )
-        })
-        .collect();
-    unmanaged.sort();
-
-    format!(
-        "managed=[{}];unmanaged=[{}]",
-        managed.join(";"),
-        unmanaged.join(";")
-    )
+    format!("sessions=[{}]", sessions.join(";"))
 }
 
 fn local_retry_delay(priority: WorkPriority) -> Duration {
@@ -2587,6 +2609,7 @@ mod tests {
             is_offline: false,
             managed_sessions: Vec::new(),
             unmanaged_session_bindings: Vec::new(),
+            sessions: Vec::new(),
             adaptive_backlog_limiter: None,
         }
     }
@@ -2605,6 +2628,53 @@ mod tests {
             source_offset: None,
             source_mtime: None,
             observed_at: "2026-05-05T12:00:02Z".to_string(),
+        }
+    }
+
+    fn resolved_session(
+        provider: &str,
+        session_id: Option<&str>,
+        provider_session_id: Option<&str>,
+        control_path: &str,
+        state: &str,
+        pid: Option<u32>,
+    ) -> heartbeat::ResolvedLocalSession {
+        heartbeat::ResolvedLocalSession {
+            session_id: session_id.map(str::to_string),
+            provider: provider.to_string(),
+            provider_session_id: provider_session_id.map(str::to_string),
+            control_path: control_path.to_string(),
+            presentation_state: if control_path == "managed" {
+                format!("managed_{state}")
+            } else {
+                control_path.to_string()
+            },
+            state: state.to_string(),
+            phase: Some("idle".to_string()),
+            tool_name: None,
+            phase_observed_at: Some("2026-05-05T12:00:01Z".to_string()),
+            last_activity_at: Some("2026-05-05T12:00:02Z".to_string()),
+            workspace: heartbeat::ResolvedWorkspace {
+                cwd: Some("/tmp/project".to_string()),
+                label: Some("project".to_string()),
+                branch: None,
+            },
+            process: heartbeat::ResolvedProcess {
+                pid,
+                process_start_time: Some("2026-05-05T12:00:00Z".to_string()),
+                started_at: Some("2026-05-05T12:00:00Z".to_string()),
+            },
+            bridge: heartbeat::ResolvedBridge::default(),
+            evidence: heartbeat::ResolvedEvidence {
+                process_observed: pid.is_some(),
+                transcript_observed: provider_session_id.is_some(),
+                bridge_state: None,
+                hook_seen_at: Some("2026-05-05T12:00:02Z".to_string()),
+                join_keys: provider_session_id
+                    .map(|id| vec![format!("provider_session_id={id}")])
+                    .unwrap_or_default(),
+            },
+            reason_codes: Vec::new(),
         }
     }
 
@@ -2627,6 +2697,7 @@ mod tests {
             last_turn_status: last_turn_status.map(str::to_string),
             last_error: None,
             thread_subscription_status: Some("subscribed".to_string()),
+            bridge_pid: 12344,
             app_server_pid: None,
             app_server_pgid: None,
             updated_at: updated_at.to_string(),
@@ -2668,27 +2739,18 @@ mod tests {
     #[test]
     fn test_runtime_truth_signature_ignores_observation_timestamps() {
         let mut first = empty_heartbeat_payload();
-        first
-            .unmanaged_session_bindings
-            .push(heartbeat::UnmanagedSessionBinding {
-                machine_id: "cinder".to_string(),
-                provider: "claude".to_string(),
-                provider_session_id: "sess-1".to_string(),
-                source_path: Some("/tmp/sess-1.jsonl".to_string()),
-                source_inode: None,
-                source_device: None,
-                pid: Some(42),
-                process_start_time: Some("2026-05-05T12:00:00Z".to_string()),
-                cwd: Some("/tmp/project".to_string()),
-                source_offset: Some(100),
-                source_mtime: Some("2026-05-05T12:00:01Z".to_string()),
-                observed_at: "2026-05-05T12:00:02Z".to_string(),
-            });
+        first.sessions.push(resolved_session(
+            "claude",
+            None,
+            Some("sess-1"),
+            "unmanaged",
+            "unmanaged",
+            Some(42),
+        ));
         let mut second = first.clone();
-        second.unmanaged_session_bindings[0].source_offset = Some(200);
-        second.unmanaged_session_bindings[0].source_mtime =
-            Some("2026-05-05T12:00:10Z".to_string());
-        second.unmanaged_session_bindings[0].observed_at = "2026-05-05T12:00:11Z".to_string();
+        second.sessions[0].phase_observed_at = Some("2026-05-05T12:00:10Z".to_string());
+        second.sessions[0].last_activity_at = Some("2026-05-05T12:00:11Z".to_string());
+        second.sessions[0].evidence.hook_seen_at = Some("2026-05-05T12:00:11Z".to_string());
 
         assert_eq!(
             runtime_truth_signature(&first),
@@ -2699,24 +2761,16 @@ mod tests {
     #[test]
     fn test_runtime_truth_signature_changes_when_process_identity_changes() {
         let mut first = empty_heartbeat_payload();
-        first
-            .unmanaged_session_bindings
-            .push(heartbeat::UnmanagedSessionBinding {
-                machine_id: "cinder".to_string(),
-                provider: "claude".to_string(),
-                provider_session_id: "sess-1".to_string(),
-                source_path: Some("/tmp/sess-1.jsonl".to_string()),
-                source_inode: None,
-                source_device: None,
-                pid: Some(42),
-                process_start_time: Some("2026-05-05T12:00:00Z".to_string()),
-                cwd: Some("/tmp/project".to_string()),
-                source_offset: None,
-                source_mtime: None,
-                observed_at: "2026-05-05T12:00:02Z".to_string(),
-            });
+        first.sessions.push(resolved_session(
+            "claude",
+            None,
+            Some("sess-1"),
+            "unmanaged",
+            "unmanaged",
+            Some(42),
+        ));
         let mut second = first.clone();
-        second.unmanaged_session_bindings[0].pid = Some(43);
+        second.sessions[0].process.pid = Some(43);
 
         assert_ne!(
             runtime_truth_signature(&first),
@@ -2727,21 +2781,17 @@ mod tests {
     #[test]
     fn test_runtime_truth_signature_changes_on_managed_lease_state() {
         let mut first = empty_heartbeat_payload();
-        first.managed_sessions.push(heartbeat::ManagedSessionLease {
-            session_id: "managed-session".to_string(),
-            provider: "codex".to_string(),
-            machine_id: "cinder".to_string(),
-            sequence: 10,
-            state: "attached".to_string(),
-            phase: Some("idle".to_string()),
-            tool_name: None,
-            bridge_status: Some("healthy".to_string()),
-            thread_subscription_status: None,
-            observed_at: "2026-05-05T12:00:02Z".to_string(),
-            lease_ttl_ms: 900_000,
-        });
+        first.sessions.push(resolved_session(
+            "codex",
+            Some("managed-session"),
+            Some("thread-1"),
+            "managed",
+            "attached",
+            Some(42),
+        ));
         let mut second = first.clone();
-        second.managed_sessions[0].state = "detached".to_string();
+        second.sessions[0].state = "detached".to_string();
+        second.sessions[0].presentation_state = "managed_detached".to_string();
 
         assert_ne!(
             runtime_truth_signature(&first),
