@@ -1,19 +1,6 @@
-"""Tests for POST /api/sessions/launch and the launch_remote_session service.
-
-Retired pending kernel-shaped replacement: the session-identity-kernel
-cleanup deleted ``launch_state``/``launch_lease_until`` columns from
-``AgentSession``; persistence now lives on ``SessionLaunchAttempt``. The
-tests below were tightly coupled to the deleted columns.
-"""
+"""Tests for POST /api/sessions/launch and the launch_remote_session service."""
 
 from __future__ import annotations
-
-import pytest
-
-pytest.skip(
-    "launch_state columns deleted by session-identity-kernel cleanup",
-    allow_module_level=True,
-)
 
 import asyncio
 import os
@@ -40,7 +27,11 @@ from zerg.dependencies.agents_auth import require_single_tenant  # noqa: E402
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user  # noqa: E402
 from zerg.models import User  # noqa: E402
 from zerg.models.agents import AgentSession  # noqa: E402
+from zerg.models.agents import SessionLaunchAttempt  # noqa: E402
 from zerg.models.device_token import DeviceToken  # noqa: E402
+from zerg.services.agents.kernel_writes import ensure_primary_thread  # noqa: E402
+from zerg.services.agents.kernel_writes import record_run  # noqa: E402
+from zerg.services.live_session_dispatch import supports_live_text_dispatch_metadata  # noqa: E402
 from zerg.services.machine_control_channel import MachineControlChannelRegistry  # noqa: E402
 from zerg.services.machine_control_channel import MachineControlCommandResponse  # noqa: E402
 from zerg.services.machine_control_channel import get_machine_control_channel_registry  # noqa: E402
@@ -54,6 +45,15 @@ from zerg.services.session_runtime import ingest_runtime_events  # noqa: E402
 from zerg.services.session_workspace import build_session_workspace  # noqa: E402
 
 OWNER_ID = 77
+
+
+def _latest_attempt(db, session_id):
+    return (
+        db.query(SessionLaunchAttempt)
+        .filter(SessionLaunchAttempt.session_id == session_id)
+        .order_by(SessionLaunchAttempt.created_at.desc(), SessionLaunchAttempt.id.desc())
+        .one()
+    )
 
 
 def _make_db(tmp_path):
@@ -152,9 +152,11 @@ def test_happy_path_inserts_live_session(tmp_path):
     with SessionLocal() as db:
         row = db.get(AgentSession, result.session_id)
         assert row is not None
-        assert row.launch_state == "live"
-        assert row.launch_error_code is None
-        assert row.launch_lease_until is None
+        attempt = _latest_attempt(db, result.session_id)
+        assert attempt.state == "dispatched"
+        assert attempt.error_code is None
+        assert attempt.expires_at is None
+        assert attempt.run_id is not None
         assert row.provider == "codex"
         assert row.cwd == "/Users/me/repo"
         assert row.device_id == "cinder"
@@ -283,8 +285,9 @@ def test_engine_error_maps_to_launch_failed(tmp_path):
     assert result.launch_error_code == "cwd_not_found"
     with SessionLocal() as db:
         row = db.get(AgentSession, result.session_id)
-        assert row.launch_state == "launch_failed"
-        assert row.launch_error_code == "cwd_not_found"
+        attempt = _latest_attempt(db, result.session_id)
+        assert attempt.state == "failed"
+        assert attempt.error_code == "cwd_not_found"
         assert row.ended_at is not None
 
 
@@ -319,8 +322,9 @@ def test_transport_timeout_leaves_unknown(tmp_path):
     assert result.launch_state == "launching_unknown"
     with SessionLocal() as db:
         row = db.get(AgentSession, result.session_id)
-        assert row.launch_state == "launching_unknown"
-        assert row.launch_lease_until is not None
+        attempt = _latest_attempt(db, result.session_id)
+        assert attempt.state == "dispatched"
+        assert attempt.expires_at is not None
         assert row.ended_at is None
 
 
@@ -475,13 +479,17 @@ def test_launched_codex_workspace_exposes_live_engine_control(tmp_path):
                 ],
             )
             workspace = build_session_workspace(db=db, session_id=result.session_id, owner_id=OWNER_ID)
+            launched = db.get(AgentSession, result.session_id)
+            assert launched.execution_home == "managed_local"
+            assert launched.managed_transport == "codex_app_server"
+            assert supports_live_text_dispatch_metadata(launched, db=db, owner_id=OWNER_ID) is True
     finally:
         asyncio.run(global_registry.clear_for_tests())
 
     assert workspace.session.launch_state == "live"
     assert workspace.session.capabilities.live_control_available is True
     assert workspace.session.capabilities.can_queue_next_input is True
-    assert workspace.session.capabilities.can_steer_active_turn is False
+    assert workspace.session.capabilities.can_steer_active_turn is True
 
 
 def test_late_result_reconciliation_moves_unknown_to_live(tmp_path):
@@ -525,9 +533,10 @@ def test_late_result_reconciliation_moves_unknown_to_live(tmp_path):
         )
     assert reconciled is True
     with SessionLocal() as db:
-        row = db.get(AgentSession, result.session_id)
-        assert row.launch_state == "live"
-        assert row.launch_lease_until is None
+        attempt = _latest_attempt(db, result.session_id)
+        assert attempt.state == "dispatched"
+        assert attempt.run_id is not None
+        assert attempt.expires_at is None
 
 
 def test_late_result_reconciliation_ignores_unknown_command(tmp_path):
@@ -552,28 +561,34 @@ def test_reap_orphaned_launches_expires_stale_rows(tmp_path):
     past = datetime.now(timezone.utc).replace(tzinfo=timezone.utc)
     with SessionLocal() as db:
         sid = uuid4()
+        session = AgentSession(
+            id=sid,
+            provider="codex",
+            environment="development",
+            project="repo",
+            device_id="cinder",
+            cwd="/Users/me/repo",
+            started_at=past,
+            thread_root_session_id=sid,
+            continued_from_session_id=None,
+            continuation_kind="local",
+            origin_label="cinder",
+            user_messages=0,
+            assistant_messages=0,
+            tool_calls=0,
+            is_writable_head=1,
+            is_sidechain=0,
+        )
+        db.add(session)
+        db.flush()
         db.add(
-            AgentSession(
-                id=sid,
+            SessionLaunchAttempt(
+                session_id=sid,
                 provider="codex",
-                environment="development",
-                project="repo",
-                device_id="cinder",
-                cwd="/Users/me/repo",
-                started_at=past,
-                thread_root_session_id=sid,
-                continued_from_session_id=None,
-                continuation_kind="local",
-                origin_label="cinder",
-                user_messages=0,
-                assistant_messages=0,
-                tool_calls=0,
-                is_writable_head=1,
-                is_sidechain=0,
-                execution_home="managed_local",
-                launch_state="launching_unknown",
-                launch_command_id=f"launch-{sid}",
-                launch_lease_until=past.replace(year=past.year - 1),  # way in the past
+                host_id="cinder",
+                command_id=f"launch-{sid}",
+                state="dispatched",
+                expires_at=past.replace(year=past.year - 1),  # way in the past
             )
         )
         db.commit()
@@ -581,8 +596,10 @@ def test_reap_orphaned_launches_expires_stale_rows(tmp_path):
     assert reaped == 1
     with SessionLocal() as db:
         row = db.query(AgentSession).first()
-        assert row.launch_state == "launch_orphaned"
-        assert row.launch_lease_until is None
+        attempt = _latest_attempt(db, row.id)
+        assert attempt.state == "abandoned"
+        assert attempt.expires_at is None
+        assert attempt.error_code == "launch_timeout"
         assert row.ended_at is not None
 
 
@@ -612,28 +629,47 @@ def test_admin_launch_debug_lists_non_live_rows(tmp_path):
 
     now = datetime.now(timezone.utc)
     with SessionLocal() as db:
-        for state in ("launching_unknown", "launch_failed", "launch_orphaned", "live"):
+        for launch_state, attempt_state in (
+            ("launching_unknown", "dispatched"),
+            ("launch_failed", "failed"),
+            ("launch_orphaned", "abandoned"),
+            ("live", "dispatched"),
+        ):
             sid = uuid4()
+            session = AgentSession(
+                id=sid,
+                provider="codex",
+                environment="development",
+                project="repo",
+                device_id="cinder",
+                cwd="/Users/me/repo",
+                started_at=now,
+                thread_root_session_id=sid,
+                continued_from_session_id=None,
+                continuation_kind="local",
+                origin_label="cinder",
+                user_messages=0,
+                assistant_messages=0,
+                tool_calls=0,
+                is_writable_head=1,
+                is_sidechain=0,
+            )
+            db.add(session)
+            db.flush()
+            thread = ensure_primary_thread(db, session)
+            run = None
+            if launch_state == "live":
+                run = record_run(db, thread=thread, provider="codex", host_id="cinder", cwd="/Users/me/repo")
             db.add(
-                AgentSession(
-                    id=sid,
+                SessionLaunchAttempt(
+                    session_id=sid,
+                    thread_id=thread.id,
+                    run_id=run.id if run is not None else None,
                     provider="codex",
-                    environment="development",
-                    project="repo",
-                    device_id="cinder",
-                    cwd="/Users/me/repo",
-                    started_at=now,
-                    thread_root_session_id=sid,
-                    continued_from_session_id=None,
-                    continuation_kind="local",
-                    origin_label="cinder",
-                    user_messages=0,
-                    assistant_messages=0,
-                    tool_calls=0,
-                    is_writable_head=1,
-                    is_sidechain=0,
-                    execution_home="managed_local",
-                    launch_state=state,
+                    host_id="cinder",
+                    state=attempt_state,
+                    error_code="boom" if attempt_state in {"failed", "abandoned"} else None,
+                    error_message="boom" if attempt_state in {"failed", "abandoned"} else None,
                 )
             )
         db.commit()

@@ -741,26 +741,45 @@ async def list_remote_launch_debug(
     Surfaces launching / launching_unknown / launch_failed / launch_orphaned
     rows so an operator can debug propagation or control-channel issues.
     """
-    # Session-identity-kernel cleanup: ``launch_state`` was dropped from
-    # ``AgentSession``. The remote-launch debug surface is no longer wired
-    # to a column-backed store; return empty until it is re-implemented on
-    # ``SessionLaunchAttempt``.
-    rows: list[AgentSession] = []
-    total = 0
-    _ = include_live
+    from zerg.models.agents import SessionLaunchAttempt
+
+    q = (
+        db.query(SessionLaunchAttempt, AgentSession)
+        .join(AgentSession, AgentSession.id == SessionLaunchAttempt.session_id)
+        .order_by(SessionLaunchAttempt.created_at.desc(), SessionLaunchAttempt.id.desc())
+    )
+    all_rows = q.limit(limit if include_live else max(limit * 4, limit)).all()
+
+    def _state(attempt: SessionLaunchAttempt) -> str:
+        raw = str(attempt.state or "").strip()
+        if raw == "failed":
+            return "launch_failed"
+        if raw == "abandoned":
+            return "launch_orphaned"
+        if attempt.run_id is not None or raw == "adopted":
+            return "live"
+        if raw == "dispatched":
+            return "launching_unknown"
+        return "launching"
+
+    filtered = [(attempt, session, _state(attempt)) for attempt, session in all_rows]
+    if not include_live:
+        filtered = [row for row in filtered if row[2] != "live"]
+    filtered = filtered[:limit]
+    total = len(filtered)
     entries = [
         RemoteLaunchDebugEntry(
-            session_id=str(row.id),
-            device_id=row.device_id,
-            provider=row.provider,
-            cwd=row.cwd,
-            launch_state=row.launch_state,
-            launch_error_code=row.launch_error_code,
-            launch_error_message=row.launch_error_message,
-            launch_lease_until=row.launch_lease_until,
-            started_at=row.started_at,
-            ended_at=row.ended_at,
+            session_id=str(session.id),
+            device_id=session.device_id,
+            provider=attempt.provider or session.provider,
+            cwd=session.cwd,
+            launch_state=launch_state,
+            launch_error_code=attempt.error_code,
+            launch_error_message=attempt.error_message,
+            launch_lease_until=attempt.expires_at,
+            started_at=session.started_at,
+            ended_at=session.ended_at,
         )
-        for row in rows
+        for attempt, session, launch_state in filtered
     ]
     return RemoteLaunchDebugResponse(entries=entries, total=total)

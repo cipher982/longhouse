@@ -26,6 +26,7 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionLaunchAttempt
 from zerg.models.device_token import DeviceToken
 from zerg.services.agents.kernel_writes import ensure_primary_thread
 from zerg.services.agents.kernel_writes import record_connection
@@ -101,6 +102,28 @@ def _project_for(cwd: str, project: str | None) -> str:
     return Path(cwd).name or "managed-local"
 
 
+def _launch_state_for_attempt(attempt: SessionLaunchAttempt) -> str:
+    state = str(attempt.state or "").strip()
+    if state == "failed":
+        return "launch_failed"
+    if state == "abandoned":
+        return "launch_orphaned"
+    if attempt.run_id is not None or state == "adopted":
+        return "live"
+    if state == "dispatched":
+        return "launching_unknown"
+    return "launching"
+
+
+def _launch_result_for_attempt(attempt: SessionLaunchAttempt) -> RemoteLaunchResult:
+    return RemoteLaunchResult(
+        session_id=UUID(str(attempt.session_id)),
+        launch_state=_launch_state_for_attempt(attempt),
+        launch_error_code=attempt.error_code,
+        launch_error_message=attempt.error_message,
+    )
+
+
 async def launch_remote_session(
     db: Session,
     params: RemoteLaunchParams,
@@ -141,20 +164,18 @@ async def launch_remote_session(
     client_request_id = (params.client_request_id or "").strip() or None
     if client_request_id:
         existing = (
-            db.query(AgentSession)
-            .filter(AgentSession.launch_client_request_id == client_request_id)
+            db.query(SessionLaunchAttempt)
+            .join(AgentSession, AgentSession.id == SessionLaunchAttempt.session_id)
+            .filter(SessionLaunchAttempt.client_request_id == client_request_id)
+            .filter(SessionLaunchAttempt.host_id == device_id)
+            .filter(SessionLaunchAttempt.provider == provider)
             .filter(AgentSession.device_id == device_id)
             .filter(AgentSession.provider == provider)
-            .order_by(AgentSession.started_at.desc())
+            .order_by(SessionLaunchAttempt.created_at.desc(), SessionLaunchAttempt.id.desc())
             .first()
         )
         if existing is not None:
-            return RemoteLaunchResult(
-                session_id=UUID(str(existing.id)),
-                launch_state=existing.launch_state or "live",
-                launch_error_code=existing.launch_error_code,
-                launch_error_message=existing.launch_error_message,
-            )
+            return _launch_result_for_attempt(existing)
 
     reg = registry or get_machine_control_channel_registry()
     info = reg.info(owner_id=params.owner_id, device_id=device_id)
@@ -260,29 +281,24 @@ async def launch_remote_session(
         # Timeout or transport error — the command may already be on the wire.
         # Mark dispatched so the reaper recognizes it as in-flight; the late
         # reconcile path will flip to failed/abandoned with the real outcome.
-        session.launch_state = "launching_unknown"
-        session.launch_error_message = response.error or "control channel transport failed"
+        error_message = response.error or "control channel transport failed"
         update_launch_attempt(
             db,
             launch_attempt,
             state="dispatched",
-            error_message=session.launch_error_message,
+            error_message=error_message,
         )
         db.commit()
         db.refresh(session)
         return RemoteLaunchResult(
             session_id=session_uuid,
-            launch_state=session.launch_state,
+            launch_state="launching_unknown",
             launch_error_code=None,
-            launch_error_message=session.launch_error_message,
+            launch_error_message=error_message,
         )
 
     message = response.message or {}
     if message.get("ok"):
-        session.launch_state = "live"
-        session.launch_error_code = None
-        session.launch_error_message = None
-        session.launch_lease_until = None
         run = record_run(
             db,
             thread=primary_thread,
@@ -334,10 +350,6 @@ async def launch_remote_session(
     error = message.get("error") or {}
     code = str(error.get("code") or "provider_launch_failed")
     err_msg = str(error.get("message") or "unknown error")
-    session.launch_state = "launch_failed"
-    session.launch_error_code = code
-    session.launch_error_message = err_msg
-    session.launch_lease_until = None
     session.ended_at = datetime.now(timezone.utc)
     update_launch_attempt(
         db,
@@ -378,10 +390,13 @@ def reconcile_launch_from_command_result(db: Session, message: dict) -> bool:
     command_id = str(message.get("command_id") or "").strip()
     if not command_id or not command_id.startswith("launch-"):
         return False
-    session = db.query(AgentSession).filter(AgentSession.launch_command_id == command_id).first()
-    if session is None:
+    attempt = db.query(SessionLaunchAttempt).filter(SessionLaunchAttempt.command_id == command_id).first()
+    if attempt is None:
         return False
-    if session.launch_state not in {"launching", "launching_unknown"}:
+    if attempt.state not in {"pending", "dispatched"}:
+        return False
+    session = db.query(AgentSession).filter(AgentSession.id == attempt.session_id).first()
+    if session is None:
         return False
     # Defense-in-depth: if the Machine Agent reported back a session_id, it
     # must match the one we pre-allocated. Mismatch means the command_id
@@ -389,15 +404,9 @@ def reconcile_launch_from_command_result(db: Session, message: dict) -> bool:
     reported_session_id = str(message.get("session_id") or "").strip()
     if reported_session_id and reported_session_id != str(session.id):
         return False
-    from zerg.models.agents import SessionLaunchAttempt as _SLA
 
-    attempt = db.query(_SLA).filter(_SLA.session_id == session.id, _SLA.command_id == command_id).one_or_none()
     primary_thread = ensure_primary_thread(db, session)
     if message.get("ok"):
-        session.launch_state = "live"
-        session.launch_error_code = None
-        session.launch_error_message = None
-        session.launch_lease_until = None
         run = record_run(
             db,
             thread=primary_thread,
@@ -427,25 +436,19 @@ def reconcile_launch_from_command_result(db: Session, message: dict) -> bool:
             can_tail_output=1,
             can_resume=1,
         )
-        if attempt is not None:
-            update_launch_attempt(db, attempt, state="dispatched", run=run, clear_expires=True)
+        update_launch_attempt(db, attempt, state="dispatched", run=run, clear_expires=True)
     else:
         error = message.get("error") or {}
-        session.launch_state = "launch_failed"
-        session.launch_error_code = str(error.get("code") or "provider_launch_failed")
-        session.launch_error_message = str(error.get("message") or "unknown error")
-        session.launch_lease_until = None
         if session.ended_at is None:
             session.ended_at = datetime.now(timezone.utc)
-        if attempt is not None:
-            update_launch_attempt(
-                db,
-                attempt,
-                state="failed",
-                error_code=session.launch_error_code,
-                error_message=session.launch_error_message,
-                clear_expires=True,
-            )
+        update_launch_attempt(
+            db,
+            attempt,
+            state="failed",
+            error_code=str(error.get("code") or "provider_launch_failed"),
+            error_message=str(error.get("message") or "unknown error"),
+            clear_expires=True,
+        )
     db.commit()
     return True
 
@@ -457,30 +460,26 @@ def reap_orphaned_launches(db: Session, *, now: datetime | None = None) -> int:
     tick (every 30-60s) from a background task.
     """
     cutoff = now or datetime.now(timezone.utc)
-    # Session-identity-kernel cleanup: ``launch_state``/``launch_lease_until``
-    # were dropped. Lease tracking lives on SessionLaunchAttempt now;
-    # downstream sweep is a no-op until reimplemented there.
-    stale: list[AgentSession] = []
-    _ = cutoff
-    from zerg.models.agents import SessionLaunchAttempt as _SLA
+    stale = (
+        db.query(SessionLaunchAttempt)
+        .filter(SessionLaunchAttempt.state.in_(["pending", "dispatched"]))
+        .filter(SessionLaunchAttempt.expires_at.is_not(None))
+        .filter(SessionLaunchAttempt.expires_at <= cutoff)
+        .all()
+    )
 
-    for session in stale:
-        session.launch_state = "launch_orphaned"
-        session.launch_error_code = session.launch_error_code or "launch_timeout"
-        session.launch_error_message = session.launch_error_message or "Machine Agent did not report back before lease expired"
-        session.launch_lease_until = None
-        if session.ended_at is None:
+    for attempt in stale:
+        session = db.query(AgentSession).filter(AgentSession.id == attempt.session_id).first()
+        if session is not None and session.ended_at is None:
             session.ended_at = cutoff
-        attempts = db.query(_SLA).filter(_SLA.session_id == session.id, _SLA.state.in_(["pending", "dispatched"])).all()
-        for attempt in attempts:
-            update_launch_attempt(
-                db,
-                attempt,
-                state="abandoned",
-                error_code=session.launch_error_code,
-                error_message=session.launch_error_message,
-                clear_expires=True,
-            )
+        update_launch_attempt(
+            db,
+            attempt,
+            state="abandoned",
+            error_code=attempt.error_code or "launch_timeout",
+            error_message=attempt.error_message or "Machine Agent did not report back before lease expired",
+            clear_expires=True,
+        )
     if stale:
         db.commit()
     return len(stale)
