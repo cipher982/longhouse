@@ -1,0 +1,113 @@
+name: Remote Launch Smoke
+
+on:
+  workflow_run:
+    workflows:
+      - Deploy and Verify
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      subdomain:
+        description: 'Hosted instance subdomain'
+        required: false
+        default: 'david010'
+        type: string
+      device_id:
+        description: 'Target device id; required unless repository variable is set'
+        required: false
+        default: ''
+        type: string
+      cwd:
+        description: 'Absolute cwd on the target machine'
+        required: false
+        default: ''
+        type: string
+      expected_commit:
+        description: 'Expected runtime build commit; defaults to workflow SHA'
+        required: false
+        default: ''
+        type: string
+  schedule:
+    - cron: '23 */6 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: remote-launch-smoke-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  remote-launch-smoke:
+    name: remote-launch-smoke
+    runs-on: cube-deploy
+    timeout-minutes: 25
+    if: >-
+      ${{
+        (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+        || (github.event_name == 'schedule' && vars.REMOTE_LAUNCH_SMOKE_ENABLED == 'true')
+        || github.event_name == 'workflow_dispatch'
+      }}
+    env:
+      REMOTE_LAUNCH_SMOKE_SUBDOMAIN: ${{ inputs.subdomain || 'david010' }}
+      REMOTE_LAUNCH_SMOKE_DEVICE_ID: ${{ inputs.device_id || vars.REMOTE_LAUNCH_SMOKE_DEVICE_ID || '' }}
+      REMOTE_LAUNCH_SMOKE_CWD: ${{ inputs.cwd || vars.REMOTE_LAUNCH_SMOKE_CWD || '' }}
+      REMOTE_LAUNCH_SMOKE_BRIDGE_STOP_SSH_TARGET: ${{ vars.REMOTE_LAUNCH_SMOKE_BRIDGE_STOP_SSH_TARGET || '' }}
+      REMOTE_LAUNCH_SMOKE_EXPECTED_COMMIT: ${{ inputs.expected_commit || github.event.workflow_run.head_sha || github.sha }}
+      REMOTE_LAUNCH_SMOKE_OUTPUT_DIR: ${{ github.workspace }}/artifacts/remote-launch-smoke/${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Preflight target config
+        run: |
+          if [[ -z "$REMOTE_LAUNCH_SMOKE_DEVICE_ID" ]]; then
+            echo "REMOTE_LAUNCH_SMOKE_DEVICE_ID is required; set the repository variable or workflow_dispatch input." >&2
+            exit 1
+          fi
+          if [[ -z "$REMOTE_LAUNCH_SMOKE_CWD" ]]; then
+            echo "REMOTE_LAUNCH_SMOKE_CWD is required; set the repository variable or workflow_dispatch input to an absolute path on the target machine." >&2
+            exit 1
+          fi
+
+      - name: Run remote launch smoke
+        run: ./scripts/ci/remote-launch-smoke.sh
+
+      - name: Write summary
+        if: always()
+        run: |
+          result="$REMOTE_LAUNCH_SMOKE_OUTPUT_DIR/result.json"
+          {
+            echo "## Remote Launch Smoke"
+            echo ""
+            echo "- Instance: \`$REMOTE_LAUNCH_SMOKE_SUBDOMAIN\`"
+            echo "- Commit: \`$REMOTE_LAUNCH_SMOKE_EXPECTED_COMMIT\`"
+            if [[ -f "$result" ]]; then
+              python3 - "$result" <<'PY'
+          import json, sys
+          payload = json.load(open(sys.argv[1]))
+          print(f"- Result: `{'pass' if payload.get('ok') else 'fail'}`")
+          if payload.get("session_id"):
+              print(f"- Session: `{payload['session_id']}`")
+          if payload.get("machine"):
+              print(f"- Machine: `{payload['machine'].get('machine_name') or payload['machine'].get('device_id')}`")
+          if payload.get("error"):
+              print(f"- Error: `{payload['error']}`")
+          cleanup = payload.get("cleanup")
+          if isinstance(cleanup, dict) and cleanup.get("ok") is not True:
+              print(f"- Cleanup: `warning: {cleanup.get('error') or cleanup.get('stderr') or cleanup}`")
+          PY
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload smoke result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: remote-launch-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.REMOTE_LAUNCH_SMOKE_OUTPUT_DIR }}
+          if-no-files-found: ignore
+          retention-days: 14

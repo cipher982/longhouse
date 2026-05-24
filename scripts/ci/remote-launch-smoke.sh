@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+OUTPUT_DIR="${REMOTE_LAUNCH_SMOKE_OUTPUT_DIR:-$ROOT_DIR/artifacts/remote-launch-smoke}"
+mkdir -p "$OUTPUT_DIR"
+
+export REMOTE_LAUNCH_SMOKE_OUTPUT_JSON="${REMOTE_LAUNCH_SMOKE_OUTPUT_JSON:-$OUTPUT_DIR/result.json}"
+export REMOTE_LAUNCH_SMOKE_PROJECT="${REMOTE_LAUNCH_SMOKE_PROJECT:-zerg}"
+export REMOTE_LAUNCH_SMOKE_SUBDOMAIN="${REMOTE_LAUNCH_SMOKE_SUBDOMAIN:-david010}"
+export REMOTE_LAUNCH_SMOKE_EXPECTED_COMMIT="${REMOTE_LAUNCH_SMOKE_EXPECTED_COMMIT:-${GITHUB_SHA:-}}"
+
+python3 "$ROOT_DIR/scripts/ops/remote-launch-smoke.py"
