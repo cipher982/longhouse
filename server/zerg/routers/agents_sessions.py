@@ -47,8 +47,8 @@ from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.session_turns import execute_session_turn_write
 from zerg.services.session_turns import get_session_turn_by_id
-from zerg.services.session_turns import load_pending_response_turn_map
 from zerg.services.session_turns import list_session_turns
+from zerg.services.session_turns import load_pending_response_turn_map
 from zerg.services.session_turns import materialize_managed_transcript_turns
 from zerg.services.session_views import ActiveSessionResponse
 from zerg.services.session_views import ActiveSessionsResponse
@@ -78,6 +78,7 @@ from zerg.services.session_views import build_event_input_origin_map
 from zerg.services.session_views import build_event_response
 from zerg.services.session_views import build_session_response
 from zerg.services.session_views import build_session_turn_response
+from zerg.services.session_views import latest_launch_attempts
 from zerg.services.session_views import normalize_utc_datetime
 from zerg.services.session_workspace import build_session_workspace
 from zerg.services.startup_context import STARTUP_CONTEXT_DEFAULT_DAYS_BACK
@@ -837,6 +838,7 @@ async def get_session_thread(
         pending_response_turn_map = load_pending_response_turn_map(db, thread_session_ids)
         binding_overlay_map = load_binding_overlay(db, [item.id for item in thread_sessions], now=now)
         control_state_map = load_managed_control_state_map(db, [item.id for item in thread_sessions])
+        launch_attempt_map = latest_launch_attempts(db, thread_session_ids)
 
     with timing.span("build_response"):
         effective_owner_id = owner_id
@@ -863,6 +865,7 @@ async def get_session_thread(
                     control_overlay=control_state_map.get(item.id),
                     owner_id=effective_owner_id,
                     has_pending_response_turn=bool(pending_response_turn_map.get(item.id)),
+                    launch_attempt=launch_attempt_map.get(item.id),
                 )
                 for item in thread_sessions
             ],

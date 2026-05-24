@@ -638,6 +638,12 @@ public enum RemoteLaunchState: String, Decodable, Sendable {
     case launchingUnknown = "launching_unknown"
     case launchFailed = "launch_failed"
     case launchOrphaned = "launch_orphaned"
+    case unknown
+
+    public init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        self = RemoteLaunchState(rawValue: value) ?? .unknown
+    }
 }
 
 public struct RemoteSessionLaunchResponse: Decodable, Sendable {

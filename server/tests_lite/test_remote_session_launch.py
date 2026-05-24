@@ -27,7 +27,9 @@ from zerg.dependencies.agents_auth import require_single_tenant  # noqa: E402
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user  # noqa: E402
 from zerg.models import User  # noqa: E402
 from zerg.models.agents import AgentSession  # noqa: E402
+from zerg.models.agents import SessionConnection  # noqa: E402
 from zerg.models.agents import SessionLaunchAttempt  # noqa: E402
+from zerg.models.agents import SessionRun  # noqa: E402
 from zerg.models.device_token import DeviceToken  # noqa: E402
 from zerg.services.agents.kernel_writes import ensure_primary_thread  # noqa: E402
 from zerg.services.agents.kernel_writes import record_run  # noqa: E402
@@ -153,7 +155,7 @@ def test_happy_path_inserts_live_session(tmp_path):
         row = db.get(AgentSession, result.session_id)
         assert row is not None
         attempt = _latest_attempt(db, result.session_id)
-        assert attempt.state == "dispatched"
+        assert attempt.state == "adopted"
         assert attempt.error_code is None
         assert attempt.expires_at is None
         assert attempt.run_id is not None
@@ -430,6 +432,37 @@ def test_client_request_id_is_idempotent(tmp_path):
     assert len(registry.sent) == 1  # second call short-circuits
 
 
+def test_client_request_id_is_owner_scoped(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal, owner_id=OWNER_ID, device_id="cinder")
+    _seed_user_and_device(SessionLocal, owner_id=OWNER_ID + 1, device_id="cinder")
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder")
+    _register_online(registry, owner_id=OWNER_ID + 1, device_id="cinder")
+
+    first_params = RemoteLaunchParams(
+        owner_id=OWNER_ID,
+        device_id="cinder",
+        provider="codex",
+        cwd="/Users/me/repo",
+        client_request_id="same-tap",
+    )
+    second_params = RemoteLaunchParams(
+        owner_id=OWNER_ID + 1,
+        device_id="cinder",
+        provider="codex",
+        cwd="/Users/other/repo",
+        client_request_id="same-tap",
+    )
+    with SessionLocal() as db:
+        first = asyncio.run(launch_remote_session(db, first_params, registry=registry))
+    with SessionLocal() as db:
+        second = asyncio.run(launch_remote_session(db, second_params, registry=registry))
+
+    assert first.session_id != second.session_id
+    assert len(registry.sent) == 2
+
+
 def test_launched_codex_workspace_exposes_live_engine_control(tmp_path):
     SessionLocal = _make_db(tmp_path)
     _seed_user_and_device(SessionLocal)
@@ -534,9 +567,26 @@ def test_late_result_reconciliation_moves_unknown_to_live(tmp_path):
     assert reconciled is True
     with SessionLocal() as db:
         attempt = _latest_attempt(db, result.session_id)
-        assert attempt.state == "dispatched"
+        assert attempt.state == "adopted"
         assert attempt.run_id is not None
         assert attempt.expires_at is None
+        assert db.query(SessionRun).count() == 1
+        assert db.query(SessionConnection).count() == 1
+
+    with SessionLocal() as db:
+        duplicate = reconcile_launch_from_command_result(
+            db,
+            {
+                "type": "command_result",
+                "command_id": command_id,
+                "ok": True,
+                "result": {"session_id": str(result.session_id)},
+            },
+        )
+    assert duplicate is True
+    with SessionLocal() as db:
+        assert db.query(SessionRun).count() == 1
+        assert db.query(SessionConnection).count() == 1
 
 
 def test_late_result_reconciliation_ignores_unknown_command(tmp_path):
@@ -673,6 +723,38 @@ def test_admin_launch_debug_lists_non_live_rows(tmp_path):
                 )
             )
         db.commit()
+        test_sid = uuid4()
+        db.add(
+            AgentSession(
+                id=test_sid,
+                provider="codex",
+                environment="test",
+                project="probe",
+                device_id="cinder",
+                cwd="/Users/me/repo",
+                started_at=now,
+                thread_root_session_id=test_sid,
+                continued_from_session_id=None,
+                continuation_kind="local",
+                origin_label="cinder",
+                user_messages=0,
+                assistant_messages=0,
+                tool_calls=0,
+                is_writable_head=1,
+                is_sidechain=0,
+            )
+        )
+        db.flush()
+        db.add(
+            SessionLaunchAttempt(
+                session_id=test_sid,
+                provider="codex",
+                host_id="cinder",
+                state="failed",
+                error_code="probe",
+            )
+        )
+        db.commit()
 
     client, api_app = _make_admin_client(SessionLocal)
     try:
@@ -683,6 +765,7 @@ def test_admin_launch_debug_lists_non_live_rows(tmp_path):
     body = resp.json()
     states = sorted(e["launch_state"] for e in body["entries"])
     assert states == ["launch_failed", "launch_orphaned", "launching_unknown"]
+    assert all(e["launch_error_code"] != "probe" for e in body["entries"])
 
     client, api_app = _make_admin_client(SessionLocal)
     try:
@@ -691,6 +774,14 @@ def test_admin_launch_debug_lists_non_live_rows(tmp_path):
         api_app.dependency_overrides.clear()
     assert resp_all.status_code == 200
     assert len(resp_all.json()["entries"]) == 4
+
+    client, api_app = _make_admin_client(SessionLocal)
+    try:
+        resp_with_test = client.get("/api/admin/launches/debug?include_test=true")
+    finally:
+        api_app.dependency_overrides.clear()
+    assert resp_with_test.status_code == 200
+    assert any(e["launch_error_code"] == "probe" for e in resp_with_test.json()["entries"])
 
 
 def test_http_endpoint_offline_machine_is_409(tmp_path):

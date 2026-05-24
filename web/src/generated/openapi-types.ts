@@ -11953,6 +11953,8 @@ export interface operations {
                 limit?: number;
                 /** @description Include launch_state=live rows (default: only show non-healthy) */
                 include_live?: boolean;
+                /** @description Include test/e2e launch attempts */
+                include_test?: boolean;
             };
             header?: never;
             path?: never;

@@ -127,6 +127,43 @@ struct LonghouseAPITests {
     }
 
     @Test
+    func launchErrorParsingAcceptsCodeField() throws {
+        let data = try #require("""
+        {
+          "detail": {
+            "code": "machine_offline",
+            "message": "Machine is offline"
+          }
+        }
+        """.data(using: .utf8))
+
+        let error = LonghouseAPI.parseLaunchError(statusCode: 409, data: data)
+
+        guard case let .structured(status, code, message)? = error else {
+            Issue.record("expected structured error, got \(String(describing: error))")
+            return
+        }
+        #expect(status == 409)
+        #expect(code == "machine_offline")
+        #expect(message == "Machine is offline")
+    }
+
+    @Test
+    func unknownLaunchStateDoesNotFailDecode() throws {
+        let data = try #require("""
+        {
+          "session_id": "abc",
+          "launch_state": "new_future_state",
+          "launch_error_code": null,
+          "launch_error_message": null
+        }
+        """.data(using: .utf8))
+
+        let decoded = try JSONDecoder.snakeCase.decode(RemoteSessionLaunchResponse.self, from: data)
+        #expect(decoded.launchState == .unknown)
+    }
+
+    @Test
     func machineDirectoryEntryUsesExplicitLaunchCapabilityFields() throws {
         let data = try #require("""
         {

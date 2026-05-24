@@ -383,8 +383,8 @@ struct WebTranscriptView: UIViewRepresentable {
 
         private func emitNearTopIfNeeded(_ scrollView: UIScrollView) {
             guard inFlightPayload == nil else { return }
-            guard Date() >= suppressNearTopUntil else { return }
             guard userScrollInProgress || !shouldStickToBottom else { return }
+            guard Date() >= suppressNearTopUntil else { return }
             guard scrollView.contentSize.height > scrollView.bounds.height + 240 else { return }
             guard scrollView.contentOffset.y < 180 else { return }
             let now = Date()
@@ -469,7 +469,7 @@ struct WebTranscriptView: UIViewRepresentable {
                 } else {
                     self.jsFailureCount += 1
                 }
-                if stick == "true" {
+                if stick == "true", self.shouldStickToBottom, !self.userScrollInProgress {
                     self.suppressNearTopUntil = Date().addingTimeInterval(0.75)
                 }
                 self.inFlightPayload = nil

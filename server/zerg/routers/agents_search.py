@@ -10,6 +10,7 @@ from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Query
 from fastapi import status
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
@@ -66,6 +67,8 @@ async def semantic_search_sessions(
         filter_query = filter_query.filter(AgentSession.project == project)
     if provider:
         filter_query = filter_query.filter(AgentSession.provider == provider)
+    else:
+        filter_query = filter_query.filter(or_(AgentSession.provider != "canary", AgentSession.provider.is_(None)))
     if environment:
         filter_query = filter_query.filter(AgentSession.environment == environment)
     # Session-identity-kernel cleanup: ``is_sidechain`` was dropped.
@@ -201,6 +204,7 @@ async def recall_sessions(
     filter_query = db.query(AgentSession.id).filter(AgentSession.started_at >= since)
     if project:
         filter_query = filter_query.filter(AgentSession.project == project)
+    filter_query = filter_query.filter(or_(AgentSession.provider != "canary", AgentSession.provider.is_(None)))
     valid_ids = {str(row[0]) for row in filter_query.all()}
 
     results = cache.search_turns(query_vec, limit=max_results, session_filter=valid_ids)

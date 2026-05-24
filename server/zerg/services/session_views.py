@@ -52,6 +52,7 @@ from zerg.utils.time import UTCBaseModel
 from zerg.utils.time import normalize_utc
 
 logger = logging.getLogger(__name__)
+_LAUNCH_ATTEMPT_MISSING = object()
 
 PROVISIONAL_TRANSCRIPT_PARTIAL_FRESHNESS = timedelta(minutes=2)
 PROVISIONAL_TRANSCRIPT_COMPLETE_FRESHNESS = timedelta(minutes=10)
@@ -1247,6 +1248,7 @@ def build_session_response(
     control_overlay=None,
     kernel_capabilities=None,
     has_pending_response_turn: bool = False,
+    launch_attempt: SessionLaunchAttempt | None | object = _LAUNCH_ATTEMPT_MISSING,
 ) -> SessionResponse:
     cache = thread_cache if thread_cache is not None else {}
     thread_head_session_id, thread_continuation_count = get_thread_meta(store, session, cache)
@@ -1327,7 +1329,7 @@ def build_session_response(
     # Session-identity-kernel cleanup: legacy capability re-projection was
     # removed; the kernel ``capability_flags`` is already the truth.
     effective_capability_flags = capability_flags
-    launch_attempt = _latest_launch_attempt(store.db, session.id)
+    effective_launch_attempt = _latest_launch_attempt(store.db, session.id) if launch_attempt is _LAUNCH_ATTEMPT_MISSING else launch_attempt
     return SessionResponse(
         id=str(session.id),
         provider=session.provider,
@@ -1394,11 +1396,9 @@ def build_session_response(
         ),
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
         user_state=session.user_state or "active",
-        launch_state=_launch_state_from_attempt(launch_attempt, session),
-        launch_error_code=launch_attempt.error_code if launch_attempt is not None else getattr(session, "launch_error_code", None),
-        launch_error_message=(
-            launch_attempt.error_message if launch_attempt is not None else getattr(session, "launch_error_message", None)
-        ),
+        launch_state=_launch_state_from_attempt(effective_launch_attempt, session),
+        launch_error_code=effective_launch_attempt.error_code if effective_launch_attempt is not None else None,
+        launch_error_message=(effective_launch_attempt.error_message if effective_launch_attempt is not None else None),
     )
 
 
@@ -1450,9 +1450,28 @@ def _latest_launch_attempt(db, session_id) -> SessionLaunchAttempt | None:
     )
 
 
+def latest_launch_attempts(db, session_ids) -> dict:
+    if not session_ids:
+        return {}
+    rows = (
+        db.query(SessionLaunchAttempt)
+        .filter(SessionLaunchAttempt.session_id.in_(session_ids))
+        .order_by(
+            SessionLaunchAttempt.session_id,
+            SessionLaunchAttempt.created_at.desc(),
+            SessionLaunchAttempt.id.desc(),
+        )
+        .all()
+    )
+    result = {}
+    for attempt in rows:
+        result.setdefault(attempt.session_id, attempt)
+    return result
+
+
 def _launch_state_from_attempt(attempt: SessionLaunchAttempt | None, session: AgentSession) -> str | None:
     if attempt is None:
-        return getattr(session, "launch_state", None)
+        return None
     state = str(attempt.state or "").strip()
     if state == "failed":
         return "launch_failed"

@@ -58,6 +58,15 @@ struct LaunchSessionSheet: View {
         !submitting && selectedMachine != nil && normalizedCwd.starts(with: "/")
     }
 
+    private var pathValidationMessage: String? {
+        if normalizedCwd.isEmpty { return nil }
+        if normalizedCwd.starts(with: "/") { return nil }
+        if normalizedCwd.starts(with: "~") {
+            return "Use the full absolute path for the target machine."
+        }
+        return "Path must start with /."
+    }
+
     private var usesPreviewData: Bool {
         previewMachines != nil
     }
@@ -136,9 +145,15 @@ struct LaunchSessionSheet: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Text("Existing absolute directory on the target machine.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                if let pathValidationMessage {
+                    Text(pathValidationMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                } else {
+                    Text("Existing absolute directory on the target machine.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section("Optional") {
@@ -244,6 +259,7 @@ struct LaunchSessionSheet: View {
             return
         }
         loadingWorkspaces = true
+        defer { loadingWorkspaces = false }
         workspaceError = nil
         do {
             let paths = try await api.recentWorkspacePaths(deviceId: deviceId)
@@ -252,6 +268,9 @@ struct LaunchSessionSheet: View {
                 cwd = first
             }
         } catch {
+            if Task.isCancelled || (error as? URLError)?.code == .cancelled {
+                return
+            }
             workspacePaths = []
             workspaceError = "Recent workspaces unavailable."
         }
@@ -272,7 +291,7 @@ struct LaunchSessionSheet: View {
                 displayName: trimmedDisplayName.isEmpty ? nil : trimmedDisplayName,
                 clientRequestId: "launch-\(UUID().uuidString)"
             )
-            if response.launchState == .launchFailed || response.launchState == .launchOrphaned {
+            if response.launchState == .launchFailed || response.launchState == .launchOrphaned || response.launchState == .unknown {
                 submitError = formatLaunchFailure(response)
                 return
             }
@@ -311,11 +330,32 @@ struct LaunchSessionSheet: View {
     private func formatLaunchFailure(_ response: RemoteSessionLaunchResponse) -> String {
         let code = response.launchErrorCode?.trimmingCharacters(in: .whitespacesAndNewlines)
         let message = response.launchErrorMessage?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let code, !code.isEmpty, let message, !message.isEmpty {
-            return "\(code): \(message)"
+        if let code, !code.isEmpty {
+            let friendlyPrefix: String? = switch code {
+            case "cwd_not_found", "cwd_not_allowed":
+                "Check the workspace path"
+            case "machine_offline":
+                "Machine is offline"
+            case "provider_unsupported":
+                "Codex launch is unavailable on this machine"
+            case "device_not_enrolled":
+                "Machine is not enrolled"
+            case "provider_launch_failed":
+                "Codex failed to start"
+            default:
+                nil
+            }
+            if let friendlyPrefix, let message, !message.isEmpty {
+                return "\(friendlyPrefix): \(message)"
+            }
+            if let friendlyPrefix { return friendlyPrefix }
+            if let message, !message.isEmpty { return message }
+            return code
         }
         if let message, !message.isEmpty { return message }
-        if let code, !code.isEmpty { return code }
+        if response.launchState == .unknown {
+            return "Launch state was not recognized by this app build."
+        }
         return "Launch failed."
     }
 }

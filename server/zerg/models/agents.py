@@ -263,7 +263,9 @@ class AgentSession(AgentsBase):
             sess = object_session(self)
             if sess is None:
                 return None
-            return project_session_capabilities(sess, session_id=self.id).execution_home.value
+            derived = project_session_capabilities(sess, session_id=self.id).execution_home.value
+            self._legacy_set("execution_home", derived)
+            return derived
         except Exception:
             return None
 
@@ -1255,7 +1257,8 @@ class SessionLaunchAttempt(AgentsBase):
 
     Attempts can exist before any run does (the user clicked "launch" but
     dispatch is still pending). Replaces AgentSession.launch_* columns.
-    Idempotency is keyed by (session_id, client_request_id).
+    Idempotency is keyed by (session_id, client_request_id). ``owner_id`` is
+    duplicated here so caller request-id replay cannot cross user boundaries.
     """
 
     __tablename__ = "session_launch_attempts"
@@ -1275,6 +1278,7 @@ class SessionLaunchAttempt(AgentsBase):
 
     provider = Column(String(64), nullable=False)
     host_id = Column(String(255), nullable=True, index=True)
+    owner_id = Column(Integer, nullable=True, index=True)
 
     # Caller-provided idempotency key + dispatch correlation.
     client_request_id = Column(String(64), nullable=True, index=True)
