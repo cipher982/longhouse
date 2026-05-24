@@ -2125,7 +2125,7 @@ class AgentsStore:
             stmt = stmt.where(AgentSession.project.ilike(f"%{project}%"))
         if provider:
             stmt = stmt.where(AgentSession.provider == provider)
-        elif project != "canary":
+        else:
             stmt = stmt.where(or_(AgentSession.provider != "canary", AgentSession.provider.is_(None)))
         if device_id:
             # The browser now writes `device_id=` for machine filters, but the
