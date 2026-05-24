@@ -8,6 +8,7 @@ callers don't have to rewrite every projection at once.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
@@ -27,6 +28,7 @@ CONTROL_SOURCE_HEARTBEAT = "machine_heartbeat"
 CONTROL_SOURCE_ENGINE_CHANNEL = "machine_control_ws"
 CONTROL_SOURCE_LEGACY_RUNNER = "legacy_runner"
 DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS = 15 * 60 * 1000
+DISABLE_MISSING_MANAGED_LEASE_DETACH_ENV = "LONGHOUSE_DISABLE_MISSING_MANAGED_LEASE_DETACH"
 _CONTROL_READY_BRIDGE_STATUSES = {"ready", "healthy", ""}
 
 _KERNEL_STATE_BY_CONTROL_STATE = {
@@ -103,6 +105,10 @@ def _mirror_connection_state(
         )
         if existing is None:
             return
+        if device_id is not None and existing.device_id not in {device_id, None}:
+            return
+        if device_id is None and existing.device_id is not None:
+            return
         upsert_connection_for_run(
             db,
             run=db.query(SessionRun).filter(SessionRun.id == existing.run_id).one(),
@@ -110,6 +116,7 @@ def _mirror_connection_state(
             acquisition_kind=existing.acquisition_kind,
             state=kernel_state,
             external_name=external_name,
+            device_id=device_id,
         )
         return
 
@@ -130,6 +137,7 @@ def _mirror_connection_state(
         acquisition_kind="adopted_control",
         state=kernel_state,
         external_name=external_name,
+        device_id=device_id,
     )
 
 
@@ -211,7 +219,7 @@ def _overlay_from_connection(
     return ManagedControlOverlay(
         session_id=session_id,
         provider=_provider_for_connection(conn),
-        device_id=None,
+        device_id=_normalized(conn.device_id) or None,
         machine_id=_normalized(conn.external_name) or None,
         transport=None,
         lease_state=_lease_state_for_connection(conn),
@@ -282,6 +290,7 @@ def upsert_managed_control_leases(
 
     touched: set[UUID] = set()
     seen_at = normalize_utc(received_at) or _utc_now()
+    normalized_device_id = _normalized(device_id) or device_id
     for lease in leases:
         session_id = getattr(lease, "session_id", None)
         if session_id is None:
@@ -302,7 +311,7 @@ def upsert_managed_control_leases(
             provider=provider,
             control_state=control_state,
             external_name=machine_id,
-            device_id=device_id,
+            device_id=normalized_device_id,
         )
         touched.add(session_id)
     # Update last_health_at on the affected connections so freshness reflects
@@ -313,7 +322,10 @@ def upsert_managed_control_leases(
             db.query(SessionConnection)
             .join(SessionRun, SessionConnection.run_id == SessionRun.id)
             .join(SessionThread, SessionRun.thread_id == SessionThread.id)
-            .filter(SessionThread.session_id.in_(touched))
+            .filter(
+                SessionThread.session_id.in_(touched),
+                SessionConnection.device_id == normalized_device_id,
+            )
             .all()
         )
         for row in rows:
@@ -330,24 +342,29 @@ def mark_missing_managed_control_leases(
 ) -> set[UUID]:
     """Mark connections from this device offline when omitted from the snapshot."""
 
+    if os.environ.get(DISABLE_MISSING_MANAGED_LEASE_DETACH_ENV) in {"1", "true", "TRUE", "yes", "on"}:
+        return set()
+
     seen_session_ids = {getattr(lease, "session_id", None) for lease in leases}
     seen_session_ids.discard(None)
-    # Without ManagedSessionControlState we no longer have a per-device
-    # index of "what was previously known managed for this device". The
-    # heartbeat path still owns liveness via ``_mirror_connection_state``
-    # for present leases; absent ones can be conservatively flipped via the
-    # control_plane state already on SessionConnection if their last health
-    # is older than the snapshot's seen_at.
+    normalized_device_id = _normalized(device_id)
+    if not normalized_device_id:
+        return set()
     seen_at = normalize_utc(received_at) or _utc_now()
     touched: set[UUID] = set()
 
-    # Find connections in attached/degraded state whose health timestamps
-    # predate this snapshot — those must be missing from the snapshot.
+    # Find this device's connections in attached/degraded state whose health
+    # timestamps predate this snapshot. Unknown-owner rows are intentionally
+    # sticky: they require positive heartbeat evidence to claim/update them and
+    # are never detached just because a device omitted them.
     query = (
         db.query(SessionConnection, SessionThread.session_id)
         .join(SessionRun, SessionConnection.run_id == SessionRun.id)
         .join(SessionThread, SessionRun.thread_id == SessionThread.id)
-        .filter(SessionConnection.state.in_(("attached", "degraded")))
+        .filter(
+            SessionConnection.device_id == normalized_device_id,
+            SessionConnection.state.in_(("attached", "degraded")),
+        )
     )
     if seen_session_ids:
         query = query.filter(SessionThread.session_id.notin_(seen_session_ids))

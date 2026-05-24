@@ -341,6 +341,7 @@ def test_heartbeat_resolved_sessions_materialize_managed_control(tmp_path):
 
             assert connection.control_plane == "codex_bridge"
             assert connection.state == "attached"
+            assert connection.device_id == "testclient"
             assert connection.last_health_at is not None
             assert raw["sessions"][0]["control_path"] == "managed"
             assert raw["managed_sessions"] == []
@@ -398,6 +399,7 @@ def test_heartbeat_legacy_managed_sessions_still_materialize_control(tmp_path):
             connection = db.query(SessionConnection).one()
             assert connection.control_plane == "claude_channel_bridge"
             assert connection.state == "attached"
+            assert connection.device_id == "testclient"
     finally:
         api_app_ref.dependency_overrides = {}
 
@@ -445,7 +447,8 @@ def test_heartbeat_empty_resolved_sessions_detaches_missing_managed_control(tmp_
             )
             db.add(session)
             db.flush()
-            seed_managed_kernel_rows(db, session, control_plane="codex_bridge")
+            _thread, _run, connection = seed_managed_kernel_rows(db, session, control_plane="codex_bridge")
+            connection.device_id = "testclient"
             db.commit()
 
         response = client.post(
@@ -461,6 +464,166 @@ def test_heartbeat_empty_resolved_sessions_detaches_missing_managed_control(tmp_
         with SessionLocal() as db:
             connection = db.query(SessionConnection).one()
             assert connection.state == "detached"
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_heartbeat_empty_resolved_sessions_does_not_detach_other_device_control(tmp_path):
+    from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+
+    SessionLocal = _make_db(tmp_path)
+    client, api_app_ref = _make_client(SessionLocal)
+    first_session_id = uuid4()
+    other_session_id = uuid4()
+
+    try:
+        with SessionLocal() as db:
+            first_session = AgentSession(
+                id=first_session_id,
+                provider="codex",
+                environment="laptop",
+                started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
+                provider_session_id="thread-codex-a",
+                execution_home="managed_local",
+                managed_transport="codex_app_server",
+                user_messages=1,
+                assistant_messages=1,
+                tool_calls=0,
+                is_writable_head=1,
+            )
+            other_session = AgentSession(
+                id=other_session_id,
+                provider="codex",
+                environment="desktop",
+                started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
+                provider_session_id="thread-codex-b",
+                execution_home="managed_local",
+                managed_transport="codex_app_server",
+                user_messages=1,
+                assistant_messages=1,
+                tool_calls=0,
+                is_writable_head=1,
+            )
+            db.add_all([first_session, other_session])
+            db.flush()
+            _thread, _run, first_connection = seed_managed_kernel_rows(
+                db, first_session, control_plane="codex_bridge"
+            )
+            first_connection.device_id = "testclient"
+            _thread, _run, other_connection = seed_managed_kernel_rows(
+                db, other_session, control_plane="codex_bridge"
+            )
+            other_connection.device_id = "other-device"
+            db.commit()
+
+        response = client.post(
+            "/api/agents/heartbeat",
+            json={
+                "version": "0.7.0",
+                "daemon_pid": 42,
+                "sessions": [],
+            },
+        )
+
+        assert response.status_code == 204, response.text
+        with SessionLocal() as db:
+            states_by_device = {row.device_id: row.state for row in db.query(SessionConnection).all()}
+            assert states_by_device == {
+                "testclient": "detached",
+                "other-device": "attached",
+            }
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_heartbeat_empty_resolved_sessions_does_not_detach_unknown_device_control(tmp_path):
+    from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+
+    SessionLocal = _make_db(tmp_path)
+    client, api_app_ref = _make_client(SessionLocal)
+    session_id = uuid4()
+
+    try:
+        with SessionLocal() as db:
+            session = AgentSession(
+                id=session_id,
+                provider="codex",
+                environment="laptop",
+                started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
+                provider_session_id="thread-codex",
+                execution_home="managed_local",
+                managed_transport="codex_app_server",
+                user_messages=1,
+                assistant_messages=1,
+                tool_calls=0,
+                is_writable_head=1,
+            )
+            db.add(session)
+            db.flush()
+            seed_managed_kernel_rows(db, session, control_plane="codex_bridge")
+            db.commit()
+
+        response = client.post(
+            "/api/agents/heartbeat",
+            json={
+                "version": "0.7.0",
+                "daemon_pid": 42,
+                "sessions": [],
+            },
+        )
+
+        assert response.status_code == 204, response.text
+        with SessionLocal() as db:
+            connection = db.query(SessionConnection).one()
+            assert connection.device_id is None
+            assert connection.state == "attached"
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_heartbeat_missing_managed_detach_can_be_disabled(monkeypatch, tmp_path):
+    from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+
+    monkeypatch.setenv("LONGHOUSE_DISABLE_MISSING_MANAGED_LEASE_DETACH", "1")
+    SessionLocal = _make_db(tmp_path)
+    client, api_app_ref = _make_client(SessionLocal)
+    session_id = uuid4()
+
+    try:
+        with SessionLocal() as db:
+            session = AgentSession(
+                id=session_id,
+                provider="codex",
+                environment="laptop",
+                started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
+                provider_session_id="thread-codex",
+                execution_home="managed_local",
+                managed_transport="codex_app_server",
+                user_messages=1,
+                assistant_messages=1,
+                tool_calls=0,
+                is_writable_head=1,
+            )
+            db.add(session)
+            db.flush()
+            _thread, _run, connection = seed_managed_kernel_rows(db, session, control_plane="codex_bridge")
+            connection.device_id = "testclient"
+            db.commit()
+
+        response = client.post(
+            "/api/agents/heartbeat",
+            json={
+                "version": "0.7.0",
+                "daemon_pid": 42,
+                "sessions": [],
+            },
+        )
+
+        assert response.status_code == 204, response.text
+        with SessionLocal() as db:
+            connection = db.query(SessionConnection).one()
+            assert connection.device_id == "testclient"
+            assert connection.state == "attached"
     finally:
         api_app_ref.dependency_overrides = {}
 
