@@ -2708,6 +2708,54 @@ def test_collect_local_health_deep_prefers_resolved_engine_sessions(monkeypatch,
     assert snapshot["managed_sessions"][0]["liveness_model"] == "engine_status"
 
 
+def test_collect_local_health_deep_falls_back_when_resolved_sessions_absent(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(tmp_path, age_seconds=1, payload={})
+
+    rollout_path = tmp_path / "sessions" / "2026" / "05" / "05" / "rollout-fallback.jsonl"
+    rollout_path.parent.mkdir(parents=True, exist_ok=True)
+    rollout_path.write_text("{}\n")
+    _write_session_binding_rows(
+        tmp_path,
+        [(str(rollout_path), "sess-fallback", "codex", "2026-05-05T11:59:58Z")],
+    )
+    state_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
+    _write_codex_bridge_state(
+        state_dir,
+        "sess-fallback",
+        {
+            "session_id": "sess-fallback",
+            "pid": 4401,
+            "app_server_pid": 4402,
+            "codex_bin": "/opt/homebrew/bin/codex",
+            "ws_url": "ws://127.0.0.1:50001",
+            "cwd": "/Users/test/git/zerg",
+            "status": "ready",
+            "thread_id": "thread-fallback",
+            "thread_path": str(rollout_path),
+            "updated_at": "2026-05-05T11:59:58Z",
+        },
+    )
+    monkeypatch.setattr(local_health_service, "_codex_bridge_state_dir", lambda base_dir: state_dir)
+    _stub_bridge_alive(monkeypatch)
+    monkeypatch.setattr(
+        local_health_service,
+        "_collect_process_rows",
+        lambda: [
+            {"pid": 4401, "ppid": 1, "command": "longhouse-engine codex-bridge run --session-id sess-fallback"},
+            {"pid": 4402, "ppid": 4401, "command": "/opt/homebrew/bin/codex app-server --listen ws://127.0.0.1:0"},
+        ],
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["collection_tier"] == "deep"
+    assert "engine_status_sessions_missing" not in snapshot["reasons"]
+    assert snapshot["managed_sessions"][0]["session_id"] == "sess-fallback"
+    assert snapshot["managed_sessions"][0]["liveness_model"] == "codex_bridge"
+
+
 def test_local_health_menubar_requires_installed_app(monkeypatch, tmp_path: Path):
     runner = CliRunner()
     calls: list[dict[str, object]] = []
