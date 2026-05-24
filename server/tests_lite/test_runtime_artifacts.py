@@ -62,6 +62,22 @@ def test_ensure_runtime_binary_copies_window_host_from_local_override(monkeypatc
     assert result.installed_now is True
 
 
+def test_copy_local_binary_replaces_existing_binary_atomically(tmp_path: Path):
+    source = tmp_path / "source-engine"
+    destination = tmp_path / "bin" / "longhouse-engine"
+    destination.parent.mkdir()
+    source.write_text("new")
+    source.chmod(0o644)
+    destination.write_text("old")
+    destination.chmod(0o755)
+
+    runtime_artifacts._copy_local_binary(source, destination)
+
+    assert destination.read_text() == "new"
+    assert os.access(destination, os.X_OK)
+    assert not list(destination.parent.glob(".longhouse-engine.*.installing"))
+
+
 def test_ensure_runtime_artifact_copies_app_bundle_from_local_override(monkeypatch, tmp_path: Path):
     home = tmp_path / "home"
     home.mkdir()

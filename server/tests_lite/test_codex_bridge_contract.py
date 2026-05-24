@@ -113,6 +113,8 @@ def test_bridge_state_file_schema_matches_python_reader(tmp_path: Path) -> None:
         # Fields the Python reader inspects. Types must match what
         # `_collect_managed_codex_sessions` + `_normalize_optional_string`
         # + `_managed_session_phase` expect.
+        if "schema_version" in raw:
+            assert isinstance(raw["schema_version"], int)
         assert isinstance(raw["session_id"], str) and raw["session_id"] == SESSION_ID
         assert isinstance(raw["pid"], int) and raw["pid"] > 0
         assert isinstance(raw["status"], str)
@@ -123,6 +125,7 @@ def test_bridge_state_file_schema_matches_python_reader(tmp_path: Path) -> None:
         # Optional fields: must be absent, null, or string. Never int/list/dict.
         for optional_key in (
             "ws_url",
+            "launch_mode",
             "thread_id",
             "thread_path",
             "active_turn_id",

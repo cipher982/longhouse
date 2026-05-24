@@ -38,6 +38,12 @@ Codex launch modes:
 - **Detached-UI managed**: long-running Codex app-server and Longhouse bridge, but no visible terminal TUI. Browser/iOS remote launch uses this mode so the session remains steerable from Longhouse without opening a terminal window.
 - **One-shot/batch**: prompt is passed to a provider process and the process exits after one turn. Do not call this "headless" in managed-session code or docs; it is a different execution model and is not equivalent to detached-ui managed control.
 
+Bridge state compatibility:
+
+- Treat `docs/specs/managed-codex-state-compat.md` as the contract before changing bridge state fields.
+- On-disk `launch_mode` may use legacy `headless` as the persisted compatibility value for detached-UI managed sessions during a release floor window. Product/docs/code comments should still call the lifecycle detached-UI managed.
+- Reapers must skip live-bridge reaping for unknown launch modes or future bridge state schema versions.
+
 Hard Codex contract:
 
 - Do not ship a Codex runtime payload.

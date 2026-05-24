@@ -334,8 +334,24 @@ def _copy_local_binary(source_path: Path, destination_path: Path) -> None:
     if not source_path.exists():
         raise RuntimeError(f"Runtime binary source does not exist: {source_path}")
     destination_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source_path, destination_path)
-    destination_path.chmod(destination_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            prefix=f".{destination_path.name}.",
+            suffix=".installing",
+            dir=destination_path.parent,
+            delete=False,
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+        shutil.copy2(source_path, tmp_path)
+        tmp_path.chmod(tmp_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        os.replace(tmp_path, destination_path)
+    finally:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
 
 
 def _copy_local_app_bundle(source_path: Path, destination_path: Path) -> None:

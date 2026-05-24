@@ -1304,6 +1304,7 @@ mod tests {
         CodexBridgeObservation {
             session_id: session_id.to_string(),
             state_file: PathBuf::from(format!("/tmp/{session_id}.json")),
+            schema_version: crate::codex_bridge::BRIDGE_STATE_SCHEMA_VERSION,
             cwd: Some("/tmp/cwd".to_string()),
             launch_mode: Some("tui".to_string()),
             ws_url: Some(ws_url.to_string()),
