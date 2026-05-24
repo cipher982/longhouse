@@ -333,6 +333,38 @@ def upsert_managed_control_leases(
     return touched
 
 
+def refresh_managed_control_lease_health(
+    db: Session,
+    leases: list[Any],
+    *,
+    device_id: str,
+    received_at: datetime,
+) -> set[UUID]:
+    """Refresh health timestamps for an unchanged managed lease snapshot."""
+
+    seen_session_ids = {getattr(lease, "session_id", None) for lease in leases}
+    seen_session_ids.discard(None)
+    normalized_device_id = _normalized(device_id)
+    if not seen_session_ids or not normalized_device_id:
+        return set()
+    seen_at = normalize_utc(received_at) or _utc_now()
+    touched: set[UUID] = set()
+    rows = (
+        db.query(SessionConnection, SessionThread.session_id)
+        .join(SessionRun, SessionConnection.run_id == SessionRun.id)
+        .join(SessionThread, SessionRun.thread_id == SessionThread.id)
+        .filter(
+            SessionThread.session_id.in_(seen_session_ids),
+            SessionConnection.device_id == normalized_device_id,
+        )
+        .all()
+    )
+    for conn, session_id in rows:
+        conn.last_health_at = seen_at
+        touched.add(session_id)
+    return touched
+
+
 def mark_missing_managed_control_leases(
     db: Session,
     leases: list[Any],

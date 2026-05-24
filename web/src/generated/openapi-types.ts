@@ -6109,6 +6109,10 @@ export interface components {
             unmanaged_session_bindings?: components["schemas"]["UnmanagedSessionBindingIn"][];
             /** Sessions */
             sessions?: components["schemas"]["ResolvedLocalSessionIn"][];
+            /** Sessions Digest */
+            sessions_digest?: string | null;
+            /** Sessions Sequence */
+            sessions_sequence?: number | null;
         };
         /** HostObservationResponse */
         HostObservationResponse: {

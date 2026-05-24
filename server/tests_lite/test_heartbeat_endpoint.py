@@ -737,6 +737,92 @@ def test_heartbeat_empty_resolved_sessions_does_not_detach_unknown_device_contro
         api_app_ref.dependency_overrides = {}
 
 
+def test_heartbeat_repeated_sessions_digest_refreshes_health_without_snapshot_work(monkeypatch, tmp_path):
+    from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+    import zerg.routers.heartbeat as heartbeat_router
+
+    SessionLocal = _make_db(tmp_path)
+    client, api_app_ref = _make_client(SessionLocal)
+    session_id = uuid4()
+    old_health = datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc)
+
+    def fail_upsert(*args, **kwargs):
+        raise AssertionError("unchanged digest should not upsert managed leases")
+
+    def fail_mark_missing(*args, **kwargs):
+        raise AssertionError("unchanged digest should not scan missing managed leases")
+
+    try:
+        with SessionLocal() as db:
+            session = AgentSession(
+                id=session_id,
+                provider="codex",
+                environment="laptop",
+                started_at=datetime(2026, 5, 5, 10, 0, tzinfo=timezone.utc),
+                provider_session_id="thread-codex",
+                execution_home="managed_local",
+                managed_transport="codex_app_server",
+                user_messages=1,
+                assistant_messages=1,
+                tool_calls=0,
+                is_writable_head=1,
+            )
+            db.add(session)
+            db.flush()
+            _thread, _run, connection = seed_managed_kernel_rows(db, session, control_plane="codex_bridge")
+            connection.device_id = "testclient"
+            connection.last_health_at = old_health
+            db.add(
+                AgentHeartbeat(
+                    device_id="testclient",
+                    received_at=datetime(2026, 5, 5, 11, 1, tzinfo=timezone.utc),
+                    raw_json=json.dumps({"sessions_digest": "digest-1"}),
+                )
+            )
+            db.commit()
+
+        monkeypatch.setattr(heartbeat_router, "upsert_managed_control_leases", fail_upsert)
+        monkeypatch.setattr(heartbeat_router, "mark_missing_managed_control_leases", fail_mark_missing)
+
+        response = client.post(
+            "/api/agents/heartbeat",
+            json={
+                "version": "0.7.0",
+                "daemon_pid": 42,
+                "sessions_digest": "digest-1",
+                "sessions_sequence": 2,
+                "sessions": [
+                    {
+                        "session_id": str(session_id),
+                        "provider": "codex",
+                        "provider_session_id": "thread-codex",
+                        "control_path": "managed",
+                        "presentation_state": "managed_attached",
+                        "state": "attached",
+                        "phase": "idle",
+                        "workspace": {"cwd": "/Users/test/git/zerg", "label": "zerg"},
+                        "process": {"pid": 4201},
+                        "bridge": {"status": "ready", "thread_subscription_status": "subscribed"},
+                        "evidence": {"process_observed": True, "transcript_observed": True},
+                        "reason_codes": [],
+                    }
+                ],
+            },
+        )
+
+        assert response.status_code == 204, response.text
+        with SessionLocal() as db:
+            connection = db.query(SessionConnection).one()
+            assert connection.state == "attached"
+            assert connection.last_health_at is not None
+            refreshed_at = connection.last_health_at
+            if refreshed_at.tzinfo is None:
+                refreshed_at = refreshed_at.replace(tzinfo=timezone.utc)
+            assert refreshed_at > old_health
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
 def test_heartbeat_missing_managed_detach_can_be_disabled(monkeypatch, tmp_path):
     from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 
