@@ -514,6 +514,53 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    @MainActor
+    func snapshotStoreDoesNotReportStaleCacheAfterSuccessfulRefresh() throws {
+        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let cacheURL = tempDir.appendingPathComponent("last-good.json")
+        let oldSnapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-05-05T12:00:00Z",
+            healthState: "healthy",
+            severity: "green",
+            headline: "Old cached Longhouse status",
+            reasons: [],
+            suggestedActions: [],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: nil
+        )
+        let freshSnapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-05-05T12:03:00Z",
+            healthState: "healthy",
+            severity: "green",
+            headline: "Fresh Longhouse status",
+            reasons: [],
+            suggestedActions: [],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: nil
+        )
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        try encoder.encode(oldSnapshot).write(to: cacheURL)
+
+        let store = SnapshotStore(source: StaticHealthSnapshotSource(snapshot: freshSnapshot), cacheURL: cacheURL)
+        let referenceDate = try #require(HealthSnapshot.parseISO8601("2026-05-05T12:03:30Z"))
+
+        #expect(store.staleCachedSnapshotFailureMessage(relativeTo: referenceDate) == nil)
+        #expect(store.snapshot?.headline == "Fresh Longhouse status")
+        #expect(store.loadError == nil)
+    }
+
+    @Test
     func repairInstallInvocationUsesResolvedCLI() throws {
         let homeDirectory = try makeFakeHomeDirectory()
         let executableURL = try installFakeLonghouseBinary(homeDirectory: homeDirectory)

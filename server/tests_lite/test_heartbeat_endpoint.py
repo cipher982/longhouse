@@ -349,6 +349,162 @@ def test_heartbeat_resolved_sessions_materialize_managed_control(tmp_path):
         api_app_ref.dependency_overrides = {}
 
 
+def test_heartbeat_resolved_sessions_ignore_legacy_session_identity(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    client, api_app_ref = _make_client(SessionLocal)
+    resolved_session_id = uuid4()
+    legacy_session_id = uuid4()
+
+    try:
+        with SessionLocal() as db:
+            db.add_all(
+                [
+                    AgentSession(
+                        id=resolved_session_id,
+                        provider="codex",
+                        environment="laptop",
+                        started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
+                        provider_session_id="thread-codex",
+                        execution_home="managed_local",
+                        managed_transport="codex_app_server",
+                        user_messages=1,
+                        assistant_messages=1,
+                        tool_calls=0,
+                        is_writable_head=1,
+                    ),
+                    AgentSession(
+                        id=legacy_session_id,
+                        provider="claude",
+                        environment="laptop",
+                        started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
+                        provider_session_id="thread-legacy",
+                        execution_home="managed_local",
+                        managed_transport="claude_channel_bridge",
+                        user_messages=1,
+                        assistant_messages=1,
+                        tool_calls=0,
+                        is_writable_head=1,
+                    ),
+                ]
+            )
+            db.commit()
+
+        response = client.post(
+            "/api/agents/heartbeat",
+            json={
+                "version": "0.7.0",
+                "daemon_pid": 42,
+                "sessions": [
+                    {
+                        "session_id": str(resolved_session_id),
+                        "provider": "codex",
+                        "provider_session_id": "thread-codex",
+                        "control_path": "managed",
+                        "presentation_state": "managed_attached",
+                        "state": "attached",
+                        "phase": "idle",
+                        "last_activity_at": "2026-05-05T11:59:58Z",
+                        "workspace": {"cwd": "/Users/test/git/zerg", "label": "zerg"},
+                        "process": {"pid": 4201},
+                        "bridge": {
+                            "bridge_pid": 4202,
+                            "app_server_pid": 4203,
+                            "heartbeat_at": "2026-05-05T11:59:58Z",
+                            "status": "ready",
+                            "thread_subscription_status": "subscribed",
+                        },
+                        "evidence": {"process_observed": True, "transcript_observed": True},
+                        "reason_codes": [],
+                    }
+                ],
+                "managed_sessions": [
+                    {
+                        "session_id": str(legacy_session_id),
+                        "provider": "claude",
+                        "machine_id": "legacy-machine",
+                        "sequence": 1,
+                        "state": "attached",
+                        "phase": "idle",
+                        "bridge_status": "ready",
+                        "observed_at": "2026-05-05T11:59:58Z",
+                        "lease_ttl_ms": 900000,
+                    }
+                ],
+            },
+        )
+
+        assert response.status_code == 204, response.text
+        with SessionLocal() as db:
+            connections = db.query(SessionConnection).all()
+            assert len(connections) == 1
+            assert connections[0].control_plane == "codex_bridge"
+            assert connections[0].device_id == "testclient"
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_heartbeat_resolved_managed_unknown_state_does_not_attach(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    client, api_app_ref = _make_client(SessionLocal)
+    session_id = uuid4()
+
+    try:
+        with SessionLocal() as db:
+            db.add(
+                AgentSession(
+                    id=session_id,
+                    provider="codex",
+                    environment="laptop",
+                    started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
+                    provider_session_id="thread-codex",
+                    execution_home="managed_local",
+                    managed_transport="codex_app_server",
+                    user_messages=1,
+                    assistant_messages=1,
+                    tool_calls=0,
+                    is_writable_head=1,
+                )
+            )
+            db.commit()
+
+        response = client.post(
+            "/api/agents/heartbeat",
+            json={
+                "version": "0.7.0",
+                "daemon_pid": 42,
+                "sessions": [
+                    {
+                        "session_id": str(session_id),
+                        "provider": "codex",
+                        "provider_session_id": "thread-codex",
+                        "control_path": "managed",
+                        "presentation_state": "managed_attached",
+                        "state": "future_state",
+                        "phase": "idle",
+                        "last_activity_at": "2026-05-05T11:59:58Z",
+                        "workspace": {"cwd": "/Users/test/git/zerg", "label": "zerg"},
+                        "process": {"pid": 4201},
+                        "bridge": {
+                            "bridge_pid": 4202,
+                            "app_server_pid": 4203,
+                            "heartbeat_at": "2026-05-05T11:59:58Z",
+                            "status": "ready",
+                            "thread_subscription_status": "subscribed",
+                        },
+                        "evidence": {"process_observed": True, "transcript_observed": True},
+                        "reason_codes": ["future_state"],
+                    }
+                ],
+            },
+        )
+
+        assert response.status_code == 204, response.text
+        with SessionLocal() as db:
+            assert db.query(SessionConnection).count() == 0
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
 def test_heartbeat_legacy_managed_sessions_still_materialize_control(tmp_path):
     SessionLocal = _make_db(tmp_path)
     client, api_app_ref = _make_client(SessionLocal)

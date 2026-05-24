@@ -1630,6 +1630,77 @@ mod tests {
     }
 
     #[test]
+    fn resolved_sessions_keep_sparse_managed_codex_without_observation() {
+        let lease = ManagedSessionLease {
+            session_id: "managed-codex".to_string(),
+            provider: "codex".to_string(),
+            machine_id: "cinder".to_string(),
+            sequence: 1,
+            state: "attached".to_string(),
+            phase: Some("idle".to_string()),
+            tool_name: None,
+            bridge_status: Some("ready".to_string()),
+            thread_subscription_status: Some("waiting_for_turn".to_string()),
+            observed_at: "2026-05-05T12:00:00Z".to_string(),
+            lease_ttl_ms: 900_000,
+        };
+
+        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[]);
+
+        assert_eq!(sessions.len(), 1);
+        let session = &sessions[0];
+        assert_eq!(session.session_id.as_deref(), Some("managed-codex"));
+        assert_eq!(session.provider, "codex");
+        assert_eq!(session.control_path, "managed");
+        assert_eq!(session.presentation_state, "managed_attached");
+        assert_eq!(session.state, "attached");
+        assert_eq!(session.phase.as_deref(), Some("idle"));
+        assert_eq!(session.provider_session_id, None);
+        assert_eq!(session.bridge.status, None);
+        assert_eq!(session.evidence.process_observed, false);
+        assert_eq!(session.evidence.transcript_observed, false);
+        assert_eq!(
+            session.evidence.join_keys,
+            vec!["session_id=managed-codex".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolved_sessions_use_generic_managed_provider_projection() {
+        let lease = ManagedSessionLease {
+            session_id: "managed-opencode".to_string(),
+            provider: "opencode".to_string(),
+            machine_id: "cinder".to_string(),
+            sequence: 1,
+            state: "degraded".to_string(),
+            phase: Some("needs_user".to_string()),
+            tool_name: None,
+            bridge_status: Some("ready".to_string()),
+            thread_subscription_status: None,
+            observed_at: "2026-05-05T12:00:00Z".to_string(),
+            lease_ttl_ms: 900_000,
+        };
+
+        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[]);
+
+        assert_eq!(sessions.len(), 1);
+        let session = &sessions[0];
+        assert_eq!(session.session_id.as_deref(), Some("managed-opencode"));
+        assert_eq!(session.provider, "opencode");
+        assert_eq!(session.control_path, "managed");
+        assert_eq!(session.presentation_state, "managed_degraded");
+        assert_eq!(session.state, "degraded");
+        assert_eq!(session.phase.as_deref(), Some("needs_user"));
+        assert_eq!(session.provider_session_id, None);
+        assert_eq!(session.process.pid, None);
+        assert_eq!(session.evidence.process_observed, false);
+        assert_eq!(
+            session.evidence.join_keys,
+            vec!["session_id=managed-opencode".to_string()]
+        );
+    }
+
+    #[test]
     fn test_heartbeat_payload_no_last_ship() {
         let payload = HeartbeatPayload {
             version: "0.1.0".to_string(),
