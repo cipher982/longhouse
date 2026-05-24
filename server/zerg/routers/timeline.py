@@ -1043,7 +1043,7 @@ async def stream_session_workspace(
 
 
 # -----------------------------------------------------------------------------
-# Canary-only SSE: token-auth variant of workspace/stream for headless probes.
+# Canary-only SSE: token-auth variant of workspace/stream for background probes.
 # Lives on a separate router so it doesn't inherit the browser cookie guard.
 # -----------------------------------------------------------------------------
 

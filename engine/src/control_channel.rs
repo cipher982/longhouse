@@ -562,8 +562,8 @@ async fn execute_command(
                 longhouse_home: None,
                 log_file: None,
                 start_timeout_secs: LAUNCH_START_TIMEOUT_SECS,
-                // Headless: there is no TUI to create a thread, so we ask the
-                // bridge to call thread/start itself.
+                // Detached-UI remote launch: there is no visible TUI to create
+                // a thread, so we ask the bridge to call thread/start itself.
                 start_thread: true,
             })
             .await

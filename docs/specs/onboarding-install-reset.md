@@ -34,7 +34,7 @@ Longhouse has one macOS product and two supported macOS acquisition methods.
 - Those two methods MUST converge on the same installed state.
 - On macOS, `install.sh` is not a separate product story. It is an automation-
   and agent-friendly bootstrapper for the same app-first product.
-- On Linux and other headless/power-user environments, the CLI remains the
+- On Linux and other non-GUI/power-user environments, the CLI remains the
   primary product surface.
 - `longhouse connect --install` remains the canonical repair verb.
 - Trial-mode localhost runtime state MUST NOT silently overwrite durable
@@ -118,7 +118,7 @@ path:
 - install the Machine Agent / hooks / related local runtime pieces through the
   shared installer seam
 - open `Longhouse.app` when running interactively with a GUI available
-- skip auto-open in headless or explicitly non-interactive mode if needed
+- skip auto-open in non-GUI or explicitly non-interactive mode if needed
 
 Rules:
 
@@ -133,7 +133,7 @@ Rules:
 The CLI remains first-class for:
 
 - Linux
-- headless environments
+- non-GUI environments
 - automation
 - agents
 - power users who prefer explicit commands
@@ -386,7 +386,7 @@ This contract is only good enough if all of these are true:
   bootstrap
 - terminal bootstrap on macOS installs the same `/Applications/Longhouse.app`
   state and the same local runtime state
-- headless/agent terminal bootstrap can complete without requiring a GUI
+- non-GUI/agent terminal bootstrap can complete without requiring a GUI
 - `connect --install` repairs back to the same state from missing/broken local
   runtime pieces
 - `Longhouse.app`, CLI status, and browser handoff agree on machine identity
@@ -403,6 +403,6 @@ The launch model is:
 - one macOS installed state: `/Applications/Longhouse.app` plus the shared
   local runtime wiring underneath
 - one repair seam: `longhouse connect --install`
-- one CLI-first story for Linux/headless/automation
+- one CLI-first story for Linux/non-GUI/automation
 
 Everything else is implementation detail.

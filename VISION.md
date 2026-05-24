@@ -58,7 +58,7 @@ That means the product should make these truths obvious:
 Longhouse launches as one product with two components and multiple acquisition channels:
 
 - macOS humans should learn `Longhouse.app`
-- agents, headless users, and power users should keep the CLI paths
+- agents, non-GUI users, and power users should keep the CLI paths
 - hosted is a later convenience path — we run the server for you
 
 All channels converge on the same topology:

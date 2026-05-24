@@ -452,7 +452,7 @@ Managed Codex uses:
 - `longhouse-engine codex-bridge send`
 - `longhouse-engine codex-bridge stop`
 
-Codex is the easiest first target because managed sessions can be launched with `--no-attach`, then driven through the bridge.
+Codex is the easiest first target because managed sessions can be launched in detached-UI mode with `--no-attach`, then driven through the bridge.
 
 The profiler should treat rollout JSONL as provider transcript truth. Bridge `last_turn_status` can be stale; a stale bridge field is a bridge-state finding, not proof the provider turn is still running. If an app-server child survives with no bridge `.sock` or `.json`, classify it as an orphan/cleanup failure.
 
@@ -467,7 +467,7 @@ Managed Claude uses:
 - `longhouse claude-channel interrupt`
 - process scan for liveness
 
-Claude requires an actual channel-backed Claude process. A headless `--no-attach` launch prepares state, but does not by itself create the provider process to measure.
+Claude requires an actual channel-backed Claude process. A detached/no-attach launch prepares state, but does not by itself create the provider process to measure.
 
 Claude liveness is noisier because it depends heavily on process scan plus channel state. The profiler should record the channel state file and process identity every time it classifies Claude as live, detached, or closed.
 

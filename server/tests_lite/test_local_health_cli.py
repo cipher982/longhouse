@@ -834,6 +834,7 @@ def test_collect_local_health_flags_detached_managed_session(monkeypatch, tmp_pa
             "session_id": "sess-detached",
             "pid": 7771,
             "codex_bin": "/opt/homebrew/bin/codex",
+            "launch_mode": "detached_ui",
             "ws_url": "ws://127.0.0.1:49760",
             "cwd": "/Users/test/git/zerg",
             "status": "ready",
@@ -892,32 +893,33 @@ def test_collect_local_health_flags_detached_managed_session(monkeypatch, tmp_pa
     assert snapshot["orphan_bridges"] == []
 
 
-def test_collect_local_health_treats_headless_ready_codex_bridge_as_attached(monkeypatch, tmp_path: Path):
+def test_collect_local_health_treats_detached_ui_ready_codex_bridge_as_attached(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
     _write_engine_status(tmp_path, age_seconds=5)
 
-    rollout_path = tmp_path / "sessions" / "2026" / "05" / "13" / "rollout-headless.jsonl"
+    rollout_path = tmp_path / "sessions" / "2026" / "05" / "13" / "rollout-detached-ui.jsonl"
     rollout_path.parent.mkdir(parents=True, exist_ok=True)
     rollout_path.write_text("{}\n")
     _write_session_binding_rows(
         tmp_path,
-        [(str(rollout_path), "sess-headless", "codex", "2026-05-13T23:59:36Z")],
+        [(str(rollout_path), "sess-detached-ui", "codex", "2026-05-13T23:59:36Z")],
     )
 
     state_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
     _write_codex_bridge_state(
         state_dir,
-        "sess-headless",
+        "sess-detached-ui",
         {
-            "session_id": "sess-headless",
+            "session_id": "sess-detached-ui",
             "pid": 7771,
             "app_server_pid": 7772,
             "codex_bin": "/opt/homebrew/bin/codex",
+            "launch_mode": "detached_ui",
             "ws_url": "ws://127.0.0.1:49760",
             "cwd": "/Users/test/git/zerg",
             "status": "ready",
-            "thread_id": "thread-headless",
+            "thread_id": "thread-detached-ui",
             "thread_path": str(rollout_path),
             "updated_at": "2026-05-13T23:59:39Z",
         },
@@ -928,7 +930,7 @@ def test_collect_local_health_treats_headless_ready_codex_bridge_as_attached(mon
         local_health_service,
         "_collect_process_rows",
         lambda: [
-            {"pid": 7771, "ppid": 1, "command": "longhouse-engine codex-bridge run --session-id sess-headless"},
+            {"pid": 7771, "ppid": 1, "command": "longhouse-engine codex-bridge run --session-id sess-detached-ui"},
             {"pid": 7772, "ppid": 7771, "command": "/opt/homebrew/bin/codex app-server --listen ws://127.0.0.1:0"},
         ],
     )
@@ -939,7 +941,7 @@ def test_collect_local_health_treats_headless_ready_codex_bridge_as_attached(mon
     assert snapshot["managed_summary"]["detached_count"] == 0
     assert snapshot["managed_summary"]["degraded_count"] == 0
     assert snapshot["orphan_bridges"] == []
-    assert snapshot["managed_sessions"][0]["session_id"] == "sess-headless"
+    assert snapshot["managed_sessions"][0]["session_id"] == "sess-detached-ui"
     assert snapshot["managed_sessions"][0]["state"] == "attached"
 
 

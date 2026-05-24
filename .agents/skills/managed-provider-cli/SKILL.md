@@ -32,6 +32,12 @@ Use this skill when a task touches how Longhouse starts, observes, steers, or re
 - Bridge state, logs, lock sidecars, and IPC sockets live under `~/.claude/managed-local/codex-bridge/` unless overridden.
 - Hook scripts such as `longhouse-codex-hook.sh` are Longhouse hook scripts, not provider binaries.
 
+Codex launch modes:
+
+- **TUI-attached managed**: long-running Codex app-server plus visible `codex` TUI attached through `--remote`.
+- **Detached-UI managed**: long-running Codex app-server and Longhouse bridge, but no visible terminal TUI. Browser/iOS remote launch uses this mode so the session remains steerable from Longhouse without opening a terminal window.
+- **One-shot/batch**: prompt is passed to a provider process and the process exits after one turn. Do not call this "headless" in managed-session code or docs; it is a different execution model and is not equivalent to detached-ui managed control.
+
 Hard Codex contract:
 
 - Do not ship a Codex runtime payload.
@@ -88,6 +94,9 @@ After changes:
 
 - Use `managed` for Longhouse-owned control paths.
 - Use `unmanaged` for imported/discovered sessions without live control ownership.
+- Use `detached-ui managed` for a long-running managed provider session with no visible terminal TUI attached.
+- Use `one-shot` or `batch` for prompt-and-exit execution.
+- Avoid `headless` for Codex managed-session lifecycle unless you explicitly mean a non-GUI environment, headless browser, or other conventional non-session usage.
 - Use `live`, `reattachable`, `phase-known`, and `running` separately; do not collapse them into one status.
 - In local-health JSON, keep `control_path`, `liveness_model`, and `state` separate; do not infer managed/unmanaged ownership from process liveness or attached/detached state.
 - Avoid naming constants or paths as if Longhouse owns a provider binary when the behavior is only wrapper config or update-check suppression.

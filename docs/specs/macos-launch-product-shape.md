@@ -64,7 +64,7 @@ Keep these first-class:
 Why:
 
 - agents can script them
-- headless and Linux installs still need them
+- non-GUI and Linux installs still need them
 - they remain the cleanest low-friction path for machine setup and automation
 - on macOS, shell/bootstrap paths should still converge on the same
   `Longhouse.app` install state instead of creating a second Mac product story
