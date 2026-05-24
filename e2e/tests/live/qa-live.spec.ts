@@ -78,21 +78,22 @@ async function waitForLivePageReady(
   });
 }
 
-async function findSessionIdViaAgentsApi(request: APIRequestContext): Promise<string | null> {
-  const response = await request.get("/api/agents/sessions?limit=5");
+async function findSessionIdsViaAgentsApi(request: APIRequestContext): Promise<string[]> {
+  const response = await request.get("/api/agents/sessions?limit=25");
   if (!response.ok()) {
-    return null;
+    return [];
   }
 
   const body = await response.json();
   const sessions = Array.isArray(body?.sessions) ? body.sessions : [];
+  const ids: string[] = [];
   for (const session of sessions) {
     if (typeof session?.id === "string" && session.id.length > 0) {
-      return session.id;
+      ids.push(session.id);
     }
   }
 
-  return null;
+  return ids;
 }
 
 async function findEngineControlSessionIdViaAgentsApi(request: APIRequestContext): Promise<string | null> {
@@ -364,8 +365,8 @@ test("forum route redirects to timeline without auth errors", async ({
 test("session detail renders event timeline", async ({ context, agentsRequest }) => {
   test.setTimeout(45_000);
 
-  const sessionId = await findSessionIdViaAgentsApi(agentsRequest).catch(() => null);
-  if (!sessionId) {
+  const candidateSessionIds = await findSessionIdsViaAgentsApi(agentsRequest).catch(() => []);
+  if (candidateSessionIds.length === 0) {
     test.skip(true, "No sessions available to test detail view");
     return;
   }
@@ -374,7 +375,7 @@ test("session detail renders event timeline", async ({ context, agentsRequest })
 
   const { consoleErrors, serverErrors } = attachErrorCollectors(page);
   const authErrors: string[] = [];
-  const detailPath = `/api/timeline/sessions/${sessionId}`;
+  let detailPath = "";
   const timelineItems = page.locator(
     '[data-testid="session-timeline-row"], button[id^="event-"], .timeline-row, .event-item',
   );
@@ -389,33 +390,48 @@ test("session detail renders event timeline", async ({ context, agentsRequest })
     }
   });
 
-  await page.goto(`/timeline/${sessionId}`, { waitUntil: "domcontentloaded" });
+  const emptySessionIds: string[] = [];
+  let renderedSessionId: string | null = null;
 
-  await waitForLivePageReady(
-    page,
-    "session-detail-not-ready",
-    `Session detail for ${sessionId} never reached data-ready=true.`,
-  );
+  for (const sessionId of candidateSessionIds) {
+    authErrors.length = 0;
+    detailPath = `/api/timeline/sessions/${sessionId}`;
 
-  if (authErrors.length > 0) {
-    await failWithScreenshot(
+    await page.goto(`/timeline/${sessionId}`, { waitUntil: "domcontentloaded" });
+
+    await waitForLivePageReady(
       page,
-      "session-detail-auth",
-      `Auth failures on session detail: ${authErrors.join(", ")}`,
+      "session-detail-not-ready",
+      `Session detail for ${sessionId} never reached data-ready=true.`,
     );
-  }
 
-  // Support both the current workspace DOM and the older live session-detail shape.
-  await timelineItems
-    .first()
-    .waitFor({ timeout: 12_000 })
-    .catch(async () => {
+    if (authErrors.length > 0) {
       await failWithScreenshot(
         page,
-        "session-detail",
-        `No compatible timeline items found for session ${sessionId}. Expected [data-testid=\"session-timeline-row\"], button[id^=\"event-\"], .timeline-row, or .event-item.`,
+        "session-detail-auth",
+        `Auth failures on session detail: ${authErrors.join(", ")}`,
       );
-    });
+    }
+
+    const renderedTimeline = await timelineItems
+      .first()
+      .waitFor({ timeout: 4_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (renderedTimeline) {
+      renderedSessionId = sessionId;
+      break;
+    }
+    emptySessionIds.push(sessionId);
+  }
+
+  if (!renderedSessionId) {
+    await failWithScreenshot(
+      page,
+      "session-detail",
+      `No compatible timeline items found in ${candidateSessionIds.length} candidate sessions. Empty detail candidates: ${emptySessionIds.join(", ")}. Expected [data-testid=\"session-timeline-row\"], button[id^=\"event-\"], .timeline-row, or .event-item.`,
+    );
+  }
 
   if (serverErrors.length > 0) {
     await failWithScreenshot(
@@ -436,7 +452,7 @@ test("session detail renders event timeline", async ({ context, agentsRequest })
   const eventCount = await timelineItems.count();
   expect(
     eventCount,
-    `Expected at least 1 compatible timeline item in session ${sessionId}`,
+    `Expected at least 1 compatible timeline item in session ${renderedSessionId}`,
   ).toBeGreaterThan(0);
 
   await page.close();
