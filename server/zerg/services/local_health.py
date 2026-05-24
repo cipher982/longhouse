@@ -3222,14 +3222,19 @@ def _collect_managed_session_sources(
     phase_overlay: dict[str, dict[str, str | None]] | None,
     fast: bool,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    resolved_sessions = _collect_resolved_sessions_from_engine_status(engine_status)
+    if resolved_sessions is not None:
+        managed_sessions, unmanaged_processes = resolved_sessions
+        managed_summary, managed_sessions, orphan_bridges = _merge_managed_sessions(
+            bridge_sessions=[],
+            bridge_orphans=[],
+            process_sessions=managed_sessions,
+        )
+        return managed_summary, managed_sessions, orphan_bridges, unmanaged_processes
+
     if fast:
-        bridge_sessions: list[dict[str, Any]] = []
-        orphan_bridges: list[dict[str, Any]] = []
-        resolved_sessions = _collect_resolved_sessions_from_engine_status(engine_status)
-        if resolved_sessions is None:
-            issue = _engine_status_resolved_sessions_issue(engine_status)
-            return _resolved_sessions_unusable_summary(issue), [], [], []
-        process_sessions, unmanaged_processes = resolved_sessions
+        issue = _engine_status_resolved_sessions_issue(engine_status)
+        return _resolved_sessions_unusable_summary(issue), [], [], []
     else:
         with _process_snapshot_scope():
             provider_processes = _scan_provider_processes()

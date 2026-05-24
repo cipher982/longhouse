@@ -2655,6 +2655,57 @@ def test_collect_local_health_fast_prefers_resolved_engine_sessions(monkeypatch,
     assert unmanaged["liveness_model"] == "engine_status"
 
 
+def test_collect_local_health_deep_prefers_resolved_engine_sessions(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr(
+        local_health_service,
+        "_compute_process_snapshot",
+        lambda: (_ for _ in ()).throw(AssertionError("resolved engine sessions are canonical")),
+    )
+    now = datetime(2026, 5, 5, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(local_health_service, "_utc_now", lambda: now)
+    _write_engine_status(
+        tmp_path,
+        age_seconds=1,
+        payload={
+            "sessions": [
+                {
+                    "session_id": "c73dbe01-c218-430f-8f80-a78c243fd8f7",
+                    "provider": "codex",
+                    "provider_session_id": "thread-codex",
+                    "control_path": "managed",
+                    "presentation_state": "managed_attached",
+                    "state": "attached",
+                    "phase": "thinking",
+                    "tool_name": "Bash",
+                    "phase_observed_at": "2026-05-05T11:59:58Z",
+                    "last_activity_at": "2026-05-05T11:59:58Z",
+                    "workspace": {"cwd": "/Users/test/git/zerg", "label": "zerg"},
+                    "process": {"pid": 4201},
+                    "bridge": {
+                        "bridge_pid": 4202,
+                        "app_server_pid": 4203,
+                        "heartbeat_at": "2026-05-05T11:59:58Z",
+                        "status": "ready",
+                        "thread_subscription_status": "subscribed",
+                    },
+                    "evidence": {"process_observed": True, "transcript_observed": True},
+                    "reason_codes": [],
+                }
+            ],
+        },
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["collection_tier"] == "deep"
+    assert snapshot["managed_summary"]["attached_count"] == 1
+    assert snapshot["managed_summary"]["degraded_count"] == 0
+    assert "managed_session_control_degraded" not in snapshot["reasons"]
+    assert snapshot["managed_sessions"][0]["liveness_model"] == "engine_status"
+
+
 def test_local_health_menubar_requires_installed_app(monkeypatch, tmp_path: Path):
     runner = CliRunner()
     calls: list[dict[str, object]] = []
