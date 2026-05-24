@@ -2666,6 +2666,7 @@ mod tests {
         managed_bridge_scan::CodexBridgeObservation {
             session_id: "sess-codex-managed".to_string(),
             state_file: PathBuf::from("/tmp/sess-codex-managed.json"),
+            schema_version: crate::codex_bridge::BRIDGE_STATE_SCHEMA_VERSION,
             cwd: Some("/tmp".to_string()),
             launch_mode: Some("tui".to_string()),
             ws_url: Some("ws://127.0.0.1:1111".to_string()),

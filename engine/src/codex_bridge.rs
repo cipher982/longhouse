@@ -31,9 +31,16 @@ const THREAD_SUBSCRIBE_BACKGROUND_RETRY_MS: u64 = 500;
 const THREAD_SUBSCRIBE_RETRY_ATTEMPTS: usize = 8;
 const THREAD_SUBSCRIBE_RETRY_DELAY_MS: u64 = 250;
 const CODEX_DISABLE_UPDATE_CHECK_CONFIG: &str = "check_for_update_on_startup=false";
+pub const BRIDGE_STATE_SCHEMA_VERSION: u32 = 1;
 pub const LAUNCH_MODE_DETACHED_UI: &str = "detached_ui";
 pub const LAUNCH_MODE_TUI: &str = "tui";
 pub const LEGACY_LAUNCH_MODE_HEADLESS: &str = "headless";
+// Keep the on-disk value old reapers already treat as detached-UI-safe until
+// all dogfood/release paths guarantee the daemon and bridge writer upgrade
+// together. Flip writers to LAUNCH_MODE_DETACHED_UI once the minimum supported
+// daemon is past f9d6f201; readers should accept legacy headless indefinitely.
+// Product/docs should still call this detached-UI managed.
+pub const PERSISTED_DETACHED_UI_LAUNCH_MODE: &str = LEGACY_LAUNCH_MODE_HEADLESS;
 const BRIDGE_OPT_OUT_NOTIFICATION_METHODS: &[&str] = &[
     "item/plan/delta",
     "item/reasoning/summaryTextDelta",
@@ -144,6 +151,8 @@ pub struct BridgeAttachConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BridgeStateFile {
+    #[serde(default = "default_bridge_state_schema_version")]
+    pub schema_version: u32,
     pub session_id: String,
     pub cwd: String,
     pub codex_bin: String,
@@ -175,6 +184,10 @@ pub struct BridgeStateFile {
     #[serde(default)]
     pub thread_subscription_last_error: Option<String>,
     pub updated_at: String,
+}
+
+fn default_bridge_state_schema_version() -> u32 {
+    0
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -536,12 +549,13 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
     }
 
     let mut state = BridgeStateFile {
+        schema_version: BRIDGE_STATE_SCHEMA_VERSION,
         session_id: config.session_id.clone(),
         cwd: config.cwd.display().to_string(),
         codex_bin: config.codex_bin.clone(),
         launch_mode: Some(
             if config.start_thread {
-                LAUNCH_MODE_DETACHED_UI
+                PERSISTED_DETACHED_UI_LAUNCH_MODE
             } else {
                 LAUNCH_MODE_TUI
             }
@@ -698,12 +712,13 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     let pid = std::process::id();
     crate::codex_attachments::cleanup_session_tmpdir(&config.session_id);
     let initial_state = BridgeStateFile {
+        schema_version: BRIDGE_STATE_SCHEMA_VERSION,
         session_id: config.session_id.clone(),
         cwd: config.cwd.display().to_string(),
         codex_bin: config.codex_bin.clone(),
         launch_mode: Some(
             if config.start_thread {
-                LAUNCH_MODE_DETACHED_UI
+                PERSISTED_DETACHED_UI_LAUNCH_MODE
             } else {
                 LAUNCH_MODE_TUI
             }
@@ -849,6 +864,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     let mut context = BridgeContext {
         state_file: config.state_file.clone(),
         state: BridgeStateFile {
+            schema_version: BRIDGE_STATE_SCHEMA_VERSION,
             session_id: config.session_id.clone(),
             cwd: config.cwd.display().to_string(),
             codex_bin: config.codex_bin.clone(),
@@ -3830,6 +3846,7 @@ mod tests {
         BridgeContext {
             state_file: state_file.clone(),
             state: BridgeStateFile {
+                schema_version: BRIDGE_STATE_SCHEMA_VERSION,
                 session_id: "session-123".to_string(),
                 cwd: temp.path().display().to_string(),
                 codex_bin: "codex".to_string(),
@@ -3907,9 +3924,45 @@ mod tests {
         let state = read_state_file(&state_file).unwrap();
 
         assert_eq!(state.session_id, "session-legacy");
+        assert_eq!(state.schema_version, 0);
         assert_eq!(state.app_server_pid, None);
         assert_eq!(state.app_server_pgid, None);
         assert_eq!(state.app_server_ws_url, None);
+    }
+
+    #[test]
+    fn bridge_state_file_writes_schema_version() {
+        let temp = tempfile::tempdir().unwrap();
+        let state_file = temp.path().join("state.json");
+        let state = BridgeStateFile {
+            schema_version: BRIDGE_STATE_SCHEMA_VERSION,
+            session_id: "session-123".to_string(),
+            cwd: temp.path().display().to_string(),
+            codex_bin: "codex".to_string(),
+            launch_mode: Some(PERSISTED_DETACHED_UI_LAUNCH_MODE.to_string()),
+            ws_url: None,
+            thread_id: None,
+            thread_path: None,
+            pid: 42,
+            app_server_pid: None,
+            app_server_pgid: None,
+            app_server_ws_url: None,
+            status: "starting".to_string(),
+            log_file: temp.path().join("bridge.log").display().to_string(),
+            active_turn_id: None,
+            last_turn_status: None,
+            last_error: None,
+            thread_subscription_status: None,
+            thread_subscription_attempts: 0,
+            thread_subscription_last_error: None,
+            updated_at: Utc::now().to_rfc3339(),
+        };
+
+        write_state_file(&state_file, &state).unwrap();
+        let raw: Value = serde_json::from_slice(&fs::read(&state_file).unwrap()).unwrap();
+
+        assert_eq!(raw["schema_version"], BRIDGE_STATE_SCHEMA_VERSION);
+        assert_eq!(raw["launch_mode"], LEGACY_LAUNCH_MODE_HEADLESS);
     }
 
     #[cfg(unix)]
@@ -4583,6 +4636,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let session_id = "session-123";
         let state = BridgeStateFile {
+            schema_version: BRIDGE_STATE_SCHEMA_VERSION,
             session_id: session_id.to_string(),
             cwd: temp.path().display().to_string(),
             codex_bin: "codex".to_string(),

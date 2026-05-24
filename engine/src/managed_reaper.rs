@@ -69,14 +69,21 @@ pub fn decide(
 
     // Class B — dead bridge daemon, orphaned app-server child.
     // No grace: if the bridge daemon exited and no TUI is attached,
-    // the app-server is strictly orphaned. Process-identity check
-    // runs again in the executor right before signaling.
+    // the app-server is strictly orphaned. This intentionally runs
+    // before schema/launch-mode gating: with a dead bridge daemon,
+    // there is no live bridge control path to preserve.
+    // Process-identity check runs again in the executor right before signaling.
     if !obs.bridge_alive && obs.app_server_alive && !obs.has_tui_attachment {
         return ReapDecision::StopOrphanAppServer;
     }
 
-    if is_detached_ui_launch(obs) && !obs.has_tui_attachment {
-        return ReapDecision::Skip;
+    if !obs.has_tui_attachment {
+        match live_bridge_reap_safety(obs) {
+            LiveBridgeReapSafety::TreatAsTuiAttached => {}
+            LiveBridgeReapSafety::SkipDetachedUi | LiveBridgeReapSafety::SkipUnknown => {
+                return ReapDecision::Skip;
+            }
+        }
     }
 
     // Class A — live bridge, unattached, idle.
@@ -96,18 +103,34 @@ pub fn decide(
     }
 }
 
-fn is_detached_ui_launch(obs: &CodexBridgeObservation) -> bool {
-    launch_mode_is_detached_ui(obs.launch_mode.as_deref())
+fn live_bridge_reap_safety(obs: &CodexBridgeObservation) -> LiveBridgeReapSafety {
+    if obs.schema_version > codex_bridge::BRIDGE_STATE_SCHEMA_VERSION {
+        return LiveBridgeReapSafety::SkipUnknown;
+    }
+    launch_mode_reap_safety(obs.launch_mode.as_deref())
 }
 
-fn launch_mode_is_detached_ui(mode: Option<&str>) -> bool {
+fn launch_mode_reap_safety(mode: Option<&str>) -> LiveBridgeReapSafety {
     match mode {
-        Some(value) if value.eq_ignore_ascii_case(codex_bridge::LAUNCH_MODE_DETACHED_UI) => true,
-        Some(value) if value.eq_ignore_ascii_case(codex_bridge::LEGACY_LAUNCH_MODE_HEADLESS) => {
-            true
+        Some(value) if value.eq_ignore_ascii_case(codex_bridge::LAUNCH_MODE_TUI) => {
+            LiveBridgeReapSafety::TreatAsTuiAttached
         }
-        _ => false,
+        Some(value) if value.eq_ignore_ascii_case(codex_bridge::LAUNCH_MODE_DETACHED_UI) => {
+            LiveBridgeReapSafety::SkipDetachedUi
+        }
+        Some(value) if value.eq_ignore_ascii_case(codex_bridge::LEGACY_LAUNCH_MODE_HEADLESS) => {
+            LiveBridgeReapSafety::SkipDetachedUi
+        }
+        Some(_) => LiveBridgeReapSafety::SkipUnknown,
+        None => LiveBridgeReapSafety::SkipUnknown,
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LiveBridgeReapSafety {
+    TreatAsTuiAttached,
+    SkipDetachedUi,
+    SkipUnknown,
 }
 
 /// Grace tracking + in-flight guard shared across ticks.
@@ -267,10 +290,16 @@ fn preflight_aborts_reap(obs: &CodexBridgeObservation, class: ReapClass) -> bool
             {
                 return true;
             }
-            if launch_mode_is_detached_ui(state.launch_mode.as_deref())
-                && matches!(class, ReapClass::LiveBridge)
-            {
-                return true;
+            if matches!(class, ReapClass::LiveBridge) {
+                let reap_safety =
+                    if state.schema_version > codex_bridge::BRIDGE_STATE_SCHEMA_VERSION {
+                        LiveBridgeReapSafety::SkipUnknown
+                    } else {
+                        launch_mode_reap_safety(state.launch_mode.as_deref())
+                    };
+                if reap_safety != LiveBridgeReapSafety::TreatAsTuiAttached {
+                    return true;
+                }
             }
             if matches!(class, ReapClass::OrphanAppServer) {
                 // Bridge came back to life between scan and stop.
@@ -385,6 +414,7 @@ mod tests {
         CodexBridgeObservation {
             session_id: "session-A".to_string(),
             state_file: PathBuf::from("/tmp/session-A.json"),
+            schema_version: codex_bridge::BRIDGE_STATE_SCHEMA_VERSION,
             cwd: Some("/tmp".to_string()),
             launch_mode: Some(codex_bridge::LAUNCH_MODE_TUI.to_string()),
             ws_url: Some("ws://127.0.0.1:1111".to_string()),
@@ -442,6 +472,46 @@ mod tests {
     fn skip_legacy_headless_launch_without_tui_even_after_grace() {
         let mut obs = base_obs();
         obs.launch_mode = Some(codex_bridge::LEGACY_LAUNCH_MODE_HEADLESS.to_string());
+        let now = Instant::now();
+        let first = now - Duration::from_secs(130);
+
+        assert_eq!(
+            decide(&obs, Some(first), now, Duration::from_secs(120)),
+            ReapDecision::Skip
+        );
+    }
+
+    #[test]
+    fn skip_unknown_launch_mode_without_tui_even_after_grace() {
+        let mut obs = base_obs();
+        obs.launch_mode = Some("future_detached_ui_v2".to_string());
+        let now = Instant::now();
+        let first = now - Duration::from_secs(130);
+
+        assert_eq!(
+            decide(&obs, Some(first), now, Duration::from_secs(120)),
+            ReapDecision::Skip
+        );
+    }
+
+    #[test]
+    fn skip_future_schema_without_tui_even_after_grace() {
+        let mut obs = base_obs();
+        obs.schema_version = codex_bridge::BRIDGE_STATE_SCHEMA_VERSION + 1;
+        let now = Instant::now();
+        let first = now - Duration::from_secs(130);
+
+        assert_eq!(
+            decide(&obs, Some(first), now, Duration::from_secs(120)),
+            ReapDecision::Skip
+        );
+    }
+
+    #[test]
+    fn skip_missing_launch_mode_without_tui_even_after_grace() {
+        let mut obs = base_obs();
+        obs.schema_version = 0;
+        obs.launch_mode = None;
         let now = Instant::now();
         let first = now - Duration::from_secs(130);
 

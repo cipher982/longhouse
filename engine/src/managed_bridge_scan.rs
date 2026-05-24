@@ -23,6 +23,7 @@ use crate::codex_bridge::BridgeStateFile;
 pub struct CodexBridgeObservation {
     pub session_id: String,
     pub state_file: PathBuf,
+    pub schema_version: u32,
     pub cwd: Option<String>,
     pub launch_mode: Option<String>,
     pub ws_url: Option<String>,
@@ -169,6 +170,7 @@ pub fn collect_observations_from(
         out.push(CodexBridgeObservation {
             session_id,
             state_file: path,
+            schema_version: state.schema_version,
             cwd: Some(state.cwd),
             launch_mode: state.launch_mode,
             ws_url: state.ws_url,
