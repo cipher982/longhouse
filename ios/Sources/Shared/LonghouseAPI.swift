@@ -409,7 +409,7 @@ struct LonghouseAPI: Sendable {
         guard
             let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
             let detail = obj["detail"] as? [String: Any],
-            let code = detail["error_code"] as? String
+            let code = (detail["error_code"] as? String) ?? (detail["code"] as? String)
         else {
             return nil
         }
@@ -614,12 +614,18 @@ public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
     public let deviceId: String
     public let machineName: String
     public let online: Bool
+    public let controlChannelStatus: String?
     public let supports: [String]
+    public let canLaunchCodex: Bool?
+    public let launchBlockedBy: String?
     public let lastSeenAt: String?
     public let engineBuild: String?
 
-    public var supportsCodexLaunch: Bool { supports.contains("codex.launch") }
-    public var isLaunchable: Bool { online && supportsCodexLaunch }
+    public var supportsCodexLaunch: Bool { canLaunchCodex ?? supports.contains("codex.launch") }
+    public var isLaunchable: Bool {
+        let controlConnected = controlChannelStatus.map { $0 == "connected" } ?? online
+        return controlConnected && supportsCodexLaunch
+    }
 }
 
 public struct MachineDirectoryResponse: Decodable, Sendable {
@@ -650,6 +656,59 @@ extension LonghouseAPI {
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
         return try JSONDecoder.snakeCase.decode(MachineDirectoryResponse.self, from: data).machines
+    }
+
+    func recentWorkspacePaths(deviceId: String, limit: Int = 50) async throws -> [String] {
+        var components = URLComponents(url: baseURL.appendingPathComponent("/api/timeline/sessions"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [
+            URLQueryItem(name: "device_id", value: deviceId),
+            URLQueryItem(name: "days_back", value: "30"),
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "hide_autonomous", value: "false"),
+        ]
+        var request = URLRequest(url: components.url!)
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+        let (data, httpResponse) = try await data(for: request)
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
+        let decoded = try JSONDecoder.snakeCase.decode(APITimelineSessionsListResponse.self, from: data)
+        return Self.workspacePathSuggestions(from: decoded.sessions)
+    }
+
+    static func workspacePathSuggestions(from cards: [APITimelineSessionCardResponse], limit: Int = 16) -> [String] {
+        var seen = Set<String>()
+        var paths: [String] = []
+
+        func add(_ path: String?) {
+            guard let path, path.starts(with: "/"), !seen.contains(path) else { return }
+            seen.insert(path)
+            paths.append(path)
+        }
+
+        for card in cards {
+            for session in [card.head, card.detail, card.root] {
+                add(session.cwd)
+                add(parentWorkspacePath(session.cwd))
+            }
+            if paths.count >= limit { break }
+        }
+
+        return Array(paths.prefix(limit))
+    }
+
+    static func compactWorkspacePath(_ path: String) -> String {
+        path.replacingOccurrences(of: #"^/Users/[^/]+"#, with: "~", options: .regularExpression)
+    }
+
+    private static func parentWorkspacePath(_ path: String?) -> String? {
+        guard let path else { return nil }
+        let normalized = path.replacingOccurrences(of: #"/+$"#, with: "", options: .regularExpression)
+        guard let slash = normalized.lastIndex(of: "/"), slash > normalized.startIndex else { return nil }
+        let parent = String(normalized[..<slash])
+        let parentName = parent.split(separator: "/").last.map(String.init)
+        guard let parentName, !parentName.isEmpty, parentName != "git" else { return nil }
+        return parent
     }
 
     func launchRemoteSession(
@@ -686,7 +745,7 @@ extension LonghouseAPI {
         guard
             let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
             let detail = obj["detail"] as? [String: Any],
-            let code = detail["code"] as? String
+            let code = (detail["code"] as? String) ?? (detail["error_code"] as? String)
         else {
             return nil
         }
