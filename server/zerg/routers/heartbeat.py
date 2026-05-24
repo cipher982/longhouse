@@ -397,27 +397,16 @@ def _runtime_observation_payload_from_raw(payload_raw: str | dict | None) -> dic
     return payload if isinstance(payload, dict) else {}
 
 
-def _heartbeat_payload_from_raw(payload_raw: str | dict | None) -> dict:
-    if isinstance(payload_raw, dict):
-        return payload_raw
-    try:
-        payload = json.loads(payload_raw or "{}")
-    except (TypeError, json.JSONDecodeError):
-        return {}
-    return payload if isinstance(payload, dict) else {}
-
-
 def _latest_heartbeat_sessions_digest(db: Session, device_id: str) -> str | None:
     row = (
-        db.query(AgentHeartbeat.raw_json)
+        db.query(AgentHeartbeat.sessions_digest)
         .filter(AgentHeartbeat.device_id == device_id)
         .order_by(AgentHeartbeat.received_at.desc(), AgentHeartbeat.id.desc())
         .first()
     )
     if row is None:
         return None
-    raw = _heartbeat_payload_from_raw(row.raw_json)
-    digest = str(raw.get("sessions_digest") or "").strip()
+    digest = str(row.sessions_digest or "").strip()
     return digest or None
 
 
@@ -868,6 +857,8 @@ async def ingest_heartbeat(
                     disk_free_bytes=_disk,
                     is_offline=_offline,
                     raw_json=_payload_json,
+                    sessions_digest=incoming_sessions_digest,
+                    sessions_sequence=payload.sessions_sequence,
                 )
                 write_db.add(hb)
                 cutoff = _now - timedelta(days=30)
