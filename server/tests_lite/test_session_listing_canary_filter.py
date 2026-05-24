@@ -58,6 +58,8 @@ def test_default_session_listing_hides_internal_canary_sessions(tmp_path):
     factory = _make_db(tmp_path)
     with factory() as db:
         canary = _seed_session(db, provider="canary", project="canary", device_id="cube-canary")
+        legacy_typo = _seed_session(db, provider="cnary", project="cnary", device_id="cube-cnary")
+        _seed_session(db, provider="codex", project="canary-stress", device_id="cube-canary", user_messages=1)
         visible = _seed_session(db, provider="codex", project="zerg", device_id="cinder", user_messages=1)
         store = AgentsStore(db)
 
@@ -69,15 +71,25 @@ def test_default_session_listing_hides_internal_canary_sessions(tmp_path):
         assert project_total == 0
         assert project_sessions == []
 
+        typo_sessions, typo_total = store.list_sessions(provider="cnary", hide_autonomous=False)
+        assert typo_total == 1
+        assert [session.id for session in typo_sessions] == [legacy_typo.id]
+
         canary_sessions, canary_total = store.list_sessions(provider="canary", hide_autonomous=False)
         assert canary_total == 1
         assert [session.id for session in canary_sessions] == [canary.id]
+
+        codex_canary_sessions, codex_canary_total = store.list_sessions(provider="codex", project="canary", hide_autonomous=False)
+        assert codex_canary_total == 0
+        assert codex_canary_sessions == []
 
 
 def test_timeline_thread_listing_hides_internal_canary_sessions_by_default(tmp_path):
     factory = _make_db(tmp_path)
     with factory() as db:
         canary = _seed_session(db, provider="canary", project="canary-stress", device_id="cube-canary")
+        typo = _seed_session(db, provider="cnary", project="cnary", device_id="cube-cnary")
+        _seed_session(db, provider="codex", project="zerg", device_id="cube-canary", user_messages=1)
         visible = _seed_session(db, provider="claude", project="zerg", device_id="cinder", user_messages=1)
         store = AgentsStore(db)
 
@@ -88,6 +100,22 @@ def test_timeline_thread_listing_hides_internal_canary_sessions_by_default(tmp_p
         canary_total, canary_rows = store.list_timeline_thread_page(provider="canary", hide_autonomous=False)
         assert canary_total == 1
         assert [(thread_id, session_id) for thread_id, session_id, _anchor in canary_rows] == [(str(canary.id), str(canary.id))]
+
+        typo_total, typo_rows = store.list_timeline_thread_page(provider="cnary", hide_autonomous=False)
+        assert typo_total == 1
+        assert [(thread_id, session_id) for thread_id, session_id, _anchor in typo_rows] == [(str(typo.id), str(typo.id))]
+
+
+def test_canary_filter_does_not_hide_real_device_names_with_canary_substring(tmp_path):
+    factory = _make_db(tmp_path)
+    with factory() as db:
+        visible = _seed_session(db, provider="claude", project="zerg", device_id="canary-mbp", user_messages=1)
+        store = AgentsStore(db)
+
+        sessions, total = store.list_sessions(hide_autonomous=False)
+
+        assert total == 1
+        assert [session.id for session in sessions] == [visible.id]
 
 
 def test_canary_sessions_do_not_make_demo_data_count_as_real(tmp_path):
@@ -128,8 +156,10 @@ def test_recall_hides_internal_canary_sessions(monkeypatch, tmp_path):
 
     with factory() as db:
         canary = _seed_session(db, provider="canary", project="canary", device_id="cube-canary", user_messages=1)
+        typo = _seed_session(db, provider="cnary", project="cnary", device_id="cube-cnary", user_messages=1)
+        mislabeled = _seed_session(db, provider="codex", project="canary-stress", device_id="cube-canary", user_messages=1)
         visible = _seed_session(db, provider="codex", project="zerg", device_id="cinder", user_messages=1)
-        for session in (canary, visible):
+        for session in (canary, typo, mislabeled, visible):
             db.add(
                 AgentEvent(
                     session_id=session.id,
