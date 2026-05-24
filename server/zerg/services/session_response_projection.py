@@ -160,6 +160,7 @@ def has_real_sessions(db: Session, *, default_when_empty: bool) -> bool:
                 AgentSession.device_id.is_(None),
             )
         )
+        .filter(or_(AgentSession.provider != "canary", AgentSession.provider.is_(None)))
         .limit(1)
         .first()
         is not None
