@@ -703,18 +703,64 @@ extension LonghouseAPI {
         return Array(paths.prefix(limit))
     }
 
+    static func commonWorkspacePathSuggestions(from recentPaths: [String], limit: Int = 8) -> [String] {
+        guard limit > 0 else { return [] }
+
+        let developmentRootNames: Set<String> = ["git", "code", "src", "dev", "Developer", "Projects", "repos", "work"]
+        var seen = Set(recentPaths.map(normalizedAbsolutePath))
+        var common: [String] = []
+
+        func add(_ path: String?) {
+            guard common.count < limit, let path else { return }
+            let normalized = normalizedAbsolutePath(path)
+            guard normalized.starts(with: "/"), !seen.contains(normalized) else { return }
+            seen.insert(normalized)
+            common.append(normalized)
+        }
+
+        func addKnownDevelopmentRoot(for path: String) {
+            let components = normalizedAbsolutePath(path).split(separator: "/").map(String.init)
+            guard components.count >= 3, components[0] == "Users" else { return }
+            for index in components.indices.dropFirst(2) where developmentRootNames.contains(components[index]) {
+                add("/" + components[...index].joined(separator: "/"))
+                return
+            }
+        }
+
+        for path in recentPaths {
+            let parentPath = parentWorkspacePath(path)
+            if !isUserHomePath(parentPath) {
+                add(parentPath)
+            }
+            addKnownDevelopmentRoot(for: path)
+            if common.count >= limit { break }
+        }
+
+        return common
+    }
+
     static func compactWorkspacePath(_ path: String) -> String {
         path.replacingOccurrences(of: #"^/Users/[^/]+"#, with: "~", options: .regularExpression)
     }
 
     private static func parentWorkspacePath(_ path: String?) -> String? {
         guard let path else { return nil }
-        let normalized = path.replacingOccurrences(of: #"/+$"#, with: "", options: .regularExpression)
+        let normalized = normalizedAbsolutePath(path)
         guard let slash = normalized.lastIndex(of: "/"), slash > normalized.startIndex else { return nil }
         let parent = String(normalized[..<slash])
         let parentName = parent.split(separator: "/").last.map(String.init)
         guard let parentName, !parentName.isEmpty, parentName != "git" else { return nil }
         return parent
+    }
+
+    private static func normalizedAbsolutePath(_ path: String) -> String {
+        path.replacingOccurrences(of: #"/+$"#, with: "", options: .regularExpression)
+    }
+
+    private static func isUserHomePath(_ path: String?) -> Bool {
+        guard let path else { return false }
+        let components = normalizedAbsolutePath(path).split(separator: "/")
+        return components.count == 2 && components.first == "Users"
     }
 
     func launchRemoteSession(

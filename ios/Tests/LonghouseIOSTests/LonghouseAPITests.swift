@@ -208,6 +208,58 @@ struct LonghouseAPITests {
     }
 
     @Test
+    func commonWorkspacePathSuggestionsUsesRecentParentsAndObservedRoots() {
+        let paths = LonghouseAPI.commonWorkspacePathSuggestions(from: [
+            "/Users/davidrose/git/zerg/longhouse",
+            "/Users/davidrose/Projects/longhouse-ios",
+        ])
+
+        #expect(paths == [
+            "/Users/davidrose/git/zerg",
+            "/Users/davidrose/git",
+            "/Users/davidrose/Projects",
+        ])
+    }
+
+    @Test
+    func commonWorkspacePathSuggestionsDoesNotInventUnseenSiblingRoots() {
+        let paths = LonghouseAPI.commonWorkspacePathSuggestions(from: [
+            "/Users/davidrose/git/zerg/longhouse",
+        ])
+
+        #expect(paths.contains("/Users/davidrose/git"))
+        #expect(!paths.contains("/Users/davidrose/code"))
+        #expect(!paths.contains("/Users/davidrose/src"))
+    }
+
+    @Test
+    func commonWorkspacePathSuggestionsDedupesAgainstRecentAndSkipsHome() {
+        let paths = LonghouseAPI.commonWorkspacePathSuggestions(from: [
+            "/Users/davidrose/git/zerg/longhouse",
+            "/Users/davidrose/git",
+            "/Users/davidrose/git/",
+        ])
+
+        #expect(paths == ["/Users/davidrose/git/zerg"])
+    }
+
+    @Test
+    func commonWorkspacePathSuggestionsKeepsNonUserParentsAndHonorsLimit() {
+        let paths = LonghouseAPI.commonWorkspacePathSuggestions(from: [
+            "/opt/acme/service",
+            "/Users/davidrose/git/zerg/longhouse",
+            "/Users/davidrose/Projects/app/mobile",
+        ], limit: 4)
+
+        #expect(paths == [
+            "/opt/acme",
+            "/Users/davidrose/git/zerg",
+            "/Users/davidrose/git",
+            "/Users/davidrose/Projects/app",
+        ])
+    }
+
+    @Test
     func structuredErrorParsingIgnoresUnstructuredDetail() throws {
         let data = try #require("""
         {

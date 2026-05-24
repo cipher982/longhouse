@@ -2,7 +2,9 @@ import SwiftUI
 
 @MainActor
 struct LaunchSessionSheet: View {
-    private static let provider = "codex"
+    private static let providerOptions = [
+        LaunchProviderOption(id: "codex", label: "Codex", commandSummary: "codex app-server"),
+    ]
 
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
@@ -23,6 +25,7 @@ struct LaunchSessionSheet: View {
     @State private var workspaceError: String?
     @State private var cwd: String = ""
     @State private var displayName: String = ""
+    @State private var showManualPath = false
 
     init(
         previewMachines: [MachineDirectoryEntry]? = nil,
@@ -40,6 +43,9 @@ struct LaunchSessionSheet: View {
         if let firstPath = previewWorkspacePaths?.first {
             _cwd = State(initialValue: firstPath)
         }
+        if previewWorkspacePaths?.isEmpty == true {
+            _showManualPath = State(initialValue: true)
+        }
     }
 
     private var launchable: [MachineDirectoryEntry] {
@@ -56,6 +62,14 @@ struct LaunchSessionSheet: View {
 
     private var canSubmit: Bool {
         !submitting && selectedMachine != nil && normalizedCwd.starts(with: "/")
+    }
+
+    private var commonWorkspacePaths: [String] {
+        LonghouseAPI.commonWorkspacePathSuggestions(from: workspacePaths)
+    }
+
+    private var hasWorkspaceSuggestions: Bool {
+        !workspacePaths.isEmpty || !commonWorkspacePaths.isEmpty
     }
 
     private var pathValidationMessage: String? {
@@ -110,49 +124,85 @@ struct LaunchSessionSheet: View {
                     cwd = ""
                     workspaceError = nil
                     submitError = nil
+                    showManualPath = false
                 }
             }
 
-            Section("Coding agent") {
-                Picker("Agent", selection: .constant(Self.provider)) {
-                    Text("Codex").tag(Self.provider)
-                }
-                Text("Runs codex app-server on \(selectedMachine?.machineName ?? "the selected machine") through the Longhouse Machine Agent.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("Workspace") {
+            Section("Recent workspaces") {
                 if loadingWorkspaces {
                     ProgressView("Loading recent workspaces...")
                 }
 
                 if !workspacePaths.isEmpty {
-                    WorkspacePathGrid(paths: workspacePaths, selectedPath: normalizedCwd) { path in
+                    WorkspacePathList(paths: workspacePaths, selectedPath: normalizedCwd) { path in
                         cwd = path
+                        showManualPath = false
                         submitError = nil
                     }
+                } else if !loadingWorkspaces {
+                    Text("No recent workspaces found for this machine.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-
-                TextField("Absolute path", text: $cwd)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled(true)
-                    .textContentType(.URL)
 
                 if let workspaceError {
                     Text(workspaceError)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+            }
 
-                if let pathValidationMessage {
-                    Text(pathValidationMessage)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                } else {
-                    Text("Existing absolute directory on the target machine.")
+            if !commonWorkspacePaths.isEmpty {
+                Section("Common locations") {
+                    WorkspacePathList(paths: commonWorkspacePaths, selectedPath: normalizedCwd) { path in
+                        cwd = path
+                        showManualPath = false
+                        submitError = nil
+                    }
+                }
+            }
+
+            Section("Manual path") {
+                DisclosureGroup(isExpanded: $showManualPath) {
+                    TextField("Absolute path", text: $cwd)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled(true)
+
+                    if let pathValidationMessage {
+                        Text(pathValidationMessage)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    } else {
+                        Text("Existing absolute directory on the target machine.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } label: {
+                    Label("Use a different path", systemImage: "keyboard")
+                }
+                .onChange(of: cwd) { _, _ in
+                    submitError = nil
+                }
+
+                if !hasWorkspaceSuggestions && !loadingWorkspaces {
+                    Text("Use this when the workspace has not appeared in recent sessions yet.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+            }
+
+            Section("Coding agent") {
+                if let option = Self.providerOptions.first {
+                    HStack(spacing: 10) {
+                        Image(systemName: "terminal")
+                            .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(option.label)
+                            Text("\(option.commandSummary) on \(selectedMachine?.machineName ?? "selected machine")")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
             }
 
@@ -267,14 +317,15 @@ struct LaunchSessionSheet: View {
             if cwd.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let first = paths.first {
                 cwd = first
             }
+            showManualPath = paths.isEmpty
         } catch {
             if Task.isCancelled || (error as? URLError)?.code == .cancelled {
                 return
             }
             workspacePaths = []
             workspaceError = "Recent workspaces unavailable."
+            showManualPath = true
         }
-        loadingWorkspaces = false
     }
 
     private func submit() async {
@@ -286,7 +337,7 @@ struct LaunchSessionSheet: View {
         do {
             let response = try await api.launchRemoteSession(
                 deviceId: selectedDeviceId,
-                provider: Self.provider,
+                provider: Self.providerOptions[0].id,
                 cwd: normalizedCwd,
                 displayName: trimmedDisplayName.isEmpty ? nil : trimmedDisplayName,
                 clientRequestId: "launch-\(UUID().uuidString)"
@@ -360,30 +411,44 @@ struct LaunchSessionSheet: View {
     }
 }
 
-private struct WorkspacePathGrid: View {
+private struct LaunchProviderOption: Identifiable {
+    let id: String
+    let label: String
+    let commandSummary: String
+}
+
+private struct WorkspacePathList: View {
     let paths: [String]
     let selectedPath: String
     let onSelect: (String) -> Void
 
-    private let columns = [GridItem(.adaptive(minimum: 140), spacing: 8)]
-
     var body: some View {
-        LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
+        VStack(spacing: 0) {
             ForEach(paths, id: \.self) { path in
                 Button {
                     onSelect(path)
                 } label: {
-                    Text(LonghouseAPI.compactWorkspacePath(path))
-                        .font(.caption)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    HStack(spacing: 10) {
+                        Image(systemName: path == selectedPath ? "checkmark.circle.fill" : "folder")
+                            .foregroundStyle(path == selectedPath ? Color.accentColor : Color.secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(LonghouseAPI.compactWorkspacePath(path))
+                                .font(.body)
+                                .lineLimit(1)
+                            Text(path)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .tint(path == selectedPath ? .accentColor : .secondary)
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(path == selectedPath ? .isSelected : [])
+                .padding(.vertical, 7)
             }
         }
-        .padding(.vertical, 2)
     }
 }
 
@@ -407,6 +472,26 @@ private struct WorkspacePathGrid: View {
             "/Users/davidrose/git/zerg",
             "/Users/davidrose/git/me",
         ]
+    ) { _ in }
+    .environmentObject(AppState())
+}
+
+#Preview("Launch session without recent workspaces") {
+    LaunchSessionSheet(
+        previewMachines: [
+            MachineDirectoryEntry(
+                deviceId: "cinder",
+                machineName: "cinder",
+                online: true,
+                controlChannelStatus: "connected",
+                supports: ["codex.launch", "codex.send"],
+                canLaunchCodex: true,
+                launchBlockedBy: nil,
+                lastSeenAt: "2026-05-24T00:00:00Z",
+                engineBuild: "dev"
+            ),
+        ],
+        previewWorkspacePaths: []
     ) { _ in }
     .environmentObject(AppState())
 }
