@@ -142,10 +142,12 @@ newest attached lease wins. Once the reducer sees explicit
 session. Later product work can expose multi-attach as a richer state, but
 launch should not let stale machine state hide the currently attached owner.
 
-For managed Codex, `attached` requires the bridge/control socket to be healthy
-and the Codex TUI attachment to be present. If either side is missing while the
-engine still knows about the session, the lease state is `degraded`, not
-`attached`.
+For TUI-attached managed Codex, `attached` requires the bridge/control socket to
+be healthy and the Codex TUI attachment to be present. For detached-UI managed
+Codex, `attached` requires a healthy bridge/app-server and an existing thread;
+there is no visible TUI by design. If the expected control signal for the
+launch mode is missing while the engine still knows about the session, the
+lease state is `degraded`, not `attached`.
 
 Fresh `degraded` means the session is still managed and recoverable, but live
 control is impaired. Hosted surfaces should show it as attention/degraded, not

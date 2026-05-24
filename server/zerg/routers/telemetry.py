@@ -66,7 +66,7 @@ beacon_router = APIRouter(prefix="/telemetry", tags=["telemetry"])
 admin_router = APIRouter(prefix="/telemetry", tags=["telemetry"], dependencies=[Depends(require_admin)])
 # Canary router is a separate auth surface from admin. Same endpoints are
 # *also* exposed on admin_router so operators with a browser cookie still
-# hit them; canary_router is the headless-daemon path.
+# hit them; canary_router is the background-daemon path.
 canary_router = APIRouter(prefix="/telemetry", tags=["telemetry"], dependencies=[Depends(require_canary_token)])
 
 
@@ -172,10 +172,7 @@ def _persist_render_beacon(db: Session, beacon: RenderBeacon, *, latency_ms: int
         payload["webkit"] = beacon.webkit.model_dump(exclude_none=True)
     record_session_observation(
         db,
-        observation_id=(
-            f"client_render:{beacon.surface}:{session_id}:"
-            f"{beacon.event_id}:{beacon.rendered_at_ms}"
-        ),
+        observation_id=(f"client_render:{beacon.surface}:{session_id}:" f"{beacon.event_id}:{beacon.rendered_at_ms}"),
         session_id=session_id,
         runtime_key=None,
         provider=provider,
@@ -291,11 +288,7 @@ async def recent_client_render_beacons(
     if event_id:
         query = query.filter(SessionObservation.source_cursor == f"event:{event_id}")
 
-    rows = (
-        query.order_by(SessionObservation.observed_at.desc(), SessionObservation.id.desc())
-        .limit(max(1, min(limit, 200)))
-        .all()
-    )
+    rows = query.order_by(SessionObservation.observed_at.desc(), SessionObservation.id.desc()).limit(max(1, min(limit, 200))).all()
     items = []
     for row in rows:
         import json
@@ -426,7 +419,7 @@ async def canary_observation(obs: CanaryObservation) -> dict:
 
     Gated by X-Canary-Token (shared secret env var). Keeps random clients
     from polluting SLA signal without requiring a browser cookie — the
-    producer + observer run headless on cube.
+    producer + observer run without a browser cookie on cube.
     """
     latency_s = obs.latency_ms / 1000.0
     canary_latency_seconds.labels(hop=obs.hop, surface=obs.surface).observe(latency_s)

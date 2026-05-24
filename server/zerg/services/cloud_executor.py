@@ -1,6 +1,6 @@
-"""Cloud Executor – run headless commis execution via subprocess.
+"""Cloud Executor – run batch commis execution via subprocess.
 
-This service runs commis as headless subprocesses using the `hatch` CLI tool.
+This service runs commis as batch subprocesses using the `hatch` CLI tool.
 It enables 24/7 cloud execution independent of laptop connectivity.
 
 Workspace isolation is handled by WorkspaceManager (directory-based isolation
@@ -162,7 +162,7 @@ class CloudExecutionResult:
 
 
 class CloudExecutor:
-    """Execute commis as headless subprocesses using hatch CLI."""
+    """Execute commis as batch subprocesses using hatch CLI."""
 
     def __init__(
         self,

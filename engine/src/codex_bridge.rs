@@ -31,6 +31,9 @@ const THREAD_SUBSCRIBE_BACKGROUND_RETRY_MS: u64 = 500;
 const THREAD_SUBSCRIBE_RETRY_ATTEMPTS: usize = 8;
 const THREAD_SUBSCRIBE_RETRY_DELAY_MS: u64 = 250;
 const CODEX_DISABLE_UPDATE_CHECK_CONFIG: &str = "check_for_update_on_startup=false";
+pub const LAUNCH_MODE_DETACHED_UI: &str = "detached_ui";
+pub const LAUNCH_MODE_TUI: &str = "tui";
+pub const LEGACY_LAUNCH_MODE_HEADLESS: &str = "headless";
 const BRIDGE_OPT_OUT_NOTIFICATION_METHODS: &[&str] = &[
     "item/plan/delta",
     "item/reasoning/summaryTextDelta",
@@ -60,8 +63,8 @@ pub struct BridgeStartConfig {
     pub log_file: Option<PathBuf>,
     pub start_timeout_secs: u64,
     /// When true, the bridge's run loop will invoke `thread/start` itself so
-    /// the managed session is driveable without a TUI attach. Default (false)
-    /// preserves the legacy behavior where a TUI creates the thread.
+    /// the managed session is driveable without a visible TUI attach. Default
+    /// (false) preserves the legacy behavior where a TUI creates the thread.
     pub start_thread: bool,
 }
 
@@ -83,7 +86,7 @@ pub struct BridgeRunConfig {
     pub state_file: PathBuf,
     pub log_file: PathBuf,
     /// When true, the bridge calls `thread/start` itself instead of waiting
-    /// for a TUI attach. Used by the headless remote-launch path.
+    /// for a TUI attach. Used by the detached-UI remote-launch path.
     pub start_thread: bool,
 }
 
@@ -144,6 +147,10 @@ pub struct BridgeStateFile {
     pub session_id: String,
     pub cwd: String,
     pub codex_bin: String,
+    /// Managed Codex launch mode. `detached_ui` means long-running app-server
+    /// control without a visible terminal TUI; it is not one-shot/batch
+    /// prompt-and-exit execution. Legacy state files may still contain
+    /// `headless`, which is interpreted as equivalent to `detached_ui`.
     #[serde(default)]
     pub launch_mode: Option<String>,
     pub ws_url: Option<String>,
@@ -177,7 +184,7 @@ pub struct BridgeStartSummary {
     pub log_file: String,
     pub pid: u32,
     pub ws_url: String,
-    /// None until the TUI connects and creates a thread (captured via thread/started notification).
+    /// None until a thread exists, either from TUI attach or detached-UI `thread/start`.
     pub thread_id: Option<String>,
     pub thread_path: Option<String>,
 }
@@ -534,9 +541,9 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
         codex_bin: config.codex_bin.clone(),
         launch_mode: Some(
             if config.start_thread {
-                "headless"
+                LAUNCH_MODE_DETACHED_UI
             } else {
-                "tui"
+                LAUNCH_MODE_TUI
             }
             .to_string(),
         ),
@@ -696,9 +703,9 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         codex_bin: config.codex_bin.clone(),
         launch_mode: Some(
             if config.start_thread {
-                "headless"
+                LAUNCH_MODE_DETACHED_UI
             } else {
-                "tui"
+                LAUNCH_MODE_TUI
             }
             .to_string(),
         ),
@@ -742,14 +749,15 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     starting_state.app_server_ws_url = client.child_ws_url.clone();
     write_state_file(&config.state_file, &starting_state)?;
 
-    // Initialize the protocol handshake. The normal TUI path creates the
-    // thread later; headless remote launch creates it below.
+    // Initialize the protocol handshake. The TUI-attached path creates the
+    // thread later; detached-UI remote launch creates it below.
     initialize_client(&mut client).await?;
 
-    // Headless remote-launch path: create the thread ourselves so the session
-    // is driveable via send/interrupt/steer without a TUI attach. A TUI that
-    // attaches later can still create its own thread; bridge state captures
-    // the most recent thread via thread/started notifications.
+    // Detached-UI remote-launch path: create the thread ourselves so the
+    // session is driveable via send/interrupt/steer without a visible TUI
+    // attach. A TUI that attaches later can still create its own thread;
+    // bridge state captures the most recent thread via thread/started
+    // notifications.
     if config.start_thread {
         let params = json!({
             "cwd": config.cwd.to_string_lossy(),
@@ -783,7 +791,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                 starting_state.status = "error".to_string();
                 starting_state.last_error = Some(format!("thread/start failed: {err}"));
                 let _ = write_state_file(&config.state_file, &starting_state);
-                bail!("thread/start failed in headless bridge: {err}");
+                bail!("thread/start failed in detached-ui bridge: {err}");
             }
         }
     }
@@ -881,7 +889,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         subscribed_thread_id: None,
         rejected_thread_ids: BTreeSet::new(),
     };
-    // Mark ready so the CLI can read ws_url and launch the TUI. Headless
+    // Mark ready so the CLI can read ws_url and launch the TUI. Detached-UI
     // launches already have a thread id; TUI launches capture it later from
     // thread/started notifications.
     write_state_file(&context.state_file, &context.state)?;
@@ -3825,7 +3833,7 @@ mod tests {
                 session_id: "session-123".to_string(),
                 cwd: temp.path().display().to_string(),
                 codex_bin: "codex".to_string(),
-                launch_mode: Some("tui".to_string()),
+                launch_mode: Some(LAUNCH_MODE_TUI.to_string()),
                 ws_url: Some("ws://example.test".to_string()),
                 thread_id: None,
                 thread_path: None,
@@ -4578,7 +4586,7 @@ mod tests {
             session_id: session_id.to_string(),
             cwd: temp.path().display().to_string(),
             codex_bin: "codex".to_string(),
-            launch_mode: Some("headless".to_string()),
+            launch_mode: Some(LAUNCH_MODE_DETACHED_UI.to_string()),
             ws_url: Some("ws://127.0.0.1:9".to_string()),
             thread_id: Some("thread-123".to_string()),
             thread_path: None,

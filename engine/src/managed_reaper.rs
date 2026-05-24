@@ -35,7 +35,7 @@ use tokio::time::Instant;
 
 use crate::codex_bridge::{self, BridgeStopConfig};
 use crate::managed_bridge_scan::{
-    self, CodexBridgeObservation, codex_tui_process_attached, collect_process_commands, pid_alive,
+    self, codex_tui_process_attached, collect_process_commands, pid_alive, CodexBridgeObservation,
 };
 
 pub const DEFAULT_REAP_GRACE_SECS: u64 = 120;
@@ -60,9 +60,9 @@ pub fn decide(
     now: Instant,
     grace: Duration,
 ) -> ReapDecision {
-    // Invariant applied to both classes: never touch a bridge that was
-    // never used. `thread_id` becomes `Some` once the TUI has attached
-    // and created a thread. Protects `--no-attach` and startup races.
+    // Invariant applied to both classes: never touch a bridge that was never
+    // used. `thread_id` becomes `Some` after TUI attach or detached-UI
+    // `thread/start`. Protects no-attach startup races.
     if obs.thread_id.is_none() {
         return ReapDecision::Skip;
     }
@@ -75,7 +75,7 @@ pub fn decide(
         return ReapDecision::StopOrphanAppServer;
     }
 
-    if is_headless_launch(obs) && !obs.has_tui_attachment {
+    if is_detached_ui_launch(obs) && !obs.has_tui_attachment {
         return ReapDecision::Skip;
     }
 
@@ -96,10 +96,18 @@ pub fn decide(
     }
 }
 
-fn is_headless_launch(obs: &CodexBridgeObservation) -> bool {
-    obs.launch_mode
-        .as_deref()
-        .is_some_and(|mode| mode.eq_ignore_ascii_case("headless"))
+fn is_detached_ui_launch(obs: &CodexBridgeObservation) -> bool {
+    launch_mode_is_detached_ui(obs.launch_mode.as_deref())
+}
+
+fn launch_mode_is_detached_ui(mode: Option<&str>) -> bool {
+    match mode {
+        Some(value) if value.eq_ignore_ascii_case(codex_bridge::LAUNCH_MODE_DETACHED_UI) => true,
+        Some(value) if value.eq_ignore_ascii_case(codex_bridge::LEGACY_LAUNCH_MODE_HEADLESS) => {
+            true
+        }
+        _ => false,
+    }
 }
 
 /// Grace tracking + in-flight guard shared across ticks.
@@ -259,10 +267,7 @@ fn preflight_aborts_reap(obs: &CodexBridgeObservation, class: ReapClass) -> bool
             {
                 return true;
             }
-            if state
-                .launch_mode
-                .as_deref()
-                .is_some_and(|mode| mode.eq_ignore_ascii_case("headless"))
+            if launch_mode_is_detached_ui(state.launch_mode.as_deref())
                 && matches!(class, ReapClass::LiveBridge)
             {
                 return true;
@@ -381,7 +386,7 @@ mod tests {
             session_id: "session-A".to_string(),
             state_file: PathBuf::from("/tmp/session-A.json"),
             cwd: Some("/tmp".to_string()),
-            launch_mode: Some("tui".to_string()),
+            launch_mode: Some(codex_bridge::LAUNCH_MODE_TUI.to_string()),
             ws_url: Some("ws://127.0.0.1:1111".to_string()),
             status: "ready".to_string(),
             thread_id: Some("thread-1".to_string()),
@@ -421,9 +426,22 @@ mod tests {
     }
 
     #[test]
-    fn skip_headless_launch_without_tui_even_after_grace() {
+    fn skip_detached_ui_launch_without_tui_even_after_grace() {
         let mut obs = base_obs();
-        obs.launch_mode = Some("headless".to_string());
+        obs.launch_mode = Some(codex_bridge::LAUNCH_MODE_DETACHED_UI.to_string());
+        let now = Instant::now();
+        let first = now - Duration::from_secs(130);
+
+        assert_eq!(
+            decide(&obs, Some(first), now, Duration::from_secs(120)),
+            ReapDecision::Skip
+        );
+    }
+
+    #[test]
+    fn skip_legacy_headless_launch_without_tui_even_after_grace() {
+        let mut obs = base_obs();
+        obs.launch_mode = Some(codex_bridge::LEGACY_LAUNCH_MODE_HEADLESS.to_string());
         let now = Instant::now();
         let first = now - Duration::from_secs(130);
 

@@ -16,8 +16,8 @@ running on the target machine itself. That machine POSTs to
 After this spec, a user on iPhone or browser picks a machine, picks a
 workspace (cwd), picks a provider, and says "start it there." The target
 Machine Agent receives a typed `session.launch` command over its existing
-control WebSocket, spawns the provider locally (headless under the engine
-bridge), and reports the pre-allocated session id back.
+control WebSocket, spawns the provider locally in detached-UI managed mode
+under the engine bridge, and reports the pre-allocated session id back.
 
 This is a natural extension of `machine-agent-control-channel.md`: Phase 2
 gave us `session.send_text` / `interrupt` / `steer_text` on known sessions.
@@ -45,7 +45,7 @@ The release scope is the narrow Codex v1:
 - machine directory endpoints for browser and machine clients
 - `POST /api/sessions/launch`
 - `session.launch` over the Machine Agent control WebSocket
-- headless Codex bridge startup with thread creation
+- detached-UI Codex bridge startup with thread creation
 - web and iOS launch sheets
 - launch lifecycle fields on `sessions`
 - launch reaper and admin debug endpoint
@@ -90,9 +90,10 @@ Provider     [Codex]
 
 - Success deep-links into session detail, which already renders managed
   Codex live transcript + steering.
-- Provider process runs headless on the target machine under the
-  engine-owned bridge. Same path a local `longhouse codex` ends up on,
-  minus the terminal attach.
+- Provider process runs in detached-UI managed mode on the target machine
+  under the engine-owned bridge. Same long-running app-server/bridge control
+  path a local `longhouse codex` ends up on, minus the visible terminal TUI
+  attach. This is not one-shot prompt-and-exit execution.
 - A user at a terminal on the target machine can later `longhouse codex
   --attach <session-id>` if they want to watch it there (pre-existing
   capability; unchanged).
@@ -366,8 +367,9 @@ Confirmed reusable without duplication:
 
 **Explicitly not reused**: `_run_native_codex_tui` and
 `_run_foreground_process_group` in `server/zerg/cli/codex.py`. These
-attach a terminal. Remote launch is headless. The engine handler must
-not attach a TUI.
+attach a terminal. Remote launch is detached-UI managed: the engine handler
+must not attach a TUI, but it must leave a long-running steerable bridge and
+app-server session rather than a one-shot prompt-and-exit process.
 
 Device identity: the handler reads `device_id` from the engine's own
 config. Runtime Host does not pass it in the frame. This differs from

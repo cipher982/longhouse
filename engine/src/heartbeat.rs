@@ -329,7 +329,7 @@ pub fn leases_from_observations(
             .is_some_and(|value| !value.trim().is_empty());
         let bridge_ready = obs.status == "ready";
 
-        let headless_control_ready = bridge_ready
+        let detached_ui_control_ready = bridge_ready
             && obs.app_server_alive
             && obs
                 .thread_id
@@ -337,7 +337,7 @@ pub fn leases_from_observations(
                 .is_some_and(|value| !value.trim().is_empty());
         let lease_state = if !obs.bridge_alive {
             "detached"
-        } else if (bridge_ready && obs.has_tui_attachment || headless_control_ready)
+        } else if (bridge_ready && obs.has_tui_attachment || detached_ui_control_ready)
             && !thread_failed
             && !has_bridge_error
         {
@@ -1272,7 +1272,7 @@ mod tests {
     }
 
     #[test]
-    fn leases_from_observations_classifies_headless_ready_bridge_as_attached() {
+    fn leases_from_observations_classifies_detached_ui_ready_bridge_as_attached() {
         let db = tempfile::NamedTempFile::new().unwrap();
         let conn = open_db(Some(db.path())).unwrap();
         let now = Utc::now();
@@ -1283,7 +1283,7 @@ mod tests {
         );
         obs.has_tui_attachment = false;
         obs.app_server_alive = true;
-        obs.thread_id = Some("thread-headless".to_string());
+        obs.thread_id = Some("thread-detached-ui".to_string());
 
         let leases = leases_from_observations(&conn, "cinder", &[obs], now);
 
@@ -1300,7 +1300,7 @@ mod tests {
 
         let mut degraded = test_observation("degraded-session", "ws://127.0.0.1:45679/session");
         degraded.has_tui_attachment = false;
-        degraded.thread_id = None; // alive but no TUI/headless thread → degraded
+        degraded.thread_id = None; // alive but no TUI/detached-UI thread -> degraded
         let mut detached = test_observation("detached-session", "ws://127.0.0.1:45680/session");
         detached.bridge_alive = false; // lock not held → detached
 

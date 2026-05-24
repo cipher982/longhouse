@@ -475,7 +475,7 @@ enum CodexBridgeCommands {
         start_timeout_secs: u64,
 
         /// Create the codex thread ourselves via thread/start; used by the
-        /// headless remote-launch path where no TUI will attach to create one.
+        /// detached-UI remote-launch path where no TUI will attach to create one.
         #[arg(long)]
         start_thread: bool,
 
@@ -531,7 +531,8 @@ enum CodexBridgeCommands {
         log_file: PathBuf,
 
         /// When set, the bridge calls thread/start itself during startup so
-        /// remote launches produce a driveable session without a TUI attach.
+        /// detached-UI remote launches produce a driveable session without a
+        /// visible TUI attach.
         #[arg(long)]
         start_thread: bool,
     },

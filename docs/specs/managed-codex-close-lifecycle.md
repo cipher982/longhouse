@@ -35,13 +35,17 @@ problem is the path and copy before that terminal signal:
 2. Explicit Longhouse close is the only source of `user_closed`.
    Browser, iOS, or CLI close actions may send this reason because they are
    product-level intent.
-3. Detached with an active turn is not closed.
+3. Detached-UI launch is not terminal detachment.
+   Browser/iOS remote launch intentionally has no visible Codex TUI. The
+   absence of a TUI is only close evidence for TUI-attached managed sessions,
+   not for detached-UI managed sessions that already created a bridge thread.
+4. Detached with an active turn is not closed.
    If Codex is still in-progress, the bridge remains reattachable.
-4. Detached and idle should close quickly and honestly.
+5. Detached and idle TUI-attached sessions should close quickly and honestly.
    Once there is no TUI attachment and no active turn, Longhouse should avoid
    prolonged `blocked/control path` UI. It can terminalize as
    `terminal_disconnected` after a short grace.
-5. Terminal reason is part of the contract.
+6. Terminal reason is part of the contract.
    `session_ended` answers lifecycle. `terminal_reason` answers why.
 
 ## Terminal Reasons
@@ -95,10 +99,15 @@ owns the backstop.
 
 1. TUI attachment disappears.
 2. Machine Agent observes bridge state.
-3. If no TUI is attached and no turn is active, reaper stops bridge with
+3. If the bridge was launched as a TUI-attached managed session, no TUI is
+   attached, and no turn is active, reaper stops bridge with
    `terminal_disconnected` after the grace window.
 4. If an active turn is still in progress, reaper leaves it alone for
    reattach.
+
+Detached-UI managed sessions are excluded from this close path. They have no
+visible TUI by design and remain steerable through the bridge unless the bridge
+daemon itself dies or an explicit Longhouse close arrives.
 
 ## Implementation Plan
 
