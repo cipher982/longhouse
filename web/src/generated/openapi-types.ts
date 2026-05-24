@@ -6107,6 +6107,8 @@ export interface components {
             managed_sessions?: components["schemas"]["ManagedSessionLeaseIn"][];
             /** Unmanaged Session Bindings */
             unmanaged_session_bindings?: components["schemas"]["UnmanagedSessionBindingIn"][];
+            /** Sessions */
+            sessions?: components["schemas"]["ResolvedLocalSessionIn"][];
         };
         /** HostObservationResponse */
         HostObservationResponse: {
@@ -7627,6 +7629,87 @@ export interface components {
          * @enum {string}
          */
         ResetType: "clear_data" | "full_rebuild";
+        /** ResolvedBridgeIn */
+        ResolvedBridgeIn: {
+            /** Bridge Pid */
+            bridge_pid?: number | null;
+            /** App Server Pid */
+            app_server_pid?: number | null;
+            /** Ws Url */
+            ws_url?: string | null;
+            /** Heartbeat At */
+            heartbeat_at?: string | null;
+            /** Status */
+            status?: string | null;
+            /** Thread Subscription Status */
+            thread_subscription_status?: string | null;
+        };
+        /** ResolvedEvidenceIn */
+        ResolvedEvidenceIn: {
+            /**
+             * Process Observed
+             * @default false
+             */
+            process_observed: boolean;
+            /**
+             * Transcript Observed
+             * @default false
+             */
+            transcript_observed: boolean;
+            /** Bridge State */
+            bridge_state?: string | null;
+            /** Hook Seen At */
+            hook_seen_at?: string | null;
+            /** Join Keys */
+            join_keys?: string[];
+        };
+        /** ResolvedLocalSessionIn */
+        ResolvedLocalSessionIn: {
+            /** Session Id */
+            session_id?: string | null;
+            /** Provider */
+            provider: string;
+            /** Provider Session Id */
+            provider_session_id?: string | null;
+            /** Control Path */
+            control_path: string;
+            /** Presentation State */
+            presentation_state: string;
+            /** State */
+            state: string;
+            /** Phase */
+            phase?: string | null;
+            /** Tool Name */
+            tool_name?: string | null;
+            /** Phase Observed At */
+            phase_observed_at?: string | null;
+            /** Last Activity At */
+            last_activity_at?: string | null;
+            workspace?: components["schemas"]["ResolvedWorkspaceIn"];
+            process?: components["schemas"]["ResolvedProcessIn"];
+            bridge?: components["schemas"]["ResolvedBridgeIn"];
+            evidence?: components["schemas"]["ResolvedEvidenceIn"];
+            /** Reason Codes */
+            reason_codes?: string[];
+        };
+        /** ResolvedProcessIn */
+        ResolvedProcessIn: {
+            /** Pid */
+            pid?: number | null;
+            /** Process Start Time */
+            process_start_time?: string | null;
+            /** Started At */
+            started_at?: string | null;
+        };
+        /** ResolvedWorkspaceIn */
+        ResolvedWorkspaceIn: {
+            /** Cwd */
+            cwd?: string | null;
+            /** Label */
+            label?: string | null;
+            /** Branch */
+            branch?: string | null;
+        };
         /** RunBundle */
         RunBundle: {
             /** Automation Id */
@@ -15881,7 +15964,9 @@ export interface operations {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
-            header?: never;
+            header?: {
+                "user-agent"?: string | null;
+            };
             path: {
                 session_id: string;
             };
