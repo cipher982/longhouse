@@ -24,6 +24,7 @@ from sqlalchemy import and_
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionInput
+from zerg.models.agents import SessionLaunchAttempt
 from zerg.models.agents import SessionTurn
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
@@ -1326,6 +1327,7 @@ def build_session_response(
     # Session-identity-kernel cleanup: legacy capability re-projection was
     # removed; the kernel ``capability_flags`` is already the truth.
     effective_capability_flags = capability_flags
+    launch_attempt = _latest_launch_attempt(store.db, session.id)
     return SessionResponse(
         id=str(session.id),
         provider=session.provider,
@@ -1392,9 +1394,11 @@ def build_session_response(
         ),
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
         user_state=session.user_state or "active",
-        launch_state=getattr(session, "launch_state", None),
-        launch_error_code=getattr(session, "launch_error_code", None),
-        launch_error_message=getattr(session, "launch_error_message", None),
+        launch_state=_launch_state_from_attempt(launch_attempt, session),
+        launch_error_code=launch_attempt.error_code if launch_attempt is not None else getattr(session, "launch_error_code", None),
+        launch_error_message=(
+            launch_attempt.error_message if launch_attempt is not None else getattr(session, "launch_error_message", None)
+        ),
     )
 
 
@@ -1435,6 +1439,30 @@ def build_session_transcript_preview_response(
         is_stale=is_stale,
         stale_reason=stale_reason,
     )
+
+
+def _latest_launch_attempt(db, session_id) -> SessionLaunchAttempt | None:
+    return (
+        db.query(SessionLaunchAttempt)
+        .filter(SessionLaunchAttempt.session_id == session_id)
+        .order_by(SessionLaunchAttempt.created_at.desc(), SessionLaunchAttempt.id.desc())
+        .first()
+    )
+
+
+def _launch_state_from_attempt(attempt: SessionLaunchAttempt | None, session: AgentSession) -> str | None:
+    if attempt is None:
+        return getattr(session, "launch_state", None)
+    state = str(attempt.state or "").strip()
+    if state == "failed":
+        return "launch_failed"
+    if state == "abandoned":
+        return "launch_orphaned"
+    if attempt.run_id is not None or state == "adopted":
+        return "live"
+    if state == "dispatched":
+        return "launching_unknown"
+    return "launching"
 
 
 def build_active_session_response(

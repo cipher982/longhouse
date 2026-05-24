@@ -249,7 +249,23 @@ class AgentSession(AgentsBase):
 
     @property
     def execution_home(self):
-        return self._legacy_get("execution_home", None)
+        stored = self._legacy_get("execution_home", None)
+        if stored is not None:
+            return stored
+        # Session-identity-kernel cleanup: derive managed/unmanaged truth from
+        # the current run/connection projection so old call sites do not reject
+        # kernel-native remote launches as legacy sessions.
+        try:
+            from sqlalchemy.orm import object_session
+
+            from zerg.services.agents.kernel_capabilities import project_session_capabilities
+
+            sess = object_session(self)
+            if sess is None:
+                return None
+            return project_session_capabilities(sess, session_id=self.id).execution_home.value
+        except Exception:
+            return None
 
     @execution_home.setter
     def execution_home(self, value):

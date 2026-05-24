@@ -6,6 +6,7 @@ Longhouse. Per-session locks prevent concurrent send collisions.
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from datetime import datetime
@@ -1060,11 +1061,23 @@ async def _create_session_input_response(
     # input row is marked failed and the client sees the error.
     dispatch_status = int(getattr(dispatch_response, "status_code", 200) or 200)
     if dispatch_status >= 400:
-        _mark_input_failed(db, int(row.id), error=f"dispatch returned {dispatch_status}")
+        response_error_code = "send_failed"
+        response_error_message = f"Managed local dispatch returned {dispatch_status}"
+        try:
+            response_body = json.loads(getattr(dispatch_response, "body", b"{}") or b"{}")
+            if isinstance(response_body, dict):
+                response_error_code = str(response_body.get("error_code") or response_error_code)
+                response_error_message = str(response_body.get("error") or response_error_message)
+        except Exception:
+            pass
+        _mark_input_failed(db, int(row.id), error=response_error_message[:200])
         # Lock already released by _dispatch_managed_local_text on failure.
         raise HTTPException(
             status_code=dispatch_status,
-            detail=f"Managed local dispatch returned {dispatch_status}",
+            detail={
+                "error_code": response_error_code,
+                "message": response_error_message,
+            },
         )
 
     # Dispatch accepted — mark the row delivered. Lock release + terminal-phase
