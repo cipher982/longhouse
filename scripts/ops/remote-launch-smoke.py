@@ -313,6 +313,16 @@ conn.row_factory = sqlite3.Row
 def table(name):
     return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
 
+def columns(name):
+    return [row["name"] for row in conn.execute(f"PRAGMA table_info({name})").fetchall()]
+
+def select_existing(name, wanted):
+    existing = set(columns(name))
+    selected = [column for column in wanted if column in existing]
+    if not selected:
+        return "1"
+    return ", ".join(selected)
+
 def rows(sql, params=()):
     return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
@@ -324,7 +334,25 @@ payload = {"session_id": sid}
 if table("sessions"):
     payload["session"] = one("SELECT id, provider, project, device_id, cwd, started_at, ended_at, last_activity_at, user_messages, assistant_messages, tool_calls, provider_session_id, launch_state FROM sessions WHERE id=? OR provider_session_id=?", (sid, sid))
 if table("session_runtime_state"):
-    payload["runtime_state"] = one("SELECT session_id, lifecycle, phase, progress, terminal_state, updated_at, last_observed_at, active_turn_id, pending_input_count FROM session_runtime_state WHERE session_id=? ORDER BY updated_at DESC LIMIT 1", (sid,))
+    runtime_select = select_existing("session_runtime_state", [
+        "session_id",
+        "lifecycle",
+        "phase",
+        "progress",
+        "phase_source",
+        "terminal_state",
+        "terminal_reason",
+        "updated_at",
+        "last_observed_at",
+        "last_runtime_signal_at",
+        "last_progress_at",
+        "last_live_at",
+        "active_turn_id",
+        "pending_input_count",
+        "thread_id",
+        "run_id",
+    ])
+    payload["runtime_state"] = one(f"SELECT {runtime_select} FROM session_runtime_state WHERE session_id=? ORDER BY updated_at DESC LIMIT 1", (sid,))
 if table("events"):
     payload["event_stats"] = one("SELECT count(*) AS count, min(timestamp) AS first_timestamp, max(timestamp) AS last_timestamp FROM events WHERE session_id=?", (sid,))
     payload["recent_events"] = rows("SELECT id, role, tool_name, substr(coalesce(content_text, tool_output_text, ''), 1, 1000) AS text, timestamp FROM events WHERE session_id=? ORDER BY id DESC LIMIT ?", (sid, limit))
