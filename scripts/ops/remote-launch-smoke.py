@@ -46,6 +46,11 @@ DEFAULT_ASSISTANT_TIMEOUT_SECS = 240
 DEFAULT_POLL_INTERVAL_SECS = 5
 COOKIE_NAME = "longhouse_session"
 CODEX_LAUNCH_CAPABILITY = "codex.launch"
+SMOKE_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) "
+    "Version/17.0 Safari/605.1.15 LonghouseRemoteLaunchSmoke/1.0"
+)
 
 
 class SmokeError(RuntimeError):
@@ -74,7 +79,11 @@ def _http_json(
     cookie: str | None = None,
     timeout: float = 15,
 ) -> HttpResult:
-    headers = {"Accept": "application/json"}
+    headers = {
+        "Accept": "application/json",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": SMOKE_USER_AGENT,
+    }
     data = None
     if body is not None:
         data = json.dumps(body).encode("utf-8")
