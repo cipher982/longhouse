@@ -15,6 +15,7 @@ use anyhow::Result;
 use chrono::DateTime;
 use chrono::Utc;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 use crate::build_identity::BuildIdentity;
 use crate::managed_bridge_scan::CodexBridgeObservation;
@@ -93,6 +94,15 @@ pub struct HeartbeatPayload {
     /// bridge, channel, transcript, and process observations.
     #[serde(default)]
     pub sessions: Vec<ResolvedLocalSession>,
+    /// Stable hash of the canonical session snapshot over identity/control
+    /// fields only. Timestamp-only freshness changes intentionally do not
+    /// change this digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sessions_digest: Option<String>,
+    /// Daemon-local monotonic sequence that increments whenever
+    /// `sessions_digest` changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sessions_sequence: Option<u64>,
     /// Phase-2 adaptive backlog limiter snapshot. Drives AIMD off the
     /// `X-Ingest-Queue-Wait-Ms` header on each successful ship; absent on
     /// processes that haven't built a scheduler yet (e.g. legacy heartbeat
@@ -298,9 +308,77 @@ impl HeartbeatPayload {
             managed_sessions: Vec::new(),
             unmanaged_session_bindings: Vec::new(),
             sessions: Vec::new(),
+            sessions_digest: None,
+            sessions_sequence: None,
             adaptive_backlog_limiter: None,
         }
     }
+}
+
+/// Deterministic digest for the local session truth graph.
+///
+/// The digest covers fields that change session identity, ownership, control,
+/// or visible state. It deliberately excludes observation timestamps and
+/// freshness counters so frequent heartbeats can refresh liveness without
+/// forcing the Runtime Host to re-run snapshot cleanup work.
+pub fn session_snapshot_digest(payload: &HeartbeatPayload) -> String {
+    let mut sessions: Vec<String> = payload
+        .sessions
+        .iter()
+        .map(|session| {
+            let mut join_keys = session.evidence.join_keys.clone();
+            join_keys.sort();
+            let mut reason_codes = session.reason_codes.clone();
+            reason_codes.sort();
+            format!(
+                "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+                session.provider,
+                session.session_id.as_deref().unwrap_or(""),
+                session.provider_session_id.as_deref().unwrap_or(""),
+                session.control_path,
+                session.presentation_state,
+                session.state,
+                session.phase.as_deref().unwrap_or(""),
+                session.tool_name.as_deref().unwrap_or(""),
+                session.workspace.cwd.as_deref().unwrap_or(""),
+                session.workspace.label.as_deref().unwrap_or(""),
+                session.workspace.branch.as_deref().unwrap_or(""),
+                session
+                    .process
+                    .pid
+                    .map(|pid| pid.to_string())
+                    .unwrap_or_default(),
+                session.process.process_start_time.as_deref().unwrap_or(""),
+                session.process.started_at.as_deref().unwrap_or(""),
+                session
+                    .bridge
+                    .bridge_pid
+                    .map(|pid| pid.to_string())
+                    .unwrap_or_default(),
+                session
+                    .bridge
+                    .app_server_pid
+                    .map(|pid| pid.to_string())
+                    .unwrap_or_default(),
+                session.bridge.status.as_deref().unwrap_or(""),
+                session
+                    .bridge
+                    .thread_subscription_status
+                    .as_deref()
+                    .unwrap_or(""),
+                session.evidence.process_observed,
+                session.evidence.transcript_observed,
+                session.evidence.bridge_state.as_deref().unwrap_or(""),
+                join_keys.join(","),
+                reason_codes.join(",")
+            )
+        })
+        .collect();
+    sessions.sort();
+    let signature = format!("sessions=[{}]", sessions.join(";"));
+    let mut hasher = Sha256::new();
+    hasher.update(signature.as_bytes());
+    format!("{:x}", hasher.finalize())
 }
 
 /// Build lease views from a pre-collected set of bridge observations.
@@ -801,7 +879,11 @@ fn binding_owned_by_codex(binding: &UnmanagedSessionBinding, keys: &ManagedCodex
 fn current_process_group_id(pid: u32) -> Option<i32> {
     let pid = i32::try_from(pid).ok()?;
     let pgid = unsafe { libc::getpgid(pid) };
-    if pgid > 0 { Some(pgid) } else { None }
+    if pgid > 0 {
+        Some(pgid)
+    } else {
+        None
+    }
 }
 
 #[cfg(not(unix))]
@@ -1129,6 +1211,8 @@ mod tests {
             managed_sessions: Vec::new(),
             unmanaged_session_bindings: Vec::new(),
             sessions: Vec::new(),
+            sessions_digest: None,
+            sessions_sequence: None,
             adaptive_backlog_limiter: None,
         };
 
@@ -1202,6 +1286,8 @@ mod tests {
             }],
             unmanaged_session_bindings: Vec::new(),
             sessions: Vec::new(),
+            sessions_digest: None,
+            sessions_sequence: None,
             adaptive_backlog_limiter: None,
         };
 
@@ -1577,7 +1663,10 @@ mod tests {
         );
         assert_eq!(managed.presentation_state, "managed_attached");
         assert_eq!(managed.workspace.label.as_deref(), Some("zerg"));
-        assert_eq!(managed.workspace.cwd.as_deref(), Some("/Users/test/git/zerg"));
+        assert_eq!(
+            managed.workspace.cwd.as_deref(),
+            Some("/Users/test/git/zerg")
+        );
         assert_eq!(managed.phase.as_deref(), Some("thinking"));
         assert_eq!(managed.tool_name.as_deref(), Some("Bash"));
         assert_eq!(
@@ -1595,13 +1684,11 @@ mod tests {
             managed.bridge.thread_subscription_status.as_deref(),
             Some("subscribed")
         );
-        assert!(
-            managed
-                .evidence
-                .join_keys
-                .iter()
-                .any(|key| key == "provider_session_id=thread-managed")
-        );
+        assert!(managed
+            .evidence
+            .join_keys
+            .iter()
+            .any(|key| key == "provider_session_id=thread-managed"));
 
         let unmanaged = sessions
             .iter()
@@ -1620,13 +1707,11 @@ mod tests {
             unmanaged.evidence.hook_seen_at.as_deref(),
             Some("2026-05-05T12:00:02Z")
         );
-        assert!(
-            unmanaged
-                .evidence
-                .join_keys
-                .iter()
-                .any(|key| key == "source_path=/tmp/claude-unmanaged.jsonl")
-        );
+        assert!(unmanaged
+            .evidence
+            .join_keys
+            .iter()
+            .any(|key| key == "source_path=/tmp/claude-unmanaged.jsonl"));
     }
 
     #[test]
@@ -1737,6 +1822,8 @@ mod tests {
             managed_sessions: Vec::new(),
             unmanaged_session_bindings: Vec::new(),
             sessions: Vec::new(),
+            sessions_digest: None,
+            sessions_sequence: None,
             adaptive_backlog_limiter: None,
         };
 
@@ -1791,6 +1878,8 @@ mod tests {
             managed_sessions: Vec::new(),
             unmanaged_session_bindings: Vec::new(),
             sessions: Vec::new(),
+            sessions_digest: None,
+            sessions_sequence: None,
             adaptive_backlog_limiter: None,
         };
 
@@ -1914,6 +2003,8 @@ mod tests {
             managed_sessions: Vec::new(),
             unmanaged_session_bindings: Vec::new(),
             sessions: Vec::new(),
+            sessions_digest: None,
+            sessions_sequence: None,
             adaptive_backlog_limiter: None,
         };
         let stats = HeartbeatStats {
@@ -1992,6 +2083,8 @@ mod tests {
             managed_sessions: Vec::new(),
             unmanaged_session_bindings: Vec::new(),
             sessions: Vec::new(),
+            sessions_digest: None,
+            sessions_sequence: None,
             adaptive_backlog_limiter: None,
         };
         let stats = HeartbeatStats {

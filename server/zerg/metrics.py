@@ -260,6 +260,12 @@ try:
         labelnames=("provider", "state", "phase"),
     )
 
+    agents_heartbeat_snapshot_skipped_total = Counter(
+        "agents_heartbeat_snapshot_skipped_total",
+        "Agent heartbeat session snapshots skipped because the canonical digest was unchanged",
+        labelnames=("reason",),
+    )
+
     managed_codex_runtime_observations_total = Counter(
         "managed_codex_runtime_observations_total",
         "Managed Codex runtime observations by source, kind, and reducer outcome",
@@ -319,6 +325,7 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
     agents_ingest_events_total = _NoopCounter()  # type: ignore[assignment]
     agents_heartbeat_requests_total = _NoopCounter()  # type: ignore[assignment]
     managed_session_heartbeat_lease_rows_total = _NoopCounter()  # type: ignore[assignment]
+    agents_heartbeat_snapshot_skipped_total = _NoopCounter()  # type: ignore[assignment]
     managed_codex_runtime_observations_total = _NoopCounter()  # type: ignore[assignment]
     managed_codex_bridge_freshness_total = _NoopCounter()  # type: ignore[assignment]
     session_input_attachments_total = _NoopCounter()  # type: ignore[assignment]

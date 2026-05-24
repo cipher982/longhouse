@@ -373,6 +373,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut last_ship_at: Option<String> = None;
     let mut last_runtime_truth_signature: Option<String> = None;
     let mut runtime_truth_bootstrapped = false;
+    let mut session_snapshot_state = SessionSnapshotState::default();
     let mut last_unmanaged_session_bindings: Option<Vec<heartbeat::UnmanagedSessionBinding>> = None;
     let mut last_unmanaged_session_bindings_refreshed_at: Option<Instant> = None;
     let mut latest_transcript_wake_observed: HashMap<PathBuf, i64> = HashMap::new();
@@ -891,6 +892,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             serde_json::to_value(control_channel_status.snapshot()).ok(),
                             Some(unmanaged_binding_override),
                             Some(adaptive_limiter.as_ref()),
+                            &mut session_snapshot_state,
                         );
                         bridge_reaper.tick(&result.codex_observations);
                         let signature = runtime_truth_signature(&payload);
@@ -1186,6 +1188,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     serde_json::to_value(control_channel_status.snapshot()).ok(),
                     Some(unmanaged_binding_override),
                     Some(adaptive_limiter.as_ref()),
+                    &mut session_snapshot_state,
                 );
                 if !offline.is_offline {
                     runtime_truth_bootstrapped = true;
@@ -1232,6 +1235,7 @@ fn write_local_status_snapshot(
     control_channel: Option<Value>,
     unmanaged_session_binding_override: Option<&[heartbeat::UnmanagedSessionBinding]>,
     limiter: Option<&crate::scheduler::AdaptiveLimiter>,
+    session_snapshot_state: &mut SessionSnapshotState,
 ) -> heartbeat::HeartbeatPayload {
     let spool = Spool::new(conn);
     let stats = heartbeat::HeartbeatStats {
@@ -1282,6 +1286,7 @@ fn write_local_status_snapshot(
         observations,
         claude_observations,
     );
+    session_snapshot_state.annotate(&mut payload);
     // Compute the fresh ledger view up front so a read failure is both
     // logged and encoded in the status file as `phase_ledger_status`.
     // Downstream readers (verify-runtime-truth, local-health) can then
@@ -1346,57 +1351,28 @@ fn record_flight_sample(
 }
 
 fn runtime_truth_signature(payload: &heartbeat::HeartbeatPayload) -> String {
-    let mut sessions: Vec<String> = payload
-        .sessions
-        .iter()
-        .map(|session| {
-            let mut join_keys = session.evidence.join_keys.clone();
-            join_keys.sort();
-            let mut reason_codes = session.reason_codes.clone();
-            reason_codes.sort();
-            format!(
-                "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
-                session.provider,
-                session.session_id.as_deref().unwrap_or(""),
-                session.provider_session_id.as_deref().unwrap_or(""),
-                session.control_path,
-                session.presentation_state,
-                session.state,
-                session.phase.as_deref().unwrap_or(""),
-                session.tool_name.as_deref().unwrap_or(""),
-                session.workspace.cwd.as_deref().unwrap_or(""),
-                session.workspace.label.as_deref().unwrap_or(""),
-                session.workspace.branch.as_deref().unwrap_or(""),
-                session
-                    .process
-                    .pid
-                    .map(|pid| pid.to_string())
-                    .unwrap_or_default(),
-                session.process.process_start_time.as_deref().unwrap_or(""),
-                session
-                    .bridge
-                    .bridge_pid
-                    .map(|pid| pid.to_string())
-                    .unwrap_or_default(),
-                session
-                    .bridge
-                    .app_server_pid
-                    .map(|pid| pid.to_string())
-                    .unwrap_or_default(),
-                session.bridge.status.as_deref().unwrap_or(""),
-                session
-                    .bridge
-                    .thread_subscription_status
-                    .as_deref()
-                    .unwrap_or(""),
-                join_keys.join(","),
-                reason_codes.join(",")
-            )
-        })
-        .collect();
-    sessions.sort();
+    payload
+        .sessions_digest
+        .clone()
+        .unwrap_or_else(|| heartbeat::session_snapshot_digest(payload))
+}
 
-    format!("sessions=[{}]", sessions.join(";"))
+#[derive(Default)]
+struct SessionSnapshotState {
+    last_digest: Option<String>,
+    sequence: u64,
+}
+
+impl SessionSnapshotState {
+    fn annotate(&mut self, payload: &mut heartbeat::HeartbeatPayload) {
+        let digest = heartbeat::session_snapshot_digest(payload);
+        if self.last_digest.as_deref() != Some(digest.as_str()) {
+            self.sequence = self.sequence.saturating_add(1);
+            self.last_digest = Some(digest.clone());
+        }
+        payload.sessions_digest = Some(digest);
+        payload.sessions_sequence = Some(self.sequence);
+    }
 }
 
 fn local_retry_delay(priority: WorkPriority) -> Duration {
@@ -2610,6 +2586,8 @@ mod tests {
             managed_sessions: Vec::new(),
             unmanaged_session_bindings: Vec::new(),
             sessions: Vec::new(),
+            sessions_digest: None,
+            sessions_sequence: None,
             adaptive_backlog_limiter: None,
         }
     }
@@ -2717,6 +2695,7 @@ mod tests {
         let parse_tracker = RecentIssueTracker::new();
         let ship_stats = RecentShipStatsTracker::new();
         let cached = vec![unmanaged_binding("sess-cached", 42)];
+        let mut session_snapshot_state = SessionSnapshotState::default();
 
         let payload = write_local_status_snapshot(
             &conn,
@@ -2732,9 +2711,78 @@ mod tests {
             None,
             Some(&cached),
             None,
+            &mut session_snapshot_state,
         );
 
         assert_eq!(payload.unmanaged_session_bindings, cached);
+    }
+
+    #[test]
+    fn test_write_local_status_snapshot_sequences_only_digest_changes() {
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let status = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(db.path())).unwrap();
+        let tracker = ConsecutiveErrorTracker::new();
+        let parse_tracker = RecentIssueTracker::new();
+        let ship_stats = RecentShipStatsTracker::new();
+        let cached = vec![unmanaged_binding("sess-cached", 42)];
+        let mut session_snapshot_state = SessionSnapshotState::default();
+
+        let first = write_local_status_snapshot(
+            &conn,
+            &tracker,
+            &parse_tracker,
+            &ship_stats,
+            false,
+            &None,
+            "cinder",
+            status.path(),
+            &[],
+            &[],
+            None,
+            Some(&cached),
+            None,
+            &mut session_snapshot_state,
+        );
+        let second = write_local_status_snapshot(
+            &conn,
+            &tracker,
+            &parse_tracker,
+            &ship_stats,
+            false,
+            &None,
+            "cinder",
+            status.path(),
+            &[],
+            &[],
+            None,
+            Some(&cached),
+            None,
+            &mut session_snapshot_state,
+        );
+        let changed = vec![unmanaged_binding("sess-cached", 43)];
+        let third = write_local_status_snapshot(
+            &conn,
+            &tracker,
+            &parse_tracker,
+            &ship_stats,
+            false,
+            &None,
+            "cinder",
+            status.path(),
+            &[],
+            &[],
+            None,
+            Some(&changed),
+            None,
+            &mut session_snapshot_state,
+        );
+
+        assert_eq!(first.sessions_digest, second.sessions_digest);
+        assert_eq!(first.sessions_sequence, Some(1));
+        assert_eq!(second.sessions_sequence, Some(1));
+        assert_ne!(second.sessions_digest, third.sessions_digest);
+        assert_eq!(third.sessions_sequence, Some(2));
     }
 
     #[test]

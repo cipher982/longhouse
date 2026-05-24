@@ -31,6 +31,7 @@ from zerg.database import get_db
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.metrics import agents_heartbeat_payload_bytes
 from zerg.metrics import agents_heartbeat_requests_total
+from zerg.metrics import agents_heartbeat_snapshot_skipped_total
 from zerg.metrics import agents_heartbeat_write_seconds
 from zerg.metrics import managed_session_heartbeat_lease_rows_total
 from zerg.models.agents import AgentHeartbeat
@@ -41,6 +42,7 @@ from zerg.models.device_token import DeviceToken
 from zerg.observability import get_tracer
 from zerg.observability import set_span_attributes
 from zerg.services.managed_control_state import mark_missing_managed_control_leases
+from zerg.services.managed_control_state import refresh_managed_control_lease_health
 from zerg.services.managed_control_state import upsert_managed_control_leases
 from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
 from zerg.services.session_runtime import RuntimeEventIngest
@@ -195,6 +197,10 @@ class HeartbeatIn(BaseModel):
     # Canonical engine-resolved local session snapshot. When present, server
     # ingest prefers this over legacy managed/unmanaged arrays for identity.
     sessions: list[ResolvedLocalSessionIn] = Field(default_factory=list)
+    # Stable digest/sequence over canonical session identity/control fields.
+    # Older engines omit these, which forces the full compatibility path.
+    sessions_digest: str | None = Field(None, max_length=128)
+    sessions_sequence: int | None = None
 
 
 def _managed_lease_provider_label(lease: ManagedSessionLeaseIn) -> str:
@@ -389,6 +395,34 @@ def _runtime_observation_payload_from_raw(payload_raw: str | dict | None) -> dic
     except (TypeError, json.JSONDecodeError):
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _heartbeat_payload_from_raw(payload_raw: str | dict | None) -> dict:
+    if isinstance(payload_raw, dict):
+        return payload_raw
+    try:
+        payload = json.loads(payload_raw or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _latest_heartbeat_sessions_digest(db: Session, device_id: str) -> str | None:
+    row = (
+        db.query(AgentHeartbeat.raw_json)
+        .filter(AgentHeartbeat.device_id == device_id)
+        .order_by(AgentHeartbeat.received_at.desc(), AgentHeartbeat.id.desc())
+        .first()
+    )
+    if row is None:
+        return None
+    raw = _heartbeat_payload_from_raw(row.raw_json)
+    digest = str(raw.get("sessions_digest") or "").strip()
+    return digest or None
+
+
+def _managed_lease_session_ids(leases: list[ManagedSessionLeaseIn]) -> set[UUID]:
+    return {lease.session_id for lease in leases if lease.session_id is not None}
 
 
 def _is_synthetic_missing_managed_lease_payload(payload: dict) -> bool:
@@ -804,6 +838,10 @@ async def ingest_heartbeat(
 
             def _do_heartbeat(write_db: Session) -> dict[UUID, tuple[str | None, str]]:
                 publish_sessions: dict[UUID, tuple[str | None, str]] = {}
+                managed_snapshot_skip = False
+                incoming_sessions_digest = str(payload.sessions_digest or "").strip() or None
+                if _managed_leases_present and incoming_sessions_digest is not None:
+                    managed_snapshot_skip = _latest_heartbeat_sessions_digest(write_db, _device_id) == incoming_sessions_digest
                 hb = AgentHeartbeat(
                     device_id=_device_id,
                     received_at=_now,
@@ -858,7 +896,28 @@ async def ingest_heartbeat(
                             session_id,
                             (None, UNMANAGED_PROCESS_SNAPSHOT_SOURCE),
                         )
-                if _managed_leases:
+                managed_snapshot_refreshed_ids: set[UUID] = set()
+                if managed_snapshot_skip:
+                    managed_snapshot_refreshed_ids = refresh_managed_control_lease_health(
+                        write_db,
+                        _managed_leases,
+                        device_id=_device_id,
+                        received_at=_now,
+                    )
+                    seen_ids = _managed_lease_session_ids(_managed_leases)
+                    if not seen_ids or seen_ids.issubset(managed_snapshot_refreshed_ids):
+                        agents_heartbeat_snapshot_skipped_total.labels(
+                            reason="unchanged_sessions_digest",
+                        ).inc()
+                    else:
+                        managed_snapshot_skip = False
+                        managed_snapshot_refreshed_ids.clear()
+                for session_id in managed_snapshot_refreshed_ids:
+                    publish_sessions.setdefault(
+                        session_id,
+                        (None, MANAGED_SESSION_LEASE_SOURCE),
+                    )
+                if _managed_leases and not managed_snapshot_skip:
                     for session_id in upsert_managed_control_leases(
                         write_db,
                         _managed_leases,
@@ -877,7 +936,7 @@ async def ingest_heartbeat(
                             session_id,
                             (None, MANAGED_SESSION_LEASE_SOURCE),
                         )
-                if _managed_leases_present:
+                if _managed_leases_present and not managed_snapshot_skip:
                     for session_id in mark_missing_managed_control_leases(
                         write_db,
                         _managed_leases,
@@ -893,7 +952,7 @@ async def ingest_heartbeat(
                     device_id=_device_id,
                     received_at=_now,
                 )
-                if _managed_leases_present:
+                if _managed_leases_present and not managed_snapshot_skip:
                     runtime_events.extend(
                         _runtime_events_for_missing_managed_leases(
                             write_db,
