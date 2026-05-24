@@ -166,7 +166,7 @@ def _run_remote_python(
     remote_command = ["docker", "exec", "-i", container, "python3", "-"]
     if args:
         remote_command.extend(args)
-    command = ["ssh", ssh_target, shlex.join(remote_command)]
+    command = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", ssh_target, shlex.join(remote_command)]
     return subprocess.run(
         command,
         input=script,
@@ -381,7 +381,7 @@ def poll_for_assistant_nonce(
 def stop_codex_bridge(session_id: str, *, target_ssh: str | None = None) -> dict[str, Any]:
     command = ["longhouse-engine", "codex-bridge", "stop", "--session-id", session_id, "--reason", "user_closed"]
     if target_ssh:
-        command = ["ssh", target_ssh, shlex.join(command)]
+        command = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", target_ssh, shlex.join(command)]
     started = time.monotonic()
     try:
         proc = subprocess.run(command, text=True, capture_output=True, timeout=30, check=False)

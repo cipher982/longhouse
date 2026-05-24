@@ -126,6 +126,26 @@ def test_http_json_uses_browser_like_user_agent(monkeypatch) -> None:
     assert captured["accept_language"] == "en-US,en;q=0.9"
 
 
+def test_remote_python_ssh_accepts_new_host_keys(monkeypatch) -> None:
+    captured = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        return smoke.subprocess.CompletedProcess(command, 0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(smoke.subprocess, "run", fake_run)
+
+    smoke._run_remote_python("zerg", container="longhouse-david010", script="print('ok')")
+
+    assert captured["command"][:5] == [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+    ]
+
+
 def test_launch_session_rejects_non_live_state(monkeypatch) -> None:
     def fake_http_json(method, url, **kwargs):
         assert method == "POST"
