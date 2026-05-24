@@ -97,6 +97,35 @@ def test_parse_last_json_line_skips_logs() -> None:
     assert parsed == {"ok": True}
 
 
+def test_http_json_uses_browser_like_user_agent(monkeypatch) -> None:
+    captured = {}
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"ok": true}'
+
+    def fake_urlopen(request, timeout):
+        captured["user_agent"] = request.get_header("User-agent")
+        captured["accept_language"] = request.get_header("Accept-language")
+        return FakeResponse()
+
+    monkeypatch.setattr(smoke, "urlopen", fake_urlopen)
+
+    result = smoke._http_json("GET", "https://david010.longhouse.ai/api/health")
+
+    assert result.status == 200
+    assert "Mozilla/5.0" in captured["user_agent"]
+    assert captured["accept_language"] == "en-US,en;q=0.9"
+
+
 def test_launch_session_rejects_non_live_state(monkeypatch) -> None:
     def fake_http_json(method, url, **kwargs):
         assert method == "POST"
