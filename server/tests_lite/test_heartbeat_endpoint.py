@@ -777,6 +777,8 @@ def test_heartbeat_repeated_sessions_digest_refreshes_health_without_snapshot_wo
                     device_id="testclient",
                     received_at=datetime(2026, 5, 5, 11, 1, tzinfo=timezone.utc),
                     raw_json=json.dumps({"sessions_digest": "digest-1"}),
+                    sessions_digest="digest-1",
+                    sessions_sequence=1,
                 )
             )
             db.commit()

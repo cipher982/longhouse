@@ -734,6 +734,8 @@ class AgentHeartbeat(AgentsBase):
 
     # Full payload for forward compatibility
     raw_json = Column(Text, nullable=True)
+    sessions_digest = Column(String(128), nullable=True)
+    sessions_sequence = Column(Integer, nullable=True)
 
     __table_args__ = (Index("ix_heartbeats_device_received", "device_id", "received_at"),)
 
