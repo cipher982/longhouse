@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import AgentSession
 from zerg.services.agents.kernel_capabilities import project_capabilities_bulk
 from zerg.services.agents_store import AgentsStore
+from zerg.services.internal_sessions import internal_canary_session_clause
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.session_runtime import load_runtime_state_map
@@ -163,7 +164,7 @@ def has_real_sessions(db: Session, *, default_when_empty: bool) -> bool:
                 AgentSession.device_id.is_(None),
             )
         )
-        .filter(or_(AgentSession.provider != "canary", AgentSession.provider.is_(None)))
+        .filter(~internal_canary_session_clause(AgentSession))
         .limit(1)
         .first()
         is not None

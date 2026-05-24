@@ -35,6 +35,8 @@ from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents.kernel_writes import ensure_primary_thread
 from zerg.services.agents.kernel_writes import record_thread_alias
+from zerg.services.internal_sessions import internal_canary_session_clause
+from zerg.services.internal_sessions import is_internal_canary_provider_filter
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.provisional_events import visible_transcript_event_predicate
 from zerg.services.raw_json_compression import CODEC_PLAIN
@@ -2125,8 +2127,8 @@ class AgentsStore:
             stmt = stmt.where(AgentSession.project.ilike(f"%{project}%"))
         if provider:
             stmt = stmt.where(AgentSession.provider == provider)
-        else:
-            stmt = stmt.where(or_(AgentSession.provider != "canary", AgentSession.provider.is_(None)))
+        if not is_internal_canary_provider_filter(provider):
+            stmt = stmt.where(~internal_canary_session_clause(AgentSession))
         if device_id:
             # The browser now writes `device_id=` for machine filters, but the
             # timeline filter API still returns legacy machine labels sourced
