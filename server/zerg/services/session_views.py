@@ -101,10 +101,13 @@ def build_session_capabilities_response(
     )
     host_state_norm = (host_state or "").strip().lower()
     runtime_offline = host_state_norm in {"stale", "offline", "lost", "unknown"}
-    effective_live_control = bool(capability_flags.live_control_available) and not runtime_offline
-    effective_reply = bool(capability_flags.reply_to_live_session_available) and not runtime_offline
-    effective_queue = bool(capability_flags.can_queue_next_input) and not runtime_offline
-    effective_steer = bool(capability_flags.can_steer_active_turn) and not runtime_offline
+    lifecycle_closed = lifecycle == "closed"
+    control_available = not runtime_offline and not lifecycle_closed
+    effective_live_control = bool(capability_flags.live_control_available) and control_available
+    effective_reply = bool(capability_flags.reply_to_live_session_available) and control_available
+    effective_queue = bool(capability_flags.can_queue_next_input) and control_available
+    effective_steer = bool(capability_flags.can_steer_active_turn) and control_available
+    effective_host_reattach = bool(capability_flags.host_reattach_available) and not lifecycle_closed
     input_presentation = build_session_input_presentation(
         capability_flags,
         capability_display=capability_display,
@@ -115,7 +118,7 @@ def build_session_capabilities_response(
     )
     return SessionCapabilitiesResponse(
         live_control_available=effective_live_control,
-        host_reattach_available=capability_flags.host_reattach_available,
+        host_reattach_available=effective_host_reattach,
         reply_to_live_session_available=effective_reply,
         can_queue_next_input=effective_queue,
         can_steer_active_turn=effective_steer,
@@ -131,16 +134,16 @@ def build_session_capabilities_response(
         observe_only=(kernel_capabilities.observe_only if kernel_capabilities is not None else False),
         search_only=(kernel_capabilities.search_only if kernel_capabilities is not None else False),
         staleness_reason=(kernel_capabilities.staleness_reason if kernel_capabilities is not None else None),
-        can_send_input=(kernel_capabilities.can_send_input if kernel_capabilities is not None else False),
-        can_interrupt=(kernel_capabilities.can_interrupt if kernel_capabilities is not None else False),
-        can_terminate=(kernel_capabilities.can_terminate if kernel_capabilities is not None else False),
+        can_send_input=(bool(kernel_capabilities.can_send_input) and control_available if kernel_capabilities is not None else False),
+        can_interrupt=(bool(kernel_capabilities.can_interrupt) and control_available if kernel_capabilities is not None else False),
+        can_terminate=(bool(kernel_capabilities.can_terminate) and control_available if kernel_capabilities is not None else False),
         can_tail_output=(kernel_capabilities.can_tail_output if kernel_capabilities is not None else False),
-        can_resume=(kernel_capabilities.can_resume if kernel_capabilities is not None else False),
-        attach_images=_attach_images_capability(capability_flags),
+        can_resume=(bool(kernel_capabilities.can_resume) and not lifecycle_closed if kernel_capabilities is not None else False),
+        attach_images=_attach_images_capability(capability_flags, live_control_available=effective_live_control),
     )
 
 
-def _attach_images_capability(capability_flags) -> bool:
+def _attach_images_capability(capability_flags, *, live_control_available: bool | None = None) -> bool:
     """True when this session can accept image attachments.
 
     Gated on (a) the session having live control and (b) the underlying
@@ -153,7 +156,8 @@ def _attach_images_capability(capability_flags) -> bool:
     transport_value = getattr(transport, "value", str(transport))
     if transport_value != "codex_app_server":
         return False
-    return bool(capability_flags.live_control_available)
+    live = bool(capability_flags.live_control_available) if live_control_available is None else bool(live_control_available)
+    return live
 
 
 def _provider_label(session: AgentSession | None) -> str | None:

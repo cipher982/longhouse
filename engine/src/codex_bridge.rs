@@ -144,6 +144,8 @@ pub struct BridgeStateFile {
     pub session_id: String,
     pub cwd: String,
     pub codex_bin: String,
+    #[serde(default)]
+    pub launch_mode: Option<String>,
     pub ws_url: Option<String>,
     pub thread_id: Option<String>,
     pub thread_path: Option<String>,
@@ -530,6 +532,14 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
         session_id: config.session_id.clone(),
         cwd: config.cwd.display().to_string(),
         codex_bin: config.codex_bin.clone(),
+        launch_mode: Some(
+            if config.start_thread {
+                "headless"
+            } else {
+                "tui"
+            }
+            .to_string(),
+        ),
         ws_url: None,
         thread_id: None,
         thread_path: None,
@@ -684,6 +694,14 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         session_id: config.session_id.clone(),
         cwd: config.cwd.display().to_string(),
         codex_bin: config.codex_bin.clone(),
+        launch_mode: Some(
+            if config.start_thread {
+                "headless"
+            } else {
+                "tui"
+            }
+            .to_string(),
+        ),
         ws_url: None,
         thread_id: None,
         thread_path: None,
@@ -826,6 +844,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
             session_id: config.session_id.clone(),
             cwd: config.cwd.display().to_string(),
             codex_bin: config.codex_bin.clone(),
+            launch_mode: initial_state.launch_mode.clone(),
             ws_url: Some(ws_url.clone()),
             thread_id: initial_thread_id.clone(),
             thread_path: initial_thread_path.clone(),
@@ -3806,6 +3825,7 @@ mod tests {
                 session_id: "session-123".to_string(),
                 cwd: temp.path().display().to_string(),
                 codex_bin: "codex".to_string(),
+                launch_mode: Some("tui".to_string()),
                 ws_url: Some("ws://example.test".to_string()),
                 thread_id: None,
                 thread_path: None,
@@ -4558,6 +4578,7 @@ mod tests {
             session_id: session_id.to_string(),
             cwd: temp.path().display().to_string(),
             codex_bin: "codex".to_string(),
+            launch_mode: Some("headless".to_string()),
             ws_url: Some("ws://127.0.0.1:9".to_string()),
             thread_id: Some("thread-123".to_string()),
             thread_path: None,

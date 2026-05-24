@@ -1219,6 +1219,7 @@ mod tests {
             session_id: session_id.to_string(),
             state_file: PathBuf::from(format!("/tmp/{session_id}.json")),
             cwd: Some("/tmp/cwd".to_string()),
+            launch_mode: Some("tui".to_string()),
             ws_url: Some(ws_url.to_string()),
             status: "ready".to_string(),
             thread_id: Some("thread-1".to_string()),

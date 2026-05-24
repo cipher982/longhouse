@@ -43,6 +43,7 @@ PHASE_FRESHNESS = {
 }
 MANAGED_CODEX_FRESHNESS = timedelta(minutes=15)
 EXPLICIT_CLOSED_TERMINAL_STATES = {"session_ended", "finished", "user_closed", "process_gone"}
+UNVERIFIED_TERMINAL_STATES = {"host_expired"}
 LIVE_EXECUTION_PHASES = {"thinking", "running"}
 ATTENTION_PHASES = {"blocked"}
 KNOWN_PHASES = {"thinking", "running", "blocked", "needs_user", "idle", "finished"}

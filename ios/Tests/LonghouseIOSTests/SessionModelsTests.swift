@@ -1806,6 +1806,81 @@ struct SessionModelsTests {
     }
 
     @Test
+    func closedComposer() throws {
+        let json = """
+        {
+          "id": "closed-stale-live",
+          "provider": "codex",
+          "project": "zerg",
+          "cwd": "/Users/davidrose/git/zerg",
+          "git_branch": "main",
+          "summary": "Closed session",
+          "summary_title": "Closed session",
+          "presence_state": "idle",
+          "presence_tool": null,
+          "user_state": "active",
+          "status": "idle",
+          "last_activity_at": null,
+          "display_phase": null,
+          "active_tool": null,
+          "home_label": "On this Mac",
+          "origin_label": "On this Mac",
+          "capabilities": {
+            "live_control_available": true,
+            "host_reattach_available": true,
+            "reply_to_live_session_available": true,
+            "can_queue_next_input": true,
+            "can_steer_active_turn": true,
+            "display_label": "Closed",
+            "display_detail": "This session has ended.",
+            "display_tone": "neutral",
+            "input_mode": "read_only",
+            "default_input_intent": "none",
+            "composer_enabled": true,
+            "composer_placeholder": "Send a message to the live Codex session...",
+            "composer_disabled_reason": "This session has ended."
+          },
+          "runtime_display": {
+            "truth_tier": "managed-local",
+            "signal_tier": "terminal_signal",
+            "state": "finished",
+            "tone": "neutral",
+            "headline": "Closed",
+            "detail": "This session has ended.",
+            "phase_label": "Closed",
+            "compact_tool_label": null,
+            "is_live": false,
+            "is_executing": false,
+            "needs_attention": false,
+            "is_idle": false,
+            "is_managed_local_truth": true,
+            "has_signal": true,
+            "control_path": "managed",
+            "activity_recency": "stale",
+            "lifecycle": "closed",
+            "host_state": "online",
+            "terminal_reason": "terminal_disconnected"
+          },
+          "runtime_facts": {
+            "control_path": "managed",
+            "host": {"state": "online", "last_seen_at": "2026-05-24T15:03:10Z", "source": "machine_heartbeat"},
+            "process": {"status": "unknown", "pid": null, "process_start_time": null, "observed_at": null, "last_seen_at": null, "source_mtime": null, "source_path": null, "reason": null, "source": null},
+            "phase": {"kind": "finished", "tool": null, "source": "codex_bridge", "observed_at": "2026-05-24T15:05:10Z", "expires_at": null},
+            "activity": {"last_transcript_at": null, "last_runtime_signal_at": "2026-05-24T15:05:10Z", "last_progress_at": null},
+            "lifecycle": {"state": "closed", "reason": "terminal_disconnected", "observed_at": "2026-05-24T15:05:10Z"}
+          },
+          "loop_mode": "manual"
+        }
+        """.data(using: .utf8)!
+
+        let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
+
+        #expect(!detail.canSendLive)
+        #expect(detail.attachImagesEnabled == false)
+        #expect(detail.controlHealthMessage == "This session has ended.")
+    }
+
+    @Test
     func sessionInputResponseDecodesSentOutcome() throws {
         let json = """
         {

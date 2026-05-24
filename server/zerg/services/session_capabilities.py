@@ -84,6 +84,15 @@ def build_session_input_presentation(
     provider = (provider_label or "").strip() or "session"
     provider_session = provider if provider.lower().endswith("session") else f"{provider} session"
 
+    if lifecycle == "closed":
+        return SessionInputPresentation(
+            input_mode="read_only",
+            default_input_intent="none",
+            composer_enabled=False,
+            composer_placeholder="Type a message...",
+            composer_disabled_reason=capability_display.detail,
+        )
+
     # Even if the kernel projection says live, runtime overlay can demote
     # the session to offline when heartbeats go stale or the host is gone.
     host_state_norm = (host_state or "").strip().lower()
@@ -107,15 +116,6 @@ def build_session_input_presentation(
             composer_enabled=True,
             composer_placeholder=f"Send a message to the live {provider_session}...",
             composer_disabled_reason=None,
-        )
-
-    if lifecycle == "closed":
-        return SessionInputPresentation(
-            input_mode="read_only",
-            default_input_intent="none",
-            composer_enabled=False,
-            composer_placeholder="Type a message...",
-            composer_disabled_reason=capability_display.detail,
         )
 
     if capability_flags.host_reattach_available:
