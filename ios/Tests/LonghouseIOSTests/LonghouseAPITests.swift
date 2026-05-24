@@ -83,6 +83,94 @@ struct LonghouseAPITests {
     }
 
     @Test
+    func structuredErrorParsingAlsoAcceptsCodeField() throws {
+        let data = try #require("""
+        {
+          "detail": {
+            "code": "send_failed",
+            "message": "Session is not managed_local"
+          }
+        }
+        """.data(using: .utf8))
+
+        let error = LonghouseAPI.parseStructuredError(statusCode: 502, data: data)
+
+        guard case let .structured(status, code, message)? = error else {
+            Issue.record("expected structured error, got \(String(describing: error))")
+            return
+        }
+        #expect(status == 502)
+        #expect(code == "send_failed")
+        #expect(message == "Session is not managed_local")
+    }
+
+    @Test
+    func launchErrorParsingAcceptsErrorCodeField() throws {
+        let data = try #require("""
+        {
+          "detail": {
+            "error_code": "cwd_not_found",
+            "message": "Directory does not exist"
+          }
+        }
+        """.data(using: .utf8))
+
+        let error = LonghouseAPI.parseLaunchError(statusCode: 400, data: data)
+
+        guard case let .structured(status, code, message)? = error else {
+            Issue.record("expected structured error, got \(String(describing: error))")
+            return
+        }
+        #expect(status == 400)
+        #expect(code == "cwd_not_found")
+        #expect(message == "Directory does not exist")
+    }
+
+    @Test
+    func machineDirectoryEntryUsesExplicitLaunchCapabilityFields() throws {
+        let data = try #require("""
+        {
+          "machines": [
+            {
+              "device_id": "cinder",
+              "machine_name": "cinder",
+              "online": true,
+              "control_channel_status": "connected",
+              "supports": [],
+              "can_launch_codex": true,
+              "launch_blocked_by": null,
+              "last_seen_at": "2026-05-24T00:00:00Z",
+              "engine_build": "dev"
+            },
+            {
+              "device_id": "offline",
+              "machine_name": "offline",
+              "online": true,
+              "control_channel_status": "disconnected",
+              "supports": ["codex.launch"],
+              "can_launch_codex": false,
+              "launch_blocked_by": "control_down",
+              "last_seen_at": null,
+              "engine_build": null
+            }
+          ]
+        }
+        """.data(using: .utf8))
+
+        let decoded = try JSONDecoder.snakeCase.decode(MachineDirectoryResponse.self, from: data)
+
+        #expect(decoded.machines[0].isLaunchable)
+        #expect(!decoded.machines[1].isLaunchable)
+        #expect(decoded.machines[1].launchBlockedBy == "control_down")
+    }
+
+    @Test
+    func compactWorkspacePathReplacesUserHomePrefix() {
+        #expect(LonghouseAPI.compactWorkspacePath("/Users/davidrose/git/zerg/longhouse") == "~/git/zerg/longhouse")
+        #expect(LonghouseAPI.compactWorkspacePath("/var/app-data/longhouse") == "/var/app-data/longhouse")
+    }
+
+    @Test
     func structuredErrorParsingIgnoresUnstructuredDetail() throws {
         let data = try #require("""
         {
