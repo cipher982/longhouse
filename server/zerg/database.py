@@ -1479,6 +1479,12 @@ def _migrate_agents_columns(engine: Engine) -> None:
             conn.execute(
                 text("CREATE UNIQUE INDEX IF NOT EXISTS ux_connections_run_plane " "ON session_connections(run_id, control_plane)")
             )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_connections_device_state_health "
+                    "ON session_connections(device_id, state, last_health_at)"
+                )
+            )
             conn.commit()
     except Exception:
         logger.debug("session identity kernel index migration skipped", exc_info=True)

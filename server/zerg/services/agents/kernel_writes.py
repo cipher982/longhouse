@@ -314,6 +314,7 @@ def upsert_connection_for_run(
     acquisition_kind: str,
     state: str,
     external_name: str | None = None,
+    device_id: str | None = None,
     can_send_input: int | None = None,
     can_interrupt: int | None = None,
     can_terminate: int | None = None,
@@ -347,6 +348,7 @@ def upsert_connection_for_run(
                     acquisition_kind=acquisition_kind,
                     state=state,
                     external_name=external_name,
+                    device_id=device_id,
                     can_send_input=can_send_input or 0,
                     can_interrupt=can_interrupt or 0,
                     can_terminate=can_terminate or 0,
@@ -375,6 +377,8 @@ def upsert_connection_for_run(
             existing.released_at = None
     if external_name is not None and existing.external_name != external_name:
         existing.external_name = external_name
+    if device_id is not None and existing.device_id != device_id:
+        existing.device_id = device_id
     if can_send_input is not None:
         existing.can_send_input = can_send_input
     if can_interrupt is not None:
@@ -397,6 +401,7 @@ def record_connection(
     acquisition_kind: str,
     state: str = "attached",
     external_name: str | None = None,
+    device_id: str | None = None,
     can_send_input: int = 0,
     can_interrupt: int = 0,
     can_terminate: int = 0,
@@ -411,6 +416,7 @@ def record_connection(
         acquisition_kind=acquisition_kind,
         state=state,
         external_name=external_name,
+        device_id=device_id,
         can_send_input=can_send_input,
         can_interrupt=can_interrupt,
         can_terminate=can_terminate,

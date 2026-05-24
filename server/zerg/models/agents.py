@@ -1224,6 +1224,7 @@ class SessionConnection(AgentsBase):
     # Optional human-friendly label for attach/debug paths (replaces
     # AgentSession.managed_session_name).
     external_name = Column(String(255), nullable=True)
+    device_id = Column(String(255), nullable=True, index=True)
 
     # Typed capability gates. Small enumerated set; queryable.
     can_send_input = Column(Integer, nullable=False, server_default=text("0"))
@@ -1240,6 +1241,7 @@ class SessionConnection(AgentsBase):
     __table_args__ = (
         Index("ix_connections_run_state", "run_id", "state"),
         Index("ix_connections_state_health", "state", "last_health_at"),
+        Index("ix_connections_device_state_health", "device_id", "state", "last_health_at"),
         # One control attachment per (run, control_plane). Capability projection
         # depends on this — a single run cannot have two competing pty/bridge
         # connections for the same plane.
