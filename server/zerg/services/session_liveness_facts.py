@@ -13,6 +13,8 @@ from datetime import datetime
 from datetime import timezone
 
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
+from zerg.services.session_runtime import EXPLICIT_CLOSED_TERMINAL_STATES
+from zerg.services.session_runtime import UNVERIFIED_TERMINAL_STATES
 from zerg.services.session_runtime import SessionRuntimeView
 
 
@@ -79,12 +81,6 @@ class SessionLivenessFacts:
     phase: PhaseObservation
     activity: ActivityObservation
     lifecycle: LifecycleFact
-
-
-# `process_gone` is an explicit engine-snapshot terminal fact: the process is
-# gone, not merely unverifiable.
-_EXPLICIT_CLOSED_TERMINAL_STATES = {"session_ended", "finished", "user_closed", "process_gone"}
-_UNVERIFIED_TERMINAL_STATES = {"host_expired"}
 
 
 def _control_path(capabilities: KernelSessionCapabilities) -> str:
@@ -176,9 +172,9 @@ def _explicit_lifecycle(runtime_view: SessionRuntimeView | None) -> LifecycleFac
         return None
     observed_at = runtime_view.presence_updated_at or runtime_view.last_live_at
     terminal_reason = _normalized(runtime_view.terminal_reason)
-    if terminal_state in _EXPLICIT_CLOSED_TERMINAL_STATES:
+    if terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES:
         return LifecycleFact(state="closed", reason=terminal_reason or terminal_state, observed_at=observed_at)
-    if terminal_state in _UNVERIFIED_TERMINAL_STATES:
+    if terminal_state in UNVERIFIED_TERMINAL_STATES:
         return LifecycleFact(state="unknown", reason=terminal_reason or terminal_state, observed_at=observed_at)
     return LifecycleFact(state="closed", reason=terminal_reason or "provider_signal", observed_at=observed_at)
 

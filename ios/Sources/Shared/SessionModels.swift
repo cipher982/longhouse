@@ -754,8 +754,16 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         loopMode ?? .manual
     }
 
+    var isClosed: Bool {
+        if let runtimeFacts { return runtimeFacts.lifecycle.state == "closed" }
+        if runtimeDisplay?.lifecycle == "closed" { return true }
+        if runtimeDisplay?.lifecycle == nil && status == "completed" { return true }
+        return false
+    }
+
     var canSendLive: Bool {
-        capabilities.composerEnabled ?? (capabilities.liveControlAvailable || capabilities.replyToLiveSessionAvailable)
+        if isClosed { return false }
+        return capabilities.composerEnabled ?? (capabilities.liveControlAvailable || capabilities.replyToLiveSessionAvailable)
     }
 
     /// Codex managed sessions advertise `attach_images=true` once both the

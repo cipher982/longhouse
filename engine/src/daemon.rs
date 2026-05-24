@@ -2689,6 +2689,7 @@ mod tests {
             session_id: "sess-codex-managed".to_string(),
             state_file: PathBuf::from("/tmp/sess-codex-managed.json"),
             cwd: Some("/tmp".to_string()),
+            launch_mode: Some("tui".to_string()),
             ws_url: Some("ws://127.0.0.1:1111".to_string()),
             status: "ready".to_string(),
             thread_id: Some("thread-live".to_string()),

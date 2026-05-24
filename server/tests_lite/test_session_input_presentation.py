@@ -91,3 +91,28 @@ def test_offline_managed_session_exposes_disabled_composer_reason():
     assert response.composer_disabled_reason == (
         "Longhouse can see this Codex session, but cannot send prompts until the engine reconnects."
     )
+
+
+def test_closed_session_lifecycle_overrides_stale_live_capabilities():
+    session = _session()
+
+    response = build_session_capabilities_response(
+        session=session,
+        capability_flags=build_session_capabilities(session),
+        runtime_display=_runtime(lifecycle="closed", host_state="online"),
+    )
+
+    assert response.live_control_available is False
+    assert response.host_reattach_available is False
+    assert response.reply_to_live_session_available is False
+    assert response.can_queue_next_input is False
+    assert response.can_steer_active_turn is False
+    assert response.can_send_input is False
+    assert response.can_interrupt is False
+    assert response.can_terminate is False
+    assert response.can_resume is False
+    assert response.attach_images is False
+    assert response.input_mode == "read_only"
+    assert response.default_input_intent == "none"
+    assert response.composer_enabled is False
+    assert response.composer_disabled_reason == "This session has ended."

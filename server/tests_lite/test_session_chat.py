@@ -23,9 +23,9 @@ from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
+from zerg.models.agents import SessionRuntimeState
 from zerg.models.device_token import DeviceToken
 from zerg.models.enums import UserRole
-from zerg.models.agents import SessionRuntimeState
 from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.routers import session_chat
@@ -135,8 +135,8 @@ def _seed_kernel_session(session_local, *, provider: str, with_kernel_rows: bool
     branches the SimpleNamespace placeholders used to.
     """
 
-    from zerg.models.agents import AgentSession
     from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+    from zerg.models.agents import AgentSession
 
     sid = uuid4()
     with session_local() as db:
@@ -438,6 +438,75 @@ def test_agents_send_live_route_ignores_device_mismatch_and_dispatches(monkeypat
         assert calls[0]["verification_timeout_secs"] == 15.0
     finally:
         asyncio.run(session_chat.session_lock_manager.release(str(source_session_id)))
+        api_app_ref.dependency_overrides = {}
+
+
+@pytest.mark.parametrize("terminal_state", ["session_ended", "provider_disconnected"])
+def test_agents_send_live_rejects_runtime_closed_session(monkeypatch, tmp_path, terminal_state):
+    session_local = _make_db(tmp_path)
+    source_session_id = uuid4()
+    provider_session_id = f"managed-closed-{uuid4().hex[:8]}"
+
+    with session_local() as db:
+        user = User(email="agents-send-closed@test.local", role=UserRole.USER.value)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        store = AgentsStore(db)
+        started_at = datetime.now(timezone.utc)
+        store.ingest_session(
+            SessionIngest(
+                id=source_session_id,
+                provider="codex",
+                environment="Cinder",
+                project="agents-send-closed",
+                device_id="agent-device",
+                cwd="/tmp",
+                git_repo=None,
+                git_branch=None,
+                provider_session_id=provider_session_id,
+                started_at=started_at,
+                ended_at=started_at,
+                events=[],
+            )
+        )
+        source_session = store.get_session(source_session_id)
+        assert source_session is not None
+        source_session.execution_home = "managed_local"
+        source_session.managed_transport = "codex_app_server"
+        source_session.source_runner_id = 1
+        source_session.source_runner_name = "agent-device"
+        db.commit()
+        _mark_session_live(db, source_session, owner_id=user.id)
+        state = (
+            db.query(SessionRuntimeState)
+            .filter(SessionRuntimeState.session_id == source_session.id)
+            .one()
+        )
+        state.phase = "finished"
+        state.terminal_state = terminal_state
+        state.terminal_at = datetime.now(timezone.utc)
+        db.commit()
+        token = DeviceToken(owner_id=user.id, device_id="agent-device", token_hash="test")
+
+    client, api_app_ref = _make_machine_client(session_local, token)
+    monkeypatch.setattr(
+        "zerg.services.live_session_dispatch.send_text_to_live_session",
+        lambda **_kwargs: pytest.fail("closed session should not dispatch"),
+    )
+
+    try:
+        response = client.post(
+            f"/api/agents/sessions/{source_session_id}/send-live",
+            json={"message": "this should not send"},
+        )
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"] == {
+            "error_code": "session_closed",
+            "message": "This session has ended.",
+        }
+    finally:
         api_app_ref.dependency_overrides = {}
 
 

@@ -121,6 +121,24 @@ async function findEngineControlSessionIdViaAgentsApi(request: APIRequestContext
   return null;
 }
 
+async function findClosedSessionIdViaAgentsApi(request: APIRequestContext): Promise<string | null> {
+  const response = await request.get("/api/agents/sessions?limit=100");
+  if (!response.ok()) {
+    return null;
+  }
+
+  const body = await response.json();
+  const sessions = Array.isArray(body?.sessions) ? body.sessions : [];
+  for (const session of sessions) {
+    const lifecycle = session?.runtime_facts?.lifecycle?.state ?? session?.runtime_display?.lifecycle;
+    if (typeof session?.id === "string" && lifecycle === "closed") {
+      return session.id;
+    }
+  }
+
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Test 1: Auth + Timeline loads
 // ---------------------------------------------------------------------------
@@ -519,6 +537,38 @@ test("managed engine-control session stays enabled in workspace projection", asy
   expect(session?.capabilities?.live_control_available).toBe(true);
   expect(session?.capabilities?.composer_enabled).toBe(true);
   expect(session?.capabilities?.composer_disabled_reason ?? null).toBeNull();
+});
+
+test("closed session workspace projection never exposes live composer", async ({
+  agentsRequest,
+  context,
+}) => {
+  test.setTimeout(20_000);
+
+  const sessionId = await findClosedSessionIdViaAgentsApi(agentsRequest).catch(() => null);
+  if (!sessionId) {
+    test.skip(true, "No closed session available to test composer gating");
+    return;
+  }
+
+  const workspaceResponse = await context.request.get(
+    `/api/timeline/sessions/${sessionId}/workspace?limit=5`,
+  );
+  expect(
+    workspaceResponse.ok(),
+    `GET /api/timeline/sessions/${sessionId}/workspace returned ${workspaceResponse.status()}`,
+  ).toBe(true);
+
+  const workspace = await workspaceResponse.json();
+  const session = workspace?.session;
+  expect(session?.runtime_facts?.lifecycle?.state ?? session?.runtime_display?.lifecycle).toBe("closed");
+  expect(session?.capabilities?.live_control_available).toBe(false);
+  expect(session?.capabilities?.reply_to_live_session_available).toBe(false);
+  expect(session?.capabilities?.can_queue_next_input).toBe(false);
+  expect(session?.capabilities?.can_steer_active_turn).toBe(false);
+  expect(session?.capabilities?.host_reattach_available).toBe(false);
+  expect(session?.capabilities?.composer_enabled).toBe(false);
+  expect(session?.capabilities?.attach_images ?? false).toBe(false);
 });
 
 // ---------------------------------------------------------------------------

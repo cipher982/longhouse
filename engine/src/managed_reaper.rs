@@ -75,6 +75,10 @@ pub fn decide(
         return ReapDecision::StopOrphanAppServer;
     }
 
+    if is_headless_launch(obs) && !obs.has_tui_attachment {
+        return ReapDecision::Skip;
+    }
+
     // Class A — live bridge, unattached, idle.
     let class_a_eligible = obs.bridge_alive
         && !obs.has_tui_attachment
@@ -90,6 +94,12 @@ pub fn decide(
         Some(first) if now.saturating_duration_since(first) >= grace => ReapDecision::Reap,
         Some(_) => ReapDecision::Track,
     }
+}
+
+fn is_headless_launch(obs: &CodexBridgeObservation) -> bool {
+    obs.launch_mode
+        .as_deref()
+        .is_some_and(|mode| mode.eq_ignore_ascii_case("headless"))
 }
 
 /// Grace tracking + in-flight guard shared across ticks.
@@ -249,6 +259,14 @@ fn preflight_aborts_reap(obs: &CodexBridgeObservation, class: ReapClass) -> bool
             {
                 return true;
             }
+            if state
+                .launch_mode
+                .as_deref()
+                .is_some_and(|mode| mode.eq_ignore_ascii_case("headless"))
+                && matches!(class, ReapClass::LiveBridge)
+            {
+                return true;
+            }
             if matches!(class, ReapClass::OrphanAppServer) {
                 // Bridge came back to life between scan and stop.
                 if managed_bridge_scan::bridge_lock_is_held(&obs.state_file) {
@@ -363,6 +381,7 @@ mod tests {
             session_id: "session-A".to_string(),
             state_file: PathBuf::from("/tmp/session-A.json"),
             cwd: Some("/tmp".to_string()),
+            launch_mode: Some("tui".to_string()),
             ws_url: Some("ws://127.0.0.1:1111".to_string()),
             status: "ready".to_string(),
             thread_id: Some("thread-1".to_string()),
@@ -399,6 +418,19 @@ mod tests {
         assert_eq!(decide(&obs, Some(first), now, grace), ReapDecision::Track);
         let first = now - Duration::from_secs(130);
         assert_eq!(decide(&obs, Some(first), now, grace), ReapDecision::Reap);
+    }
+
+    #[test]
+    fn skip_headless_launch_without_tui_even_after_grace() {
+        let mut obs = base_obs();
+        obs.launch_mode = Some("headless".to_string());
+        let now = Instant::now();
+        let first = now - Duration::from_secs(130);
+
+        assert_eq!(
+            decide(&obs, Some(first), now, Duration::from_secs(120)),
+            ReapDecision::Skip
+        );
     }
 
     #[test]

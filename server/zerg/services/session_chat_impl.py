@@ -34,6 +34,7 @@ from zerg.metrics import managed_turn_wait_seconds
 from zerg.metrics import managed_turn_wait_total
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import SessionInput
+from zerg.models.agents import SessionRuntimeState
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
 from zerg.models_config import get_llm_client_for_use_case
@@ -63,6 +64,8 @@ from zerg.services.managed_local_event_polling import get_session_turn_snapshot_
 from zerg.services.managed_local_event_polling import hydrate_turn_events_from_snapshot
 from zerg.services.session_continuity import session_lock_manager
 from zerg.services.session_current_control import current_session_capabilities
+from zerg.services.session_runtime import EXPLICIT_CLOSED_TERMINAL_STATES
+from zerg.services.session_runtime import UNVERIFIED_TERMINAL_STATES
 from zerg.services.session_turns import SESSION_TURN_ERROR_SEND_FAILED
 from zerg.services.session_turns import SESSION_TURN_ERROR_TURN_TIMEOUT
 from zerg.services.session_turns import SESSION_TURN_ERROR_VERIFICATION_TIMEOUT
@@ -354,6 +357,14 @@ def _assert_live_session_send_available(
     *,
     owner_id: int | None = None,
 ) -> None:
+    if _session_is_closed_for_input(db, source_session):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error_code": "session_closed",
+                "message": "This session has ended.",
+            },
+        )
     capabilities = current_session_capabilities(db, source_session, owner_id=owner_id)
     if capabilities.live_control_available:
         return
@@ -366,6 +377,24 @@ def _assert_live_session_send_available(
         status_code=status.HTTP_409_CONFLICT,
         detail="This session does not have a live Longhouse control channel.",
     )
+
+
+def _session_is_closed_for_input(db: Session, source_session) -> bool:
+    session_id = getattr(source_session, "id", None)
+    if session_id is None:
+        return False
+    runtime_state = (
+        db.query(SessionRuntimeState)
+        .filter(SessionRuntimeState.session_id == session_id)
+        .order_by(SessionRuntimeState.updated_at.desc(), SessionRuntimeState.runtime_version.desc())
+        .first()
+    )
+    terminal_state = str(getattr(runtime_state, "terminal_state", "") or "").strip()
+    if terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES:
+        return True
+    if terminal_state in UNVERIFIED_TERMINAL_STATES:
+        return False
+    return bool(terminal_state)
 
 
 def _parse_current_session_header(request: Request) -> UUID | None:
