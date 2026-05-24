@@ -78,8 +78,35 @@ async function waitForLivePageReady(
   });
 }
 
-async function findSessionIdsViaAgentsApi(request: APIRequestContext): Promise<string[]> {
-  const response = await request.get("/api/agents/sessions?limit=25");
+type AgentsSessionCandidate = {
+  id?: unknown;
+  provider?: unknown;
+  user_messages?: unknown;
+  assistant_messages?: unknown;
+  tool_calls?: unknown;
+};
+
+function numericField(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function isTranscriptBackedNonInternalSession(session: AgentsSessionCandidate): boolean {
+  if (typeof session?.id !== "string" || session.id.length === 0) {
+    return false;
+  }
+  if (String(session.provider ?? "").toLowerCase() === "canary") {
+    return false;
+  }
+  return (
+    numericField(session.user_messages) +
+      numericField(session.assistant_messages) +
+      numericField(session.tool_calls) >
+    0
+  );
+}
+
+async function findTranscriptBackedSessionIdsViaAgentsApi(request: APIRequestContext): Promise<string[]> {
+  const response = await request.get("/api/agents/sessions?limit=100");
   if (!response.ok()) {
     return [];
   }
@@ -88,7 +115,7 @@ async function findSessionIdsViaAgentsApi(request: APIRequestContext): Promise<s
   const sessions = Array.isArray(body?.sessions) ? body.sessions : [];
   const ids: string[] = [];
   for (const session of sessions) {
-    if (typeof session?.id === "string" && session.id.length > 0) {
+    if (isTranscriptBackedNonInternalSession(session)) {
       ids.push(session.id);
     }
   }
@@ -383,11 +410,11 @@ test("forum route redirects to timeline without auth errors", async ({
 test("session detail renders event timeline", async ({ context, agentsRequest }) => {
   test.setTimeout(45_000);
 
-  const candidateSessionIds = await findSessionIdsViaAgentsApi(agentsRequest).catch(() => []);
-  if (candidateSessionIds.length === 0) {
-    test.skip(true, "No sessions available to test detail view");
-    return;
-  }
+  const candidateSessionIds = await findTranscriptBackedSessionIdsViaAgentsApi(agentsRequest).catch(() => []);
+  expect(
+    candidateSessionIds.length,
+    "No transcript-backed non-internal sessions available for detail QA. Canary/heartbeat-only rows are intentionally not valid detail candidates.",
+  ).toBeGreaterThan(0);
 
   const page = await context.newPage();
 

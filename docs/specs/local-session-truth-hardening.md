@@ -282,6 +282,15 @@ Test gates:
 - `make test-e2e` if web selection behavior changes
 - targeted API tests for any new query/filter/capability field
 
+Implementation note:
+
+- Default session list, timeline thread list, recall, and `has_real_sessions`
+  already filter `provider=canary` unless callers explicitly ask for that
+  provider.
+- Hosted `qa-live` now selects detail candidates by a transcript-backed,
+  non-internal rule (`provider != canary` and at least one user, assistant, or
+  tool row) and fails clearly when no suitable detail candidate exists.
+
 ### Phase 5: End-To-End Ship And Dogfood
 
 Acceptance criteria:
