@@ -1,6 +1,6 @@
 # Local Session Truth Hardening
 
-Status: Draft for review
+Status: Reviewed, implementation started
 Owner: Longhouse local runtime
 Updated: 2026-05-24
 
@@ -52,20 +52,51 @@ resolved session contract.
 **Revisit if:** We introduce a provider that cannot provide enough local
 evidence to the engine.
 
-### Decision: Add Device Scope Before Optimizing Snapshot Work
+### Decision: Add Explicit Device Scope Before Optimizing Snapshot Work
 
 **Context:** `mark_missing_managed_control_leases()` currently uses connection
 freshness as a conservative proxy because the old managed-state table no longer
 indexes previous rows by device.
 
-**Choice:** First make missing-lease cleanup device-scoped, then add cheap
-snapshot no-op detection.
+**Choice:** First make missing-lease cleanup device-scoped with an explicit
+nullable `SessionConnection.device_id`, then add cheap snapshot no-op
+detection.
 
-**Rationale:** Correctness beats avoiding writes. Optimization should not hide
-cross-device detach bugs.
+**Rationale:** Freshness as a proxy is unsafe under cross-device heartbeats,
+clock skew, or out-of-order delivery. Correctness beats avoiding writes.
+Optimization should not hide cross-device detach bugs.
 
-**Revisit if:** The connection model cannot represent machine/device ownership
-without a schema change.
+**Revisit if:** Runtime connection ownership moves out of `SessionConnection`
+into a dedicated per-device lease table.
+
+### Decision: Unknown Device Ownership Is Sticky, Not Missing
+
+**Context:** Existing rows will not have `device_id` populated at migration
+time.
+
+**Choice:** `device_id IS NULL` means "unknown owner"; missing-lease cleanup
+must not detach those rows. Only a positive heartbeat can claim and update
+them.
+
+**Rationale:** This avoids mass-detaching legacy or ambiguous rows on the first
+post-deploy heartbeat.
+
+**Revisit if:** We add a reliable backfill from durable heartbeat history.
+
+### Decision: Narrow Heartbeat-Only Session Semantics For This Slice
+
+**Context:** Canary visibility has already been partially tightened in prior
+commits, and `qa-live` already tries multiple candidates.
+
+**Choice:** This spec will audit and pin the current canary/internal filtering
+rule, but it will not introduce a generic transcript-backed session capability.
+
+**Rationale:** A generic capability flag may be useful later, but it is a
+larger product/API design. The launch risk here is accidental internal canary
+pollution, not a full transcript-state taxonomy.
+
+**Revisit if:** Non-canary heartbeat-only sessions become common in real user
+journeys.
 
 ### Decision: Treat Heartbeat-Only Sessions as Explicit Internal Fixtures
 
@@ -90,10 +121,9 @@ session-detail candidates.
 - Tests proving resolved `sessions` wins over legacy heartbeat arrays.
 - Tests for unusual managed states in resolved heartbeat rows.
 - Engine tests for sparse resolved managed rows and generic managed providers.
-- A lightweight session snapshot signature to skip no-op heartbeat-derived
-  lease updates when the resolved snapshot is unchanged.
-- A user-facing or QA-facing way to avoid heartbeat-only sessions in timeline
-  detail selection.
+- A lightweight session snapshot signature to skip no-op missing-lease work
+  when the resolved snapshot is unchanged.
+- An audit and pinned tests for canary/internal session filtering.
 - Desktop/menu-bar stale-cache edge tests.
 
 ### Out Of Scope
@@ -152,7 +182,34 @@ Machine Agent
 
 ## Implementation Phases
 
-### Phase 1: Pin Existing Canonical Contracts
+### Phase 1: Device-Scoped Missing Lease Cleanup
+
+Acceptance criteria:
+
+- `SessionConnection` has a nullable `device_id` column.
+- Positive managed lease upserts stamp `SessionConnection.device_id` with the
+  heartbeat `device_id`.
+- `mark_missing_managed_control_leases()` detaches only attached/degraded
+  connections whose `device_id` equals the heartbeat `device_id`.
+- `device_id IS NULL` rows are never detached by missing-lease cleanup.
+- A heartbeat with `sessions=[]` from device A cannot detach a connection last
+  refreshed by device B.
+- A heartbeat from device A still detaches device A's previously attached lease
+  when that lease is omitted.
+- Runtime overlay still reports attached/degraded/detached correctly after the
+  scoped cleanup.
+- A rollback flag exists to disable missing-lease detach behavior for one
+  release if dogfood finds an unexpected detach regression.
+- A two-device integration-style test holds disjoint attached connections for
+  devices A and B, heartbeats A with `sessions=[]`, and verifies B remains
+  attached.
+
+Test gates:
+
+- `uv run --project server pytest server/tests_lite/test_heartbeat_endpoint.py server/tests_lite/test_timeline_runtime_overlay.py`
+- `make test`
+
+### Phase 2: Pin Canonical Contract Edge Cases
 
 Acceptance criteria:
 
@@ -175,42 +232,31 @@ Test gates:
 - `make test-engine`
 - Swift menu bar tests for changed desktop files
 
-### Phase 2: Device-Scoped Missing Lease Cleanup
-
-Acceptance criteria:
-
-- `mark_missing_managed_control_leases()` detaches only connections owned by
-  the heartbeat's `device_id` / machine identity.
-- A heartbeat with `sessions=[]` from device A cannot detach a connection last
-  refreshed by device B.
-- A heartbeat from device A still detaches device A's previously attached lease
-  when that lease is omitted.
-- Runtime overlay still reports attached/degraded/detached correctly after the
-  scoped cleanup.
-
-Implementation note:
-
-- Prefer using existing `SessionConnection` fields if they already carry device
-  or external machine identity.
-- If the current model cannot represent ownership, add the smallest additive
-  nullable field needed and backfill only where evidence exists.
-
-Test gates:
-
-- `uv run --project server pytest server/tests_lite/test_heartbeat_endpoint.py server/tests_lite/test_timeline_runtime_overlay.py`
-- `make test`
-
 ### Phase 3: Snapshot No-Op Optimization
 
 Acceptance criteria:
 
-- Engine includes a stable resolved-session snapshot signature or sequence in
-  the heartbeat/status payload.
-- Server skips missing-lease work when the same device repeats the same
-  resolved session snapshot and freshness has already been observed.
-- Signature excludes volatile timestamps that change every heartbeat.
+- Engine includes stable resolved-session snapshot fields in the
+  heartbeat/status payload:
+  - `sessions_digest`: deterministic hash over an allowlist of identity/control
+    fields
+  - `sessions_sequence`: monotonic sequence that increments when the allowlist
+    changes
+- The digest allowlist is explicit. It includes session id, provider,
+  provider-session id, control path, presentation state, normalized state,
+  phase, tool name, workspace identity, process pid, bridge status, thread
+  subscription status, and reason codes. It excludes heartbeat timestamps,
+  observed-at timestamps, disk/build counters, and raw evidence timestamps.
+- Server treats cold-start or missing digest as full work.
+- Server skips missing-lease scan work when the same device repeats the same
+  digest and freshness was already observed.
+- Server still updates heartbeat freshness/`last_health_at` as needed on every
+  heartbeat; the no-op path skips only redundant missing-lease scan/upsert work.
+- Server records an observable counter/log for skipped snapshot work, such as
+  `heartbeat.snapshot_skipped`.
 - Tests show a changed state/phase/control path updates the signature and does
   process.
+- Tests show heartbeat timestamp-only changes do not change the digest.
 
 Test gates:
 
@@ -219,18 +265,16 @@ Test gates:
 - a lightweight hosted or local smoke proving heartbeat ingest still updates
   liveness after a real snapshot change
 
-### Phase 4: Heartbeat-Only Session Semantics
+### Phase 4: Canary/Internal Session Visibility Audit
 
 Acceptance criteria:
 
-- Heartbeat-only canary/internal rows are distinguishable from transcript-backed
-  user sessions in API output or QA selection.
-- `qa-live` no longer needs to blindly try 25 sessions to find a transcript
-  detail page.
-- Session detail QA fails clearly if no transcript-backed sessions are
-  available, instead of passing on internal telemetry rows.
-- The product story remains capability-based: no new user-facing species of
-  session unless there is a real product need.
+- Existing `provider=canary` filtering is documented and covered where it
+  matters: timeline, search/session list, and live QA candidate selection.
+- `qa-live` uses a clear transcript-backed or non-internal candidate rule
+  rather than relying only on incidental ordering.
+- Session detail QA fails clearly if no suitable candidate exists.
+- No new user-facing session species is introduced.
 
 Test gates:
 
@@ -249,6 +293,8 @@ Acceptance criteria:
 - `make qa-live` passes after hosted deploy.
 - `make dogfood-refresh` runs and the menu bar is restarted.
 - `make dogfood-check` reports healthy/green locally.
+- A two-device dogfood or integration check verifies one device's empty
+  snapshot does not flip another device's managed session state.
 
 ## Risks
 
