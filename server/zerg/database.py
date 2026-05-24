@@ -457,9 +457,7 @@ def _pre_migrate_session_inputs_identity_columns(engine: Engine) -> None:
 
     try:
         with engine.connect() as conn:
-            exists = conn.execute(
-                text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_inputs'")
-            ).fetchone()
+            exists = conn.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_inputs'")).fetchone()
             if not exists:
                 return
 
@@ -530,9 +528,7 @@ def initialize_database(engine: Engine = None) -> None:
         is_compatible, version_str = check_sqlite_version(target_engine)
         if not is_compatible:
             min_ver = ".".join(str(x) for x in SQLITE_MIN_VERSION)
-            raise RuntimeError(
-                f"SQLite version {version_str} is below minimum {min_ver}. Upgrade SQLite to use this application."
-            )
+            raise RuntimeError(f"SQLite version {version_str} is below minimum {min_ver}. Upgrade SQLite to use this application.")
         logger.debug(f"SQLite version {version_str} meets requirements")
 
     # Strip any schema references for SQLite (which doesn't support schemas)
@@ -731,6 +727,40 @@ def _migrate_agents_columns(engine: Engine) -> None:
             conn.commit()
     except Exception:
         logger.debug("sessions table migration skipped (table may not exist yet)", exc_info=True)
+
+    try:
+        with engine.begin() as conn:
+            launch_attempts_exists = conn.execute(
+                text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_launch_attempts'")
+            ).fetchone()
+            if launch_attempts_exists:
+                attempt_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(session_launch_attempts)"))}
+                session_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(sessions)"))}
+                if {"owner_id", "session_id"}.issubset(attempt_columns) and {"id", "owner_id"}.issubset(session_columns):
+                    conn.execute(
+                        text(
+                            """
+                            UPDATE session_launch_attempts
+                            SET owner_id = (
+                                SELECT sessions.owner_id
+                                FROM sessions
+                                WHERE sessions.id = session_launch_attempts.session_id
+                            )
+                            WHERE owner_id IS NULL
+                              AND session_id IS NOT NULL
+                            """
+                        )
+                    )
+                    conn.execute(
+                        text(
+                            """
+                            CREATE INDEX IF NOT EXISTS ix_session_launch_attempts_owner_request
+                            ON session_launch_attempts(owner_id, device_id, client_request_id, created_at)
+                            """
+                        )
+                    )
+    except Exception:
+        logger.debug("session_launch_attempts migration skipped (table may not exist yet)", exc_info=True)
 
     try:
         with engine.begin() as conn:
@@ -1438,28 +1468,16 @@ def _migrate_agents_columns(engine: Engine) -> None:
             )
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_events_thread_id ON events(thread_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_source_lines_thread_id ON source_lines(thread_id)"))
-            conn.execute(
-                text("CREATE INDEX IF NOT EXISTS ix_session_observations_thread_id ON session_observations(thread_id)")
-            )
-            conn.execute(
-                text(
-                    "CREATE INDEX IF NOT EXISTS ix_session_runtime_state_thread_id "
-                    "ON session_runtime_state(thread_id)"
-                )
-            )
-            conn.execute(
-                text("CREATE INDEX IF NOT EXISTS ix_session_runtime_state_run_id ON session_runtime_state(run_id)")
-            )
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_session_observations_thread_id ON session_observations(thread_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_session_runtime_state_thread_id " "ON session_runtime_state(thread_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_session_runtime_state_run_id ON session_runtime_state(run_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_session_turns_thread_id ON session_turns(thread_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_session_turns_run_id ON session_turns(run_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_session_inputs_thread_id ON session_inputs(thread_id)"))
             # One control attachment per (run, control_plane) — capability
             # projection invariant. Phase 2 upsert depends on this.
             conn.execute(
-                text(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS ux_connections_run_plane "
-                    "ON session_connections(run_id, control_plane)"
-                )
+                text("CREATE UNIQUE INDEX IF NOT EXISTS ux_connections_run_plane " "ON session_connections(run_id, control_plane)")
             )
             conn.commit()
     except Exception:
@@ -1506,9 +1524,7 @@ def _auto_add_missing_columns(
     skipped: list[tuple[str, str, str]] = []  # (table, col, reason)
 
     with engine.connect() as conn:
-        existing_tables = {
-            row[0] for row in conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
-        }
+        existing_tables = {row[0] for row in conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
         for md in metadatas:
             for table in md.tables.values():
                 if table.name not in existing_tables:
@@ -1579,8 +1595,7 @@ def _auto_add_missing_columns(
     for table_name, col_name, reason in skipped:
         if reason == "python_default_only_no_server_default":
             logger.info(
-                "auto-derive skip: %s.%s has Python default= but no server_default; "
-                "leaving for imperative migrator",
+                "auto-derive skip: %s.%s has Python default= but no server_default; " "leaving for imperative migrator",
                 table_name,
                 col_name,
             )
@@ -1801,9 +1816,7 @@ async def start_wal_checkpoint_loop() -> None:
                 if WAL_TRUNCATE_BYTES <= 0 or wal_size < WAL_TRUNCATE_BYTES:
                     return
                 truncate_result = conn.exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)")
-                t_busy, t_log_frames, t_checkpointed_frames, t_remaining_frames = _checkpoint_counts(
-                    truncate_result.fetchone()
-                )
+                t_busy, t_log_frames, t_checkpointed_frames, t_remaining_frames = _checkpoint_counts(truncate_result.fetchone())
                 if t_busy:
                     logger.warning(
                         "WAL truncate checkpoint was busy: %d frames in log, %d checkpointed, %d remaining, size=%d",

@@ -28,12 +28,12 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionLaunchAttempt
 from zerg.models.device_token import DeviceToken
+from zerg.services.agents.kernel_writes import ensure_open_run_for_session
 from zerg.services.agents.kernel_writes import ensure_primary_thread
-from zerg.services.agents.kernel_writes import record_connection
 from zerg.services.agents.kernel_writes import record_launch_attempt
-from zerg.services.agents.kernel_writes import record_run
 from zerg.services.agents.kernel_writes import record_thread_alias
 from zerg.services.agents.kernel_writes import update_launch_attempt
+from zerg.services.agents.kernel_writes import upsert_connection_for_run
 from zerg.services.machine_control_channel import MachineControlChannelRegistry
 from zerg.services.machine_control_channel import MachineControlCommandResponse
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
@@ -124,6 +124,53 @@ def _launch_result_for_attempt(attempt: SessionLaunchAttempt) -> RemoteLaunchRes
     )
 
 
+def _control_plane_for_provider(provider: str | None) -> str:
+    return (
+        "codex_bridge"
+        if provider == "codex"
+        else "opencode_process"
+        if provider == "opencode"
+        else "antigravity_process"
+        if provider == "antigravity"
+        else "claude_channel_bridge"
+    )
+
+
+def _attach_live_launch_run(
+    db: Session,
+    *,
+    session: AgentSession,
+    attempt: SessionLaunchAttempt,
+    external_name: str | None,
+) -> None:
+    run = ensure_open_run_for_session(
+        db,
+        session,
+        launch_origin="longhouse_spawned",
+        host_id=session.device_id,
+    )
+    upsert_connection_for_run(
+        db,
+        run=run,
+        control_plane=_control_plane_for_provider(session.provider),
+        acquisition_kind="spawned_control",
+        state="attached",
+        external_name=external_name or session.device_id,
+        can_send_input=1,
+        can_interrupt=1,
+        can_terminate=1,
+        can_tail_output=1,
+        can_resume=1,
+    )
+    update_launch_attempt(
+        db,
+        attempt,
+        state="adopted",
+        run=run,
+        clear_expires=True,
+    )
+
+
 async def launch_remote_session(
     db: Session,
     params: RemoteLaunchParams,
@@ -167,6 +214,7 @@ async def launch_remote_session(
             db.query(SessionLaunchAttempt)
             .join(AgentSession, AgentSession.id == SessionLaunchAttempt.session_id)
             .filter(SessionLaunchAttempt.client_request_id == client_request_id)
+            .filter(SessionLaunchAttempt.owner_id == params.owner_id)
             .filter(SessionLaunchAttempt.host_id == device_id)
             .filter(SessionLaunchAttempt.provider == provider)
             .filter(AgentSession.device_id == device_id)
@@ -251,6 +299,7 @@ async def launch_remote_session(
         thread=primary_thread,
         provider=provider,
         host_id=device_id,
+        owner_id=params.owner_id,
         client_request_id=client_request_id,
         command_id=command_id,
         state="pending",
@@ -299,41 +348,11 @@ async def launch_remote_session(
 
     message = response.message or {}
     if message.get("ok"):
-        run = record_run(
+        _attach_live_launch_run(
             db,
-            thread=primary_thread,
-            provider=provider,
-            host_id=device_id,
-            cwd=cwd,
-            launch_origin="longhouse_spawned",
-        )
-        record_connection(
-            db,
-            run=run,
-            control_plane=(
-                "codex_bridge"
-                if provider == "codex"
-                else "opencode_process"
-                if provider == "opencode"
-                else "antigravity_process"
-                if provider == "antigravity"
-                else "claude_channel_bridge"
-            ),
-            acquisition_kind="spawned_control",
-            state="attached",
+            session=session,
+            attempt=launch_attempt,
             external_name=info.machine_name or device_id,
-            can_send_input=1,
-            can_interrupt=1,
-            can_terminate=1,
-            can_tail_output=1,
-            can_resume=1,
-        )
-        update_launch_attempt(
-            db,
-            launch_attempt,
-            state="dispatched",
-            run=run,
-            clear_expires=True,
         )
         db.commit()
         db.refresh(session)
@@ -393,6 +412,8 @@ def reconcile_launch_from_command_result(db: Session, message: dict) -> bool:
     attempt = db.query(SessionLaunchAttempt).filter(SessionLaunchAttempt.command_id == command_id).first()
     if attempt is None:
         return False
+    if attempt.run_id is not None or attempt.state == "adopted":
+        return True
     if attempt.state not in {"pending", "dispatched"}:
         return False
     session = db.query(AgentSession).filter(AgentSession.id == attempt.session_id).first()
@@ -405,38 +426,13 @@ def reconcile_launch_from_command_result(db: Session, message: dict) -> bool:
     if reported_session_id and reported_session_id != str(session.id):
         return False
 
-    primary_thread = ensure_primary_thread(db, session)
     if message.get("ok"):
-        run = record_run(
+        _attach_live_launch_run(
             db,
-            thread=primary_thread,
-            provider=session.provider,
-            host_id=session.device_id,
-            cwd=session.cwd,
-            launch_origin="longhouse_spawned",
-        )
-        record_connection(
-            db,
-            run=run,
-            control_plane=(
-                "codex_bridge"
-                if session.provider == "codex"
-                else "opencode_process"
-                if session.provider == "opencode"
-                else "antigravity_process"
-                if session.provider == "antigravity"
-                else "claude_channel_bridge"
-            ),
-            acquisition_kind="spawned_control",
-            state="attached",
+            session=session,
+            attempt=attempt,
             external_name=session.device_name or session.device_id,
-            can_send_input=1,
-            can_interrupt=1,
-            can_terminate=1,
-            can_tail_output=1,
-            can_resume=1,
         )
-        update_launch_attempt(db, attempt, state="dispatched", run=run, clear_expires=True)
     else:
         error = message.get("error") or {}
         if session.ended_at is None:
@@ -454,7 +450,7 @@ def reconcile_launch_from_command_result(db: Session, message: dict) -> bool:
 
 
 def reap_orphaned_launches(db: Session, *, now: datetime | None = None) -> int:
-    """Move expired ``launching``/``launching_unknown`` rows to ``launch_orphaned``.
+    """Move expired pending/dispatched launch attempts to abandoned.
 
     Returns the number of rows reaped. Intended to be called on a low-frequency
     tick (every 30-60s) from a background task.

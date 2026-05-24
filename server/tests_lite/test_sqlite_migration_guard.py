@@ -34,9 +34,9 @@ def _migrate_agents_columns(engine):
     _auto_add_missing_columns(engine, Base.metadata, apply=True)
     _migrate_agents_columns_raw(engine)
 from zerg.models.agents import AgentEvent
+from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
-from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionTurn
@@ -263,3 +263,69 @@ def test_sqlite_migration_adds_current_model_columns(tmp_path):
             text("SELECT baseline_observation_cursor FROM session_turns WHERE request_id='req-1'")
         ).scalar_one()
     assert copied_cursor == 42
+
+
+def test_sqlite_migration_backfills_launch_attempt_owner_id(tmp_path):
+    db_path = tmp_path / "launch_attempt_owner_migration.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    session_id = "11111111-1111-4111-8111-111111111111"
+
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE sessions (
+                id VARCHAR(36) PRIMARY KEY,
+                owner_id INTEGER,
+                provider VARCHAR(50) NOT NULL,
+                started_at DATETIME NOT NULL,
+                created_at DATETIME,
+                updated_at DATETIME
+            )
+            """
+        )
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE session_launch_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id VARCHAR(36) NOT NULL,
+                provider VARCHAR(64) NOT NULL,
+                device_id VARCHAR(255),
+                client_request_id VARCHAR(64),
+                state VARCHAR(32) NOT NULL DEFAULT 'pending',
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO sessions (id, owner_id, provider, started_at)
+                VALUES (:session_id, 42, 'codex', '2026-05-23T12:00:00Z')
+                """
+            ),
+            {"session_id": session_id},
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO session_launch_attempts (session_id, provider, device_id, client_request_id)
+                VALUES (:session_id, 'codex', 'devbox', 'tap-1')
+                """
+            ),
+            {"session_id": session_id},
+        )
+
+    _migrate_agents_columns(engine)
+
+    columns = _table_columns(engine, "session_launch_attempts")
+    assert "owner_id" in columns
+
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT owner_id FROM session_launch_attempts WHERE client_request_id = 'tap-1'")
+        ).one()
+        indexes = conn.execute(text("PRAGMA index_list(session_launch_attempts)")).fetchall()
+
+    assert row.owner_id == 42
+    assert any(index[1] == "ix_session_launch_attempts_owner_request" for index in indexes)

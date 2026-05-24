@@ -21,6 +21,7 @@ from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.session_turns import load_pending_response_turn_map
 from zerg.services.session_views import SessionResponse
 from zerg.services.session_views import build_session_response
+from zerg.services.session_views import latest_launch_attempts
 from zerg.services.session_views import normalize_utc_datetime
 from zerg.services.unmanaged_bindings import load_binding_overlay
 
@@ -82,6 +83,7 @@ def build_session_response_list(
     thread_cache: dict[str, tuple[str, int]] = store.batch_thread_meta(sessions)
     binding_overlay_map = load_binding_overlay(db, session_ids, now=now)
     kernel_capabilities_map = project_capabilities_bulk(db, session_ids=session_ids)
+    launch_attempt_map = latest_launch_attempts(db, session_ids)
     match_map = match_map or {}
     semantic_snippet_map = semantic_snippet_map or {}
     sem_score_map = sem_score_map or {}
@@ -121,6 +123,7 @@ def build_session_response_list(
                 summary_status=summary_status,
                 kernel_capabilities=kernel_capabilities_map.get(session.id),
                 has_pending_response_turn=bool(pending_response_turn_map.get(session.id)),
+                launch_attempt=launch_attempt_map.get(session.id),
             )
         )
 

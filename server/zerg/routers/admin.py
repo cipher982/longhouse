@@ -733,6 +733,7 @@ class RemoteLaunchDebugResponse(UTCBaseModel):
 async def list_remote_launch_debug(
     limit: int = Query(50, ge=1, le=200, description="Max rows to return"),
     include_live: bool = Query(False, description="Include launch_state=live rows (default: only show non-healthy)"),
+    include_test: bool = Query(False, description="Include test/e2e launch attempts"),
     db: Session = Depends(get_db),
     current_user=Depends(require_admin),
 ):
@@ -743,12 +744,16 @@ async def list_remote_launch_debug(
     """
     from zerg.models.agents import SessionLaunchAttempt
 
-    q = (
-        db.query(SessionLaunchAttempt, AgentSession)
-        .join(AgentSession, AgentSession.id == SessionLaunchAttempt.session_id)
-        .order_by(SessionLaunchAttempt.created_at.desc(), SessionLaunchAttempt.id.desc())
-    )
-    all_rows = q.limit(limit if include_live else max(limit * 4, limit)).all()
+    q = db.query(SessionLaunchAttempt, AgentSession).join(AgentSession, AgentSession.id == SessionLaunchAttempt.session_id)
+    if not include_test:
+        q = q.filter(AgentSession.environment.notin_(["test", "e2e"]))
+    if not include_live:
+        q = q.filter(
+            (SessionLaunchAttempt.state.in_(["failed", "abandoned"]))
+            | (SessionLaunchAttempt.state.in_(["pending", "dispatched"]) & SessionLaunchAttempt.run_id.is_(None))
+        )
+    total = q.count()
+    all_rows = q.order_by(SessionLaunchAttempt.created_at.desc(), SessionLaunchAttempt.id.desc()).limit(limit).all()
 
     def _state(attempt: SessionLaunchAttempt) -> str:
         raw = str(attempt.state or "").strip()
@@ -763,10 +768,6 @@ async def list_remote_launch_debug(
         return "launching"
 
     filtered = [(attempt, session, _state(attempt)) for attempt, session in all_rows]
-    if not include_live:
-        filtered = [row for row in filtered if row[2] != "live"]
-    filtered = filtered[:limit]
-    total = len(filtered)
     entries = [
         RemoteLaunchDebugEntry(
             session_id=str(session.id),
