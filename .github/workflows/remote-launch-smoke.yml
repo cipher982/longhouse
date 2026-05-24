@@ -53,6 +53,7 @@ jobs:
       REMOTE_LAUNCH_SMOKE_SUBDOMAIN: ${{ inputs.subdomain || 'david010' }}
       REMOTE_LAUNCH_SMOKE_DEVICE_ID: ${{ inputs.device_id || vars.REMOTE_LAUNCH_SMOKE_DEVICE_ID || '' }}
       REMOTE_LAUNCH_SMOKE_CWD: ${{ inputs.cwd || vars.REMOTE_LAUNCH_SMOKE_CWD || '' }}
+      REMOTE_LAUNCH_SMOKE_SSH_TARGET: ${{ vars.REMOTE_LAUNCH_SMOKE_SSH_TARGET || 'zerg' }}
       REMOTE_LAUNCH_SMOKE_BRIDGE_STOP_SSH_TARGET: ${{ vars.REMOTE_LAUNCH_SMOKE_BRIDGE_STOP_SSH_TARGET || '' }}
       REMOTE_LAUNCH_SMOKE_EXPECTED_COMMIT: ${{ inputs.expected_commit || github.event.workflow_run.head_sha || github.sha }}
       REMOTE_LAUNCH_SMOKE_OUTPUT_DIR: ${{ github.workspace }}/artifacts/remote-launch-smoke/${{ github.run_id }}-${{ github.run_attempt }}
