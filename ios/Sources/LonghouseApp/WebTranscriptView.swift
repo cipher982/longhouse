@@ -324,6 +324,7 @@ struct WebTranscriptView: UIViewRepresentable {
         private var lastDuplicatePayload: String?
         private var renderSequence = 0
         private var jsFailureCount = 0
+        private var suppressNearTopUntil = Date.distantPast
         private var diagnosticsEnabled = WebTranscriptDiagnosticsFeature.isEnabled
         private var onNearTop: (() -> Void)?
         private var onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?
@@ -381,6 +382,8 @@ struct WebTranscriptView: UIViewRepresentable {
         }
 
         private func emitNearTopIfNeeded(_ scrollView: UIScrollView) {
+            guard inFlightPayload == nil else { return }
+            guard Date() >= suppressNearTopUntil else { return }
             guard userScrollInProgress || !shouldStickToBottom else { return }
             guard scrollView.contentSize.height > scrollView.bounds.height + 240 else { return }
             guard scrollView.contentOffset.y < 180 else { return }
@@ -455,6 +458,9 @@ struct WebTranscriptView: UIViewRepresentable {
             let stick = shouldStickToBottom && !userScrollInProgress ? "true" : "false"
             inFlightPayload = payload
             let renderStartedAt = Date()
+            if shouldStickToBottom && !userScrollInProgress {
+                suppressNearTopUntil = renderStartedAt.addingTimeInterval(0.75)
+            }
             webView.evaluateJavaScript("window.renderTranscript('\(payload.base64)', \(stick));") { [weak self] _, error in
                 guard let self else { return }
                 let renderDurationMs = Int(Date().timeIntervalSince(renderStartedAt) * 1000)
@@ -462,6 +468,9 @@ struct WebTranscriptView: UIViewRepresentable {
                     self.lastPayload = payload.base64
                 } else {
                     self.jsFailureCount += 1
+                }
+                if stick == "true" {
+                    self.suppressNearTopUntil = Date().addingTimeInterval(0.75)
                 }
                 self.inFlightPayload = nil
                 self.emitDiagnostics(
@@ -1079,6 +1088,7 @@ private extension WebTranscriptView {
     }
 
     function scrollToBottom() {
+      window.scrollTo(0, document.documentElement.scrollHeight);
       requestAnimationFrame(() => {
         window.scrollTo(0, document.documentElement.scrollHeight);
       });
