@@ -716,6 +716,39 @@ def _migrate_agents_columns(engine: Engine) -> None:
                         ") WHERE last_activity_at IS NULL"
                     )
                 )
+            # Backfill: close sessions whose runtime row already observed a
+            # terminal state (process_gone / host_expired / user_closed /
+            # session_ended) but whose ended_at was never written. The reducer
+            # only stamped ended_at for "session_ended" historically, so
+            # engine-observed deaths left these rows lingering as "open" on
+            # the timeline and showing up with no useful status.
+            runtime_state_exists = conn.execute(
+                text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_runtime_state'")
+            ).fetchone()
+            if runtime_state_exists:
+                conn.execute(
+                    text(
+                        """
+                        UPDATE sessions
+                        SET ended_at = (
+                            SELECT COALESCE(srs.terminal_at, srs.last_runtime_signal_at)
+                            FROM session_runtime_state srs
+                            WHERE srs.session_id = sessions.id
+                              AND srs.terminal_state IN
+                                  ('session_ended', 'process_gone', 'host_expired', 'user_closed')
+                            ORDER BY srs.terminal_at DESC
+                            LIMIT 1
+                        )
+                        WHERE ended_at IS NULL
+                          AND EXISTS (
+                                SELECT 1 FROM session_runtime_state srs
+                                WHERE srs.session_id = sessions.id
+                                  AND srs.terminal_state IN
+                                      ('session_ended', 'process_gone', 'host_expired', 'user_closed')
+                          )
+                        """
+                    )
+                )
             # Multi-column indexes the model layer doesn't declare on these columns.
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_execution_home ON sessions(execution_home)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_source_runner_id ON sessions(source_runner_id)"))

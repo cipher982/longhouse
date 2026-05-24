@@ -916,9 +916,9 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
         phase_started_at = normalize_utc(state.phase_started_at)
         if phase_started_at is None or phase_started_at < occurred_at:
             state.phase_started_at = occurred_at
-        if terminal_state == "session_ended" and event.session_id is not None:
+        if terminal_state in {"session_ended", "process_gone", "host_expired", "user_closed"} and event.session_id is not None:
             session = db.query(AgentSession).filter(AgentSession.id == event.session_id).first()
-            if session is not None:
+            if session is not None and session.ended_at is None:
                 session.ended_at = occurred_at
 
     elif event.kind == "binding_signal":
