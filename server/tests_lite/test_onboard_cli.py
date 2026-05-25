@@ -144,6 +144,37 @@ def test_onboard_without_cli_skips_initial_import(monkeypatch, tmp_path):
     ]
 
 
+def test_onboard_with_agy_points_to_longhouse_agy(monkeypatch, tmp_path):
+    runner = CliRunner()
+
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setattr(onboard_cli, "_has_command", lambda cmd: cmd == "agy")
+    monkeypatch.setattr(onboard_cli, "_has_launchd", lambda: True)
+    monkeypatch.setattr(onboard_cli, "_has_systemd", lambda: False)
+    monkeypatch.setattr(onboard_cli, "_is_server_running", lambda: (False, None))
+    monkeypatch.setattr(onboard_cli, "_check_server_health", lambda *args, **kwargs: True)
+    monkeypatch.setattr(onboard_cli, "_has_gui", lambda: False)
+    monkeypatch.setattr(onboard_cli.socket, "gethostname", lambda: "test-box")
+    monkeypatch.setattr(onboard_cli, "load_token", lambda: None)
+    monkeypatch.setattr(onboard_cli, "verify_shell_path", lambda: [])
+    monkeypatch.setattr(onboard_cli, "get_config_path", lambda: tmp_path / "config.toml")
+    monkeypatch.setattr(onboard_cli, "load_config", lambda config_path=None: config_file_cli.LonghouseConfig())
+    monkeypatch.setattr(onboard_cli, "save_loaded_config", lambda config, config_path=None: None)
+    monkeypatch.setattr(onboard_cli, "install_local_runtime", lambda **_kwargs: _install_result())
+    monkeypatch.setattr(
+        onboard_cli.subprocess,
+        "run",
+        lambda args, **kwargs: SimpleNamespace(returncode=0, stderr="", stdout=""),
+    )
+
+    result = runner.invoke(app, ["onboard"])
+
+    assert result.exit_code == 0, result.output
+    assert "[OK] Antigravity CLI found" in result.output
+    assert "longhouse agy      Start a Longhouse-managed agy session" in result.output
+    assert "longhouse antigravity" not in result.output
+
+
 def test_onboard_in_ci_skips_service_manager_install(monkeypatch, tmp_path):
     runner = CliRunner()
     subprocess_calls: list[list[str]] = []

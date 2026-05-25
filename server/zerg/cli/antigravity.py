@@ -376,10 +376,7 @@ def _ensure_antigravity_runtime_plugin(
         )
         if completed.returncode != 0:
             detail = (completed.stderr or "").strip()
-            raise _AntigravityLaunchError(
-                "Could not install Longhouse Antigravity plugin"
-                + (f": {detail}" if detail else ".")
-            )
+            raise _AntigravityLaunchError("Could not install Longhouse Antigravity plugin" + (f": {detail}" if detail else "."))
     return staged_root
 
 
@@ -581,11 +578,11 @@ def antigravity(
         "--loop-mode",
         help="Loop mode to store on the Longhouse session.",
     ),
-    name: str | None = typer.Option(None, "--name", help="Optional display name for the Antigravity session."),
+    name: str | None = typer.Option(None, "--name", help="Optional display name for the agy session."),
     attach: bool = typer.Option(
         True,
         "--attach/--no-attach",
-        help="Launch Antigravity after creating the Longhouse session when running interactively.",
+        help="Launch agy after creating the Longhouse session when running interactively.",
     ),
     open_browser: bool = typer.Option(
         False,
@@ -617,7 +614,7 @@ def antigravity(
         help=_ANTIGRAVITY_BIN_OPTION_HELP,
     ),
 ) -> None:
-    """Launch a Longhouse Antigravity session on this machine.
+    """Launch a Longhouse-managed agy session on this machine.
 
     Extra arguments after the Longhouse options are passed to the stock
     `agy` executable.
@@ -661,7 +658,7 @@ def antigravity(
         machine_name=machine_name,
     )
     session_url = _build_session_url(resolved_url, result.session_id)
-    typer.secho("Longhouse Antigravity session launched on this machine.", fg=typer.colors.GREEN)
+    typer.secho("Longhouse agy session launched on this machine.", fg=typer.colors.GREEN)
     typer.echo(f"Session ID: {result.session_id}")
     typer.echo(f"Session URL: {session_url}")
 

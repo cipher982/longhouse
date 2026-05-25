@@ -250,7 +250,8 @@ for command in (serve, status, claude, wall, peers, message, tail, auth, ship, r
     app.command()(command)
 
 app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})(opencode)
-app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})(antigravity)
+app.command(name="agy", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})(antigravity)
+app.command(name="antigravity", hidden=True, context_settings={"allow_extra_args": True, "ignore_unknown_options": True})(antigravity)
 app.command(name="continue")(continue_session)
 app.command(name="connect")(connect_command)
 app.command(name="version")(version_command)

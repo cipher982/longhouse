@@ -29,7 +29,7 @@ All three install the same product. The shell installer also drops `Longhouse.ap
 ```bash
 longhouse claude       # managed session, steerable later
 longhouse codex        # same, for Codex CLI
-longhouse antigravity  # managed observe-only launch
+longhouse agy          # managed observe-only launch for Antigravity CLI
 longhouse opencode     # managed observe-only launch
 ```
 
