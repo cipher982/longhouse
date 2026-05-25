@@ -373,10 +373,9 @@ function formatLaunchFailure(result: {
   launch_error_code: string | null;
   launch_error_message: string | null;
 }): string {
-  const code = result.launch_error_code?.trim();
   const message = result.launch_error_message?.trim();
-  if (code && message) return `${code}: ${message}`;
   if (message) return message;
+  const code = result.launch_error_code?.trim();
   if (code) return code;
   return "Launch failed";
 }

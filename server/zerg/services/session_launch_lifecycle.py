@@ -33,6 +33,16 @@ RemoteLaunchErrorCode = Literal[
     "launch_timeout",
 ]
 KNOWN_REMOTE_LAUNCH_ERROR_CODES = frozenset(get_args(RemoteLaunchErrorCode))
+REMOTE_LAUNCH_ERROR_TITLES: dict[RemoteLaunchErrorCode, str] = {
+    "invalid_request": "Launch request is invalid",
+    "device_not_enrolled": "Machine is not enrolled",
+    "provider_unsupported": "Launch is unavailable on this machine",
+    "cwd_not_allowed": "Check the workspace path",
+    "cwd_not_found": "Check the workspace path",
+    "machine_offline": "Machine is offline",
+    "provider_launch_failed": "Provider failed to start",
+    "launch_timeout": "Launch timed out",
+}
 
 
 @dataclass(frozen=True)
@@ -54,6 +64,19 @@ def normalize_remote_launch_error_code(
     return fallback
 
 
+def format_remote_launch_error_message(
+    code: RemoteLaunchErrorCode | None,
+    message: str | None,
+) -> str | None:
+    title = REMOTE_LAUNCH_ERROR_TITLES.get(code) if code else None
+    detail = (message or "").strip()
+    if title and detail:
+        return f"{title}: {detail}"
+    if title:
+        return title
+    return detail or None
+
+
 def project_remote_launch_lifecycle(attempt: SessionLaunchAttempt | None) -> RemoteLaunchLifecycle | None:
     """Project a launch attempt into the user-visible lifecycle contract."""
 
@@ -72,10 +95,11 @@ def project_remote_launch_lifecycle(attempt: SessionLaunchAttempt | None) -> Rem
     else:
         state = "launching"
 
+    error_code = normalize_remote_launch_error_code(attempt.error_code) if attempt.error_code is not None else None
     return RemoteLaunchLifecycle(
         state=state,
-        error_code=normalize_remote_launch_error_code(attempt.error_code) if attempt.error_code else None,
-        error_message=attempt.error_message,
+        error_code=error_code,
+        error_message=format_remote_launch_error_message(error_code, attempt.error_message),
         lease_until=attempt.expires_at,
     )
 
@@ -84,6 +108,7 @@ __all__ = [
     "RemoteLaunchLifecycle",
     "RemoteLaunchErrorCode",
     "RemoteLaunchLifecycleState",
+    "format_remote_launch_error_message",
     "normalize_remote_launch_error_code",
     "project_remote_launch_lifecycle",
 ]

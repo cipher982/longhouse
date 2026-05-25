@@ -768,8 +768,9 @@ async def list_remote_launch_debug(
             provider=attempt.provider or session.provider,
             cwd=session.cwd,
             launch_state=lifecycle.state,
+            # Admin debug keeps the raw machine-reported code; product projections normalize it.
             launch_error_code=attempt.error_code,
-            launch_error_message=lifecycle.error_message,
+            launch_error_message=attempt.error_message,
             launch_lease_until=lifecycle.lease_until,
             started_at=session.started_at,
             ended_at=session.ended_at,

@@ -18,7 +18,28 @@
           "host_reattach_available": true,
           "reply_to_live_session_available": true
         },
-        "runtime_display": null,
+        "runtime_display": {
+          "truth_tier": "managed-local",
+          "signal_tier": "phase_signal",
+          "state": "running",
+          "tone": "running",
+          "headline": "Working",
+          "detail": "Using Shell",
+          "phase_label": "Using Shell",
+          "compact_tool_label": "Shell",
+          "is_live": true,
+          "is_executing": true,
+          "needs_attention": false,
+          "is_idle": false,
+          "is_stalled": false,
+          "is_managed_local_truth": true,
+          "has_signal": true,
+          "control_path": "managed",
+          "activity_recency": "live",
+          "lifecycle": "open",
+          "host_state": "online",
+          "terminal_reason": null
+        },
         "runtime_facts": {
           "control_path": "managed",
           "process_state": "running",
@@ -64,8 +85,8 @@
         "status_label": "Using Shell",
         "status_tone": "running",
         "display_phase_label": "Using Shell",
-        "runtime_headline": "Using Shell",
-        "runtime_detail": null,
+        "runtime_headline": "Working",
+        "runtime_detail": "Using Shell",
         "runtime_tone": "running",
         "seen_at": "2026-05-15T20:00:02Z",
         "seen_at_prefix": "Updated"
@@ -87,7 +108,28 @@
           "host_reattach_available": false,
           "reply_to_live_session_available": false
         },
-        "runtime_display": null,
+        "runtime_display": {
+          "truth_tier": "fresh",
+          "signal_tier": "process_binding",
+          "state": null,
+          "tone": "active",
+          "headline": "Active",
+          "detail": null,
+          "phase_label": "Process running",
+          "compact_tool_label": null,
+          "is_live": false,
+          "is_executing": false,
+          "needs_attention": false,
+          "is_idle": false,
+          "is_stalled": false,
+          "is_managed_local_truth": false,
+          "has_signal": true,
+          "control_path": "unmanaged",
+          "activity_recency": "live",
+          "lifecycle": "open",
+          "host_state": "online",
+          "terminal_reason": null
+        },
         "runtime_facts": {
           "control_path": "unmanaged",
           "process_state": "running",
@@ -126,10 +168,10 @@
         "management_label": "Unmanaged",
         "status_label": "Running",
         "status_tone": "inactive",
-        "display_phase_label": "Running",
-        "runtime_headline": "Running",
+        "display_phase_label": "Process running",
+        "runtime_headline": "Active",
         "runtime_detail": null,
-        "runtime_tone": "inactive",
+        "runtime_tone": "active",
         "seen_at": "2026-05-15T20:10:01Z",
         "seen_at_prefix": "Verified"
       }
@@ -150,7 +192,28 @@
           "host_reattach_available": true,
           "reply_to_live_session_available": false
         },
-        "runtime_display": null,
+        "runtime_display": {
+          "truth_tier": "stale",
+          "signal_tier": "process_binding",
+          "state": null,
+          "tone": "closed",
+          "headline": "Closed",
+          "detail": null,
+          "phase_label": "Closed",
+          "compact_tool_label": null,
+          "is_live": false,
+          "is_executing": false,
+          "needs_attention": false,
+          "is_idle": true,
+          "is_stalled": false,
+          "is_managed_local_truth": false,
+          "has_signal": true,
+          "control_path": "managed",
+          "activity_recency": "none",
+          "lifecycle": "closed",
+          "host_state": "online",
+          "terminal_reason": "process_gone"
+        },
         "runtime_facts": {
           "control_path": "managed",
           "process_state": "closed",
@@ -284,6 +347,174 @@
         "runtime_detail": "Waiting for next prompt",
         "runtime_tone": "idle",
         "seen_at": "2026-05-15T20:30:02Z",
+        "seen_at_prefix": "Updated"
+      }
+    },
+    {
+      "name": "managed-stalled-display",
+      "session": {
+        "id": "runtime-managed-stalled",
+        "title": "Managed stalled",
+        "presence_state": "thinking",
+        "provider": "claude",
+        "project": "zerg",
+        "last_activity_at": "2026-05-15T20:40:00Z",
+        "status": "active",
+        "user_state": "active",
+        "capabilities": {
+          "live_control_available": true,
+          "host_reattach_available": true,
+          "reply_to_live_session_available": true
+        },
+        "runtime_display": {
+          "truth_tier": "stale",
+          "signal_tier": "phase_signal",
+          "state": "stalled",
+          "tone": "stalled",
+          "headline": "Stalled",
+          "detail": "Provider reported stalled",
+          "phase_label": "Stalled",
+          "compact_tool_label": null,
+          "is_live": false,
+          "is_executing": false,
+          "needs_attention": false,
+          "is_idle": false,
+          "is_stalled": true,
+          "is_managed_local_truth": false,
+          "has_signal": true,
+          "control_path": "managed",
+          "activity_recency": "stale",
+          "lifecycle": "open",
+          "host_state": "online",
+          "terminal_reason": null
+        },
+        "timeline_card": {
+          "ownership": {"label": "Managed", "tone": "neutral"},
+          "status": {"label": "Stalled", "tone": "stalled", "seen_at": "2026-05-15T20:40:00Z", "seen_at_prefix": "Updated"},
+          "border_tone": "stalled"
+        }
+      },
+      "expectations": {
+        "management_label": "Managed",
+        "status_label": "Stalled",
+        "status_tone": "stalled",
+        "display_phase_label": "Stalled",
+        "runtime_headline": "Stalled",
+        "runtime_detail": "Provider reported stalled",
+        "runtime_tone": "stalled",
+        "seen_at": "2026-05-15T20:40:00Z",
+        "seen_at_prefix": "Updated"
+      }
+    },
+    {
+      "name": "managed-host-offline",
+      "session": {
+        "id": "runtime-managed-host-offline",
+        "title": "Managed host offline",
+        "presence_state": "idle",
+        "provider": "codex",
+        "project": "zerg",
+        "last_activity_at": "2026-05-15T20:50:00Z",
+        "status": "idle",
+        "user_state": "active",
+        "capabilities": {
+          "live_control_available": false,
+          "host_reattach_available": true,
+          "reply_to_live_session_available": false
+        },
+        "runtime_display": {
+          "truth_tier": "none",
+          "signal_tier": "none",
+          "state": null,
+          "tone": "inactive",
+          "headline": "Not connected",
+          "detail": null,
+          "phase_label": "Inactive",
+          "compact_tool_label": null,
+          "is_live": false,
+          "is_executing": false,
+          "needs_attention": false,
+          "is_idle": false,
+          "is_stalled": false,
+          "is_managed_local_truth": false,
+          "has_signal": false,
+          "control_path": "managed",
+          "activity_recency": "none",
+          "lifecycle": "open",
+          "host_state": "offline",
+          "terminal_reason": null
+        },
+        "timeline_card": {
+          "ownership": {"label": "Managed", "tone": "neutral"},
+          "status": {"label": "No live signal", "tone": "inactive", "seen_at": null, "seen_at_prefix": "Checked"},
+          "border_tone": "inactive"
+        }
+      },
+      "expectations": {
+        "management_label": "Managed",
+        "status_label": "No live signal",
+        "status_tone": "inactive",
+        "display_phase_label": "Inactive",
+        "runtime_headline": "Not connected",
+        "runtime_detail": null,
+        "runtime_tone": "inactive",
+        "seen_at": null,
+        "seen_at_prefix": "Checked"
+      }
+    },
+    {
+      "name": "managed-transcript-sync",
+      "session": {
+        "id": "runtime-managed-sync",
+        "title": "Managed transcript sync",
+        "presence_state": "idle",
+        "provider": "claude",
+        "project": "zerg",
+        "last_activity_at": "2026-05-15T21:00:00Z",
+        "status": "idle",
+        "user_state": "active",
+        "capabilities": {
+          "live_control_available": true,
+          "host_reattach_available": true,
+          "reply_to_live_session_available": true
+        },
+        "runtime_display": {
+          "truth_tier": "managed-local",
+          "signal_tier": "phase_signal",
+          "state": "syncing_transcript",
+          "tone": "active",
+          "headline": "Syncing",
+          "detail": "Waiting for transcript",
+          "phase_label": "Syncing transcript",
+          "compact_tool_label": null,
+          "is_live": false,
+          "is_executing": false,
+          "needs_attention": false,
+          "is_idle": false,
+          "is_stalled": false,
+          "is_managed_local_truth": true,
+          "has_signal": true,
+          "control_path": "managed",
+          "activity_recency": "live",
+          "lifecycle": "open",
+          "host_state": "online",
+          "terminal_reason": null
+        },
+        "timeline_card": {
+          "ownership": {"label": "Managed", "tone": "neutral"},
+          "status": {"label": "Syncing", "tone": "active", "seen_at": null, "seen_at_prefix": "Updated"},
+          "border_tone": "active"
+        }
+      },
+      "expectations": {
+        "management_label": "Managed",
+        "status_label": "Syncing",
+        "status_tone": "active",
+        "display_phase_label": "Syncing transcript",
+        "runtime_headline": "Syncing",
+        "runtime_detail": "Waiting for transcript",
+        "runtime_tone": "active",
+        "seen_at": null,
         "seen_at_prefix": "Updated"
       }
     }

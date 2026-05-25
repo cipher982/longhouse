@@ -1394,17 +1394,8 @@ final class SessionViewModel: ObservableObject {
         ].joined(separator: "|")
     }
 
-    /// Runtime facts are authoritative when present. Unknown facts stay
-    /// unknown instead of falling through to transcript-derived hints.
     var isSessionEnded: Bool {
         guard let detail else { return false }
-        if let runtimeFacts = detail.runtimeFacts { return runtimeFacts.lifecycle.state == "closed" }
-        if let lifecycle = detail.runtimeDisplay?.lifecycle {
-            return lifecycle == "closed"
-        }
-        let terminal: Set<String> = ["completed", "closed", "ended", "terminated"]
-        if let presence = detail.presenceState, terminal.contains(presence) { return true }
-        if let status = detail.status, terminal.contains(status) { return true }
-        return false
+        return detail.isClosed
     }
 }

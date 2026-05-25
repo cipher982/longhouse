@@ -222,7 +222,7 @@ extension APISessionResponse {
             homeLabel: homeLabel,
             originLabel: originLabel,
             capabilities: capabilities.sessionCapabilities,
-            runtimeDisplay: runtimeDisplay?.sessionRuntimeDisplay,
+            runtimeDisplay: runtimeDisplay.sessionRuntimeDisplay,
             runtimeFacts: runtimeFacts?.sessionLivenessFacts,
             loopMode: loopMode.flatMap(SessionLoopMode.init(rawValue:)),
             transcriptPreview: transcriptPreview?.sessionTranscriptPreview
@@ -404,7 +404,7 @@ extension APITimelineSessionCardResponse {
             liveControlAvailable: head.capabilities.liveControlAvailable,
             hostReattachAvailable: head.capabilities.hostReattachAvailable,
             replyToLiveSessionAvailable: head.capabilities.replyToLiveSessionAvailable,
-            runtimeDisplay: head.runtimeDisplay?.sessionRuntimeDisplay,
+            runtimeDisplay: head.runtimeDisplay.sessionRuntimeDisplay,
             runtimeFacts: head.runtimeFacts?.sessionLivenessFacts,
             timelineCard: head.timelineCard.timelineCardPresentation
         )

@@ -47,33 +47,7 @@ function getFallbackCapabilityLabel({
 }
 
 function getRuntimeBadgeState(runtime: SessionRuntimeState): KnownPresenceState | null {
-  if (!runtime.factStatus) {
-    return runtime.presenceState;
-  }
-
-  const phaseKind = runtime.runtimeFacts?.phase?.kind;
-  if (
-    phaseKind === "thinking" ||
-    phaseKind === "running" ||
-    phaseKind === "needs_user" ||
-    phaseKind === "blocked" ||
-    phaseKind === "stalled" ||
-    phaseKind === "idle"
-  ) {
-    return phaseKind;
-  }
-
-  const { tone } = runtime.factStatus;
-  if (
-    tone === "thinking" ||
-    tone === "running" ||
-    tone === "blocked" ||
-    tone === "stalled" ||
-    tone === "idle"
-  ) {
-    return tone;
-  }
-  return null;
+  return runtime.presenceState;
 }
 
 function shouldAnimateRuntimeBadge(state: KnownPresenceState | null): boolean {
@@ -96,9 +70,7 @@ export function SessionRuntimeStrip({
 }: SessionRuntimeStripProps) {
   const runtime = resolveSessionRuntimeState(session);
   const runtimeBadgeState = getRuntimeBadgeState(runtime);
-  const runtimeBadgeTool = runtime.factStatus
-    ? (runtime.runtimeFacts?.phase?.tool ?? null)
-    : runtime.presenceTool;
+  const runtimeBadgeTool = runtime.presenceTool;
   const runtimeDisplay = getRuntimeDisplayCopy(runtime, {
     managedLocal: interaction.isManagedLocalSession,
   });
@@ -106,9 +78,7 @@ export function SessionRuntimeStrip({
     ? runtimeDisplay.headline
     : getRuntimeOutcomeLabel(runtime);
   const runtimeDetail = interaction.isManagedLocalSession
-    ? runtime.runtimeDisplay
-      ? runtimeDisplay.detail
-      : (detailFallback ?? runtimeDisplay.detail)
+    ? (runtimeDisplay.detail ?? (runtime.runtimeDisplay ? null : detailFallback))
     : null;
   const runtimeMeta = getRuntimeMetaLabel(runtime);
   const resolvedHostLabel =
@@ -165,7 +135,7 @@ export function SessionRuntimeStrip({
           animateCompact={shouldAnimateRuntimeBadge(runtimeBadgeState)}
           showUnknown={
             runtimeBadgeState == null &&
-            (runtime.factStatus != null || interaction.isManagedLocalSession)
+            (runtime.hasSignal || interaction.isManagedLocalSession)
           }
         />
         <div className="session-runtime-strip__copy">

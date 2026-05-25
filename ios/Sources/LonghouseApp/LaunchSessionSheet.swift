@@ -379,31 +379,10 @@ struct LaunchSessionSheet: View {
     }
 
     private func formatLaunchFailure(_ response: RemoteSessionLaunchResponse) -> String {
-        let code = response.launchErrorCode?.trimmingCharacters(in: .whitespacesAndNewlines)
         let message = response.launchErrorMessage?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let code, !code.isEmpty {
-            let friendlyPrefix: String? = switch code {
-            case "cwd_not_found", "cwd_not_allowed":
-                "Check the workspace path"
-            case "machine_offline":
-                "Machine is offline"
-            case "provider_unsupported":
-                "Codex launch is unavailable on this machine"
-            case "device_not_enrolled":
-                "Machine is not enrolled"
-            case "provider_launch_failed":
-                "Codex failed to start"
-            default:
-                nil
-            }
-            if let friendlyPrefix, let message, !message.isEmpty {
-                return "\(friendlyPrefix): \(message)"
-            }
-            if let friendlyPrefix { return friendlyPrefix }
-            if let message, !message.isEmpty { return message }
-            return code
-        }
         if let message, !message.isEmpty { return message }
+        let code = response.launchErrorCode?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let code, !code.isEmpty { return code }
         if response.launchState == .unknown {
             return "Launch state was not recognized by this app build."
         }

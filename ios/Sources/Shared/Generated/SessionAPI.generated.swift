@@ -202,7 +202,7 @@ struct APISessionResponse: Codable, Hashable, Sendable {
     let isSidechain: Bool?
     let control: APISessionControlResponse?
     let capabilities: APISessionCapabilitiesResponse
-    let runtimeDisplay: APISessionRuntimeDisplayResponse?
+    let runtimeDisplay: APISessionRuntimeDisplayResponse
     let runtimeFacts: APISessionLivenessFactsResponse?
     let transcriptPreview: APISessionTranscriptPreviewResponse?
     let timelineCard: APITimelineCardPresentationResponse

@@ -138,7 +138,7 @@ function nonEmptyText(value: string | null | undefined): string {
 export function shouldRenderTranscriptPreview(
   preview: AgentSession["transcript_preview"] | null | undefined,
 ): boolean {
-  return Boolean(preview && nonEmptyText(preview.text) && preview.timestamp && !preview.is_stale);
+  return Boolean(preview && nonEmptyText(preview.text) && !preview.is_stale);
 }
 
 export function projectionItemsWithTranscriptPreview(

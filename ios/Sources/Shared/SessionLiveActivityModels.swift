@@ -21,15 +21,7 @@ extension SessionDetail {
         let state: String
         let tool: String?
         let phase: String?
-        if runtimeDisplay?.state == transcriptSyncState, let runtimeDisplay {
-            state = runtimeDisplay.state ?? "unknown"
-            tool = RuntimeDisplayText.canonicalToolLabel(runtimeDisplay.compactToolLabel)
-            phase = RuntimeDisplayText.canonicalDisplayText(Optional(runtimeDisplay.phaseLabel))
-        } else if let factStatus = sessionFactStatus(runtimeFacts) {
-            state = "unknown"
-            tool = nil
-            phase = factStatus.label
-        } else if let runtimeDisplay {
+        if let runtimeDisplay {
             state = runtimeDisplay.state ?? "unknown"
             tool = RuntimeDisplayText.canonicalToolLabel(runtimeDisplay.compactToolLabel)
             phase = RuntimeDisplayText.canonicalDisplayText(Optional(runtimeDisplay.phaseLabel))
@@ -43,7 +35,7 @@ extension SessionDetail {
             displayPhase: phase ?? liveActivityPhaseLabel(state: state, tool: tool),
             activeTool: tool,
             updatedAt: Int(updatedAt.timeIntervalSince1970),
-            isAttention: runtimeFacts == nil ? ((runtimeDisplay?.needsAttention) ?? (state == "blocked")) : false
+            isAttention: runtimeDisplay?.needsAttention ?? (state == "blocked")
         )
     }
 

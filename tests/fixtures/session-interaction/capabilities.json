@@ -154,6 +154,79 @@
         "ios_default_input_intent": "auto",
         "ios_composer_placeholder": "Reply"
       }
+    },
+    {
+      "name": "managed-session-closed",
+      "session": {
+        "id": "interaction-managed-closed",
+        "provider": "codex",
+        "project": "zerg",
+        "cwd": null,
+        "git_branch": null,
+        "summary": null,
+        "summary_title": null,
+        "presence_state": "idle",
+        "presence_tool": null,
+        "user_state": "active",
+        "status": "completed",
+        "last_activity_at": null,
+        "display_phase": null,
+        "active_tool": null,
+        "home_label": "Mac mini",
+        "origin_label": "Mac mini",
+        "runtime_display": {
+          "truth_tier": "stale",
+          "signal_tier": "none",
+          "state": null,
+          "tone": "closed",
+          "headline": "Closed",
+          "detail": null,
+          "phase_label": "Closed",
+          "compact_tool_label": null,
+          "is_live": false,
+          "is_executing": false,
+          "needs_attention": false,
+          "is_idle": true,
+          "is_stalled": false,
+          "is_managed_local_truth": false,
+          "has_signal": true,
+          "control_path": "managed",
+          "activity_recency": "none",
+          "lifecycle": "closed",
+          "host_state": "offline",
+          "terminal_reason": "process_gone"
+        },
+        "capabilities": {
+          "live_control_available": false,
+          "host_reattach_available": false,
+          "reply_to_live_session_available": false,
+          "display_label": "Closed",
+          "display_detail": "This session has ended.",
+          "display_tone": "neutral",
+          "input_mode": "read_only",
+          "default_input_intent": "auto",
+          "composer_enabled": false,
+          "composer_placeholder": "Reply",
+          "composer_disabled_reason": "This session has ended.",
+          "send_disabled_reason": "session_closed"
+        },
+        "loop_mode": "manual"
+      },
+      "expectations": {
+        "web_mode": "unsupported",
+        "web_capability_label": "Closed",
+        "web_composer_disabled_reason": "This session has ended.",
+        "web_send_disabled_reason": "session_closed",
+        "web_primary_action_label": "Unavailable",
+        "ios_can_send_live": false,
+        "ios_is_control_offline": false,
+        "ios_is_read_only": true,
+        "ios_runtime_capability_label": "Closed",
+        "ios_runtime_capability_tone": "neutral",
+        "ios_control_health_message": "This session has ended.",
+        "ios_default_input_intent": "auto",
+        "ios_composer_placeholder": "Reply"
+      }
     }
   ]
 }

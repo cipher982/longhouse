@@ -54,50 +54,6 @@ enum RuntimeDisplayText {
         return nil
     }
 
-    static func compactFactToolLabel(_ value: String?) -> String? {
-        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
-            return nil
-        }
-        let canonical = value.split(separator: "__").last.map(String.init) ?? value
-        let withoutPrefixes = canonical
-            .replacingOccurrences(of: #"^(hatch_|tool_|mcp_)"#, with: "", options: .regularExpression)
-        let normalized = withoutPrefixes
-            .replacingOccurrences(of: #"[-_.]+"#, with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalized.isEmpty else { return nil }
-        switch normalized.lowercased() {
-        case "codex": return "Codex"
-        case "claude": return "Claude"
-        case "antigravity": return "Antigravity"
-        case "gemini": return "Gemini"
-        case "default": return "Z.ai"
-        case "shell", "bash", "terminal": return "Shell"
-        case "edit", "write", "patch", "apply patch", "file change", "filechange": return "Edit"
-        default: return normalized.capitalized
-        }
-    }
-
-    static func phaseStatusLabel(kind: String, tool: String?) -> String {
-        let phase = kind == "needs_user" ? "idle" : kind.replacingOccurrences(of: #"[-_]+"#, with: " ", options: .regularExpression)
-        if let compactTool = compactFactToolLabel(tool), kind == "running" {
-            return "Using \(compactTool)"
-        }
-        if let compactTool = compactFactToolLabel(tool), kind == "blocked" {
-            return "\(phase.capitalized) \(compactTool)"
-        }
-        return phase.capitalized
-    }
-
-    static func phaseTone(_ kind: String) -> String {
-        switch kind {
-        case "thinking", "running", "blocked", "stalled":
-            return kind
-        case "idle", "needs_user":
-            return "idle"
-        default:
-            return "inactive"
-        }
-    }
 }
 
 struct HostObservation: Codable, Hashable, Sendable {
@@ -176,48 +132,6 @@ struct SessionLivenessFacts: Codable, Hashable, Sendable {
         self.activity = activity
         self.lifecycle = lifecycle
     }
-}
-
-struct SessionFactStatus: Hashable, Sendable {
-    let label: String
-    let tone: String
-    let seenAt: String?
-    let seenAtPrefix: String
-}
-
-func sessionFactStatus(_ facts: SessionLivenessFacts?) -> SessionFactStatus? {
-    guard let facts else { return nil }
-    let processState = facts.processState ?? "unknown"
-    if facts.lifecycle.state == "closed" || processState == "closed" {
-        return SessionFactStatus(
-            label: "Closed",
-            tone: "closed",
-            seenAt: facts.lifecycle.observedAt ?? facts.phase.observedAt ?? facts.activity.lastTranscriptAt,
-            seenAtPrefix: "Closed"
-        )
-    }
-    if let kind = facts.phase.kind?.trimmingCharacters(in: .whitespacesAndNewlines), !kind.isEmpty {
-        return SessionFactStatus(
-            label: RuntimeDisplayText.phaseStatusLabel(kind: kind, tool: facts.phase.tool),
-            tone: RuntimeDisplayText.phaseTone(kind),
-            seenAt: facts.phase.observedAt,
-            seenAtPrefix: "Updated"
-        )
-    }
-    if processState == "running" || facts.process.status == "observed" {
-        return SessionFactStatus(
-            label: "Running",
-            tone: "inactive",
-            seenAt: facts.process.observedAt ?? facts.process.lastSeenAt,
-            seenAtPrefix: "Verified"
-        )
-    }
-    return SessionFactStatus(
-        label: "No live signal",
-        tone: "inactive",
-        seenAt: facts.activity.lastRuntimeSignalAt,
-        seenAtPrefix: facts.activity.lastRuntimeSignalAt == nil ? "Checked" : "Last signal"
-    )
 }
 
 /// Honest summarization state — mirrors backend `summary_status` field.
@@ -321,15 +235,12 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     var isClosed: Bool {
         if runtimeDisplay?.lifecycle == "closed" { return true }
         if runtimeDisplay?.lifecycle != nil { return false }
-        if let runtimeFacts { return runtimeFacts.lifecycle.state == "closed" }
         if runtimeDisplay?.lifecycle == nil && status == "completed" { return true }
         return false
     }
 
     private var effectiveRuntimeState: String? {
-        if runtimeDisplay?.state == transcriptSyncState { return transcriptSyncState }
         if let runtimeDisplay { return runtimeDisplay.state }
-        if runtimeFacts != nil { return nil }
         return presenceState
     }
     var isBlocked: Bool { !isClosed && effectiveRuntimeState == "blocked" }
@@ -337,33 +248,21 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     var needsAttention: Bool {
         if isClosed || !isUserActive { return false }
         if let runtimeDisplay { return runtimeDisplay.needsAttention }
-        if runtimeFacts != nil { return false }
         return isBlocked
     }
     var isExecuting: Bool {
         if isClosed { return false }
         if let runtimeDisplay { return runtimeDisplay.isExecuting }
-        if runtimeFacts != nil { return false }
-        return presenceState == "thinking" || presenceState == "running"
+        return false
     }
     var isIdle: Bool {
         if isClosed { return true }
         if let runtimeDisplay { return runtimeDisplay.isIdle }
-        if runtimeFacts != nil { return false }
-        return presenceState == "idle" || status == "idle"
+        return false
     }
     var runtimeTone: String {
-        if runtimeDisplay?.state == transcriptSyncState { return runtimeDisplay?.tone ?? "active" }
-        if isClosed { return "idle" }
         if let tone = runtimeDisplay?.tone { return tone }
-        if let factStatus = sessionFactStatus(runtimeFacts) { return factStatus.tone }
-        switch presenceState {
-        case "running": return "running"
-        case "thinking": return "thinking"
-        case "needs_user", "idle": return "idle"
-        case "blocked": return "blocked"
-        default: return "inactive"
-        }
+        return isClosed ? "closed" : "inactive"
     }
     var timelineAnchor: String? { timelineAnchorAt ?? lastActivityAt }
     var timelineBranchBadgeLabel: String? {
@@ -389,8 +288,6 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     }
 
     var managementLabel: String {
-        if runtimeFacts?.controlPath == "managed" { return "Managed" }
-        if runtimeFacts?.controlPath == "unmanaged" { return "Unmanaged" }
         if let label = timelineCard?.ownership.label.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
             return label
         }
@@ -402,49 +299,19 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     }
 
     private var isManaged: Bool {
-        if runtimeFacts?.controlPath == "managed" { return true }
-        if runtimeFacts?.controlPath == "unmanaged" { return false }
         if runtimeDisplay?.controlPath == "managed" { return true }
         if runtimeDisplay?.controlPath == "unmanaged" { return false }
         return liveControlAvailable == true || hostReattachAvailable == true || replyToLiveSessionAvailable == true
     }
 
     var displayPhaseLabel: String {
-        if runtimeDisplay?.state == transcriptSyncState,
-           let phaseLabel = runtimeDisplay?.phaseLabel.trimmingCharacters(in: .whitespacesAndNewlines),
-           !phaseLabel.isEmpty {
-            return RuntimeDisplayText.canonicalDisplayText(phaseLabel)
-        }
         if isClosed {
             return "Closed"
         }
         if let phaseLabel = runtimeDisplay?.phaseLabel.trimmingCharacters(in: .whitespacesAndNewlines), !phaseLabel.isEmpty {
             return RuntimeDisplayText.canonicalDisplayText(phaseLabel)
         }
-        if let factStatus = sessionFactStatus(runtimeFacts) {
-            return factStatus.label
-        }
-        if let displayPhase = displayPhase?.trimmingCharacters(in: .whitespacesAndNewlines), !displayPhase.isEmpty {
-            return RuntimeDisplayText.canonicalDisplayText(displayPhase)
-        }
-        let tool = RuntimeDisplayText.canonicalToolLabel(activeTool ?? presenceTool)
-        switch presenceState {
-        case "running":
-            return tool.map { "Using \($0)" } ?? "Running"
-        case "thinking":
-            return "Thinking"
-        case "needs_user":
-            return "Idle"
-        case "blocked":
-            return tool.map { "Blocked on \($0)" } ?? "Needs permission"
-        case "idle":
-            return "Idle"
-        default:
-            let lifecycle = runtimeDisplay?.lifecycle
-            if lifecycle == "closed" { return "Closed" }
-            if lifecycle == nil && status == "completed" { return "Closed" }
-            return "Inactive"
-        }
+        return "Inactive"
     }
 
     var timelineStatusLabel: String {
@@ -642,7 +509,7 @@ struct SessionTranscriptPreview: Codable, Hashable, Sendable {
     let staleReason: String?
 
     var shouldRender: Bool {
-        timestamp != nil && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && isStale != true
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && isStale != true
     }
 
     var syntheticEvent: SessionEvent {
@@ -738,7 +605,6 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     var isClosed: Bool {
         if runtimeDisplay?.lifecycle == "closed" { return true }
         if runtimeDisplay?.lifecycle != nil { return false }
-        if let runtimeFacts { return runtimeFacts.lifecycle.state == "closed" }
         if runtimeDisplay?.lifecycle == nil && status == "completed" { return true }
         return false
     }
@@ -783,49 +649,15 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     }
 
     var runtimePhaseState: String {
-        if runtimeDisplay?.state == transcriptSyncState { return transcriptSyncState }
         if let runtimeDisplay { return runtimeDisplay.state ?? "idle" }
-        if let runtimeFacts {
-            let kind = runtimeFacts.phase.kind?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return kind?.isEmpty == false ? kind! : "unknown"
-        }
-        return presenceState ?? status ?? "idle"
+        return "idle"
     }
 
     var runtimePhaseLabel: String {
-        if runtimeDisplay?.state == transcriptSyncState,
-           let phaseLabel = runtimeDisplay?.phaseLabel.trimmingCharacters(in: .whitespacesAndNewlines),
-           !phaseLabel.isEmpty {
-            return RuntimeDisplayText.canonicalDisplayText(phaseLabel)
-        }
         if let phaseLabel = runtimeDisplay?.phaseLabel.trimmingCharacters(in: .whitespacesAndNewlines), !phaseLabel.isEmpty {
             return RuntimeDisplayText.canonicalDisplayText(phaseLabel)
         }
-        if let factStatus = sessionFactStatus(runtimeFacts) {
-            return factStatus.label
-        }
-        if let displayPhase = displayPhase?.trimmingCharacters(in: .whitespacesAndNewlines), !displayPhase.isEmpty {
-            return RuntimeDisplayText.canonicalDisplayText(displayPhase)
-        }
-        let tool = RuntimeDisplayText.canonicalToolLabel(activeTool ?? presenceTool)
-        switch runtimePhaseState {
-        case "running":
-            return tool.map { "Using \($0)" } ?? "Running"
-        case "thinking":
-            return "Thinking"
-        case "needs_user":
-            return "Idle"
-        case "blocked":
-            return tool.map { "Blocked on \($0)" } ?? "Needs permission"
-        case "working", "active":
-            return "Working"
-        case "completed":
-            return "Completed"
-        case "idle":
-            return "Idle"
-        default:
-            return runtimePhaseState.capitalized
-        }
+        return "Inactive"
     }
 
     var controlHealthMessage: String? {
@@ -879,64 +711,34 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     }
 
     var runtimeHeadline: String {
-        if runtimeDisplay?.state == transcriptSyncState,
-           let headline = runtimeDisplay?.headline.trimmingCharacters(in: .whitespacesAndNewlines),
-           !headline.isEmpty {
-            return RuntimeDisplayText.canonicalDisplayText(headline)
-        }
         if let headline = runtimeDisplay?.headline.trimmingCharacters(in: .whitespacesAndNewlines), !headline.isEmpty {
             return RuntimeDisplayText.canonicalDisplayText(headline)
         }
-        if let factStatus = sessionFactStatus(runtimeFacts) {
-            return factStatus.label
-        }
         if isControlOffline || isReadOnly { return runtimeCapabilityLabel }
-        if isSessionExecuting { return "Working" }
-        if runtimePhaseState == "idle" { return "Idle" }
-        return runtimePhaseLabel
+        return "Inactive"
     }
 
     var runtimeDetail: String? {
-        if runtimeDisplay?.state == transcriptSyncState,
-           let detail = runtimeDisplay?.detail?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !detail.isEmpty {
+        if let runtimeDisplay {
+            guard let detail = runtimeDisplay.detail?.trimmingCharacters(in: .whitespacesAndNewlines), !detail.isEmpty else {
+                return nil
+            }
             return RuntimeDisplayText.canonicalDisplayText(detail)
-        }
-        if let detail = runtimeDisplay?.detail?.trimmingCharacters(in: .whitespacesAndNewlines), !detail.isEmpty {
-            return RuntimeDisplayText.canonicalDisplayText(detail)
-        }
-        if runtimeFacts != nil {
-            return nil
         }
         if isControlOffline || isReadOnly {
             return controlHealthMessage
-        }
-        if runtimePhaseState == "idle" {
-            return controlHealthMessage
-        }
-        if runtimeHeadline != runtimePhaseLabel {
-            return runtimePhaseLabel
         }
         return controlHealthMessage
     }
 
     var runtimeTone: String {
-        if runtimeDisplay?.state == transcriptSyncState { return runtimeDisplay?.tone ?? "active" }
         if let tone = runtimeDisplay?.tone { return tone }
-        if let factStatus = sessionFactStatus(runtimeFacts) { return factStatus.tone }
-        switch runtimePhaseState {
-        case "running": return "running"
-        case "thinking": return "thinking"
-        case "needs_user": return "idle"
-        case "blocked": return "blocked"
-        case "idle", "completed": return "idle"
-        default: return "inactive"
-        }
+        return isClosed ? "closed" : "inactive"
     }
 
     var isSessionExecuting: Bool {
         if let runtimeDisplay { return runtimeDisplay.isExecuting }
-        return runtimePhaseState == "running" || runtimePhaseState == "thinking"
+        return false
     }
 
     func replacingTranscriptPreview(_ transcriptPreview: SessionTranscriptPreview?) -> SessionDetail {
