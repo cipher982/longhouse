@@ -5,7 +5,6 @@ import type { AgentSession } from "../../services/api/agents";
 import {
   resolveSessionOwnershipLabel,
   resolveSessionRuntimeState,
-  resolveSessionStatusLabel,
 } from "../sessionRuntime";
 
 type RuntimeExpectation = {
@@ -28,20 +27,6 @@ type RuntimeFixture = {
   cases: RuntimeFixtureCase[];
 };
 
-function shouldUseTimelineCardStatus(session: AgentSession): boolean {
-  const timelineCardStatus = session.timeline_card?.status ?? null;
-  const runtimeFacts = session.runtime_facts ?? null;
-  const processState = runtimeFacts?.process_state ?? null;
-  const phaseKind = runtimeFacts?.phase?.kind?.trim() || null;
-  const hasProcessAxis = processState === "running" || processState === "closed" || processState === "unknown";
-  const processOnly =
-    hasProcessAxis &&
-    phaseKind == null &&
-    timelineCardStatus != null &&
-    (timelineCardStatus.tone === "inactive" || timelineCardStatus.tone === "closed");
-  return timelineCardStatus != null && !processOnly;
-}
-
 function loadFixture(name: string): RuntimeFixture {
   const fixturePath = resolve(process.cwd(), "../tests/fixtures/session-runtime", name);
   return JSON.parse(readFileSync(fixturePath, "utf8")) as RuntimeFixture;
@@ -53,18 +38,18 @@ describe("shared runtime fixtures", () => {
   it.each(fixture.cases)("matches $name", ({ session, expectations }) => {
     const runtime = resolveSessionRuntimeState(session);
     const timelineCard = session.timeline_card ?? null;
-    const timelineStatus = shouldUseTimelineCardStatus(session) ? (timelineCard?.status ?? null) : null;
-    const fallbackControlPath = expectations.management_label === "Managed" ? "managed" : "unmanaged";
-    const statusLabel = timelineStatus?.label ?? resolveSessionStatusLabel(runtime, fallbackControlPath);
-    const statusTone = timelineStatus?.tone ?? timelineCard?.border_tone ?? runtime.tone;
-    const seenAt = timelineStatus?.seen_at ?? runtime.factStatus?.seenAt ?? null;
-    const seenAtPrefix = timelineStatus?.seen_at_prefix ?? runtime.factStatus?.seenAtPrefix ?? "Updated";
+    const timelineStatus = timelineCard?.status ?? {
+      label: "No live signal",
+      tone: "inactive",
+      seen_at: null,
+      seen_at_prefix: "Checked",
+    };
 
     expect(timelineCard?.ownership.label ?? resolveSessionOwnershipLabel(runtime)).toBe(expectations.management_label);
-    expect(statusLabel).toBe(expectations.status_label);
-    expect(statusTone).toBe(expectations.status_tone);
+    expect(timelineStatus.label).toBe(expectations.status_label);
+    expect(timelineStatus.tone).toBe(expectations.status_tone);
     expect(runtime.displayPhase).toBe(expectations.display_phase_label);
-    expect(seenAt).toBe(expectations.seen_at);
-    expect(seenAtPrefix).toBe(expectations.seen_at_prefix);
+    expect(timelineStatus.seen_at ?? null).toBe(expectations.seen_at);
+    expect(timelineStatus.seen_at_prefix).toBe(expectations.seen_at_prefix);
   });
 });

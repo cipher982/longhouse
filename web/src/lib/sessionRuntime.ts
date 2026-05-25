@@ -53,7 +53,11 @@ export function isSessionClosed(
   if (lifecycle != null) {
     return lifecycle === "closed";
   }
-  return !!session.terminal_state;
+  return (
+    session.terminal_state === "session_ended" ||
+    session.terminal_state === "process_gone" ||
+    session.terminal_state === "user_closed"
+  );
 }
 
 export interface SessionRuntimeState {
@@ -84,7 +88,7 @@ export interface SessionFactStatus {
   label: string;
   tone: RuntimeTone;
   seenAt: string | null;
-  seenAtPrefix: "Closed" | "Checked" | "Updated" | "Verified";
+  seenAtPrefix: "Closed" | "Checked" | "Last signal" | "Updated" | "Verified";
 }
 
 export function resolveSessionOwnershipLabel(
@@ -106,69 +110,6 @@ export function resolveSessionOwnershipLabel(
     return "Unmanaged";
   }
   return fallback;
-}
-
-export function resolveSessionStatusLabel(
-  runtime: SessionRuntimeState,
-  fallbackControlPath: "managed" | "unmanaged" = "unmanaged",
-): string {
-  if (runtime.factStatus) {
-    return runtime.factStatus.label;
-  }
-  const display = runtime.runtimeDisplay;
-  if (display?.lifecycle === "closed") {
-    return "Closed";
-  }
-  if (display?.state === TRANSCRIPT_SYNC_STATE) {
-    return display.headline || "Syncing";
-  }
-
-  const controlPath = display?.control_path ?? fallbackControlPath;
-  if (controlPath === "managed") {
-    if (runtime.isStalled || runtime.presenceState === "stalled") {
-      return "Stalled";
-    }
-    if (runtime.presenceState === "running" || runtime.presenceState === "thinking") {
-      return "Working";
-    }
-    if (runtime.presenceState === "blocked") {
-      return "Needs permission";
-    }
-    if (runtime.presenceState === "needs_user") {
-      return "Idle";
-    }
-    if (runtime.presenceState === "idle" || runtime.isIdle) {
-      return "Idle";
-    }
-    if (display?.activity_recency === "live" || display?.activity_recency === "recent") {
-      return "Recent activity";
-    }
-    if (display?.activity_recency === "none") {
-      return "Unknown";
-    }
-    return "Disconnected";
-  }
-
-  if (controlPath === "unmanaged") {
-    if (display?.activity_recency === "live" || runtime.isExecuting || runtime.needsAttention) {
-      return "Active";
-    }
-    if (display?.activity_recency === "recent") {
-      return "Recent activity";
-    }
-    if (display?.activity_recency === "stale") {
-      return "Stale";
-    }
-    return "Unknown";
-  }
-
-  if (runtime.isExecuting || runtime.needsAttention) {
-    return "Active";
-  }
-  if (runtime.isIdle) {
-    return "Idle";
-  }
-  return "Unknown";
 }
 
 function titleCaseWords(value: string): string {
@@ -277,10 +218,10 @@ function resolveSessionFactStatus(facts: SessionLivenessFacts | null): SessionFa
   }
 
   return {
-    label: "Unknown",
+    label: "No live signal",
     tone: "inactive",
-    seenAt: null,
-    seenAtPrefix: "Checked",
+    seenAt: facts.activity?.last_runtime_signal_at ?? null,
+    seenAtPrefix: facts.activity?.last_runtime_signal_at ? "Last signal" : "Checked",
   };
 }
 

@@ -202,6 +202,147 @@ def _client(factory):
         api_app.dependency_overrides.clear()
 
 
+@pytest.mark.parametrize("terminal_state", ["session_ended", "process_gone", "user_closed"])
+def test_terminal_signals_with_irreversible_states_close_session_and_timeline(tmp_path, terminal_state):
+    factory = _make_db(tmp_path, f"terminal_closes_{terminal_state}.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session = _seed_session(db, started_at=now - timedelta(minutes=30), ended_at=None)
+        session_id = str(session.id)
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=f"claude:{session_id}",
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="terminal_signal",
+                    occurred_at=now,
+                    dedupe_key=f"terminal:{terminal_state}",
+                    payload={"terminal_state": terminal_state},
+                )
+            ],
+        )
+        db.commit()
+        db.refresh(session)
+
+        assert session.ended_at is not None
+        assert session.ended_at.replace(tzinfo=timezone.utc) == now
+    finally:
+        db.close()
+
+    for client in _client(factory):
+        resp = client.get("/agents/sessions?days_back=7&limit=1", headers={"X-Agents-Token": "dev"})
+        assert resp.status_code == 200, resp.text
+        row = resp.json()["sessions"][0]
+        assert row["id"] == session_id
+        assert row["runtime_facts"]["lifecycle"]["state"] == "closed"
+        assert row["timeline_card"]["status"]["label"] == "Closed"
+        assert row["timeline_card"]["status"]["tone"] == "closed"
+
+
+@pytest.mark.parametrize("terminal_state", ["finished", "host_expired"])
+def test_reversible_or_turn_terminal_signals_do_not_close_session(tmp_path, terminal_state):
+    factory = _make_db(tmp_path, f"terminal_open_{terminal_state}.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session = _seed_session(db, started_at=now - timedelta(minutes=30), ended_at=None)
+        session_id = str(session.id)
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=f"claude:{session_id}",
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="terminal_signal",
+                    occurred_at=now,
+                    dedupe_key=f"terminal:{terminal_state}",
+                    payload={"terminal_state": terminal_state},
+                )
+            ],
+        )
+        db.commit()
+        db.refresh(session)
+
+        assert session.ended_at is None
+    finally:
+        db.close()
+
+    for client in _client(factory):
+        resp = client.get("/agents/sessions?days_back=7&limit=1", headers={"X-Agents-Token": "dev"})
+        assert resp.status_code == 200, resp.text
+        row = resp.json()["sessions"][0]
+        assert row["id"] == session_id
+        assert row["runtime_facts"]["lifecycle"]["state"] == "unknown"
+        assert row["timeline_card"]["status"]["label"] == "No live signal"
+        assert row["timeline_card"]["status"]["seen_at"] == row["runtime_facts"]["activity"]["last_runtime_signal_at"]
+        assert row["timeline_card"]["status"]["seen_at_prefix"] == "Last signal"
+
+
+def test_progress_after_host_expired_reopens_runtime_projection(tmp_path):
+    factory = _make_db(tmp_path, "host_expired_then_progress.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session = _seed_session(db, started_at=now - timedelta(minutes=30), ended_at=None)
+        session_id = str(session.id)
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=f"claude:{session_id}",
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="terminal_signal",
+                    occurred_at=now,
+                    dedupe_key="terminal:host_expired",
+                    payload={"terminal_state": "host_expired"},
+                ),
+                RuntimeEventIngest(
+                    runtime_key=f"claude:{session_id}",
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="progress_signal",
+                    occurred_at=now + timedelta(seconds=5),
+                    dedupe_key="progress:after-host-expired",
+                    payload={"progress_kind": "transcript_append"},
+                ),
+            ],
+        )
+        db.commit()
+        db.refresh(session)
+
+        runtime_state = db.query(SessionRuntimeState).filter_by(runtime_key=f"claude:{session_id}").one()
+        assert session.ended_at is None
+        assert runtime_state.terminal_state is None
+        assert runtime_state.phase == "idle"
+        assert runtime_state.phase_source == "progress"
+    finally:
+        db.close()
+
+    for client in _client(factory):
+        resp = client.get("/agents/sessions?days_back=7&limit=1", headers={"X-Agents-Token": "dev"})
+        assert resp.status_code == 200, resp.text
+        row = resp.json()["sessions"][0]
+        assert row["id"] == session_id
+        assert row["runtime_facts"]["lifecycle"]["state"] == "unknown"
+        assert row["timeline_card"]["status"]["label"] == "No live signal"
+
+
 def test_sessions_list_uses_recent_activity_anchor_for_old_live_session(tmp_path):
     factory = _make_db(tmp_path, "recent_anchor.db")
     now = datetime.now(timezone.utc)
@@ -869,7 +1010,7 @@ def test_sessions_list_keeps_progress_runtime_overlay_for_recent_closed_session(
         assert row["last_live_at"] is None
         assert row["confidence"] == "stale"
         assert row["runtime_facts"]["process_state"] == "unknown"
-        assert row["timeline_card"]["status"]["label"] == "Unknown"
+        assert row["timeline_card"]["status"]["label"] == "No live signal"
         assert row["timeline_card"]["status"]["seen_at_prefix"] == "Checked"
 
 
@@ -980,8 +1121,9 @@ def test_sessions_list_suppresses_stale_phase_signal_from_timeline_status(tmp_pa
         assert row["runtime_facts"]["phase"]["kind"] is None
         assert row["runtime_facts"]["activity"]["last_runtime_signal_at"] is not None
         assert row["runtime_facts"]["process_state"] == "unknown"
-        assert row["timeline_card"]["status"]["label"] == "Unknown"
-        assert row["timeline_card"]["status"]["seen_at_prefix"] == "Checked"
+        assert row["timeline_card"]["status"]["label"] == "No live signal"
+        assert row["timeline_card"]["status"]["seen_at"] == row["runtime_facts"]["activity"]["last_runtime_signal_at"]
+        assert row["timeline_card"]["status"]["seen_at_prefix"] == "Last signal"
 
 
 def test_sessions_list_marks_materialized_needs_user_as_idle(tmp_path):

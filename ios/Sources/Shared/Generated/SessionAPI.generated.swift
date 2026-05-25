@@ -147,7 +147,7 @@ struct APITimelineStatusPresentationResponse: Codable, Hashable, Sendable {
 
 struct APITimelineCardPresentationResponse: Codable, Hashable, Sendable {
     let ownership: APITimelineBadgePresentationResponse
-    let status: APITimelineStatusPresentationResponse?
+    let status: APITimelineStatusPresentationResponse
     let borderTone: String?
 }
 

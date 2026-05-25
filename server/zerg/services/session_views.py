@@ -353,7 +353,7 @@ def _timeline_status_from_display(
 
 def _timeline_status_from_liveness_facts(runtime_facts: SessionLivenessFactsResponse | None) -> TimelineStatusPresentationResponse:
     if runtime_facts is None:
-        return TimelineStatusPresentationResponse(label="Unknown", tone="inactive", seen_at=None, seen_at_prefix="Checked")
+        return TimelineStatusPresentationResponse(label="No live signal", tone="inactive", seen_at=None, seen_at_prefix="Checked")
 
     process_state = str(runtime_facts.process_state or "").strip()
     lifecycle = runtime_facts.lifecycle
@@ -385,10 +385,10 @@ def _timeline_status_from_liveness_facts(runtime_facts: SessionLivenessFactsResp
         )
 
     return TimelineStatusPresentationResponse(
-        label="Unknown",
+        label="No live signal",
         tone="inactive",
-        seen_at=None,
-        seen_at_prefix="Checked",
+        seen_at=runtime_facts.activity.last_runtime_signal_at,
+        seen_at_prefix="Last signal" if runtime_facts.activity.last_runtime_signal_at is not None else "Checked",
     )
 
 
@@ -655,7 +655,7 @@ class TimelineStatusPresentationResponse(TimelineBadgePresentationResponse):
 
 class TimelineCardPresentationResponse(UTCBaseModel):
     ownership: TimelineBadgePresentationResponse = Field(..., description="Managed/unmanaged badge")
-    status: Optional[TimelineStatusPresentationResponse] = Field(None, description="Primary timeline status badge")
+    status: TimelineStatusPresentationResponse = Field(..., description="Primary timeline status badge")
     border_tone: str = Field("inactive", description="Stable tone token for the card edge/outline")
 
 

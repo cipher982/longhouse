@@ -878,7 +878,7 @@ struct SessionModelsTests {
         let noPhaseDetail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: Data(noPhaseJson.utf8))
 
         #expect(noPhaseDetail.runtimePhaseState == "unknown")
-        #expect(noPhaseDetail.runtimePhaseLabel == "Unknown")
+        #expect(noPhaseDetail.runtimePhaseLabel == "No live signal")
         #expect(!noPhaseDetail.isSessionExecuting)
     }
 
@@ -1052,9 +1052,9 @@ struct SessionModelsTests {
             )
         )
 
-        #expect(stale.timelineStatusLabel == "Stale")
-        #expect(stale.timelineStatusSeenAt == "2026-04-25T20:00:00Z")
-        #expect(live.timelineStatusLabel == "Active")
+        #expect(stale.timelineStatusLabel == "No live signal")
+        #expect(stale.timelineStatusSeenAt == nil)
+        #expect(live.timelineStatusLabel == "No live signal")
     }
 
     @Test
@@ -1090,7 +1090,7 @@ struct SessionModelsTests {
             )
         )
 
-        #expect(summary.timelineStatusLabel == "Idle")
+        #expect(summary.timelineStatusLabel == "No live signal")
     }
 
     @Test
@@ -1197,9 +1197,9 @@ struct SessionModelsTests {
         )
 
         #expect(managedPhase.managementLabel == "Managed")
-        #expect(managedPhase.timelineStatusLabel == "Using Codex")
+        #expect(managedPhase.timelineStatusLabel == "No live signal")
         #expect(managedPhase.displayPhaseLabel == "Using Codex")
-        #expect(managedPhase.timelineStatusTone == "running")
+        #expect(managedPhase.timelineStatusTone == "inactive")
         #expect(!managedPhase.isExecuting)
     }
 
@@ -1326,24 +1326,24 @@ struct SessionModelsTests {
         )
 
         #expect(processObserved.managementLabel == "Unmanaged")
-        #expect(processObserved.timelineStatusLabel == "Running")
+        #expect(processObserved.timelineStatusLabel == "No live signal")
         #expect(processObserved.timelineStatusTone == "inactive")
-        #expect(processObserved.timelineStatusSeenAtPrefix == "Verified")
-        #expect(transcriptOnly.timelineStatusLabel == "Unknown")
+        #expect(processObserved.timelineStatusSeenAtPrefix == "Checked")
+        #expect(transcriptOnly.timelineStatusLabel == "No live signal")
         #expect(transcriptOnly.timelineStatusSeenAtPrefix == "Checked")
-        #expect(hostUnverified.timelineStatusLabel == "Unknown")
+        #expect(hostUnverified.timelineStatusLabel == "No live signal")
         #expect(closed.isClosed)
-        #expect(closed.timelineStatusLabel == "Closed")
-        #expect(closed.timelineStatusTone == "closed")
+        #expect(closed.timelineStatusLabel == "No live signal")
+        #expect(closed.timelineStatusTone == "inactive")
         #expect(closed.displayPhaseLabel == "Closed")
         #expect(!closed.isExecuting)
         #expect(terminalDisconnected.isClosed)
-        #expect(terminalDisconnected.timelineStatusLabel == "Closed")
-        #expect(terminalDisconnected.timelineStatusTone == "closed")
+        #expect(terminalDisconnected.timelineStatusLabel == "No live signal")
+        #expect(terminalDisconnected.timelineStatusTone == "inactive")
         #expect(terminalDisconnected.displayPhaseLabel == "Closed")
         #expect(!terminalDisconnected.isExecuting)
         #expect(!unknownWithClosedLegacy.isClosed)
-        #expect(unknownWithClosedLegacy.timelineStatusLabel == "Unknown")
+        #expect(unknownWithClosedLegacy.timelineStatusLabel == "No live signal")
     }
 
     @Test
@@ -1424,7 +1424,7 @@ struct SessionModelsTests {
         #expect(session.timelineAnchorAt == "2026-04-25T20:00:00Z")
         #expect(summary.timelineAnchorAt == "2026-04-25T20:05:00Z")
         #expect(session.timelineCard.ownership.label == "Managed")
-        #expect(session.timelineCard.status?.label == "Idle")
+        #expect(session.timelineCard.status.label == "Idle")
         #expect(session.timelineCard.borderTone == "idle")
         #expect(session.runtimeFacts?.controlPath == "managed")
         #expect(session.runtimeFacts?.control?.state == "online")

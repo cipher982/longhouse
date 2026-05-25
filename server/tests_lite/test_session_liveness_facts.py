@@ -206,6 +206,23 @@ def test_host_expired_means_unverified_not_closed():
     assert facts.lifecycle.state == "unknown"
 
 
+def test_finished_terminal_state_is_not_session_lifecycle_truth():
+    facts = build_session_liveness_facts(
+        runtime_view=_runtime_view(
+            terminal_state="finished",
+            terminal_reason="provider_exit",
+            last_live_at=NOW - timedelta(minutes=1),
+            runtime_phase="finished",
+            status="completed",
+        ),
+        capabilities=_capabilities(managed=True),
+        last_activity_at=NOW - timedelta(minutes=1),
+    )
+
+    assert facts.lifecycle.state == "unknown"
+    assert facts.process_state == "unknown"
+
+
 def test_stale_phase_signal_is_timestamped_not_current_lifecycle_truth():
     observed_at = NOW - timedelta(minutes=30)
     facts = build_session_liveness_facts(

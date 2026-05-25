@@ -392,6 +392,8 @@ def _session_is_closed_for_input(db: Session, source_session) -> bool:
     terminal_state = str(getattr(runtime_state, "terminal_state", "") or "").strip()
     if terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES:
         return True
+    if terminal_state == "finished":
+        return False
     if terminal_state in UNVERIFIED_TERMINAL_STATES:
         return False
     return bool(terminal_state)

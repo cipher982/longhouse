@@ -20,6 +20,7 @@ def _facts(
     lifecycle_reason: str | None = None,
     process_status: str = "unknown",
     process_state: str | None = None,
+    last_runtime_signal_at: datetime | None = None,
 ) -> SessionLivenessFactsResponse:
     now = datetime(2026, 3, 21, 12, 0, tzinfo=timezone.utc)
     return SessionLivenessFactsResponse(
@@ -38,7 +39,7 @@ def _facts(
             source="managed_local_transport" if phase_kind else None,
             observed_at=now if phase_kind else None,
         ),
-        activity=ActivityObservationResponse(),
+        activity=ActivityObservationResponse(last_runtime_signal_at=last_runtime_signal_at),
         lifecycle=LifecycleFactResponse(
             state=lifecycle_state,
             reason=lifecycle_reason,
@@ -98,3 +99,22 @@ def test_timeline_status_closed_label_is_generic_regardless_of_reason():
         assert status.label == "Closed", f"expected generic 'Closed' for reason={reason!r}"
         assert status.tone == "closed"
         assert status.seen_at_prefix == "Closed"
+
+
+def test_timeline_status_no_live_signal_uses_last_runtime_signal():
+    seen_at = datetime(2026, 3, 21, 11, 30, tzinfo=timezone.utc)
+    status = _timeline_status_from_liveness_facts(_facts(last_runtime_signal_at=seen_at))
+
+    assert status.label == "No live signal"
+    assert status.tone == "inactive"
+    assert status.seen_at == seen_at
+    assert status.seen_at_prefix == "Last signal"
+
+
+def test_timeline_status_no_facts_has_constant_missing_field_fallback():
+    status = _timeline_status_from_liveness_facts(None)
+
+    assert status.label == "No live signal"
+    assert status.tone == "inactive"
+    assert status.seen_at is None
+    assert status.seen_at_prefix == "Checked"
