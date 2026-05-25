@@ -14,8 +14,9 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret-value")
 os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-value")
 
-from tests_lite._capability_test_helper import build_session_capabilities
 from zerg.services.session_views import build_session_capabilities_response
+
+from tests_lite._capability_test_helper import build_session_capabilities
 
 
 def _session(**overrides):
@@ -45,6 +46,32 @@ def _runtime(**overrides):
     }
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
+def _facts(**overrides):
+    values = {
+        "control_path": "managed",
+        "control_state": "online",
+        "control_reason": None,
+        "host_state": "online",
+        "lifecycle": "open",
+        "phase_kind": "idle",
+    }
+    values.update(overrides)
+    return SimpleNamespace(
+        control_path=values["control_path"],
+        control=SimpleNamespace(
+            state="none" if values["control_path"] == "unmanaged" else values["control_state"],
+            reason=values["control_reason"],
+            source="machine_heartbeat" if values["control_path"] == "managed" else None,
+        ),
+        host=SimpleNamespace(
+            state=values["host_state"],
+            source="machine_heartbeat" if values["host_state"] != "unknown" else None,
+        ),
+        lifecycle=SimpleNamespace(state=values["lifecycle"], reason=None),
+        phase=SimpleNamespace(kind=values["phase_kind"]),
+    )
 
 
 def test_live_idle_session_exposes_enabled_composer_with_auto_intent():
@@ -140,3 +167,84 @@ def test_closed_session_lifecycle_overrides_stale_live_capabilities():
     assert response.composer_enabled is False
     assert response.composer_disabled_reason == "This session has ended."
     assert response.send_disabled_reason == "session_closed"
+
+
+def test_control_transport_offline_fact_disables_composer_even_when_host_is_online():
+    session = _session()
+
+    response = build_session_capabilities_response(
+        session=session,
+        capability_flags=build_session_capabilities(session),
+        runtime_display=_runtime(host_state="online"),
+        runtime_facts=_facts(
+            host_state="online",
+            control_state="offline",
+            control_reason="lease_stale",
+        ),
+    )
+
+    assert response.live_control_available is False
+    assert response.host_reattach_available is True
+    assert response.input_mode == "offline"
+    assert response.default_input_intent == "none"
+    assert response.composer_enabled is False
+    assert response.send_disabled_reason == "control_offline"
+    assert response.display_label == "Control offline"
+
+
+def test_host_offline_fact_overrides_stale_runtime_display_host_copy():
+    session = _session()
+
+    response = build_session_capabilities_response(
+        session=session,
+        capability_flags=build_session_capabilities(session),
+        runtime_display=_runtime(host_state="online"),
+        runtime_facts=_facts(host_state="stale", control_state="online"),
+    )
+
+    assert response.live_control_available is False
+    assert response.input_mode == "offline"
+    assert response.send_disabled_reason == "control_offline"
+    assert response.display_label == "Control offline"
+
+
+def test_control_transport_degraded_fact_disables_composer_without_closing_session():
+    session = _session()
+
+    response = build_session_capabilities_response(
+        session=session,
+        capability_flags=build_session_capabilities(session),
+        runtime_display=_runtime(host_state="online"),
+        runtime_facts=_facts(
+            host_state="online",
+            control_state="degraded",
+            control_reason="bridge_unavailable",
+            lifecycle="open",
+        ),
+    )
+
+    assert response.live_control_available is False
+    assert response.host_reattach_available is True
+    assert response.input_mode == "offline"
+    assert response.send_disabled_reason == "control_offline"
+    assert response.display_label == "Control offline"
+
+
+def test_unknown_control_cold_start_does_not_override_positive_host_display():
+    session = _session()
+
+    response = build_session_capabilities_response(
+        session=session,
+        capability_flags=build_session_capabilities(session),
+        runtime_display=_runtime(host_state="online"),
+        runtime_facts=_facts(
+            host_state="online",
+            control_state="unknown",
+            control_reason="cold_start",
+            lifecycle="open",
+        ),
+    )
+
+    assert response.live_control_available is True
+    assert response.input_mode == "live"
+    assert response.send_disabled_reason is None
