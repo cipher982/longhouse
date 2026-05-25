@@ -566,6 +566,43 @@ describe("SessionDetailPage", () => {
     expect(strip).not.toHaveTextContent("Running AskUserQuestion");
   });
 
+  it("renders the backend launch lifecycle pending state", () => {
+    const session = makeSession({
+      ended_at: null,
+      launch_state: "launching_unknown",
+      launch_error_code: null,
+      launch_error_message: "transport timed out",
+    });
+
+    mockWorkspaceState({ session, model: buildTimelineModel([]) });
+    renderSessionDetailPage();
+
+    const banner = screen.getByTestId("launch-pending-banner");
+    expect(banner).toHaveTextContent("Starting session on cinder");
+    expect(banner).toHaveTextContent("waiting for the machine to confirm");
+    expect(screen.queryByTestId("launch-failed-banner")).not.toBeInTheDocument();
+  });
+
+  it("renders the backend launch lifecycle failure reason", () => {
+    const session = makeSession({
+      ended_at: "2026-03-22T22:05:00Z",
+      launch_state: "launch_orphaned",
+      launch_error_code: "launch_timeout",
+      launch_error_message: "Machine Agent did not report back before lease expired",
+    });
+
+    mockWorkspaceState({ session, model: buildTimelineModel([]) });
+    renderSessionDetailPage();
+
+    const banner = screen.getByTestId("launch-failed-banner");
+    expect(banner).toHaveTextContent("Launch failed");
+    expect(banner).toHaveTextContent("launch_timeout");
+    expect(banner).toHaveTextContent(
+      "Machine Agent did not report back before lease expired",
+    );
+    expect(screen.queryByTestId("launch-pending-banner")).not.toBeInTheDocument();
+  });
+
   it("marks unresolved ended-session tool calls as dropped in both row and inspector", () => {
     const session = makeSession({
       ended_at: "2026-03-22T22:05:00Z",

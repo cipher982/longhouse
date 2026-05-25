@@ -117,12 +117,12 @@ Provider     [Codex]
    Target machine must have an active control-channel connection at the
    moment of request. Offline machines fail fast with clear copy.
 
-5. **Pre-allocated session id. No parallel status table.**
-   Runtime Host mints the session UUID, inserts a `sessions` row with
-   `launch_state=launching`, and includes `session_id` in the
-   `session.launch` frame. The control-channel envelope rule — every
-   command carries `session_id` — is preserved. Lifecycle is one column
-   on one table.
+5. **Pre-allocated session id. One launch attempt row.**
+   Runtime Host mints the session UUID, inserts the `sessions` row, records a
+   `SessionLaunchAttempt(state=pending)`, and includes `session_id` in the
+   `session.launch` frame. The control-channel envelope rule - every command
+   carries `session_id` - is preserved. Lifecycle is projected from the durable
+   attempt row, not from legacy `AgentSession.launch_*` shims.
 
 6. **Explicit per-provider per-op capability.**
    Only providers the Machine Agent announces in `supports[]` as
@@ -151,9 +151,11 @@ POST /api/sessions/launch
   - verify control channel online for device_id
   - verify provider ∈ device supports[] as <provider>.launch
   - mint session UUID
-  - INSERT sessions row: launch_state=launching,
+  - INSERT sessions row:
       owner_id, device_id, cwd, provider, display_name,
       git_repo, git_branch, project, started_at=now()
+  - INSERT session_launch_attempts row:
+      state=pending, command_id, expires_at, client_request_id
   - send session.launch command frame over control WS
   - await command_result (short timeout, 20s)
         │
@@ -167,7 +169,8 @@ Machine Agent (WS)
         │
         ▼
 Runtime Host
-  - UPDATE sessions row: launch_state=live, provider_session_id
+  - create run/connection rows
+  - UPDATE session_launch_attempts row: state=adopted, run_id
   - return { session_id, launch_state } to client
         │
         ▼
@@ -176,44 +179,51 @@ Client deep-links to /sessions/{session_id}
 
 ### Timeout / mid-flight disconnect
 
-- Runtime Host marks `launch_state=launching_unknown` and returns the
-  session_id with that state to the client.
+- Runtime Host marks the attempt `state=dispatched`, projects
+  `launch_state=launching_unknown`, and returns the session_id with that state
+  to the client.
 - Client polls `GET /api/sessions/{id}` (or subscribes to the existing
   session stream) for resolution.
 - On Machine Agent reconnect, it sends any buffered late
   `command_result` frames (same LRU behavior as other control commands).
-- If no result arrives before `launch_lease_until` (e.g. 120s after
-  request), Runtime Host moves the row to `launch_state=launch_orphaned`.
-  No retry. The row becomes a cold record; timeline filters hide
-  `launch_orphaned` from default views but leaves it for debug.
+- If no result arrives before `expires_at` (e.g. 120s after request), Runtime
+  Host moves the attempt to `state=abandoned`, projected as
+  `launch_state=launch_orphaned`. No retry. The attempt becomes a cold record;
+  timeline filters hide `launch_orphaned` from default views but leave it for
+  debug.
 
 ### Failure
 
 - Typed errors from Machine Agent (`cwd_not_found`, `cwd_not_allowed`,
   `provider_unsupported`, `provider_launch_failed`,
-  `already_running_for_cwd`) propagate to the client and mark the row
-  `launch_state=launch_failed` with `launch_error_code` /
-  `launch_error_message`.
+  `already_running_for_cwd`) propagate to the client and mark the attempt
+  `state=failed`, projected as `launch_state=launch_failed` with
+  `launch_error_code` / `launch_error_message`.
 
 ## Data Model
 
-### `sessions` — add three columns
+### `session_launch_attempts`
 
 ```text
-launch_state          text nullable  -- launching | live | launching_unknown
-                                     -- | launch_failed | launch_orphaned
-                                     -- NULL for sessions created the old way
-launch_error_code     text nullable
-launch_error_message  text nullable
-launch_lease_until    timestamptz nullable
+session_id            uuid not null
+thread_id             uuid nullable
+run_id                uuid nullable
+provider              text not null
+host_id               text nullable
+owner_id              integer nullable
+client_request_id     text nullable
+command_id            text nullable
+state                 text not null  -- pending | dispatched | adopted
+                                      -- | failed | abandoned
+error_code            text nullable
+error_message         text nullable
+expires_at            timestamptz nullable
 ```
 
-`launch_state=live` is functionally equivalent to "session exists
-normally" — it's the steady state for any remotely-launched session. For
-sessions created by the existing this-device path, the column stays NULL
-and readers treat NULL as `live`.
-
-No new table.
+`project_remote_launch_lifecycle()` maps attempt rows to the public states:
+`launching`, `live`, `launching_unknown`, `launch_failed`, and
+`launch_orphaned`. Sessions with no attempt are not remote-launch sessions and
+surface `launch_state=null`.
 
 ### Workspace presets (derived, not stored)
 
@@ -405,10 +415,9 @@ Acceptance:
   known supports are not persisted — avoid implying stale truth).
 - Unknown users return `[]` (not 404).
 
-### Phase 1 — `session.launch` + `launch_state` on `sessions`
+### Phase 1 — `session.launch` + `SessionLaunchAttempt` lifecycle
 
-- DB migration: add `launch_state`, `launch_error_code`,
-  `launch_error_message`, `launch_lease_until` to `sessions`.
+- DB migration: add `session_launch_attempts`.
 - `POST /api/sessions/launch` endpoint.
 - Control-channel `session.launch` command dispatch.
 - Engine handler in `control_channel.rs` that validates cwd via
@@ -420,17 +429,17 @@ Acceptance:
   `GET /api/sessions/{id}` for clients to render.
 
 Acceptance:
-- Launch happy-path creates a `sessions` row in `launch_state=live`.
-- Bogus cwd returns `cwd_not_found`, row ends in `launch_failed`.
-- cwd outside policy returns `cwd_not_allowed`, row ends in
+- Launch happy-path creates a session plus attempt projected as
+  `launch_state=live`.
+- Bogus cwd returns `cwd_not_found`, attempt ends in `launch_failed`.
+- cwd outside policy returns `cwd_not_allowed`, attempt ends in
   `launch_failed`.
 - Offline device returns 409 `machine_offline` without inserting a row.
 - Rapid double-submit returns one `live` row + one `already_running_for_cwd`
   via engine LRU.
-- Command-result arriving after Runtime Host timeout moves the row from
+- Command-result arriving after Runtime Host timeout moves the attempt from
   `launching_unknown` to `live` or `launch_failed` deterministically.
-- No new table created. `launch_state` column is nullable and NULL for
-  all pre-migration rows (= equivalent to `live`).
+- Sessions with no `SessionLaunchAttempt` surface `launch_state=null`.
 
 ### Phase 2 — Web launch sheet
 
@@ -453,8 +462,8 @@ Acceptance:
 
 ### Phase 4 — telemetry/admin debug
 
-- Hidden admin view of sessions filtered by `launch_state !=
-  {live, NULL}` for debugging.
+- Hidden admin view of launch attempts filtered by projected `launch_state !=
+  live` for debugging.
 - Propagation metric: POST-to-first-transcript-byte for remote launches,
   tracked alongside existing managed-op SLAs. Deferred.
 

@@ -546,7 +546,7 @@ async def launch_remote_session_endpoint(
     """Start a session on a user-owned machine via the Machine Agent control channel.
 
     See docs/specs/remote-session-launch.md. Pre-allocates a session UUID,
-    inserts the ``sessions`` row in ``launch_state=launching``, and dispatches
+    records a ``SessionLaunchAttempt(state=pending)``, and dispatches
     ``session.launch`` over the existing control WebSocket.
     """
     try:

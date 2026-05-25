@@ -35,6 +35,7 @@ from zerg.models.user import User
 from zerg.schemas.usage import AdminUserDetailResponse
 from zerg.schemas.usage import AdminUsersResponse
 from zerg.services.runner_connection_manager import get_runner_connection_manager
+from zerg.services.session_launch_lifecycle import project_remote_launch_lifecycle
 
 # Usage service
 from zerg.services.usage_service import get_all_users_usage
@@ -755,32 +756,24 @@ async def list_remote_launch_debug(
     total = q.count()
     all_rows = q.order_by(SessionLaunchAttempt.created_at.desc(), SessionLaunchAttempt.id.desc()).limit(limit).all()
 
-    def _state(attempt: SessionLaunchAttempt) -> str:
-        raw = str(attempt.state or "").strip()
-        if raw == "failed":
-            return "launch_failed"
-        if raw == "abandoned":
-            return "launch_orphaned"
-        if attempt.run_id is not None or raw == "adopted":
-            return "live"
-        if raw == "dispatched":
-            return "launching_unknown"
-        return "launching"
-
-    filtered = [(attempt, session, _state(attempt)) for attempt, session in all_rows]
+    filtered = [
+        (attempt, session, lifecycle)
+        for attempt, session in all_rows
+        if (lifecycle := project_remote_launch_lifecycle(attempt)) is not None
+    ]
     entries = [
         RemoteLaunchDebugEntry(
             session_id=str(session.id),
             device_id=session.device_id,
             provider=attempt.provider or session.provider,
             cwd=session.cwd,
-            launch_state=launch_state,
-            launch_error_code=attempt.error_code,
-            launch_error_message=attempt.error_message,
-            launch_lease_until=attempt.expires_at,
+            launch_state=lifecycle.state,
+            launch_error_code=lifecycle.error_code,
+            launch_error_message=lifecycle.error_message,
+            launch_lease_until=lifecycle.lease_until,
             started_at=session.started_at,
             ended_at=session.ended_at,
         )
-        for attempt, session, launch_state in filtered
+        for attempt, session, lifecycle in filtered
     ]
     return RemoteLaunchDebugResponse(entries=entries, total=total)

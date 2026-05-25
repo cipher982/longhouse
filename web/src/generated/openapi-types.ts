@@ -2858,7 +2858,7 @@ export interface paths {
          * @description Start a session on a user-owned machine via the Machine Agent control channel.
          *
          *     See docs/specs/remote-session-launch.md. Pre-allocates a session UUID,
-         *     inserts the ``sessions`` row in ``launch_state=launching``, and dispatches
+         *     records a ``SessionLaunchAttempt(state=pending)``, and dispatches
          *     ``session.launch`` over the existing control WebSocket.
          */
         post: operations["launch_remote_session_endpoint_sessions_launch_post"];
@@ -9337,7 +9337,7 @@ export interface components {
             user_state: string;
             /**
              * Launch State
-             * @description Remote-launch lifecycle: launching|live|launching_unknown|launch_failed|launch_orphaned; null for pre-migration rows
+             * @description Remote-launch lifecycle: launching|live|launching_unknown|launch_failed|launch_orphaned; null when there is no launch attempt
              */
             launch_state?: string | null;
             /**
