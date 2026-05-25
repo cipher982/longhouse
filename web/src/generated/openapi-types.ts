@@ -7235,10 +7235,16 @@ export interface components {
             id: number;
             /** Text */
             text: string;
-            /** Intent */
-            intent: string;
-            /** Status */
-            status: string;
+            /**
+             * Intent
+             * @enum {string}
+             */
+            intent: "auto" | "queue" | "steer";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "delivering" | "delivered" | "cancelled" | "failed";
             /** Last Error */
             last_error?: string | null;
             /** Created At */
@@ -8764,8 +8770,9 @@ export interface components {
              * Intent
              * @description auto | queue | steer
              * @default auto
+             * @enum {string}
              */
-            intent: string;
+            intent: "auto" | "queue" | "steer";
             /**
              * Client Request Id
              * @description Optional client idempotency key for this submitted input
@@ -8780,14 +8787,18 @@ export interface components {
             /**
              * Outcome
              * @description sent | queued
+             * @enum {string}
              */
-            outcome: string;
+            outcome: "sent" | "queued";
             /** Input Id */
             input_id: number;
             /** Client Request Id */
             client_request_id?: string | null;
-            /** Intent */
-            intent: string;
+            /**
+             * Intent
+             * @enum {string}
+             */
+            intent: "auto" | "queue" | "steer";
             /** Queued */
             queued?: components["schemas"]["QueuedInputSummary"][];
         };

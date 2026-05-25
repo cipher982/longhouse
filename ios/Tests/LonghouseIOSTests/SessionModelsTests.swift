@@ -1965,7 +1965,7 @@ struct SessionModelsTests {
         let response = try JSONDecoder.snakeCase.decode(SessionInputResponse.self, from: json)
         #expect(response.outcome == .queued)
         #expect(response.queued.count == 1)
-        #expect(response.queued.first?.status == "queued")
+        #expect(response.queued.first?.status == .queued)
         #expect(response.queued.first?.text == "hold this thought")
         #expect(response.pendingInputCount == 1)
         #expect(response.visibleFailedInputCount == 0)
@@ -2012,7 +2012,7 @@ struct SessionModelsTests {
         """.data(using: .utf8)!
 
         let response = try JSONDecoder.snakeCase.decode(SessionInputResponse.self, from: json)
-        #expect(response.queued.first?.status == "failed")
+        #expect(response.queued.first?.status == .failed)
         #expect(response.queued.first?.lastError == "provider unavailable")
         #expect(response.pendingInputCount == 0)
         #expect(response.visibleFailedInputCount == 1)

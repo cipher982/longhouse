@@ -252,12 +252,14 @@ def _stub_dispatch(monkeypatch):
         verification_timeout_secs=None,
         attachments=None,
     ):
-        calls.append({
-            "session_id": str(session.id),
-            "text": text,
-            "commis_id": commis_id,
-            "attachments": list(attachments or []),
-        })
+        calls.append(
+            {
+                "session_id": str(session.id),
+                "text": text,
+                "commis_id": commis_id,
+                "attachments": list(attachments or []),
+            }
+        )
         return SimpleNamespace(
             ok=True,
             exit_code=0,
@@ -313,9 +315,7 @@ def test_multipart_upload_succeeds_on_codex(monkeypatch, tmp_path):
             row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
             assert row.status == INPUT_STATUS_DELIVERED
             attachments = (
-                db.query(SessionInputAttachment)
-                .filter(SessionInputAttachment.session_input_id == row.id)
-                .all()
+                db.query(SessionInputAttachment).filter(SessionInputAttachment.session_input_id == row.id).all()
             )
             assert len(attachments) == 1
             attach = attachments[0]
@@ -452,11 +452,7 @@ def test_machine_blob_fetch_streams_bytes(monkeypatch, tmp_path):
         input_id = upload.json()["input_id"]
 
         with session_local() as db:
-            attach = (
-                db.query(SessionInputAttachment)
-                .filter(SessionInputAttachment.session_input_id == input_id)
-                .one()
-            )
+            attach = db.query(SessionInputAttachment).filter(SessionInputAttachment.session_input_id == input_id).one()
             attach_id = attach.id
             sha = attach.sha256
 
@@ -498,11 +494,7 @@ def test_machine_blob_fetch_404_on_session_mismatch(monkeypatch, tmp_path):
         input_id = upload.json()["input_id"]
 
         with session_local() as db:
-            attach = (
-                db.query(SessionInputAttachment)
-                .filter(SessionInputAttachment.session_input_id == input_id)
-                .one()
-            )
+            attach = db.query(SessionInputAttachment).filter(SessionInputAttachment.session_input_id == input_id).one()
             attach_id = attach.id
 
         bogus_session = uuid4()
@@ -538,11 +530,7 @@ def test_cleanup_stale_blobs_removes_terminal_aged_rows(monkeypatch, tmp_path):
         with session_local() as db:
             row = db.query(SessionInput).filter(SessionInput.id == input_id).one()
             assert row.status == INPUT_STATUS_DELIVERED
-            attach = (
-                db.query(SessionInputAttachment)
-                .filter(SessionInputAttachment.session_input_id == input_id)
-                .one()
-            )
+            attach = db.query(SessionInputAttachment).filter(SessionInputAttachment.session_input_id == input_id).one()
             blob_path = tmp_path / "blobs" / attach.blob_path
             assert blob_path.exists()
 
@@ -555,9 +543,7 @@ def test_cleanup_stale_blobs_removes_terminal_aged_rows(monkeypatch, tmp_path):
             assert removed == 1
             assert not blob_path.exists()
             assert (
-                db.query(SessionInputAttachment)
-                .filter(SessionInputAttachment.session_input_id == input_id)
-                .count()
+                db.query(SessionInputAttachment).filter(SessionInputAttachment.session_input_id == input_id).count()
                 == 0
             )
     finally:
@@ -599,3 +585,5 @@ def test_startup_reconciliation_fails_stuck_attachment_rows(monkeypatch, tmp_pat
         refreshed = db.query(SessionInput).filter(SessionInput.id == row.id).one()
         assert refreshed.status == INPUT_STATUS_FAILED
         assert refreshed.last_error == "attachment delivery interrupted by restart"
+        assert refreshed.client_request_id == "crash-attachment"
+        assert refreshed.delivery_request_id == "crash-attachment-delivery"

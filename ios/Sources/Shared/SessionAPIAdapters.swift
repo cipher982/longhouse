@@ -316,8 +316,8 @@ extension APIQueuedInputSummary {
         QueuedInputSummary(
             id: id,
             text: text,
-            intent: intent,
-            status: status,
+            intent: SessionInputIntent(rawValue: intent) ?? .auto,
+            status: SessionInputStatus(rawValue: status) ?? .queued,
             lastError: lastError,
             createdAt: createdAt
         )
@@ -330,7 +330,7 @@ extension APISessionInputResponse {
             outcome: SessionInputOutcome(rawValue: outcome) ?? .queued,
             inputId: inputId,
             clientRequestId: clientRequestId,
-            intent: intent,
+            intent: SessionInputIntent(rawValue: intent) ?? .auto,
             queued: (queued ?? []).map(\.queuedInputSummary)
         )
     }

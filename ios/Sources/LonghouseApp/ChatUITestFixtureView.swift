@@ -325,7 +325,13 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             )
         ))
         nextEventID += 1
-        return SessionInputResponse(outcome: .sent, inputId: inputID, clientRequestId: clientRequestId, intent: intent, queued: [])
+        return SessionInputResponse(
+            outcome: .sent,
+            inputId: inputID,
+            clientRequestId: clientRequestId,
+            intent: SessionInputIntent(rawValue: intent) ?? .auto,
+            queued: []
+        )
     }
 
     func sendInputMultipart(id: String, text: String, attachments: [ComposerAttachment], clientRequestId: String?) async throws -> SessionInputResponse {
