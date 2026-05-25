@@ -12,6 +12,7 @@
         "project": "zerg",
         "last_activity_at": "2026-05-15T20:00:00Z",
         "status": "active",
+        "user_state": "active",
         "capabilities": {
           "live_control_available": true,
           "host_reattach_available": true,
@@ -63,6 +64,9 @@
         "status_label": "Using Shell",
         "status_tone": "running",
         "display_phase_label": "Using Shell",
+        "runtime_headline": "Using Shell",
+        "runtime_detail": null,
+        "runtime_tone": "running",
         "seen_at": "2026-05-15T20:00:02Z",
         "seen_at_prefix": "Updated"
       }
@@ -77,6 +81,7 @@
         "project": "zerg",
         "last_activity_at": "2026-05-15T20:10:00Z",
         "status": "active",
+        "user_state": "active",
         "capabilities": {
           "live_control_available": false,
           "host_reattach_available": false,
@@ -122,6 +127,9 @@
         "status_label": "Running",
         "status_tone": "inactive",
         "display_phase_label": "Running",
+        "runtime_headline": "Running",
+        "runtime_detail": null,
+        "runtime_tone": "inactive",
         "seen_at": "2026-05-15T20:10:01Z",
         "seen_at_prefix": "Verified"
       }
@@ -136,6 +144,7 @@
         "project": "zerg",
         "last_activity_at": "2026-05-15T20:20:00Z",
         "status": "completed",
+        "user_state": "active",
         "capabilities": {
           "live_control_available": false,
           "host_reattach_available": true,
@@ -181,8 +190,101 @@
         "status_label": "Closed",
         "status_tone": "closed",
         "display_phase_label": "Closed",
+        "runtime_headline": "Closed",
+        "runtime_detail": null,
+        "runtime_tone": "closed",
         "seen_at": "2026-05-15T20:20:01Z",
         "seen_at_prefix": "Closed"
+      }
+    },
+    {
+      "name": "managed-idle-display-over-running-facts",
+      "session": {
+        "id": "runtime-managed-idle-display",
+        "title": "Managed idle display",
+        "presence_state": "running",
+        "provider": "codex",
+        "project": "zerg",
+        "last_activity_at": "2026-05-15T20:30:00Z",
+        "status": "active",
+        "user_state": "active",
+        "capabilities": {
+          "live_control_available": true,
+          "host_reattach_available": true,
+          "reply_to_live_session_available": true
+        },
+        "runtime_display": {
+          "truth_tier": "managed-local",
+          "signal_tier": "phase_signal",
+          "state": "idle",
+          "tone": "idle",
+          "headline": "Idle",
+          "detail": "Waiting for next prompt",
+          "phase_label": "Idle",
+          "compact_tool_label": null,
+          "is_live": false,
+          "is_executing": false,
+          "needs_attention": false,
+          "is_idle": true,
+          "is_stalled": false,
+          "is_managed_local_truth": true,
+          "has_signal": true,
+          "control_path": "managed",
+          "activity_recency": "live",
+          "lifecycle": "open",
+          "host_state": "online",
+          "terminal_reason": null
+        },
+        "runtime_facts": {
+          "control_path": "managed",
+          "process_state": "running",
+          "host": {"state": "online", "last_seen_at": "2026-05-15T20:30:00Z", "source": "machine"},
+          "process": {
+            "status": "observed",
+            "pid": 4444,
+            "process_start_time": "2026-05-15T20:25:00Z",
+            "observed_at": "2026-05-15T20:30:01Z",
+            "last_seen_at": "2026-05-15T20:30:01Z",
+            "source_mtime": null,
+            "source_path": null,
+            "reason": null,
+            "source": "process_scan"
+          },
+          "phase": {
+            "kind": "running",
+            "tool": "shell",
+            "source": "managed_local_transport",
+            "observed_at": "2026-05-15T20:30:02Z",
+            "expires_at": "2026-05-15T20:45:02Z"
+          },
+          "activity": {
+            "last_transcript_at": "2026-05-15T20:30:00Z",
+            "last_runtime_signal_at": "2026-05-15T20:30:02Z",
+            "last_progress_at": "2026-05-15T20:30:02Z"
+          },
+          "lifecycle": {"state": "open", "reason": null, "observed_at": "2026-05-15T20:30:02Z"}
+        },
+        "timeline_card": {
+          "ownership": {"label": "Managed", "tone": "neutral"},
+          "status": {
+            "label": "Idle",
+            "tone": "idle",
+            "seen_at": "2026-05-15T20:30:02Z",
+            "seen_at_prefix": "Updated"
+          },
+          "border_tone": "idle"
+        }
+      },
+      "expectations": {
+        "management_label": "Managed",
+        "status_label": "Idle",
+        "status_tone": "idle",
+        "display_phase_label": "Idle",
+        "runtime_headline": "Idle",
+        "runtime_detail": "Waiting for next prompt",
+        "runtime_tone": "idle",
+        "seen_at": "2026-05-15T20:30:02Z",
+        "seen_at_prefix": "Updated"
       }
     }
   ]

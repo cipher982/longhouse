@@ -6,12 +6,16 @@ import {
   resolveSessionOwnershipLabel,
   resolveSessionRuntimeState,
 } from "../sessionRuntime";
+import { getRuntimeDisplayCopy } from "../sessionUtils";
 
 type RuntimeExpectation = {
   management_label: "Managed" | "Unmanaged";
   status_label: string;
   status_tone: string;
   display_phase_label: string;
+  runtime_headline: string;
+  runtime_detail: string | null;
+  runtime_tone: string;
   seen_at: string | null;
   seen_at_prefix: string;
 };
@@ -44,11 +48,17 @@ describe("shared runtime fixtures", () => {
       seen_at: null,
       seen_at_prefix: "Checked",
     };
+    const runtimeDisplay = getRuntimeDisplayCopy(runtime, {
+      managedLocal: true,
+    });
 
     expect(timelineCard?.ownership.label ?? resolveSessionOwnershipLabel(runtime)).toBe(expectations.management_label);
     expect(timelineStatus.label).toBe(expectations.status_label);
     expect(timelineStatus.tone).toBe(expectations.status_tone);
     expect(runtime.displayPhase).toBe(expectations.display_phase_label);
+    expect(runtimeDisplay.headline).toBe(expectations.runtime_headline);
+    expect(runtimeDisplay.detail).toBe(expectations.runtime_detail);
+    expect(runtime.tone).toBe(expectations.runtime_tone);
     expect(timelineStatus.seen_at ?? null).toBe(expectations.seen_at);
     expect(timelineStatus.seen_at_prefix).toBe(expectations.seen_at_prefix);
   });
