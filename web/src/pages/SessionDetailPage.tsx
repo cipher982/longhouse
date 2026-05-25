@@ -362,7 +362,7 @@ function SessionDetailWorkspaceRoute({
                 interaction={interaction}
                 hostLabel={runtimeHostLabel}
                 elapsedLabel={runtimeElapsedLabel}
-                detailOverride={
+                detailFallback={
                   interaction.isManagedLocalSession ? activeToolDetail : null
                 }
                 variant="bar"

@@ -23,7 +23,7 @@ interface SessionRuntimeStripProps {
   >;
   hostLabel?: string | null;
   elapsedLabel?: string | null;
-  detailOverride?: string | null;
+  detailFallback?: string | null;
   variant?: "inline" | "block" | "dock" | "bar";
   testId?: string;
 }
@@ -90,7 +90,7 @@ export function SessionRuntimeStrip({
   interaction,
   hostLabel,
   elapsedLabel,
-  detailOverride,
+  detailFallback,
   variant = "inline",
   testId,
 }: SessionRuntimeStripProps) {
@@ -106,7 +106,9 @@ export function SessionRuntimeStrip({
     ? runtimeDisplay.headline
     : getRuntimeOutcomeLabel(runtime);
   const runtimeDetail = interaction.isManagedLocalSession
-    ? (detailOverride ?? runtimeDisplay.detail)
+    ? runtime.runtimeDisplay
+      ? runtimeDisplay.detail
+      : (detailFallback ?? runtimeDisplay.detail)
     : null;
   const runtimeMeta = getRuntimeMetaLabel(runtime);
   const resolvedHostLabel =
