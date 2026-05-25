@@ -60,6 +60,10 @@ from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
 from zerg.services.session_inputs import INPUT_STATUS_FAILED
 from zerg.services.session_inputs import INPUT_STATUS_QUEUED
 from zerg.services.session_inputs import MAX_QUEUED_PER_SESSION
+from zerg.services.session_inputs import InputConflictReason
+from zerg.services.session_inputs import InputIntent
+from zerg.services.session_inputs import InputOutcome
+from zerg.services.session_inputs import InputStatus
 from zerg.services.session_inputs import cancel_queued_input
 from zerg.services.session_inputs import count_queued
 from zerg.services.session_inputs import create_session_input
@@ -160,7 +164,7 @@ class SessionInputRequest(BaseModel):
     """User input targeted at a managed session."""
 
     text: str = Field(..., min_length=1, max_length=10000)
-    intent: str = Field(INPUT_INTENT_AUTO, description="auto | queue | steer")
+    intent: InputIntent = Field(INPUT_INTENT_AUTO, description="auto | queue | steer")
     client_request_id: str | None = Field(
         None,
         min_length=1,
@@ -172,8 +176,8 @@ class SessionInputRequest(BaseModel):
 class QueuedInputSummary(BaseModel):
     id: int
     text: str
-    intent: str
-    status: str
+    intent: InputIntent
+    status: InputStatus
     last_error: str | None = None
     created_at: datetime | None = None
 
@@ -181,10 +185,10 @@ class QueuedInputSummary(BaseModel):
 class SessionInputResponse(BaseModel):
     """Shape returned from POST /api/sessions/{id}/input."""
 
-    outcome: str = Field(..., description="sent | queued")
+    outcome: InputOutcome = Field(..., description="sent | queued")
     input_id: int
     client_request_id: str | None = None
-    intent: str
+    intent: InputIntent
     queued: list[QueuedInputSummary] = Field(default_factory=list)
 
 
@@ -621,7 +625,7 @@ def _client_request_id_for_input(body: SessionInputRequest) -> str:
     return uuid.uuid4().hex
 
 
-def _input_conflict(existing: SessionInput, *, reason: str) -> HTTPException:
+def _input_conflict(existing: SessionInput, *, reason: InputConflictReason) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_409_CONFLICT,
         detail={
@@ -722,8 +726,8 @@ def _create_session_input_or_existing(
     source_session,
     owner_id: int,
     body: SessionInputRequest,
-    intent: str,
-    status_value: str,
+    intent: InputIntent,
+    status_value: InputStatus,
     client_request_id: str,
     delivery_request_id: str | None = None,
 ) -> SessionInput | SessionInputResponse:
@@ -912,7 +916,7 @@ async def _create_session_input_response(
         if current >= MAX_QUEUED_PER_SESSION:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=(f"Too many queued inputs for this session ({current}); " "cancel one before queuing another"),
+                detail=(f"Too many queued inputs for this session ({current}); cancel one before queuing another"),
             )
 
     if body.intent == INPUT_INTENT_STEER:

@@ -244,13 +244,13 @@ struct SessionViewModelTests {
                 outcome: .queued,
                 inputId: 7,
                 clientRequestId: nil,
-                intent: "queue",
+                intent: .queue,
                 queued: [
                     QueuedInputSummary(
                         id: 7,
                         text: "next",
-                        intent: "queue",
-                        status: "queued",
+                        intent: .queue,
+                        status: .queued,
                         lastError: nil,
                         createdAt: "2026-05-02T20:00:00Z"
                     )
@@ -278,13 +278,13 @@ struct SessionViewModelTests {
             outcome: .queued,
             inputId: 9,
             clientRequestId: nil,
-            intent: "queue",
+            intent: .queue,
             queued: [
                 QueuedInputSummary(
                     id: 9,
                     text: "keep going",
-                    intent: "queue",
-                    status: "queued",
+                    intent: .queue,
+                    status: .queued,
                     lastError: nil,
                     createdAt: "2026-05-02T20:00:00Z"
                 )
@@ -319,7 +319,7 @@ struct SessionViewModelTests {
         let api = FakeSessionWorkspaceClient(workspaces: [before])
         await api.setSendSteps([
             .requestFailed,
-            .response(SessionInputResponse(outcome: .sent, inputId: 11, clientRequestId: nil, intent: "auto", queued: [])),
+            .response(SessionInputResponse(outcome: .sent, inputId: 11, clientRequestId: nil, intent: .auto, queued: [])),
         ])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
@@ -355,7 +355,7 @@ struct SessionViewModelTests {
         )
         let api = FakeSessionWorkspaceClient(
             workspaces: [before, after],
-            sendResponse: SessionInputResponse(outcome: .sent, inputId: 7, clientRequestId: nil, intent: "auto", queued: [])
+            sendResponse: SessionInputResponse(outcome: .sent, inputId: 7, clientRequestId: nil, intent: .auto, queued: [])
         )
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
@@ -375,7 +375,7 @@ struct SessionViewModelTests {
         let before = try makeWorkspace(eventId: 10, content: "Before send")
         let api = FakeSessionWorkspaceClient(
             workspaces: [before],
-            sendResponse: SessionInputResponse(outcome: .sent, inputId: 7, clientRequestId: nil, intent: "auto", queued: []),
+            sendResponse: SessionInputResponse(outcome: .sent, inputId: 7, clientRequestId: nil, intent: .auto, queued: []),
             afterSendWorkspace: { clientRequestId in
                 try makeWorkspace(
                     eventId: 11,
@@ -444,7 +444,7 @@ struct SessionViewModelTests {
         )
         let api = FakeSessionWorkspaceClient(
             workspaces: [before, after],
-            sendResponse: SessionInputResponse(outcome: .sent, inputId: 7, clientRequestId: nil, intent: "auto", queued: [])
+            sendResponse: SessionInputResponse(outcome: .sent, inputId: 7, clientRequestId: nil, intent: .auto, queued: [])
         )
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
@@ -652,7 +652,7 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
 
     init(
         workspaces: [SessionWorkspaceResponse],
-        sendResponse: SessionInputResponse = SessionInputResponse(outcome: .sent, inputId: 1, clientRequestId: nil, intent: "auto", queued: []),
+        sendResponse: SessionInputResponse = SessionInputResponse(outcome: .sent, inputId: 1, clientRequestId: nil, intent: .auto, queued: []),
         afterSendWorkspace: (@Sendable (String?) throws -> SessionWorkspaceResponse)? = nil
     ) {
         self.workspaces = workspaces

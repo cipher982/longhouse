@@ -19,6 +19,7 @@ os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-1234")
 os.environ.setdefault("GOOGLE_CLIENT_ID", "test-google-client-id")
 os.environ.setdefault("GOOGLE_CLIENT_SECRET", "test-google-client-secret")
 
+from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 from zerg.database import get_db
 from zerg.database import initialize_database
 from zerg.database import make_engine
@@ -44,7 +45,6 @@ from zerg.services.session_inputs import INPUT_STATUS_QUEUED
 from zerg.services.session_inputs import create_session_input
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
-from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 
 
 def _make_db(tmp_path):
@@ -204,6 +204,28 @@ def _stub_dispatch(monkeypatch, *, emit_verified_user_event: bool = False):
         lambda **_kwargs: None,
     )
     return calls
+
+
+def test_session_input_api_schema_exposes_typed_lifecycle_contract():
+    from zerg.routers.session_chat import QueuedInputSummary
+    from zerg.routers.session_chat import SessionInputRequest
+    from zerg.routers.session_chat import SessionInputResponse
+
+    request_schema = SessionInputRequest.model_json_schema()
+    response_schema = SessionInputResponse.model_json_schema()
+    queued_schema = QueuedInputSummary.model_json_schema()
+
+    assert request_schema["properties"]["intent"]["enum"] == ["auto", "queue", "steer"]
+    assert response_schema["properties"]["outcome"]["enum"] == ["sent", "queued"]
+    assert response_schema["properties"]["intent"]["enum"] == ["auto", "queue", "steer"]
+    assert queued_schema["properties"]["intent"]["enum"] == ["auto", "queue", "steer"]
+    assert queued_schema["properties"]["status"]["enum"] == [
+        "queued",
+        "delivering",
+        "delivered",
+        "cancelled",
+        "failed",
+    ]
 
 
 def test_intent_auto_not_locked_returns_sent(monkeypatch, tmp_path):
@@ -661,6 +683,41 @@ def test_client_request_id_failed_retry_reuses_row(monkeypatch, tmp_path):
         api_app_ref.dependency_overrides = {}
 
 
+def test_retry_failed_input_rejects_terminal_rows(tmp_path):
+    from zerg.services.session_inputs import retry_failed_input
+
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+
+    with session_local() as db:
+        row = create_session_input(
+            db,
+            session_id=session_id,
+            text="already sent",
+            owner_id=user_id,
+            intent="auto",
+            status=INPUT_STATUS_DELIVERED,
+            client_request_id="ios-delivered-1",
+            delivery_request_id="old-delivery",
+        )
+        input_id = int(row.id)
+
+        retried = retry_failed_input(
+            db,
+            input_id,
+            intent="auto",
+            status=INPUT_STATUS_DELIVERING,
+            delivery_request_id="new-delivery",
+        )
+
+        db.expire_all()
+        refreshed = db.query(SessionInput).filter(SessionInput.id == input_id).one()
+        assert retried is None
+        assert refreshed.status == INPUT_STATUS_DELIVERED
+        assert refreshed.client_request_id == "ios-delivered-1"
+        assert refreshed.delivery_request_id == "old-delivery"
+
+
 def test_intent_auto_locked_returns_queued(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_live_session(session_local)
@@ -668,9 +725,7 @@ def test_intent_auto_locked_returns_queued(monkeypatch, tmp_path):
 
     # Pre-acquire the lock on the session scope.
     lock_scope_id = str(session_id)
-    acquired = asyncio.run(
-        session_lock_manager.acquire(session_id=lock_scope_id, holder="other", ttl_seconds=60)
-    )
+    acquired = asyncio.run(session_lock_manager.acquire(session_id=lock_scope_id, holder="other", ttl_seconds=60))
     assert acquired
 
     client, api_app_ref = _make_client(
@@ -748,26 +803,16 @@ def _seed_codex_session(session_local):
         session = db.query(AgentSession).filter_by(id=session_id).one()
         session.provider = "codex"
         session.managed_transport = "codex_app_server"
-        db.query(SessionRuntimeState).filter(
-            SessionRuntimeState.session_id == session.id
-        ).delete(synchronize_session=False)
+        db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).delete(
+            synchronize_session=False
+        )
         thread = (
-            db.query(SessionThread)
-            .filter(SessionThread.session_id == session.id, SessionThread.is_primary == 1)
-            .one()
+            db.query(SessionThread).filter(SessionThread.session_id == session.id, SessionThread.is_primary == 1).one()
         )
         thread.provider = "codex"
-        run = (
-            db.query(SessionRun)
-            .filter(SessionRun.thread_id == thread.id, SessionRun.ended_at.is_(None))
-            .one()
-        )
+        run = db.query(SessionRun).filter(SessionRun.thread_id == thread.id, SessionRun.ended_at.is_(None)).one()
         run.provider = "codex"
-        conn = (
-            db.query(SessionConnection)
-            .filter(SessionConnection.run_id == run.id)
-            .one()
-        )
+        conn = db.query(SessionConnection).filter(SessionConnection.run_id == run.id).one()
         conn.control_plane = "codex_bridge"
         db.commit()
         _seed_live_runtime_state(db, session, phase="running")
@@ -1086,7 +1131,10 @@ def test_startup_reconciliation_fails_stuck_steer_rows_instead_of_requeuing(tmp_
         auto_refreshed = db.query(SessionInput).filter(SessionInput.id == auto_row.id).one()
         assert steer_refreshed.status == INPUT_STATUS_FAILED
         assert steer_refreshed.last_error == "steer interrupted by restart"
+        assert steer_refreshed.delivery_request_id == "crash-steer-delivery"
         assert auto_refreshed.status == INPUT_STATUS_QUEUED
+        assert auto_refreshed.client_request_id == "crash-auto"
+        assert auto_refreshed.delivery_request_id is None
 
 
 def test_startup_reconciliation_rewinds_stuck_delivering(tmp_path):
@@ -1115,3 +1163,5 @@ def test_startup_reconciliation_rewinds_stuck_delivering(tmp_path):
         db.expire_all()
         refreshed = db.query(SessionInput).filter(SessionInput.id == row.id).one()
         assert refreshed.status == INPUT_STATUS_QUEUED
+        assert refreshed.client_request_id == "old"
+        assert refreshed.delivery_request_id is None

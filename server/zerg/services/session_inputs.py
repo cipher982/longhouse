@@ -14,6 +14,7 @@ import logging
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from typing import Literal
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -23,18 +24,23 @@ from zerg.models.agents import SessionInputAttachment
 
 logger = logging.getLogger(__name__)
 
+InputIntent = Literal["auto", "queue", "steer"]
+InputStatus = Literal["queued", "delivering", "delivered", "cancelled", "failed"]
+RetryInputStatus = Literal["queued", "delivering"]
+InputOutcome = Literal["sent", "queued"]
+InputConflictReason = Literal["different_text", "cancelled"]
 
-INPUT_INTENT_AUTO = "auto"
-INPUT_INTENT_QUEUE = "queue"
-INPUT_INTENT_STEER = "steer"
+INPUT_INTENT_AUTO: InputIntent = "auto"
+INPUT_INTENT_QUEUE: InputIntent = "queue"
+INPUT_INTENT_STEER: InputIntent = "steer"
 
-INPUT_STATUS_QUEUED = "queued"
-INPUT_STATUS_DELIVERING = "delivering"
-INPUT_STATUS_DELIVERED = "delivered"
-INPUT_STATUS_CANCELLED = "cancelled"
-INPUT_STATUS_FAILED = "failed"
+INPUT_STATUS_QUEUED: InputStatus = "queued"
+INPUT_STATUS_DELIVERING: InputStatus = "delivering"
+INPUT_STATUS_DELIVERED: InputStatus = "delivered"
+INPUT_STATUS_CANCELLED: InputStatus = "cancelled"
+INPUT_STATUS_FAILED: InputStatus = "failed"
 
-VALID_INTENTS = frozenset({INPUT_INTENT_AUTO, INPUT_INTENT_QUEUE, INPUT_INTENT_STEER})
+VALID_INTENTS: frozenset[InputIntent] = frozenset({INPUT_INTENT_AUTO, INPUT_INTENT_QUEUE, INPUT_INTENT_STEER})
 
 # Startup reconciliation: any `delivering` row older than this at boot is
 # considered wedged (the process died mid-dispatch) and rewound to queued.
@@ -49,8 +55,8 @@ def create_session_input(
     *,
     session_id: UUID,
     text: str,
-    intent: str,
-    status: str,
+    intent: InputIntent,
+    status: InputStatus,
     owner_id: int | None = None,
     client_request_id: str | None = None,
     delivery_request_id: str | None = None,
@@ -200,8 +206,8 @@ def retry_failed_input(
     db: Session,
     input_id: int,
     *,
-    intent: str,
-    status: str,
+    intent: InputIntent,
+    status: RetryInputStatus,
     delivery_request_id: str | None = None,
 ) -> SessionInput | None:
     if intent not in VALID_INTENTS:

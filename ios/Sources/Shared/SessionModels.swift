@@ -566,11 +566,25 @@ enum SessionInputOutcome: String, Codable, Sendable {
     case queued
 }
 
+enum SessionInputIntent: String, Codable, Sendable {
+    case auto
+    case queue
+    case steer
+}
+
+enum SessionInputStatus: String, Codable, Sendable {
+    case queued
+    case delivering
+    case delivered
+    case cancelled
+    case failed
+}
+
 struct QueuedInputSummary: Codable, Sendable, Identifiable {
     let id: Int
     let text: String
-    let intent: String
-    let status: String
+    let intent: SessionInputIntent
+    let status: SessionInputStatus
     let lastError: String?
     let createdAt: String?
 }
@@ -579,16 +593,16 @@ struct SessionInputResponse: Codable, Sendable {
     let outcome: SessionInputOutcome
     let inputId: Int
     let clientRequestId: String?
-    let intent: String
+    let intent: SessionInputIntent
     let queued: [QueuedInputSummary]
 
     var pendingInputCount: Int {
-        queued.filter { $0.status == "queued" || $0.status == "delivering" }.count
+        queued.filter { $0.status == .queued || $0.status == .delivering }.count
     }
 
     var visibleFailedInputCount: Int {
         queued.filter { row in
-            row.status == "failed" && !(row.intent == "steer" && row.lastError == "turn_ended")
+            row.status == .failed && !(row.intent == .steer && row.lastError == "turn_ended")
         }.count
     }
 }
