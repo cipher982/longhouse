@@ -2,10 +2,10 @@
 
 See docs/specs/remote-session-launch.md. The caller (user-auth'd browser or
 iOS) picks a target machine + cwd + provider. We verify ownership, confirm
-the Machine Agent is connected, pre-allocate the session UUID, insert the
-``sessions`` row in ``launch_state=launching``, dispatch the ``session.launch``
-command over the existing control WebSocket, and reconcile the row based on
-the typed result.
+the Machine Agent is connected, pre-allocate the session UUID, record a
+``SessionLaunchAttempt(state=pending)``, dispatch the ``session.launch`` command
+over the existing control WebSocket, and reconcile the attempt based on the
+typed result.
 
 Control-channel contract preserved: every command carries ``session_id``,
 including launch. The session id is the one we pre-allocated. No parallel
@@ -37,6 +37,7 @@ from zerg.services.agents.kernel_writes import upsert_connection_for_run
 from zerg.services.machine_control_channel import MachineControlChannelRegistry
 from zerg.services.machine_control_channel import MachineControlCommandResponse
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
+from zerg.services.session_launch_lifecycle import project_remote_launch_lifecycle
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_loop_mode import SessionLoopMode
@@ -102,25 +103,15 @@ def _project_for(cwd: str, project: str | None) -> str:
     return Path(cwd).name or "managed-local"
 
 
-def _launch_state_for_attempt(attempt: SessionLaunchAttempt) -> str:
-    state = str(attempt.state or "").strip()
-    if state == "failed":
-        return "launch_failed"
-    if state == "abandoned":
-        return "launch_orphaned"
-    if attempt.run_id is not None or state == "adopted":
-        return "live"
-    if state == "dispatched":
-        return "launching_unknown"
-    return "launching"
-
-
 def _launch_result_for_attempt(attempt: SessionLaunchAttempt) -> RemoteLaunchResult:
+    lifecycle = project_remote_launch_lifecycle(attempt)
+    if lifecycle is None:  # pragma: no cover - defensive for type checkers
+        raise RuntimeError("launch attempt projection returned no lifecycle")
     return RemoteLaunchResult(
         session_id=UUID(str(attempt.session_id)),
-        launch_state=_launch_state_for_attempt(attempt),
-        launch_error_code=attempt.error_code,
-        launch_error_message=attempt.error_message,
+        launch_state=lifecycle.state,
+        launch_error_code=lifecycle.error_code,
+        launch_error_message=lifecycle.error_message,
     )
 
 
@@ -276,10 +267,6 @@ async def launch_remote_session(
         source_runner_id=None,
         source_runner_name=info.machine_name or device_id,
         managed_session_name=display_name,
-        launch_state="launching",
-        launch_lease_until=lease_until,
-        launch_command_id=command_id,
-        launch_client_request_id=client_request_id,
     )
     db.add(session)
     db.flush()
@@ -339,12 +326,7 @@ async def launch_remote_session(
         )
         db.commit()
         db.refresh(session)
-        return RemoteLaunchResult(
-            session_id=session_uuid,
-            launch_state="launching_unknown",
-            launch_error_code=None,
-            launch_error_message=error_message,
-        )
+        return _launch_result_for_attempt(launch_attempt)
 
     message = response.message or {}
     if message.get("ok"):
@@ -364,7 +346,7 @@ async def launch_remote_session(
             provider,
             elapsed_ms,
         )
-        return RemoteLaunchResult(session_id=session_uuid, launch_state="live")
+        return _launch_result_for_attempt(launch_attempt)
 
     error = message.get("error") or {}
     code = str(error.get("code") or "provider_launch_failed")
@@ -387,12 +369,7 @@ async def launch_remote_session(
         provider,
         code,
     )
-    return RemoteLaunchResult(
-        session_id=session_uuid,
-        launch_state="launch_failed",
-        launch_error_code=code,
-        launch_error_message=err_msg,
-    )
+    return _launch_result_for_attempt(launch_attempt)
 
 
 def reconcile_launch_from_command_result(db: Session, message: dict) -> bool:

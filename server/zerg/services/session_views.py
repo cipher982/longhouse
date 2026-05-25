@@ -41,6 +41,7 @@ from zerg.services.send_affordance import project_send_affordance
 from zerg.services.session_capabilities import build_session_capability_display
 from zerg.services.session_current_control import engine_control_online
 from zerg.services.session_current_control import engine_session_control_attached
+from zerg.services.session_launch_lifecycle import project_remote_launch_lifecycle
 from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_runner_state import managed_runner_host_state
 from zerg.services.session_runtime import SessionRuntimeView
@@ -773,7 +774,7 @@ class SessionResponse(UTCBaseModel):
     user_state: str = Field("active", description="User classification: active|parked|snoozed|archived")
     launch_state: Optional[str] = Field(
         None,
-        description="Remote-launch lifecycle: launching|live|launching_unknown|launch_failed|launch_orphaned; null for pre-migration rows",
+        description="Remote-launch lifecycle: launching|live|launching_unknown|launch_failed|launch_orphaned; null when there is no launch attempt",
     )
     launch_error_code: Optional[str] = Field(None, description="Remote-launch error code when launch_state=launch_failed/launch_orphaned")
     launch_error_message: Optional[str] = Field(
@@ -1375,6 +1376,7 @@ def build_session_response(
     # removed; the kernel ``capability_flags`` is already the truth.
     effective_capability_flags = capability_flags
     effective_launch_attempt = _latest_launch_attempt(store.db, session.id) if launch_attempt is _LAUNCH_ATTEMPT_MISSING else launch_attempt
+    launch_lifecycle = project_remote_launch_lifecycle(effective_launch_attempt)
     return SessionResponse(
         id=str(session.id),
         provider=session.provider,
@@ -1441,9 +1443,9 @@ def build_session_response(
         ),
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
         user_state=session.user_state or "active",
-        launch_state=_launch_state_from_attempt(effective_launch_attempt, session),
-        launch_error_code=effective_launch_attempt.error_code if effective_launch_attempt is not None else None,
-        launch_error_message=(effective_launch_attempt.error_message if effective_launch_attempt is not None else None),
+        launch_state=launch_lifecycle.state if launch_lifecycle is not None else None,
+        launch_error_code=launch_lifecycle.error_code if launch_lifecycle is not None else None,
+        launch_error_message=launch_lifecycle.error_message if launch_lifecycle is not None else None,
     )
 
 
@@ -1512,21 +1514,6 @@ def latest_launch_attempts(db, session_ids) -> dict:
     for attempt in rows:
         result.setdefault(attempt.session_id, attempt)
     return result
-
-
-def _launch_state_from_attempt(attempt: SessionLaunchAttempt | None, session: AgentSession) -> str | None:
-    if attempt is None:
-        return None
-    state = str(attempt.state or "").strip()
-    if state == "failed":
-        return "launch_failed"
-    if state == "abandoned":
-        return "launch_orphaned"
-    if attempt.run_id is not None or state == "adopted":
-        return "live"
-    if state == "dispatched":
-        return "launching_unknown"
-    return "launching"
 
 
 def build_active_session_response(
