@@ -13,6 +13,7 @@ import {
   buildTimelineModel,
   getPreferredSelectionKey,
   projectionItemsWithTranscriptPreview,
+  shouldRenderTranscriptPreview,
   timelineItemContainsSelection,
 } from "../lib/sessionWorkspace";
 import {
@@ -137,7 +138,7 @@ export function useSessionWorkspace(
           let shouldDeferRefetchForPreview = false;
           if (Object.prototype.hasOwnProperty.call(data, "transcript_preview")) {
             const transcriptPreview = data.transcript_preview ?? null;
-            shouldDeferRefetchForPreview = Boolean(transcriptPreview?.text?.trim());
+            shouldDeferRefetchForPreview = shouldRenderTranscriptPreview(transcriptPreview);
             setStreamTranscriptPreview(transcriptPreview);
             queryClient.setQueriesData<AgentSessionWorkspaceResponse>(
               { queryKey: ["agent-session-workspace", sessionId] },

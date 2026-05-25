@@ -662,6 +662,33 @@ struct SessionTranscriptPreview: Codable, Hashable, Sendable {
     }
 }
 
+enum TranscriptPreviewProjection {
+    static func visibleEvents(
+        durableEvents: [SessionEvent],
+        preview: SessionTranscriptPreview?
+    ) -> [SessionEvent] {
+        guard let preview, preview.shouldRender else { return durableEvents }
+        let previewText = preview.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !previewText.isEmpty else { return durableEvents }
+
+        if let lastDurableAssistant = durableEvents.reversed().first(where: {
+            $0.role == "assistant" && ($0.contentText ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        }) {
+            let lastText = (lastDurableAssistant.contentText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if lastText == previewText { return durableEvents }
+        }
+
+        if let previewAt = LonghouseDateParser.parse(preview.timestamp),
+           let latestEvent = durableEvents.last,
+           let latestDurableAt = LonghouseDateParser.parse(latestEvent.timestamp),
+           latestDurableAt >= previewAt {
+            return durableEvents
+        }
+
+        return durableEvents + [preview.syntheticEvent]
+    }
+}
+
 enum SessionLoopMode: String, Codable, Sendable, CaseIterable, Hashable {
     case manual
     case assist

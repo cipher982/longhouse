@@ -135,13 +135,19 @@ function nonEmptyText(value: string | null | undefined): string {
   return (value || "").trim();
 }
 
+export function shouldRenderTranscriptPreview(
+  preview: AgentSession["transcript_preview"] | null | undefined,
+): boolean {
+  return Boolean(preview && nonEmptyText(preview.text) && !preview.is_stale);
+}
+
 export function projectionItemsWithTranscriptPreview(
   projectionItems: AgentSessionProjectionItem[],
   session: AgentSession | null | undefined,
 ): AgentSessionProjectionItem[] {
   const preview = session?.transcript_preview;
   const previewText = nonEmptyText(preview?.text);
-  if (!session || !preview || !previewText || preview.is_stale) {
+  if (!session || !preview || !shouldRenderTranscriptPreview(preview)) {
     return projectionItems;
   }
 

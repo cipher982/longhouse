@@ -39,6 +39,7 @@ export {
   isToolInteractionDropped,
   parseLonghouseOutput,
   projectionItemsWithTranscriptPreview,
+  shouldRenderTranscriptPreview,
   timelineItemContainsSelection,
 } from "./timelineModel";
 

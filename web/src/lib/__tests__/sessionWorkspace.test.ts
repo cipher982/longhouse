@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildTimelineModel,
@@ -8,6 +10,21 @@ import {
 } from "../sessionWorkspace";
 import type { ToolInteraction } from "../sessionWorkspace";
 import type { AgentEvent, AgentSession, AgentSessionProjectionItem, SessionCapabilities } from "../../services/api/agents";
+
+type TranscriptPreviewFixture = {
+  cases: Array<{
+    name: string;
+    session: Pick<AgentSession, "id" | "transcript_preview">;
+    projection: {
+      items: AgentSessionProjectionItem[];
+    };
+    expectations: {
+      rendered_event_ids: number[];
+      rendered_message_texts: string[];
+      renders_preview: boolean;
+    };
+  }>;
+};
 
 function makeCapabilities(overrides: Partial<SessionCapabilities> = {}): SessionCapabilities {
   return {
@@ -51,6 +68,11 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     loop_mode: "assist",
     ...overrides,
   };
+}
+
+function loadTranscriptPreviewFixture(): TranscriptPreviewFixture {
+  const fixturePath = resolve(process.cwd(), "../tests/fixtures/session-transcript-preview/rendering.json");
+  return JSON.parse(readFileSync(fixturePath, "utf8")) as TranscriptPreviewFixture;
 }
 
 describe("buildTimelineModel", () => {
@@ -176,6 +198,19 @@ describe("projectionItemsWithTranscriptPreview", () => {
     ];
 
     expect(projectionItemsWithTranscriptPreview(items, session)).toBe(items);
+  });
+});
+
+describe("shared transcript preview fixtures", () => {
+  it.each(loadTranscriptPreviewFixture().cases)("$name", (fixtureCase) => {
+    const session = makeSession(fixtureCase.session);
+    const items = projectionItemsWithTranscriptPreview(fixtureCase.projection.items, session);
+    const model = buildTimelineModel(items);
+    const messages = model.items.filter((item) => item.kind === "message");
+
+    expect(messages.map((item) => item.event.id)).toEqual(fixtureCase.expectations.rendered_event_ids);
+    expect(messages.map((item) => item.event.content_text)).toEqual(fixtureCase.expectations.rendered_message_texts);
+    expect(messages.some((item) => item.event.id < 0)).toBe(fixtureCase.expectations.renders_preview);
   });
 });
 
