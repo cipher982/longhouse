@@ -215,9 +215,6 @@ export function getRuntimeMetaLabel(
   runtime: ReturnType<typeof resolveSessionRuntimeState>,
   relativeNowMs?: number,
 ): string | null {
-  if (runtime.factStatus?.seenAt) {
-    return `${runtime.factStatus.seenAtPrefix} ${formatRelativeTime(runtime.factStatus.seenAt, relativeNowMs)}`;
-  }
   if (runtime.truthTier === "managed-local") {
     return "Live on host";
   }
@@ -242,82 +239,18 @@ export function toTitleCaseWords(value: string): string {
     .join(" ");
 }
 
-export function compactRuntimeToolLabel(toolName: string | null): string | null {
-  const rawToolName = toolName?.trim();
-  if (!rawToolName) {
-    return null;
-  }
-
-  const canonicalSegment = rawToolName.split("__").pop() ?? rawToolName;
-  const withoutPrefixes = canonicalSegment
-    .replace(/^hatch_/, "")
-    .replace(/^tool_/, "")
-    .replace(/^mcp_/, "");
-  const normalized = withoutPrefixes.replace(/[-_.]+/g, " ").trim();
-
-  if (!normalized) {
-    return null;
-  }
-
-  const lower = normalized.toLowerCase();
-  if (lower === "codex") return "Codex";
-  if (lower === "claude") return "Claude";
-  if (lower === "antigravity") return "Antigravity";
-  if (lower === "gemini") return "Gemini";
-  if (lower === "default") return "Z.ai";
-  if (lower === "shell" || lower === "bash" || lower === "terminal") return "Shell";
-  if (
-    lower === "edit" ||
-    lower === "write" ||
-    lower === "patch" ||
-    lower === "apply patch" ||
-    lower === "file change" ||
-    lower === "filechange"
-  ) {
-    return "Edit";
-  }
-
-  return toTitleCaseWords(normalized);
-}
-
 export function getCardRuntimePhaseLabel(runtime: ReturnType<typeof resolveSessionRuntimeState>): string {
-  if (runtime.runtimeDisplay?.phase_label) {
-    return runtime.runtimeDisplay.phase_label;
-  }
-
-  const compactTool = compactRuntimeToolLabel(runtime.presenceTool);
-
-  if (runtime.presenceState === "running" && compactTool) {
-    return `Running ${compactTool}`;
-  }
-  if (runtime.presenceState === "blocked" && compactTool) {
-    return `Blocked on ${compactTool}`;
-  }
-
-  return runtime.displayPhase;
+  return runtime.runtimeDisplay?.phase_label ?? runtime.displayPhase;
 }
 
 export function getRuntimeOutcomeLabel(
   runtime: ReturnType<typeof resolveSessionRuntimeState>,
 ): string {
-  if (runtime.factStatus) {
-    return runtime.factStatus.label;
-  }
   if (runtime.runtimeDisplay?.lifecycle === "closed") {
     return "Closed";
   }
-  if (
-    runtime.runtimeDisplay?.headline === "Active" ||
-    runtime.runtimeDisplay?.headline === "Completed" ||
-    runtime.runtimeDisplay?.headline === "Inactive"
-  ) {
+  if (runtime.runtimeDisplay?.headline) {
     return runtime.runtimeDisplay.headline;
-  }
-  if (runtime.isExecuting || runtime.needsAttention) {
-    return "Active";
-  }
-  if (runtime.status === "completed") {
-    return "Completed";
   }
   return "Inactive";
 }
@@ -335,13 +268,6 @@ export function getRuntimeDisplayCopy(
     managedLocal?: boolean;
   } = {},
 ): RuntimeDisplayCopy {
-  if (runtime.factStatus) {
-    return {
-      headline: runtime.factStatus.label,
-      detail: null,
-    };
-  }
-
   if (runtime.runtimeDisplay) {
     if (runtime.runtimeDisplay.lifecycle === "closed") {
       return {
@@ -354,50 +280,9 @@ export function getRuntimeDisplayCopy(
       detail: runtime.runtimeDisplay.detail,
     };
   }
-
-  const runtimePhaseLabel = getCardRuntimePhaseLabel(runtime);
-  if (!managedLocal) {
-    return {
-      headline: runtimePhaseLabel,
-      detail: null,
-    };
-  }
-
-  const compactTool = compactRuntimeToolLabel(runtime.presenceTool);
-
-  if (runtime.presenceState === "thinking") {
-    return {
-      headline: "Working",
-      detail: "Thinking",
-    };
-  }
-  if (runtime.presenceState === "running") {
-    return {
-      headline: "Working",
-      detail: compactTool ? `Using ${compactTool}` : runtimePhaseLabel,
-    };
-  }
-  if (runtime.presenceState === "needs_user") {
-    return {
-      headline: "Idle",
-      detail: "Waiting for next prompt",
-    };
-  }
-  if (runtime.presenceState === "blocked") {
-    return {
-      headline: "Needs permission",
-      detail: compactTool ? `Approval needed • ${compactTool}` : "Approval needed",
-    };
-  }
-  if (runtime.presenceState == null) {
-    return {
-      headline: "Not connected",
-      detail: null,
-    };
-  }
   return {
-    headline: "Idle",
-    detail: "Waiting for next prompt",
+    headline: managedLocal ? "Not connected" : "Inactive",
+    detail: null,
   };
 }
 

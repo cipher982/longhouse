@@ -452,9 +452,7 @@ def reap_orphaned_launches(db: Session, *, now: datetime | None = None) -> int:
             db,
             attempt,
             state="abandoned",
-            error_code=normalize_remote_launch_error_code(attempt.error_code, fallback="launch_timeout")
-            if attempt.error_code
-            else "launch_timeout",
+            error_code=normalize_remote_launch_error_code(attempt.error_code, fallback="launch_timeout"),
             error_message=attempt.error_message or "Machine Agent did not report back before lease expired",
             clear_expires=True,
         )

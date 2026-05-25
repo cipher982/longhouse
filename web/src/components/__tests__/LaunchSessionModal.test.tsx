@@ -255,7 +255,7 @@ describe("LaunchSessionModal", () => {
     await user.click(screen.getByTestId("launch-submit"));
 
     expect(await screen.findByTestId("launch-error")).toHaveTextContent(
-      "cwd_not_allowed: cwd must be absolute",
+      "cwd must be absolute",
     );
     expect(onLaunched).not.toHaveBeenCalled();
   });

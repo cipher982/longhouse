@@ -75,7 +75,7 @@ def test_remote_launch_lifecycle_carries_user_visible_error_and_lease():
     assert lifecycle is not None
     assert lifecycle.state == "launch_failed"
     assert lifecycle.error_code == "cwd_not_found"
-    assert lifecycle.error_message == "Workspace missing"
+    assert lifecycle.error_message == "Check the workspace path: Workspace missing"
     assert lifecycle.lease_until == lease_until
 
 
@@ -91,7 +91,7 @@ def test_remote_launch_lifecycle_normalizes_unknown_error_codes():
     assert lifecycle is not None
     assert lifecycle.state == "launch_failed"
     assert lifecycle.error_code == "provider_launch_failed"
-    assert lifecycle.error_message == "internal details stay in the message"
+    assert lifecycle.error_message == "Provider failed to start: internal details stay in the message"
 
 
 def test_remote_launch_lifecycle_requires_durable_attempt():

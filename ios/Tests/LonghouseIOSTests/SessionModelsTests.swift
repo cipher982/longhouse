@@ -110,7 +110,28 @@ struct SessionModelsTests {
             "reply_to_live_session_available": true
           },
           "loop_mode": "assist",
-          "runtime_display": null,
+          "runtime_display": {
+            "truth_tier": "managed-local",
+            "signal_tier": "phase_signal",
+            "state": "needs_user",
+            "tone": "idle",
+            "headline": "Idle",
+            "detail": "Waiting for next prompt",
+            "phase_label": "Idle",
+            "compact_tool_label": null,
+            "is_live": false,
+            "is_executing": false,
+            "needs_attention": false,
+            "is_idle": true,
+            "is_stalled": false,
+            "is_managed_local_truth": true,
+            "has_signal": true,
+            "control_path": "managed",
+            "activity_recency": "live",
+            "lifecycle": "open",
+            "host_state": "online",
+            "terminal_reason": null
+          },
           "runtime_facts": {
             "control_path": "managed",
             "control": {"state": "online", "reason": null, "source": "machine_heartbeat", "last_seen_at": "2026-04-25T20:00:00Z", "expires_at": "2026-04-25T20:15:00Z", "transport": "claude_channel_bridge"},
@@ -591,6 +612,26 @@ struct SessionModelsTests {
             "display_detail": "Longhouse can send prompts into this live session.",
             "display_tone": "success"
           },
+          "runtime_display": {
+            "truth_tier": "managed-local",
+            "state": "needs_user",
+            "tone": "idle",
+            "headline": "Idle",
+            "detail": null,
+            "phase_label": "Idle",
+            "compact_tool_label": null,
+            "is_live": false,
+            "is_executing": false,
+            "needs_attention": false,
+            "is_idle": true,
+            "is_managed_local_truth": true,
+            "has_signal": true,
+            "control_path": "managed",
+            "activity_recency": "live",
+            "lifecycle": "open",
+            "host_state": "online",
+            "terminal_reason": null
+          },
           "loop_mode": "assist"
         }
         """.data(using: .utf8)!
@@ -770,7 +811,7 @@ struct SessionModelsTests {
     }
 
     @Test
-    func sessionDetailCanonicalizesLegacyShellLabels() throws {
+    func sessionDetailCanonicalizesRuntimeDisplayShellLabels() throws {
         let json = """
         {
           "id": "session-shell",
@@ -796,6 +837,26 @@ struct SessionModelsTests {
             "display_label": "Live on this Mac",
             "display_detail": "Longhouse can send prompts into this live session.",
             "display_tone": "success"
+          },
+          "runtime_display": {
+            "truth_tier": "managed-local",
+            "state": "running",
+            "tone": "running",
+            "headline": "Working",
+            "detail": "running bash",
+            "phase_label": "running bash",
+            "compact_tool_label": "bash",
+            "is_live": true,
+            "is_executing": true,
+            "needs_attention": false,
+            "is_idle": false,
+            "is_managed_local_truth": true,
+            "has_signal": true,
+            "control_path": "managed",
+            "activity_recency": "live",
+            "lifecycle": "open",
+            "host_state": "online",
+            "terminal_reason": null
           },
           "loop_mode": "assist"
         }
@@ -893,7 +954,7 @@ struct SessionModelsTests {
     }
 
     @Test
-    func sessionSummaryCanonicalizesLegacyShellLabels() {
+    func sessionSummaryCanonicalizesRuntimeDisplayShellLabels() {
         let summary = SessionSummary(
             id: "session-shell",
             title: "Run checks",
@@ -904,7 +965,27 @@ struct SessionModelsTests {
             status: "working",
             displayPhase: "Running bash",
             presenceTool: "bash",
-            activeTool: "bash"
+            activeTool: "bash",
+            runtimeDisplay: SessionRuntimeDisplay(
+                truthTier: "managed-local",
+                state: "running",
+                tone: "running",
+                headline: "Working",
+                detail: "running bash",
+                phaseLabel: "Running bash",
+                compactToolLabel: "bash",
+                isLive: true,
+                isExecuting: true,
+                needsAttention: false,
+                isIdle: false,
+                isManagedLocalTruth: true,
+                hasSignal: true,
+                controlPath: "managed",
+                activityRecency: "live",
+                lifecycle: "open",
+                hostState: "online",
+                terminalReason: nil
+            )
         )
 
         #expect(summary.displayPhaseLabel == "Using Shell")
@@ -1252,6 +1333,26 @@ struct SessionModelsTests {
             project: "zerg",
             lastActivityAt: "2026-04-25T20:00:00Z",
             status: "working",
+            runtimeDisplay: SessionRuntimeDisplay(
+                truthTier: "stale",
+                state: nil,
+                tone: "closed",
+                headline: "Closed",
+                detail: nil,
+                phaseLabel: "Closed",
+                compactToolLabel: nil,
+                isLive: false,
+                isExecuting: false,
+                needsAttention: false,
+                isIdle: true,
+                isManagedLocalTruth: false,
+                hasSignal: true,
+                controlPath: "unmanaged",
+                activityRecency: "stale",
+                lifecycle: "closed",
+                hostState: "unknown",
+                terminalReason: "provider_signal"
+            ),
             runtimeFacts: runtimeFacts(
                 controlPath: "unmanaged",
                 transcriptAt: "2026-04-25T20:00:00Z",
@@ -1380,7 +1481,28 @@ struct SessionModelsTests {
             "reply_to_live_session_available": true
           },
           "loop_mode": "assist",
-          "runtime_display": null,
+          "runtime_display": {
+            "truth_tier": "managed-local",
+            "signal_tier": "phase_signal",
+            "state": "needs_user",
+            "tone": "idle",
+            "headline": "Idle",
+            "detail": "Waiting for next prompt",
+            "phase_label": "Idle",
+            "compact_tool_label": null,
+            "is_live": false,
+            "is_executing": false,
+            "needs_attention": false,
+            "is_idle": true,
+            "is_stalled": false,
+            "is_managed_local_truth": true,
+            "has_signal": true,
+            "control_path": "managed",
+            "activity_recency": "live",
+            "lifecycle": "open",
+            "host_state": "online",
+            "terminal_reason": null
+          },
           "runtime_facts": {
             "control_path": "managed",
             "control": {"state": "online", "reason": null, "source": "machine_heartbeat", "last_seen_at": "2026-04-25T20:00:00Z", "expires_at": "2026-04-25T20:15:00Z", "transport": "claude_channel_bridge"},
@@ -1470,7 +1592,7 @@ struct SessionModelsTests {
     }
 
     @Test
-    func sessionSummaryUsesTimelineCardStatusBeforeLocalFactFallback() {
+    func sessionSummaryUsesTimelineCardStatusAndRuntimeDisplayPhase() {
         let summary = SessionSummary(
             id: "session-card-first",
             title: "Timeline card first",
@@ -1479,6 +1601,26 @@ struct SessionModelsTests {
             project: "zerg",
             lastActivityAt: "2026-04-25T20:00:00Z",
             status: "working",
+            runtimeDisplay: SessionRuntimeDisplay(
+                truthTier: "managed-local",
+                state: "running",
+                tone: "running",
+                headline: "Working",
+                detail: "Using Shell",
+                phaseLabel: "Using Shell",
+                compactToolLabel: "Shell",
+                isLive: true,
+                isExecuting: true,
+                needsAttention: false,
+                isIdle: false,
+                isManagedLocalTruth: true,
+                hasSignal: true,
+                controlPath: "managed",
+                activityRecency: "live",
+                lifecycle: "open",
+                hostState: "online",
+                terminalReason: nil
+            ),
             runtimeFacts: runtimeFacts(
                 controlPath: "managed",
                 hostState: "online",
@@ -1646,7 +1788,7 @@ struct SessionModelsTests {
         #expect(detail.runtimeHeadline == "Read only")
         #expect(detail.runtimeDetail == "This imported session is searchable, but Longhouse cannot steer it.")
         #expect(detail.controlHealthMessage == "This imported session is searchable, but Longhouse cannot steer it.")
-        #expect(detail.runtimePhaseLabel == "Idle")
+        #expect(detail.runtimePhaseLabel == "Inactive")
     }
 
     @Test
@@ -1792,6 +1934,26 @@ struct SessionModelsTests {
             "display_label": "Live on this Mac",
             "display_detail": "Longhouse can send prompts into this live session.",
             "display_tone": "success"
+          },
+          "runtime_display": {
+            "truth_tier": "managed-local",
+            "state": "needs_user",
+            "tone": "idle",
+            "headline": "Idle",
+            "detail": null,
+            "phase_label": "Idle",
+            "compact_tool_label": null,
+            "is_live": false,
+            "is_executing": false,
+            "needs_attention": false,
+            "is_idle": true,
+            "is_managed_local_truth": true,
+            "has_signal": true,
+            "control_path": "managed",
+            "activity_recency": "live",
+            "lifecycle": "open",
+            "host_state": "online",
+            "terminal_reason": null
           },
           "loop_mode": "manual"
         }

@@ -47,6 +47,7 @@ from zerg.services.session_launch_lifecycle import project_remote_launch_lifecyc
 from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_runner_state import managed_runner_host_state
 from zerg.services.session_runtime import SessionRuntimeView
+from zerg.services.session_runtime import build_fallback_runtime_view
 from zerg.services.session_runtime import should_include_runtime_view
 from zerg.services.session_runtime_display import TRANSCRIPT_SYNC_STATE
 from zerg.services.session_runtime_display import build_session_runtime_display
@@ -762,7 +763,7 @@ class SessionResponse(UTCBaseModel):
     is_sidechain: bool = Field(False, description="True when session is a Task sub-agent (not human-initiated)")
     control: Optional[SessionControlResponse] = Field(None, description="Host-control and managed-launch debugging detail")
     capabilities: SessionCapabilitiesResponse = Field(..., description="Canonical session capability flags")
-    runtime_display: Optional[SessionRuntimeDisplayResponse] = Field(None, description="Server-derived display state for clients")
+    runtime_display: SessionRuntimeDisplayResponse = Field(..., description="Server-derived display state for clients")
     runtime_facts: Optional[SessionLivenessFactsResponse] = Field(None, description="Observed liveness facts with timestamps and sources")
     transcript_preview: Optional[SessionTranscriptPreviewResponse] = Field(
         None,
@@ -1303,12 +1304,18 @@ def build_session_response(
 ) -> SessionResponse:
     cache = thread_cache if thread_cache is not None else {}
     thread_head_session_id, thread_continuation_count = get_thread_meta(store, session, cache)
-    include_runtime = should_include_runtime_view(session=session, runtime_view=runtime_overlay)
     if kernel_capabilities is None:
         kernel_capabilities = project_session_capabilities(store.db, session_id=session.id)
     capability_flags = kernel_capabilities
     is_engine_control_online = engine_control_online(session, owner_id)
     current_now = datetime.now(timezone.utc)
+    display_last_activity_at = last_activity_at or session.ended_at or session.started_at
+    display_runtime_overlay = runtime_overlay or build_fallback_runtime_view(
+        session=session,
+        last_activity_at=display_last_activity_at,
+        now=current_now,
+    )
+    include_runtime = should_include_runtime_view(session=session, runtime_view=runtime_overlay)
     is_engine_session_attached = is_engine_control_online and engine_session_control_attached(
         session,
         runtime_overlay,
@@ -1351,22 +1358,18 @@ def build_session_response(
     has_visible_transcript_preview = bool(
         transcript_preview_response is not None and transcript_preview_response.text.strip() and not transcript_preview_response.is_stale
     )
-    runtime_display = (
-        build_session_runtime_display_response(
-            runtime_overlay=runtime_overlay,
-            capability_flags=capability_flags,
-            ended_at=session.ended_at,
-            binding_host_state=binding_host_state,
-            binding_terminal_reason=binding_terminal_reason,
-            last_activity_at=last_activity_at,
-            user_messages=session.user_messages or 0,
-            assistant_messages=session.assistant_messages or 0,
-            has_visible_transcript_preview=has_visible_transcript_preview,
-            has_pending_response_turn=has_pending_response_turn,
-            now=current_now,
-        )
-        if include_runtime
-        else None
+    runtime_display = build_session_runtime_display_response(
+        runtime_overlay=display_runtime_overlay,
+        capability_flags=capability_flags,
+        ended_at=session.ended_at,
+        binding_host_state=binding_host_state,
+        binding_terminal_reason=binding_terminal_reason,
+        last_activity_at=display_last_activity_at,
+        user_messages=session.user_messages or 0,
+        assistant_messages=session.assistant_messages or 0,
+        has_visible_transcript_preview=has_visible_transcript_preview,
+        has_pending_response_turn=has_pending_response_turn,
+        now=current_now,
     )
     runtime_facts = build_session_liveness_facts_response(
         runtime_overlay=runtime_overlay,

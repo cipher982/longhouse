@@ -137,7 +137,7 @@ struct SessionLiveActivityModelsTests {
     }
 
     @Test
-    func contentStatePrefersRuntimeFactsOverRuntimeDisplay() throws {
+    func contentStateUsesRuntimeDisplayOverRuntimeFacts() throws {
         let json = """
         {
           "id": "session-runtime-facts",
@@ -194,10 +194,10 @@ struct SessionLiveActivityModelsTests {
         let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
         let state = detail.liveActivityContentState(updatedAt: Date(timeIntervalSince1970: 1_777_140_000))
 
-        #expect(state.presenceState == "unknown")
+        #expect(state.presenceState == "running")
         #expect(state.displayPhase == "Using Shell")
-        #expect(state.activeTool == nil)
-        #expect(state.isAttention == false)
+        #expect(state.activeTool == "Shell")
+        #expect(state.isAttention)
     }
 
     @Test
@@ -227,8 +227,8 @@ struct SessionLiveActivityModelsTests {
           },
           "runtime_display": {
             "truth_tier": "managed-local",
-            "state": "needs_user",
-            "tone": "idle",
+            "state": null,
+            "tone": "closed",
             "headline": "Closed",
             "detail": null,
             "phase_label": "Closed",

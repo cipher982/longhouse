@@ -130,6 +130,20 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
         "zsh -lc 'exec longhouse-engine codex-bridge attach --session-id session-codex'",
     },
     capabilities: makeCapabilities(),
+    runtime_display: makeRuntimeDisplay(),
+    timeline_card: {
+      ownership: {
+        label: "Managed",
+        tone: "neutral",
+      },
+      status: {
+        label: "Using Shell",
+        tone: "running",
+        seen_at: "2026-03-22T22:04:30Z",
+        seen_at_prefix: "Updated",
+      },
+      border_tone: "running",
+    },
     loop_mode: "assist",
     ...overrides,
   };
@@ -486,7 +500,10 @@ describe("SessionDetailPage", () => {
       renderSessionDetailPage();
 
       expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
-        "Running shell · git status --short",
+        "Working",
+      );
+      expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
+        "Using Shell",
       );
 
       {
@@ -742,6 +759,17 @@ describe("SessionDetailPage", () => {
       confidence: "live",
       display_phase: "Idle",
       last_live_at: "2026-03-22T22:04:30Z",
+      runtime_display: makeRuntimeDisplay({
+        state: "needs_user",
+        tone: "idle",
+        headline: "Idle",
+        detail: "Waiting for next prompt",
+        phase_label: "Idle",
+        compact_tool_label: null,
+        is_live: false,
+        is_executing: false,
+        is_idle: true,
+      }),
     });
     const model = buildTimelineModel([
       {
@@ -854,7 +882,7 @@ describe("SessionDetailPage", () => {
     expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
       "Using Shell",
     );
-    expect(screen.getByTitle("Running: shell")).toBeInTheDocument();
+    expect(screen.getByTitle("Running: Shell")).toBeInTheDocument();
   });
 
   it("does not promote recent transcript timestamps into live runtime tone", () => {
@@ -904,6 +932,26 @@ describe("SessionDetailPage", () => {
       confidence: "stale",
       display_phase: "Running",
       last_live_at: "2026-03-22T22:05:00Z",
+      runtime_display: makeRuntimeDisplay({
+        truth_tier: "stale",
+        signal_tier: "transcript_progress",
+        state: null,
+        tone: "inactive",
+        headline: "Inactive",
+        detail: null,
+        phase_label: "Inactive",
+        compact_tool_label: null,
+        is_live: false,
+        is_executing: false,
+        needs_attention: false,
+        is_idle: false,
+        is_managed_local_truth: false,
+        has_signal: true,
+        control_path: "unmanaged",
+        activity_recency: "stale",
+        lifecycle: "open",
+        host_state: "unknown",
+      }),
       capabilities: makeCapabilities({
         live_control_available: false,
         host_reattach_available: false,
@@ -996,6 +1044,26 @@ describe("SessionDetailPage", () => {
       control: null,
       continuation_kind: "local",
       id: "session-unmanaged-codex",
+      runtime_display: makeRuntimeDisplay({
+        truth_tier: "stale",
+        signal_tier: "transcript_progress",
+        state: null,
+        tone: "inactive",
+        headline: "Inactive",
+        detail: null,
+        phase_label: "Inactive",
+        compact_tool_label: null,
+        is_live: false,
+        is_executing: false,
+        needs_attention: false,
+        is_idle: false,
+        is_managed_local_truth: false,
+        has_signal: true,
+        control_path: "unmanaged",
+        activity_recency: "stale",
+        lifecycle: "open",
+        host_state: "unknown",
+      }),
       capabilities: makeCapabilities({
         live_control_available: false,
         host_reattach_available: false,

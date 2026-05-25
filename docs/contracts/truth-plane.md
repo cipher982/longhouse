@@ -13,15 +13,15 @@ same backend-owned truth instead of reconstructing it differently.
 | Contract | Product Question | Canonical Surface | Current Proof | Next Proof |
 | --- | --- | --- | --- | --- |
 | Session identity kernel | What kind of control relationship does Longhouse own for this session? | `KernelSessionCapabilities` in `server/zerg/services/agents/kernel_capabilities.py` | `server/tests_lite/test_session_kernel_capabilities.py` | Keep web/iOS from inferring ownership from raw metadata. |
-| Runtime display | What is happening right now, and how trustworthy is that signal? | `SessionRuntimeDisplayResponse` from `server/zerg/services/session_runtime_display.py` | runtime display tests plus shared web/iOS fixtures that assert exact label/headline/detail/tone rendering from backend payloads | Expand fixture cases as new runtime states appear. |
+| Runtime display | What is happening right now, and how trustworthy is that signal? | Required `SessionRuntimeDisplayResponse` on session responses from `server/zerg/services/session_runtime_display.py` | runtime display tests plus shared web/iOS fixtures that assert exact label/headline/detail/tone rendering from backend payloads; clients treat missing display as inert legacy compatibility | Expand fixture cases as new runtime states appear. |
 | Timeline card status | Can I trust this session at a glance? | `timeline_card.status` and `border_tone` from backend timeline projection | `server/tests_lite/test_timeline_status_presentation.py` | Treat web/iOS fallback labels as legacy compatibility only. |
 | Send affordance | Can the user type, what happens on send, and why is send disabled? | `SessionCapabilitiesResponse` fields `input_mode`, `default_input_intent`, `composer_enabled`, `send_disabled_reason` | server truth-table tests plus shared web/iOS send-affordance fixtures | Expand fixtures when a new typed disabled reason is introduced. |
 | Session input lifecycle | What state is a submitted user input in after send, retry, crash, or cancel? | `SessionInput.status` plus typed intent/status/outcome fields on the input API | server input API/idempotency/boot-recovery tests plus web/iOS optimistic-row identity reconciliation tests | Add end-to-end queue replay proof if recovered queued rows ever gain a separate dispatcher. |
 | Host and transport health | Is the host reachable, is the control transport alive, and are those different? | runtime facts plus capabilities/send affordance projection | `server/tests_lite/test_session_liveness_facts.py`, `server/tests_lite/test_session_input_presentation.py`, and shared web/iOS capability fixtures | Add fixture cases for new host/control reason codes as they appear. |
-| Remote launch lifecycle | Did a remote launch start, become live, fail, or become orphaned? | `project_remote_launch_lifecycle()` over durable `SessionLaunchAttempt`; legacy `AgentSession.launch_*` shims are not product truth | launch route tests plus lifecycle transition matrix and web/iOS state fixtures | Keep launch-state labels/reasons backend-owned as new states appear. |
+| Remote launch lifecycle | Did a remote launch start, become live, fail, or become orphaned? | `project_remote_launch_lifecycle()` over durable `SessionLaunchAttempt`; legacy `AgentSession.launch_*` shims are not product truth | launch route tests plus lifecycle transition matrix and backend-owned failure copy | Add shared launch fixtures if clients start branching on launch states beyond displaying backend text. |
 | Provisional vs durable transcript | Is this text live preview, durable archive, stale preview, or superseded? | `SessionTranscriptPreview` and durable events | preview freshness tests plus shared web/iOS rendering fixtures | Keep stale/superseded render decisions backend-owned as bridge behavior changes. |
 | Clock and freshness | When does a signal expire, and which clock owns that decision? | backend freshness windows near runtime/provisional projections | `server/tests_lite/test_session_freshness_contract.py` pins backend-clock boundaries for runtime sync and provisional previews | Add cases here when a launch-critical projection introduces a new freshness window. |
-| Error taxonomy | Which failures are product states versus logs/debug details? | typed response fields on launch/input/runtime projections | launch lifecycle normalizes user-visible error codes; input/send/preview reason codes are typed at projection boundaries | Expand only when web, iOS, or agents branch on a new code. |
+| Error taxonomy | Which failures are product states versus logs/debug details? | typed response fields on launch/input/runtime projections | launch lifecycle normalizes user-visible error codes and messages; input/send/preview reason codes are typed at projection boundaries | Expand only when web, iOS, or agents branch on a new code. |
 
 ## Non-goals
 
@@ -29,8 +29,8 @@ same backend-owned truth instead of reconstructing it differently.
 - No formal contracts for auth, billing, model selection, tools, connectors,
   distribution, search ranking, or LLM heuristics unless a launch-critical
   session truth flow directly needs them.
-- No client-side fallback removal for old payloads until the backend field is
-  deployed and both web and iOS can tolerate it.
+- Client compatibility for old payloads must be inert defaults, not alternate
+  product truth reconstructed from raw facts.
 - No duplicated contract maps in client code. Clients may keep compatibility
   fallbacks, but the backend projection is the product contract.
 

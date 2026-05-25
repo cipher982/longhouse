@@ -42,9 +42,9 @@ export interface AgentSession {
   display_phase?: string | null;
   active_tool?: string | null;
   confidence?: string | null;
-  runtime_display?: SessionRuntimeDisplay | null;
+  runtime_display: SessionRuntimeDisplay;
   runtime_facts?: SessionLivenessFacts | null;
-  timeline_card?: TimelineCardPresentation | null;
+  timeline_card: TimelineCardPresentation;
   transcript_preview?: SessionTranscriptPreview | null;
   user_messages: number;
   assistant_messages: number;
@@ -99,6 +99,7 @@ export interface SessionRuntimeDisplay {
     | "blocked"
     | "stalled"
     | "idle"
+    | "closed"
     | "active"
     | (string & {});
   headline: string;
@@ -109,7 +110,7 @@ export interface SessionRuntimeDisplay {
   is_executing: boolean;
   needs_attention: boolean;
   is_idle: boolean;
-  is_stalled?: boolean;
+  is_stalled: boolean;
   is_managed_local_truth: boolean;
   has_signal: boolean;
   control_path?: "managed" | "unmanaged" | (string & {});

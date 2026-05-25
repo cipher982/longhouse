@@ -9,6 +9,8 @@ import type {
   AgentSession,
   AgentSessionFilters,
   SessionCapabilities,
+  SessionRuntimeDisplay,
+  TimelineCardPresentation,
   TimelineSessionCard,
   TimelineSessionsListResponse,
 } from "../../services/api/agents";
@@ -65,6 +67,41 @@ function makeCapabilities(overrides: Partial<SessionCapabilities> = {}): Session
   };
 }
 
+function makeRuntimeDisplay(overrides: Partial<SessionRuntimeDisplay> = {}): SessionRuntimeDisplay {
+  return {
+    truth_tier: "none",
+    signal_tier: "none",
+    state: null,
+    tone: "inactive",
+    headline: "Inactive",
+    detail: null,
+    phase_label: "Inactive",
+    compact_tool_label: null,
+    is_live: false,
+    is_executing: false,
+    needs_attention: false,
+    is_idle: false,
+    is_stalled: false,
+    is_managed_local_truth: false,
+    has_signal: false,
+    control_path: "unmanaged",
+    activity_recency: "none",
+    lifecycle: "open",
+    host_state: "unknown",
+    terminal_reason: null,
+    ...overrides,
+  };
+}
+
+function makeTimelinePresentation(overrides: Partial<TimelineCardPresentation> = {}): TimelineCardPresentation {
+  return {
+    ownership: { label: "Unmanaged", tone: "neutral" },
+    status: { label: "No live signal", tone: "inactive", seen_at: null, seen_at_prefix: "Checked" },
+    border_tone: "inactive",
+    ...overrides,
+  };
+}
+
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
   const now = "2026-03-21T12:00:00Z";
   return {
@@ -100,6 +137,8 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     is_writable_head: true,
     control: null,
     capabilities: makeCapabilities(),
+    runtime_display: makeRuntimeDisplay(),
+    timeline_card: makeTimelinePresentation(),
     loop_mode: "assist",
     ...overrides,
   };

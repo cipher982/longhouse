@@ -214,7 +214,7 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
                 "signal_tier": "phase_signal",
                 "lifecycle": "closed",
                 "state": None,
-                "tone": "inactive",
+                "tone": "closed",
                 "headline": "Closed",
                 "phase_label": "Closed",
                 "activity_recency": "none",
@@ -248,7 +248,7 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
                 "signal_tier": "process_binding",
                 "lifecycle": "closed",
                 "state": None,
-                "tone": "inactive",
+                "tone": "closed",
                 "headline": "Closed",
                 "phase_label": "Closed",
                 "activity_recency": "none",
@@ -315,7 +315,7 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
                 "signal_tier": "transcript_progress",
                 "lifecycle": "closed",
                 "state": None,
-                "tone": "inactive",
+                "tone": "closed",
                 "headline": "Closed",
                 "phase_label": "Closed",
                 "activity_recency": "none",
@@ -955,7 +955,7 @@ def test_process_gone_closure_suppresses_stale_attention_copy():
     assert display.phase_label == "Closed"
     assert display.needs_attention is False
     assert display.is_idle is True
-    assert display.tone == "inactive"
+    assert display.tone == "closed"
 
 
 def test_host_expired_closure_suppresses_stale_attention_copy_without_process_gone():

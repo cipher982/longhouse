@@ -19,12 +19,6 @@ import {
 } from "../../lib/sessionUtils";
 
 const HOVER_PREFETCH_DELAY_MS = 180;
-const MISSING_TIMELINE_STATUS = {
-  label: "No live signal",
-  tone: "inactive",
-  seen_at: null,
-  seen_at_prefix: "Checked",
-} as const;
 
 export interface SessionRowProps {
   thread: TimelineSessionCard;
@@ -62,7 +56,7 @@ export function SessionRow({
 }: SessionRowProps) {
   const session = thread.head;
   const detailSession = thread.detail;
-  const timelineStatus = session.timeline_card?.status ?? MISSING_TIMELINE_STATUS;
+  const timelineStatus = session.timeline_card.status;
   const isClosed = closed || isCardClosed(thread);
   const text = getSessionCardText(session, { titleMaxChars: 96, subheadingMaxChars: 200 });
   const branch = getBranchLabel(session.git_branch);
@@ -187,6 +181,6 @@ export function getRowTimeLabel({
 function isCardClosed(card: TimelineSessionCard): boolean {
   const session = card.head;
   const status = session?.timeline_card?.status;
-  if (status?.tone === "closed" || status?.label === "Closed") return true;
+  if (status?.tone === "closed") return true;
   return isSessionClosed(session);
 }

@@ -377,11 +377,10 @@ def build_session_runtime_display(
     tone = (
         "active"
         if transcript_sync_pending
-        else "inactive"
+        else "closed"
         if lifecycle == "closed"
-        or unmanaged_attention_unverified
-        or no_runtime_signal
-        or (presence_state is None and confidence == "stale")
+        else "inactive"
+        if unmanaged_attention_unverified or no_runtime_signal or (presence_state is None and confidence == "stale")
         else _tone(
             presence_state=presence_state,
             process_observed=process_observed,

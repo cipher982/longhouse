@@ -9320,7 +9320,7 @@ export interface components {
             /** @description Canonical session capability flags */
             capabilities: components["schemas"]["SessionCapabilitiesResponse"];
             /** @description Server-derived display state for clients */
-            runtime_display?: components["schemas"]["SessionRuntimeDisplayResponse"] | null;
+            runtime_display: components["schemas"]["SessionRuntimeDisplayResponse"];
             /** @description Observed liveness facts with timestamps and sources */
             runtime_facts?: components["schemas"]["SessionLivenessFactsResponse"] | null;
             /** @description Latest renderable transcript preview sourced from the event ledger. */
