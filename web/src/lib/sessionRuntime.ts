@@ -68,17 +68,9 @@ export interface SessionRuntimeState {
   tone: RuntimeTone;
   runtimeDisplay: SessionRuntimeDisplay | null;
   runtimeFacts: SessionLivenessFacts | null;
-  factStatus: SessionFactStatus | null;
 }
 
 export type SessionControlPathLabel = "Managed" | "Unmanaged";
-
-export interface SessionFactStatus {
-  label: string;
-  tone: RuntimeTone;
-  seenAt: string | null;
-  seenAtPrefix: "Closed" | "Checked" | "Last signal" | "Updated" | "Verified";
-}
 
 export function resolveSessionOwnershipLabel(
   runtime: SessionRuntimeState,
@@ -134,7 +126,6 @@ export function resolveSessionRuntimeState(
       tone: "inactive",
       runtimeDisplay: null,
       runtimeFacts,
-      factStatus: null,
     };
   }
 
@@ -171,7 +162,6 @@ export function resolveSessionRuntimeState(
     tone,
     runtimeDisplay: serverDisplay,
     runtimeFacts,
-    factStatus: null,
   };
 }
 
