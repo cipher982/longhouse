@@ -26,6 +26,20 @@ type TranscriptPreviewFixture = {
   }>;
 };
 
+type InteractionCapabilitiesFixture = {
+  cases: Array<{
+    name: string;
+    session: unknown;
+    expectations: {
+      web_mode: string;
+      web_capability_label: string;
+      web_composer_disabled_reason: string | null;
+      web_send_disabled_reason: string | null;
+      web_primary_action_label: string;
+    };
+  }>;
+};
+
 function makeCapabilities(overrides: Partial<SessionCapabilities> = {}): SessionCapabilities {
   return {
     live_control_available: false,
@@ -73,6 +87,11 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
 function loadTranscriptPreviewFixture(): TranscriptPreviewFixture {
   const fixturePath = resolve(process.cwd(), "../tests/fixtures/session-transcript-preview/rendering.json");
   return JSON.parse(readFileSync(fixturePath, "utf8")) as TranscriptPreviewFixture;
+}
+
+function loadInteractionCapabilitiesFixture(): InteractionCapabilitiesFixture {
+  const fixturePath = resolve(process.cwd(), "../tests/fixtures/session-interaction/capabilities.json");
+  return JSON.parse(readFileSync(fixturePath, "utf8")) as InteractionCapabilitiesFixture;
 }
 
 describe("buildTimelineModel", () => {
@@ -287,6 +306,18 @@ describe("isToolInteractionDropped", () => {
 });
 
 describe("getSessionInteractionCapabilities", () => {
+  it.each(loadInteractionCapabilitiesFixture().cases)("matches shared capability fixture: $name", ({ session, expectations }) => {
+    const capabilities = getSessionInteractionCapabilities({
+      session: session as AgentSession,
+    });
+
+    expect(capabilities.mode).toBe(expectations.web_mode);
+    expect(capabilities.capabilityLabel).toBe(expectations.web_capability_label);
+    expect(capabilities.composerDisabledReason).toBe(expectations.web_composer_disabled_reason);
+    expect(capabilities.sendDisabledReason).toBe(expectations.web_send_disabled_reason);
+    expect(capabilities.primaryActionLabel).toBe(expectations.web_primary_action_label);
+  });
+
   it("treats managed-local sessions with runner metadata as browser-drivable live sessions", () => {
     const capabilities = getSessionInteractionCapabilities({
       session: makeSession({

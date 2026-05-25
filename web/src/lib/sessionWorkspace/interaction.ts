@@ -211,7 +211,7 @@ export function getSessionInteractionCapabilities({
     capabilityDescription,
     composerDisabledReason,
     sendDisabledReason: serverSendDisabledReason || null,
-    primaryActionLabel: liveControlAvailable ? "Open live dock" : "Unavailable",
+    primaryActionLabel: mode === "managed_local" ? "Open live dock" : "Unavailable",
     submitLabel,
     title,
     description,
