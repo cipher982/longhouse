@@ -37,6 +37,9 @@ from zerg.services.agents.kernel_writes import upsert_connection_for_run
 from zerg.services.machine_control_channel import MachineControlChannelRegistry
 from zerg.services.machine_control_channel import MachineControlCommandResponse
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
+from zerg.services.session_launch_lifecycle import RemoteLaunchErrorCode
+from zerg.services.session_launch_lifecycle import RemoteLaunchLifecycleState
+from zerg.services.session_launch_lifecycle import normalize_remote_launch_error_code
 from zerg.services.session_launch_lifecycle import project_remote_launch_lifecycle
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
@@ -52,7 +55,7 @@ LAUNCH_LEASE_SECS = 120
 class RemoteLaunchError(RuntimeError):
     """Expected remote-launch failure with user-facing detail."""
 
-    def __init__(self, detail: str, code: str, *, status_code: int = 400) -> None:
+    def __init__(self, detail: str, code: RemoteLaunchErrorCode, *, status_code: int = 400) -> None:
         super().__init__(detail)
         self.detail = detail
         self.code = code
@@ -75,8 +78,8 @@ class RemoteLaunchParams:
 @dataclass(frozen=True)
 class RemoteLaunchResult:
     session_id: UUID
-    launch_state: str
-    launch_error_code: str | None = None
+    launch_state: RemoteLaunchLifecycleState
+    launch_error_code: RemoteLaunchErrorCode | None = None
     launch_error_message: str | None = None
 
 
@@ -349,7 +352,7 @@ async def launch_remote_session(
         return _launch_result_for_attempt(launch_attempt)
 
     error = message.get("error") or {}
-    code = str(error.get("code") or "provider_launch_failed")
+    code = normalize_remote_launch_error_code(error.get("code"))
     err_msg = str(error.get("message") or "unknown error")
     session.ended_at = datetime.now(timezone.utc)
     update_launch_attempt(
@@ -418,7 +421,7 @@ def reconcile_launch_from_command_result(db: Session, message: dict) -> bool:
             db,
             attempt,
             state="failed",
-            error_code=str(error.get("code") or "provider_launch_failed"),
+            error_code=normalize_remote_launch_error_code(error.get("code")),
             error_message=str(error.get("message") or "unknown error"),
             clear_expires=True,
         )
@@ -449,7 +452,9 @@ def reap_orphaned_launches(db: Session, *, now: datetime | None = None) -> int:
             db,
             attempt,
             state="abandoned",
-            error_code=attempt.error_code or "launch_timeout",
+            error_code=normalize_remote_launch_error_code(attempt.error_code, fallback="launch_timeout")
+            if attempt.error_code
+            else "launch_timeout",
             error_message=attempt.error_message or "Machine Agent did not report back before lease expired",
             clear_expires=True,
         )

@@ -33,6 +33,16 @@ export type LaunchState =
   | "launch_failed"
   | "launch_orphaned";
 
+export type RemoteLaunchErrorCode =
+  | "invalid_request"
+  | "device_not_enrolled"
+  | "provider_unsupported"
+  | "cwd_not_allowed"
+  | "cwd_not_found"
+  | "machine_offline"
+  | "provider_launch_failed"
+  | "launch_timeout";
+
 export type RemoteSessionLaunchRequest = {
   device_id: string;
   provider: string;
@@ -47,7 +57,7 @@ export type RemoteSessionLaunchRequest = {
 export type RemoteSessionLaunchResponse = {
   session_id: string;
   launch_state: LaunchState;
-  launch_error_code: string | null;
+  launch_error_code: RemoteLaunchErrorCode | null;
   launch_error_message: string | null;
 };
 

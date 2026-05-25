@@ -79,5 +79,20 @@ def test_remote_launch_lifecycle_carries_user_visible_error_and_lease():
     assert lifecycle.lease_until == lease_until
 
 
+def test_remote_launch_lifecycle_normalizes_unknown_error_codes():
+    lifecycle = _project(
+        _attempt(
+            state="failed",
+            error_code="engine_stacktrace",
+            error_message="internal details stay in the message",
+        )
+    )
+
+    assert lifecycle is not None
+    assert lifecycle.state == "launch_failed"
+    assert lifecycle.error_code == "provider_launch_failed"
+    assert lifecycle.error_message == "internal details stay in the message"
+
+
 def test_remote_launch_lifecycle_requires_durable_attempt():
     assert _project(None) is None
