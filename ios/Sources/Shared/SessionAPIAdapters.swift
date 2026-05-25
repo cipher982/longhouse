@@ -60,6 +60,7 @@ extension APISessionCapabilitiesResponse {
             composerEnabled: composerEnabled,
             composerPlaceholder: composerPlaceholder,
             composerDisabledReason: composerDisabledReason,
+            sendDisabledReason: sendDisabledReason,
             attachImages: attachImages
         )
     }

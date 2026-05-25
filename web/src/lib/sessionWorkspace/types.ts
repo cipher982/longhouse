@@ -97,6 +97,7 @@ export type SessionInteractionCapabilities = {
   capabilityVariant: "neutral" | "success" | "warning";
   capabilityDescription: string | null;
   composerDisabledReason: string | null;
+  sendDisabledReason: string | null;
   primaryActionLabel: string;
   submitLabel: string;
   title: string;

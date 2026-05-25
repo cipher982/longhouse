@@ -1649,6 +1649,51 @@ struct SessionModelsTests {
     }
 
     @Test
+    func sessionDetailPrefersServerReadOnlyInputModeOverReattachFallback() throws {
+        let json = """
+        {
+          "id": "session-live-no-send",
+          "provider": "codex",
+          "project": "zerg",
+          "cwd": null,
+          "git_branch": null,
+          "summary": null,
+          "summary_title": null,
+          "presence_state": "idle",
+          "presence_tool": null,
+          "user_state": "active",
+          "status": "idle",
+          "last_activity_at": null,
+          "display_phase": null,
+          "active_tool": null,
+          "home_label": "On this Mac",
+          "origin_label": "On this Mac",
+          "capabilities": {
+            "live_control_available": true,
+            "host_reattach_available": true,
+            "reply_to_live_session_available": false,
+            "input_mode": "read_only",
+            "default_input_intent": "none",
+            "composer_enabled": false,
+            "composer_disabled_reason": "This live Codex session is connected, but this control path cannot accept typed input.",
+            "send_disabled_reason": "input_not_supported"
+          },
+          "loop_mode": "assist"
+        }
+        """.data(using: .utf8)!
+
+        let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
+
+        #expect(!detail.canSendLive)
+        #expect(!detail.isControlOffline)
+        #expect(detail.isReadOnly)
+        #expect(detail.runtimeCapabilityLabel == "Read only")
+        #expect(detail.runtimeCapabilityTone == "neutral")
+        #expect(detail.runtimeHeadline == "Read only")
+        #expect(detail.controlHealthMessage == "This live Codex session is connected, but this control path cannot accept typed input.")
+    }
+
+    @Test
     func sessionDetailNormalizesLegacyCapabilityLabels() throws {
         let liveJSON = """
         {

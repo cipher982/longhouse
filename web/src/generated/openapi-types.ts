@@ -8637,6 +8637,11 @@ export interface components {
              */
             composer_disabled_reason?: string | null;
             /**
+             * Send Disabled Reason
+             * @description Stable reason code when the primary send action is disabled
+             */
+            send_disabled_reason?: ("session_closed" | "control_offline" | "input_not_supported" | "read_only") | null;
+            /**
              * Control Label
              * @description Kernel-projected control bucket for this session
              */

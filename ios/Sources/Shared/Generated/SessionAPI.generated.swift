@@ -20,6 +20,7 @@ struct APISessionCapabilitiesResponse: Codable, Hashable, Sendable {
     let composerEnabled: Bool?
     let composerPlaceholder: String?
     let composerDisabledReason: String?
+    let sendDisabledReason: String?
     let controlLabel: String?
     let observeOnly: Bool?
     let searchOnly: Bool?

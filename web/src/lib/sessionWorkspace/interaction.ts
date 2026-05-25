@@ -182,6 +182,7 @@ export function getSessionInteractionCapabilities({
         : null;
 
   const serverComposerDisabledReason = session.capabilities.composer_disabled_reason?.trim();
+  const serverSendDisabledReason = session.capabilities.send_disabled_reason?.trim();
   const composerDisabledReason =
     serverComposerDisabledReason ||
     (mode === "managed_local_unavailable"
@@ -209,6 +210,7 @@ export function getSessionInteractionCapabilities({
     capabilityVariant,
     capabilityDescription,
     composerDisabledReason,
+    sendDisabledReason: serverSendDisabledReason || null,
     primaryActionLabel: liveControlAvailable ? "Open live dock" : "Unavailable",
     submitLabel,
     title,

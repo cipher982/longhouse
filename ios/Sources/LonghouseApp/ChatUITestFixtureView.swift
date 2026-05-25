@@ -563,6 +563,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 composerEnabled: true,
                 composerPlaceholder: "Send a message to the live Codex session...",
                 composerDisabledReason: nil,
+                sendDisabledReason: nil,
                 attachImages: false
             ),
             runtimeDisplay: SessionRuntimeDisplay(
