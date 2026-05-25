@@ -79,7 +79,7 @@ export interface SessionTranscriptPreview {
   event_id: number;
   text: string;
   event_origin: string;
-  timestamp: string;
+  timestamp?: string | null;
   is_provisional: boolean;
   is_complete: boolean;
   content_cursor?: string | null;
