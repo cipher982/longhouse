@@ -171,6 +171,57 @@
         "rendered_message_texts": ["Durable prompt", "Durable assistant answer"],
         "renders_preview": false
       }
+    },
+    {
+      "name": "missing-timestamp-preview-hidden-by-backend-reason",
+      "session": {
+        "id": "fixture-transcript-preview",
+        "transcript_preview": {
+          "event_id": 102,
+          "text": "Undated live bridge text",
+          "event_origin": "live_provisional",
+          "timestamp": null,
+          "is_provisional": true,
+          "is_complete": false,
+          "content_cursor": "cursor-102",
+          "is_stale": true,
+          "stale_reason": "missing_preview_timestamp"
+        }
+      },
+      "projection": {
+        "root_session_id": "fixture-transcript-preview",
+        "focus_session_id": "fixture-transcript-preview",
+        "head_session_id": "fixture-transcript-preview",
+        "path_session_ids": ["fixture-transcript-preview"],
+        "total": 1,
+        "page_offset": 0,
+        "branch_mode": "head",
+        "abandoned_events": 0,
+        "items": [
+          {
+            "kind": "event",
+            "session_id": "fixture-transcript-preview",
+            "timestamp": "2026-05-15T20:00:00Z",
+            "event": {
+              "id": 10,
+              "role": "user",
+              "content_text": "Durable prompt",
+              "tool_name": null,
+              "tool_input_json": null,
+              "tool_output_text": null,
+              "tool_call_id": null,
+              "timestamp": "2026-05-15T20:00:00Z",
+              "in_active_context": true,
+              "is_head_branch": true
+            }
+          }
+        ]
+      },
+      "expectations": {
+        "rendered_event_ids": [10],
+        "rendered_message_texts": ["Durable prompt"],
+        "renders_preview": false
+      }
     }
   ]
 }

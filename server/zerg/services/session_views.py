@@ -598,7 +598,7 @@ class SessionTranscriptPreviewResponse(UTCBaseModel):
     event_id: int = Field(..., description="AgentEvent id for this preview row")
     text: str = Field(..., description="Transcript preview text from the event ledger")
     event_origin: str = Field(..., description="Event origin: durable|live_provisional")
-    timestamp: datetime = Field(..., description="Event timestamp used for transcript ordering")
+    timestamp: Optional[datetime] = Field(None, description="Event timestamp used for transcript ordering")
     is_provisional: bool = Field(..., description="True when the preview is from an active provisional event")
     is_complete: bool = Field(
         False,

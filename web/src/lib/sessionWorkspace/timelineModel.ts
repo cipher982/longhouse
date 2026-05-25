@@ -138,7 +138,7 @@ function nonEmptyText(value: string | null | undefined): string {
 export function shouldRenderTranscriptPreview(
   preview: AgentSession["transcript_preview"] | null | undefined,
 ): boolean {
-  return Boolean(preview && nonEmptyText(preview.text) && !preview.is_stale);
+  return Boolean(preview && nonEmptyText(preview.text) && preview.timestamp && !preview.is_stale);
 }
 
 export function projectionItemsWithTranscriptPreview(
@@ -148,6 +148,10 @@ export function projectionItemsWithTranscriptPreview(
   const preview = session?.transcript_preview;
   const previewText = nonEmptyText(preview?.text);
   if (!session || !preview || !shouldRenderTranscriptPreview(preview)) {
+    return projectionItems;
+  }
+  const previewTimestamp = preview.timestamp;
+  if (!previewTimestamp) {
     return projectionItems;
   }
 
@@ -163,7 +167,7 @@ export function projectionItemsWithTranscriptPreview(
   }
 
   const latestDurable = durableEvents[durableEvents.length - 1];
-  const previewAt = Date.parse(preview.timestamp);
+  const previewAt = Date.parse(previewTimestamp);
   const latestDurableAt = latestDurable ? Date.parse(latestDurable.timestamp) : Number.NaN;
   if (!Number.isNaN(previewAt) && !Number.isNaN(latestDurableAt) && latestDurableAt >= previewAt) {
     return projectionItems;
@@ -174,7 +178,7 @@ export function projectionItemsWithTranscriptPreview(
     {
       kind: "event",
       session_id: session.id,
-      timestamp: preview.timestamp,
+      timestamp: previewTimestamp,
       event: {
         id: -Math.abs(preview.event_id),
         role: "assistant",
@@ -183,7 +187,7 @@ export function projectionItemsWithTranscriptPreview(
         tool_input_json: null,
         tool_output_text: null,
         tool_call_id: null,
-        timestamp: preview.timestamp,
+        timestamp: previewTimestamp,
         in_active_context: true,
         is_head_branch: true,
       },

@@ -126,7 +126,7 @@ struct APISessionTranscriptPreviewResponse: Codable, Hashable, Sendable {
     let eventId: Int
     let text: String
     let eventOrigin: String
-    let timestamp: String
+    let timestamp: String?
     let isProvisional: Bool
     let isComplete: Bool?
     let contentCursor: String?

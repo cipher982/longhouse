@@ -9559,10 +9559,9 @@ export interface components {
             event_origin: string;
             /**
              * Timestamp
-             * Format: date-time
              * @description Event timestamp used for transcript ordering
              */
-            timestamp: string;
+            timestamp?: string | null;
             /**
              * Is Provisional
              * @description True when the preview is from an active provisional event

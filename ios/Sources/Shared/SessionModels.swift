@@ -634,7 +634,7 @@ struct SessionTranscriptPreview: Codable, Hashable, Sendable {
     let eventId: Int
     let text: String
     let eventOrigin: String
-    let timestamp: String
+    let timestamp: String?
     let isProvisional: Bool
     let isComplete: Bool?
     let contentCursor: String?
@@ -642,7 +642,7 @@ struct SessionTranscriptPreview: Codable, Hashable, Sendable {
     let staleReason: String?
 
     var shouldRender: Bool {
-        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && isStale != true
+        timestamp != nil && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && isStale != true
     }
 
     var syntheticEvent: SessionEvent {
@@ -654,7 +654,7 @@ struct SessionTranscriptPreview: Codable, Hashable, Sendable {
             toolInputJSON: nil,
             toolOutputText: nil,
             toolCallId: nil,
-            timestamp: timestamp,
+            timestamp: timestamp ?? "",
             inActiveContext: true,
             isHeadBranch: true,
             inputOrigin: nil
@@ -670,6 +670,7 @@ enum TranscriptPreviewProjection {
         guard let preview, preview.shouldRender else { return durableEvents }
         let previewText = preview.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !previewText.isEmpty else { return durableEvents }
+        guard let previewTimestamp = preview.timestamp else { return durableEvents }
 
         if let lastDurableAssistant = durableEvents.reversed().first(where: {
             $0.role == "assistant" && ($0.contentText ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
@@ -678,7 +679,7 @@ enum TranscriptPreviewProjection {
             if lastText == previewText { return durableEvents }
         }
 
-        if let previewAt = LonghouseDateParser.parse(preview.timestamp),
+        if let previewAt = LonghouseDateParser.parse(previewTimestamp),
            let latestEvent = durableEvents.last,
            let latestDurableAt = LonghouseDateParser.parse(latestEvent.timestamp),
            latestDurableAt >= previewAt {
