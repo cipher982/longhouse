@@ -6,6 +6,7 @@
  */
 
 import { buildUrl, request } from "./base";
+import type { RemoteLaunchErrorCode } from "./launch";
 
 const TIMELINE_API_PREFIX = "/timeline";
 const TIMELINE_SESSIONS_PREFIX = `${TIMELINE_API_PREFIX}/sessions`;
@@ -71,7 +72,7 @@ export interface AgentSession {
   user_state?: string;
   /** Remote-launch lifecycle state; null for sessions created before remote-launch. */
   launch_state?: "launching" | "live" | "launching_unknown" | "launch_failed" | "launch_orphaned" | null;
-  launch_error_code?: string | null;
+  launch_error_code?: RemoteLaunchErrorCode | null;
   launch_error_message?: string | null;
 }
 

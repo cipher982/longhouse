@@ -41,6 +41,8 @@ from zerg.services.send_affordance import project_send_affordance
 from zerg.services.session_capabilities import build_session_capability_display
 from zerg.services.session_current_control import engine_control_online
 from zerg.services.session_current_control import engine_session_control_attached
+from zerg.services.session_launch_lifecycle import RemoteLaunchErrorCode
+from zerg.services.session_launch_lifecycle import RemoteLaunchLifecycleState
 from zerg.services.session_launch_lifecycle import project_remote_launch_lifecycle
 from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_runner_state import managed_runner_host_state
@@ -772,11 +774,14 @@ class SessionResponse(UTCBaseModel):
     )
     loop_mode: SessionLoopMode = Field(SessionLoopMode.ASSIST, description="Session loop mode: assist|autopilot")
     user_state: str = Field("active", description="User classification: active|parked|snoozed|archived")
-    launch_state: Optional[str] = Field(
+    launch_state: Optional[RemoteLaunchLifecycleState] = Field(
         None,
         description="Remote-launch lifecycle: launching|live|launching_unknown|launch_failed|launch_orphaned; null when there is no launch attempt",
     )
-    launch_error_code: Optional[str] = Field(None, description="Remote-launch error code when launch_state=launch_failed/launch_orphaned")
+    launch_error_code: Optional[RemoteLaunchErrorCode] = Field(
+        None,
+        description="Remote-launch error code when launch_state=launch_failed/launch_orphaned",
+    )
     launch_error_message: Optional[str] = Field(
         None, description="Remote-launch error message when launch_state=launch_failed/launch_orphaned"
     )

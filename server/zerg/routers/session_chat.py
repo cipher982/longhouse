@@ -71,6 +71,8 @@ from zerg.services.session_inputs import get_session_input
 from zerg.services.session_inputs import list_recent_inputs
 from zerg.services.session_inputs import mark_failed as _mark_input_failed
 from zerg.services.session_inputs import retry_failed_input
+from zerg.services.session_launch_lifecycle import RemoteLaunchErrorCode
+from zerg.services.session_launch_lifecycle import RemoteLaunchLifecycleState
 from zerg.services.write_serializer import get_write_serializer
 from zerg.session_loop_mode import SessionLoopMode
 from zerg.session_loop_mode import coerce_session_loop_mode
@@ -120,8 +122,8 @@ class RemoteSessionLaunchResponse(BaseModel):
     """Response from POST /api/sessions/launch."""
 
     session_id: str
-    launch_state: str
-    launch_error_code: str | None = None
+    launch_state: RemoteLaunchLifecycleState
+    launch_error_code: RemoteLaunchErrorCode | None = None
     launch_error_message: str | None = None
 
 

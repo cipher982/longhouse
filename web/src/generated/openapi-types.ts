@@ -7626,10 +7626,13 @@ export interface components {
         RemoteSessionLaunchResponse: {
             /** Session Id */
             session_id: string;
-            /** Launch State */
-            launch_state: string;
+            /**
+             * Launch State
+             * @enum {string}
+             */
+            launch_state: "launching" | "live" | "launching_unknown" | "launch_failed" | "launch_orphaned";
             /** Launch Error Code */
-            launch_error_code?: string | null;
+            launch_error_code?: ("invalid_request" | "device_not_enrolled" | "provider_unsupported" | "cwd_not_allowed" | "cwd_not_found" | "machine_offline" | "provider_launch_failed" | "launch_timeout") | null;
             /** Launch Error Message */
             launch_error_message?: string | null;
         };
@@ -9339,12 +9342,12 @@ export interface components {
              * Launch State
              * @description Remote-launch lifecycle: launching|live|launching_unknown|launch_failed|launch_orphaned; null when there is no launch attempt
              */
-            launch_state?: string | null;
+            launch_state?: ("launching" | "live" | "launching_unknown" | "launch_failed" | "launch_orphaned") | null;
             /**
              * Launch Error Code
              * @description Remote-launch error code when launch_state=launch_failed/launch_orphaned
              */
-            launch_error_code?: string | null;
+            launch_error_code?: ("invalid_request" | "device_not_enrolled" | "provider_unsupported" | "cwd_not_allowed" | "cwd_not_found" | "machine_offline" | "provider_launch_failed" | "launch_timeout") | null;
             /**
              * Launch Error Message
              * @description Remote-launch error message when launch_state=launch_failed/launch_orphaned

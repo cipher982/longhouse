@@ -21,7 +21,7 @@ same backend-owned truth instead of reconstructing it differently.
 | Remote launch lifecycle | Did a remote launch start, become live, fail, or become orphaned? | `project_remote_launch_lifecycle()` over durable `SessionLaunchAttempt`; legacy `AgentSession.launch_*` shims are not product truth | launch route tests plus lifecycle transition matrix and web/iOS state fixtures | Keep launch-state labels/reasons backend-owned as new states appear. |
 | Provisional vs durable transcript | Is this text live preview, durable archive, stale preview, or superseded? | `SessionTranscriptPreview` and durable events | preview freshness tests plus shared web/iOS rendering fixtures | Keep stale/superseded render decisions backend-owned as bridge behavior changes. |
 | Clock and freshness | When does a signal expire, and which clock owns that decision? | backend freshness windows near runtime/provisional projections | `server/tests_lite/test_session_freshness_contract.py` pins backend-clock boundaries for runtime sync and provisional previews | Add cases here when a launch-critical projection introduces a new freshness window. |
-| Error taxonomy | Which failures are product states versus logs/debug details? | typed response fields on launch/input/runtime projections | partial route tests | Normalize user-visible reason codes only where clients branch on them. |
+| Error taxonomy | Which failures are product states versus logs/debug details? | typed response fields on launch/input/runtime projections | launch lifecycle normalizes user-visible error codes; input/send/preview reason codes are typed at projection boundaries | Expand only when web, iOS, or agents branch on a new code. |
 
 ## Non-goals
 

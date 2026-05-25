@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
+from typing import cast
+from typing import get_args
 
 from zerg.models.agents import SessionLaunchAttempt
 
@@ -20,14 +22,36 @@ RemoteLaunchLifecycleState = Literal[
     "launch_failed",
     "launch_orphaned",
 ]
+RemoteLaunchErrorCode = Literal[
+    "invalid_request",
+    "device_not_enrolled",
+    "provider_unsupported",
+    "cwd_not_allowed",
+    "cwd_not_found",
+    "machine_offline",
+    "provider_launch_failed",
+    "launch_timeout",
+]
+KNOWN_REMOTE_LAUNCH_ERROR_CODES = frozenset(get_args(RemoteLaunchErrorCode))
 
 
 @dataclass(frozen=True)
 class RemoteLaunchLifecycle:
     state: RemoteLaunchLifecycleState
-    error_code: str | None
+    error_code: RemoteLaunchErrorCode | None
     error_message: str | None
     lease_until: datetime | None
+
+
+def normalize_remote_launch_error_code(
+    code: str | None,
+    *,
+    fallback: RemoteLaunchErrorCode = "provider_launch_failed",
+) -> RemoteLaunchErrorCode:
+    normalized = (code or "").strip()
+    if normalized in KNOWN_REMOTE_LAUNCH_ERROR_CODES:
+        return cast(RemoteLaunchErrorCode, normalized)
+    return fallback
 
 
 def project_remote_launch_lifecycle(attempt: SessionLaunchAttempt | None) -> RemoteLaunchLifecycle | None:
@@ -50,7 +74,7 @@ def project_remote_launch_lifecycle(attempt: SessionLaunchAttempt | None) -> Rem
 
     return RemoteLaunchLifecycle(
         state=state,
-        error_code=attempt.error_code,
+        error_code=normalize_remote_launch_error_code(attempt.error_code) if attempt.error_code else None,
         error_message=attempt.error_message,
         lease_until=attempt.expires_at,
     )
@@ -58,6 +82,8 @@ def project_remote_launch_lifecycle(attempt: SessionLaunchAttempt | None) -> Rem
 
 __all__ = [
     "RemoteLaunchLifecycle",
+    "RemoteLaunchErrorCode",
     "RemoteLaunchLifecycleState",
+    "normalize_remote_launch_error_code",
     "project_remote_launch_lifecycle",
 ]
