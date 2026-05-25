@@ -1123,7 +1123,10 @@ final class SessionViewModel: ObservableObject {
         let currentDetail = detail?.replacingTranscriptPreview(preview)
         detail = currentDetail
         items = TimelineBuilder.build(
-            events: visibleTranscriptEvents(durableEvents: lastWorkspaceEvents, preview: currentDetail?.transcriptPreview)
+            events: TranscriptPreviewProjection.visibleEvents(
+                durableEvents: lastWorkspaceEvents,
+                preview: currentDetail?.transcriptPreview
+            )
         )
     }
 
@@ -1188,7 +1191,10 @@ final class SessionViewModel: ObservableObject {
             self.prefetchedOlderTail = nil
             self.prefetchedOlderOffset = nil
             let builtItems = TimelineBuilder.build(
-                events: visibleTranscriptEvents(durableEvents: mergedEvents, preview: tail.session.transcriptPreview)
+                events: TranscriptPreviewProjection.visibleEvents(
+                    durableEvents: mergedEvents,
+                    preview: tail.session.transcriptPreview
+                )
             )
             self.items = builtItems
             let buildMs = Int(Date().timeIntervalSince(buildStartedAt) * 1000)
@@ -1268,7 +1274,10 @@ final class SessionViewModel: ObservableObject {
         if !olderEvents.isEmpty {
             lastWorkspaceEvents = olderEvents + lastWorkspaceEvents
             items = TimelineBuilder.build(
-                events: visibleTranscriptEvents(durableEvents: lastWorkspaceEvents, preview: detail?.transcriptPreview)
+                events: TranscriptPreviewProjection.visibleEvents(
+                    durableEvents: lastWorkspaceEvents,
+                    preview: detail?.transcriptPreview
+                )
             )
             reconcileSubmittedInputs(with: lastWorkspaceEvents)
             saveCurrentCache()
@@ -1300,31 +1309,6 @@ final class SessionViewModel: ObservableObject {
             totalProjectionItemCount: totalProjectionItemCount,
             tailSnapshotEventId: tailSnapshotEventId
         )
-    }
-
-    private func visibleTranscriptEvents(
-        durableEvents: [SessionEvent],
-        preview: SessionTranscriptPreview?
-    ) -> [SessionEvent] {
-        guard let preview, preview.shouldRender else { return durableEvents }
-        let previewText = preview.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !previewText.isEmpty else { return durableEvents }
-
-        if let lastDurableAssistant = durableEvents.reversed().first(where: {
-            $0.role == "assistant" && ($0.contentText ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-        }) {
-            let lastText = (lastDurableAssistant.contentText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if lastText == previewText { return durableEvents }
-        }
-
-        if let previewAt = LonghouseDateParser.parse(preview.timestamp),
-           let latestEvent = durableEvents.last,
-           let latestDurableAt = LonghouseDateParser.parse(latestEvent.timestamp),
-           latestDurableAt >= previewAt {
-            return durableEvents
-        }
-
-        return durableEvents + [preview.syntheticEvent]
     }
 
     private func updateSubmittedInput(

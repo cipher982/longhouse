@@ -404,6 +404,59 @@ describe("useSessionWorkspace", () => {
     rafSpy.mockRestore();
   });
 
+  it("does not defer refetch for backend-stale streamed transcript previews", () => {
+    let handlers:
+      | {
+          onWorkspaceChanged?: (data: {
+            session_id: string;
+            latest_event_id: number;
+            thread_session_count: number;
+            transcript_preview?: {
+              event_id: number;
+              text: string;
+              event_origin: string;
+              timestamp: string;
+              is_provisional: boolean;
+              is_complete: boolean;
+              content_cursor?: string | null;
+              is_stale: boolean;
+              stale_reason?: string | null;
+            } | null;
+          }) => void;
+        }
+      | undefined;
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    renderHook(() => useSessionWorkspace(baseSession.id));
+
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        latest_event_id: 80,
+        thread_session_count: 1,
+        transcript_preview: {
+          event_id: 321,
+          text: "Expired preview must not delay durable refetch",
+          event_origin: "live_provisional",
+          timestamp: "2026-03-14T11:50:00.000Z",
+          is_provisional: true,
+          is_complete: false,
+          content_cursor: "cursor-321",
+          is_stale: true,
+          stale_reason: "freshness_window_expired",
+        },
+      });
+    });
+
+    expect(queryClientMocks.setQueriesData).toHaveBeenCalled();
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["agent-session-workspace", baseSession.id],
+    });
+  });
+
   it("keeps SSE transcript previews visible when query data is still stale", async () => {
     seedHookMocks(1);
     let handlers:
