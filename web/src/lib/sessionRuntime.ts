@@ -8,7 +8,6 @@ import type {
 export type KnownPresenceState = "thinking" | "running" | "idle" | "needs_user" | "blocked" | "stalled";
 export type RuntimeTruthTier = "none" | "stale" | "fresh" | "managed-local";
 export type RuntimeTone = "inactive" | "active" | "thinking" | "running" | "blocked" | "stalled" | "idle" | "closed";
-const TRANSCRIPT_SYNC_STATE = "syncing_transcript";
 
 type TimelineRuntimeOverlay = {
   timeline_anchor_at?: string | null;
@@ -39,6 +38,10 @@ export function isSessionClosed(
     runtime_facts?: SessionLivenessFacts | null;
   },
 ): boolean {
+  const lifecycle = session.runtime_display?.lifecycle;
+  if (lifecycle != null) {
+    return lifecycle === "closed";
+  }
   const factsLifecycle = session.runtime_facts?.lifecycle?.state;
   if (factsLifecycle === "closed") {
     return true;
@@ -48,10 +51,6 @@ export function isSessionClosed(
   }
   if (factsLifecycle != null) {
     return false;
-  }
-  const lifecycle = session.runtime_display?.lifecycle;
-  if (lifecycle != null) {
-    return lifecycle === "closed";
   }
   return (
     session.terminal_state === "session_ended" ||
@@ -350,15 +349,14 @@ export function resolveSessionRuntimeState(
 ): SessionRuntimeState {
   const serverDisplay = session.runtime_display ?? null;
   const runtimeFacts = session.runtime_facts ?? null;
-  const rawFactStatus = resolveSessionFactStatus(runtimeFacts);
-  const displayOverridesFacts =
-    serverDisplay?.state === TRANSCRIPT_SYNC_STATE && runtimeFacts?.lifecycle?.state !== "closed";
-  const factStatus = displayOverridesFacts ? null : rawFactStatus;
-  const hasFacts = runtimeFacts != null;
-  const hasFactsForRuntime = hasFacts && !displayOverridesFacts;
+  const hasServerDisplay = serverDisplay != null;
+  const factStatus = hasServerDisplay ? null : resolveSessionFactStatus(runtimeFacts);
+  const hasFactsForRuntime = runtimeFacts != null && !hasServerDisplay;
   const sessionTruthTier = hasFactsForRuntime ? "none" : getRuntimeTruthTier(session);
   const status = session.status ?? null;
-  const isClosed = hasFacts ? runtimeFacts?.lifecycle?.state === "closed" : serverDisplay?.lifecycle === "closed";
+  const isClosed = hasServerDisplay
+    ? serverDisplay.lifecycle === "closed"
+    : runtimeFacts?.lifecycle?.state === "closed";
   const rawPresenceState = hasFactsForRuntime ? null : normalizePresenceState(serverDisplay ? serverDisplay.state : session.presence_state ?? null);
   const presenceState = isClosed ? null : rawPresenceState;
   const presenceTool = hasFactsForRuntime ? null : (session.active_tool ?? session.presence_tool ?? null);

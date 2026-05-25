@@ -552,13 +552,14 @@ describe("resolveSessionRuntimeState", () => {
     });
   });
 
-  it("renders managed phase facts with the observed phase tone", () => {
+  it("prefers server runtime_display over runtime_facts for presentation", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({
         presence_state: "running",
         runtime_display: makeRuntimeDisplay({
           state: "running",
           headline: "Working",
+          detail: "Using Shell",
           phase_label: "Using Shell",
           activity_recency: "live",
         }),
@@ -586,14 +587,11 @@ describe("resolveSessionRuntimeState", () => {
     );
 
     expect(resolveSessionOwnershipLabel(runtime)).toBe("Managed");
-    expect(runtime.factStatus).toMatchObject({
-      label: "Using Shell",
-      tone: "running",
-      seenAtPrefix: "Updated",
-    });
+    expect(runtime.factStatus).toBeNull();
+    expect(runtime.displayPhase).toBe("Using Shell");
     expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
-      headline: "Using Shell",
-      detail: null,
+      headline: "Working",
+      detail: "Using Shell",
     });
   });
 
@@ -681,11 +679,6 @@ describe("resolveSessionRuntimeState", () => {
   it("renders unmanaged process observations as process-visible facts", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({
-        runtime_display: makeRuntimeDisplay({
-          control_path: "unmanaged",
-          activity_recency: "live",
-          headline: "Active",
-        }),
         runtime_facts: makeRuntimeFacts({
           control_path: "unmanaged",
           process_state: "running",
@@ -726,11 +719,6 @@ describe("resolveSessionRuntimeState", () => {
   it("renders transcript-only facts as no live signal", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({
-        runtime_display: makeRuntimeDisplay({
-          control_path: "unmanaged",
-          activity_recency: "recent",
-          headline: "Active",
-        }),
         runtime_facts: makeRuntimeFacts({
           control_path: "unmanaged",
           activity: {
@@ -753,11 +741,6 @@ describe("resolveSessionRuntimeState", () => {
   it("renders unknown host facts as no live signal", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({
-        runtime_display: makeRuntimeDisplay({
-          control_path: "managed",
-          activity_recency: "stale",
-          headline: "Disconnected",
-        }),
         runtime_facts: makeRuntimeFacts({
           control_path: "managed",
           activity: {
@@ -790,11 +773,6 @@ describe("resolveSessionRuntimeState", () => {
   it("renders closed facts as closed rather than completed", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({
-        runtime_display: makeRuntimeDisplay({
-          lifecycle: "open",
-          headline: "Working",
-          phase_label: "Using Shell",
-        }),
         runtime_facts: makeRuntimeFacts({
           control_path: "managed",
           lifecycle: {
@@ -817,11 +795,6 @@ describe("resolveSessionRuntimeState", () => {
   it("renders closed lifecycle facts with generic label regardless of reason metadata", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({
-        runtime_display: makeRuntimeDisplay({
-          lifecycle: "open",
-          headline: "Working",
-          phase_label: "Using Shell",
-        }),
         runtime_facts: makeRuntimeFacts({
           control_path: "managed",
           process_state: "closed",
@@ -840,6 +813,35 @@ describe("resolveSessionRuntimeState", () => {
     expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
       headline: "Closed",
       detail: null,
+    });
+  });
+
+  it("does not let runtime_facts override runtime_display lifecycle when display exists", () => {
+    const runtime = resolveSessionRuntimeState(
+      makeSession({
+        runtime_display: makeRuntimeDisplay({
+          lifecycle: "open",
+          headline: "Working",
+          detail: "Using Shell",
+          phase_label: "Using Shell",
+        }),
+        runtime_facts: makeRuntimeFacts({
+          control_path: "managed",
+          lifecycle: {
+            state: "closed",
+            reason: "session_ended",
+            observed_at: "2026-03-21T12:00:00Z",
+          },
+        }),
+      }),
+    );
+
+    expect(runtime.factStatus).toBeNull();
+    expect(runtime.displayPhase).toBe("Using Shell");
+    expect(getRuntimeOutcomeLabel(runtime)).toBe("Inactive");
+    expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
+      headline: "Working",
+      detail: "Using Shell",
     });
   });
 
